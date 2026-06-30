@@ -218,6 +218,20 @@ pub enum PreviewPixels {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct LoadedPreviewAsset {
+    pub pixels: PreviewPixels,
+    pub read_us: u64,
+    pub decode_us: u64,
+    pub raw565_parse_us: u64,
+    pub resize_us: u64,
+    pub total_us: u64,
+    pub encoded_bytes: usize,
+    pub load_source: PreviewLoadSource,
+    pub storage_format: PreviewStorageFormat,
+    pub resize_filter: PreviewResizeFilter,
+}
+
 impl PreviewPixels {
     pub fn width(&self) -> u32 {
         match self {
@@ -739,6 +753,29 @@ pub fn load_preview_asset_pixels(
     let mut scratch = PreviewArchiveScratch::default();
     load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key, &mut scratch)
         .map(|loaded| loaded.image)
+}
+
+pub fn load_preview_asset_pixels_timed(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
+) -> Result<LoadedPreviewAsset, String> {
+    let mut scratch = PreviewArchiveScratch::default();
+    let resize = PreviewResizeSpec::from_env();
+    let storage_format = PreviewStorageFormat::from_env();
+    load_preview_pixels(preview_archive_path, preview_asset_key, &mut scratch, resize).map(
+        |loaded| LoadedPreviewAsset {
+            pixels: loaded.image,
+            read_us: loaded.timing.read_us,
+            decode_us: loaded.timing.decode_us,
+            raw565_parse_us: loaded.timing.raw565_parse_us,
+            resize_us: loaded.timing.resize_us,
+            total_us: loaded.timing.total_us,
+            encoded_bytes: loaded.timing.encoded_bytes,
+            load_source: loaded.timing.load_source,
+            storage_format,
+            resize_filter: resize.filter,
+        },
+    )
 }
 
 fn load_raw565_preview_asset_timed(

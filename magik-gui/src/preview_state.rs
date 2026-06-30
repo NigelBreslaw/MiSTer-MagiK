@@ -9,9 +9,9 @@ use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
-    preview_asset_cache_key, preview_window_indices, PreviewLoadSource, PreviewPixels,
-    PreviewPriority, PreviewResult, PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP,
-    DEFAULT_PREVIEW_RADIUS,
+    load_preview_asset_pixels_timed, preview_asset_cache_key, preview_window_indices,
+    PreviewLoadSource, PreviewPixels, PreviewPriority, PreviewResult, PreviewWorker,
+    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -221,6 +221,34 @@ fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
     bridge.set_arcade_preview_source_height(0);
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
+}
+
+fn preview_image_from_pixels(pixels: PreviewPixels) -> PreviewImage {
+    let source_w = pixels.width();
+    let source_h = pixels.height();
+    let display = preview_display_size(
+        source_w,
+        source_h,
+        ARCADE_PREVIEW_BOX_W,
+        ARCADE_PREVIEW_BOX_H,
+    );
+    let pixels = match pixels {
+        PreviewPixels::Rgb565 {
+            stride_bytes,
+            words,
+            ..
+        } => PreviewImagePixels::Rgb565 {
+            words,
+            stride_pixels: stride_bytes as usize / 2,
+        },
+    };
+    PreviewImage {
+        pixels,
+        source_w,
+        source_h,
+        display_w: display.w,
+        display_h: display.h,
+    }
 }
 
 pub(crate) struct PreviewState {
@@ -762,6 +790,93 @@ pub(crate) fn request_arcade_preview_window(
         request_preview_prefetches(games, selected, preview);
         return true;
     }
+    let requested_at_ms = preview.trace_elapsed_ms();
+    eprintln!(
+        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0",
+        requested_at_ms,
+        candidate_game.system_id,
+        selected,
+        candidate_game.title,
+        candidate_game.preview_asset_key
+    );
+    match load_preview_asset_pixels_timed(
+        candidate_game.preview_archive_path.as_ref(),
+        candidate_game.preview_asset_key.as_ref(),
+    ) {
+        Ok(loaded) => {
+            let completed_at_ms = preview.trace_elapsed_ms();
+            let load_source = loaded.load_source;
+            let total_us = loaded.total_us;
+            let read_us = loaded.read_us;
+            let decode_us = loaded.decode_us;
+            let raw565_parse_us = loaded.raw565_parse_us;
+            let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
+            eprintln!(
+                "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
+                completed_at_ms,
+                candidate_game.system_id,
+                candidate_game.title,
+                candidate_game.preview_asset_key,
+                load_source.label(),
+                total_us,
+                read_us,
+                decode_us,
+                raw565_parse_us,
+                age_us
+            );
+            if load_source == PreviewLoadSource::IndexPread {
+                eprintln!(
+                    "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\tread_us={}",
+                    completed_at_ms,
+                    candidate_game.system_id,
+                    candidate_game.title,
+                    candidate_game.preview_asset_key,
+                    load_source.label(),
+                    read_us
+                );
+            }
+            let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
+            preview.cache.insert(
+                preview_key.clone(),
+                Arc::clone(&loaded_image),
+                &preview.window_preview_keys,
+                Some(&preview.visible_preview_key),
+            );
+            preview.current_generation = 0;
+            preview.selected_preview_key = Some(preview_key.clone());
+            preview.has_visible_preview = true;
+            preview.begin_raw_transition_to(&preview_key);
+            preview.visible_preview_key = preview_key;
+            preview.raw_dirty = true;
+            apply_preview_image_bridge(bridge, &loaded_image);
+            eprintln!(
+                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
+                preview.trace_elapsed_ms(),
+                candidate_game.system_id,
+                selected,
+                candidate_game.title,
+                candidate_game.preview_asset_key,
+                load_source.label(),
+                total_us,
+                read_us,
+                decode_us,
+                age_us
+            );
+            request_preview_prefetches(games, selected, preview);
+            return true;
+        }
+        Err(err) => {
+            if preview_trace_enabled() {
+                eprintln!(
+                    "preview_trace sync_selected_failed title={} archive_path={} asset_key={} error={}",
+                    candidate_game.title,
+                    candidate_game.preview_archive_path,
+                    candidate_game.preview_asset_key,
+                    err
+                );
+            }
+        }
+    }
     preview.current_generation = preview.worker.request_selected(
         candidate_game.title.to_string(),
         candidate_game.preview_archive_path.to_string(),
@@ -1123,22 +1238,6 @@ pub(crate) fn apply_ready_preview(
             }
             let source_w = image.width();
             let source_h = image.height();
-            let display = preview_display_size(
-                source_w,
-                source_h,
-                ARCADE_PREVIEW_BOX_W,
-                ARCADE_PREVIEW_BOX_H,
-            );
-            let pixels = match image {
-                PreviewPixels::Rgb565 {
-                    stride_bytes,
-                    words,
-                    ..
-                } => PreviewImagePixels::Rgb565 {
-                    words,
-                    stride_pixels: stride_bytes as usize / 2,
-                },
-            };
             if preview_trace_enabled() && is_selected_result {
                 eprintln!(
                     "preview_trace raw_image generation={} output={}x{} archive_path={} asset_key={}",
@@ -1149,13 +1248,7 @@ pub(crate) fn apply_ready_preview(
                     result.preview_asset_key
                 );
             }
-            let image = Arc::new(PreviewImage {
-                pixels,
-                source_w,
-                source_h,
-                display_w: display.w,
-                display_h: display.h,
-            });
+            let image = Arc::new(preview_image_from_pixels(image));
             preview.cache.insert(
                 result_preview_key.clone(),
                 Arc::clone(&image),
