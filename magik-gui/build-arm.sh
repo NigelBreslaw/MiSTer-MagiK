@@ -131,6 +131,12 @@ case "$UI_SCOPE" in
     ;;
 esac
 export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
+export MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
+  git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
+)}"
+export MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-$(
+  date '+%-d.%-m.%Y %H:%M' 2>/dev/null || date '+%d.%m.%Y %H:%M' 2>/dev/null || echo unknown
+)}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: Docker is not installed or not on PATH — cross needs it for armv7 builds." >&2
