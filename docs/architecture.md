@@ -70,6 +70,12 @@ Normal launcher rendering is governed by a small composition controller. Slint
 owns the cached full frame in every state; Rust direct-blitted layers are legal
 only while the controller is in `MixedArcade`. `ModalOverArcade` clears direct
 layer assumptions and forces a full Slint present before showing the dialog.
+Full-frame Slint presents also invalidate the live direct Arcade layers. When a
+route reassertion, recovery, modal transition, or screen ownership change forces
+a full present while Arcade remains active, the list and preview layers must be
+repainted in the same frame. This prevents Slint's cached base frame from
+silently overwriting a still-truthful `exact` preview with the blank placeholder
+area.
 
 ```mermaid
 stateDiagram-v2

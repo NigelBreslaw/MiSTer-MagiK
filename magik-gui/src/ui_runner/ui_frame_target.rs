@@ -221,6 +221,8 @@ pub(super) fn blit_raw_preview_if_needed(
     full_frame_present: bool,
 ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
     let raw_dirty = preview.take_raw_dirty();
+    // Full-frame Slint presents overwrite direct preview pixels, so they count
+    // as preview damage even when the preview frame itself is otherwise idle.
     let preview_dirty = preview_dirty_for_present(ui, slint_dirty, full_frame_present);
     let slint_touched_preview = preview_dirty
         .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
@@ -451,11 +453,12 @@ mod tests {
     }
 
     #[test]
-    fn full_frame_present_counts_as_preview_dirty() {
+    fn direct_preview_repaints_after_full_frame_present() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
         let screen = preview_screen_rect(&ui);
         let dirty = preview_dirty_for_present(&ui, None, true).expect("full frame dirty");
 
         assert!(dirty.contains(screen));
+        assert!(preview_dirty_for_present(&ui, None, false).is_none());
     }
 }
