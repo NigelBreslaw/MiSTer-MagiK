@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
+source "$ROOT/scripts/library-sql-output-lib.sh"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
@@ -162,7 +163,7 @@ assert_db_count() {
   local expected="$2"
   local sql="$3"
   local actual
-  actual="$(db "$sql" | last_number)"
+  actual="$(db "$sql" | library_sql_first_result_number)"
   if [ "$actual" != "$expected" ]; then
     fail "$label expected=$expected actual=${actual:-empty}"
   fi
@@ -204,7 +205,7 @@ force_refresh() {
 }
 
 temp_mra_count() {
-  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | last_number
+  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | library_sql_first_result_number
 }
 
 assert_temp_mra_count() {
@@ -345,7 +346,7 @@ if [ "$(remote "if [ -f $(sq "$REMOTE_ENV") ]; then cp $(sq "$REMOTE_ENV") $(sq 
   HAD_ENV=1
 fi
 
-SOURCE_MRA="$(db "SELECT launch_ref FROM launcher_catalog WHERE launch_ref LIKE '/media/fat/_Arcade/%.mra' AND launch_ref NOT LIKE '%_mister-magik-it-%' ORDER BY launch_ref LIMIT 1;" | last_line)"
+SOURCE_MRA="$(db "SELECT launch_ref FROM launch_plans WHERE launch_ref LIKE '/media/fat/_Arcade/%.mra' AND launch_ref NOT LIKE '%_mister-magik-it-%' ORDER BY launch_ref LIMIT 1;" | library_sql_first_result_line)"
 if [ -z "$SOURCE_MRA" ] || [[ "$SOURCE_MRA" != /media/fat/_Arcade/*.mra ]]; then
   fail "could not find source _Arcade MRA in launcher_catalog"
 fi
