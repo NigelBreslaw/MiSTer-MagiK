@@ -325,13 +325,14 @@ impl LauncherFrameAccounting {
         last_route_reassert_frame: u64,
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
+        startup_status: StartupRevealStatus,
     ) {
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
         self.record_stable_samples(frame.frames, disp);
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         self.record_boot_frame_profile(&frame, disp);
-        self.record_first_frame(start, catalog_ready);
+        self.record_first_frame(&frame, start, catalog_ready);
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let runtime_status_write_start =
             (frame.status_write_due && self.preview_scroll_trace.is_some()).then(Instant::now);
@@ -369,6 +370,7 @@ impl LauncherFrameAccounting {
             last_route_reassert_frame,
             last_route_reassert_ok,
             last_route_reassert_error,
+            startup_status,
         );
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         {
@@ -595,8 +597,13 @@ impl LauncherFrameAccounting {
         }
     }
 
-    fn record_first_frame(&mut self, start: Instant, catalog_ready: bool) {
-        if !self.first_frame_logged {
+    fn record_first_frame(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        start: Instant,
+        catalog_ready: bool,
+    ) {
+        if frame.copied_rows > 0 && !self.first_frame_logged {
             self.first_frame_logged = true;
             boot_analytics::event("first_frame", format!("catalog_ready={catalog_ready}"));
             print_startup_event(
@@ -643,6 +650,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_frame: u64,
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
+        startup_status: StartupRevealStatus,
     ) {
         if !status_write_due {
             return;
@@ -706,6 +714,12 @@ impl LauncherFrameAccounting {
             } else {
                 u64::MAX
             },
+            startup_mode: startup_status.mode.label(),
+            startup_reveal_state: startup_status.state.label(),
+            revealed: startup_status.revealed,
+            input_enabled: startup_status.input_enabled,
+            reveal_ms: startup_status.reveal_ms,
+            input_enabled_ms: startup_status.input_enabled_ms,
         });
         self.last_status_write = Instant::now();
     }

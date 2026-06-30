@@ -909,6 +909,7 @@ run_tier_launcher_lifecycle() {
     "int(data['runtime']['main_status'].get('invariant_count', 0)) == 0"
 
   if [ "$FAST" -eq 0 ]; then
+    run_capture "startup-reveal-acceptance" "$ROOT/scripts/device-startup-reveal-acceptance.sh" "release-$STAMP" || true
     run_supervised_reboot_soak || true
     run_crash_restart_lite || true
   fi
