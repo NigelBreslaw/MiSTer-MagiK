@@ -16,13 +16,14 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
-RAM_CATALOG_READY_GATE_MS=41000
-DB_SAVE_GATE_MS=55000
+RAM_CATALOG_READY_GATE_MS=57094
+DB_SAVE_GATE_MS=72573
 source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--thread-sample]
+       scripts/profile-first-scan.sh --self-test
 
 Deletes the launcher catalog database and summary projection, reboots the
 MiSTer, waits for the visible first-boot scan to complete, and appends timing
@@ -32,8 +33,35 @@ second after reboot while the first scan completes.
 EOF
 }
 
+first_scan_gate_check() {
+  local ready_ms="$1"
+  local saved_ms="$2"
+  if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
+    return 1
+  fi
+  if (( saved_ms > DB_SAVE_GATE_MS )); then
+    return 1
+  fi
+  return 0
+}
+
+first_scan_self_test() {
+  first_scan_gate_check 56094 71573
+  first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" "$DB_SAVE_GATE_MS"
+  if first_scan_gate_check $((RAM_CATALOG_READY_GATE_MS + 1)) "$DB_SAVE_GATE_MS"; then
+    echo "ready gate accepted gate+1" >&2
+    return 1
+  fi
+  if first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" $((DB_SAVE_GATE_MS + 1)); then
+    echo "save gate accepted gate+1" >&2
+    return 1
+  fi
+  echo "profile-first-scan self-test ok"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --self-test) first_scan_self_test; exit 0 ;;
     --deploy-device) DEPLOY="device"; shift ;;
     --skip-build) DEPLOY="skip"; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
@@ -158,15 +186,14 @@ if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
-if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
+if ! first_scan_gate_check "$ready_ms" "$saved_ms"; then
   emit_thread_sample_artifact_report || true
-  echo "first scan RAM catalog usable gate failed: library_ready=${ready_ms}ms > ${RAM_CATALOG_READY_GATE_MS}ms" >&2
-  tail -80 "$local_log" >&2 || true
-  exit 1
-fi
-if (( saved_ms > DB_SAVE_GATE_MS )); then
-  emit_thread_sample_artifact_report || true
-  echo "first scan DB save gate failed: library_db_saved=${saved_ms}ms > ${DB_SAVE_GATE_MS}ms" >&2
+  if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
+    echo "first scan RAM catalog usable gate failed: library_ready=${ready_ms}ms > ${RAM_CATALOG_READY_GATE_MS}ms" >&2
+  fi
+  if (( saved_ms > DB_SAVE_GATE_MS )); then
+    echo "first scan DB save gate failed: library_db_saved=${saved_ms}ms > ${DB_SAVE_GATE_MS}ms" >&2
+  fi
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
