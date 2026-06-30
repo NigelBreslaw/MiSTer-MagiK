@@ -118,17 +118,24 @@ pub(crate) fn run_scan_bench() {
         );
         match stamp_check {
             Ok(check) => println!(
-                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} compute_us={} open_us={} read_us={} compare_us={} stored={} current={} stored_lines={} current_lines={}",
+                "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={}",
                 check.unchanged,
                 check.check_us,
                 check.compute_us,
                 check.open_us,
                 check.read_us,
+                check.checkpoint_read_us,
                 check.compare_us,
+                check.checkpoint_compare_us,
                 check.stored_fingerprint.as_deref().unwrap_or("missing"),
                 check.current_fingerprint,
+                check.stored_checkpoint_fingerprint.as_deref().unwrap_or("missing"),
+                check.current_checkpoint_fingerprint,
                 check.stored_lines,
-                check.current_lines
+                check.current_lines,
+                check.stored_checkpoint_lines,
+                check.current_checkpoint_lines,
+                check.drift.detail
             ),
             Err(e) => println!(
                 "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check_error\t{stamp_us}\t{e}"

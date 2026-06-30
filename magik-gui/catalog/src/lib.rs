@@ -2,6 +2,7 @@
 
 pub mod arcade_catalog;
 pub mod catalog_build;
+pub mod catalog_checkpoint;
 pub mod catalog_classify;
 pub mod catalog_config;
 pub mod catalog_navigation;

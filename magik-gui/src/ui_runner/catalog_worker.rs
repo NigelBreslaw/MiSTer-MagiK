@@ -286,17 +286,24 @@ pub(super) fn start_library_catalog_worker(
                         let _ = tx.send(CatalogWorkerMessage::Timing {
                             name: "catalog_stamp_check".to_string(),
                             detail: format!(
-                                "unchanged={} check_us={} compute_us={} open_us={} read_us={} compare_us={} stored={} current={} stored_lines={} current_lines={}",
+                                "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={}",
                                 check.unchanged,
                                 check.check_us,
                                 check.compute_us,
                                 check.open_us,
                                 check.read_us,
+                                check.checkpoint_read_us,
                                 check.compare_us,
+                                check.checkpoint_compare_us,
                                 check.stored_fingerprint.as_deref().unwrap_or("missing"),
                                 check.current_fingerprint,
+                                check.stored_checkpoint_fingerprint.as_deref().unwrap_or("missing"),
+                                check.current_checkpoint_fingerprint,
                                 check.stored_lines,
-                                check.current_lines
+                                check.current_lines,
+                                check.stored_checkpoint_lines,
+                                check.current_checkpoint_lines,
+                                check.drift.detail
                             ),
                         });
                         if check.unchanged {
@@ -325,7 +332,10 @@ pub(super) fn start_library_catalog_worker(
                             }
                         }
                         let _ = tx.send(CatalogWorkerMessage::Changed {
-                            detail: "Catalog stamp changed; rebuild required.".to_string(),
+                            detail: format!(
+                                "Catalog inputs changed; rebuild required. {}",
+                                check.drift.detail
+                            ),
                         });
                         return;
                     }

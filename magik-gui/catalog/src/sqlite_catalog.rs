@@ -7,6 +7,7 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
+use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_load_metrics;
 use crate::catalog_navigation;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
@@ -815,16 +816,33 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let read_t = Instant::now();
     let stored = catalog_store::read_catalog_stamp(&conn)?;
     let read_us = read_t.elapsed().as_micros() as u64;
+    let checkpoint_read_t = Instant::now();
+    let stored_checkpoint = catalog_store::read_catalog_discovery_checkpoint(&conn)?;
+    let checkpoint_read_us = checkpoint_read_t.elapsed().as_micros() as u64;
     let compute_t = Instant::now();
     let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
+    let audit_t = Instant::now();
     let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+    catalog_checkpoint::report_checkpoint_timing(
+        "coverage_audit",
+        audit_t.elapsed().as_micros() as u64,
+        format!("rows={}", audit_rows.len()),
+    );
     let current =
         catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
+    let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint(
+        &cfg.roots,
+        &default_mame_sqlite_path(),
+        &default_hbmame_sqlite_path(),
+        &audit_rows,
+    );
     let current_fingerprint = current.fingerprint_hex();
     let current_lines = current.lines().len();
+    let current_checkpoint_fingerprint = current_checkpoint.fingerprint_hex();
+    let current_checkpoint_lines = current_checkpoint.lines().len();
     let compute_us = compute_t.elapsed().as_micros() as u64;
     let compare_t = Instant::now();
-    let (stored_fingerprint, stored_lines, unchanged) = match stored {
+    let (stored_fingerprint, stored_lines, stamp_unchanged) = match stored {
         Some(stored) => {
             let stored_fingerprint = stored.fingerprint_hex();
             let stored_lines = stored.lines().len();
@@ -833,6 +851,15 @@ pub(crate) fn sqlite_catalog_stamp_check(
         }
         None => (None, 0, false),
     };
+    let checkpoint_compare_t = Instant::now();
+    let drift = CatalogDriftSummary::from_checkpoints(stored_checkpoint.as_ref(), &current_checkpoint);
+    let checkpoint_compare_us = checkpoint_compare_t.elapsed().as_micros() as u64;
+    catalog_checkpoint::report_drift_summary(&drift);
+    let (stored_checkpoint_fingerprint, stored_checkpoint_lines) =
+        stored_checkpoint.as_ref().map_or((None, 0), |checkpoint| {
+            (Some(checkpoint.fingerprint_hex()), checkpoint.lines().len())
+        });
+    let unchanged = stamp_unchanged && drift.unchanged;
     let compare_us = compare_t.elapsed().as_micros() as u64;
     Ok(CatalogStampCheckSummary {
         unchanged,
@@ -840,11 +867,18 @@ pub(crate) fn sqlite_catalog_stamp_check(
         compute_us,
         open_us,
         read_us,
+        checkpoint_read_us,
+        checkpoint_compare_us,
         compare_us,
         stored_fingerprint,
         current_fingerprint,
+        stored_checkpoint_fingerprint,
+        current_checkpoint_fingerprint,
         stored_lines,
         current_lines,
+        stored_checkpoint_lines,
+        current_checkpoint_lines,
+        drift,
     })
 }
 
@@ -1777,10 +1811,14 @@ fn write_sqlite_scan_with_sources_inner(
             ordinal INTEGER PRIMARY KEY,
             line TEXT NOT NULL
         );
+        CREATE TABLE catalog_discovery_checkpoint (
+            ordinal INTEGER PRIMARY KEY,
+            line TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=13");
+    report_library_import_timing("schema", schema_t, "tables=14");
 
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
@@ -2190,10 +2228,21 @@ fn write_sqlite_scan_with_sources_inner(
     if let Some(stamp) = sources.stamp {
         let stage_t = Instant::now();
         catalog_store::write_catalog_stamp(&tx, stamp)?;
+        let checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint(
+            &scan.roots,
+            sources.mame_sqlite_path,
+            sources.hbmame_sqlite_path,
+            &scan.audit_rows,
+        );
+        catalog_store::write_catalog_discovery_checkpoint(&tx, &checkpoint)?;
         report_library_import_timing(
             "insert_catalog_stamp",
             stage_t,
-            format!("rows={}", stamp.lines().len()),
+            format!(
+                "stamp_rows={} checkpoint_rows={}",
+                stamp.lines().len(),
+                checkpoint.lines().len()
+            ),
         );
     }
     {
@@ -3060,6 +3109,12 @@ mod tests {
 
         let unchanged = sqlite_catalog_stamp_check(&cfg).expect("check unchanged stamp");
         assert!(unchanged.unchanged);
+        assert!(unchanged.stored_checkpoint_fingerprint.is_some());
+        assert_eq!(
+            unchanged.stored_checkpoint_fingerprint,
+            Some(unchanged.current_checkpoint_fingerprint.clone())
+        );
+        assert!(unchanged.current_checkpoint_lines > 0);
         let summary = sqlite_cached_summary(&db, unchanged.check_us).expect("cached summary");
         assert!(summary.skipped);
 
@@ -3071,6 +3126,31 @@ mod tests {
             changed.stored_fingerprint,
             Some(changed.current_fingerprint)
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_missing_checkpoint() {
+        let root = unique_temp_dir("sqlite-catalog-missing-checkpoint");
+        let db = root.join("library.sqlite3");
+        let games = root.join("games");
+        std::fs::create_dir_all(games.join("NES")).expect("create system dir");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+        let conn = Connection::open(&db).expect("open db");
+        conn.execute("DROP TABLE catalog_discovery_checkpoint", [])
+            .expect("drop checkpoint");
+        drop(conn);
+
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check missing checkpoint");
+
+        assert!(!changed.unchanged);
+        assert!(changed.stored_checkpoint_fingerprint.is_none());
+        assert_eq!(changed.drift.detail, "checkpoint missing");
         let _ = std::fs::remove_dir_all(root);
     }
 

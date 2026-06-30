@@ -416,6 +416,7 @@ pub(crate) fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: 1,
+        roots: Vec::new(),
         profiles: launch_profiles::builtin_profiles(),
         normal_files: paths
             .iter()
@@ -437,6 +438,7 @@ pub(crate) fn sqlite_scan_with_discoveries(discoveries: Vec<GameDiscovery>) -> L
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: 1,
+        roots: Vec::new(),
         profiles: launch_profiles::builtin_profiles(),
         normal_files: Vec::new(),
         containers: Vec::new(),
