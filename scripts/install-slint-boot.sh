@@ -6,6 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/reboot-wait-lib.sh"
 
 echo "==> Configure device (stock inittab + MiSTer.ini main=MiSTer_MagiK)"
 scripts/mister run '
@@ -38,7 +39,6 @@ scripts/mister inittab-ensure-stock
 scripts/mister ini-repair-boot
 scripts/mister ini-repair-arcade-video
 
-echo "==> Reboot to apply"
-scripts/mister reboot-wait
+mister_reboot_wait_with_raw_fallback
 
 echo "Done. Stock MiSTer should hand off to MiSTer_MagiK via MiSTer.ini main=."
