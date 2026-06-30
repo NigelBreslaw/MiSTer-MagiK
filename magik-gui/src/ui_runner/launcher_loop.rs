@@ -644,22 +644,16 @@ pub(super) fn run_launcher_loop(
                     CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
                 );
             } else {
-                let delay = if return_catalog_hydration_needed {
-                    Duration::ZERO
-                } else {
-                    catalog_background_validation_delay()
-                };
                 print_startup_event(
                     start,
-                    "catalog_worker_deferred",
+                    "catalog_worker_start",
                     format!(
-                        "root={} request={} delay_ms={}",
+                        "{} request={} reason=summary_hydration",
                         arcade_root,
-                        request.label(),
-                        delay.as_millis()
+                        request.label()
                     ),
                 );
-                catalog_session.defer_catalog_worker(
+                scheduler.start_catalog_worker(
                     arcade_root.clone(),
                     request,
                     CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
