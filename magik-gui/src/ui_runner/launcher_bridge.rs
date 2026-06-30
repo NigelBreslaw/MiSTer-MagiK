@@ -425,6 +425,7 @@ pub(super) fn sync_bridge_launcher(
             nav.arcade.selected,
             preview,
             defer_selected_preview,
+            nav.arcade.is_scroll_active(),
         );
     } else {
         preview.clear(&bridge);
@@ -524,6 +525,7 @@ pub(super) fn sync_bridge_launcher_light(
             nav.arcade.selected,
             preview,
             defer_selected_preview,
+            nav.arcade.is_scroll_active(),
         );
     } else {
         preview.clear(&bridge);

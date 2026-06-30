@@ -18,6 +18,9 @@ use crate::ui_display::{UI_FB_H, UI_FB_W};
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
 const MAX_PREFETCH_RESULTS_PER_FRAME: usize = 1;
 const DIRECTIONAL_PREFETCH_TAIL_RADIUS: usize = 2;
+const TURBO_PREVIEW_LOOKAHEAD: usize = 64;
+const TURBO_PREVIEW_BACKTAIL: usize = 4;
+const TURBO_PREVIEW_CACHE_CAP: usize = 96;
 const PREFETCH_SCROLL_SETTLE: Duration = Duration::from_millis(40);
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
@@ -40,6 +43,16 @@ fn preview_loading_enabled() -> bool {
         !matches!(
             std::env::var("MISTER_PREVIEW_LOADING").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")
+        )
+    })
+}
+
+fn preview_turbo_runway_enabled() -> bool {
+    static VALUE: OnceLock<bool> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        matches!(
+            std::env::var("MISTER_PREVIEW_TURBO_RUNWAY").as_deref(),
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     })
 }
@@ -143,7 +156,12 @@ impl PreviewImageCache {
                     || window_preview_keys.iter().any(|keep| keep == path)
             });
         }
-        while self.entries.len() > DEFAULT_PREVIEW_CACHE_CAP {
+        let cap = if window_preview_keys.len() > DEFAULT_PREVIEW_CACHE_CAP {
+            TURBO_PREVIEW_CACHE_CAP
+        } else {
+            DEFAULT_PREVIEW_CACHE_CAP
+        };
+        while self.entries.len() > cap {
             if self
                 .entries
                 .front()
@@ -260,6 +278,7 @@ pub(crate) struct PreviewState {
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_preview_key: String,
+    visible_preview_load_source: &'static str,
     previous_image: Option<Arc<PreviewImage>>,
     raw_transition_id: u64,
     window_preview_keys: Vec<String>,
@@ -277,6 +296,7 @@ struct PreviewPrefetchWindow {
     selected: usize,
     len: usize,
     direction: i8,
+    turbo_active: bool,
 }
 
 pub(crate) struct PreviewRawFrame<'a> {
@@ -379,6 +399,7 @@ impl PreviewState {
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
             visible_preview_key: String::new(),
+            visible_preview_load_source: "none",
             previous_image: None,
             raw_transition_id: 0,
             window_preview_keys: Vec::new(),
@@ -402,6 +423,7 @@ impl PreviewState {
             self.current_generation = 0;
             self.has_visible_preview = false;
             self.visible_preview_key.clear();
+            self.visible_preview_load_source = "none";
             self.previous_image = None;
             self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
             self.window_preview_keys.clear();
@@ -487,6 +509,7 @@ impl PreviewState {
         };
         self.has_visible_preview = false;
         self.visible_preview_key.clear();
+        self.visible_preview_load_source = "none";
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
         self.raw_dirty = true;
     }
@@ -605,6 +628,141 @@ fn first_preview_candidate(
         })
 }
 
+fn first_available_preview_candidate<'a>(
+    games: ArcadeGameView<'a>,
+    selected: usize,
+    radius: usize,
+    cache: &mut PreviewImageCache,
+) -> Option<PreviewCandidate<'a>> {
+    let selected_game = games.get(selected)?;
+    if let Some(preview_key) = game_preview_key(selected_game) {
+        if !cache.contains_failed(&preview_key) {
+            return Some(PreviewCandidate {
+                index: selected,
+                game: selected_game,
+                preview_key,
+            });
+        }
+    }
+
+    preview_window_indices(games.len(), selected, radius)
+        .into_iter()
+        .filter(|idx| *idx != selected)
+        .find_map(|idx| {
+            let game = games.get(idx)?;
+            let preview_key = game_preview_key(game)?;
+            (!cache.contains_failed(&preview_key)).then_some(PreviewCandidate {
+                index: idx,
+                game,
+                preview_key,
+            })
+        })
+}
+
+fn preview_cache_state_for_candidate(
+    preview: &mut PreviewState,
+    candidate_key: Option<&str>,
+) -> &'static str {
+    let Some(candidate_key) = candidate_key else {
+        return "no_candidate";
+    };
+    if preview.visible_preview_key == candidate_key {
+        "exact"
+    } else if preview.cache.contains(candidate_key) {
+        "cached"
+    } else if preview.cache.contains_failed(candidate_key) {
+        "failed"
+    } else if preview.pending_prefetch_keys.contains(candidate_key) {
+        "pending"
+    } else if preview.has_visible_preview {
+        "stale"
+    } else {
+        "blank"
+    }
+}
+
+fn preview_coverage_event_for_state(cache_state: &str, has_candidate: bool) -> &'static str {
+    match (has_candidate, cache_state) {
+        (false, _) => "preview_selection_sample",
+        (true, "exact") => "preview_visible_exact",
+        (true, "stale") | (true, "cached") | (true, "pending") => "preview_visible_stale",
+        (true, "blank") | (true, "failed") => "preview_visible_blank",
+        (true, _) => "preview_selection_sample",
+    }
+}
+
+fn preview_state_is_miss(cache_state: &str, has_candidate: bool) -> bool {
+    has_candidate && !matches!(cache_state, "exact")
+}
+
+fn trace_preview_coverage_sample(
+    preview: &mut PreviewState,
+    selected: usize,
+    selected_game: &ArcadeGameEntry,
+    candidate: Option<&PreviewCandidate<'_>>,
+    turbo_active: bool,
+) {
+    let candidate_key = candidate.map(|candidate| candidate.preview_key.as_str());
+    let cache_state = preview_cache_state_for_candidate(preview, candidate_key);
+    let has_candidate = candidate.is_some();
+    let event = preview_coverage_event_for_state(cache_state, has_candidate);
+    let candidate_index = candidate
+        .map(|candidate| candidate.index.to_string())
+        .unwrap_or_default();
+    let title = candidate
+        .map(|candidate| candidate.game.title.as_ref())
+        .unwrap_or(selected_game.title.as_ref());
+    let system = candidate
+        .map(|candidate| candidate.game.system_id.as_ref())
+        .unwrap_or(selected_game.system_id.as_ref());
+    let asset_key = candidate
+        .map(|candidate| candidate.game.preview_asset_key.as_ref())
+        .unwrap_or("");
+    let visible_asset_key = preview
+        .visible_preview_key
+        .rsplit('|')
+        .next()
+        .unwrap_or(preview.visible_preview_key.as_str());
+    let pack_state = if preview.visible_preview_load_source == "archive_mem" {
+        "archive_mem_ready"
+    } else {
+        "index_or_cache"
+    };
+    eprintln!(
+        "startup_timing\t{event}\t{}ms\tsystem={}\tselected_index={}\tcandidate_index={}\ttitle={}\thas_preview={}\tasset_key={}\tvisible_asset_key={}\tgeneration={}\tturbo_active={}\tcache_state={}\tload_source={}\tpack_state={}",
+        preview.trace_elapsed_ms(),
+        system,
+        selected,
+        candidate_index,
+        title,
+        if has_candidate { 1 } else { 0 },
+        asset_key,
+        visible_asset_key,
+        preview.current_generation,
+        if turbo_active { 1 } else { 0 },
+        cache_state,
+        preview.visible_preview_load_source,
+        pack_state
+    );
+    if preview_state_is_miss(cache_state, has_candidate) {
+        eprintln!(
+            "startup_timing\tpreview_miss\t{}ms\tsystem={}\tselected_index={}\tcandidate_index={}\ttitle={}\thas_preview=1\tasset_key={}\tvisible_asset_key={}\tgeneration={}\tturbo_active={}\tcache_state={}\tload_source={}\tpack_state={}",
+            preview.trace_elapsed_ms(),
+            system,
+            selected,
+            candidate_index,
+            title,
+            asset_key,
+            visible_asset_key,
+            preview.current_generation,
+            if turbo_active { 1 } else { 0 },
+            cache_state,
+            preview.visible_preview_load_source,
+            pack_state
+        );
+    }
+}
+
 fn next_ready_result_index(
     backlog: &VecDeque<PreviewResult>,
     current_generation: u64,
@@ -649,6 +807,7 @@ pub(crate) fn request_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,
+    turbo_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -674,13 +833,24 @@ pub(crate) fn request_arcade_preview_window(
     };
     bridge.set_arcade_preview_placeholder_visible(true);
 
-    preview.window_preview_keys = preview_window_keys(games, selected, DEFAULT_PREVIEW_RADIUS);
+    let turbo_runway_active = turbo_active || preview_turbo_runway_enabled();
+    let prefetch_radius = if turbo_runway_active {
+        TURBO_PREVIEW_LOOKAHEAD
+    } else {
+        DEFAULT_PREVIEW_RADIUS
+    };
+    preview.window_preview_keys = preview_window_keys(games, selected, prefetch_radius);
     preview.cache.retain_window(
         &preview.window_preview_keys,
         Some(&preview.visible_preview_key),
     );
 
-    let candidate = first_preview_candidate(games, selected, DEFAULT_PREVIEW_RADIUS);
+    let candidate = first_available_preview_candidate(
+        games,
+        selected,
+        DEFAULT_PREVIEW_RADIUS,
+        &mut preview.cache,
+    );
     let candidate_preview_key = candidate
         .as_ref()
         .map(|candidate| candidate.preview_key.as_str());
@@ -694,7 +864,7 @@ pub(crate) fn request_arcade_preview_window(
             if preview.visible_preview_key != path {
                 if let Some(image) = preview.cache.get(&path) {
                     if defer_selected_application {
-                        request_preview_prefetches(games, selected, preview);
+                        request_preview_prefetches(games, selected, preview, turbo_runway_active);
                         return false;
                     }
                     if let Some(candidate) = candidate.as_ref() {
@@ -704,20 +874,42 @@ pub(crate) fn request_arcade_preview_window(
                     preview.has_visible_preview = true;
                     preview.begin_raw_transition_to(&path);
                     preview.visible_preview_key = path;
+                    preview.visible_preview_load_source = "decoded_cache";
                     preview.raw_dirty = true;
                     apply_preview_image_bridge(bridge, &image);
-                    request_preview_prefetches(games, selected, preview);
+                    request_preview_prefetches(games, selected, preview, turbo_runway_active);
+                    trace_preview_coverage_sample(
+                        preview,
+                        selected,
+                        selected_game,
+                        candidate.as_ref(),
+                        turbo_active,
+                    );
                     return true;
                 }
                 if preview.cache.contains_failed(&path) {
                     preview.select_empty_preview();
                     bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                    request_preview_prefetches(games, selected, preview);
+                    request_preview_prefetches(games, selected, preview, turbo_runway_active);
+                    trace_preview_coverage_sample(
+                        preview,
+                        selected,
+                        selected_game,
+                        candidate.as_ref(),
+                        turbo_active,
+                    );
                     return true;
                 }
             }
         }
-        request_preview_prefetches(games, selected, preview);
+        request_preview_prefetches(games, selected, preview, turbo_runway_active);
+        trace_preview_coverage_sample(
+            preview,
+            selected,
+            selected_game,
+            candidate.as_ref(),
+            turbo_active,
+        );
         return false;
     }
     preview.selected_mra_path = Some(selected_game.mra_path.to_string());
@@ -736,7 +928,8 @@ pub(crate) fn request_arcade_preview_window(
         bridge.set_arcade_preview_placeholder_visible(true);
         clear_preview_image_bridge(bridge);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        request_preview_prefetches(games, selected, preview);
+        request_preview_prefetches(games, selected, preview, turbo_runway_active);
+        trace_preview_coverage_sample(preview, selected, selected_game, None, turbo_active);
         return true;
     };
 
@@ -752,21 +945,29 @@ pub(crate) fn request_arcade_preview_window(
         candidate.index,
         if selected_has_preview { 1 } else { 0 }
     );
-    let preview_key = candidate.preview_key;
+    let preview_key = candidate.preview_key.clone();
     preview.selected_preview_key = Some(preview_key.clone());
     if preview.cache.contains_failed(&preview_key) {
         preview.select_empty_preview();
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        request_preview_prefetches(games, selected, preview);
+        request_preview_prefetches(games, selected, preview, turbo_runway_active);
+        trace_preview_coverage_sample(
+            preview,
+            selected,
+            selected_game,
+            Some(&candidate),
+            turbo_active,
+        );
         return true;
     }
     if let Some(image) = preview.cache.get(&preview_key) {
         if defer_selected_application {
-            request_preview_prefetches(games, selected, preview);
+            request_preview_prefetches(games, selected, preview, turbo_runway_active);
             return false;
         }
         preview.current_generation = 0;
         preview.has_visible_preview = true;
+        preview.visible_preview_load_source = "decoded_cache";
         if preview_trace_enabled() {
             eprintln!(
                 "preview_trace cache_hit title={} archive_path={} asset_key={}",
@@ -787,7 +988,14 @@ pub(crate) fn request_arcade_preview_window(
         preview.visible_preview_key = preview_key;
         preview.raw_dirty = true;
         apply_preview_image_bridge(bridge, &image);
-        request_preview_prefetches(games, selected, preview);
+        request_preview_prefetches(games, selected, preview, turbo_runway_active);
+        trace_preview_coverage_sample(
+            preview,
+            selected,
+            selected_game,
+            Some(&candidate),
+            turbo_active,
+        );
         return true;
     }
     let requested_at_ms = preview.trace_elapsed_ms();
@@ -845,6 +1053,7 @@ pub(crate) fn request_arcade_preview_window(
             preview.current_generation = 0;
             preview.selected_preview_key = Some(preview_key.clone());
             preview.has_visible_preview = true;
+            preview.visible_preview_load_source = load_source.label();
             preview.begin_raw_transition_to(&preview_key);
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
@@ -862,7 +1071,14 @@ pub(crate) fn request_arcade_preview_window(
                 decode_us,
                 age_us
             );
-            request_preview_prefetches(games, selected, preview);
+            request_preview_prefetches(games, selected, preview, turbo_runway_active);
+            trace_preview_coverage_sample(
+                preview,
+                selected,
+                selected_game,
+                Some(&candidate),
+                turbo_active,
+            );
             return true;
         }
         Err(err) => {
@@ -875,37 +1091,32 @@ pub(crate) fn request_arcade_preview_window(
                     err
                 );
             }
+            preview.cache.insert_failed(preview_key.clone());
+            if first_available_preview_candidate(
+                games,
+                selected,
+                prefetch_radius,
+                &mut preview.cache,
+            )
+            .is_some()
+            {
+                preview.selected_mra_path = None;
+                return request_arcade_preview_window(
+                    bridge,
+                    games,
+                    selected,
+                    preview,
+                    defer_selected_application,
+                    turbo_active,
+                );
+            }
+            preview.select_empty_preview();
+            bridge.set_arcade_preview_status(PreviewStatus::Empty);
+            request_preview_prefetches(games, selected, preview, turbo_runway_active);
+            trace_preview_coverage_sample(preview, selected, selected_game, None, turbo_active);
+            return true;
         }
     }
-    preview.current_generation = preview.worker.request_selected(
-        candidate_game.title.to_string(),
-        candidate_game.preview_archive_path.to_string(),
-        candidate_game.preview_asset_key.to_string(),
-    );
-    eprintln!(
-        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
-        preview.trace_elapsed_ms(),
-        candidate_game.system_id,
-        selected,
-        candidate_game.title,
-        candidate_game.preview_asset_key,
-        preview.current_generation
-    );
-    if preview_trace_enabled() {
-        eprintln!(
-            "preview_trace requested generation={} title={} archive_path={} asset_key={}",
-            preview.current_generation,
-            candidate_game.title,
-            candidate_game.preview_archive_path,
-            candidate_game.preview_asset_key
-        );
-    }
-    if !preview.has_visible_preview {
-        clear_preview_image_bridge(bridge);
-    }
-    bridge.set_arcade_preview_status(PreviewStatus::Loading);
-    request_preview_prefetches(games, selected, preview);
-    true
 }
 
 impl PreviewState {
@@ -918,7 +1129,9 @@ fn request_preview_prefetches(
     games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
+    turbo_active: bool,
 ) {
+    let turbo_active = turbo_active || preview_turbo_runway_enabled();
     let selected_changed = preview
         .last_prefetch_selected
         .is_some_and(|previous| previous != selected);
@@ -930,16 +1143,20 @@ fn request_preview_prefetches(
         }
     }
     preview.last_prefetch_selected = Some(selected);
-    if prefetch_should_throttle(preview, selected_changed) {
+    if prefetch_should_throttle(preview, selected_changed, turbo_active) {
         return;
+    }
+    if turbo_active {
+        prune_pending_prefetch_keys_for_turbo(games, selected, preview);
     }
     let window = PreviewPrefetchWindow {
         selected,
         len: games.len(),
         direction: preview.prefetch_direction,
+        turbo_active,
     };
     if preview.last_prefetch_window == Some(window)
-        && prefetch_window_is_covered(games, selected, preview)
+        && prefetch_window_is_covered(games, selected, preview, turbo_active)
     {
         return;
     }
@@ -948,8 +1165,17 @@ fn request_preview_prefetches(
     for (rank, idx) in direction_aware_prefetch_indices(
         games.len(),
         selected,
-        DEFAULT_PREVIEW_RADIUS,
+        if turbo_active {
+            TURBO_PREVIEW_LOOKAHEAD
+        } else {
+            DEFAULT_PREVIEW_RADIUS
+        },
         preview.prefetch_direction,
+        if turbo_active {
+            TURBO_PREVIEW_BACKTAIL
+        } else {
+            DIRECTIONAL_PREFETCH_TAIL_RADIUS
+        },
     )
     .into_iter()
     .enumerate()
@@ -988,7 +1214,36 @@ fn request_preview_prefetches(
     }
 }
 
-fn prefetch_should_throttle(preview: &mut PreviewState, selected_changed: bool) -> bool {
+fn prune_pending_prefetch_keys_for_turbo(
+    games: ArcadeGameView<'_>,
+    selected: usize,
+    preview: &mut PreviewState,
+) {
+    let keep: HashSet<String> = direction_aware_prefetch_indices(
+        games.len(),
+        selected,
+        TURBO_PREVIEW_LOOKAHEAD,
+        preview.prefetch_direction,
+        TURBO_PREVIEW_BACKTAIL,
+    )
+    .into_iter()
+    .filter_map(|idx| games.get(idx))
+    .filter_map(game_preview_key)
+    .collect();
+    preview
+        .pending_prefetch_keys
+        .retain(|preview_key| keep.contains(preview_key));
+}
+
+fn prefetch_should_throttle(
+    preview: &mut PreviewState,
+    selected_changed: bool,
+    turbo_active: bool,
+) -> bool {
+    if turbo_active {
+        preview.prefetch_throttle_until = None;
+        return false;
+    }
     let now = Instant::now();
     if selected_changed {
         preview.prefetch_throttle_until = Some(now + PREFETCH_SCROLL_SETTLE);
@@ -1020,12 +1275,22 @@ fn prefetch_window_is_covered(
     games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
+    turbo_active: bool,
 ) -> bool {
     direction_aware_prefetch_indices(
         games.len(),
         selected,
-        DEFAULT_PREVIEW_RADIUS,
+        if turbo_active {
+            TURBO_PREVIEW_LOOKAHEAD
+        } else {
+            DEFAULT_PREVIEW_RADIUS
+        },
         preview.prefetch_direction,
+        if turbo_active {
+            TURBO_PREVIEW_BACKTAIL
+        } else {
+            DIRECTIONAL_PREFETCH_TAIL_RADIUS
+        },
     )
     .into_iter()
     .filter_map(|idx| games.get(idx))
@@ -1042,6 +1307,7 @@ fn direction_aware_prefetch_indices(
     selected: usize,
     radius: usize,
     direction: i8,
+    tail_radius: usize,
 ) -> Vec<usize> {
     if len == 0 {
         return Vec::new();
@@ -1066,7 +1332,7 @@ fn direction_aware_prefetch_indices(
         for idx in selected.saturating_add(1)..=end {
             push_unique(idx);
         }
-        for distance in 1..=DIRECTIONAL_PREFETCH_TAIL_RADIUS.min(radius) {
+        for distance in 1..=tail_radius.min(radius) {
             if let Some(idx) = selected.checked_sub(distance) {
                 push_unique(idx);
             }
@@ -1080,7 +1346,7 @@ fn direction_aware_prefetch_indices(
             }
         }
         let end = selected
-            .saturating_add(DIRECTIONAL_PREFETCH_TAIL_RADIUS.min(radius))
+            .saturating_add(tail_radius.min(radius))
             .min(len - 1);
         for idx in selected.saturating_add(1)..=end {
             push_unique(idx);
@@ -1111,6 +1377,7 @@ pub(crate) fn schedule_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,
+    turbo_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         preview.clear(bridge);
@@ -1132,12 +1399,20 @@ pub(crate) fn schedule_arcade_preview_window(
                 selected,
                 preview,
                 defer_selected_application,
+                turbo_active,
             );
         }
-        request_preview_prefetches(games, selected, preview);
+        request_preview_prefetches(games, selected, preview, turbo_active);
         return false;
     }
-    request_arcade_preview_window(bridge, games, selected, preview, defer_selected_application)
+    request_arcade_preview_window(
+        bridge,
+        games,
+        selected,
+        preview,
+        defer_selected_application,
+        turbo_active,
+    )
 }
 
 pub(crate) fn apply_ready_preview(
@@ -1259,6 +1534,7 @@ pub(crate) fn apply_ready_preview(
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result_title.clone().into());
                 preview.has_visible_preview = true;
+                preview.visible_preview_load_source = result.load_source.label();
                 preview.begin_raw_transition_to(&result_preview_key);
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
@@ -1416,6 +1692,24 @@ mod tests {
     }
 
     #[test]
+    fn available_preview_candidate_skips_known_failed_assets() {
+        let games = vec![
+            preview_game("Missing In Pack", "missing.mra", "missing.png", true),
+            preview_game("Fallback", "fallback.mra", "fallback.png", true),
+        ];
+        let mut cache = PreviewImageCache::default();
+        let failed_key = game_preview_key(&games[0]).expect("failed preview key");
+        cache.insert_failed(failed_key);
+
+        let candidate =
+            first_available_preview_candidate(ArcadeGameView::contiguous(&games), 0, 4, &mut cache)
+                .expect("fallback candidate");
+
+        assert_eq!(candidate.index, 1);
+        assert_eq!(candidate.game.title.as_ref(), "Fallback");
+    }
+
+    #[test]
     fn ready_result_selector_prioritizes_current_selected_preview() {
         let backlog = VecDeque::from(vec![
             preview_result(
@@ -1496,32 +1790,100 @@ mod tests {
     #[test]
     fn direction_aware_prefetch_orders_ahead_before_small_tail() {
         assert_eq!(
-            direction_aware_prefetch_indices(30, 10, 4, 1),
+            direction_aware_prefetch_indices(30, 10, 4, 1, DIRECTIONAL_PREFETCH_TAIL_RADIUS),
             vec![11, 12, 13, 14, 9, 8]
         );
         assert_eq!(
-            direction_aware_prefetch_indices(30, 10, 4, -1),
+            direction_aware_prefetch_indices(30, 10, 4, -1, DIRECTIONAL_PREFETCH_TAIL_RADIUS),
             vec![9, 8, 7, 6, 11, 12]
         );
         assert_eq!(
-            direction_aware_prefetch_indices(30, 10, 4, 0),
+            direction_aware_prefetch_indices(30, 10, 4, 0, DIRECTIONAL_PREFETCH_TAIL_RADIUS),
             vec![9, 11, 8, 12, 7, 13, 6, 14]
         );
     }
 
     #[test]
-    fn prefetch_throttle_clears_pending_keys_and_resumes_after_settle() {
+    fn turbo_prefetch_orders_sixty_four_ahead_before_backtail() {
+        let forward = direction_aware_prefetch_indices(
+            100,
+            10,
+            TURBO_PREVIEW_LOOKAHEAD,
+            1,
+            TURBO_PREVIEW_BACKTAIL,
+        );
+        assert_eq!(&forward[..64], &(11..=74).collect::<Vec<_>>()[..]);
+        assert_eq!(&forward[64..], &[9, 8, 7, 6]);
+
+        let reverse = direction_aware_prefetch_indices(
+            100,
+            74,
+            TURBO_PREVIEW_LOOKAHEAD,
+            -1,
+            TURBO_PREVIEW_BACKTAIL,
+        );
+        assert_eq!(&reverse[..64], &(10..=73).rev().collect::<Vec<_>>()[..]);
+        assert_eq!(&reverse[64..], &[75, 76, 77, 78]);
+    }
+
+    #[test]
+    fn turbo_prefetch_clamps_at_edges() {
+        assert_eq!(
+            direction_aware_prefetch_indices(
+                5,
+                0,
+                TURBO_PREVIEW_LOOKAHEAD,
+                1,
+                TURBO_PREVIEW_BACKTAIL
+            ),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            direction_aware_prefetch_indices(
+                5,
+                4,
+                TURBO_PREVIEW_LOOKAHEAD,
+                -1,
+                TURBO_PREVIEW_BACKTAIL
+            ),
+            vec![3, 2, 1, 0]
+        );
+    }
+
+    #[test]
+    fn normal_prefetch_throttle_clears_pending_keys_and_resumes_after_settle() {
         let mut preview = PreviewState::new();
         preview.pending_prefetch_keys.insert("stale".to_string());
 
-        assert!(prefetch_should_throttle(&mut preview, true));
+        assert!(prefetch_should_throttle(&mut preview, true, false));
         assert!(preview.pending_prefetch_keys.is_empty());
         assert!(preview.prefetch_throttle_until.is_some());
-        assert!(prefetch_should_throttle(&mut preview, false));
+        assert!(prefetch_should_throttle(&mut preview, false, false));
 
         preview.prefetch_throttle_until = Some(Instant::now() - Duration::from_millis(1));
-        assert!(!prefetch_should_throttle(&mut preview, false));
+        assert!(!prefetch_should_throttle(&mut preview, false, false));
         assert!(preview.prefetch_throttle_until.is_none());
+    }
+
+    #[test]
+    fn turbo_prefetch_bypasses_throttle_and_preserves_pending_keys() {
+        let mut preview = PreviewState::new();
+        preview.pending_prefetch_keys.insert("runway".to_string());
+        preview.prefetch_throttle_until = Some(Instant::now() + Duration::from_secs(1));
+
+        assert!(!prefetch_should_throttle(&mut preview, true, true));
+        assert!(preview.pending_prefetch_keys.contains("runway"));
+        assert!(preview.prefetch_throttle_until.is_none());
+    }
+
+    #[test]
+    fn preview_miss_classification_requires_exact_candidate() {
+        assert!(!preview_state_is_miss("exact", true));
+        assert!(preview_state_is_miss("blank", true));
+        assert!(preview_state_is_miss("stale", true));
+        assert!(preview_state_is_miss("pending", true));
+        assert!(preview_state_is_miss("failed", true));
+        assert!(!preview_state_is_miss("blank", false));
     }
 
     #[test]

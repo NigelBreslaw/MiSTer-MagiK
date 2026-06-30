@@ -487,10 +487,13 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
     let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
     let env_start_screen = launcher_start_screen_from_env();
+    let env_start_system = launcher_start_system_from_env();
     let start_screen = env_start_screen
+        .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
     let lock_screen = launcher_lock_screen_from_env()
+        .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
     let launch_return_restore_allowed = launcher_return_to_launcher_requested()
         && env_start_screen.is_none()
@@ -502,6 +505,7 @@ pub(super) fn run_launcher_loop(
     let mut launch_return_restored = false;
     let arcade_catalog_required_at_start =
         start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
+    let mut pending_start_system = env_start_system.clone();
     let mut nav = LauncherNav::new();
     nav.screen = start_screen;
     let mut setup = SetupNav::new();
@@ -535,6 +539,9 @@ pub(super) fn run_launcher_loop(
         screen_label(start_screen),
         lock_screen.map(screen_label).unwrap_or("none")
     );
+    if let Some(system_id) = env_start_system.as_ref() {
+        println!("launcher_start_system={system_id}");
+    }
     println!(
         "launcher_dirty_opt={}",
         if dirty_opt { "on" } else { "off" }
@@ -1205,6 +1212,34 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        if let Some(system_id) = pending_start_system.take() {
+            if arcade_navigation_ready(catalog_ready, &catalog) {
+                let before = LauncherBridgeKey::from_nav(&nav);
+                if apply_start_system_from_env(&mut nav, &catalog, &system_id) {
+                    print_startup_event(
+                        start,
+                        "launcher_start_system_applied",
+                        format!("system={system_id}"),
+                    );
+                    let after = LauncherBridgeKey::from_nav(&nav);
+                    if before != after {
+                        media_session.note_nav_change(&before, &after, Instant::now());
+                        full_bridge_dirty = true;
+                    }
+                } else {
+                    print_startup_event(
+                        start,
+                        "launcher_start_system_fallback",
+                        format!("system={system_id} reason=missing"),
+                    );
+                    nav.screen = Screen::Home;
+                    full_bridge_dirty = true;
+                }
+            } else {
+                pending_start_system = Some(system_id);
+            }
+        }
+
         if let Some(scenario) = launcher_bench_scenario {
             let catalog_ready_for_bench = if scenario.starts_on_arcade() {
                 arcade_navigation_ready(catalog_ready, &catalog)
@@ -1855,6 +1890,7 @@ pub(super) fn run_launcher_loop(
                 nav.arcade.selected,
                 &mut preview,
                 defer_selected_preview,
+                nav.arcade.is_scroll_active(),
             ) {
                 window.request_redraw();
             }
@@ -2851,6 +2887,27 @@ fn launcher_bench_initial_preview_ready(
     !scenario.starts_on_arcade() || matches!(preview_cache_state, "exact" | "empty")
 }
 
+fn apply_start_system_from_env(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    system_id: &str,
+) -> bool {
+    let Some(system_index) = catalog
+        .systems
+        .iter()
+        .position(|system| system.id.eq_ignore_ascii_case(system_id))
+    else {
+        return false;
+    };
+    nav.selected = system_index;
+    nav.screen = Screen::Arcade;
+    nav.arcade_filter.active = arcade_catalog::ArcadeFilter::All;
+    nav.arcade_filter.drawer_open = false;
+    nav.arcade_filter.level = launcher::ArcadeFilterLevel::Top;
+    nav.arcade.reset();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2922,6 +2979,41 @@ mod tests {
             })
             .collect();
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), systems)
+    }
+
+    #[test]
+    fn start_system_env_selects_matching_system_and_enters_arcade() {
+        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
+        let mut nav = LauncherNav::new();
+
+        assert!(apply_start_system_from_env(&mut nav, &catalog, "neogeo"));
+
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.arcade.selected, 0);
+        assert_eq!(nav.arcade_filter.active, arcade_catalog::ArcadeFilter::All);
+    }
+
+    #[test]
+    fn start_system_env_matches_case_insensitively() {
+        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
+        let mut nav = LauncherNav::new();
+
+        assert!(apply_start_system_from_env(&mut nav, &catalog, "SATURN"));
+
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.selected, 2);
+    }
+
+    #[test]
+    fn start_system_env_fails_without_changing_nav_for_missing_system() {
+        let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
+        let mut nav = LauncherNav::new();
+
+        assert!(!apply_start_system_from_env(&mut nav, &catalog, "psx"));
+
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.selected, 0);
     }
 
     fn ready_catalog_message() -> CatalogWorkerMessage {

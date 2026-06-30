@@ -214,6 +214,21 @@ Launcher velocity scenarios and preview scroll TSVs require a MagiK binary
 built with `--bench-tools`; production `ui` builds intentionally ignore
 `MISTER_LAUNCHER_BENCH_SCENARIO` and omit trace writers.
 
+Cold direct-to-system turbo preview readiness is measured with:
+
+```bash
+scripts/gate-cold-turbo-preview.sh LABEL --systems arcade,neogeo,saturn --secs 10
+```
+
+This gate reboots per system, starts the launcher directly with
+`MISTER_LAUNCHER_START_SYSTEM=<system>`, skips full archive warming, enables the
+64-item turbo preview runway, and runs `turbo-hold`. It fails if any turbo
+selection sample with a preview-capable candidate is blank, stale, failed, or
+shows another asset key. Passing rows report `miss_count=0`, `blank=0`,
+`stale=0`, `archive_mem_loads=0`, and first selected loads from `index_pread`.
+Use `scripts/profile-cold-turbo-preview.sh` without `--require-pass` when
+collecting reporting-only data.
+
 Arcade benchmark scripts use `MISTER_CATALOG_REFRESH=default`, not `off`.
 Warm catalog startup may first populate Home/system counts from
 `library.summary.json`; the default policy then hydrates the full SQLite catalog

@@ -91,6 +91,13 @@ pub(super) fn launcher_start_screen_from_env() -> Option<Screen> {
     launcher_screen_from_env("MISTER_LAUNCHER_START_SCREEN")
 }
 
+pub(super) fn launcher_start_system_from_env() -> Option<String> {
+    std::env::var("MISTER_LAUNCHER_START_SYSTEM")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
 pub(super) fn launcher_lock_screen_from_env() -> Option<Screen> {
     launcher_screen_from_env("MISTER_LAUNCHER_LOCK_SCREEN")
 }
