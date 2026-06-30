@@ -12,15 +12,20 @@ label="cold-preview-$(date -u +%Y%m%dT%H%M%SZ)"
 secs="22"
 systems_csv="arcade,neogeo,saturn"
 skip_reboot="0"
+require_pass="0"
+max_request_to_apply_ms="32"
+env_file=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-cold-preview-systems.sh [LABEL] [--secs N] [--systems CSV] [--skip-reboot]
+Usage: scripts/profile-cold-preview-systems.sh [LABEL] [--secs N] [--systems CSV] [--skip-reboot] [--require-pass] [--max-request-to-apply-ms N]
 
 Runs the launcher from Home for each requested system and summarizes the
 state-chart startup_timing rows for first list + first preview readiness.
 
 Default systems: arcade,neogeo,saturn.
+By default this is reporting-only. Use --require-pass to fail when any system
+misses the first-preview gate.
 EOF
 }
 
@@ -30,6 +35,8 @@ while [[ $# -gt 0 ]]; do
     --secs) secs="${2:?--secs needs a value}"; shift 2 ;;
     --systems) systems_csv="${2:?--systems needs a value}"; shift 2 ;;
     --skip-reboot) skip_reboot="1"; shift ;;
+    --require-pass) require_pass="1"; shift ;;
+    --max-request-to-apply-ms) max_request_to_apply_ms="${2:?--max-request-to-apply-ms needs a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
@@ -45,6 +52,10 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then
   echo "--secs must be a positive integer" >&2
   exit 2
 fi
+if [[ ! "$max_request_to_apply_ms" =~ ^[0-9]+$ || "$max_request_to_apply_ms" -lt 1 ]]; then
+  echo "--max-request-to-apply-ms must be a positive integer" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -57,23 +68,33 @@ input_script_for_system() {
   esac
 }
 
-tsv_value() {
-  printf '%s' "$1" | tr '\t\r\n' '   '
-}
-
 write_env_for_system() {
-  local system="$1" input_script="$2" remote_trace="/tmp/${label}-${system}.tsv"
-  "$MISTER" run "mkdir -p /media/fat/mister-magik; rm -f '$REMOTE_LOG' '$remote_trace'; printf '%s\n' 'export MISTER_CATALOG_REFRESH=default' 'export MISTER_LAUNCHER_START_SCREEN=home' 'export MISTER_LAUNCHER_INPUT_SCRIPT=$input_script' 'export MISTER_PREVIEW_TRACE=1' 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=$secs' 'export MISTER_PREVIEW_SCROLL_TRACE=$remote_trace' 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1' > '$REMOTE_ENV'; sync" >/dev/null
+  local system="$1" input_script="$2"
+  env_file="$OUT_DIR/${label}-${system}.launcher.env"
+  {
+    printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
+    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
+    printf 'export MISTER_PREVIEW_TRACE=1\n'
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
+    printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
+  } >"$env_file"
+  "$MISTER" run "mkdir -p /media/fat/mister-magik; rm -f '$REMOTE_LOG'" >/dev/null
+  "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+  "$MISTER" run "sync" >/dev/null
 }
 
 cleanup() {
+  if [[ -n "$env_file" ]]; then
+    rm -f "$env_file"
+  fi
   "$MISTER" run "rm -f '$REMOTE_ENV'; sync; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 summarize_log() {
-  local system="$1" log="$2"
-  awk -v label="$label" -v system="$system" '
+  local target_system="$1" log="$2"
+  awk -v label="$label" -v target_system="$target_system" -v max_request_to_apply_ms="$max_request_to_apply_ms" '
     function field(name, fallback,    i, kv) {
       for (i = 4; i <= NF; i++) {
         split($i, kv, "=")
@@ -87,6 +108,7 @@ summarize_log() {
       return value + 0
     }
     BEGIN {
+      FS = "\t"
       first_frame = input_enabled = system_entered = list_ready = candidate = request = decoded = applied = pack_current = full_catalog = -1
       load_source = "unknown"
       selected_has_preview = "unknown"
@@ -97,17 +119,17 @@ summarize_log() {
     $1 == "startup_timing" && $2 == "first_frame" && first_frame < 0 { first_frame = ms_value() }
     $1 == "startup_timing" && $2 == "launcher_input_enabled" && input_enabled < 0 { input_enabled = ms_value() }
     $1 == "startup_timing" && ($2 == "catalog_navigation_load" || $2 == "library_ready") && full_catalog < 0 { full_catalog = ms_value() }
-    $1 == "startup_timing" && $2 == "screenshot_media_pack_status" && field("system", "") == system && pack_current < 0 { pack_current = ms_value() }
-    $1 == "startup_timing" && $2 == "preview_system_entered" && field("system", "") == system && system_entered < 0 { system_entered = ms_value() }
-    $1 == "startup_timing" && $2 == "preview_initial_list_ready" && field("system", "") == system && list_ready < 0 { list_ready = ms_value() }
-    $1 == "startup_timing" && $2 == "preview_selected_candidate" && field("system", "") == system && candidate < 0 {
+    $1 == "startup_timing" && $2 == "screenshot_media_pack_status" && field("system", "") == target_system && pack_current < 0 { pack_current = ms_value() }
+    $1 == "startup_timing" && $2 == "preview_system_entered" && field("system", "") == target_system && system_entered < 0 { system_entered = ms_value() }
+    $1 == "startup_timing" && $2 == "preview_initial_list_ready" && field("system", "") == target_system && list_ready < 0 { list_ready = ms_value() }
+    $1 == "startup_timing" && $2 == "preview_selected_candidate" && field("system", "") == target_system && candidate < 0 {
       candidate = ms_value()
       selected_has_preview = field("has_preview", "unknown")
       asset_key = field("asset_key", "")
       candidate_title = field("title", "")
     }
-    $1 == "startup_timing" && $2 == "preview_selected_requested" && field("system", "") == system && request < 0 { request = ms_value() }
-    $1 == "startup_timing" && $2 == "preview_selected_decoded" && field("system", "") == system && decoded < 0 {
+    $1 == "startup_timing" && $2 == "preview_selected_requested" && field("system", "") == target_system && request < 0 { request = ms_value() }
+    $1 == "startup_timing" && $2 == "preview_selected_decoded" && field("system", "") == target_system && decoded < 0 {
       decoded = ms_value()
       load_source = field("load_source", "unknown")
       total_us = field("total_us", "-1") + 0
@@ -115,20 +137,21 @@ summarize_log() {
       decode_us = field("decode_us", "-1") + 0
       age_us = field("age_us", "-1") + 0
     }
-    $1 == "startup_timing" && $2 == "preview_selected_applied" && field("system", "") == system && applied < 0 { applied = ms_value() }
+    $1 == "startup_timing" && $2 == "preview_selected_applied" && field("system", "") == target_system && applied < 0 { applied = ms_value() }
     END {
       request_to_apply_ms = (request >= 0 && applied >= 0) ? applied - request : -1
-      pass = (request_to_apply_ms >= 0 && request_to_apply_ms <= 32 && load_source == "index_pread") ? 1 : 0
-      printf "preview_state_tsv\tlabel=%s\tsystem=%s\tfirst_frame_ms=%d\tinput_enabled_ms=%d\tsystem_entered_ms=%d\tinitial_list_ready_ms=%d\tselected_candidate_ms=%d\tselected_has_preview=%s\tpreview_requested_ms=%d\tpreview_decoded_ms=%d\tpreview_applied_ms=%d\trequest_to_apply_ms=%d\tpack_current_ms=%d\tfull_catalog_ms=%d\tload_source=%s\ttotal_us=%d\tread_us=%d\tdecode_us=%d\tage_us=%d\tasset_key=%s\tcandidate_title=%s\tpass=%d\n",
-        label, system, first_frame, input_enabled, system_entered, list_ready, candidate,
+      pass = (system_entered >= 0 && list_ready >= 0 && candidate >= 0 && request >= 0 && decoded >= 0 && applied >= 0 && request_to_apply_ms >= 0 && request_to_apply_ms <= max_request_to_apply_ms && load_source == "index_pread") ? 1 : 0
+      printf "preview_state_tsv\tlabel=%s\tsystem=%s\tfirst_frame_ms=%d\tinput_enabled_ms=%d\tsystem_entered_ms=%d\tinitial_list_ready_ms=%d\tselected_candidate_ms=%d\tselected_has_preview=%s\tpreview_requested_ms=%d\tpreview_decoded_ms=%d\tpreview_applied_ms=%d\trequest_to_apply_ms=%d\tpack_current_ms=%d\tfull_catalog_ms=%d\tload_source=%s\ttotal_us=%d\tread_us=%d\tdecode_us=%d\tage_us=%d\tasset_key=%s\tcandidate_title=%s\tmax_request_to_apply_ms=%d\tpass=%d\n",
+        label, target_system, first_frame, input_enabled, system_entered, list_ready, candidate,
         selected_has_preview, request, decoded, applied, request_to_apply_ms, pack_current,
         full_catalog, load_source, total_us, read_us, decode_us, age_us, asset_key,
-        candidate_title, pass
+        candidate_title, max_request_to_apply_ms, pass
     }
   ' "$log"
 }
 
 IFS=',' read -r -a systems <<<"$systems_csv"
+all_pass="1"
 for system in "${systems[@]}"; do
   input_script="$(input_script_for_system "$system")" || {
     echo "unsupported system for scripted benchmark: $system" >&2
@@ -143,5 +166,14 @@ for system in "${systems[@]}"; do
   fi
   sleep "$((secs + 8))"
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null
-  summarize_log "$system" "$local_log"
+  summary="$(summarize_log "$system" "$local_log")"
+  printf '%s\n' "$summary"
+  if [[ "$summary" != *$'\tpass=1' ]]; then
+    all_pass="0"
+  fi
 done
+
+if [[ "$require_pass" == "1" && "$all_pass" != "1" ]]; then
+  echo "cold preview gate failed for one or more systems" >&2
+  exit 1
+fi

@@ -697,7 +697,7 @@ pub(crate) fn request_arcade_preview_window(
     let selected_has_preview = game_preview_key(selected_game).is_some();
     let Some(candidate) = candidate else {
         eprintln!(
-            "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview=0 asset_key= candidate_index= selected_has_preview={}",
+            "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=0\tasset_key=\tcandidate_index=\tselected_has_preview={}",
             preview.trace_elapsed_ms(),
             selected_game.system_id,
             selected,
@@ -715,7 +715,7 @@ pub(crate) fn request_arcade_preview_window(
     let candidate_game = candidate.game;
     bridge.set_arcade_preview_title(candidate_game.title.as_ref().into());
     eprintln!(
-        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} candidate_index={} selected_has_preview={}",
+        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tcandidate_index={}\tselected_has_preview={}",
         preview.trace_elapsed_ms(),
         candidate_game.system_id,
         selected,
@@ -748,7 +748,7 @@ pub(crate) fn request_arcade_preview_window(
             );
         }
         eprintln!(
-            "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation=0 load_source=decoded_cache total_us=0 read_us=0 decode_us=0 age_us=0",
+            "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source=decoded_cache\ttotal_us=0\tread_us=0\tdecode_us=0\tage_us=0",
             preview.trace_elapsed_ms(),
             candidate_game.system_id,
             selected,
@@ -768,7 +768,7 @@ pub(crate) fn request_arcade_preview_window(
         candidate_game.preview_asset_key.to_string(),
     );
     eprintln!(
-        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={} selected_index={} title={} has_preview=1 asset_key={} generation={}",
+        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
         preview.trace_elapsed_ms(),
         candidate_game.system_id,
         selected,
@@ -1096,7 +1096,7 @@ pub(crate) fn apply_ready_preview(
             if is_selected_result {
                 if result.load_source == PreviewLoadSource::IndexPread {
                     eprintln!(
-                        "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} read_us={}",
+                        "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\tread_us={}",
                         result.completed_at_ms,
                         result_system_id,
                         result_title,
@@ -1107,7 +1107,7 @@ pub(crate) fn apply_ready_preview(
                     );
                 }
                 eprintln!(
-                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} total_us={} read_us={} decode_us={} raw565_parse_us={} age_us={}",
+                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
                     result.completed_at_ms,
                     result_system_id,
                     result_title,
@@ -1171,7 +1171,7 @@ pub(crate) fn apply_ready_preview(
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
                 eprintln!(
-                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={} title={} has_preview=1 asset_key={} generation={} load_source={} total_us={} read_us={} decode_us={} age_us={}",
+                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
                     preview.trace_elapsed_ms(),
                     result_system_id,
                     result_title,
