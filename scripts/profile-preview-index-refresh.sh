@@ -8,7 +8,7 @@ OUT_DIR="$HERE/build/preview-index-refresh"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/profile-preview-index-refresh.sh LABEL
+Usage: scripts/profile-preview-index-refresh.sh LABEL [--deploy-device]
 
 Runs the diagnostics preview-index-refresh-bench command on-device. The command
 updates library preview availability from installed screenshot pack .idx files
@@ -17,19 +17,26 @@ USAGE
 }
 
 label="${1:-}"
+deploy_device=0
 if [[ -z "$label" || "$label" == "-h" || "$label" == "--help" ]]; then
   usage
   [[ -z "$label" ]] && exit 2 || exit 0
 fi
 shift
-if (($#)); then
-  echo "unexpected argument: $1" >&2
-  usage >&2
-  exit 2
-fi
+while (($#)); do
+  case "$1" in
+    --deploy-device) deploy_device=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unexpected argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "label must contain only letters, numbers, _, ., or -" >&2
   exit 2
+fi
+
+if [[ "$deploy_device" == "1" ]]; then
+  "$HERE/scripts/deploy-rust.sh" --device --diagnostics --ui-scope launcher
 fi
 
 mkdir -p "$OUT_DIR"
@@ -43,7 +50,7 @@ if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik/m
   "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
   if grep -q "unknown command 'preview-index-refresh-bench'" "$local_log" "$local_tsv" 2>/dev/null; then
     echo "ERROR: deployed mister-magik-fb does not expose preview-index-refresh-bench." >&2
-    echo "Build/deploy a diagnostics-capable production binary before running this profile." >&2
+    echo "Build/deploy a diagnostics-capable binary first: scripts/deploy-rust.sh --device --diagnostics" >&2
     exit 3
   fi
   echo "preview index refresh profile failed; see $local_log" >&2

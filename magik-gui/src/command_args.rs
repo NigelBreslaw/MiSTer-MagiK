@@ -146,6 +146,7 @@ mod tests {
             "library-sql",
             "hbmame-metadata-from-library",
             "library-scan-bench",
+            "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
             assert!(COMMANDS.contains(&command), "{command}");
@@ -154,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "bench-tools")]
+    #[cfg(all(feature = "bench-tools", not(feature = "diagnostics")))]
     fn bench_tool_command_list_exposes_benchmarks() {
         for command in [
             "media-bench-download",
@@ -163,6 +164,8 @@ mod tests {
         ] {
             assert!(COMMANDS.contains(&command), "{command}");
         }
+        assert!(!COMMANDS.contains(&"preview-pack-bench"));
+        assert!(!COMMANDS.contains(&"preview-index-refresh-bench"));
         assert!(!COMMANDS.contains(&"audio-tone"));
     }
 

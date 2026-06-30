@@ -8,6 +8,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --all-scenes     # lab/bench build
 #   MISTER_IP=... scripts/deploy-rust.sh --experiments    # lab/bench build
 #   MISTER_IP=... scripts/deploy-rust.sh --bench-tools    # benchmark command build
+#   MISTER_IP=... scripts/deploy-rust.sh --diagnostics    # diagnostics command build
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_DEPLOY_TRANSPORT=ssh scripts/deploy-rust.sh  # explicit fallback only
 #
@@ -34,6 +35,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
     --experiments) BUILD_FLAG+=(--experiments) ;;
     --bench-tools) BUILD_FLAG+=(--bench-tools) ;;
+    --diagnostics) BUILD_FLAG+=(--diagnostics) ;;
     --ui-scope=*) BUILD_FLAG+=("$arg") ;;
     --ui-scope)
       i=$((i + 1))

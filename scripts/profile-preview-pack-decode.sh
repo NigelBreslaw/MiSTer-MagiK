@@ -11,6 +11,7 @@ usage() {
 Usage: scripts/profile-preview-pack-decode.sh LABEL [options]
 
 Options:
+  --deploy-device          Build/deploy a diagnostics-capable binary first.
   --pack PATH              Arcade pack to decode on-device.
   --variant NAME           Variant label (default mmlz4b-lz4-fast).
   --codec NAME             Codec label for TSV output (default lz4-flex).
@@ -47,9 +48,11 @@ sample="all"
 arcade_pack=""
 saturn_pack="/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b"
 neogeo_pack="/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b"
+deploy_device=0
 
 while (($#)); do
   case "$1" in
+    --deploy-device) deploy_device=1; shift ;;
     --pack) pack="${2:?--pack needs a path}"; shift 2 ;;
     --variant) variant="${2:?--variant needs a value}"; shift 2 ;;
     --codec) codec="${2:?--codec needs a value}"; shift 2 ;;
@@ -162,6 +165,10 @@ EOF
   exit 0
 fi
 
+if [[ "$deploy_device" == "1" ]]; then
+  "$HERE/scripts/deploy-rust.sh" --device --diagnostics --ui-scope launcher
+fi
+
 mkdir -p "$OUT_DIR"
 local_tsv="$OUT_DIR/${label}-preview-pack.tsv"
 remote_tsv="/tmp/${label}-preview-pack.tsv"
@@ -184,7 +191,17 @@ remote_cmd=(
 )
 
 printf -v quoted ' %q' "${remote_cmd[@]}"
-"$MISTER" run "rm -f '$remote_tsv' '$remote_log';${quoted} >'$remote_tsv' 2>'$remote_log'" >/dev/null
+if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log';${quoted} >'$remote_tsv' 2>'$remote_log'" >/dev/null; then
+  "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
+  "$MISTER" get "$remote_log" "$OUT_DIR/${label}-preview-pack.log" >/dev/null || true
+  if grep -q "unknown command 'preview-pack-bench'" "$local_tsv" "$OUT_DIR/${label}-preview-pack.log" 2>/dev/null; then
+    echo "ERROR: deployed mister-magik-fb does not expose preview-pack-bench." >&2
+    echo "Build/deploy a diagnostics-capable binary first: scripts/deploy-rust.sh --device --diagnostics" >&2
+    exit 3
+  fi
+  echo "preview pack decode profile failed; see $OUT_DIR/${label}-preview-pack.log" >&2
+  exit 1
+fi
 "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null
 "$MISTER" get "$remote_log" "$OUT_DIR/${label}-preview-pack.log" >/dev/null || true
 echo "wrote $local_tsv"
