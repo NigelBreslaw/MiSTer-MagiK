@@ -1,5 +1,12 @@
 # Launcher Framebuffer Route Reassertion - 2026-06-14
 
+Superseded note, 2026-06-30: the maintained Main_MiSTer fork now suppresses
+stock OSD/menu/framebuffer routes while MagiK owns the launcher. Periodic
+reassertion is no longer normal runtime policy; `MISTER_FB_ROUTE_REASSERT_FRAMES`
+is a diagnostic fallback and defaults to disabled. The evidence below explains
+why the watchdog existed before the fork gained explicit MagiK ownership
+invariants.
+
 ## Context
 
 After the library scanner benchmark, the MiSTer was visibly showing the stock
@@ -40,22 +47,24 @@ launcher process was alive.
 
 ## Fix
 
-The launcher now owns the route continuously instead of only during startup:
+At the time, the launcher was changed to own the route continuously instead of
+only during startup:
 
-1. `FramebufferRouteGuard` requests a route reassertion on frame 0 and every 60
-   frames by default.
+1. `FramebufferRouteGuard` requested a route reassertion on frame 0 and at a
+   periodic interval.
 2. Each reassertion sends the current RGB565 `SET_FBUF` route through Rust's
    `Fpga::fb_enable_format()`.
 3. A successful reassertion also forces a full cached-frame present back to
    `/dev/fb0`, so dirty-row optimization cannot preserve stale helper output.
 
-The cadence is controlled by `MISTER_FB_ROUTE_REASSERT_FRAMES`. Use `0` only for
-diagnostics that intentionally need to disable reassertion.
+The cadence is controlled by `MISTER_FB_ROUTE_REASSERT_FRAMES`. It now defaults
+to `0`, disabling the periodic watchdog unless an attended diagnostic explicitly
+opts back in.
 
-This is intentionally different from the old boot-flicker experiment that reset
-the framebuffer mode and route every 10 frames for the first few seconds. The new
-path does not rewrite the framebuffer mode, runs at a lower steady cadence, and
-is paired with a full present.
+That path was intentionally different from the old boot-flicker experiment that
+reset the framebuffer mode and route every 10 frames for the first few seconds:
+it did not rewrite the framebuffer mode, ran at a lower steady cadence, and was
+paired with a full present.
 
 ## Validation
 
