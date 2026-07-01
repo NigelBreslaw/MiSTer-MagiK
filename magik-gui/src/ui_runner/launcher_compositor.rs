@@ -85,7 +85,9 @@ pub(super) struct LauncherPresentRequest<'a, 'b> {
 
 pub(super) struct LauncherPresentResult {
     pub(super) copied_rows: u32,
+    pub(super) direct_preview_rows: u32,
     pub(super) cached_present_us: u128,
+    pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
@@ -118,8 +120,13 @@ impl LauncherCompositor {
             cached_present_us += copy_start.elapsed().as_micros();
         }
 
+        let mut direct_preview_rows = 0u32;
+        let mut direct_preview_present_us = 0u128;
         if let Some(rect) = raw_preview_direct_rect {
-            copied_rows += request.layer_target.present_direct_preview_rect(rect);
+            let copy_start = Instant::now();
+            direct_preview_rows = request.layer_target.present_direct_preview_rect(rect);
+            direct_preview_present_us = copy_start.elapsed().as_micros();
+            copied_rows += direct_preview_rows;
         }
 
         let mut arcade_list_present_us = 0u128;
@@ -133,7 +140,9 @@ impl LauncherCompositor {
 
         LauncherPresentResult {
             copied_rows,
+            direct_preview_rows,
             cached_present_us,
+            direct_preview_present_us,
             arcade_list_present_us,
             arcade_update_label,
         }

@@ -2058,7 +2058,9 @@ pub(super) fn run_launcher_loop(
                 let _ = disp.wait_vsync();
                 LauncherPresentResult {
                     copied_rows: 0,
+                    direct_preview_rows: 0,
                     cached_present_us: 0,
+                    direct_preview_present_us: 0,
                     arcade_list_present_us: 0,
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
@@ -2088,7 +2090,9 @@ pub(super) fn run_launcher_loop(
                 prepare_us,
                 dirty_rect: this_rect,
                 copied_rows: presentation.copied_rows,
+                direct_preview_rows: presentation.direct_preview_rows,
                 cached_present_us: presentation.cached_present_us,
+                direct_preview_present_us: presentation.direct_preview_present_us,
                 arcade_list_present_us: presentation.arcade_list_present_us,
                 vsync_source,
                 vsync_period_us,

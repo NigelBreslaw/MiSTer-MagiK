@@ -13,6 +13,7 @@ pub(super) struct LauncherFrameAccounting {
     vsync_us: u128,
     copy_us: u128,
     cached_present_us: u128,
+    direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     rows: u128,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -55,7 +56,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) prepare_us: u128,
     pub(super) dirty_rect: Option<DirtyRect>,
     pub(super) copied_rows: u32,
+    pub(super) direct_preview_rows: u32,
     pub(super) cached_present_us: u128,
+    pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
@@ -102,6 +105,7 @@ struct PreviewScrollTraceRow {
     transition_progress: f32,
     arcade_update: ArcadeUpdateTrace,
     copied_rows: u32,
+    direct_preview_rows: u32,
     prepare_us: u128,
     catalog_worker_us: u128,
     catalog_message_count: u32,
@@ -120,6 +124,7 @@ struct PreviewScrollTraceRow {
     vsync_us: u128,
     fb_present_us: u128,
     cached_present_us: u128,
+    direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     vsync_source: &'static str,
     vsync_period_us: u64,
@@ -154,7 +159,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -165,6 +170,7 @@ impl PreviewScrollTrace {
                 row.transition_progress,
                 row.arcade_update,
                 row.copied_rows,
+                row.direct_preview_rows,
                 row.prepare_us,
                 row.catalog_worker_us,
                 row.catalog_message_count,
@@ -183,6 +189,7 @@ impl PreviewScrollTrace {
                 row.vsync_us,
                 row.fb_present_us,
                 row.cached_present_us,
+                row.direct_preview_present_us,
                 row.arcade_list_present_us,
                 row.vsync_source,
                 row.vsync_period_us,
@@ -251,6 +258,7 @@ impl LauncherFrameAccounting {
             vsync_us: 0,
             copy_us: 0,
             cached_present_us: 0,
+            direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             rows: 0,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -423,6 +431,7 @@ impl LauncherFrameAccounting {
             transition_progress: frame.preview_transition.progress,
             arcade_update: frame.arcade_update_label,
             copied_rows: frame.copied_rows,
+            direct_preview_rows: frame.direct_preview_rows,
             prepare_us: frame.prepare_us,
             catalog_worker_us: frame.prepare_trace.catalog_worker_us,
             catalog_message_count: frame.prepare_trace.catalog_message_count,
@@ -441,6 +450,7 @@ impl LauncherFrameAccounting {
             vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
             fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
             cached_present_us: frame.cached_present_us,
+            direct_preview_present_us: frame.direct_preview_present_us,
             arcade_list_present_us: frame.arcade_list_present_us,
             vsync_source: frame
                 .vsync_source
@@ -501,6 +511,7 @@ impl LauncherFrameAccounting {
         self.vsync_us += (frame.frame_t3 - frame.custom_draw_done).as_micros();
         self.copy_us += (frame.frame_t4 - frame.frame_t3).as_micros();
         self.cached_present_us += frame.cached_present_us;
+        self.direct_preview_present_us += frame.direct_preview_present_us;
         self.arcade_list_present_us += frame.arcade_list_present_us;
         self.rows += frame.copied_rows as u128;
         if self.fps_window_start.elapsed() >= Duration::from_secs(1) {
@@ -518,7 +529,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
             println!(
-                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us arcade-list-present {}us ({} rows avg)",
+                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
                 self.fps_frames,
                 self.prepare_us / n,
                 self.render_us / n,
@@ -526,6 +537,7 @@ impl LauncherFrameAccounting {
                 self.vsync_us / n,
                 self.copy_us / n,
                 self.cached_present_us / n,
+                self.direct_preview_present_us / n,
                 self.arcade_list_present_us / n,
                 self.rows / n
             );
@@ -537,6 +549,7 @@ impl LauncherFrameAccounting {
             self.vsync_us = 0;
             self.copy_us = 0;
             self.cached_present_us = 0;
+            self.direct_preview_present_us = 0;
             self.arcade_list_present_us = 0;
             self.rows = 0;
         }
@@ -751,7 +764,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

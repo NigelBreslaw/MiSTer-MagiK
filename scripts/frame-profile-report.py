@@ -21,6 +21,7 @@ PHASES = [
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
+    "direct_preview_present_us",
     "arcade_list_present_us",
     "video_decode_us",
     "video_scale_us",

@@ -31,8 +31,10 @@ REQUIRED_COLUMNS = {
 
 METRICS = [
     "rows",
+    "direct_preview_rows",
     "fb_present_us",
     "cached_present_us",
+    "direct_preview_present_us",
     "arcade_list_present_us",
 ]
 
@@ -107,6 +109,8 @@ def read_trace(path: Path, *, ignore_frames_through: int) -> TraceData:
         for row in reader:
             if "arcade_list_present_us" not in row and "overlay_present_us" in row:
                 row["arcade_list_present_us"] = row["overlay_present_us"]
+            row.setdefault("direct_preview_present_us", "0")
+            row.setdefault("direct_preview_rows", "0")
             if int_field(row, "frame") > ignore_frames_through:
                 rows.append(row)
     if not rows:
@@ -348,8 +352,10 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
     defaults: dict[str, int | str] = {
         "group": "scroll:-12",
         "rows": 704,
+        "direct_preview_rows": 0,
         "fb_present_us": 900,
         "cached_present_us": 400,
+        "direct_preview_present_us": 0,
         "arcade_list_present_us": 500,
         "vsync_source": "vsync",
         "vsync_miss_streak": 0,
@@ -362,8 +368,10 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                 "frame",
                 "arcade_update",
                 "rows",
+                "direct_preview_rows",
                 "fb_present_us",
                 "cached_present_us",
+                "direct_preview_present_us",
                 "arcade_list_present_us",
                 "vsync_source",
                 "vsync_miss_streak",
@@ -375,8 +383,10 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                     frame,
                     defaults["group"],
                     defaults["rows"],
+                    defaults["direct_preview_rows"],
                     defaults["fb_present_us"],
                     defaults["cached_present_us"],
+                    defaults["direct_preview_present_us"],
                     defaults["arcade_list_present_us"],
                     defaults["vsync_source"],
                     defaults["vsync_miss_streak"],

@@ -30,6 +30,7 @@ PHASES = [
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
+    "direct_preview_present_us",
     "arcade_list_present_us",
     "wall_us",
     "rows",
@@ -126,6 +127,7 @@ def main() -> int:
             "custom_draw_us",
             "fb_present_us",
             "cached_present_us",
+            "direct_preview_present_us",
             "arcade_list_present_us",
             "wall_us",
         ]
