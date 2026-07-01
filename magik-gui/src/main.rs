@@ -71,6 +71,7 @@ mod preview_pack_bench;
 mod preview_state;
 mod runtime_status;
 mod screenshot_transitions;
+mod settings;
 mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;

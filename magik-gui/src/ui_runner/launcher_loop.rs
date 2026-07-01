@@ -507,6 +507,7 @@ pub(super) fn run_launcher_loop(
         start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
     let mut pending_start_system = env_start_system.clone();
     let mut nav = LauncherNav::new();
+    nav.settings = crate::settings::MagikSettings::load();
     nav.screen = start_screen;
     let mut setup = SetupNav::new();
     let mut loading_title = String::new();
