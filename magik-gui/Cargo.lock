@@ -2604,6 +2604,7 @@ dependencies = [
  "mister-magik-catalog",
  "mister-magik-ui",
  "pprof",
+ "quick-xml 0.40.1",
  "serde",
  "serde_json",
  "slint",

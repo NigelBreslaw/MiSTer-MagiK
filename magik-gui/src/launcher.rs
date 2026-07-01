@@ -1,5 +1,6 @@
 //! Launcher navigation and arcade game launch.
 
+use crate::arcade_button_overrides::{remove_button_overrides, write_button_overrides_for_mra};
 use crate::arcade_catalog::{
     ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, LaunchTarget, StructuredLaunchPlan,
     ARCADE_ROW_HEIGHT, HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,
@@ -1701,6 +1702,11 @@ trait LaunchIo {
     fn wait_for_started_mister(&mut self) -> bool;
     fn wait_for_command_fifo(&mut self) -> bool;
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String>;
+    fn write_button_overrides(
+        &mut self,
+        launch_target: &LaunchTarget,
+        simple_joystick_handling: bool,
+    ) -> Result<(), String>;
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
     fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool;
 }
@@ -1749,6 +1755,14 @@ impl LaunchIo for SystemLaunchIo {
 
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String> {
         write_input_policy_marker(simple_joystick_handling)
+    }
+
+    fn write_button_overrides(
+        &mut self,
+        launch_target: &LaunchTarget,
+        simple_joystick_handling: bool,
+    ) -> Result<(), String> {
+        write_button_overrides_for_launch(launch_target, simple_joystick_handling)
     }
 
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
@@ -1819,6 +1833,22 @@ fn write_input_policy_marker(simple_joystick_handling: bool) -> Result<(), Strin
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("failed to remove {INPUT_POLICY_MARKER_PATH}: {e}")),
         }
+    }
+}
+
+fn write_button_overrides_for_launch(
+    launch_target: &LaunchTarget,
+    simple_joystick_handling: bool,
+) -> Result<(), String> {
+    if !simple_joystick_handling {
+        return remove_button_overrides();
+    }
+
+    match launch_target {
+        LaunchTarget::Path(path) if path.to_ascii_lowercase().ends_with(".mra") => {
+            write_button_overrides_for_mra(Path::new(path.as_ref()))
+        }
+        _ => remove_button_overrides(),
     }
 }
 
@@ -2079,6 +2109,14 @@ pub fn execute_game_launch_handoff_bench(
             Ok(())
         }
 
+        fn write_button_overrides(
+            &mut self,
+            _launch_target: &LaunchTarget,
+            _simple_joystick_handling: bool,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
         fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
             if self.mode == LaunchHandoffBenchMode::Success {
                 Ok(())
@@ -2156,6 +2194,8 @@ fn execute_game_launch_with(
             io.prepare_simple_input_profiles()
                 .map_err(|e| LaunchError::new(e, spawned))?;
         }
+        io.write_button_overrides(launch_target, simple_joystick_handling)
+            .map_err(|e| LaunchError::new(e, spawned))?;
         io.write_input_policy_marker(simple_joystick_handling)
             .map_err(|e| LaunchError::new(e, spawned))?;
     }
@@ -2319,6 +2359,7 @@ mod tests {
         start_calls: usize,
         prepare_simple_input_profile_calls: usize,
         input_policy_markers: Vec<bool>,
+        button_override_writes: Vec<String>,
         commands: Vec<String>,
     }
 
@@ -2365,6 +2406,21 @@ mod tests {
             Ok(())
         }
 
+        fn write_button_overrides(
+            &mut self,
+            launch_target: &LaunchTarget,
+            simple_joystick_handling: bool,
+        ) -> Result<(), String> {
+            let action = match (simple_joystick_handling, launch_target) {
+                (true, LaunchTarget::Path(path)) if path.to_ascii_lowercase().ends_with(".mra") => {
+                    format!("write:{path}")
+                }
+                _ => "remove".to_string(),
+            };
+            self.button_override_writes.push(action);
+            Ok(())
+        }
+
         fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
             self.commands.push(cmd.to_string());
             self.write_result.clone()
@@ -2389,6 +2445,7 @@ mod tests {
             start_calls: 0,
             prepare_simple_input_profile_calls: 0,
             input_policy_markers: Vec::new(),
+            button_override_writes: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -4136,6 +4193,7 @@ mod tests {
             .expect("launch succeeds");
 
         assert_eq!(io.input_policy_markers, vec![false]);
+        assert_eq!(io.button_override_writes, vec!["remove"]);
         assert_eq!(io.prepare_simple_input_profile_calls, 0);
         reset_launch();
     }
@@ -4152,6 +4210,25 @@ mod tests {
 
         assert_eq!(io.prepare_simple_input_profile_calls, 1);
         assert_eq!(io.input_policy_markers, vec![true]);
+        assert_eq!(
+            io.button_override_writes,
+            vec!["write:/media/fat/_Arcade/test.mra"]
+        );
+        reset_launch();
+    }
+
+    #[test]
+    fn simple_non_mra_launch_removes_button_overrides() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.simple_joystick_handling = true;
+
+        execute_game_launch_with(&structured_target(), &mut io).expect("launch succeeds");
+
+        assert_eq!(io.prepare_simple_input_profile_calls, 1);
+        assert_eq!(io.input_policy_markers, vec![true]);
+        assert_eq!(io.button_override_writes, vec!["remove"]);
         reset_launch();
     }
 
@@ -4167,6 +4244,7 @@ mod tests {
             .expect("launch succeeds");
 
         assert!(io.input_policy_markers.is_empty());
+        assert!(io.button_override_writes.is_empty());
         assert_eq!(io.prepare_simple_input_profile_calls, 0);
         reset_launch();
     }

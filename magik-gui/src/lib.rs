@@ -4,6 +4,7 @@
 //! target behind the `ui` feature. This library keeps pure logic available for
 //! fast macOS host tests without compiling Slint/AppKit.
 
+pub mod arcade_button_overrides;
 pub mod boot_analytics;
 pub mod camera_effects;
 pub mod command_args;
