@@ -12,11 +12,51 @@ step() {
   echo "==> $*"
 }
 
+run_linux_host_check() {
+  if [ "$(uname -s)" != Darwin ]; then
+    return 0
+  fi
+  if command -v container >/dev/null 2>&1 &&
+    container run --arch arm64 --rm rust:1.96-bookworm true >/dev/null 2>&1; then
+    container run --arch arm64 --rm \
+      --env CARGO_HOME=/cargo \
+      --env CARGO_TARGET_DIR=/tmp/mister-magik-linux-target \
+      --env RUSTC_WRAPPER= \
+      --volume "$HOME/.cargo:/cargo" \
+      --volume "$ROOT:/repo:ro" \
+      --workdir /repo/magik-gui \
+      rust:1.96-bookworm \
+      bash -lc 'cargo check --lib --tests --no-default-features'
+    return
+  fi
+  if command -v docker >/dev/null 2>&1 &&
+    docker run --rm rust:1.96-bookworm true >/dev/null 2>&1; then
+    docker run --rm \
+      -e CARGO_HOME=/cargo \
+      -e CARGO_TARGET_DIR=/tmp/mister-magik-linux-target \
+      -e RUSTC_WRAPPER= \
+      -v "$HOME/.cargo:/cargo" \
+      -v "$ROOT:/repo:ro" \
+      -w /repo/magik-gui \
+      rust:1.96-bookworm \
+      bash -lc 'cargo check --lib --tests --no-default-features'
+    return
+  fi
+  echo "ERROR: macOS pre-commit needs a running Linux container runtime." >&2
+  echo "       Start Apple's container runtime with: container system start" >&2
+  echo "       Or start Docker/OrbStack, then rerun .githooks/pre-commit." >&2
+  echo "       This catches CI-only warnings from cfg(target_os = \"linux\")." >&2
+  exit 1
+}
+
 step "Format"
 "$ROOT/scripts/dev-rust" fmt
 
 step "Host logic tests"
 "$ROOT/scripts/dev-rust" test
+
+step "Linux host cfg check"
+run_linux_host_check
 
 step "Catalog crate tests"
 cargo test --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml"
