@@ -197,17 +197,79 @@ pub(super) fn start_library_catalog_worker(
                         );
                     }
                 }
-                let artifact_result = if first_catalog_build {
-                    library_db::scan_default_library_foreground_with_events(
+                if first_catalog_build {
+                    let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
                         Some(&mut progress),
                         Some(&mut scan_events),
-                    )
-                } else {
-                    library_db::scan_default_library_with_events(
+                    );
+                    let ram_artifact = match ram_artifact_result {
+                        Ok(artifact) => artifact,
+                        Err(e) => {
+                            eprintln!("library scan failed: {e}");
+                            send_catalog_progress(
+                                &tx,
+                                library_db::CatalogProgress::library_scan_failed(e),
+                            );
+                            return;
+                        }
+                    };
+                    let stats = ram_artifact.stats().clone();
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "library_scan_complete".to_string(),
+                        detail: format!(
+                            "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={}",
+                            stats.scan_us,
+                            stats.discover_us,
+                            stats.classify_us,
+                            stats.discoveries,
+                            stats.normal_files,
+                            stats.containers,
+                            stats.entries
+                        ),
+                    });
+                    let catalog_t = Instant::now();
+                    let catalog = ram_artifact.catalog(&root);
+                    let load_us = catalog_t.elapsed().as_micros() as u64;
+                    let catalog_len = catalog.len();
+                    let _ = tx.send(CatalogWorkerMessage::Ready {
+                        catalog,
+                        summary: None,
+                        load_us,
+                        source: CatalogSource::FreshBuild,
+                        durable_save_pending: true,
+                    });
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "catalog_worker_ram_catalog".to_string(),
+                        detail: format!("games={catalog_len} catalog_us={load_us}"),
+                    });
+                    send_catalog_progress(
+                        &tx,
+                        library_db::CatalogProgress::saving_before_opening_launcher(),
+                    );
+                    let artifact = ram_artifact.complete_coverage_audit();
+                    match artifact.save_default_sqlite_with_projections(&root, Some(&mut progress)) {
+                        Ok(summary) => {
+                            let _ = tx.send(CatalogWorkerMessage::Persisted {
+                                summary: summary.clone(),
+                            });
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_worker_saved_catalog".to_string(),
+                                detail: format!(
+                                    "games={catalog_len} skipped=precomputed_projection"
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            eprintln!("library persistence failed after RAM catalog ready: {e}");
+                            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: e });
+                        }
+                    }
+                    return;
+                }
+                let artifact_result = library_db::scan_default_library_with_events(
                         Some(&mut progress),
                         Some(&mut scan_events),
-                    )
-                };
+                    );
                 let artifact = match artifact_result {
                     Ok(artifact) => artifact,
                     Err(e) => {
