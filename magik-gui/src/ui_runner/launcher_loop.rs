@@ -608,6 +608,7 @@ pub(super) fn run_launcher_loop(
     );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
+    let mut arcade_search_indexes_prewarmed_for: Option<usize> = None;
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = catalog_refresh_policy.force_requested();
     let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
@@ -1132,6 +1133,23 @@ pub(super) fn run_launcher_loop(
         }
         if let Some(trace_start) = catalog_worker_trace_start {
             prepare_trace.catalog_worker_us = trace_start.elapsed().as_micros();
+        }
+        if catalog_ready
+            && arcade_search_indexes_prewarmed_for != Some(catalog_version)
+            && frame_accounting.first_visible_copy_done()
+        {
+            let prewarm_t = Instant::now();
+            let built = catalog.ensure_text_indexes_ready();
+            arcade_search_indexes_prewarmed_for = Some(catalog_version);
+            runtime_status::event(
+                "arcade_search_index_prewarm",
+                &format!(
+                    "built={} games={} elapsed_us={}",
+                    u8::from(built),
+                    catalog.games.len(),
+                    prewarm_t.elapsed().as_micros()
+                ),
+            );
         }
 
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
@@ -1976,7 +1994,7 @@ pub(super) fn run_launcher_loop(
                 let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
                 arcade_list_renderer.draw_filter_items(
                     items,
-                    nav.arcade_filter.selected,
+                    nav.arcade_filter.visual_index,
                     force_arcade_redraw,
                 )
             } else {

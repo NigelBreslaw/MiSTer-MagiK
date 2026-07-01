@@ -44,7 +44,6 @@ const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
-const ARCADE_FILTER_ROW_HEIGHT: i32 = 40;
 const SETTINGS_MAX_SELECTED: usize = 4;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
 pub const ARCADE_SEARCH_KEYS: [&str; 43] = [
@@ -156,10 +155,12 @@ pub fn parse_library_changed_test_dialog_choice(
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ArcadeNav {
     pub selected: usize,
     pub scroll_y: i32,
     pub visual_index: f32,
+    row_height: i32,
     scroll: ArcadeScrollState,
 }
 
@@ -184,10 +185,15 @@ impl Default for ArcadeNav {
 
 impl ArcadeNav {
     pub fn new() -> Self {
+        Self::with_row_height(ARCADE_ROW_HEIGHT)
+    }
+
+    fn with_row_height(row_height: i32) -> Self {
         Self {
             selected: 0,
             scroll_y: 0,
             visual_index: 0.0,
+            row_height: row_height.max(1),
             scroll: ArcadeScrollState::default(),
         }
     }
@@ -202,7 +208,7 @@ impl ArcadeNav {
     pub fn snap_to_selected(&mut self) {
         self.scroll.target_index = self.selected;
         self.scroll.intent_queue = 0;
-        self.scroll.visual_px = self.selected as i32 * ARCADE_ROW_HEIGHT;
+        self.scroll.visual_px = self.selected as i32 * self.row_height;
         self.sync_visual_from_px();
     }
 
@@ -214,12 +220,12 @@ impl ArcadeNav {
         self.selected = selected.min(count - 1);
         self.scroll = ArcadeScrollState::default();
         self.scroll.target_index = self.selected;
-        self.scroll.visual_px = scroll_y.clamp(0, Self::max_scroll_y(count));
+        self.scroll.visual_px = scroll_y.clamp(0, self.max_scroll_y(count));
         self.sync_visual_from_px();
     }
 
-    fn max_scroll_y(count: usize) -> i32 {
-        count.saturating_sub(1) as i32 * ARCADE_ROW_HEIGHT
+    fn max_scroll_y(&self, count: usize) -> i32 {
+        count.saturating_sub(1) as i32 * self.row_height
     }
 
     pub fn handle_direction_input(
@@ -273,7 +279,7 @@ impl ArcadeNav {
             self.snap_to_selected();
             return;
         }
-        let target_px = self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT;
+        let target_px = self.scroll.target_index as i32 * self.row_height;
         let delta = target_px - self.scroll.visual_px;
         if delta == 0 {
             self.scroll.intent_queue = 0;
@@ -288,10 +294,10 @@ impl ArcadeNav {
         .saturating_div(arcade_scroll_speed_div())
         .max(1);
         let movement = delta.signum() * step.min(delta.abs());
-        let before_row = self.scroll.visual_px.div_euclid(ARCADE_ROW_HEIGHT);
+        let before_row = self.scroll.visual_px.div_euclid(self.row_height);
         self.scroll.visual_px =
-            (self.scroll.visual_px + movement).clamp(0, Self::max_scroll_y(count));
-        let after_row = self.scroll.visual_px.div_euclid(ARCADE_ROW_HEIGHT);
+            (self.scroll.visual_px + movement).clamp(0, self.max_scroll_y(count));
+        let after_row = self.scroll.visual_px.div_euclid(self.row_height);
         if after_row != before_row && self.scroll.intent_queue != 0 {
             self.scroll.intent_queue -= self.scroll.intent_queue.signum();
         }
@@ -399,7 +405,7 @@ impl ArcadeNav {
     }
 
     pub fn is_settled(&self) -> bool {
-        self.scroll.visual_px == self.scroll.target_index as i32 * ARCADE_ROW_HEIGHT
+        self.scroll.visual_px == self.scroll.target_index as i32 * self.row_height
     }
 
     pub fn is_scroll_active(&self) -> bool {
@@ -429,7 +435,7 @@ impl ArcadeNav {
 
     fn sync_visual_from_px(&mut self) {
         self.scroll_y = self.scroll.visual_px;
-        self.visual_index = self.scroll.visual_px as f32 / ARCADE_ROW_HEIGHT as f32;
+        self.visual_index = self.scroll.visual_px as f32 / self.row_height as f32;
     }
 }
 
@@ -458,6 +464,7 @@ struct GameListMemory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArcadeFilterLevel {
+    Alphabet,
     Top,
     Decades,
     Manufacturers,
@@ -515,7 +522,9 @@ pub struct ArcadeFilterState {
     pub level: ArcadeFilterLevel,
     pub selected: usize,
     pub scroll_y: i32,
+    pub visual_index: f32,
     pub active: ArcadeFilter,
+    scroll: ArcadeNav,
     game_list_memory: HashMap<String, GameListMemory>,
 }
 
@@ -539,13 +548,16 @@ impl ArcadeFilterState {
             level: ArcadeFilterLevel::Top,
             selected: 0,
             scroll_y: 0,
+            visual_index: 0.0,
             active: ArcadeFilter::All,
+            scroll: ArcadeNav::with_row_height(ARCADE_ROW_HEIGHT),
             game_list_memory: HashMap::new(),
         }
     }
 
     pub fn title(&self) -> &'static str {
         match self.level {
+            ArcadeFilterLevel::Alphabet => "Games A-Z",
             ArcadeFilterLevel::Top => "Filters",
             ArcadeFilterLevel::Decades => "Decades",
             ArcadeFilterLevel::Manufacturers => "Manufacturers",
@@ -726,7 +738,7 @@ impl LauncherNav {
         }
 
         if rising(now.dpad_left, self.prev.dpad_left) {
-            self.open_arcade_filter(catalog, system_id);
+            self.open_arcade_alphabet(catalog, system_id);
             return None;
         }
 
@@ -866,16 +878,19 @@ impl LauncherNav {
             return None;
         }
         if !items.is_empty() {
-            if self.repeat.tick_up(now.dpad_up, frame_now) && self.arcade_filter.selected > 0 {
-                self.arcade_filter.selected -= 1;
-                self.sync_arcade_filter_scroll(items.len());
-            }
-            if self.repeat.tick_down(now.dpad_down, frame_now)
-                && self.arcade_filter.selected + 1 < items.len()
-            {
-                self.arcade_filter.selected += 1;
-                self.sync_arcade_filter_scroll(items.len());
-            }
+            let dir = arcade_dpad_dir(now);
+            let previous_dir = arcade_dpad_dir(&self.prev);
+            self.arcade_filter.scroll.handle_direction_input(
+                dir,
+                previous_dir,
+                frame_now,
+                items.len(),
+            );
+            self.arcade_filter.scroll.tick(items.len());
+            self.sync_arcade_filter_from_scroll();
+        } else {
+            self.arcade_filter.scroll.reset();
+            self.sync_arcade_filter_from_scroll();
         }
         if rising(now.btn_a, self.prev.btn_a) {
             self.activate_arcade_filter_selection(catalog, system_id, &items);
@@ -1010,6 +1025,7 @@ impl LauncherNav {
 
     pub fn active_arcade_game_count(&self, catalog: &ArcadeCatalog, system_id: &str) -> usize {
         if self.arcade_search.is_active(&self.arcade_filter.active)
+            && !self.arcade_search.query.is_empty()
             && self.arcade_search.result_system_id == system_id
             && self.arcade_search.result_query == self.arcade_search.query
         {
@@ -1025,6 +1041,7 @@ impl LauncherNav {
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
         if self.arcade_search.is_active(&self.arcade_filter.active)
+            && !self.arcade_search.query.is_empty()
             && self.arcade_search.result_system_id == system_id
             && self.arcade_search.result_query == self.arcade_search.query
         {
@@ -1052,6 +1069,7 @@ impl LauncherNav {
         system_id: &str,
     ) -> Vec<ArcadeDrawerItem> {
         match self.arcade_filter.level {
+            ArcadeFilterLevel::Alphabet => self.arcade_alphabet_items(catalog, system_id),
             ArcadeFilterLevel::Top => self.arcade_filter_top_items(catalog, system_id),
             ArcadeFilterLevel::Decades => filter_option_items(
                 catalog.decade_options(system_id),
@@ -1105,6 +1123,20 @@ impl LauncherNav {
         ]
     }
 
+    fn open_arcade_alphabet(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        if self.active_arcade_game_count(catalog, system_id) == 0 {
+            self.open_arcade_filter(catalog, system_id);
+            return;
+        }
+        self.save_game_list_state(system_id);
+        self.arcade_filter.drawer_open = true;
+        self.arcade_filter.level = ArcadeFilterLevel::Alphabet;
+        self.arcade_filter.selected =
+            self.arcade_alphabet_selected_for_current_game(catalog, system_id);
+        let items = self.arcade_alphabet_items(catalog, system_id);
+        self.snap_arcade_filter_scroll(items.len());
+    }
+
     fn open_arcade_filter(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
         self.save_game_list_state(system_id);
         self.arcade_filter.drawer_open = true;
@@ -1120,7 +1152,7 @@ impl LauncherNav {
                 self.arcade_filter.selected = active_idx;
             }
         }
-        self.sync_arcade_filter_scroll(items.len());
+        self.snap_arcade_filter_scroll(items.len());
     }
 
     fn close_arcade_filter(&mut self) {
@@ -1142,11 +1174,13 @@ impl LauncherNav {
                 }
                 self.screen = Screen::Home;
             }
+        } else if self.arcade_filter.level == ArcadeFilterLevel::Alphabet {
+            self.open_arcade_filter(catalog, system_id);
         } else {
             self.arcade_filter.level = ArcadeFilterLevel::Top;
             self.arcade_filter.selected = self.arcade_filter.active_group_index();
             let top_count = self.arcade_filter_items(catalog, system_id).len();
-            self.sync_arcade_filter_scroll(top_count);
+            self.snap_arcade_filter_scroll(top_count);
         }
     }
 
@@ -1160,9 +1194,13 @@ impl LauncherNav {
             return;
         }
         match self.arcade_filter.level {
+            ArcadeFilterLevel::Alphabet => {
+                let label = items[self.arcade_filter.selected].label.clone();
+                self.jump_arcade_to_alphabet_group(catalog, system_id, &label);
+            }
             ArcadeFilterLevel::Top => match self.arcade_filter.selected {
                 0 => self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All),
-                1 => self.enter_arcade_search(catalog, system_id),
+                1 => self.enter_arcade_search(system_id),
                 2 => self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Decades),
                 3 => self.enter_arcade_filter_level(
                     catalog,
@@ -1210,7 +1248,89 @@ impl LauncherNav {
         if let Some(active_idx) = items.iter().position(|item| item.active) {
             self.arcade_filter.selected = active_idx;
         }
-        self.sync_arcade_filter_scroll(items.len());
+        self.snap_arcade_filter_scroll(items.len());
+    }
+
+    fn arcade_alphabet_items(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Vec<ArcadeDrawerItem> {
+        let mut digit_count = 0usize;
+        let mut letter_counts = [0usize; 26];
+        for game in self.active_arcade_game_view(catalog, system_id).iter() {
+            match arcade_title_group(&game.title) {
+                Some(ArcadeTitleGroup::Digits) => digit_count += 1,
+                Some(ArcadeTitleGroup::Letter(letter)) => {
+                    letter_counts[(letter as u8 - b'A') as usize] += 1;
+                }
+                None => {}
+            }
+        }
+
+        let mut items = Vec::new();
+        if digit_count > 0 {
+            items.push(ArcadeDrawerItem {
+                label: "0-9".to_string(),
+                count: digit_count,
+                active: false,
+            });
+        }
+        for (idx, count) in letter_counts.into_iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            let letter = (b'A' + idx as u8) as char;
+            items.push(ArcadeDrawerItem {
+                label: letter.to_string(),
+                count,
+                active: false,
+            });
+        }
+        items
+    }
+
+    fn arcade_alphabet_selected_for_current_game(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> usize {
+        let Some(game) = self.active_arcade_game_at(catalog, system_id, self.arcade.selected)
+        else {
+            return 0;
+        };
+        let Some(group) = arcade_title_group(&game.title) else {
+            return 0;
+        };
+        let label = group.label();
+        self.arcade_alphabet_items(catalog, system_id)
+            .iter()
+            .position(|item| item.label == label)
+            .unwrap_or(0)
+    }
+
+    fn jump_arcade_to_alphabet_group(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        label: &str,
+    ) {
+        let Some(target_group) = ArcadeTitleGroup::from_label(label) else {
+            return;
+        };
+        let count = self.active_arcade_game_count(catalog, system_id);
+        if let Some(index) = self
+            .active_arcade_game_view(catalog, system_id)
+            .iter()
+            .enumerate()
+            .find_map(|(index, game)| {
+                (arcade_title_group(&game.title) == Some(target_group)).then_some(index)
+            })
+        {
+            self.arcade
+                .restore_position(index, index as i32 * ARCADE_ROW_HEIGHT, count);
+        }
+        self.close_arcade_filter();
     }
 
     fn apply_arcade_filter(
@@ -1236,15 +1356,19 @@ impl LauncherNav {
         self.close_arcade_filter();
     }
 
-    fn enter_arcade_search(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+    fn enter_arcade_search(&mut self, system_id: &str) {
         self.save_game_list_state(system_id);
         self.arcade_filter.active = ArcadeFilter::Search;
         self.arcade_search.pane = ArcadeSearchPane::Keyboard;
-        self.refresh_arcade_search_results(catalog, system_id);
+        self.clear_arcade_search_results(system_id);
         self.close_arcade_filter();
     }
 
     fn ensure_arcade_search_results(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        if self.arcade_search.query.is_empty() {
+            self.clear_arcade_search_results(system_id);
+            return;
+        }
         if self.arcade_search.result_system_id != system_id
             || self.arcade_search.result_query != self.arcade_search.query
             || self.arcade_search.suggestion_system_id != system_id
@@ -1254,7 +1378,21 @@ impl LauncherNav {
         }
     }
 
+    fn clear_arcade_search_results(&mut self, system_id: &str) {
+        self.arcade_search.results.clear();
+        self.arcade_search.suggestion.clear();
+        self.arcade_search.result_system_id.clear();
+        self.arcade_search.result_query.clear();
+        self.arcade_search.suggestion_system_id = system_id.to_string();
+        self.arcade_search.suggestion_query.clear();
+        self.arcade_search.pane = ArcadeSearchPane::Keyboard;
+    }
+
     fn refresh_arcade_search_results(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        if self.arcade_search.query.is_empty() {
+            self.clear_arcade_search_results(system_id);
+            return;
+        }
         self.arcade_search.results =
             catalog.search_game_indexes(system_id, &self.arcade_search.query);
         self.arcade_search.suggestion =
@@ -1303,7 +1441,11 @@ impl LauncherNav {
             "CLEAR" => self.arcade_search.query.clear(),
             value => self.arcade_search.query.push_str(value),
         }
-        self.refresh_arcade_search_results(catalog, system_id);
+        if self.arcade_search.query.is_empty() {
+            self.clear_arcade_search_results(system_id);
+        } else {
+            self.refresh_arcade_search_results(catalog, system_id);
+        }
     }
 
     fn accept_arcade_search_suggestion(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
@@ -1315,17 +1457,21 @@ impl LauncherNav {
         self.refresh_arcade_search_results(catalog, system_id);
     }
 
-    fn sync_arcade_filter_scroll(&mut self, count: usize) {
-        let selected_y = self.arcade_filter.selected as i32 * ARCADE_FILTER_ROW_HEIGHT;
-        let visible_h = crate::arcade_catalog::ARCADE_LIST_VISIBLE_H;
-        if selected_y < self.arcade_filter.scroll_y {
-            self.arcade_filter.scroll_y = selected_y;
+    fn snap_arcade_filter_scroll(&mut self, count: usize) {
+        if count == 0 {
+            self.arcade_filter.scroll.reset();
+        } else {
+            self.arcade_filter.selected = self.arcade_filter.selected.min(count - 1);
+            self.arcade_filter.scroll.selected = self.arcade_filter.selected;
+            self.arcade_filter.scroll.snap_to_selected();
         }
-        if selected_y + ARCADE_FILTER_ROW_HEIGHT > self.arcade_filter.scroll_y + visible_h {
-            self.arcade_filter.scroll_y = selected_y + ARCADE_FILTER_ROW_HEIGHT - visible_h;
-        }
-        let max_scroll = (count as i32 * ARCADE_FILTER_ROW_HEIGHT - visible_h).max(0);
-        self.arcade_filter.scroll_y = self.arcade_filter.scroll_y.clamp(0, max_scroll);
+        self.sync_arcade_filter_from_scroll();
+    }
+
+    fn sync_arcade_filter_from_scroll(&mut self) {
+        self.arcade_filter.selected = self.arcade_filter.scroll.selected;
+        self.arcade_filter.scroll_y = self.arcade_filter.scroll.scroll_y;
+        self.arcade_filter.visual_index = self.arcade_filter.scroll.visual_index;
     }
 }
 
@@ -1345,6 +1491,45 @@ fn filter_option_items(
             }
         })
         .collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArcadeTitleGroup {
+    Digits,
+    Letter(char),
+}
+
+impl ArcadeTitleGroup {
+    fn label(self) -> String {
+        match self {
+            Self::Digits => "0-9".to_string(),
+            Self::Letter(letter) => letter.to_string(),
+        }
+    }
+
+    fn from_label(label: &str) -> Option<Self> {
+        if label == "0-9" {
+            return Some(Self::Digits);
+        }
+        let mut chars = label.chars();
+        let letter = chars.next()?;
+        if chars.next().is_none() && letter.is_ascii_alphabetic() {
+            Some(Self::Letter(letter.to_ascii_uppercase()))
+        } else {
+            None
+        }
+    }
+}
+
+fn arcade_title_group(title: &str) -> Option<ArcadeTitleGroup> {
+    let first = title.trim_start().chars().next()?;
+    if first.is_ascii_digit() {
+        Some(ArcadeTitleGroup::Digits)
+    } else if first.is_ascii_alphabetic() {
+        Some(ArcadeTitleGroup::Letter(first.to_ascii_uppercase()))
+    } else {
+        None
+    }
 }
 
 fn decade_from_label(label: &str) -> Option<u16> {
@@ -2698,6 +2883,104 @@ mod tests {
         )
     }
 
+    fn alphabet_catalog() -> ArcadeCatalog {
+        let games = [
+            "1942",
+            "Asteroids",
+            "Bubble Bobble",
+            "Horizon",
+            "Hydra",
+            "Pac-Man",
+        ]
+        .into_iter()
+        .map(|title| ArcadeGameEntry {
+            title: title.into(),
+            mra_path: format!("/media/fat/_Arcade/{title}.mra").into(),
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
+            system_id: "arcade".into(),
+            year: None,
+            manufacturer: "".into(),
+            category: "".into(),
+            is_new: false,
+        })
+        .collect();
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            games,
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 6,
+            }],
+        )
+    }
+
+    fn deferred_search_catalog() -> ArcadeCatalog {
+        ArcadeCatalog::new_with_deferred_text_indexes(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            vec![
+                ArcadeGameEntry {
+                    title: "Street Fighter II".into(),
+                    mra_path: "/media/fat/_Arcade/sf2.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1991),
+                    manufacturer: "Capcom".into(),
+                    category: "Fighter / 2D".into(),
+                    is_new: false,
+                },
+                ArcadeGameEntry {
+                    title: "Pac-Man".into(),
+                    mra_path: "/media/fat/_Arcade/pacman.mra".into(),
+                    preview_archive_path: "".into(),
+                    preview_asset_key: "".into(),
+                    has_preview: false,
+                    system_id: "arcade".into(),
+                    year: Some(1980),
+                    manufacturer: "Namco".into(),
+                    category: "Maze".into(),
+                    is_new: false,
+                },
+            ],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 2,
+            }],
+            Vec::new(),
+        )
+    }
+
+    fn many_manufacturer_catalog() -> ArcadeCatalog {
+        let games = (0..12)
+            .map(|idx| ArcadeGameEntry {
+                title: format!("Maker Game {idx}").into(),
+                mra_path: format!("/media/fat/_Arcade/maker-game-{idx}.mra").into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                system_id: "arcade".into(),
+                year: Some(1980 + idx as u16),
+                manufacturer: format!("Maker {idx:02}").into(),
+                category: "Test".into(),
+                is_new: false,
+            })
+            .collect();
+        ArcadeCatalog::new(
+            Path::new("/media/fat/_Arcade").to_path_buf(),
+            games,
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 12,
+            }],
+        )
+    }
+
     fn pad_with(mut set: impl FnMut(&mut PadState)) -> PadState {
         let mut pad = PadState::default();
         set(&mut pad);
@@ -2706,6 +2989,14 @@ mod tests {
 
     fn release(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
         let _ = nav.handle_input(&PadState::default(), t + Duration::from_millis(ms), catalog);
+    }
+
+    fn open_filter_drawer(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
+        let press_left = pad_with(|pad| pad.dpad_left = true);
+        let _ = nav.handle_input(&press_left, t + Duration::from_millis(ms), catalog);
+        release(nav, catalog, t, ms + 16);
+        let _ = nav.handle_input(&press_left, t + Duration::from_millis(ms + 32), catalog);
+        release(nav, catalog, t, ms + 48);
     }
 
     fn assert_no_catalog_loads_during(action: impl FnOnce()) {
@@ -2774,8 +3065,8 @@ mod tests {
     }
 
     #[test]
-    fn arcade_filter_left_opens_and_right_selects_highlighted_item() {
-        let catalog = filter_catalog();
+    fn arcade_alphabet_left_opens_and_right_jumps_to_highlighted_group() {
+        let catalog = alphabet_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
@@ -2790,12 +3081,112 @@ mod tests {
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
         release(&mut nav, &catalog, t0, 48);
         assert!(nav.arcade_filter.drawer_open);
-        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Alphabet);
         assert_eq!(nav.arcade_filter.selected, 0);
+        assert_eq!(
+            nav.arcade_filter_items(&catalog, "arcade"),
+            vec![
+                ArcadeDrawerItem {
+                    label: "0-9".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "A".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "B".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "H".to_string(),
+                    count: 2,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "P".to_string(),
+                    count: 1,
+                    active: false,
+                },
+            ]
+        );
 
         let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(64), &catalog);
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
         assert!(!nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade.selected, 0);
+    }
+
+    #[test]
+    fn arcade_alphabet_lists_digits_and_existing_letters_only() {
+        let catalog = alphabet_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+
+        nav.open_arcade_alphabet(&catalog, "arcade");
+
+        assert_eq!(
+            nav.arcade_filter_items(&catalog, "arcade"),
+            vec![
+                ArcadeDrawerItem {
+                    label: "0-9".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "A".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "B".to_string(),
+                    count: 1,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "H".to_string(),
+                    count: 2,
+                    active: false,
+                },
+                ArcadeDrawerItem {
+                    label: "P".to_string(),
+                    count: 1,
+                    active: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn arcade_alphabet_opens_at_current_game_letter_and_jumps() {
+        let catalog = alphabet_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Arcade;
+        nav.arcade.restore_position(3, 3 * ARCADE_ROW_HEIGHT, 6);
+
+        nav.open_arcade_alphabet(&catalog, "arcade");
+
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Alphabet);
+        assert_eq!(nav.arcade_filter.selected, 3);
+        assert_eq!(nav.arcade_filter.scroll_y, 3 * ARCADE_ROW_HEIGHT);
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.dpad_right = true),
+            t0 + Duration::from_millis(16),
+            &catalog,
+        );
+
+        assert!(!nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade.selected, 3);
+        assert_eq!(
+            nav.active_arcade_game_at(&catalog, "arcade", nav.arcade.selected)
+                .map(|game| game.title.as_ref()),
+            Some("Horizon")
+        );
     }
 
     #[test]
@@ -2818,11 +3209,13 @@ mod tests {
             release(&mut nav, &catalog, t0, 80);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(96), &catalog);
             release(&mut nav, &catalog, t0, 112);
-            let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
+            let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(128), &catalog);
             release(&mut nav, &catalog, t0, 144);
-            let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(160), &catalog);
+            let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(160), &catalog);
             release(&mut nav, &catalog, t0, 176);
-            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(192), &catalog);
+            let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(192), &catalog);
+            release(&mut nav, &catalog, t0, 208);
+            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(224), &catalog);
         });
     }
 
@@ -2862,10 +3255,12 @@ mod tests {
             release(&mut nav, &catalog, t0, 16);
             let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
             release(&mut nav, &catalog, t0, 48);
-            let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
+            let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(64), &catalog);
             release(&mut nav, &catalog, t0, 80);
+            let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
+            release(&mut nav, &catalog, t0, 112);
             assert_eq!(nav.arcade_filter.selected, 1);
-            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(96), &catalog);
+            let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(128), &catalog);
         });
 
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::Search);
@@ -2883,11 +3278,46 @@ mod tests {
     }
 
     #[test]
+    fn arcade_search_entry_with_empty_query_does_not_build_deferred_text_indexes() {
+        let catalog = deferred_search_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+
+        assert!(!catalog.text_indexes_ready());
+        nav.enter_arcade_search("arcade");
+        nav.ensure_arcade_search_results(&catalog, "arcade");
+
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Search);
+        assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Keyboard);
+        assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 2);
+        assert!(!catalog.text_indexes_ready());
+    }
+
+    #[test]
+    fn arcade_search_first_non_empty_query_builds_results() {
+        let catalog = deferred_search_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search("arcade");
+
+        nav.arcade_search.query = "capcom".to_string();
+        nav.ensure_arcade_search_results(&catalog, "arcade");
+
+        assert!(catalog.text_indexes_ready());
+        assert_eq!(nav.active_arcade_game_count(&catalog, "arcade"), 1);
+        assert_eq!(
+            nav.active_arcade_game_at(&catalog, "arcade", 0)
+                .map(|game| game.title.as_ref()),
+            Some("Street Fighter II")
+        );
+    }
+
+    #[test]
     fn arcade_search_result_focus_launches_selected_match() {
         let catalog = filter_catalog();
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.enter_arcade_search(&catalog, "arcade");
+        nav.enter_arcade_search("arcade");
         nav.arcade_search.query = "brawl".to_string();
         nav.refresh_arcade_search_results(&catalog, "arcade");
         nav.arcade_search.pane = ArcadeSearchPane::Results;
@@ -2942,7 +3372,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Arcade;
-        nav.enter_arcade_search(&catalog, "arcade");
+        nav.enter_arcade_search("arcade");
 
         nav.arcade_search.query = "str".to_string();
         nav.refresh_arcade_search_results(&catalog, "arcade");
@@ -2968,7 +3398,7 @@ mod tests {
         let catalog = filter_catalog();
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.enter_arcade_search(&catalog, "arcade");
+        nav.enter_arcade_search("arcade");
         nav.arcade_search.query = "x".to_string();
         nav.refresh_arcade_search_results(&catalog, "arcade");
 
@@ -2983,7 +3413,7 @@ mod tests {
         let catalog = filter_catalog();
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.enter_arcade_search(&catalog, "arcade");
+        nav.enter_arcade_search("arcade");
         nav.arcade_search.selected_key = ARCADE_SEARCH_KEYS.len() - 1;
 
         let _ = nav.handle_input(
@@ -3001,7 +3431,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Arcade;
-        nav.enter_arcade_search(&catalog, "arcade");
+        nav.enter_arcade_search("arcade");
         nav.arcade_search.query = "b".to_string();
         nav.refresh_arcade_search_results(&catalog, "arcade");
 
@@ -3047,19 +3477,17 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
-        let press_left = pad_with(|pad| pad.dpad_left = true);
         let press_down = pad_with(|pad| pad.dpad_down = true);
         let press_right = pad_with(|pad| pad.dpad_right = true);
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
-        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
-        release(&mut nav, &catalog, t0, 48);
-        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
-        release(&mut nav, &catalog, t0, 80);
+        open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
-        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(128), &catalog);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
+        release(&mut nav, &catalog, t0, 144);
+        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(160), &catalog);
 
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
@@ -3071,25 +3499,23 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
-        let press_left = pad_with(|pad| pad.dpad_left = true);
         let press_down = pad_with(|pad| pad.dpad_down = true);
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
-        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
-        release(&mut nav, &catalog, t0, 48);
-        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
-        release(&mut nav, &catalog, t0, 80);
+        open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
-        assert_eq!(nav.arcade_filter.selected, 2);
-        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(128), &catalog);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
         release(&mut nav, &catalog, t0, 144);
-        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
-        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(160), &catalog);
+        assert_eq!(nav.arcade_filter.selected, 2);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(160), &catalog);
         release(&mut nav, &catalog, t0, 176);
-        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(192), &catalog);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(192), &catalog);
         release(&mut nav, &catalog, t0, 208);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(224), &catalog);
+        release(&mut nav, &catalog, t0, 240);
 
         assert_eq!(nav.arcade_filter.active, ArcadeFilter::Decade(1980));
         assert!(!nav.arcade_filter.drawer_open);
@@ -3097,7 +3523,7 @@ mod tests {
         assert_eq!(nav.arcade.selected, 0);
 
         let event = nav
-            .handle_input(&press_a, t0 + Duration::from_millis(224), &catalog)
+            .handle_input(&press_a, t0 + Duration::from_millis(256), &catalog)
             .expect("filtered launch");
         assert_eq!(event.action, LauncherAction::LaunchGame);
         assert_eq!(
@@ -3169,48 +3595,86 @@ mod tests {
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
         release(&mut nav, &catalog, t0, 48);
         assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Alphabet);
+        assert_eq!(nav.arcade_filter.selected, 0);
+
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(64), &catalog);
+        release(&mut nav, &catalog, t0, 80);
+        assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
         assert_eq!(nav.arcade_filter.selected, 0);
 
-        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
-        release(&mut nav, &catalog, t0, 80);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
-        assert_eq!(nav.arcade_filter.selected, 2);
-
-        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(128), &catalog);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
         release(&mut nav, &catalog, t0, 144);
-        assert!(nav.arcade_filter.drawer_open);
-        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
-        assert_eq!(nav.arcade_filter.selected, 0);
+        assert_eq!(nav.arcade_filter.selected, 2);
 
         let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(160), &catalog);
         release(&mut nav, &catalog, t0, 176);
-        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Decade(1970));
-        assert!(!nav.arcade_filter.drawer_open);
-
-        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(192), &catalog);
-        release(&mut nav, &catalog, t0, 208);
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
         assert_eq!(nav.arcade_filter.selected, 0);
+
+        let _ = nav.handle_input(&press_right, t0 + Duration::from_millis(192), &catalog);
+        release(&mut nav, &catalog, t0, 208);
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::Decade(1970));
+        assert!(!nav.arcade_filter.drawer_open);
 
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(224), &catalog);
         release(&mut nav, &catalog, t0, 240);
         assert!(nav.arcade_filter.drawer_open);
-        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
-        assert_eq!(nav.arcade_filter.selected, 2);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Alphabet);
+        assert_eq!(nav.arcade_filter.selected, 0);
 
         let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(256), &catalog);
         release(&mut nav, &catalog, t0, 272);
+        assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+        assert_eq!(nav.arcade_filter.selected, 0);
+
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(288), &catalog);
+        release(&mut nav, &catalog, t0, 304);
+        assert!(nav.arcade_filter.drawer_open);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
+        assert_eq!(nav.arcade_filter.selected, 2);
+
+        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(320), &catalog);
+        release(&mut nav, &catalog, t0, 336);
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
         assert_eq!(nav.arcade_filter.selected, 2);
         assert_eq!(nav.screen, Screen::Arcade);
 
-        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(288), &catalog);
+        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(352), &catalog);
         assert!(!nav.arcade_filter.drawer_open);
         assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn arcade_filter_manufacturer_list_uses_velocity_scroll() {
+        let catalog = many_manufacturer_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Arcade;
+        nav.open_arcade_filter(&catalog, "arcade");
+        nav.enter_arcade_filter_level(&catalog, "arcade", ArcadeFilterLevel::Manufacturers);
+
+        let hold_down = pad_with(|pad| pad.dpad_down = true);
+        let _ = nav.handle_input(&hold_down, t0, &catalog);
+
+        assert_eq!(nav.arcade_filter.selected, 1);
+        assert!(nav.arcade_filter.scroll_y > 0);
+        assert!(nav.arcade_filter.scroll_y < ARCADE_ROW_HEIGHT);
+        assert!(nav.arcade_filter.visual_index > 0.0);
+        assert!(nav.arcade_filter.visual_index < 1.0);
+
+        for frame in 1..=20 {
+            let _ = nav.handle_input(&hold_down, t0 + Duration::from_millis(frame * 16), &catalog);
+        }
+
+        assert!(nav.arcade_filter.selected > 1);
+        assert!(nav.arcade_filter.scroll_y > ARCADE_ROW_HEIGHT);
     }
 
     #[test]
@@ -3219,29 +3683,27 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
-        let press_left = pad_with(|pad| pad.dpad_left = true);
         let press_down = pad_with(|pad| pad.dpad_down = true);
         let press_b = pad_with(|pad| pad.btn_b = true);
 
         let _ = nav.handle_input(&press_a, t0, &catalog);
         release(&mut nav, &catalog, t0, 16);
-        let _ = nav.handle_input(&press_left, t0 + Duration::from_millis(32), &catalog);
-        release(&mut nav, &catalog, t0, 48);
-        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(64), &catalog);
-        release(&mut nav, &catalog, t0, 80);
+        open_filter_drawer(&mut nav, &catalog, t0, 32);
         let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(96), &catalog);
         release(&mut nav, &catalog, t0, 112);
-        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(128), &catalog);
+        let _ = nav.handle_input(&press_down, t0 + Duration::from_millis(128), &catalog);
         release(&mut nav, &catalog, t0, 144);
+        let _ = nav.handle_input(&press_a, t0 + Duration::from_millis(160), &catalog);
+        release(&mut nav, &catalog, t0, 176);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
 
-        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(160), &catalog);
-        release(&mut nav, &catalog, t0, 176);
+        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(192), &catalog);
+        release(&mut nav, &catalog, t0, 208);
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
         assert_eq!(nav.arcade_filter.selected, 0);
 
-        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(192), &catalog);
+        let _ = nav.handle_input(&press_b, t0 + Duration::from_millis(224), &catalog);
         assert!(!nav.arcade_filter.drawer_open);
         assert_eq!(nav.screen, Screen::Home);
     }

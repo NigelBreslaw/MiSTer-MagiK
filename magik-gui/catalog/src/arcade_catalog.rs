@@ -394,6 +394,21 @@ impl ArcadeCatalog {
             .get_or_init(|| build_arcade_text_indexes(&self.games))
     }
 
+    pub fn text_indexes_ready(&self) -> bool {
+        self.search_keys.len() == self.games.len()
+            || !self.autocomplete.is_empty()
+            || self.lazy_text_indexes.get().is_some()
+    }
+
+    pub fn ensure_text_indexes_ready(&self) -> bool {
+        let was_ready = self.text_indexes_ready();
+        if was_ready {
+            return false;
+        }
+        let _ = self.lazy_text_indexes();
+        self.text_indexes_ready()
+    }
+
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
         match filter {
             ArcadeFilter::All => self.system_game_count(system_id),
@@ -1601,6 +1616,25 @@ mod tests {
             .get()
             .expect("autocomplete should reuse text indexes") as *const ArcadeTextIndexes;
         assert_eq!(built, reused);
+    }
+
+    #[test]
+    fn deferred_text_indexes_can_be_prewarmed_explicitly() {
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![game("Street Fighter II", "/games/sf2.mra", "", "arcade")],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+
+        assert!(!catalog.text_indexes_ready());
+        assert!(catalog.ensure_text_indexes_ready());
+        assert!(catalog.text_indexes_ready());
+        assert!(!catalog.ensure_text_indexes_ready());
     }
 
     #[test]
