@@ -12,6 +12,9 @@ step() {
   echo "==> $*"
 }
 
+step "Format"
+"$ROOT/scripts/dev-rust" fmt
+
 step "Host logic tests"
 "$ROOT/scripts/dev-rust" test
 
@@ -26,3 +29,18 @@ step "Clippy magik-gui host logic"
   cd magik-gui
   cargo clippy --lib --no-default-features -- -D warnings
 )
+
+step "Check host logic"
+"$ROOT/scripts/dev-rust" check
+
+step "Check host tools"
+"$ROOT/scripts/dev-rust" host-tools
+
+step "Check MagiK agent"
+cargo check --manifest-path "$ROOT/tools/magik-agent/Cargo.toml"
+
+step "Clippy host tools"
+cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D warnings
+
+step "Clippy MagiK agent"
+cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings

@@ -260,7 +260,7 @@ struct LaunchPrepBenchRef {
     launch_ref: String,
 }
 
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
 #[derive(Clone, Copy, Debug, Default)]
 struct ProcIoCounters {
     read_bytes: u64,
@@ -513,7 +513,7 @@ fn prepare_cold_launch_prep_ref(launch_ref: &str) {
     }
 }
 
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
 fn read_self_proc_io() -> ProcIoCounters {
     let mut contents = String::new();
     if File::open("/proc/self/io")
