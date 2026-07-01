@@ -3160,3 +3160,77 @@ FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	sqlite_publish_progress	
 FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	library_db_saved	47311	bytes=6856704 scan_us=33976238 discover_us=32921967 classify_us=33974813 import_us=8164335 discoveries=9237 normal_files=7519 containers=154 entries=281
 FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	counter_plateau	11000	from=target=900 to=target=700
 FIRSTSCAN-FOREGROUND-FIX-COMMIT-20260629	ea2057d1-dirty	db_count	0	9237
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	first_frame	94	catalog_ready=false
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	bootstrap_counter_climb	385	target=50
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	bootstrap_counter_sustained_climb	654	target=900
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_targets	0	roots=4 targets=21 extensions=36
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_first_candidate	2314	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_first_discovery	2400	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	5347	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	481	path=/media/fat/games/Saturn dirs=12 files=465 candidates=155
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	2	path=/media/fat/games/PSX dirs=1 files=6 candidates=6
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	23	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	111	path=/media/fat/games/NEOGEO dirs=2 files=275 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	0	path=/media/fat/games/Atari5200 dirs=1 files=1 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	259	path=/media/fat/games/Atari7800 dirs=26 files=86 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	52	path=/media/fat/games/AtariLynx dirs=1 files=758 candidates=379
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	full_scan_counter_climb	13619	target=800
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	16225	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	8767	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	2215	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	7952	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	1	path=/media/fat/games/S32X dirs=1 files=2 candidates=2
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	1	path=/media/fat/games/SMS dirs=1 files=2 candidates=2
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	771	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	55	path=/media/fat/games/Vectrex dirs=2 files=91 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	1	path=/media/fat/games/WonderSwan dirs=1 files=3 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	1	path=/media/fat/games/WonderSwanColor dirs=1 files=3 candidates=1
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	54	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk_target	15	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_walk	44881	candidates=10637
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_profile_match	189	calls=10637
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_installed_collection	300	calls=10619
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_archive_toc	968	containers=162
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_collection_listings	0	collections=0
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_file_discovery	32739	files=10617
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_classify_total	45337	discoveries=13330 normal_files=10617 containers=162 entries=1151
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	scan_stage_coverage_audit	5918	rows=468
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	library_scan_complete	52403	scan_us=51519929 discover_us=44881343 classify_us=51255732 discoveries=13205 normal_files=10617 containers=162 entries=1151
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	library_ready	56591	games=11041 load_us=4127703
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	catalog_bridge_sync_update	56592	games=11041 elapsed_us=187
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	catalog_worker_ram_catalog	56592	games=11041 catalog_us=4127703
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_schema	47	tables=14
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_metadata_load	1775	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_begin_tx	0	-
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_profiles	1	rows=21
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_catalog_audit	8	rows=468
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	190	from=0 to=1000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	122	from=1000 to=2000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	120	from=2000 to=3000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	139	from=3000 to=4000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	160	from=4000 to=5000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	134	from=5000 to=6000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	143	from=6000 to=7000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	171	from=7000 to=8000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	260	from=8000 to=9000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	279	from=9000 to=10000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	259	from=10000 to=11000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	458	from=11000 to=12000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	331	from=12000 to=13000 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_chunk	61	from=13000 to=13205 total=13205
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_games_total	3467	rows=13205 launcher_rows=10213
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_materialize_arcade_ui	2118	-
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_launcher_arcade	532	-
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_launcher_console	580	rows=9967
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_launcher_launch_plans	79	rows=8279
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_meta	259	rows=12
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_catalog_stamp	1141	stamp_rows=481 checkpoint_rows=334
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_insert_software_hash_cache	0	rows=0
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_commit	10	-
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	import_stage_total	10020	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.621
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	sqlite_publish_progress	708	bytes=10268672 copy_ms=699 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	library_db_saved	71789	bytes=10268672 scan_us=51519929 discover_us=44881343 classify_us=51255732 import_us=15141567 discoveries=13205 normal_files=10617 containers=162 entries=1151 audit_rows=468
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	counter_plateau	12965	from=target=900 to=target=800
+PHASE2-20260701-FIRSTSCAN	0aebd08c4-dirty	db_count	0	13205
