@@ -9,9 +9,9 @@ use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
-    load_preview_asset_pixels_timed, preview_asset_cache_key, preview_window_indices,
-    PreviewLoadSource, PreviewPixels, PreviewPriority, PreviewResult, PreviewWorker,
-    DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS,
+    preview_asset_cache_key, preview_window_indices, PreviewLoadSource, PreviewPixels,
+    PreviewPriority, PreviewResult, PreviewWorker, DEFAULT_PREVIEW_CACHE_CAP,
+    DEFAULT_PREVIEW_RADIUS,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -1007,7 +1007,7 @@ pub(crate) fn request_arcade_preview_window(
         candidate_game.title,
         candidate_game.preview_asset_key
     );
-    match load_preview_asset_pixels_timed(
+    match preview.worker.load_asset_pixels_timed(
         candidate_game.preview_archive_path.as_ref(),
         candidate_game.preview_asset_key.as_ref(),
     ) {
