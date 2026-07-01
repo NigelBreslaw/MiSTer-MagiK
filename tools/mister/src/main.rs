@@ -1,3 +1,6 @@
+use flate2::read::GzDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection, OpenFlags};
@@ -4368,25 +4371,29 @@ fn parse_virtual_size(text: &str) -> Option<(usize, usize)> {
 fn capture_fb(sess: &Session, label: &str) -> Result<FbCapture> {
     let geometry = framebuffer_geometry(sess)?;
     let expected = geometry.bytes()?;
-    let remote = format!("/tmp/mister-magik-{label}-{}.raw", unix_secs());
+    let remote_gz = format!("/tmp/mister-magik-{label}-{}.raw.gz", unix_secs());
     let cmd = format!(
-        "dd if=/dev/fb0 of={} bs={} count=1 2>/dev/null && wc -c {}",
-        sh(&remote),
+        "dd if=/dev/fb0 bs={} count=1 2>/dev/null | gzip -9 -c > {} && wc -c {}",
         expected,
-        sh(&remote)
+        sh(&remote_gz),
+        sh(&remote_gz)
     );
     let out = exec(sess, &cmd, true)?;
     if out.rc != 0 {
+        let _ = exec(sess, &format!("rm -f {}", sh(&remote_gz)), true);
         return Err(format!("failed to capture /dev/fb0: {}", out.stdout).into());
     }
     let sftp = sess.sftp()?;
-    let mut file = sftp.open(Path::new(&remote))?;
+    let mut file = sftp.open(Path::new(&remote_gz))?;
+    let mut compressed = Vec::new();
+    file.read_to_end(&mut compressed)?;
+    let _ = sftp.unlink(Path::new(&remote_gz));
+    let mut decoder = GzDecoder::new(compressed.as_slice());
     let mut raw = Vec::with_capacity(expected);
-    file.read_to_end(&mut raw)?;
-    let _ = sftp.unlink(Path::new(&remote));
+    decoder.read_to_end(&mut raw)?;
     if raw.len() < expected {
         return Err(format!(
-            "fb0 raw had {} bytes, expected {expected} for {}x{} stride={} bpp={}",
+            "fb0 raw had {} bytes after gzip decode, expected {expected} for {}x{} stride={} bpp={}",
             raw.len(),
             geometry.width,
             geometry.height,
@@ -4849,7 +4856,7 @@ fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Resu
     ihdr.extend_from_slice(&(h as u32).to_be_bytes());
     ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
     png_chunk(&mut png, b"IHDR", &ihdr);
-    png_chunk(&mut png, b"IDAT", &zlib_store(&rgba));
+    png_chunk(&mut png, b"IDAT", &zlib_deflate(&rgba)?);
     png_chunk(&mut png, b"IEND", &[]);
     fs::write(path, png)?;
     Ok(())
@@ -4961,20 +4968,10 @@ fn raw_to_png(
     write_png_bgrx_stride(&raw[..expected], &geometry, out_path)
 }
 
-fn zlib_store(data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01];
-    let mut pos = 0;
-    while pos < data.len() {
-        let len = (data.len() - pos).min(65_535);
-        let final_block = pos + len == data.len();
-        out.push(if final_block { 1 } else { 0 });
-        out.extend_from_slice(&(len as u16).to_le_bytes());
-        out.extend_from_slice(&(!(len as u16)).to_le_bytes());
-        out.extend_from_slice(&data[pos..pos + len]);
-        pos += len;
-    }
-    out.extend_from_slice(&adler32(data).to_be_bytes());
-    out
+fn zlib_deflate(data: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(data)?;
+    Ok(encoder.finish()?)
 }
 
 fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
@@ -4999,6 +4996,7 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
+#[cfg(test)]
 fn adler32(data: &[u8]) -> u32 {
     let mut a = 1u32;
     let mut b = 0u32;
