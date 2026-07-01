@@ -34,6 +34,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
+    bridge.set_simple_joystick_handling(false);
     bridge.set_confirm_visible(false);
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
@@ -377,6 +378,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
+    bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
     sync_arcade_list_geometry_bridge(&bridge, nav);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
@@ -475,6 +477,12 @@ pub(super) fn sync_bridge_launcher_light(
         get_settings_selected,
         set_settings_selected,
         nav.settings_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_simple_joystick_handling,
+        set_simple_joystick_handling,
+        nav.settings.simple_joystick_handling
     );
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
@@ -700,6 +708,7 @@ pub(super) struct LauncherBridgeKey {
     scroll_x: i32,
     settings_focused: bool,
     settings_selected: usize,
+    simple_joystick_handling: bool,
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
     arcade_selected: usize,
@@ -721,6 +730,7 @@ impl LauncherBridgeKey {
             scroll_x: nav.scroll_x,
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
+            simple_joystick_handling: nav.settings.simple_joystick_handling,
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
             arcade_selected: nav.arcade.selected,

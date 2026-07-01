@@ -7,6 +7,7 @@ use crate::arcade_catalog::{
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
+use crate::settings::MagikSettings;
 use mister_magik_catalog::media_identity::{
     screenshot_reset_deletes_filename, DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
 };
@@ -27,6 +28,8 @@ const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
+const INPUT_POLICY_MARKER_PATH: &str = "/tmp/mister-magik/input-policy";
+const MAGIK_INPUT_DIR: &str = "/media/fat/mister-magik/input";
 pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
 #[cfg(test)]
 const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
@@ -41,6 +44,7 @@ const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
 const ARCADE_FILTER_ROW_HEIGHT: i32 = 40;
+const SETTINGS_MAX_SELECTED: usize = 4;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
 pub const ARCADE_SEARCH_KEYS: [&str; 43] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
@@ -434,6 +438,7 @@ pub struct LauncherNav {
     pub scroll_x: i32,
     pub settings_focused: bool,
     pub settings_selected: usize,
+    pub settings: MagikSettings,
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
     pub arcade: ArcadeNav,
@@ -591,6 +596,7 @@ impl LauncherNav {
             scroll_x: 0,
             settings_focused: false,
             settings_selected: 0,
+            settings: MagikSettings::default(),
             confirm_action: None,
             confirm_selected: 0,
             arcade: ArcadeNav::new(),
@@ -881,7 +887,9 @@ impl LauncherNav {
             self.screen = Screen::Home;
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) && self.settings_selected < 3 {
+        if self.repeat.tick_down(now.dpad_down, frame_now)
+            && self.settings_selected < SETTINGS_MAX_SELECTED
+        {
             self.settings_selected += 1;
         }
         if self.repeat.tick_up(now.dpad_up, frame_now) && self.settings_selected > 0 {
@@ -892,10 +900,19 @@ impl LauncherNav {
                 self.screen = Screen::Controller;
                 return None;
             }
+            if self.settings_selected == 2 {
+                let mut next_settings = self.settings.clone();
+                next_settings.simple_joystick_handling = !next_settings.simple_joystick_handling;
+                match next_settings.save() {
+                    Ok(()) => self.settings = next_settings,
+                    Err(e) => eprintln!("settings: failed to save simple joystick toggle: {e}"),
+                }
+                return None;
+            }
             self.confirm_selected = if self.settings_selected == 0 { 1 } else { 0 };
             self.confirm_action = Some(match self.settings_selected {
                 0 => ConfirmAction::ExitToMister,
-                2 => ConfirmAction::ResetDatabase,
+                3 => ConfirmAction::ResetDatabase,
                 _ => ConfirmAction::Restart,
             });
         }
@@ -1678,9 +1695,12 @@ trait LaunchIo {
     fn target_exists(&mut self, path: &str) -> bool;
     fn mister_running(&mut self) -> bool;
     fn magik_running(&mut self) -> bool;
+    fn simple_joystick_handling(&mut self) -> bool;
+    fn prepare_simple_input_profiles(&mut self) -> Result<(), String>;
     fn start_mister(&mut self) -> Result<(), String>;
     fn wait_for_started_mister(&mut self) -> bool;
     fn wait_for_command_fifo(&mut self) -> bool;
+    fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String>;
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
     fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool;
 }
@@ -1704,6 +1724,14 @@ impl LaunchIo for SystemLaunchIo {
             .unwrap_or(false)
     }
 
+    fn simple_joystick_handling(&mut self) -> bool {
+        MagikSettings::load().simple_joystick_handling
+    }
+
+    fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
+        write_builtin_simple_input_profiles()
+    }
+
     fn start_mister(&mut self) -> Result<(), String> {
         Command::new(MISTER_BIN)
             .spawn()
@@ -1717,6 +1745,10 @@ impl LaunchIo for SystemLaunchIo {
 
     fn wait_for_command_fifo(&mut self) -> bool {
         wait_for_fifo()
+    }
+
+    fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String> {
+        write_input_policy_marker(simple_joystick_handling)
     }
 
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
@@ -1766,6 +1798,82 @@ fn restore_menu_wallpaper() {
 
 fn write_mister_command(cmd: &str) -> Result<(), String> {
     write_mister_command_nonblocking(cmd)
+}
+
+fn write_input_policy_marker(simple_joystick_handling: bool) -> Result<(), String> {
+    let path = Path::new(INPUT_POLICY_MARKER_PATH);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create input policy marker dir {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    if simple_joystick_handling {
+        fs::write(path, "simple\n")
+            .map_err(|e| format!("failed to write {INPUT_POLICY_MARKER_PATH}: {e}"))
+    } else {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("failed to remove {INPUT_POLICY_MARKER_PATH}: {e}")),
+        }
+    }
+}
+
+fn write_builtin_simple_input_profiles() -> Result<(), String> {
+    const RETRO_BIT_A2_MAP: [u32; 32] = [
+        0x0000_0321,
+        0x0000_0320,
+        0x0000_0323,
+        0x0000_0322,
+        0x0000_0132,
+        0x0000_0131,
+        0x0000_0133,
+        0x0000_0130,
+        0x0000_0134,
+        0x0000_0135,
+        0x0000_0138,
+        0x0000_0139,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x0000_013c,
+        0x0000_013c,
+        0x0130_0000,
+        0x0002_0000,
+        0x0002_0001,
+        0x0002_0002,
+        0x0002_0005,
+        0x0002_0000,
+        0x0002_0001,
+        0,
+        0,
+    ];
+    write_simple_input_profile("input_2563_0575_v3.map", &RETRO_BIT_A2_MAP)
+}
+
+fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String> {
+    fs::create_dir_all(MAGIK_INPUT_DIR)
+        .map_err(|e| format!("failed to create {MAGIK_INPUT_DIR}: {e}"))?;
+    let path = Path::new(MAGIK_INPUT_DIR).join(name);
+    let mut bytes = Vec::with_capacity(map.len() * 4);
+    for value in map {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    if fs::read(&path).ok().as_deref() == Some(bytes.as_slice()) {
+        return Ok(());
+    }
+    let tmp = path.with_extension("map.tmp");
+    fs::write(&tmp, &bytes).map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("failed to install {}: {e}", path.display()))
 }
 
 fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
@@ -1939,6 +2047,14 @@ pub fn execute_game_launch_handoff_bench(
             true
         }
 
+        fn simple_joystick_handling(&mut self) -> bool {
+            false
+        }
+
+        fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
         fn start_mister(&mut self) -> Result<(), String> {
             Ok(())
         }
@@ -1954,6 +2070,13 @@ pub fn execute_game_launch_handoff_bench(
                 .handoff_us
                 .saturating_add(start.elapsed().as_micros() as u64);
             self.mode == LaunchHandoffBenchMode::Success
+        }
+
+        fn write_input_policy_marker(
+            &mut self,
+            _simple_joystick_handling: bool,
+        ) -> Result<(), String> {
+            Ok(())
         }
 
         fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
@@ -2027,6 +2150,15 @@ fn execute_game_launch_with(
     let main_status_before_handoff = magik_running
         .then(read_magik_main_status_snapshot)
         .flatten();
+    if magik_running {
+        let simple_joystick_handling = io.simple_joystick_handling();
+        if simple_joystick_handling {
+            io.prepare_simple_input_profiles()
+                .map_err(|e| LaunchError::new(e, spawned))?;
+        }
+        io.write_input_policy_marker(simple_joystick_handling)
+            .map_err(|e| LaunchError::new(e, spawned))?;
+    }
     let cmd = match (magik_running, launch_target) {
         (true, LaunchTarget::Path(path)) => format!("mister_magik_launch {path}\n"),
         (true, LaunchTarget::Structured(plan)) => {
@@ -2053,8 +2185,12 @@ fn execute_game_launch_with(
         }
     };
     println!("launch: {}", cmd.trim_end());
-    io.write_mister_command(&cmd)
-        .map_err(|e| LaunchError::new(e, spawned))?;
+    if let Err(e) = io.write_mister_command(&cmd) {
+        if magik_running {
+            let _ = io.write_input_policy_marker(false);
+        }
+        return Err(LaunchError::new(e, spawned));
+    }
     if magik_running && !io.wait_for_magik_handoff_ack(main_status_before_handoff) {
         return Err(LaunchError::new(
             format!(
@@ -2174,12 +2310,15 @@ mod tests {
         target_exists: bool,
         mister_running: bool,
         magik_running: bool,
+        simple_joystick_handling: bool,
         start_result: Result<(), String>,
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
         handoff_ack: bool,
         start_calls: usize,
+        prepare_simple_input_profile_calls: usize,
+        input_policy_markers: Vec<bool>,
         commands: Vec<String>,
     }
 
@@ -2196,6 +2335,15 @@ mod tests {
             self.magik_running
         }
 
+        fn simple_joystick_handling(&mut self) -> bool {
+            self.simple_joystick_handling
+        }
+
+        fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
+            self.prepare_simple_input_profile_calls += 1;
+            Ok(())
+        }
+
         fn start_mister(&mut self) -> Result<(), String> {
             self.start_calls += 1;
             self.start_result.clone()
@@ -2207,6 +2355,14 @@ mod tests {
 
         fn wait_for_command_fifo(&mut self) -> bool {
             self.fifo_ready
+        }
+
+        fn write_input_policy_marker(
+            &mut self,
+            simple_joystick_handling: bool,
+        ) -> Result<(), String> {
+            self.input_policy_markers.push(simple_joystick_handling);
+            Ok(())
         }
 
         fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
@@ -2224,12 +2380,15 @@ mod tests {
             target_exists: true,
             mister_running: true,
             magik_running: true,
+            simple_joystick_handling: false,
             start_result: Ok(()),
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
             handoff_ack: true,
             start_calls: 0,
+            prepare_simple_input_profile_calls: 0,
+            input_policy_markers: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -3299,7 +3458,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 2;
+        nav.settings_selected = 3;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
@@ -3964,6 +4123,51 @@ mod tests {
 
         assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
         assert!(launch_in_progress());
+        reset_launch();
+    }
+
+    #[test]
+    fn magik_launch_writes_stock_input_policy_marker_by_default() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+
+        execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect("launch succeeds");
+
+        assert_eq!(io.input_policy_markers, vec![false]);
+        assert_eq!(io.prepare_simple_input_profile_calls, 0);
+        reset_launch();
+    }
+
+    #[test]
+    fn magik_launch_writes_simple_input_policy_marker_when_enabled() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.simple_joystick_handling = true;
+
+        execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect("launch succeeds");
+
+        assert_eq!(io.prepare_simple_input_profile_calls, 1);
+        assert_eq!(io.input_policy_markers, vec![true]);
+        reset_launch();
+    }
+
+    #[test]
+    fn stock_main_launch_does_not_write_input_policy_marker() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.magik_running = false;
+        io.simple_joystick_handling = true;
+
+        execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect("launch succeeds");
+
+        assert!(io.input_policy_markers.is_empty());
+        assert_eq!(io.prepare_simple_input_profile_calls, 0);
         reset_launch();
     }
 

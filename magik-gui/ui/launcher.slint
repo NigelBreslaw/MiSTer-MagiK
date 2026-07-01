@@ -487,15 +487,21 @@ component SettingsScreen inherits Rectangle {
             }
 
             SettingsRow {
+                label: "Simple joystick handling";
+                detail: MisterBridge.simple-joystick-handling ? "On" : "Off";
+                focused: MisterBridge.settings-selected == 2;
+            }
+
+            SettingsRow {
                 label: "Reset Database";
                 detail: "Delete library database and reboot";
-                focused: MisterBridge.settings-selected == 2;
+                focused: MisterBridge.settings-selected == 3;
             }
 
             SettingsRow {
                 label: "Restart";
                 detail: "Reboot the MiSTer";
-                focused: MisterBridge.settings-selected == 3;
+                focused: MisterBridge.settings-selected == 4;
             }
 
             Rectangle { vertical-stretch: 1; background: transparent; }

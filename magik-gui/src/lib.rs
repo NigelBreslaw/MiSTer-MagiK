@@ -20,6 +20,7 @@ pub mod media_update;
 pub mod raster_effects;
 pub mod raw565;
 pub mod runtime_status;
+pub mod settings;
 pub mod setup_nav;
 pub mod sprite_effects;
 pub mod text_effects;

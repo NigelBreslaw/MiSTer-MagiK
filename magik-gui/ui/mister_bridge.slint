@@ -58,8 +58,9 @@ export global MisterBridge {
     // Home focus: selected system index, with settings-focused as the top cog target.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
-    // Settings focus: 0=exit to MiSTer, 1=controller test, 2=reset database, 3=restart.
+    // Settings focus: 0=exit to MiSTer, 1=controller test, 2=simple joystick, 3=reset database, 4=restart.
     in-out property <int> settings-selected;
+    in-out property <bool> simple-joystick-handling;
     // Confirmation dialog.
     in-out property <bool> confirm-visible;
     in-out property <string> confirm-title;
