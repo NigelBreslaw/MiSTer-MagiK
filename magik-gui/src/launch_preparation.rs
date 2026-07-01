@@ -4,7 +4,7 @@
 use crate::{arcade_catalog::LaunchTarget, library_db};
 use std::cell::Cell;
 use std::fs::{self, File};
-#[cfg(any(feature = "bench-tools", test))]
+#[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
 use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};

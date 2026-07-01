@@ -86,6 +86,16 @@ semantics, carries the encoded plan through re-exec as `magik-plan-v1:...`, and
 seeds the existing MGL action state directly in `user_io_init`. Real user `.mra`,
 `.mgl`, and `.rbf` paths stay on `mister_magik_launch`.
 
+Simple joystick handling is also launch-scoped. Rust owns the persistent setting
+and the arcade policy: when the setting is enabled for a direct `.mra` launch,
+MagiK parses the MRA button labels before handoff and writes
+`/tmp/mister-magik/button-overrides` with zero-based MRA button indexes mapped
+to virtual Main tokens or `unmap`. Main only checks the boot-local
+`/tmp/mister-magik/input-policy` marker, skips user/core input maps in simple
+mode, and applies the override file as a generic adapter while constructing its
+normal input maps. Main must not parse MRA XML or classify arcade labels such as
+coin, start, pause, service, or player-two controls.
+
 ## Defensive Diagnostics
 
 The clean model is not "clever suppression" as normal operation. Main should not

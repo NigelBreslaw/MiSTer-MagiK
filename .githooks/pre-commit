@@ -26,7 +26,7 @@ run_linux_host_check() {
       --volume "$ROOT:/repo:ro" \
       --workdir /repo/magik-gui \
       rust:1.96-bookworm \
-      bash -lc 'cargo check --lib --tests --no-default-features'
+      bash -lc 'export PATH=/usr/local/cargo/bin:$PATH; cargo check --lib --tests --no-default-features'
     return
   fi
   if command -v docker >/dev/null 2>&1 &&
@@ -39,7 +39,7 @@ run_linux_host_check() {
       -v "$ROOT:/repo:ro" \
       -w /repo/magik-gui \
       rust:1.96-bookworm \
-      bash -lc 'cargo check --lib --tests --no-default-features'
+      bash -lc 'export PATH=/usr/local/cargo/bin:$PATH; cargo check --lib --tests --no-default-features'
     return
   fi
   echo "ERROR: macOS pre-commit needs a running Linux container runtime." >&2

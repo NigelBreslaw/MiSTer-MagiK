@@ -46,6 +46,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod arcade_button_overrides;
 mod arcade_list_renderer;
 mod artifact_publish;
 mod bitmap_text;
