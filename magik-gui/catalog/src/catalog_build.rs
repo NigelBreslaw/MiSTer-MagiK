@@ -5,8 +5,9 @@ use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
 use crate::game_discovery::unique_discovery_count;
 use crate::library_db::{
-    BenchConfig, LibraryCatalogLoad, LibraryRefreshCatalog, LibraryRefreshSummary,
-    LibraryScanArtifact, LibraryScanStats, ProgressCallback, ScanEventCallback,
+    BenchConfig, LibraryCatalogLoad, LibraryRamScanArtifact, LibraryRefreshCatalog,
+    LibraryRefreshSummary, LibraryScan, LibraryScanArtifact, LibraryScanStats, ProgressCallback,
+    ScanEventCallback,
 };
 use crate::library_indexer::LibraryIndexer;
 use crate::sqlite_catalog;
@@ -84,6 +85,18 @@ impl<'a> CatalogRefreshPipeline<'a> {
         )
     }
 
+    pub(crate) fn scan_ram_artifact_foreground_with_events(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
+        let scan_t = Instant::now();
+        let scan = LibraryIndexer::foreground(self.cfg)
+            .scan_without_coverage_audit_with_progress_and_events(progress, scan_events);
+        let stats = scan_stats(&scan, scan_t);
+        LibraryRamScanArtifact { scan, stats }
+    }
+
     fn scan_artifact_with_events_using(
         &self,
         indexer: LibraryIndexer<'_>,
@@ -96,16 +109,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
             &self.cfg.roots,
             &scan.audit_rows,
         );
-        let stats = LibraryScanStats {
-            scan_us: scan_t.elapsed().as_micros() as u64,
-            discover_us: scan.discover_us,
-            classify_us: scan.classify_us,
-            normal_files: scan.normal_files.len(),
-            containers: scan.containers.len(),
-            entries: scan.entries.len(),
-            audit_rows: scan.audit_rows.len(),
-            discoveries: unique_discovery_count(&scan.discoveries),
-        };
+        let stats = scan_stats(&scan, scan_t);
         LibraryScanArtifact { scan, stats, stamp }
     }
 
@@ -158,5 +162,18 @@ impl<'a> CatalogRefreshPipeline<'a> {
             },
             catalog: LibraryCatalogLoad::from_precomputed(catalog, catalog_us),
         })
+    }
+}
+
+fn scan_stats(scan: &LibraryScan, scan_t: Instant) -> LibraryScanStats {
+    LibraryScanStats {
+        scan_us: scan_t.elapsed().as_micros() as u64,
+        discover_us: scan.discover_us,
+        classify_us: scan.classify_us,
+        normal_files: scan.normal_files.len(),
+        containers: scan.containers.len(),
+        entries: scan.entries.len(),
+        audit_rows: scan.audit_rows.len(),
+        discoveries: unique_discovery_count(&scan.discoveries),
     }
 }

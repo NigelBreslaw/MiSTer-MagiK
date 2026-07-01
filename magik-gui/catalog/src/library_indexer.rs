@@ -65,7 +65,27 @@ impl<'a> LibraryIndexer<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScan {
-        scan_library_with_progress_and_events(self.cfg, self.priority, progress, scan_events)
+        scan_library_with_progress_and_events(
+            self.cfg,
+            self.priority,
+            CoverageAuditMode::Inline,
+            progress,
+            scan_events,
+        )
+    }
+
+    pub(crate) fn scan_without_coverage_audit_with_progress_and_events(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryScan {
+        scan_library_with_progress_and_events(
+            self.cfg,
+            self.priority,
+            CoverageAuditMode::Deferred,
+            progress,
+            scan_events,
+        )
     }
 
     pub(crate) fn bootstrap_progress(
@@ -80,6 +100,12 @@ impl<'a> LibraryIndexer<'a> {
 enum LibraryScanPriority {
     Background,
     Foreground,
+}
+
+#[derive(Clone, Copy)]
+enum CoverageAuditMode {
+    Inline,
+    Deferred,
 }
 
 #[derive(Default)]
@@ -99,12 +125,15 @@ struct ScanTimingStats {
 fn scan_library_with_progress_and_events(
     cfg: &BenchConfig,
     priority: LibraryScanPriority,
+    audit_mode: CoverageAuditMode,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
     let rx = match priority {
-        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined(cfg.roots.clone()),
+        LibraryScanPriority::Background => {
+            catalog_scan::discover_files_pipelined(cfg.roots.clone())
+        }
         LibraryScanPriority::Foreground => {
             catalog_scan::discover_files_pipelined_foreground(cfg.roots.clone())
         }
@@ -318,13 +347,19 @@ fn scan_library_with_progress_and_events(
             entries.len()
         ),
     );
-    let audit_t = Instant::now();
-    let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
-    library_db::report_library_scan_timing(
-        "coverage_audit",
-        audit_t.elapsed().as_micros() as u64,
-        format!("rows={}", audit_rows.len()),
-    );
+    let audit_rows = match audit_mode {
+        CoverageAuditMode::Inline => {
+            let audit_t = Instant::now();
+            let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+            library_db::report_library_scan_timing(
+                "coverage_audit",
+                audit_t.elapsed().as_micros() as u64,
+                format!("rows={}", audit_rows.len()),
+            );
+            audit_rows
+        }
+        CoverageAuditMode::Deferred => Vec::new(),
+    };
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),

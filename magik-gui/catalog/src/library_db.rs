@@ -25,7 +25,7 @@ use crate::catalog_projection::{
 };
 use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_stamp;
-use crate::core_audit::CatalogAuditRow;
+use crate::core_audit::{self, CatalogAuditRow};
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
     launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
@@ -198,6 +198,11 @@ pub struct LibraryScanArtifact {
     pub(crate) stamp: catalog_stamp::CatalogStamp,
 }
 
+pub struct LibraryRamScanArtifact {
+    pub(crate) scan: LibraryScan,
+    pub(crate) stats: LibraryScanStats,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LibraryBootstrapSummary {
     pub launchers: usize,
@@ -249,6 +254,39 @@ impl LibraryScanArtifact {
     ) -> Result<LibraryRefreshSummary, String> {
         let cfg = BenchConfig::production();
         save_scan_artifact_to_sqlite_with_projections(&cfg, self, root, progress)
+    }
+}
+
+impl LibraryRamScanArtifact {
+    pub fn stats(&self) -> &LibraryScanStats {
+        &self.stats
+    }
+
+    pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
+        build_catalog_from_scan(root, &self.scan)
+    }
+
+    pub fn complete_coverage_audit(mut self) -> LibraryScanArtifact {
+        let audit_t = std::time::Instant::now();
+        self.scan.audit_rows =
+            core_audit::audit_catalog_coverage(&self.scan.roots, &self.scan.profiles);
+        let audit_us = audit_t.elapsed().as_micros() as u64;
+        report_library_scan_timing(
+            "coverage_audit_deferred",
+            audit_us,
+            format!("rows={}", self.scan.audit_rows.len()),
+        );
+        let stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
+            &self.scan.roots,
+            &self.scan.audit_rows,
+        );
+        self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
+        self.stats.audit_rows = self.scan.audit_rows.len();
+        LibraryScanArtifact {
+            scan: self.scan,
+            stats: self.stats,
+            stamp,
+        }
     }
 }
 
@@ -546,7 +584,17 @@ pub fn scan_default_library_foreground_with_events(
     scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryScanArtifact, String> {
     let cfg = BenchConfig::production();
-    Ok(CatalogRefreshPipeline::new(&cfg).scan_artifact_foreground_with_events(progress, scan_events))
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_artifact_foreground_with_events(progress, scan_events))
+}
+
+pub fn scan_default_library_ram_foreground_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_ram_artifact_foreground_with_events(progress, scan_events))
 }
 
 pub fn bootstrap_default_library_progress(
@@ -1324,6 +1372,45 @@ mod tests {
         assert_eq!(
             ram_catalog.games[0].title.as_ref(),
             sqlite_catalog.catalog.games[0].title.as_ref()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ram_scan_artifact_completes_coverage_audit_before_save_artifact() {
+        let root = unique_temp_dir("ram-scan-deferred-audit");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::write(root.join("_Console/UnknownCore_20260701.rbf"), b"rbf")
+            .expect("write core");
+        let mut scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "1942")]);
+        scan.roots = vec![root.display().to_string()];
+        let ram_artifact = LibraryRamScanArtifact {
+            stats: LibraryScanStats {
+                scan_us: 42,
+                discover_us: scan.discover_us,
+                classify_us: scan.classify_us,
+                normal_files: scan.normal_files.len(),
+                containers: scan.containers.len(),
+                entries: scan.entries.len(),
+                audit_rows: 0,
+                discoveries: unique_discovery_count(&scan.discoveries),
+            },
+            scan,
+        };
+
+        assert_eq!(ram_artifact.stats().audit_rows, 0);
+        assert_eq!(ram_artifact.catalog("/media/fat/_Arcade").len(), 1);
+
+        let artifact = ram_artifact.complete_coverage_audit();
+        assert!(!artifact.scan.audit_rows.is_empty());
+        assert_eq!(artifact.stats.audit_rows, artifact.scan.audit_rows.len());
+        assert!(artifact.stats.scan_us >= 42);
+        assert_eq!(
+            artifact.stamp,
+            catalog_stamp::compute_default_catalog_stamp_with_audit(
+                &artifact.scan.roots,
+                &artifact.scan.audit_rows,
+            )
         );
         let _ = std::fs::remove_dir_all(root);
     }
