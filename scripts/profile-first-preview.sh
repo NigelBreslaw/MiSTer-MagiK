@@ -8,10 +8,12 @@ OUT_DIR="$HERE/build/preview-scroll-profiles"
 secs="8"
 label="first-preview-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="--skip-build"
+self_test="0"
+replace_label=()
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-preview.sh [LABEL] [--secs N] [--skip-build|--deploy-device]
+Usage: scripts/profile-first-preview.sh [LABEL] [--secs N] [--skip-build|--deploy-device|--replace-label|--self-test]
 
 Runs the supervised launcher Arcade preview trace with
 MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1, then summarizes the first selected
@@ -32,6 +34,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --deploy-device)
       deploy="--deploy-device"
+      shift
+      ;;
+    --replace-label)
+      replace_label=(--replace-label)
+      shift
+      ;;
+    --self-test)
+      self_test="1"
       shift
       ;;
     -h|--help)
@@ -55,28 +65,29 @@ if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 
-mkdir -p "$OUT_DIR"
-"$HERE/scripts/profile-preview-scroll.sh" \
-  "$secs" \
-  preview-idle \
-  "$label" \
-  "$deploy" \
-  --skip-preview-warm \
-  --visual-captures 0
-
-log="$OUT_DIR/${label}-arcade.log"
-if [[ ! -f "$log" ]]; then
-  echo "missing preview log: $log" >&2
-  exit 1
-fi
-
-awk -v label="$label" '
+summarize_first_preview_log() {
+  local summary_label="$1" log_path="$2"
+  awk -v label="$summary_label" '
   function field(name, fallback,    i, kv) {
     for (i = 1; i <= NF; i++) {
       split($i, kv, "=")
       if (kv[1] == name) return kv[2]
     }
     return fallback
+  }
+  $1 == "startup_timing" && $2 == "preview_selected_decoded" && decoded_seen == 0 {
+    decoded_seen = 1
+    decoded_queue_age_us = field("queue_age_us", field("age_us", "0"))
+    decoded_load_source = field("load_source", "unknown")
+    decoded_total_us = field("total_us", "0")
+    decoded_read_us = field("read_us", "0")
+    decoded_decode_us = field("decode_us", "0")
+    decoded_encoded_bytes = field("encoded_bytes", "0")
+  }
+  $1 == "startup_timing" && $2 == "preview_selected_applied" && apply_seen == 0 {
+    apply_seen = 1
+    apply_age_us = field("age_us", "0")
+    apply_load_source = field("load_source", "unknown")
   }
   /preview_trace decoded / && decoded_seen == 0 {
     priority = field("priority", "")
@@ -105,4 +116,70 @@ awk -v label="$label" '
       decoded_total_us + 0, decoded_read_us + 0, decoded_decode_us + 0,
       decoded_encoded_bytes + 0
   }
-' "$log"
+  ' "$log_path"
+}
+
+run_self_test() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+
+  local startup="$tmp/startup.log"
+  cat >"$startup" <<'EOF'
+startup_timing	preview_selected_decoded	123ms	system=arcade	title=1942	has_preview=1	asset_key=1942	generation=0	load_source=index_pread	total_us=900	read_us=700	decode_us=200	raw565_parse_us=50	age_us=12
+startup_timing	preview_selected_applied	124ms	system=arcade	selected_index=0	title=1942	has_preview=1	asset_key=1942	generation=0	load_source=index_pread	total_us=900	read_us=700	decode_us=200	age_us=33
+EOF
+  summarize_first_preview_log selftest-startup "$startup" \
+    | grep -q $'decoded_seen=1\tapply_seen=1' \
+    || { echo "self-test startup readiness failed" >&2; return 1; }
+
+  local prefetch="$tmp/prefetch.log"
+  cat >"$prefetch" <<'EOF'
+preview_trace decoded generation=2 priority=Prefetch cache_hit=0 load_source=index_pread format=raw-rgb565 total_us=300 read_us=100 decode_us=200 encoded_bytes=10 path=b.png
+EOF
+  summarize_first_preview_log selftest-prefetch "$prefetch" \
+    | grep -q $'decoded_seen=0\tapply_seen=0' \
+    || { echo "self-test prefetch exclusion failed" >&2; return 1; }
+
+  local async_selected="$tmp/async-selected.log"
+  cat >"$async_selected" <<'EOF'
+preview_trace decoded generation=1 priority=Selected queue_age_us=7 cache_hit=0 load_source=index_pread format=raw-rgb565 total_us=1000 read_us=900 decode_us=100 encoded_bytes=10 path=a.png
+preview_trace apply generation=1 priority=Selected selected=true age_us=44 load_source=index_pread format=raw-rgb565 total_us=1000 read_us=900 decode_us=100 encoded_bytes=10 path=a.png
+EOF
+  summarize_first_preview_log selftest-async "$async_selected" \
+    | grep -q $'decoded_seen=1\tapply_seen=1' \
+    || { echo "self-test async selected fallback failed" >&2; return 1; }
+
+  local cache_apply="$tmp/cache-apply.log"
+  cat >"$cache_apply" <<'EOF'
+startup_timing	preview_selected_applied	1ms	system=arcade	selected_index=0	title=1942	has_preview=1	asset_key=1942	generation=0	load_source=decoded_cache	total_us=0	read_us=0	decode_us=0	age_us=0
+EOF
+  summarize_first_preview_log selftest-cache "$cache_apply" \
+    | grep -q $'decoded_seen=0\tapply_seen=1' \
+    || { echo "self-test decoded-cache apply failed" >&2; return 1; }
+
+  echo "profile-first-preview self-test ok"
+}
+
+if [[ "$self_test" == "1" ]]; then
+  run_self_test
+  exit 0
+fi
+
+mkdir -p "$OUT_DIR"
+"$HERE/scripts/profile-preview-scroll.sh" \
+  "$secs" \
+  preview-idle \
+  "$label" \
+  "$deploy" \
+  "${replace_label[@]}" \
+  --skip-preview-warm \
+  --visual-captures 0
+
+log="$OUT_DIR/${label}-arcade.log"
+if [[ ! -f "$log" ]]; then
+  echo "missing preview log: $log" >&2
+  exit 1
+fi
+
+summarize_first_preview_log "$label" "$log"

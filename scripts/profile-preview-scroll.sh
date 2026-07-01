@@ -14,7 +14,7 @@ source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--skip-preview-warm]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--skip-preview-warm] [--replace-label]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -29,6 +29,7 @@ non-empty CPU SVG artifact.
 measurement can exercise the .idx + pread fast lane.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
+--replace-label removes existing local artifacts for LABEL before running.
 
 Do not use row-step scenarios such as list-scroll/smooth-scroll for Arcade
 performance benchmarking. They do not reproduce real velocity scrolling.
@@ -45,6 +46,7 @@ allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
 skip_preview_warm="${MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM:-0}"
+replace_label="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --cpu-profile) cpu_profile="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --self-test) self_test="1"; shift ;;
+    --replace-label) replace_label="1"; shift ;;
     --secs)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
       secs="$2"
@@ -104,6 +107,16 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
+if [[ "$replace_label" == "1" ]]; then
+  rm -rf "$OUT_DIR/${label}-arcade.tsv" \
+    "$OUT_DIR/${label}-arcade.log" \
+    "$OUT_DIR/${label}-arcade.status.txt" \
+    "$OUT_DIR/${label}-arcade.status.json" \
+    "$OUT_DIR/${label}-arcade-chart.svg" \
+    "$OUT_DIR/${label}-arcade-report.html" \
+    "$OUT_DIR/${label}-arcade-cpu.svg" \
+    "$OUT_DIR/${label}-visuals"
+fi
 env_file="$(mktemp)"
 
 tsv_value() {
