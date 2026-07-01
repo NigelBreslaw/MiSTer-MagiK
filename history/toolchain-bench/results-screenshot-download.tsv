@@ -1394,3 +1394,21 @@ metric_tsv	label=PERFREVIEW-CLEAN-20260629-DOWNLOAD-01	suite_label=PERFREVIEW-CL
 metric_tsv	label=PERFREVIEW-CLEAN-20260629-DOWNLOAD-01	suite_label=PERFREVIEW-CLEAN-20260629-DOWNLOAD	system=saturn	metric=screenshot_download_total_ms	value=3751	unit=ms	valid=1
 metric_tsv	label=PERFREVIEW-CLEAN-20260629-DOWNLOAD-01	suite_label=PERFREVIEW-CLEAN-20260629-DOWNLOAD	system=saturn	metric=screenshot_download_verify_ms	value=491	unit=ms	valid=1
 metric_tsv	label=PERFREVIEW-CLEAN-20260629-DOWNLOAD-01	suite_label=PERFREVIEW-CLEAN-20260629-DOWNLOAD	system=saturn	metric=screenshot_download_wire_ms	value=2510	unit=ms	valid=1
+screenshot_download_bench_tsv	label	system	variant	encoded_bytes	decoded_bytes	download_ms	decompress_ms	save_ms	verify_ms	total_ms	wire_mbps	decoded_mbps	etag	content_encoding	cf_cache_status	result
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=publish_copy	ms=393	bytes=4973975	result=bench-ok	detail=save_strategy=staged progress_events=22
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=publish_sync	ms=0	bytes=4973975	result=bench-ok	detail=save_strategy=staged progress_events=22
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=publish_rename	ms=0	bytes=4973975	result=bench-ok	detail=save_strategy=staged progress_events=22
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=publish_parent_sync	ms=0	bytes=4973975	result=bench-ok	detail=save_strategy=staged progress_events=22
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=state	ms=20	bytes=1027	result=bench-ok	detail=save_strategy=staged path=/media/fat/mister-magik/assets/.screenshot-media-state.json.bench-2133-1782891196275
+stage_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	benchmark=media-bench-download	system=neogeo	stage=cleanup	ms=18	bytes=0	result=bench-ok	detail=save_strategy=staged removed=3
+screenshot_download_bench_tsv	PHASE2-20260701-DOWNLOAD-01	neogeo	identity	4973975	4973975	331	0	433	288	1056	120.22	37.68	"bfc33b798ccdadc9384cb5232956c68d"	identity	HIT	bench-ok
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_publish_copy_ms	value=393	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_publish_sync_ms	value=0	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_publish_rename_ms	value=0	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_publish_parent_sync_ms	value=0	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_state_ms	value=20	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_stage_cleanup_ms	value=18	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_save_ms	value=433	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_total_ms	value=1056	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_verify_ms	value=288	unit=ms	valid=1
+metric_tsv	label=PHASE2-20260701-DOWNLOAD-01	suite_label=PHASE2-20260701-DOWNLOAD	system=neogeo	metric=screenshot_download_wire_ms	value=331	unit=ms	valid=1

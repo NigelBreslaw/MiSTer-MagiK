@@ -29,3 +29,8 @@ library_sqlite_publish_tsv	PERF20260629-LIBSAVE	2	progress	6856704	0	571	0	0	0	5
 library_sqlite_publish_tsv	PERF20260629-LIBSAVE	3	progress	6856704	0	542	0	0	0	547	28	bench-ok
 library_sqlite_publish_tsv	PERF20260629-LIBSAVE	4	progress	6856704	0	670	0	0	0	675	28	bench-ok
 library_sqlite_publish_tsv	PERF20260629-LIBSAVE	5	progress	6856704	0	548	0	0	0	552	28	bench-ok
+library_sqlite_publish_tsv	PHASE2-20260701-LIBSAVE	1	progress	10268672	0	702	0	8	0	718	41	bench-ok
+library_sqlite_publish_tsv	PHASE2-20260701-LIBSAVE	2	progress	10268672	0	937	0	0	0	944	41	bench-ok
+library_sqlite_publish_tsv	PHASE2-20260701-LIBSAVE	3	progress	10268672	0	1020	0	0	0	1027	41	bench-ok
+library_sqlite_publish_tsv	PHASE2-20260701-LIBSAVE	4	progress	10268672	0	910	0	0	0	917	41	bench-ok
+library_sqlite_publish_tsv	PHASE2-20260701-LIBSAVE	5	progress	10268672	0	962	0	0	0	969	41	bench-ok
