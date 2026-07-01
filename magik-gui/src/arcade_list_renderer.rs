@@ -257,11 +257,10 @@ impl ArcadeListRenderer {
     pub(crate) fn draw_filter_items(
         &mut self,
         items: &[ArcadeListItem],
-        selected: usize,
+        visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_draw = None;
-        let visual_index = selected.min(items.len().saturating_sub(1)) as f32;
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
             visual_px: (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32,
@@ -270,10 +269,49 @@ impl ArcadeListRenderer {
         if !force && self.last_filter_draw.as_ref() == Some(&key) {
             return None;
         }
+        let previous = self.last_filter_draw;
         self.last_filter_draw = Some(key);
-        self.surface_y = 0;
-        self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
-        Some(ArcadeListUpdate::Full(self.dirty_rect()))
+        if force && previous.as_ref() == Some(&key) {
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        let content_delta = previous
+            .as_ref()
+            .map(|previous| previous.visual_px - key.visual_px)
+            .unwrap_or(0);
+        let can_reuse_scrolled_surface = previous
+            .as_ref()
+            .is_some_and(|previous| previous.len == key.len)
+            && !previous.as_ref().is_some_and(|previous| {
+                previous.len == key.len
+                    && previous.visual_px == key.visual_px
+                    && previous.visible_hash != key.visible_hash
+            });
+        if previous.is_none() || !can_reuse_scrolled_surface || items.is_empty() {
+            self.surface_y = 0;
+            self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
+        } else if content_delta == 0 {
+        } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+            self.surface_y = 0;
+            self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
+        } else if content_delta < 0 {
+            let d = content_delta.unsigned_abs() as usize;
+            self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
+            self.draw_filter_content_band(items, visual_index, ARCADE_LIST_H - d, d);
+        } else {
+            let d = content_delta as usize;
+            self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
+            self.draw_filter_content_band(items, visual_index, 0, d);
+        }
+        if force || previous.is_none() || !can_reuse_scrolled_surface {
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        if content_delta == 0 || content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        Some(ArcadeListUpdate::Scroll {
+            delta_y: content_delta as isize,
+            rect: self.dirty_rect(),
+        })
     }
 
     pub(crate) fn selection_rect(&self) -> DirtyRect {

@@ -226,11 +226,14 @@ root stamp semantics, SQLite publish model, and benchmark gates.
 
 ## Launcher Navigation Model
 
-Arcade filter navigation is hierarchical. D-pad right descends into a filter
-group or applies the highlighted value; `A` is the same action. D-pad left backs
-out one filter level; `B` is the same action except at the filter top level,
-where left is a no-op and `B` returns to the Home launcher. `Home` always jumps
-back to the Home launcher from Arcade or any open filter level.
+Arcade drawer navigation starts with an A-Z jump list. From the closed Arcade
+game list, D-pad left opens the alphabet drawer; selecting a group jumps the
+game list to the first title in that group. Pressing left again from the
+alphabet drawer opens the hierarchical filter drawer. D-pad right descends into
+a filter group or applies the highlighted value; `A` is the same action. D-pad
+left backs out one filter level; `B` is the same action except at the filter
+top level, where left is a no-op and `B` returns to the Home launcher. `Home`
+always jumps back to the Home launcher from Arcade or any open drawer level.
 
 Arcade search is a top-level filter, but it behaves like its own mode instead
 of another hierarchical drawer level. The left pane becomes an on-screen
@@ -242,10 +245,12 @@ spaces from blocking obvious matches, so `pacman` can match `Pac-Man` and
 metadata terms such as `capcom` can match games by manufacturer. The search
 keyboard also exposes a one-word autocomplete suggestion above the keys; `Y`
 accepts the suggestion by replacing the current partial word and appending a
-space. While search is active, screenshot previews stay suppressed because the
-right pane is reserved for result navigation. Launch return state stores the
-search query and restores the filtered result list before selecting the
-returning game.
+space. Empty search shows the active system's full game list and must not build
+deferred text indexes on the Search entry frame; the launcher prewarms those
+indexes after the first visible frame and logs `arcade_search_index_prewarm`.
+While search is active, screenshot previews stay suppressed because the right
+pane is reserved for result navigation. Launch return state stores the search
+query and restores the filtered result list before selecting the returning game.
 
 Current rules:
 
