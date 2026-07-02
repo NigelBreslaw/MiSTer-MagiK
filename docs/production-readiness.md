@@ -32,7 +32,12 @@ GitHub Actions remains host/build-only. The workflow explicitly runs the catalog
 crate tests so catalog behavior is not only checked indirectly through the app
 crate.
 
-## Device Gate
+## Device Acceptance Gate
+
+The industry term for checks that must run on real hardware is
+**hardware-in-the-loop (HIL)**. In this repo, use **device acceptance gate** for
+the MiSTer HIL release gate and keep the canonical command as
+`scripts/device-release-acceptance.sh`.
 
 Run against the currently deployed build:
 
@@ -72,10 +77,19 @@ scripts/device-release-acceptance.sh --skip-deploy --soak
 
 The script uses only `scripts/mister` for device access and writes artifacts to
 `build/device-release/<timestamp>/`, including status JSON, doctor output,
-snapshots, logs, optional frame/profile files, and `report.md`.
+snapshots, logs, optional frame/profile files, `report.md`, `results.tsv`, and
+`summary.json`.
 Health and catalog probe logs are captured as artifacts when those tiers run.
 The old `/dev/MrAudio` `audio-tone` probe is no longer part of the production
 binary; audio validation is covered by the video path.
+
+`report.md` is the human-readable evidence file. It includes the selected
+tiers, skip options, every recorded check, a compact result table, and the final
+PASS/FAIL result. `summary.json` is the machine-readable result with selected
+tiers, skipped tiers, pass/fail/skip counts, artifact directory, start
+timestamp, options, and final result. Skipped checks are recorded as `SKIP` and
+must not be counted as passes. An aborted run should still collect artifacts and
+write both `report.md` and `summary.json` with a failing result.
 
 The device gate is telemetry-first: it waits on `scripts/mister status --json`,
 launcher status fields, Main status fields, `/tmp/mister-magik/events.jsonl`,
@@ -86,6 +100,11 @@ run named tiers with `--tiers`: `health`, `framebuffer-route`,
 and `soak`. The default gate includes every tier except `soak`; `--fast`
 preserves the quick non-destructive preset. The 30-60 minute soak is
 deliberately default-off behind `--soak` or `--tiers soak`.
+
+Bench-tools-only checks are optional HIL sub-scenarios. When
+`MISTER_ACCEPTANCE_BENCH_TOOLS=0`, preview trace and velocity trace checks must
+report `SKIP`, not `PASS`. Use `MISTER_ACCEPTANCE_BENCH_TOOLS=1` only when the
+deployed binary was built with the matching bench-tools support.
 
 The default launch smoke target is:
 
@@ -154,7 +173,8 @@ Block a public beta release if any of these fail:
 - Supervised reboot does not return to `LauncherActive`.
 - Any sample in the 15-reboot supervised Ethernet soak misses agent, SSH, or
   `LauncherActive` recovery.
-- The acceptance script does not produce a report and artifacts.
+- The acceptance script does not produce `report.md`, `summary.json`, and
+  artifacts.
 
 ## Current Evidence
 
