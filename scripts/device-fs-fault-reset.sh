@@ -22,7 +22,8 @@ TSV="$ROOT/history/toolchain-bench/results-fs-fault-reset.tsv"
 LABEL=""
 SCENARIO="all"
 ITERATIONS=1
-WAIT_TIMEOUT=120
+WAIT_TIMEOUT=40
+MAX_WAIT_TIMEOUT=40
 SETTLE=5
 RUN_ACCEPTANCE=1
 RECOVER_ONLY=0
@@ -41,6 +42,9 @@ and screenshot media artifacts, then rebuilds/redownloads as needed.
 
 --recover-only clears stale fault launcher env and disposable artifacts, rebuilds
 the catalog, restarts the launcher, and exits.
+
+--wait-timeout is capped at 40 seconds. Reset-fault points fail fast when a
+reset is not observed.
 EOF
 }
 
@@ -75,6 +79,14 @@ if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 fi
 if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
   echo "--iterations must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "$WAIT_TIMEOUT" =~ ^[0-9]+$ || "$WAIT_TIMEOUT" -lt 1 ]]; then
+  echo "--wait-timeout must be a positive integer" >&2
+  exit 2
+fi
+if [ "$WAIT_TIMEOUT" -gt "$MAX_WAIT_TIMEOUT" ]; then
+  echo "--wait-timeout must be <= $MAX_WAIT_TIMEOUT seconds" >&2
   exit 2
 fi
 
@@ -190,7 +202,9 @@ wait_for_down_up() {
     fi
     sleep 1
   done
-  "$MISTER" wait "$WAIT_TIMEOUT" >/dev/null
+  if [ "$down_seen" = "1" ]; then
+    "$MISTER" wait "$WAIT_TIMEOUT" >/dev/null
+  fi
   echo "$down_seen"
 }
 
@@ -211,6 +225,33 @@ run_acceptance() {
     return 0
   fi
   "$ROOT/scripts/device-catalog-acceptance.sh" --settle "$SETTLE" >/tmp/mister-magik-fs-fault-acceptance.log 2>&1
+}
+
+remote_command_available() {
+  local command="$1"
+  remote "$(sq "$REMOTE_BIN") $(sq "$command") --help >/dev/null 2>&1" >/dev/null 2>&1
+}
+
+preflight_scenario() {
+  local scenario="$1"
+  case "$scenario" in
+    media)
+      remote_command_available media-bench-save || {
+        echo "ERROR: deployed binary does not expose media-bench-save; deploy a --bench-tools build before media fault tests" >&2
+        return 1
+      }
+      ;;
+    reset-delete)
+      remote_command_available reset-delete-database || {
+        echo "ERROR: deployed binary does not expose reset-delete-database; deploy the current MagiK build before reset-delete fault tests" >&2
+        return 1
+      }
+      remote_command_available reset-delete-screenshot-packs || {
+        echo "ERROR: deployed binary does not expose reset-delete-screenshot-packs; deploy the current MagiK build before reset-delete fault tests" >&2
+        return 1
+      }
+      ;;
+  esac
 }
 
 fault_env_prefix() {
@@ -239,6 +280,20 @@ trigger_rebuild_marker() {
   local point="$1"
   arm_fault_session "$point"
   remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") request-library-rebuild" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
+}
+
+trigger_reset_delete_database() {
+  local point="$1"
+  arm_fault_session "$point"
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") reset-delete-database" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
+}
+
+trigger_reset_delete_screenshot_packs() {
+  local point="$1"
+  arm_fault_session "$point"
+  remote "mkdir -p $(sq "$REMOTE_ASSETS"); printf dummy >$(sq "$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b"); sync; $(fault_env_prefix "$point") $(sq "$REMOTE_BIN") reset-delete-screenshot-packs" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
@@ -299,8 +354,8 @@ trigger_point() {
     media:*) cleanup_destructive_state; trigger_launcher_with_env "$point" ""; TRIGGER_LABEL=launcher-media-worker ;;
     settings-marker:settings.*) trigger_settings_toggle "$point"; TRIGGER_LABEL=toggle-simple-joystick-setting ;;
     settings-marker:launcher.rebuild_marker.after_write) trigger_rebuild_marker "$point"; TRIGGER_LABEL=request-library-rebuild ;;
-    reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; remote "mkdir -p $(sq "$REMOTE_ASSETS"); printf dummy >$(sq "$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b"); sync" >/dev/null; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; TRIGGER_LABEL=launcher-reset-delete-input ;;
-    reset-delete:*) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; TRIGGER_LABEL=launcher-reset-delete-input ;;
+    reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_reset_delete_screenshot_packs "$point"; TRIGGER_LABEL=reset-delete-screenshot-packs ;;
+    reset-delete:*) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_reset_delete_database "$point"; TRIGGER_LABEL=reset-delete-database ;;
     *) trigger_catalog_refresh "$point" "$iteration"; TRIGGER_LABEL=library-refresh ;;
   esac
 }
@@ -318,10 +373,12 @@ run_one() {
   cleanup_destructive_state
   recover_catalog_and_launcher >/dev/null || true
 
-  local trigger down_seen launcher_state db_state media_state acceptance_state result notes
+  local trigger down_seen marker_seen launcher_state db_state media_state acceptance_state result notes
   trigger_point "$scenario" "$point" "$iteration"
   trigger="$TRIGGER_LABEL"
   down_seen="$(wait_for_down_up || echo 0)"
+  marker_seen=0
+  remote_quick "test -f $(sq "$REMOTE_MARKER")" >/dev/null 2>&1 && marker_seen=1 || true
   stop_active_trigger
 
   launcher_state=0
@@ -330,6 +387,14 @@ run_one() {
   acceptance_state=0
   result=fail
   notes=""
+
+  if [ "$down_seen" != "1" ]; then
+    if [ "$marker_seen" = "1" ]; then
+      notes="${notes}fault_marker_without_reset;"
+    else
+      notes="${notes}fault_not_observed;"
+    fi
+  fi
 
   if recover_catalog_and_launcher; then
     sleep "$SETTLE"
@@ -351,10 +416,12 @@ run_one() {
   record_row "$scenario" "$iteration" "$point" "$trigger" "$down_seen" "$launcher_state" "$db_state" "$media_state" "$acceptance_state" "$result" "${notes:-ok}"
   if [ "$result" != "ok" ]; then
     echo "WARN: scenario=$scenario fault=$point result=$result notes=${notes:-none}" >&2
+    return 1
   fi
 }
 
 for scenario in $(scenarios_to_run); do
+  preflight_scenario "$scenario"
   while IFS= read -r point; do
     [ -n "$point" ] || continue
     for ((iteration = 1; iteration <= ITERATIONS; iteration++)); do

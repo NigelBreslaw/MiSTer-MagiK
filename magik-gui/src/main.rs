@@ -9,6 +9,10 @@
 //!                        write rebuild-on-next-boot marker for fault tests
 //!     toggle-simple-joystick-setting
 //!                        toggle settings.json simple joystick flag for fault tests
+//!     reset-delete-database
+//!                        delete catalog DB/projections for fault tests
+//!     reset-delete-screenshot-packs
+//!                        delete screenshot media artifacts for fault tests
 //!   Diagnostics:
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
@@ -144,6 +148,16 @@ fn main() {
 
     if cmd == "toggle-simple-joystick-setting" {
         run_toggle_simple_joystick_setting();
+        return;
+    }
+
+    if cmd == "reset-delete-database" {
+        run_reset_delete_database(&args);
+        return;
+    }
+
+    if cmd == "reset-delete-screenshot-packs" {
+        run_reset_delete_screenshot_packs(&args);
         return;
     }
 
@@ -365,6 +379,40 @@ fn run_toggle_simple_joystick_setting() {
         ),
         Err(e) => {
             eprintln!("toggle_simple_joystick_setting\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_reset_delete_database(args: &[String]) {
+    if args
+        .get(2)
+        .is_some_and(|arg| arg == "-h" || arg == "--help")
+    {
+        println!("usage: mister-magik-fb reset-delete-database");
+        return;
+    }
+    match library_db::remove_default_sqlite_database() {
+        Ok(()) => println!("reset_delete_database\tdone"),
+        Err(e) => {
+            eprintln!("reset_delete_database\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_reset_delete_screenshot_packs(args: &[String]) {
+    if args
+        .get(2)
+        .is_some_and(|arg| arg == "-h" || arg == "--help")
+    {
+        println!("usage: mister-magik-fb reset-delete-screenshot-packs");
+        return;
+    }
+    match launcher::delete_screenshot_packs() {
+        Ok(removed) => println!("reset_delete_screenshot_packs\tdone\tremoved={removed}"),
+        Err(e) => {
+            eprintln!("reset_delete_screenshot_packs\tfailed\t{e}");
             std::process::exit(1);
         }
     }
