@@ -96,6 +96,9 @@ startup, preview readiness, or launch-return behavior:
 scripts/device-startup-reveal-acceptance.sh LABEL
 ```
 
+For the broader hardware-in-the-loop (HIL) release policy, tier semantics, skip
+reporting, and artifact contract, see `docs/production-readiness.md`.
+
 The script backs up and removes the device catalog for the cold scenario, then
 restores it before the warm and return scenarios. It appends
 `history/toolchain-bench/results-startup-reveal.tsv` rows with `mode`,

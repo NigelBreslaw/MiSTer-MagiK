@@ -409,9 +409,9 @@ Anchor: `magik-gui/src/ui_runner/launcher_loop.rs:2093`.
    impressive than the unique behavior coverage actually is.
 2. Keep adding state-machine tests near lifecycle/session modules. That style
    is the best part of the current suite.
-3. For hardware-bound code, extract tiny pure planning functions and fakeable
-   IO traits. Avoid trying to mock the whole MiSTer; mock only the operation
-   sequence that must never regress.
+3. For hardware-in-the-loop (HIL) code, extract tiny pure planning functions and
+   fakeable IO traits. Avoid trying to mock the whole MiSTer; mock only the
+   operation sequence that must never regress.
 4. Promote optional private-fixture checks into either explicit ignored tests or
    deterministic synthetic fixtures. Silent skips are easy to overvalue.
 5. For future AI-authored tests, require every new test to name the protected
@@ -429,3 +429,34 @@ Anchor: `magik-gui/src/ui_runner/launcher_loop.rs:2093`.
 7. Fill catalog media-pruning parity and input hotplug boundaries.
 8. Add visual/pixel and frame-budget tests for renderer quality.
 
+## Implementation Follow-Up Checklist
+
+Implementation bug report:
+`docs/2026-07-02-test-audit-implementation-bugs.md`.
+
+Every future AI-authored test should name the protected user failure or product
+invariant in the test name, setup, or assertion message.
+
+| Finding | Status | Coverage / Commit |
+| --- | --- | --- |
+| Stale launch lifecycle terminal events could affect non-launch states | Done | `314c5a7` adds lifecycle guards and tests for idle, catalog validation, recovery, and startup-like non-launch states. |
+| Brittle lifecycle capacity assertion | Done | `d6e64f5` replaces capacity coupling with semantic transition/effect assertions. |
+| Preview failed-cache survives media refresh | Done | `ec64978` clears failed preview paths when media worker reports current/downloaded packs and tests the cache/effect path. |
+| HIL skips counted as passes | Done | `bf901fe` adds `record_skip`, `results.tsv`, `summary.json`, result table output, and host-tool contract checks. |
+| Loop-level launch failure journey | Planned | Add host loop/session test for loading frame, handoff failure, recovery frame, idle return, input/list/preview resumption. |
+| Launch/recovery frame-policy suppression | Planned | Add tests proving preview scheduling/apply and Arcade overlay drawing are suppressed while launching. |
+| Scheduler interleaving for catalog/media/launch workers | Planned | Extend `launcher_scheduler` and session tests for media pause/resume/drop, catalog validation visibility, and stale launch messages at scheduler boundaries. |
+| Boot/framebuffer startup order | Planned | Extract fakeable startup plan for geometry, RGB565, black clear, display config, FPGA route, and settle frames. |
+| FPGA route/direct-video planning | Planned | Extract route plan tests for scan dimensions, right-edge guard, stride, RGB565 flags, HDMI/direct-video `set_vga_fb`, and route-invalid composition recovery. |
+| Input and controller setup boundaries | Planned | Add synthetic JS event reader tests for init masking, press/release, deadzone, hat release, short reads, disconnect removal, raw/debug propagation, and setup unplug/disappearance. |
+| Button override write/remove behavior | Planned | Add temp-path IO tests proving simple launches remove stale overrides and MRA launches write expected mappings without clobbering unrelated launch policy. |
+| Production-shaped catalog fixture | Planned | Add end-to-end fixture across `_Arcade`, games, DOS, generic cores, helper/media clutter, loose files, zip entries, MGL launchers, RAM catalog, SQLite save/load, and corrupt zip resilience. |
+| Catalog pruning and audit parity | Planned | Add media/helper directory fixtures, mixed-case variants, `core_audit` parity, MGL duplicate suppression, and supported-input cache decision test. |
+| Optional and brittle catalog tests | Planned | Convert private TSV fixture to ignored or explicit skipped-fixture test; prefer structured progress assertions over exact legacy copy. |
+| Preview state hot-path coverage | Planned | Introduce preview-loader trait/test double; prove selected cache misses do not synchronously block and queued media systems do not download during active scroll interaction. |
+| Preview pack/index coherence | Planned | Add pack-success/index-failure and corrupt-payload tests that preserve pack/index/state/cache coherence. |
+| RGB565/archive validation alignment | Planned | Add contract tests comparing raw565 header/stride rules with preview worker V2 acceptance, including padding and oversize guards. |
+| Video player unit coverage | Planned | Add host-only/feature-gated tests for RGB565 extraction, EOF/rewind, and unsupported pixel format errors. |
+| Visual rendering quality contracts | Planned | Add RGB565 signature tests for Arcade rows, filter/search geometry, fades, and no stale preview artifacts. |
+| Frame-budget unit checks | Planned | Add lightweight row-count/direct-row tests for idle Arcade, one-row scroll, modal full-frame, and direct preview repaint. |
+| HIL audit-risk scenarios | Planned | Add device scenarios for invalid launch target recovery, same-process preview availability after pack/index refresh, startup reveal surfacing, and catalog helper/media decoys. |
