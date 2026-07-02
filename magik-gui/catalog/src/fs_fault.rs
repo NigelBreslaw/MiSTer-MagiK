@@ -9,8 +9,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const POINT_ENV: &str = "MISTER_FS_FAULT_POINT";
 const ACTION_ENV: &str = "MISTER_FS_FAULT_ACTION";
 const DELAY_ENV: &str = "MISTER_FS_FAULT_DELAY_MS";
+const SESSION_ENV: &str = "MISTER_FS_FAULT_SESSION";
 const DEFAULT_DELAY_MS: u64 = 2_000;
 const MARKER_PATH: &str = "/tmp/mister-magik/fs-fault.json";
+const SESSION_PATH: &str = "/tmp/mister-magik/fs-fault-session";
 const MISTER_CMD: &str = "/dev/MiSTer_cmd";
 const DIRECT_RESET_NO_SYNC: &str = "direct-reset-no-sync";
 const DIRECT_RESET_NO_SYNC_CMD: &str = "mister_magik_direct_reset_no_sync\n";
@@ -20,6 +22,7 @@ struct FaultConfig {
     point: String,
     action: String,
     delay_ms: u64,
+    session: Option<String>,
 }
 
 impl FaultConfig {
@@ -37,6 +40,9 @@ impl FaultConfig {
             point,
             action,
             delay_ms,
+            session: std::env::var(SESSION_ENV)
+                .ok()
+                .filter(|value| !value.trim().is_empty()),
         })
     }
 }
@@ -59,6 +65,10 @@ fn maybe_fault_with(
     if config.point != point {
         return;
     }
+    if config.action == DIRECT_RESET_NO_SYNC && !session_is_armed(config, runtime) {
+        eprintln!("fs_fault: direct-reset-no-sync ignored at {point}; volatile session not armed");
+        return;
+    }
     let _ = runtime.write_marker(MARKER_PATH, &marker_json(point, target, config));
     if config.action == DIRECT_RESET_NO_SYNC {
         let _ = runtime.send_mister_command(MISTER_CMD, DIRECT_RESET_NO_SYNC_CMD);
@@ -78,10 +88,21 @@ fn marker_json(point: &str, target: &Path, config: &FaultConfig) -> String {
         "target": target.display().to_string(),
         "action": config.action,
         "delay_ms": config.delay_ms,
+        "session": config.session,
         "pid": std::process::id(),
         "ts_unix_ms": unix_ms_now(),
     });
     format!("{value}\n")
+}
+
+fn session_is_armed(config: &FaultConfig, runtime: &mut impl FaultRuntime) -> bool {
+    let Some(expected) = config.session.as_deref() else {
+        return false;
+    };
+    runtime
+        .read_text(SESSION_PATH)
+        .map(|actual| actual.trim() == expected)
+        .unwrap_or(false)
 }
 
 fn unix_ms_now() -> u128 {
@@ -92,6 +113,7 @@ fn unix_ms_now() -> u128 {
 }
 
 trait FaultRuntime {
+    fn read_text(&mut self, path: &str) -> std::io::Result<String>;
     fn write_marker(&mut self, path: &str, json: &str) -> std::io::Result<()>;
     fn send_mister_command(&mut self, path: &str, command: &str) -> std::io::Result<()>;
     fn sleep_ms(&mut self, delay_ms: u64);
@@ -100,6 +122,10 @@ trait FaultRuntime {
 struct SystemFaultRuntime;
 
 impl FaultRuntime for SystemFaultRuntime {
+    fn read_text(&mut self, path: &str) -> std::io::Result<String> {
+        fs::read_to_string(path)
+    }
+
     fn write_marker(&mut self, path: &str, json: &str) -> std::io::Result<()> {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent)?;
@@ -126,12 +152,19 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRuntime {
+        session: Option<String>,
         marker: Option<(String, String)>,
         command: Option<(String, String)>,
         slept_ms: Vec<u64>,
     }
 
     impl FaultRuntime for FakeRuntime {
+        fn read_text(&mut self, _path: &str) -> std::io::Result<String> {
+            self.session
+                .clone()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "missing"))
+        }
+
         fn write_marker(&mut self, path: &str, json: &str) -> std::io::Result<()> {
             self.marker = Some((path.to_string(), json.to_string()));
             Ok(())
@@ -199,6 +232,7 @@ mod tests {
             point: "wanted".into(),
             action: DIRECT_RESET_NO_SYNC.into(),
             delay_ms: 7,
+            session: Some("test-session".into()),
         };
         let mut runtime = FakeRuntime::default();
         maybe_fault_with(
@@ -218,8 +252,12 @@ mod tests {
             point: "catalog.sqlite.after_final_temp_sync".into(),
             action: DIRECT_RESET_NO_SYNC.into(),
             delay_ms: 42,
+            session: Some("test-session".into()),
         };
-        let mut runtime = FakeRuntime::default();
+        let mut runtime = FakeRuntime {
+            session: Some("test-session".into()),
+            ..FakeRuntime::default()
+        };
         maybe_fault_with(
             "catalog.sqlite.after_final_temp_sync",
             &PathBuf::from("/media/fat/mister-magik/library.sqlite3"),
@@ -238,13 +276,35 @@ mod tests {
     }
 
     #[test]
+    fn matching_direct_reset_without_volatile_session_is_noop() {
+        let config = FaultConfig {
+            point: "settings.after_temp_write".into(),
+            action: DIRECT_RESET_NO_SYNC.into(),
+            delay_ms: 42,
+            session: Some("test-session".into()),
+        };
+        let mut runtime = FakeRuntime::default();
+        maybe_fault_with(
+            "settings.after_temp_write",
+            &PathBuf::from("/media/fat/mister-magik/settings.json"),
+            &config,
+            &mut runtime,
+        );
+        assert!(runtime.marker.is_none());
+        assert!(runtime.command.is_none());
+        assert!(runtime.slept_ms.is_empty());
+    }
+
+    #[test]
     fn env_config_defaults_to_direct_reset_no_sync() {
         let _guard = env_lock();
         let _point = EnvRestore::set(POINT_ENV, "settings.after_rename");
         let _action = EnvRestore::remove(ACTION_ENV);
         let _delay = EnvRestore::remove(DELAY_ENV);
+        let _session = EnvRestore::remove(SESSION_ENV);
         let config = FaultConfig::from_env().expect("config");
         assert_eq!(config.action, DIRECT_RESET_NO_SYNC);
         assert_eq!(config.delay_ms, DEFAULT_DELAY_MS);
+        assert_eq!(config.session, None);
     }
 }

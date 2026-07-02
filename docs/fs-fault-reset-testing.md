@@ -47,6 +47,7 @@ MagiK checks these environment variables at instrumented write boundaries:
 MISTER_FS_FAULT_POINT=<point-name>
 MISTER_FS_FAULT_ACTION=direct-reset-no-sync
 MISTER_FS_FAULT_DELAY_MS=2000
+MISTER_FS_FAULT_SESSION=<volatile-token>
 ```
 
 When the configured point matches, MagiK writes:
@@ -57,6 +58,13 @@ When the configured point matches, MagiK writes:
 
 Then it sends `mister_magik_direct_reset_no_sync` to `/dev/MiSTer_cmd` and
 sleeps briefly so reset can take the device down.
+
+`direct-reset-no-sync` is armed only when `MISTER_FS_FAULT_SESSION` matches the
+volatile token in `/tmp/mister-magik/fs-fault-session`. A stale persistent env
+file alone must be inert after reboot. The runner uses
+`/tmp/mister-magik/fs-fault-launcher.env` for launcher-driven fault tests and
+clears both `/media/fat/mister-magik/launcher.env` and the volatile fault env
+during cleanup.
 
 ## Fault Points
 
