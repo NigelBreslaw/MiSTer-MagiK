@@ -22,6 +22,8 @@ ITERATIONS=1
 WAIT_TIMEOUT=120
 SETTLE=5
 RUN_ACCEPTANCE=1
+ACTIVE_TRIGGER_PID=""
+TRIGGER_LABEL=""
 
 usage() {
   cat <<'EOF'
@@ -201,17 +203,20 @@ fault_env_prefix() {
 
 trigger_catalog_refresh() {
   local point="$1" iteration="$2"
-  remote "$(fault_env_prefix "$point") MISTER_LIBRARY_BENCH_LABEL=$(sq "$LABEL") MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=$(sq "$iteration") $(sq "$REMOTE_BIN") library-refresh" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+  remote "$(fault_env_prefix "$point") MISTER_LIBRARY_BENCH_LABEL=$(sq "$LABEL") MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=$(sq "$iteration") $(sq "$REMOTE_BIN") library-refresh" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_rebuild_marker() {
   local point="$1"
-  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") request-library-rebuild" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") request-library-rebuild" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_media_pack_bench() {
   local point="$1" iteration="$2"
-  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_launcher_with_env() {
@@ -227,19 +232,29 @@ trigger_launcher_with_env() {
   if [ -n "$input_script" ]; then
     args+=(--env "MISTER_LAUNCHER_INPUT_SCRIPT=$input_script")
   fi
-  "$MISTER" "${args[@]}" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+  "$MISTER" "${args[@]}" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  ACTIVE_TRIGGER_PID=$!
+}
+
+stop_active_trigger() {
+  if [ -n "${ACTIVE_TRIGGER_PID:-}" ]; then
+    kill "$ACTIVE_TRIGGER_PID" >/dev/null 2>&1 || true
+    wait "$ACTIVE_TRIGGER_PID" >/dev/null 2>&1 || true
+    ACTIVE_TRIGGER_PID=""
+  fi
 }
 
 trigger_point() {
   local scenario="$1" point="$2" iteration="$3"
+  ACTIVE_TRIGGER_PID=""
   case "$scenario:$point" in
-    media:media.pack.*) trigger_media_pack_bench "$point" "$iteration"; echo media-bench-save ;;
-    media:*) cleanup_destructive_state; trigger_launcher_with_env "$point" ""; echo launcher-media-worker ;;
-    settings-marker:settings.*) trigger_launcher_with_env "$point" "up,a,down,down,a"; echo launcher-settings-input ;;
-    settings-marker:launcher.rebuild_marker.after_write) trigger_rebuild_marker "$point"; echo request-library-rebuild ;;
-    reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; remote "mkdir -p $(sq "$REMOTE_ASSETS"); printf dummy >$(sq "$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b"); sync" >/dev/null; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; echo launcher-reset-delete-input ;;
-    reset-delete:*) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; echo launcher-reset-delete-input ;;
-    *) trigger_catalog_refresh "$point" "$iteration"; echo library-refresh ;;
+    media:media.pack.*) trigger_media_pack_bench "$point" "$iteration"; TRIGGER_LABEL=media-bench-save ;;
+    media:*) cleanup_destructive_state; trigger_launcher_with_env "$point" ""; TRIGGER_LABEL=launcher-media-worker ;;
+    settings-marker:settings.*) trigger_launcher_with_env "$point" "up,a,down,down,a"; TRIGGER_LABEL=launcher-settings-input ;;
+    settings-marker:launcher.rebuild_marker.after_write) trigger_rebuild_marker "$point"; TRIGGER_LABEL=request-library-rebuild ;;
+    reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; remote "mkdir -p $(sq "$REMOTE_ASSETS"); printf dummy >$(sq "$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b"); sync" >/dev/null; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; TRIGGER_LABEL=launcher-reset-delete-input ;;
+    reset-delete:*) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; TRIGGER_LABEL=launcher-reset-delete-input ;;
+    *) trigger_catalog_refresh "$point" "$iteration"; TRIGGER_LABEL=library-refresh ;;
   esac
 }
 
@@ -250,8 +265,10 @@ run_one() {
   recover_catalog_and_launcher >/dev/null || true
 
   local trigger down_seen launcher_state db_state media_state acceptance_state result notes
-  trigger="$(trigger_point "$scenario" "$point" "$iteration")"
+  trigger_point "$scenario" "$point" "$iteration"
+  trigger="$TRIGGER_LABEL"
   down_seen="$(wait_for_down_up || echo 0)"
+  stop_active_trigger
 
   launcher_state=0
   db_state=0
