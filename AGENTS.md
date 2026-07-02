@@ -7,10 +7,10 @@ experiments and long rationale into `docs/` or `history/`.
 ## Critical Boot-Loop Safety
 
 Highest priority: never leave the MiSTer in an unattended or persistent reboot
-loop. A fast reset loop can make the device physically hot, can make SSH
-unusable, and may require pulling the SD card to recover. If there is any chance
-your change or test can reboot the device repeatedly, design and verify a
-one-boot or volatile-only arming path before running it.
+loop. A fast reset loop can make SSH unusable and may require pulling the SD
+card to recover. If there is any chance your change or test can reboot the
+device repeatedly, design and verify a one-boot or volatile-only arming path
+before running it.
 
 The known dangerous failure mode is a persistent
 `/media/fat/mister-magik/launcher.env` that arms
@@ -39,8 +39,8 @@ boot, it can repeatedly send `mister_magik_direct_reset_no_sync` through
   with `scripts/mister run "ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true"`.
 - If the MiSTer starts rebooting repeatedly, stop trying normal deploys. First
   break the loop by removing stale arming files; if SSH is unstable, power down,
-  let the device cool, mount the SD card on the Mac, remove the files above, and
-  inspect `/media/fat/mister-magik/bootlogs/main-reboot.log`.
+  mount the SD card on the Mac, remove the files above, and inspect
+  `/media/fat/mister-magik/bootlogs/main-reboot.log`.
 
 ## Current State
 
