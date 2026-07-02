@@ -173,22 +173,41 @@ resolve_tiers
 
 mkdir -p "$OUT"
 REPORT="$OUT/report.md"
+SUMMARY="$OUT/summary.json"
+RESULTS_TSV="$OUT/results.tsv"
+PASSES=0
 FAILURES=0
+SKIPS=0
 FINISHED=0
 
 append_report() {
   printf '%s\n' "$*" >> "$REPORT"
 }
 
+record_result() {
+  local status="$1"
+  shift
+  local label="$*"
+  printf '%s\t%s\n' "$status" "$label" >> "$RESULTS_TSV"
+  append_report "- $status: $label"
+}
+
 record_ok() {
   echo "ok: $*"
-  append_report "- PASS: $*"
+  PASSES=$((PASSES + 1))
+  record_result "PASS" "$*"
 }
 
 record_fail() {
   echo "FAIL: $*" >&2
-  append_report "- FAIL: $*"
   FAILURES=$((FAILURES + 1))
+  record_result "FAIL" "$*"
+}
+
+record_skip() {
+  echo "skip: $*"
+  SKIPS=$((SKIPS + 1))
+  record_result "SKIP" "$*"
 }
 
 run_capture() {
@@ -490,7 +509,7 @@ restart_with_env() {
 
 run_preview_render_acceptance() {
   if [ "$BENCH_CHECKS" != "1" ]; then
-    record_ok "preview trace acceptance skipped: requires bench-tools build"
+    record_skip "preview trace acceptance requires bench-tools build"
     return
   fi
   local trace="/tmp/mister-acceptance-preview.tsv"
@@ -508,7 +527,7 @@ run_preview_render_acceptance() {
 
 run_velocity_scroll_acceptance() {
   if [ "$BENCH_CHECKS" != "1" ]; then
-    record_ok "velocity trace acceptance skipped: requires bench-tools build"
+    record_skip "velocity trace acceptance requires bench-tools build"
     return
   fi
   local scenario trace min_rows
@@ -541,7 +560,7 @@ run_controller_acceptance() {
   if [ "${pad_count:-0}" -gt 0 ]; then
     record_ok "launcher reports controller pads = $pad_count"
   else
-    record_ok "controller hot-plug/navigation skipped: no connected pad reported"
+    record_skip "controller hot-plug/navigation requires connected pad"
   fi
 }
 
@@ -551,7 +570,7 @@ run_audio_probe() {
 
 run_first_boot_visible_scan() {
   if [ "$FAST" -eq 1 ] || [ "$SKIP_FIRST_BOOT_RESET" -eq 1 ]; then
-    record_ok "first-boot visible scan skipped"
+    record_skip "first-boot visible scan"
     return
   fi
   local backup="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
@@ -692,7 +711,7 @@ run_crash_restart_smoke() {
 
 run_display_mode_smoke() {
   if [ "$FAST" -eq 1 ] || [ "$SKIP_DISPLAY_MODES" -eq 1 ]; then
-    record_ok "display mode smoke skipped"
+    record_skip "display mode smoke"
     return
   fi
   local mode
@@ -709,7 +728,7 @@ run_display_mode_smoke() {
 
 run_install_restore_roundtrip() {
   if [ "$FAST" -eq 1 ] || [ "$SKIP_INSTALL_RESTORE" -eq 1 ]; then
-    record_ok "install/restore round trip skipped"
+    record_skip "install/restore round trip"
     return
   fi
   run_capture "restore-stock-boot" "$ROOT/scripts/restore-stock-boot.sh"
@@ -719,7 +738,7 @@ run_install_restore_roundtrip() {
 
 run_soak() {
   if [ "$SOAK" -ne 1 ]; then
-    record_ok "long soak skipped"
+    record_skip "long soak"
     return
   fi
   local deadline=$((SECONDS + SOAK_SECS))
@@ -755,6 +774,83 @@ write_report_header() {
 - skip_first_boot_reset: $SKIP_FIRST_BOOT_RESET
 - artifact_dir: $OUT
 EOF
+  printf 'status\tlabel\n' > "$RESULTS_TSV"
+}
+
+append_result_table() {
+  append_report ""
+  append_report "## Check Results"
+  append_report ""
+  append_report "| Status | Check |"
+  append_report "| --- | --- |"
+  if [ -s "$RESULTS_TSV" ]; then
+    tail -n +2 "$RESULTS_TSV" | while IFS="$(printf '\t')" read -r status label; do
+      [ -n "$status" ] || continue
+      label="${label//|/\\|}"
+      append_report "| $status | $label |"
+    done
+  fi
+}
+
+json_array_from_words() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps([word for word in sys.argv[1].split() if word]))
+PY
+}
+
+write_summary_json() {
+  local result="$1"
+  local selected_json skipped_json
+  selected_json="$(json_array_from_words "$SELECTED_TIERS")"
+  skipped_json="$(json_array_from_words "$SKIPPED_TIERS")"
+  python3 - "$SUMMARY" "$result" "$STAMP" "$OUT" "$PRESET" "$PASSES" "$FAILURES" "$SKIPS" "$DEPLOY" "$FAST" "$SOAK" "$BENCH_CHECKS" "$selected_json" "$skipped_json" <<'PY'
+import json
+import sys
+
+(
+    path,
+    result,
+    started,
+    artifact_dir,
+    preset,
+    passes,
+    failures,
+    skips,
+    deploy,
+    fast,
+    soak,
+    bench_checks,
+    selected_tiers,
+    skipped_tiers,
+) = sys.argv[1:15]
+
+summary = {
+    "result": result,
+    "started": started,
+    "artifact_dir": artifact_dir,
+    "preset": preset,
+    "selected_tiers": json.loads(selected_tiers),
+    "skipped_tiers": json.loads(skipped_tiers),
+    "counts": {
+        "pass": int(passes),
+        "fail": int(failures),
+        "skip": int(skips),
+    },
+    "options": {
+        "deploy": deploy == "1",
+        "fast": fast == "1",
+        "soak": soak == "1",
+        "bench_checks": bench_checks == "1",
+    },
+}
+
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(summary, f, indent=2, sort_keys=True)
+    f.write("\n")
+PY
 }
 
 run_deploy_if_requested() {
@@ -834,7 +930,7 @@ run_tier_catalog() {
     asset_entry_tables="$(db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" || true)"
     assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
   else
-    record_ok "no console screenshot packs installed; runtime-only preview check skipped"
+    record_skip "runtime-only preview table check requires installed console screenshot packs"
   fi
 
   if remote "test -f '$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
@@ -879,7 +975,7 @@ run_tier_catalog() {
     remote "if [ -f '$BACKUP' ]; then mv '$BACKUP' '$REMOTE_DB'; fi; sync"
     restart_launcher
   else
-    record_ok "destructive catalog reset skipped"
+    record_skip "destructive catalog reset requires --allow-reset-catalog"
   fi
 }
 
@@ -919,7 +1015,7 @@ run_tier_launcher_lifecycle() {
     if tier_selected "soak"; then
       run_supervised_reboot_soak || true
     else
-      record_ok "supervised reboot soak skipped"
+      record_skip "supervised reboot soak requires soak tier"
     fi
     run_crash_restart_lite || true
   fi
@@ -989,7 +1085,7 @@ run_selected_tiers() {
 
 assert_artifacts_complete() {
   local missing=0 path
-  for path in "$REPORT" "$OUT/status-final.json" "$OUT/doctor-final.json" "$OUT/slint-status.json" "$OUT/main-status.json"; do
+  for path in "$REPORT" "$RESULTS_TSV" "$OUT/status-final.json" "$OUT/doctor-final.json" "$OUT/slint-status.json" "$OUT/main-status.json"; do
     if [ ! -s "$path" ]; then
       echo "missing artifact: $path" >&2
       missing=$((missing + 1))
@@ -1034,6 +1130,8 @@ finish() {
     append_report "## Result"
     append_report ""
     append_report "FAIL (aborted with exit $rc before completion)"
+    append_result_table || true
+    write_summary_json "FAIL" || true
     echo "device release acceptance: aborted (exit $rc)" >&2
     echo "artifacts: $OUT" >&2
   fi
@@ -1049,6 +1147,7 @@ run_selected_tiers
 
 collect_artifacts
 assert_artifacts_complete
+append_result_table
 FINISHED=1
 trap - EXIT
 
@@ -1057,11 +1156,13 @@ if [ "$FAILURES" -eq 0 ]; then
   append_report "## Result"
   append_report ""
   append_report "PASS"
+  write_summary_json "PASS"
   echo "device release acceptance: ok"
 else
   append_report "## Result"
   append_report ""
   append_report "FAIL ($FAILURES failures)"
+  write_summary_json "FAIL"
   echo "device release acceptance: FAIL ($FAILURES failures)" >&2
   echo "artifacts: $OUT" >&2
   exit 1
