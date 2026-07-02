@@ -449,7 +449,7 @@ invariant in the test name, setup, or assertion message.
 | Boot/framebuffer startup order | Planned | Extract fakeable startup plan for geometry, RGB565, black clear, display config, FPGA route, and settle frames. |
 | FPGA route/direct-video planning | Planned | Extract route plan tests for scan dimensions, right-edge guard, stride, RGB565 flags, HDMI/direct-video `set_vga_fb`, and route-invalid composition recovery. |
 | Input and controller setup boundaries | Planned | Add synthetic JS event reader tests for init masking, press/release, deadzone, hat release, short reads, disconnect removal, raw/debug propagation, and setup unplug/disappearance. |
-| Button override write/remove behavior | Planned | Add temp-path IO tests proving simple launches remove stale overrides and MRA launches write expected mappings without clobbering unrelated launch policy. |
+| Button override write/remove behavior | Partially done | Added temp-path IO tests for actual override file writes and empty override-set stale file removal. Launcher-level non-MRA removal is still covered by fake launch IO; broader launch-policy clobber tests remain planned. |
 | Production-shaped catalog fixture | Planned | Add end-to-end fixture across `_Arcade`, games, DOS, generic cores, helper/media clutter, loose files, zip entries, MGL launchers, RAM catalog, SQLite save/load, and corrupt zip resilience. |
 | Catalog pruning and audit parity | Planned | Add media/helper directory fixtures, mixed-case variants, `core_audit` parity, MGL duplicate suppression, and supported-input cache decision test. |
 | Optional and brittle catalog tests | Planned | Convert private TSV fixture to ignored or explicit skipped-fixture test; prefer structured progress assertions over exact legacy copy. |

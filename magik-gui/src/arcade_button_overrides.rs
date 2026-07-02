@@ -36,12 +36,18 @@ pub fn write_button_overrides_for_mra(path: &Path) -> Result<(), String> {
 }
 
 pub fn write_button_overrides(overrides: &[ButtonOverride]) -> Result<(), String> {
+    write_button_overrides_to_path(overrides, Path::new(BUTTON_OVERRIDES_PATH))
+}
+
+fn write_button_overrides_to_path(
+    overrides: &[ButtonOverride],
+    path: &Path,
+) -> Result<(), String> {
     if overrides.is_empty() {
-        remove_button_overrides()?;
+        remove_button_overrides_at(path)?;
         return Ok(());
     }
 
-    let path = Path::new(BUTTON_OVERRIDES_PATH);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!(
@@ -76,10 +82,14 @@ pub fn write_button_overrides(overrides: &[ButtonOverride]) -> Result<(), String
 }
 
 pub fn remove_button_overrides() -> Result<(), String> {
-    match fs::remove_file(BUTTON_OVERRIDES_PATH) {
+    remove_button_overrides_at(Path::new(BUTTON_OVERRIDES_PATH))
+}
+
+fn remove_button_overrides_at(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("failed to remove {BUTTON_OVERRIDES_PATH}: {e}")),
+        Err(e) => Err(format!("failed to remove {}: {e}", path.display())),
     }
 }
 
@@ -300,11 +310,25 @@ fn xml_attr_value(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn overrides(names: &str, defaults: &str) -> Vec<ButtonOverride> {
         button_overrides_from_mra_text(&format!(
             r#"<misterromdescription><buttons names="{names}" default="{defaults}" /></misterromdescription>"#
         ))
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "mister-magik-button-overrides-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create temp test dir");
+        dir
     }
 
     #[test]
@@ -376,5 +400,44 @@ mod tests {
             overrides("Magic/Start,Fire,-,-,Coin,-", "B,A,-,-,R,-"),
             vec![button(4, "Select")]
         );
+    }
+
+    #[test]
+    fn writes_expected_button_override_file_for_mra_mapping() {
+        let dir = temp_test_dir("write");
+        let output = dir.join("nested").join("button-overrides");
+        let mra = dir.join("mapped.mra");
+        fs::write(
+            &mra,
+            r#"<misterromdescription><buttons names="P1 Start,P2 Start,Coin 1,Coin 2,Pause" default="X,Y,R,L,A" /></misterromdescription>"#,
+        )
+        .expect("write mra fixture");
+
+        let overrides = button_overrides_for_mra(&mra).expect("parse mra overrides");
+        write_button_overrides_to_path(&overrides, &output).expect("write overrides");
+
+        assert_eq!(
+            fs::read_to_string(&output).expect("read override file"),
+            "schema=1\n0=Start\n1=unmap\n2=Select\n3=unmap\n4=L\n"
+        );
+        assert!(
+            !temp_path(&output).exists(),
+            "temporary override file should be atomically renamed away"
+        );
+
+        fs::remove_dir_all(dir).expect("remove temp test dir");
+    }
+
+    #[test]
+    fn empty_override_set_removes_stale_file() {
+        let dir = temp_test_dir("remove");
+        let output = dir.join("button-overrides");
+        fs::write(&output, "schema=1\n0=Start\n").expect("write stale override file");
+
+        write_button_overrides_to_path(&[], &output).expect("remove stale overrides");
+
+        assert!(!output.exists());
+
+        fs::remove_dir_all(dir).expect("remove temp test dir");
     }
 }
