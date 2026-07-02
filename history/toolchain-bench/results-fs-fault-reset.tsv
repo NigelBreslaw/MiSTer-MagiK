@@ -1,0 +1,11 @@
+label	commit	scenario	iteration	fault_point	trigger	down_seen	launcher_ready	db_ok	media_state_ok	acceptance_ok	result	notes
+FSFAULT-20260702-SMOKE2	329a3447	catalog	1	catalog.sqlite.after_build_temp_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702-SMOKE2	329a3447	catalog	1	catalog.sqlite.after_final_temp_copy	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702-SMOKE2	329a3447	catalog	1	catalog.sqlite.after_final_temp_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702-SMOKE2	329a3447	catalog	1	catalog.sqlite.after_rename_before_parent_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.summary.after_temp_write	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.summary.after_temp_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.summary.after_rename_before_parent_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_temp_write	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_temp_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_rename_before_parent_sync	library-refresh	1	1	1	1	1	ok	ok
