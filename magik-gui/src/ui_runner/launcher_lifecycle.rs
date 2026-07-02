@@ -600,39 +600,51 @@ impl LauncherLifecycle {
                 }
             }
             LauncherLifecycleInput::LaunchFailed { message } => {
-                out.push(LauncherEffect::PresentRecoveryFrame);
-                self.transition(
-                    LauncherLifecycleState::Recovered {
-                        reason: RecoveryReason::LaunchFailed(message),
-                    },
-                    out,
-                    "launch_failed",
-                );
+                if matches!(self.state, LauncherLifecycleState::Launching { .. }) {
+                    out.push(LauncherEffect::PresentRecoveryFrame);
+                    self.transition(
+                        LauncherLifecycleState::Recovered {
+                            reason: RecoveryReason::LaunchFailed(message),
+                        },
+                        out,
+                        "launch_failed",
+                    );
+                }
             }
             LauncherLifecycleInput::LaunchSucceeded { spawned_mister } => {
-                self.transition(
-                    LauncherLifecycleState::Handoff { spawned_mister },
-                    out,
-                    "launch_handoff",
-                );
+                if matches!(self.state, LauncherLifecycleState::Launching { .. }) {
+                    self.transition(
+                        LauncherLifecycleState::Handoff { spawned_mister },
+                        out,
+                        "launch_handoff",
+                    );
+                }
             }
             LauncherLifecycleInput::BenchmarkLaunchCompleted => {
-                out.push(LauncherEffect::ReturnToIdle);
-                self.transition(
-                    LauncherLifecycleState::Idle,
-                    out,
-                    "benchmark_launch_completed",
-                );
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::Launching { .. }
+                        | LauncherLifecycleState::Handoff { .. }
+                ) {
+                    out.push(LauncherEffect::ReturnToIdle);
+                    self.transition(
+                        LauncherLifecycleState::Idle,
+                        out,
+                        "benchmark_launch_completed",
+                    );
+                }
             }
             LauncherLifecycleInput::LaunchTimedOut => {
-                out.push(LauncherEffect::PresentRecoveryFrame);
-                self.transition(
-                    LauncherLifecycleState::Recovered {
-                        reason: RecoveryReason::LaunchTimedOut,
-                    },
-                    out,
-                    "launch_timed_out",
-                );
+                if matches!(self.state, LauncherLifecycleState::Launching { .. }) {
+                    out.push(LauncherEffect::PresentRecoveryFrame);
+                    self.transition(
+                        LauncherLifecycleState::Recovered {
+                            reason: RecoveryReason::LaunchTimedOut,
+                        },
+                        out,
+                        "launch_timed_out",
+                    );
+                }
             }
             LauncherLifecycleInput::StartupRevealReady { .. }
             | LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded
@@ -763,6 +775,20 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn assert_input_ignored(
+        lifecycle: &mut LauncherLifecycle,
+        effects: &mut LifecycleEffects,
+        input: LauncherLifecycleInput,
+    ) {
+        let before = lifecycle.state().clone();
+        effects.clear();
+
+        lifecycle.handle(input, effects);
+
+        assert_eq!(lifecycle.state(), &before);
+        assert!(effects.as_slice().is_empty());
     }
 
     #[test]
@@ -1129,6 +1155,105 @@ mod tests {
             }
         );
         assert!(effects.as_slice().is_empty());
+    }
+
+    #[test]
+    fn stale_launch_terminal_events_are_ignored_while_idle() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchFailed {
+                message: "late failure".to_string(),
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchSucceeded {
+                spawned_mister: true,
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchTimedOut,
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::BenchmarkLaunchCompleted,
+        );
+    }
+
+    #[test]
+    fn stale_launch_terminal_events_are_ignored_during_catalog_validation() {
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.after_boot_splash_presented(
+            StartupCatalogState::Ready {
+                source: CatalogSource::SummaryProjection,
+                validation_scheduled: true,
+            },
+            &mut effects,
+        );
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchFailed {
+                message: "late failure".to_string(),
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchSucceeded {
+                spawned_mister: false,
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchTimedOut,
+        );
+    }
+
+    #[test]
+    fn stale_launch_terminal_events_are_ignored_after_recovery() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchRequested {
+                launch_ref: "bad.mra".to_string(),
+            },
+            &mut effects,
+        );
+        lifecycle.loading_frame_presented(Instant::now(), &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchFailed {
+                message: "missing file".to_string(),
+            },
+            &mut effects,
+        );
+        assert!(matches!(
+            lifecycle.state(),
+            LauncherLifecycleState::Recovered { .. }
+        ));
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchSucceeded {
+                spawned_mister: true,
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::LaunchTimedOut,
+        );
     }
 
     #[test]
