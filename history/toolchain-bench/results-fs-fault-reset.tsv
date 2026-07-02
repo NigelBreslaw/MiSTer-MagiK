@@ -9,3 +9,14 @@ FSFAULT-20260702	47546d7b	projections	1	catalog.summary.after_rename_before_pare
 FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_temp_write	library-refresh	1	1	1	1	1	ok	ok
 FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_temp_sync	library-refresh	1	1	1	1	1	ok	ok
 FSFAULT-20260702	47546d7b	projections	1	catalog.navigation.after_rename_before_parent_sync	library-refresh	1	1	1	1	1	ok	ok
+FSFAULT-20260702	fdc2b973	settings-marker	1	settings.after_temp_write	toggle-simple-joystick-setting	1	1	1	1	1	ok	ok
+FSFAULT-20260702	fdc2b973	settings-marker	1	settings.after_rename	toggle-simple-joystick-setting	1	1	1	1	1	ok	ok
+FSFAULT-20260702	fdc2b973	settings-marker	1	launcher.rebuild_marker.after_write	request-library-rebuild	1	1	1	1	1	ok	ok
+FSFAULT-20260702	1c1adfa0	reset-delete	1	reset_delete.database.after_remove	launcher-reset-delete-input	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	reset-delete	1	reset_delete.summary.after_remove	launcher-reset-delete-input	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	reset-delete	1	reset_delete.navigation.after_remove	launcher-reset-delete-input	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	reset-delete	1	reset_delete.screenshot_asset.after_remove	launcher-reset-delete-input	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	media	1	media.pack.after_temp_write	media-bench-save	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	media	1	media.pack.after_temp_sync	media-bench-save	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	media	1	media.pack.after_rename_before_parent_sync	media-bench-save	0	1	1	1	1	fail	ok
+FSFAULT-20260702	1c1adfa0	media	1	media.index.after_temp_write	launcher-media-worker	0	1	1	1	1	fail	ok

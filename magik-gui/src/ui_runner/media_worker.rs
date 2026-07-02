@@ -1364,7 +1364,10 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
     mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_sync", path);
     publish.install_temp(Some("media state"))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_rename_before_parent_sync", path);
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "media.state.after_rename_before_parent_sync",
+        path,
+    );
     invalidate_preview_archive_metadata_cache("media_state_published");
     sync_path_rust_best_effort(publish.parent());
     Ok(())
