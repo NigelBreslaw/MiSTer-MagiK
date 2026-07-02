@@ -74,16 +74,18 @@ pub fn process_summary(value: &Value, name: &str) -> String {
     else {
         return "unknown".to_string();
     };
+    let pids = list
+        .iter()
+        .filter_map(Value::as_u64)
+        .map(|pid| pid.to_string())
+        .collect::<Vec<_>>();
     if list.is_empty() {
         "not running".to_string()
+    } else if pids.is_empty() {
+        "unknown".to_string()
     } else {
-        let pids = list
-            .iter()
-            .filter_map(Value::as_u64)
-            .map(|pid| pid.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{} running ({pids})", list.len())
+        let count = pids.len();
+        format!("{} running ({})", count, pids.join(", "))
     }
 }
 
@@ -166,6 +168,19 @@ mod tests {
             "2 running (12, 34)"
         );
         assert_eq!(process_summary(&value, "mister-magik-fb"), "not running");
+        assert_eq!(
+            process_summary(&json!({"processes": {}}), "missing"),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn process_summary_ignores_malformed_pid_values() {
+        let mixed = json!({"processes": {"MiSTer_MagiK": [12, "bad", null]}});
+        let malformed = json!({"processes": {"MiSTer_MagiK": ["bad"]}});
+
+        assert_eq!(process_summary(&mixed, "MiSTer_MagiK"), "1 running (12)");
+        assert_eq!(process_summary(&malformed, "MiSTer_MagiK"), "unknown");
     }
 
     #[test]
@@ -181,8 +196,24 @@ mod tests {
 
     #[test]
     fn uptime_label_formats_short_values() {
+        assert_eq!(uptime_label(None), "-");
         assert_eq!(uptime_label(Some(12_000)), "12s");
         assert_eq!(uptime_label(Some(125_000)), "2m 5s");
         assert_eq!(uptime_label(Some(7_260_000)), "2h 1m");
+    }
+
+    #[test]
+    fn screen_and_input_summaries_use_fallbacks_and_fps_aliases() {
+        assert_eq!(
+            screen_summary(
+                &json!({"screen": "Arcade", "scene": "launcher", "fps_estimate": 59.94})
+            ),
+            "Arcade / launcher; 59.9 fps; last frame -ms ago"
+        );
+        assert_eq!(input_summary(&json!({})), "- pad(s); active: none");
+        assert_eq!(
+            number_string_at(&json!({"value": 12.34}), "/value").as_deref(),
+            Some("12.3")
+        );
     }
 }

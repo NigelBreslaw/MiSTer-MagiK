@@ -240,6 +240,9 @@ impl std::error::Error for AgentError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_response_returns_result() {
@@ -252,6 +255,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_response_returns_null_for_missing_result() {
+        let value =
+            parse_response(r#"{"id":1,"ok":true}"#, Duration::ZERO).expect("response should parse");
+
+        assert_eq!(value, Value::Null);
+    }
+
+    #[test]
     fn parse_response_detects_unauthorized() {
         let err = parse_response(
             r#"{"id":1,"ok":false,"error":"unauthorized"}"#,
@@ -259,6 +270,103 @@ mod tests {
         )
         .expect_err("response should fail");
         assert!(matches!(err, AgentError::Unauthorized));
+    }
+
+    #[test]
+    fn parse_response_reports_protocol_and_command_errors() {
+        let empty = parse_response("", Duration::ZERO).expect_err("empty response");
+        assert!(
+            matches!(empty, AgentError::Protocol(message) if message == "empty response from agent")
+        );
+
+        let bad_json = parse_response("not json", Duration::ZERO).expect_err("bad json");
+        assert!(
+            matches!(bad_json, AgentError::Protocol(message) if message.contains("invalid JSON response"))
+        );
+
+        let command = parse_response(
+            r#"{"id":1,"ok":false,"error":"bad-command"}"#,
+            Duration::ZERO,
+        )
+        .expect_err("command error");
+        assert!(matches!(command, AgentError::Command(message) if message == "bad-command"));
+
+        let default_command = parse_response(r#"{"id":1,"ok":false}"#, Duration::ZERO)
+            .expect_err("default command error");
+        assert!(
+            matches!(default_command, AgentError::Command(message) if message == "agent command failed")
+        );
+    }
+
+    #[test]
+    fn token_source_labels_are_human_readable() {
+        assert_eq!(TokenSource::Env.label(), "MISTER_AGENT_TOKEN");
+        assert_eq!(
+            TokenSource::LocalFile(PathBuf::from("/tmp/token")).label(),
+            "/tmp/token"
+        );
+        assert_eq!(
+            TokenSource::Missing(PathBuf::from("/tmp/token")).label(),
+            "missing (/tmp/token)"
+        );
+    }
+
+    #[test]
+    fn read_token_prefers_env_then_configured_file_then_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let token_path = env::temp_dir().join(format!("mister-agent-token-{}", std::process::id()));
+        fs::write(&token_path, " file-token \n").expect("write token fixture");
+
+        env::set_var("MISTER_AGENT_TOKEN_FILE", &token_path);
+        env::remove_var("MISTER_AGENT_TOKEN");
+        let (token, source) = read_token();
+        assert_eq!(token, "file-token");
+        assert_eq!(source, TokenSource::LocalFile(token_path.clone()));
+
+        env::set_var("MISTER_AGENT_TOKEN", " env-token ");
+        let (token, source) = read_token();
+        assert_eq!(token, "env-token");
+        assert_eq!(source, TokenSource::Env);
+
+        env::set_var("MISTER_AGENT_TOKEN", "   ");
+        env::set_var(
+            "MISTER_AGENT_TOKEN_FILE",
+            token_path.with_extension("missing"),
+        );
+        let (token, source) = read_token();
+        assert_eq!(token, "");
+        assert!(matches!(source, TokenSource::Missing(_)));
+
+        env::remove_var("MISTER_AGENT_TOKEN");
+        env::remove_var("MISTER_AGENT_TOKEN_FILE");
+        let _ = fs::remove_file(token_path);
+    }
+
+    #[test]
+    fn apply_agent_status_formats_network_and_process_fields() {
+        let mut snapshot = DashboardSnapshot::initial("host");
+        let status = json!({
+            "agent": {"version": "1.2.3", "uptime_ms": 125000},
+            "network": {
+                "ip": "192.168.1.117",
+                "carrier": "1",
+                "operstate": "up",
+                "mac": "02:00:00:00:00:01"
+            },
+            "processes": {"MiSTer_MagiK": [10, 11], "mister-magik-fb": []}
+        });
+
+        apply_agent_status(&mut snapshot, &status);
+
+        assert_eq!(snapshot.agent_version, "1.2.3");
+        assert_eq!(snapshot.agent_uptime, "2m 5s");
+        assert_eq!(
+            snapshot.network_summary,
+            "ip 192.168.1.117; carrier 1; state up"
+        );
+        assert_eq!(snapshot.mac_address, "02:00:00:00:00:01");
+        assert_eq!(snapshot.main_process, "2 running (10, 11)");
+        assert_eq!(snapshot.launcher_process, "not running");
     }
 
     #[test]
@@ -277,5 +385,35 @@ mod tests {
         assert_eq!(snapshot.visible_owner, "fb0");
         assert_eq!(snapshot.launcher_state, "LauncherActive");
         assert_eq!(snapshot.catalog_summary, "ready; 5 games; 2 systems");
+    }
+
+    #[test]
+    fn apply_magik_status_uses_fallbacks_for_stale_and_missing_runtime_files() {
+        let mut snapshot = DashboardSnapshot::initial("host");
+        let status = json!({
+            "processes": {"MiSTer_MagiK": [], "mister-magik-fb": [20]},
+            "files": {
+                "slint_status_current": false,
+                "main_status": {"state": "Booting"},
+                "slint_status": {"catalog_ready": false, "catalog_scan_message": "scanning"}
+            }
+        });
+
+        apply_magik_status(&mut snapshot, &status);
+
+        assert_eq!(snapshot.main_process, "not running");
+        assert_eq!(snapshot.launcher_process, "1 running (20)");
+        assert_eq!(snapshot.slint_status_freshness, "stale");
+        assert_eq!(snapshot.visible_owner, "unknown");
+        assert_eq!(snapshot.launcher_state, "Booting");
+        assert_eq!(
+            snapshot.catalog_summary,
+            "not ready; - games; - systems; scanning"
+        );
+        assert_eq!(
+            snapshot.screen_summary,
+            "unknown / unknown; - fps; last frame -ms ago"
+        );
+        assert_eq!(snapshot.input_summary, "- pad(s); active: none");
     }
 }
