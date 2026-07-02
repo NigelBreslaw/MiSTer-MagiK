@@ -3,6 +3,7 @@
 //! The audit records launchable-looking things the catalog scanner did not turn
 //! into games. These rows are diagnostics and stamp inputs, not launch entries.
 
+use crate::catalog_scan::should_ignore_path;
 use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -317,22 +318,13 @@ fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
         .follow_links(false)
         .max_depth(2)
         .into_iter()
-        .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
+        .filter_entry(|entry| !should_ignore_path(entry.path()))
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
             continue;
         }
         let p = entry.path();
-        if p.components().any(|c| {
-            let s = c.as_os_str().to_string_lossy();
-            s.eq_ignore_ascii_case("images")
-                || s.eq_ignore_ascii_case("manuals")
-                || s.eq_ignore_ascii_case("screenshots")
-                || s.eq_ignore_ascii_case("palettes")
-        }) {
-            continue;
-        }
         if path_ext_eq(p, "zip") {
             has_zip = true;
         } else {
@@ -394,6 +386,9 @@ fn should_ignore_game_dir(name: &str) -> bool {
         || name.eq_ignore_ascii_case("manuals")
         || name.eq_ignore_ascii_case("screenshot")
         || name.eq_ignore_ascii_case("screenshots")
+        || name.eq_ignore_ascii_case("screenshot-magik")
+        || name.eq_ignore_ascii_case("_organized")
+        || name.eq_ignore_ascii_case("boxart")
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {
@@ -489,6 +484,30 @@ mod tests {
         assert!(!rows.iter().any(|row| {
             row.reason
                 .contains("._MiSTer MagiK Additions - SMS.zip")
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn media_only_helper_dirs_are_not_reported_as_uncataloged_game_dirs() {
+        let root = unique_temp_dir("audit-media-only-helper-dirs");
+        let channel_f = root.join("games/ChannelF");
+        std::fs::create_dir_all(channel_f.join("screenshot-magik")).expect("create screenshots");
+        std::fs::create_dir_all(channel_f.join("BoxArt")).expect("create boxart");
+        std::fs::write(channel_f.join("screenshot-magik/Fake.chf"), b"media")
+            .expect("write fake media payload");
+        write_stored_zip(
+            &channel_f.join("BoxArt/Fake.zip"),
+            &[("Fake.chf", b"media")],
+        );
+
+        let rows = audit_catalog_coverage(
+            &[root.display().to_string()],
+            &launch_profiles::builtin_profiles(),
+        );
+
+        assert!(!rows.iter().any(|row| {
+            row.expected_game_dir == "games/ChannelF" && row.catalog_status == "uncataloged"
         }));
         let _ = std::fs::remove_dir_all(root);
     }
