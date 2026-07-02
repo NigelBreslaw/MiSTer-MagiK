@@ -149,6 +149,10 @@ impl PreviewImageCache {
         }
     }
 
+    fn clear_failed(&mut self) {
+        self.failed_paths.clear();
+    }
+
     fn retain_window(&mut self, window_preview_keys: &[String], visible_preview_key: Option<&str>) {
         if !window_preview_keys.is_empty() {
             self.entries.retain(|(path, _)| {
@@ -1123,6 +1127,10 @@ impl PreviewState {
     fn trace_elapsed_ms(&self) -> u64 {
         self.trace_start.elapsed().as_millis() as u64
     }
+
+    pub(crate) fn clear_failed_preview_cache(&mut self) {
+        self.cache.clear_failed();
+    }
 }
 
 fn request_preview_prefetches(
@@ -2047,6 +2055,18 @@ mod tests {
             Instant::now() - PreviewImageCache::FAILED_TTL - Duration::from_millis(1);
 
         assert!(!cache.contains_failed("missing.png"));
+    }
+
+    #[test]
+    fn failed_preview_cache_can_be_cleared_after_media_publish() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert_failed("pack.mmlz4b:missing.raw565".into());
+
+        assert!(preview.cache.contains_failed("pack.mmlz4b:missing.raw565"));
+
+        preview.clear_failed_preview_cache();
+
+        assert!(!preview.cache.contains_failed("pack.mmlz4b:missing.raw565"));
     }
 
     #[test]
