@@ -14,6 +14,7 @@ pub mod catalog_stamp;
 pub mod catalog_store;
 pub mod catalog_summary;
 mod core_audit;
+pub mod fs_fault;
 mod game_discovery;
 pub mod launch_profiles;
 pub mod library_bench;
