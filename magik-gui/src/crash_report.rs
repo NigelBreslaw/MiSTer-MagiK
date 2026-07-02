@@ -91,9 +91,16 @@ fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result
     bytes.push(b'\n');
 
     write_file_sync(&tmp_path, &bytes)?;
+    mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_temp_sync", &path);
     fs::rename(&tmp_path, &path)?;
+    mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_rename", &path);
     write_file_sync(&latest_tmp_path, &bytes)?;
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "crash_report.latest.after_temp_sync",
+        &latest_path,
+    );
     fs::rename(&latest_tmp_path, &latest_path)?;
+    mister_magik_catalog::fs_fault::maybe_fault("crash_report.latest.after_rename", &latest_path);
     Ok(path)
 }
 

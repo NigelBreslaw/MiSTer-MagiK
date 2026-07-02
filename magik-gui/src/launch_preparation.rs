@@ -124,8 +124,10 @@ fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
         File::create(&temp_path).map_err(|e| format!("create AmigaVision descriptor temp: {e}"))?;
     file.write_all(bytes)
         .map_err(|e| format!("write AmigaVision descriptor temp: {e}"))?;
+    mister_magik_catalog::fs_fault::maybe_fault("amigavision_descriptor.after_temp_write", path);
     file.sync_all()
         .map_err(|e| format!("sync AmigaVision descriptor temp: {e}"))?;
+    mister_magik_catalog::fs_fault::maybe_fault("amigavision_descriptor.after_temp_sync", path);
     drop(file);
     fs::rename(&temp_path, path).map_err(|e| {
         let _ = fs::remove_file(&temp_path);
@@ -135,6 +137,10 @@ fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
             path.display()
         )
     })?;
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "amigavision_descriptor.after_rename_before_parent_sync",
+        path,
+    );
     sync_path_best_effort(parent);
     Ok(())
 }
