@@ -450,16 +450,6 @@ fn game_dir_has_payloadish_files(path: &Path) -> bool {
         if !entry.file_type().is_file() {
             continue;
         }
-        let p = entry.path();
-        if p.components().any(|c| {
-            let s = c.as_os_str().to_string_lossy();
-            s.eq_ignore_ascii_case("images")
-                || s.eq_ignore_ascii_case("manuals")
-                || s.eq_ignore_ascii_case("screenshots")
-                || s.eq_ignore_ascii_case("palettes")
-        }) {
-            continue;
-        }
         return true;
     }
     false
@@ -489,6 +479,9 @@ fn should_ignore_game_dir(name: &str) -> bool {
         || name.eq_ignore_ascii_case("manuals")
         || name.eq_ignore_ascii_case("screenshot")
         || name.eq_ignore_ascii_case("screenshots")
+        || name.eq_ignore_ascii_case("screenshot-magik")
+        || name.eq_ignore_ascii_case("_organized")
+        || name.eq_ignore_ascii_case("boxart")
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {
@@ -598,16 +591,37 @@ mod tests {
     #[test]
     fn ignored_media_dirs_do_not_become_game_dir_lines() {
         let root = unique_temp_dir("checkpoint-ignore-media");
-        std::fs::create_dir_all(root.join("games/screenshots")).expect("create ignored dir");
+        for dir in [
+            "screenshots",
+            "ScreenShot",
+            "screenshot-magik",
+            "BoxArt",
+            "_organized",
+        ] {
+            let path = root.join("games").join(dir);
+            std::fs::create_dir_all(&path).expect("create ignored dir");
+            std::fs::write(path.join("Fake.nes"), b"media").expect("write fake media payload");
+        }
         let roots = vec![root.display().to_string()];
 
         let checkpoint =
             compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
 
-        assert!(!checkpoint
-            .lines()
-            .iter()
-            .any(|line| line.contains("game-dir") && line.contains("screenshots")));
+        for dir in [
+            "screenshots",
+            "ScreenShot",
+            "screenshot-magik",
+            "BoxArt",
+            "_organized",
+        ] {
+            assert!(
+                !checkpoint
+                    .lines()
+                    .iter()
+                    .any(|line| line.contains("game-dir") && line.contains(dir)),
+                "{dir} should not be a checkpoint game-dir line"
+            );
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
