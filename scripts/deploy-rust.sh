@@ -80,7 +80,7 @@ LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Deploying cabinet art -> $REMOTE_ART_DIR"
-LOCAL_CABINET_RAW="$(mktemp "${TMPDIR:-/tmp}/arcade-cabinet-preview.XXXXXX.rgba")"
+LOCAL_CABINET_RAW="$(mktemp "${TMPDIR:-/tmp}/arcade-cabinet-preview-rgba.XXXXXX")"
 python3 "$HERE/scripts/png-to-slint-rgba.py" "$LOCAL_CABINET" "$LOCAL_CABINET_RAW"
 MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
