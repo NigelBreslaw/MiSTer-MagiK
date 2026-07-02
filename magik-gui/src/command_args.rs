@@ -31,6 +31,7 @@ pub const COMMANDS: &[&str] = &[
     "input",
     "library-refresh",
     "request-library-rebuild",
+    "toggle-simple-joystick-setting",
     #[cfg(feature = "bench-tools")]
     "media-bench-download",
     #[cfg(feature = "bench-tools")]
