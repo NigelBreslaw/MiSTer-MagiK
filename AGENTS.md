@@ -4,6 +4,44 @@ Read this first. This file is the short agent bootstrap: current shape, safe
 commands, hard rules, and links to deeper docs. Keep it concise; move dated
 experiments and long rationale into `docs/` or `history/`.
 
+## Critical Boot-Loop Safety
+
+Highest priority: never leave the MiSTer in an unattended or persistent reboot
+loop. A fast reset loop can make the device physically hot, can make SSH
+unusable, and may require pulling the SD card to recover. If there is any chance
+your change or test can reboot the device repeatedly, design and verify a
+one-boot or volatile-only arming path before running it.
+
+The known dangerous failure mode is a persistent
+`/media/fat/mister-magik/launcher.env` that arms
+`MISTER_FS_FAULT_ACTION=direct-reset-no-sync`. If MagiK reads that env on every
+boot, it can repeatedly send `mister_magik_direct_reset_no_sync` through
+`/dev/MiSTer_cmd`. Prevent this exact trap:
+
+- Never use persistent `launcher.env` to arm destructive reset faults. Use a
+  `/tmp` env file or a direct one-shot command.
+- `direct-reset-no-sync` fault injection must require a volatile `/tmp` session
+  token, such as `/tmp/mister-magik/fs-fault-session`, so a stale env file is
+  inert after reboot.
+- Cleanup and exit traps for destructive runners must remove both persistent
+  and volatile arming files:
+  `/media/fat/mister-magik/launcher.env`,
+  `/tmp/mister-magik/fs-fault-launcher.env`,
+  `/tmp/mister-magik/fs-fault-session`,
+  `/tmp/mister-magik/fs-fault.json`, and
+  `/media/fat/mister-magik/rebuild-on-next-boot`.
+- Host-side wait/recovery loops must use bounded local timeouts. Do not let a
+  half-open SSH connection hang the runner while the MiSTer is flapping.
+- Before running any reset-fault test, confirm the runner has a non-network
+  recovery story and a cleanup path that works if interrupted. If the SD card is
+  mounted on the Mac, remove stale arming files directly before booting again.
+- After any direct-reset-no-sync experiment, verify there is no live arming file
+  with `scripts/mister run "ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true"`.
+- If the MiSTer starts rebooting repeatedly, stop trying normal deploys. First
+  break the loop by removing stale arming files; if SSH is unstable, power down,
+  let the device cool, mount the SD card on the Mac, remove the files above, and
+  inspect `/media/fat/mister-magik/bootlogs/main-reboot.log`.
+
 ## Current State
 
 MiSTer MagiK is a Rust/Slint frontend for MiSTer FPGA. The app renders a 960x540
@@ -158,6 +196,9 @@ Effect-scene and mega-transition work is experimental only; see
 
 ## Hard Rules
 
+- Under no circumstances may an experiment, deploy, launcher env, reboot helper,
+  or fault-injection runner leave the MiSTer in a persistent boot loop. Follow
+  `Critical Boot-Loop Safety` before any direct-reset-no-sync work.
 - Do not set `main=mister-magik-fb`. Slint is not Main; it cannot initialize
   HDMI before Main's `video_init()`. Use `main=MiSTer_MagiK`.
 - Do not launch cores with external `rbf_load` from Slint. Use Main's command
