@@ -22,7 +22,7 @@ behavioral defect.
 | Boot/framebuffer startup-order tests | Coverage gap. No startup-order product bug was proven during this implementation slice. |
 | FPGA route/direct-video plan tests | Coverage gap. No route math defect was proven during this implementation slice. |
 | Input and controller setup synthetic event tests | Coverage gap. No input hotplug product bug was proven during this implementation slice. |
-| Button override write/remove tests | Coverage gap. No override persistence bug was proven during this implementation slice. |
+| Button override write/remove tests | Partial coverage added after this report started: temp-path tests now prove actual override file writes and empty-set stale file removal. No override persistence bug was proven during this implementation slice. |
 | Production-shaped catalog fixture, pruning parity, optional TSV fixture cleanup | Coverage/test hygiene gaps. No catalog product bug was proven during this implementation slice. |
 | Preview pack/index coherence and corrupt payload tests | Coverage gap. The failed-path invalidation bug was fixed, but pack/index atomicity and corrupt payload behavior still need direct tests. |
 | RGB565/archive validation, video player, visual rendering, and frame-budget tests | Coverage gaps. No rendering, archive-validation, or video-player product bug was proven during this implementation slice. |
