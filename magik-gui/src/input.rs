@@ -368,34 +368,39 @@ impl PadReader {
 
     /// Drain pending events; returns true if state changed.
     pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> io::Result<bool> {
-        let mut buf = [0u8; JS_EVENT_SIZE];
-        let mut changed = false;
-        loop {
-            match self.file.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) if n < JS_EVENT_SIZE => break,
-                Ok(_) => {
-                    let event_type = buf[6] & !JS_EVENT_INIT;
-                    let number = buf[7];
-                    let value = i16::from_le_bytes([buf[4], buf[5]]);
-                    let event = PadRawEvent {
-                        event_type,
-                        number,
-                        value,
-                    };
-                    if self
-                        .profile
-                        .apply_js_event(&mut self.state, event, debug_labels)
-                    {
-                        changed = true;
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(changed)
+        drain_js_events(&mut self.file, self.profile, &mut self.state, debug_labels)
     }
+}
+
+fn drain_js_events<R: Read>(
+    reader: &mut R,
+    profile: InputProfile,
+    state: &mut PadState,
+    debug_labels: bool,
+) -> io::Result<bool> {
+    let mut buf = [0u8; JS_EVENT_SIZE];
+    let mut changed = false;
+    loop {
+        match reader.read_exact(&mut buf) {
+            Ok(()) => {
+                let event_type = buf[6] & !JS_EVENT_INIT;
+                let number = buf[7];
+                let value = i16::from_le_bytes([buf[4], buf[5]]);
+                let event = PadRawEvent {
+                    event_type,
+                    number,
+                    value,
+                };
+                if profile.apply_js_event(state, event, debug_labels) {
+                    changed = true;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(changed)
 }
 
 fn no_pad_info() -> &'static PadInfo {
@@ -988,7 +993,43 @@ fn read_one_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_state::JS_EVENT_BUTTON;
+    use crate::input_state::{JS_EVENT_AXIS, JS_EVENT_BUTTON};
+    use std::io::Cursor;
+
+    fn js_event_bytes(event_type: u8, number: u8, value: i16) -> [u8; JS_EVENT_SIZE] {
+        let mut buf = [0u8; JS_EVENT_SIZE];
+        let value = value.to_le_bytes();
+        buf[4] = value[0];
+        buf[5] = value[1];
+        buf[6] = event_type;
+        buf[7] = number;
+        buf
+    }
+
+    struct PendingEventsThenWouldBlock {
+        bytes: Vec<u8>,
+        pos: usize,
+    }
+
+    impl PendingEventsThenWouldBlock {
+        fn new(bytes: Vec<u8>) -> Self {
+            Self { bytes, pos: 0 }
+        }
+    }
+
+    impl Read for PendingEventsThenWouldBlock {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pos >= self.bytes.len() {
+                return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            }
+            let remaining = self.bytes.len() - self.pos;
+            let len = remaining.min(buf.len());
+            buf[..len].copy_from_slice(&self.bytes[self.pos..self.pos + len]);
+            self.pos += len;
+            Ok(len)
+        }
+    }
+
     fn empty_pool() -> PadPool {
         PadPool {
             pads: Vec::new(),
@@ -1071,5 +1112,77 @@ mod tests {
                 value: 1,
             })
         );
+    }
+
+    #[test]
+    fn drain_js_events_masks_init_flag_and_applies_button_release() {
+        let mut state = PadState {
+            btn_a: true,
+            ..PadState::default()
+        };
+        state.rebuild_pressed_now();
+        let mut reader = PendingEventsThenWouldBlock::new(
+            js_event_bytes(JS_EVENT_BUTTON | JS_EVENT_INIT, 0, 0).to_vec(),
+        );
+
+        assert!(
+            drain_js_events(&mut reader, InputProfile::generic(), &mut state, true)
+                .expect("drain event")
+        );
+
+        assert!(!state.btn_a);
+        assert_eq!(state.last_event_label, "A up (js btn 0)");
+        assert_eq!(
+            state.last_raw_event,
+            Some(PadRawEvent {
+                event_type: JS_EVENT_BUTTON,
+                number: 0,
+                value: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn drain_js_events_releases_generic_hat_axes() {
+        let mut state = PadState::default();
+        let mut reader = PendingEventsThenWouldBlock::new(
+            [
+                js_event_bytes(JS_EVENT_AXIS, 6, -32767),
+                js_event_bytes(JS_EVENT_AXIS, 6, 0),
+                js_event_bytes(JS_EVENT_AXIS, 7, 32767),
+                js_event_bytes(JS_EVENT_AXIS, 7, 0),
+            ]
+            .concat(),
+        );
+
+        assert!(
+            drain_js_events(&mut reader, InputProfile::generic(), &mut state, false)
+                .expect("drain hat events")
+        );
+
+        assert!(!state.dpad_left);
+        assert!(!state.dpad_right);
+        assert!(!state.dpad_up);
+        assert!(!state.dpad_down);
+    }
+
+    #[test]
+    fn drain_js_events_reports_eof_as_disconnect() {
+        let mut state = PadState::default();
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let err = drain_js_events(&mut reader, InputProfile::generic(), &mut state, false)
+            .expect_err("empty stream should disconnect");
+
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn drain_js_events_reports_short_read_as_disconnect() {
+        let mut state = PadState::default();
+        let mut reader = Cursor::new(vec![0; JS_EVENT_SIZE - 1]);
+        let err = drain_js_events(&mut reader, InputProfile::generic(), &mut state, false)
+            .expect_err("short event should disconnect");
+
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
