@@ -72,7 +72,9 @@ impl MagikSettings {
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(&tmp, text)?;
+        mister_magik_catalog::fs_fault::maybe_fault("settings.after_temp_write", path);
         fs::rename(&tmp, path)?;
+        mister_magik_catalog::fs_fault::maybe_fault("settings.after_rename", path);
         Ok(())
     }
 }

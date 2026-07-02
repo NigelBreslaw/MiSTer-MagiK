@@ -66,8 +66,10 @@ fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> 
         writeln!(file, "{}={value}", override_entry.index)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
     }
+    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_temp_write", path);
     file.sync_all()
         .map_err(|e| format!("failed to sync {}: {e}", tmp.display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_temp_sync", path);
     drop(file);
     fs::rename(&tmp, path).map_err(|e| {
         format!(
@@ -75,7 +77,9 @@ fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> 
             tmp.display(),
             path.display()
         )
-    })
+    })?;
+    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_rename", path);
+    Ok(())
 }
 
 pub fn remove_button_overrides() -> Result<(), String> {
@@ -84,7 +88,10 @@ pub fn remove_button_overrides() -> Result<(), String> {
 
 fn remove_button_overrides_at(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_remove", path);
+            Ok(())
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("failed to remove {}: {e}", path.display())),
     }

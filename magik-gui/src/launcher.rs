@@ -2497,7 +2497,9 @@ fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create rebuild marker dir: {e}"))?;
     }
-    fs::write(path, b"rebuild\n").map_err(|e| format!("write rebuild marker: {e}"))
+    fs::write(path, b"rebuild\n").map_err(|e| format!("write rebuild marker: {e}"))?;
+    mister_magik_catalog::fs_fault::maybe_fault("launcher.rebuild_marker.after_write", path);
+    Ok(())
 }
 
 fn consume_library_rebuild_on_next_boot_at(path: &Path) -> Result<bool, String> {
