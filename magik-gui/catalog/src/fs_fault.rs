@@ -296,6 +296,29 @@ mod tests {
     }
 
     #[test]
+    fn matching_direct_reset_with_wrong_volatile_session_is_noop() {
+        let config = FaultConfig {
+            point: "settings.after_temp_write".into(),
+            action: DIRECT_RESET_NO_SYNC.into(),
+            delay_ms: 42,
+            session: Some("expected-session".into()),
+        };
+        let mut runtime = FakeRuntime {
+            session: Some("stale-session".into()),
+            ..FakeRuntime::default()
+        };
+        maybe_fault_with(
+            "settings.after_temp_write",
+            &PathBuf::from("/media/fat/mister-magik/settings.json"),
+            &config,
+            &mut runtime,
+        );
+        assert!(runtime.marker.is_none());
+        assert!(runtime.command.is_none());
+        assert!(runtime.slept_ms.is_empty());
+    }
+
+    #[test]
     fn env_config_defaults_to_direct_reset_no_sync() {
         let _guard = env_lock();
         let _point = EnvRestore::set(POINT_ENV, "settings.after_rename");
