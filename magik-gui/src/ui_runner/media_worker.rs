@@ -1155,6 +1155,12 @@ fn install_streamed_object(
             streamed.bytes
         ));
     }
+    if progress_variant == "index" {
+        mister_magik_catalog::fs_fault::maybe_fault(
+            "media.index.after_temp_write",
+            publish.temp_path(),
+        );
+    }
     if emit_progress {
         send_progress(
             tx,
@@ -1179,6 +1185,12 @@ fn install_streamed_object(
             publish.temp_path().display()
         )
     })?;
+    if progress_variant == "index" {
+        mister_magik_catalog::fs_fault::maybe_fault(
+            "media.index.after_temp_sync",
+            publish.temp_path(),
+        );
+    }
     if emit_progress {
         send_progress(
             tx,
@@ -1187,6 +1199,12 @@ fn install_streamed_object(
         );
     }
     publish.install_temp(Some(install_label))?;
+    if progress_variant == "index" {
+        mister_magik_catalog::fs_fault::maybe_fault(
+            "media.index.after_rename_before_parent_sync",
+            publish.temp_path(),
+        );
+    }
     invalidate_preview_archive_metadata_cache("media_pack_published");
     if emit_progress {
         send_progress(
@@ -1341,9 +1359,12 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
     file.write_all(text.as_bytes())
         .and_then(|()| file.write_all(b"\n"))
         .map_err(|e| format!("write media state {}: {e}", publish.temp_path().display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_write", path);
     file.sync_all()
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_sync", path);
     publish.install_temp(Some("media state"))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_rename_before_parent_sync", path);
     invalidate_preview_archive_metadata_cache("media_state_published");
     sync_path_rust_best_effort(publish.parent());
     Ok(())
