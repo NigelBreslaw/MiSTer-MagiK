@@ -250,7 +250,20 @@ fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
 
 fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
     match std::fs::remove_file(path) {
-        Ok(()) => {}
+        Ok(()) => {
+            match label {
+                "database" => {
+                    crate::fs_fault::maybe_fault("reset_delete.database.after_remove", path)
+                }
+                "catalog summary" => {
+                    crate::fs_fault::maybe_fault("reset_delete.summary.after_remove", path)
+                }
+                "catalog navigation" => {
+                    crate::fs_fault::maybe_fault("reset_delete.navigation.after_remove", path)
+                }
+                _ => {}
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("failed to delete {label} {}: {e}", path.display())),
     }

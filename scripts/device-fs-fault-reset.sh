@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# Destructively reset-fault MagiK filesystem writes on a real MiSTer.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MISTER="${MISTER:-$ROOT/scripts/mister}"
+REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_DIR="/media/fat/mister-magik"
+REMOTE_DB="$REMOTE_DIR/library.sqlite3"
+REMOTE_SUMMARY="$REMOTE_DIR/library.summary.json"
+REMOTE_NAV="$REMOTE_DIR/library.nav.lz4b"
+REMOTE_ASSETS="$REMOTE_DIR/assets"
+REMOTE_STATE="$REMOTE_ASSETS/.screenshot-media-state.json"
+REMOTE_MARKER="/tmp/mister-magik/fs-fault.json"
+REMOTE_LOCK="/tmp/mister-magik/library-refresh.lock"
+REMOTE_LOG="/tmp/mister-magik-fs-fault-refresh.log"
+TSV="$ROOT/history/toolchain-bench/results-fs-fault-reset.tsv"
+
+LABEL=""
+SCENARIO="all"
+ITERATIONS=1
+WAIT_TIMEOUT=120
+SETTLE=5
+RUN_ACCEPTANCE=1
+
+usage() {
+  cat <<'EOF'
+usage: scripts/device-fs-fault-reset.sh LABEL [--scenario NAME] [--iterations N] [--wait-timeout SECS] [--settle SECS] [--no-acceptance]
+
+Scenarios: catalog, projections, media, settings-marker, reset-delete, all
+
+This is intentionally destructive. It removes MagiK catalog DB/projection files
+and screenshot media artifacts, then rebuilds/redownloads as needed.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --scenario) SCENARIO="${2:?--scenario needs a value}"; shift 2 ;;
+    --iterations) ITERATIONS="${2:?--iterations needs a value}"; shift 2 ;;
+    --wait-timeout) WAIT_TIMEOUT="${2:?--wait-timeout needs seconds}"; shift 2 ;;
+    --settle) SETTLE="${2:?--settle needs seconds}"; shift 2 ;;
+    --no-acceptance) RUN_ACCEPTANCE=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+    *)
+      if [ -n "$LABEL" ]; then
+        echo "unexpected argument: $1" >&2
+        usage >&2
+        exit 2
+      fi
+      LABEL="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$LABEL" ]; then
+  LABEL="FSFAULT-$(date -u +%Y%m%dT%H%M%SZ)"
+fi
+if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  echo "label must contain only letters, numbers, _, ., or -" >&2
+  exit 2
+fi
+if [[ ! "$ITERATIONS" =~ ^[0-9]+$ || "$ITERATIONS" -lt 1 ]]; then
+  echo "--iterations must be a positive integer" >&2
+  exit 2
+fi
+
+mkdir -p "$(dirname "$TSV")"
+if [ ! -f "$TSV" ]; then
+  printf 'label\tcommit\tscenario\titeration\tfault_point\ttrigger\tdown_seen\tlauncher_ready\tdb_ok\tmedia_state_ok\tacceptance_ok\tresult\tnotes\n' >"$TSV"
+fi
+
+remote() {
+  "$MISTER" run "$1"
+}
+
+sq() {
+  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
+}
+
+record_row() {
+  local scenario="$1" iteration="$2" point="$3" trigger="$4" down_seen="$5" launcher_ready="$6" db_ok="$7" media_state_ok="$8" acceptance_ok="$9" result="${10}" notes="${11}"
+  local commit
+  commit="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$LABEL" "$commit" "$scenario" "$iteration" "$point" "$trigger" "$down_seen" \
+    "$launcher_ready" "$db_ok" "$media_state_ok" "$acceptance_ok" "$result" "$notes" >>"$TSV"
+}
+
+points_for_scenario() {
+  case "$1" in
+    catalog)
+      printf '%s\n' \
+        catalog.sqlite.after_build_temp_sync \
+        catalog.sqlite.after_final_temp_copy \
+        catalog.sqlite.after_final_temp_sync \
+        catalog.sqlite.after_rename_before_parent_sync
+      ;;
+    projections)
+      printf '%s\n' \
+        catalog.summary.after_temp_write \
+        catalog.summary.after_temp_sync \
+        catalog.summary.after_rename_before_parent_sync \
+        catalog.navigation.after_temp_write \
+        catalog.navigation.after_temp_sync \
+        catalog.navigation.after_rename_before_parent_sync
+      ;;
+    media)
+      printf '%s\n' \
+        media.pack.after_temp_write \
+        media.pack.after_temp_sync \
+        media.pack.after_rename_before_parent_sync \
+        media.index.after_temp_write \
+        media.index.after_temp_sync \
+        media.index.after_rename_before_parent_sync \
+        media.state.after_temp_write \
+        media.state.after_temp_sync \
+        media.state.after_rename_before_parent_sync
+      ;;
+    settings-marker)
+      printf '%s\n' \
+        settings.after_temp_write \
+        settings.after_rename \
+        launcher.rebuild_marker.after_write
+      ;;
+    reset-delete)
+      printf '%s\n' \
+        reset_delete.database.after_remove \
+        reset_delete.summary.after_remove \
+        reset_delete.navigation.after_remove \
+        reset_delete.screenshot_asset.after_remove
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+scenarios_to_run() {
+  if [ "$SCENARIO" = "all" ]; then
+    printf '%s\n' catalog projections media settings-marker reset-delete
+  else
+    points_for_scenario "$SCENARIO" >/dev/null || {
+      echo "unknown scenario: $SCENARIO" >&2
+      exit 2
+    }
+    printf '%s\n' "$SCENARIO"
+  fi
+}
+
+cleanup_destructive_state() {
+  remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$REMOTE_LOCK") $(sq "$REMOTE_DB") $(sq "$REMOTE_SUMMARY") $(sq "$REMOTE_NAV") $(sq "$REMOTE_DIR/.library.sqlite3.tmp")* $(sq "$REMOTE_DIR/.library.summary.json.tmp")* $(sq "$REMOTE_DIR/.library.nav.lz4b.tmp")* $(sq "$REMOTE_DIR/rebuild-on-next-boot"); mkdir -p $(sq "$REMOTE_ASSETS"); find $(sq "$REMOTE_ASSETS") -maxdepth 1 -type f \\( -name '*-screenshots*.mmlz4b' -o -name '*-screenshots*.mmlz4b.idx' -o -name '.*-screenshots*.mmlz4b.tmp*' -o -name '.screenshot-media-state.json*' \\) -delete; rm -rf /tmp/mister-magik-media-download; sync" >/dev/null
+}
+
+recover_catalog_and_launcher() {
+  remote "$(sq "$REMOTE_BIN") library-refresh >$(sq "$REMOTE_LOG") 2>&1" >/dev/null || {
+    echo "library-refresh recovery failed; log follows" >&2
+    remote "tail -160 $(sq "$REMOTE_LOG") 2>/dev/null || true" >&2 || true
+    return 1
+  }
+  remote "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null || true
+}
+
+wait_for_down_up() {
+  local down_seen=0 deadline
+  deadline=$((SECONDS + 40))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ! remote ":" >/dev/null 2>&1; then
+      down_seen=1
+      break
+    fi
+    sleep 1
+  done
+  "$MISTER" wait "$WAIT_TIMEOUT" >/dev/null
+  echo "$down_seen"
+}
+
+launcher_ready() {
+  remote "test \"\$(ps w | grep '[m]ister-magik-fb ui launcher' | wc -l)\" = 1" >/dev/null 2>&1
+}
+
+db_ok() {
+  "$MISTER" db "SELECT count(*) FROM launcher_catalog;" >/dev/null 2>&1
+}
+
+media_state_ok() {
+  remote "test ! -f $(sq "$REMOTE_STATE") || grep -q '\"schema\"' $(sq "$REMOTE_STATE")" >/dev/null 2>&1
+}
+
+run_acceptance() {
+  if [ "$RUN_ACCEPTANCE" -eq 0 ]; then
+    return 0
+  fi
+  "$ROOT/scripts/device-catalog-acceptance.sh" --settle "$SETTLE" >/tmp/mister-magik-fs-fault-acceptance.log 2>&1
+}
+
+fault_env_prefix() {
+  local point="$1"
+  printf 'MISTER_FS_FAULT_POINT=%s MISTER_FS_FAULT_ACTION=direct-reset-no-sync MISTER_FS_FAULT_DELAY_MS=2000 ' "$(sq "$point")"
+}
+
+trigger_catalog_refresh() {
+  local point="$1" iteration="$2"
+  remote "$(fault_env_prefix "$point") MISTER_LIBRARY_BENCH_LABEL=$(sq "$LABEL") MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=$(sq "$iteration") $(sq "$REMOTE_BIN") library-refresh" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+}
+
+trigger_rebuild_marker() {
+  local point="$1"
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") request-library-rebuild" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+}
+
+trigger_media_pack_bench() {
+  local point="$1" iteration="$2"
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+}
+
+trigger_launcher_with_env() {
+  local point="$1" input_script="${2:-}"
+  local args=(
+    launcher-restart
+    --env "MISTER_FS_FAULT_POINT=$point"
+    --env "MISTER_FS_FAULT_ACTION=direct-reset-no-sync"
+    --env "MISTER_FS_FAULT_DELAY_MS=2000"
+    --env "MISTER_CATALOG_BACKGROUND_DELAY_MS=0"
+    --timeout 20
+  )
+  if [ -n "$input_script" ]; then
+    args+=(--env "MISTER_LAUNCHER_INPUT_SCRIPT=$input_script")
+  fi
+  "$MISTER" "${args[@]}" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 || true
+}
+
+trigger_point() {
+  local scenario="$1" point="$2" iteration="$3"
+  case "$scenario:$point" in
+    media:media.pack.*) trigger_media_pack_bench "$point" "$iteration"; echo media-bench-save ;;
+    media:*) cleanup_destructive_state; trigger_launcher_with_env "$point" ""; echo launcher-media-worker ;;
+    settings-marker:settings.*) trigger_launcher_with_env "$point" "up,a,down,down,a"; echo launcher-settings-input ;;
+    settings-marker:launcher.rebuild_marker.after_write) trigger_rebuild_marker "$point"; echo request-library-rebuild ;;
+    reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; remote "mkdir -p $(sq "$REMOTE_ASSETS"); printf dummy >$(sq "$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b"); sync" >/dev/null; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; echo launcher-reset-delete-input ;;
+    reset-delete:*) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_launcher_with_env "$point" "up,a,down,down,down,a,right,a"; echo launcher-reset-delete-input ;;
+    *) trigger_catalog_refresh "$point" "$iteration"; echo library-refresh ;;
+  esac
+}
+
+run_one() {
+  local scenario="$1" point="$2" iteration="$3"
+  echo "==> scenario=$scenario iteration=$iteration fault=$point"
+  cleanup_destructive_state
+  recover_catalog_and_launcher >/dev/null || true
+
+  local trigger down_seen launcher_state db_state media_state acceptance_state result notes
+  trigger="$(trigger_point "$scenario" "$point" "$iteration")"
+  down_seen="$(wait_for_down_up || echo 0)"
+
+  launcher_state=0
+  db_state=0
+  media_state=0
+  acceptance_state=0
+  result=fail
+  notes=""
+
+  if recover_catalog_and_launcher; then
+    sleep "$SETTLE"
+    launcher_ready && launcher_state=1 || notes="${notes}launcher_not_ready;"
+    db_ok && db_state=1 || notes="${notes}db_query_failed;"
+    media_state_ok && media_state=1 || notes="${notes}media_state_bad;"
+    if run_acceptance; then
+      acceptance_state=1
+    else
+      notes="${notes}acceptance_failed;"
+    fi
+  else
+    notes="${notes}recovery_failed;"
+  fi
+
+  if [ "$down_seen" = "1" ] && [ "$launcher_state" = "1" ] && [ "$db_state" = "1" ] && [ "$media_state" = "1" ] && [ "$acceptance_state" = "1" ]; then
+    result=ok
+  fi
+  record_row "$scenario" "$iteration" "$point" "$trigger" "$down_seen" "$launcher_state" "$db_state" "$media_state" "$acceptance_state" "$result" "${notes:-ok}"
+  if [ "$result" != "ok" ]; then
+    echo "WARN: scenario=$scenario fault=$point result=$result notes=${notes:-none}" >&2
+  fi
+}
+
+for scenario in $(scenarios_to_run); do
+  while IFS= read -r point; do
+    [ -n "$point" ] || continue
+    for ((iteration = 1; iteration <= ITERATIONS; iteration++)); do
+      run_one "$scenario" "$point" "$iteration"
+    done
+  done < <(points_for_scenario "$scenario")
+done
+
+cleanup_destructive_state
+recover_catalog_and_launcher >/dev/null || true
+echo "fs fault results appended to $TSV"

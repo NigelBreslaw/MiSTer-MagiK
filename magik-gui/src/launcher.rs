@@ -2471,6 +2471,10 @@ fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
         if screenshot_reset_deletes_file(name) {
             fs::remove_file(&path)
                 .map_err(|e| format!("delete screenshot asset {}: {e}", path.display()))?;
+            mister_magik_catalog::fs_fault::maybe_fault(
+                "reset_delete.screenshot_asset.after_remove",
+                &path,
+            );
             removed += 1;
         }
     }
