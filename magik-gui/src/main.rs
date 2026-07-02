@@ -7,6 +7,8 @@
 //!     library-refresh    build/update the SQLite library cache
 //!     request-library-rebuild
 //!                        write rebuild-on-next-boot marker for fault tests
+//!     toggle-simple-joystick-setting
+//!                        toggle settings.json simple joystick flag for fault tests
 //!   Diagnostics:
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
@@ -137,6 +139,11 @@ fn main() {
 
     if cmd == "request-library-rebuild" {
         run_request_library_rebuild();
+        return;
+    }
+
+    if cmd == "toggle-simple-joystick-setting" {
+        run_toggle_simple_joystick_setting();
         return;
     }
 
@@ -343,6 +350,21 @@ fn run_request_library_rebuild() {
         Ok(()) => println!("request_library_rebuild\tdone"),
         Err(e) => {
             eprintln!("request_library_rebuild\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_toggle_simple_joystick_setting() {
+    let mut settings = settings::MagikSettings::load();
+    settings.simple_joystick_handling = !settings.simple_joystick_handling;
+    match settings.save() {
+        Ok(()) => println!(
+            "toggle_simple_joystick_setting\tdone\tsimple_joystick_handling={}",
+            settings.simple_joystick_handling
+        ),
+        Err(e) => {
+            eprintln!("toggle_simple_joystick_setting\tfailed\t{e}");
             std::process::exit(1);
         }
     }
