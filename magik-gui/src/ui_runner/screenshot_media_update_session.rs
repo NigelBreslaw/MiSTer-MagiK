@@ -24,6 +24,7 @@ pub(super) enum ScreenshotMediaUpdateEffect {
     FinishWorker,
     DropWorker,
     MarkWorkerUnavailable,
+    ClearPreviewFailures,
     SetInteractionActive { active: bool, reason: &'static str },
 }
 
@@ -286,6 +287,9 @@ impl ScreenshotMediaUpdateSession {
                     "screenshot_media_pack_status",
                     format!("system={system} image_size={image_size} status={status} {detail}"),
                 );
+                if matches!(status.as_str(), "current" | "downloaded") {
+                    effects.push(ScreenshotMediaUpdateEffect::ClearPreviewFailures);
+                }
             }
             MediaWorkerMessage::Failed { detail } => {
                 effects.event("screenshot_media_update_failed", detail);
@@ -333,6 +337,7 @@ mod tests {
                 ScreenshotMediaUpdateEffect::FinishWorker => "finish-worker",
                 ScreenshotMediaUpdateEffect::DropWorker => "drop-worker",
                 ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => "mark-unavailable",
+                ScreenshotMediaUpdateEffect::ClearPreviewFailures => "clear-preview-failures",
                 ScreenshotMediaUpdateEffect::SetInteractionActive { .. } => "set-interaction",
             })
             .collect()
@@ -416,6 +421,41 @@ mod tests {
             vec!["event", "mark-unavailable", "ui", "drop-worker"]
         );
         assert!(session.progress_clear_at.is_none());
+    }
+
+    #[test]
+    fn current_or_downloaded_pack_clears_failed_preview_paths() {
+        let mut session = ScreenshotMediaUpdateSession::default();
+
+        let current = session.handle_worker_message(
+            MediaWorkerMessage::PackStatus {
+                system: "arcade".to_string(),
+                image_size: "320x320".to_string(),
+                status: "current".to_string(),
+                detail: "local_path=/media/fat/mister-magik/assets/arcade.mmlz4b".to_string(),
+            },
+            false,
+            Instant::now(),
+        );
+        assert_eq!(
+            effect_names(current),
+            vec!["event", "clear-preview-failures"]
+        );
+
+        let downloaded = session.handle_worker_message(
+            MediaWorkerMessage::PackStatus {
+                system: "arcade".to_string(),
+                image_size: "320x320".to_string(),
+                status: "downloaded".to_string(),
+                detail: "local_path=/media/fat/mister-magik/assets/arcade.mmlz4b".to_string(),
+            },
+            false,
+            Instant::now(),
+        );
+        assert_eq!(
+            effect_names(downloaded),
+            vec!["event", "clear-preview-failures"]
+        );
     }
 
     #[test]

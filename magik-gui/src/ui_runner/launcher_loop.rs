@@ -937,6 +937,7 @@ pub(super) fn run_launcher_loop(
             &app,
             &catalog,
             &mut scheduler,
+            Some(&mut preview),
             &mut full_bridge_dirty,
             start,
         );
@@ -1164,6 +1165,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &catalog,
                 &mut scheduler,
+                Some(&mut preview),
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1477,6 +1479,7 @@ pub(super) fn run_launcher_loop(
                                     &app,
                                     &catalog,
                                     &mut scheduler,
+                                    Some(&mut preview),
                                     &mut full_bridge_dirty,
                                     start,
                                 );
@@ -1784,6 +1787,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &catalog,
                 &mut scheduler,
+                Some(&mut preview),
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1792,6 +1796,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &catalog,
                 &mut scheduler,
+                Some(&mut preview),
                 &mut full_bridge_dirty,
                 start,
             );
@@ -1800,6 +1805,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &catalog,
                 &mut scheduler,
+                Some(&mut preview),
                 &mut full_bridge_dirty,
                 start,
             );
@@ -2243,6 +2249,7 @@ fn process_catalog_worker_message(
             app,
             catalog,
             scheduler,
+            Some(&mut *preview),
             full_bridge_dirty,
             start,
         );
@@ -2558,6 +2565,7 @@ fn apply_catalog_session_effects(
                     app,
                     catalog,
                     scheduler,
+                    Some(&mut *preview),
                     full_bridge_dirty,
                     start,
                 );
@@ -2568,6 +2576,7 @@ fn apply_catalog_session_effects(
                     app,
                     catalog,
                     scheduler,
+                    Some(&mut *preview),
                     full_bridge_dirty,
                     start,
                 );
@@ -2591,6 +2600,7 @@ fn apply_catalog_session_effects(
                     app,
                     catalog,
                     scheduler,
+                    Some(&mut *preview),
                     full_bridge_dirty,
                     start,
                 );
@@ -2632,6 +2642,7 @@ fn apply_screenshot_media_update_effects(
     app: &slint_ui::launcher::Launcher,
     catalog: &ArcadeCatalog,
     scheduler: &mut LauncherScheduler,
+    mut preview: Option<&mut PreviewState>,
     full_bridge_dirty: &mut bool,
     start: Instant,
 ) {
@@ -2660,6 +2671,11 @@ fn apply_screenshot_media_update_effects(
             }
             ScreenshotMediaUpdateEffect::MarkWorkerUnavailable => {
                 scheduler.mark_media_worker_unavailable();
+            }
+            ScreenshotMediaUpdateEffect::ClearPreviewFailures => {
+                if let Some(preview) = preview.as_deref_mut() {
+                    preview.clear_failed_preview_cache();
+                }
             }
             ScreenshotMediaUpdateEffect::SetInteractionActive { active, reason } => {
                 scheduler.set_media_interaction_active(active, reason);
