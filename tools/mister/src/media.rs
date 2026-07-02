@@ -618,7 +618,7 @@ fn run_remote_index_download(
 
 fn parse_remote_row(line: &str) -> Result<RemoteBenchRow> {
     let parts: Vec<_> = line.split('\t').collect();
-    if parts.len() < 17 {
+    if parts.len() < 17 || parts.first() != Some(&"screenshot_download_bench_tsv") {
         return Err(format!("bad benchmark row: {line}").into());
     }
     Ok(RemoteBenchRow {
@@ -1308,6 +1308,46 @@ mod tests {
     }
 
     #[test]
+    fn remote_benchmark_rows_reject_bad_shape_and_non_numeric_fields() {
+        let wrong_prefix =
+            "wrong\tlabel\tnes\tgzip\t10\t20\t1\t2\t3\t4\t10\t80.00\t16.00\tetag\tgzip\tHIT\tbench-ok";
+        assert!(parse_remote_row(wrong_prefix).is_err());
+        assert!(parse_remote_row("screenshot_download_bench_tsv\ttoo-short").is_err());
+        assert!(parse_remote_row(
+            "screenshot_download_bench_tsv\tlabel\tnes\tgzip\tbad\t20\t1\t2\t3\t4\t10\t80.00\t16.00\tetag\tgzip\tHIT\tbench-ok",
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn remote_benchmark_rows_and_tsv_output_sanitize_text_fields() {
+        let row = RemoteBenchRow {
+            label: "label".to_string(),
+            system: "nes".to_string(),
+            variant: "identity".to_string(),
+            encoded_bytes: 10,
+            decoded_bytes: 20,
+            download_ms: 1,
+            decompress_ms: 2,
+            save_ms: 3,
+            verify_ms: 4,
+            total_ms: 10,
+            wire_mbps: "80.00".to_string(),
+            decoded_mbps: "16.00".to_string(),
+            etag: "etag\twith\nspace".to_string(),
+            content_encoding: "identity".to_string(),
+            cf_cache_status: "HIT".to_string(),
+            result: "bench-ok".to_string(),
+        };
+
+        let text = row.to_tsv();
+
+        assert!(text.starts_with("screenshot_download_bench_tsv\tlabel\tnes\tidentity"));
+        assert!(text.contains("etag with space"));
+        assert_eq!(text.split('\t').count(), 17);
+    }
+
+    #[test]
     fn media_args_normalize_variants_and_validate_labels() {
         let args = vec![
             "--manifest-url".to_string(),
@@ -1384,6 +1424,125 @@ mod tests {
         assert!(err
             .to_string()
             .contains("manifest has no screenshot pack for system 'arcade'"));
+    }
+
+    #[test]
+    fn manifest_url_helpers_cover_absolute_official_and_relative_objects() {
+        let manifest = MediaManifest {
+            schema_version: 1,
+            published_at: String::new(),
+            base_url: "https://assets.mistermagik.com".to_string(),
+            packs: Vec::new(),
+        };
+
+        assert_eq!(
+            manifest_object_base_url("https://example.test/path/manifest.json"),
+            "https://example.test"
+        );
+        assert_eq!(manifest_object_base_url("not-a-url"), "");
+        assert_eq!(
+            manifest_url_for_object(&manifest, "mister-magik/v1/packs/nes/pack.mmlz4b"),
+            "http://assets.mistermagik.com/mister-magik/v1/packs/nes/pack.mmlz4b"
+        );
+        assert_eq!(
+            manifest_url_for_object(&manifest, "https://cdn.example.test/pack.mmlz4b"),
+            "https://cdn.example.test/pack.mmlz4b"
+        );
+        assert_eq!(
+            manifest_url_for_object(
+                &MediaManifest {
+                    base_url: "https://media.example.test/root/".to_string(),
+                    ..manifest
+                },
+                "/packs/nes.mmlz4b",
+            ),
+            "https://media.example.test/root/packs/nes.mmlz4b"
+        );
+    }
+
+    #[test]
+    fn image_size_helpers_accept_aliases_and_reject_invalid_dimensions() {
+        assert_eq!(
+            image_size_from_pack(&json!({"preview_size": "640x480"})).as_deref(),
+            Some("640x480")
+        );
+        assert_eq!(
+            image_size_from_pack(&json!({"width": 320, "height": 240})).as_deref(),
+            Some("320x240")
+        );
+        assert_eq!(image_size_from_pack(&json!({"size": "0x240"})), None);
+        assert_eq!(image_size_from_pack(&json!({"width": 320})), None);
+        assert!(!valid_image_size("320X240"));
+        assert!(!valid_image_size("wide"));
+    }
+
+    #[test]
+    fn index_parsing_rejects_codec_object_zero_and_archive_mismatches() {
+        let identity = MediaVariant {
+            remote_path: "packs/nes.mmlz4b".to_string(),
+            decoded_bytes: 10,
+            decoded_sha256: "aaaaaaaa".to_string(),
+            etag: None,
+        };
+        let mut index = json!({
+            "object": "packs/nes.mmlz4b.idx",
+            "bytes": 4,
+            "sha256": "bbbbbbbb",
+            "codec": "mmlz4b-index-v2",
+            "archive_bytes": 10,
+            "archive_sha256": "aaaaaaaa"
+        });
+
+        assert_eq!(
+            parse_index("nes", &identity, &index).unwrap().codec,
+            "mmlz4b-index-v2"
+        );
+
+        index["codec"] = json!("zip-index");
+        assert!(parse_index("nes", &identity, &index)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported index codec"));
+        index["codec"] = json!("mmlz4b-index-v1");
+
+        index["bytes"] = json!(0);
+        assert!(parse_index("nes", &identity, &index)
+            .unwrap_err()
+            .to_string()
+            .contains("zero bytes"));
+        index["bytes"] = json!(4);
+
+        index["object"] = json!("packs/nes.txt");
+        assert!(parse_index("nes", &identity, &index)
+            .unwrap_err()
+            .to_string()
+            .contains("must end with .mmlz4b.idx"));
+        index["object"] = json!("packs/nes.mmlz4b.idx");
+
+        index["archive_sha256"] = json!("cccccccc");
+        assert!(parse_index("nes", &identity, &index)
+            .unwrap_err()
+            .to_string()
+            .contains("archive_sha256 mismatch"));
+    }
+
+    #[test]
+    fn append_profile_row_writes_header_once() {
+        let dir = env::temp_dir().join(format!(
+            "mister-media-test-{}-{}",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        let path = dir.join("bench.tsv");
+
+        append_profile_row(path.to_str().unwrap(), "col1\tcol2", "a\tb").unwrap();
+        append_profile_row(path.to_str().unwrap(), "col1\tcol2", "c\td").unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "col1\tcol2\na\tb\nc\td\n");
+
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir(dir);
     }
 
     #[test]
