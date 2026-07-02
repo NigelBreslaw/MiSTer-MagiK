@@ -189,11 +189,6 @@ impl LifecycleEffects {
     fn as_slice(&self) -> &[LauncherEffect] {
         &self.effects
     }
-
-    #[cfg(test)]
-    fn capacity(&self) -> usize {
-        self.effects.capacity()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -989,7 +984,10 @@ mod tests {
                 validating: true,
             }
         );
-        assert_eq!(effects.capacity(), 8);
+        assert_eq!(
+            effect_names(&effects),
+            vec!["launcher_lifecycle_transition"]
+        );
     }
 
     #[test]
