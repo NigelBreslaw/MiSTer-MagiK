@@ -88,6 +88,21 @@ import sys
 
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
+for needle in [
+    "SUMMARY=\"$OUT/summary.json\"",
+    "RESULTS_TSV=\"$OUT/results.tsv\"",
+    "record_skip()",
+    "append_result_table()",
+    "write_summary_json()",
+    'write_summary_json "PASS"',
+    'write_summary_json "FAIL"',
+]:
+    if needle not in text:
+        print(f"device acceptance reporting contract missing {needle!r}", file=sys.stderr)
+        sys.exit(1)
+if re.search(r"record_ok [^\n]*skipp?ed", text, re.I):
+    print("device acceptance skipped checks must use record_skip, not record_ok", file=sys.stderr)
+    sys.exit(1)
 match = re.search(
     r"run_tier_launcher_lifecycle\(\) \{(?P<body>.*?)\n\}\n\nrun_tier_handoff\(\)",
     text,
