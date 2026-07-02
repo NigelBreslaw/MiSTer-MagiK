@@ -30,6 +30,7 @@ pub const COMMANDS: &[&str] = &[
     #[cfg(feature = "diagnostics")]
     "input",
     "library-refresh",
+    "request-library-rebuild",
     #[cfg(feature = "bench-tools")]
     "media-bench-download",
     #[cfg(feature = "bench-tools")]

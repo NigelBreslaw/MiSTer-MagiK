@@ -5,6 +5,8 @@
 //!     ui [scene] [secs]  Slint UI (default `launcher`, infinite when secs=0)
 //!     early-black        route a black launcher framebuffer before full UI
 //!     library-refresh    build/update the SQLite library cache
+//!     request-library-rebuild
+//!                        write rebuild-on-next-boot marker for fault tests
 //!   Diagnostics:
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
@@ -130,6 +132,11 @@ fn main() {
 
     if cmd == "library-refresh" {
         run_library_refresh();
+        return;
+    }
+
+    if cmd == "request-library-rebuild" {
+        run_request_library_rebuild();
         return;
     }
 
@@ -326,6 +333,16 @@ fn run_library_refresh() {
         Err(e) => {
             drop(lock);
             eprintln!("library_refresh\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_request_library_rebuild() {
+    match launcher::request_library_rebuild_on_next_boot() {
+        Ok(()) => println!("request_library_rebuild\tdone"),
+        Err(e) => {
+            eprintln!("request_library_rebuild\tfailed\t{e}");
             std::process::exit(1);
         }
     }
