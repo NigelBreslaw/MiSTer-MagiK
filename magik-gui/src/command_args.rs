@@ -32,6 +32,8 @@ pub const COMMANDS: &[&str] = &[
     "library-refresh",
     "request-library-rebuild",
     "toggle-simple-joystick-setting",
+    "reset-delete-database",
+    "reset-delete-screenshot-packs",
     #[cfg(feature = "bench-tools")]
     "media-bench-download",
     #[cfg(feature = "bench-tools")]
@@ -102,6 +104,8 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert!(COMMANDS.contains(&"library-refresh"));
+        assert!(COMMANDS.contains(&"reset-delete-database"));
+        assert!(COMMANDS.contains(&"reset-delete-screenshot-packs"));
         for command in COMMANDS {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
