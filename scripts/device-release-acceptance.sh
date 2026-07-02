@@ -500,11 +500,16 @@ write_launcher_env() {
 }
 
 restart_with_env() {
-  local label="$1" remote_trace="${2:-}"
+  local label="$1" remote_trace="${2:-}" expected_scenario="${3:-}"
   remote "rm -f /tmp/mister-magik-slint.log '$remote_trace'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
   wait_status_expr "$label" 60 \
     "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['slint_status'].get('screen') == 'arcade'" \
     "str(data['runtime'].get('slint_status', {}).get('screen', '?')) + ' fps=' + str(data['runtime'].get('slint_status', {}).get('rolling_fps', data['runtime'].get('slint_status', {}).get('fps_estimate', '?')))"
+  if [ -n "$expected_scenario" ]; then
+    wait_status_expr "$label bench scenario" 20 \
+      "data['runtime']['slint_status'].get('bench_scenario') == '$expected_scenario'" \
+      "'bench_scenario=' + str(data['runtime'].get('slint_status', {}).get('bench_scenario', '?')) + ' expected=$expected_scenario'"
+  fi
 }
 
 run_preview_render_acceptance() {
@@ -514,7 +519,7 @@ run_preview_render_acceptance() {
   fi
   local trace="/tmp/mister-acceptance-preview.tsv"
   write_launcher_env "$trace" "preview-step-hold" ""
-  restart_with_env "preview render restart" "$trace"
+  restart_with_env "preview render restart" "$trace" "preview-step-hold"
   wait_remote_trace_rows "preview trace rows grow" "$trace" 60 45
   wait_status_expr "preview reaches non-placeholder state" 60 \
     "data['runtime']['slint_status'].get('preview_cache_state') not in ('placeholder', 'empty', '')" \
@@ -534,7 +539,7 @@ run_velocity_scroll_acceptance() {
   for scenario in held-scroll turbo-hold; do
     trace="/tmp/mister-acceptance-${scenario}.tsv"
     write_launcher_env "$trace" "$scenario" ""
-    restart_with_env "velocity $scenario restart" "$trace"
+    restart_with_env "velocity $scenario restart" "$trace" "$scenario"
     min_rows=300
     wait_remote_trace_rows "velocity $scenario trace rows" "$trace" "$min_rows" 35
     wait_status_expr "velocity $scenario composition has no recovery" 10 \
@@ -746,7 +751,7 @@ run_soak() {
   while [ "$SECONDS" -lt "$deadline" ]; do
     iteration=$((iteration + 1))
     write_launcher_env "/tmp/mister-acceptance-soak.tsv" "held-scroll" ""
-    restart_with_env "soak restart $iteration" "/tmp/mister-acceptance-soak.tsv"
+    restart_with_env "soak restart $iteration" "/tmp/mister-acceptance-soak.tsv" "held-scroll"
     sleep 30
     status_json "soak-$iteration" || record_fail "soak status $iteration"
     assert_status "$OUT/status-soak-$iteration.json" "soak health $iteration" \
