@@ -165,7 +165,7 @@ recover_catalog_and_launcher() {
 
 wait_for_down_up() {
   local down_seen=0 deadline
-  deadline=$((SECONDS + 40))
+  deadline=$((SECONDS + WAIT_TIMEOUT))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if ! remote ":" >/dev/null 2>&1; then
       down_seen=1
