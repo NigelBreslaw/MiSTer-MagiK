@@ -139,8 +139,10 @@ fn write_bytes_atomically_with(
             .map_err(|e| format!("create catalog summary temp {}: {e}", temp_path.display()))?;
         write(&mut file)
             .map_err(|e| format!("write catalog summary temp {}: {e}", temp_path.display()))?;
+        crate::fs_fault::maybe_fault("catalog.summary.after_temp_write", final_path);
         file.sync_all()
             .map_err(|e| format!("sync catalog summary temp {}: {e}", temp_path.display()))?;
+        crate::fs_fault::maybe_fault("catalog.summary.after_temp_sync", final_path);
         drop(file);
         std::fs::rename(&temp_path, final_path).map_err(|e| {
             format!(
@@ -149,6 +151,7 @@ fn write_bytes_atomically_with(
                 temp_path.display()
             )
         })?;
+        crate::fs_fault::maybe_fault("catalog.summary.after_rename_before_parent_sync", final_path);
         sqlite_catalog::sync_parent_dir(final_path);
         Ok(())
     })();

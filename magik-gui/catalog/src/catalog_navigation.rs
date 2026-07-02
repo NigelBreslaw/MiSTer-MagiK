@@ -860,8 +860,10 @@ fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String>
         })?;
         file.write_all(bytes)
             .map_err(|e| format!("write catalog navigation temp {}: {e}", temp_path.display()))?;
+        crate::fs_fault::maybe_fault("catalog.navigation.after_temp_write", final_path);
         file.sync_all()
             .map_err(|e| format!("sync catalog navigation temp {}: {e}", temp_path.display()))?;
+        crate::fs_fault::maybe_fault("catalog.navigation.after_temp_sync", final_path);
         drop(file);
         std::fs::rename(&temp_path, final_path).map_err(|e| {
             format!(
@@ -870,6 +872,10 @@ fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String>
                 temp_path.display()
             )
         })?;
+        crate::fs_fault::maybe_fault(
+            "catalog.navigation.after_rename_before_parent_sync",
+            final_path,
+        );
         sqlite_catalog::sync_parent_dir(final_path);
         Ok(())
     })();

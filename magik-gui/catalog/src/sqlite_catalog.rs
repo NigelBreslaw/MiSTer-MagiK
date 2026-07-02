@@ -1139,12 +1139,14 @@ fn publish_sqlite_temp(
 
     let build_sync_t = Instant::now();
     sync_file_best_effort(&plan.build_tmp_path, "sqlite build temp")?;
+    crate::fs_fault::maybe_fault("catalog.sqlite.after_build_temp_sync", final_path);
     metrics.build_sync_ms = elapsed_ms(build_sync_t.elapsed());
 
     if plan.build_tmp_path != plan.final_tmp_path {
         let copy_t = Instant::now();
         metrics.progress_events =
             copy_sqlite_temp_with_progress(&plan.build_tmp_path, &plan.final_tmp_path, progress)?;
+        crate::fs_fault::maybe_fault("catalog.sqlite.after_final_temp_copy", final_path);
         metrics.copy_ms = elapsed_ms(copy_t.elapsed());
         let _ = std::fs::remove_file(&plan.build_tmp_path);
     } else {
@@ -1154,11 +1156,13 @@ fn publish_sqlite_temp(
 
     let final_sync_t = Instant::now();
     sync_file_best_effort(&plan.final_tmp_path, "sqlite temp")?;
+    crate::fs_fault::maybe_fault("catalog.sqlite.after_final_temp_sync", final_path);
     metrics.final_sync_ms = elapsed_ms(final_sync_t.elapsed());
 
     let rename_t = Instant::now();
     std::fs::rename(&plan.final_tmp_path, final_path)
         .map_err(|e| format!("replace sqlite: {e}"))?;
+    crate::fs_fault::maybe_fault("catalog.sqlite.after_rename_before_parent_sync", final_path);
     metrics.rename_ms = elapsed_ms(rename_t.elapsed());
 
     let parent_sync_t = Instant::now();
