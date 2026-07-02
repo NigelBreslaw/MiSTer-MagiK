@@ -39,10 +39,7 @@ pub fn write_button_overrides(overrides: &[ButtonOverride]) -> Result<(), String
     write_button_overrides_to_path(overrides, Path::new(BUTTON_OVERRIDES_PATH))
 }
 
-fn write_button_overrides_to_path(
-    overrides: &[ButtonOverride],
-    path: &Path,
-) -> Result<(), String> {
+fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> Result<(), String> {
     if overrides.is_empty() {
         remove_button_overrides_at(path)?;
         return Ok(());

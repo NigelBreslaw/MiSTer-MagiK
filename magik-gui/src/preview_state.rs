@@ -2060,7 +2060,9 @@ mod tests {
     #[test]
     fn failed_preview_cache_can_be_cleared_after_media_publish() {
         let mut preview = PreviewState::new();
-        preview.cache.insert_failed("pack.mmlz4b:missing.raw565".into());
+        preview
+            .cache
+            .insert_failed("pack.mmlz4b:missing.raw565".into());
 
         assert!(preview.cache.contains_failed("pack.mmlz4b:missing.raw565"));
 
