@@ -90,6 +90,7 @@ fn publish_pack_file_impl(
 
     let copy_started = Instant::now();
     metrics.progress_events = copy_with_progress(&mut input, &mut output, metrics.bytes, progress)?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.pack.after_temp_write", final_path);
     metrics.copy_ms = elapsed_ms(copy_started.elapsed());
 
     let bytes = metrics.bytes;
@@ -98,6 +99,7 @@ fn publish_pack_file_impl(
     output
         .sync_all()
         .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.pack.after_temp_sync", final_path);
     metrics.sync_ms = elapsed_ms(sync_started.elapsed());
     drop(output);
 
@@ -105,6 +107,10 @@ fn publish_pack_file_impl(
     emit_progress(&mut metrics, progress, PackSavePhase::Rename, bytes, bytes);
     let rename_started = Instant::now();
     publish.install_temp(None)?;
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "media.pack.after_rename_before_parent_sync",
+        final_path,
+    );
     metrics.rename_ms = elapsed_ms(rename_started.elapsed());
 
     let bytes = metrics.bytes;
