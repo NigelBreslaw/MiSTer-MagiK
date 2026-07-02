@@ -6,12 +6,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_DIR="/media/fat/mister-magik"
+REMOTE_ENV="$REMOTE_DIR/launcher.env"
 REMOTE_DB="$REMOTE_DIR/library.sqlite3"
 REMOTE_SUMMARY="$REMOTE_DIR/library.summary.json"
 REMOTE_NAV="$REMOTE_DIR/library.nav.lz4b"
 REMOTE_ASSETS="$REMOTE_DIR/assets"
 REMOTE_STATE="$REMOTE_ASSETS/.screenshot-media-state.json"
 REMOTE_MARKER="/tmp/mister-magik/fs-fault.json"
+REMOTE_SESSION="/tmp/mister-magik/fs-fault-session"
+REMOTE_FAULT_ENV="/tmp/mister-magik/fs-fault-launcher.env"
 REMOTE_LOCK="/tmp/mister-magik/library-refresh.lock"
 REMOTE_LOG="/tmp/mister-magik-fs-fault-refresh.log"
 TSV="$ROOT/history/toolchain-bench/results-fs-fault-reset.tsv"
@@ -22,17 +25,22 @@ ITERATIONS=1
 WAIT_TIMEOUT=120
 SETTLE=5
 RUN_ACCEPTANCE=1
+RECOVER_ONLY=0
 ACTIVE_TRIGGER_PID=""
+ACTIVE_FAULT_SESSION=""
 TRIGGER_LABEL=""
 
 usage() {
   cat <<'EOF'
-usage: scripts/device-fs-fault-reset.sh LABEL [--scenario NAME] [--iterations N] [--wait-timeout SECS] [--settle SECS] [--no-acceptance]
+usage: scripts/device-fs-fault-reset.sh LABEL [--scenario NAME] [--iterations N] [--wait-timeout SECS] [--settle SECS] [--no-acceptance] [--recover-only]
 
 Scenarios: catalog, projections, media, settings-marker, reset-delete, all
 
 This is intentionally destructive. It removes MagiK catalog DB/projection files
 and screenshot media artifacts, then rebuilds/redownloads as needed.
+
+--recover-only clears stale fault launcher env and disposable artifacts, rebuilds
+the catalog, restarts the launcher, and exits.
 EOF
 }
 
@@ -43,6 +51,7 @@ while [ "$#" -gt 0 ]; do
     --wait-timeout) WAIT_TIMEOUT="${2:?--wait-timeout needs seconds}"; shift 2 ;;
     --settle) SETTLE="${2:?--settle needs seconds}"; shift 2 ;;
     --no-acceptance) RUN_ACCEPTANCE=0; shift ;;
+    --recover-only) RECOVER_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
@@ -76,6 +85,14 @@ fi
 
 remote() {
   "$MISTER" run "$1"
+}
+
+remote_quick() {
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'alarm shift; exec @ARGV' 5 "$MISTER" run "$1"
+  else
+    "$MISTER" run "$1"
+  fi
 }
 
 sq() {
@@ -151,7 +168,7 @@ scenarios_to_run() {
 }
 
 cleanup_destructive_state() {
-  remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$REMOTE_LOCK") $(sq "$REMOTE_DB") $(sq "$REMOTE_SUMMARY") $(sq "$REMOTE_NAV") $(sq "$REMOTE_DIR/.library.sqlite3.tmp")* $(sq "$REMOTE_DIR/.library.summary.json.tmp")* $(sq "$REMOTE_DIR/.library.nav.lz4b.tmp")* $(sq "$REMOTE_DIR/rebuild-on-next-boot"); mkdir -p $(sq "$REMOTE_ASSETS"); find $(sq "$REMOTE_ASSETS") -maxdepth 1 -type f \\( -name '*-screenshots*.mmlz4b' -o -name '*-screenshots*.mmlz4b.idx' -o -name '.*-screenshots*.mmlz4b.tmp*' -o -name '.screenshot-media-state.json*' \\) -delete; rm -rf /tmp/mister-magik-media-download; sync" >/dev/null
+  remote "rm -f $(sq "$REMOTE_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION") $(sq "$REMOTE_LOCK") $(sq "$REMOTE_DB") $(sq "$REMOTE_SUMMARY") $(sq "$REMOTE_NAV") $(sq "$REMOTE_DIR/.library.sqlite3.tmp")* $(sq "$REMOTE_DIR/.library.summary.json.tmp")* $(sq "$REMOTE_DIR/.library.nav.lz4b.tmp")* $(sq "$REMOTE_DIR/rebuild-on-next-boot"); mkdir -p $(sq "$REMOTE_ASSETS"); find $(sq "$REMOTE_ASSETS") -maxdepth 1 -type f \\( -name '*-screenshots*.mmlz4b' -o -name '*-screenshots*.mmlz4b.idx' -o -name '.*-screenshots*.mmlz4b.tmp*' -o -name '.screenshot-media-state.json*' \\) -delete; rm -rf /tmp/mister-magik-media-download; sync" >/dev/null
 }
 
 recover_catalog_and_launcher() {
@@ -167,7 +184,7 @@ wait_for_down_up() {
   local down_seen=0 deadline
   deadline=$((SECONDS + WAIT_TIMEOUT))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if ! remote ":" >/dev/null 2>&1; then
+    if ! remote_quick ":" >/dev/null 2>&1; then
       down_seen=1
       break
     fi
@@ -198,40 +215,57 @@ run_acceptance() {
 
 fault_env_prefix() {
   local point="$1"
-  printf 'MISTER_FS_FAULT_POINT=%s MISTER_FS_FAULT_ACTION=direct-reset-no-sync MISTER_FS_FAULT_DELAY_MS=2000 ' "$(sq "$point")"
+  if [ -z "$ACTIVE_FAULT_SESSION" ]; then
+    echo "internal error: fault session is not armed" >&2
+    exit 2
+  fi
+  printf 'MISTER_FS_FAULT_POINT=%s MISTER_FS_FAULT_ACTION=direct-reset-no-sync MISTER_FS_FAULT_DELAY_MS=2000 MISTER_FS_FAULT_SESSION=%s ' "$(sq "$point")" "$(sq "$ACTIVE_FAULT_SESSION")"
+}
+
+arm_fault_session() {
+  local point="$1" iteration="${2:-0}"
+  ACTIVE_FAULT_SESSION="${LABEL}:${point}:${iteration}:$$:${RANDOM}"
+  remote "mkdir -p /tmp/mister-magik; printf %s $(sq "$ACTIVE_FAULT_SESSION") >$(sq "$REMOTE_SESSION")" >/dev/null
 }
 
 trigger_catalog_refresh() {
   local point="$1" iteration="$2"
+  arm_fault_session "$point" "$iteration"
   remote "$(fault_env_prefix "$point") MISTER_LIBRARY_BENCH_LABEL=$(sq "$LABEL") MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=$(sq "$iteration") $(sq "$REMOTE_BIN") library-refresh" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_rebuild_marker() {
   local point="$1"
+  arm_fault_session "$point"
   remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") request-library-rebuild" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_settings_toggle() {
   local point="$1"
+  arm_fault_session "$point"
   remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") toggle-simple-joystick-setting" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_media_pack_bench() {
   local point="$1" iteration="$2"
+  arm_fault_session "$point" "$iteration"
   remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
 trigger_launcher_with_env() {
   local point="$1" input_script="${2:-}"
+  arm_fault_session "$point"
   local args=(
     launcher-restart
+    --remote-env "$REMOTE_FAULT_ENV"
     --env "MISTER_FS_FAULT_POINT=$point"
     --env "MISTER_FS_FAULT_ACTION=direct-reset-no-sync"
     --env "MISTER_FS_FAULT_DELAY_MS=2000"
+    --env "MISTER_FS_FAULT_SESSION=$ACTIVE_FAULT_SESSION"
     --env "MISTER_CATALOG_BACKGROUND_DELAY_MS=0"
     --timeout 20
   )
@@ -250,6 +284,13 @@ stop_active_trigger() {
   fi
 }
 
+cleanup_on_exit() {
+  stop_active_trigger
+  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION")" >/dev/null 2>&1 || true
+}
+
+trap cleanup_on_exit EXIT INT TERM
+
 trigger_point() {
   local scenario="$1" point="$2" iteration="$3"
   ACTIVE_TRIGGER_PID=""
@@ -263,6 +304,13 @@ trigger_point() {
     *) trigger_catalog_refresh "$point" "$iteration"; TRIGGER_LABEL=library-refresh ;;
   esac
 }
+
+if [ "$RECOVER_ONLY" -eq 1 ]; then
+  cleanup_destructive_state
+  recover_catalog_and_launcher
+  echo "fs fault recovery completed"
+  exit 0
+fi
 
 run_one() {
   local scenario="$1" point="$2" iteration="$3"
