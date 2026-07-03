@@ -92,3 +92,15 @@ FSFAULT-20260703	461f3aaf	media	3	media.state.after_temp_sync	media-bench-save-s
 FSFAULT-20260703	461f3aaf	media	1	media.state.after_rename_before_parent_sync	media-bench-save-state	1	1	1	1	1	ok	ok
 FSFAULT-20260703	461f3aaf	media	2	media.state.after_rename_before_parent_sync	media-bench-save-state	1	1	1	1	1	ok	ok
 FSFAULT-20260703	461f3aaf	media	3	media.state.after_rename_before_parent_sync	media-bench-save-state	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	1	reset_delete.database.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	2	reset_delete.database.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	3	reset_delete.database.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	1	reset_delete.summary.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	2	reset_delete.summary.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	3	reset_delete.summary.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	1	reset_delete.navigation.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	2	reset_delete.navigation.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	3	reset_delete.navigation.after_remove	reset-delete-database	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	1	reset_delete.screenshot_asset.after_remove	reset-delete-screenshot-packs	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	2	reset_delete.screenshot_asset.after_remove	reset-delete-screenshot-packs	1	1	1	1	1	ok	ok
+FSFAULT-20260703	8df3bd5c	reset-delete	3	reset_delete.screenshot_asset.after_remove	reset-delete-screenshot-packs	1	1	1	1	1	ok	ok
