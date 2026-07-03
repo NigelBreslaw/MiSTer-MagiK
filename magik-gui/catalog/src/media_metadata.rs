@@ -11,7 +11,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
 use quick_xml::XmlVersion;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -228,11 +228,8 @@ pub(crate) struct MglMetadata {
 }
 
 pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
-    let mut file = File::open(path).ok()?;
-    let mut data = vec![0u8; MRA_PREFIX_BYTES];
-    let n = file.read(&mut data).ok()?;
-    data.truncate(n);
-    parse_mra_metadata_xml(&String::from_utf8_lossy(&data))
+    let file = File::open(path).ok()?;
+    parse_mra_metadata_xml_reader(BufReader::new(file.take(MRA_PREFIX_BYTES as u64)))
 }
 
 pub(crate) fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
@@ -260,52 +257,77 @@ pub(crate) fn resolve_mgl_payload_path(mgl_path: &Path, payload: &str) -> PathBu
     }
 }
 
-fn parse_mra_metadata_xml(text: &str) -> Option<MraMetadata> {
-    let mut reader = XmlReader::from_str(text);
+fn parse_mra_metadata_xml_reader(reader: impl BufRead) -> Option<MraMetadata> {
+    let mut reader = XmlReader::from_reader(reader);
+    let mut buf = Vec::with_capacity(4096);
     let mut metadata = MraMetadata::default();
     let mut field: Option<&'static str> = None;
     let mut field_text = String::new();
     loop {
-        match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                field = mra_metadata_field(e.name().as_ref());
-                field_text.clear();
-            }
-            Ok(Event::Text(e)) => {
-                if field.is_some() {
-                    if let Ok(value) = e.xml10_content() {
-                        field_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::CData(e)) => {
-                if field.is_some() {
-                    if let Ok(value) = e.xml10_content() {
-                        field_text.push_str(&value);
-                    }
-                }
-            }
-            Ok(Event::GeneralRef(e)) => {
-                if field.is_some() {
-                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
-                        field_text.push_str(value);
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                if let Some(ended_field) = mra_metadata_field(e.name().as_ref()) {
-                    if field == Some(ended_field) {
-                        set_mra_metadata_field(&mut metadata, ended_field, &field_text);
-                    }
-                    field = None;
-                    field_text.clear();
-                }
-            }
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) | Err(_) => break,
-            _ => {}
+            Ok(event) => {
+                if !apply_mra_metadata_event(
+                    event,
+                    &mut metadata,
+                    &mut field,
+                    &mut field_text,
+                ) {
+                    break;
+                }
+            }
         }
     }
     Some(metadata)
+}
+
+fn apply_mra_metadata_event(
+    event: Event<'_>,
+    metadata: &mut MraMetadata,
+    field: &mut Option<&'static str>,
+    field_text: &mut String,
+) -> bool {
+    match event {
+        Event::Start(e) => {
+            *field = mra_metadata_field(e.name().as_ref());
+            field_text.clear();
+        }
+        Event::Text(e) => {
+            if field.is_some() {
+                if let Ok(value) = e.xml10_content() {
+                    field_text.push_str(&value);
+                }
+            }
+        }
+        Event::CData(e) => {
+            if field.is_some() {
+                if let Ok(value) = e.xml10_content() {
+                    field_text.push_str(&value);
+                }
+            }
+        }
+        Event::GeneralRef(e) => {
+            if field.is_some() {
+                if let Some(value) = xml_general_ref_text(e.as_ref()) {
+                    field_text.push_str(value);
+                }
+            }
+        }
+        Event::End(e) => {
+            if let Some(ended_field) = mra_metadata_field(e.name().as_ref()) {
+                if *field == Some(ended_field) {
+                    set_mra_metadata_field(metadata, ended_field, field_text);
+                }
+                *field = None;
+                field_text.clear();
+            } else if e.name().as_ref().eq_ignore_ascii_case(b"misterromdescription") {
+                return false;
+            }
+        }
+        _ => {}
+    }
+    true
 }
 
 fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
@@ -757,6 +779,28 @@ mod tests {
         assert_eq!(metadata.year.as_deref(), Some("1997"));
         assert_eq!(metadata.setname.as_deref(), Some("batcir"));
         assert_eq!(metadata.parent.as_deref(), Some("batcirj"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mra_metadata_reader_ignores_trailing_payload_after_root() {
+        let root = unique_temp_dir("mra-trailing-payload");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("fixture.mra");
+        let mut data = br#"
+            <misterromdescription>
+                <name>Fast Game</name>
+                <rbf>Arcade</rbf>
+            </misterromdescription>
+            "#
+        .to_vec();
+        data.extend_from_slice(&[0xff, 0x00, 0xfe, b'<', b'b', b'a', b'd']);
+        std::fs::write(&path, data).expect("write mra fixture");
+
+        let metadata = read_mra_metadata(&path).expect("read mra metadata");
+
+        assert_eq!(metadata.name.as_deref(), Some("Fast Game"));
+        assert_eq!(metadata.rbf.as_deref(), Some("Arcade"));
         let _ = std::fs::remove_dir_all(root);
     }
 
