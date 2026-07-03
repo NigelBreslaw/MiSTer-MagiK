@@ -1010,6 +1010,7 @@ fn clipped_title(title: &str, max_chars: usize) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::arcade_game;
 
     #[test]
     fn arcade_anchor_hash_tracks_visible_row_fields_only() {
@@ -1050,11 +1051,9 @@ mod tests {
         let mut renderer = ArcadeListRenderer::new();
         let mut games = (0..20)
             .map(|idx| {
-                game(
-                    "arcade",
-                    &format!("/media/fat/_Arcade/{idx}.mra"),
-                    &format!("Game {idx}"),
-                )
+                arcade_game(format!("Game {idx}"))
+                    .path(format!("/media/fat/_Arcade/{idx}.mra"))
+                    .build()
             })
             .collect::<Vec<_>>();
 
@@ -1217,21 +1216,6 @@ mod tests {
             renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
-    }
-
-    fn game(system_id: &str, mra_path: &str, title: &str) -> ArcadeGameEntry {
-        ArcadeGameEntry {
-            title: title.into(),
-            mra_path: mra_path.into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: system_id.into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
-        }
     }
 
     fn rgb565_luma(pixel: Rgb565Pixel) -> u32 {

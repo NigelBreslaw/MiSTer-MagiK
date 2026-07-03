@@ -896,25 +896,21 @@ fn navigation_temp_path_for(final_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::test_support::arcade_game;
 
     fn stamp(lines: &[&str]) -> CatalogStamp {
         CatalogStamp::from_lines(lines.iter().map(|line| line.to_string()).collect())
     }
 
     fn game(title: &str, launch_ref: &str, system_id: &str) -> ArcadeGameEntry {
-        ArcadeGameEntry {
-            title: Arc::from(title),
-            mra_path: Arc::from(launch_ref),
-            preview_archive_path: Arc::from("/media/fat/mister-magik/assets/arcade.mmlz4b"),
-            preview_asset_key: Arc::from(title.to_ascii_lowercase()),
-            has_preview: true,
-            system_id: Arc::from(system_id),
-            year: Some(1984),
-            manufacturer: Arc::from("Capcom"),
-            category: Arc::from("Shooter"),
-            is_new: false,
-        }
+        arcade_game(title)
+            .path(launch_ref)
+            .preview(title.to_ascii_lowercase())
+            .system_id(system_id)
+            .year(1984)
+            .manufacturer("Capcom")
+            .category("Shooter")
+            .build()
     }
 
     fn projection_catalog() -> ArcadeCatalog {

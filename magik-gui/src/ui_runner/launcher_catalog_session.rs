@@ -606,32 +606,17 @@ fn games_found_count_step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
 
     fn catalog_with_games(count: usize) -> ArcadeCatalog {
         let games = (0..count)
-            .map(|index| ArcadeGameEntry {
-                title: Arc::from(format!("Game {index}")),
-                mra_path: Arc::from(format!("/media/fat/_Arcade/game-{index}.mra")),
-                preview_archive_path: Arc::from(""),
-                preview_asset_key: Arc::from(""),
-                has_preview: false,
-                system_id: Arc::from("arcade"),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
+            .map(|index| {
+                arcade_game(format!("Game {index}"))
+                    .path(format!("/media/fat/_Arcade/game-{index}.mra"))
+                    .build()
             })
             .collect();
-        ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            games,
-            vec![arcade_catalog::GameSystemEntry {
-                id: "arcade".to_string(),
-                title: "Arcade".to_string(),
-                count,
-            }],
-        )
+        arcade_catalog(games, vec![arcade_system("arcade", count)])
     }
 
     fn effect_names(effects: CatalogSessionEffects) -> Vec<&'static str> {

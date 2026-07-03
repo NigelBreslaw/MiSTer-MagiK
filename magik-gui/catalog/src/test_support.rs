@@ -17,6 +17,85 @@ type MameMachineFixture<'a> = (
     Option<&'a str>,
 );
 
+pub(crate) struct ArcadeGameFixture {
+    title: String,
+    mra_path: String,
+    preview_archive_path: String,
+    preview_asset_key: String,
+    system_id: String,
+    year: Option<u16>,
+    manufacturer: String,
+    category: String,
+    is_new: bool,
+}
+
+impl ArcadeGameFixture {
+    pub(crate) fn path(mut self, path: impl Into<String>) -> Self {
+        self.mra_path = path.into();
+        self
+    }
+
+    pub(crate) fn preview(mut self, asset_key: impl Into<String>) -> Self {
+        self.preview_archive_path =
+            "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".to_string();
+        self.preview_asset_key = asset_key.into();
+        self
+    }
+
+    pub(crate) fn system_id(mut self, system_id: impl Into<String>) -> Self {
+        self.system_id = system_id.into();
+        self
+    }
+
+    pub(crate) fn year(mut self, year: u16) -> Self {
+        self.year = Some(year);
+        self
+    }
+
+    pub(crate) fn manufacturer(mut self, manufacturer: impl Into<String>) -> Self {
+        self.manufacturer = manufacturer.into();
+        self
+    }
+
+    pub(crate) fn category(mut self, category: impl Into<String>) -> Self {
+        self.category = category.into();
+        self
+    }
+
+    pub(crate) fn build(self) -> ArcadeGameEntry {
+        let has_preview =
+            !self.preview_archive_path.is_empty() && !self.preview_asset_key.is_empty();
+        ArcadeGameEntry {
+            title: self.title.into(),
+            mra_path: self.mra_path.into(),
+            preview_archive_path: self.preview_archive_path.into(),
+            preview_asset_key: self.preview_asset_key.into(),
+            has_preview,
+            system_id: self.system_id.into(),
+            year: self.year,
+            manufacturer: self.manufacturer.into(),
+            category: self.category.into(),
+            is_new: self.is_new,
+        }
+    }
+}
+
+pub(crate) fn arcade_game(title: impl Into<String>) -> ArcadeGameFixture {
+    let title = title.into();
+    let mra_path = format!("/media/fat/_Arcade/{title}.mra");
+    ArcadeGameFixture {
+        title,
+        mra_path,
+        preview_archive_path: String::new(),
+        preview_asset_key: String::new(),
+        system_id: "arcade".to_string(),
+        year: None,
+        manufacturer: String::new(),
+        category: String::new(),
+        is_new: false,
+    }
+}
+
 pub(crate) fn chd_v5_header(sha1: [u8; 20]) -> [u8; 124] {
     let mut header = [0u8; 124];
     header[..8].copy_from_slice(b"MComprHD");
@@ -76,18 +155,7 @@ pub(crate) fn catalog_row(
 ) -> CatalogProjectionRow {
     CatalogProjectionRow {
         launch_id: 0,
-        game: ArcadeGameEntry {
-            title: title.into(),
-            mra_path: path.into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: "arcade".into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
-        },
+        game: arcade_game(title).path(path).build(),
         discovered_at_unix: None,
         source_kind: "mra".to_string(),
         setname: setname.to_string(),
@@ -99,18 +167,7 @@ pub(crate) fn catalog_row(
 pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjectionRow {
     CatalogProjectionRow {
         launch_id: 0,
-        game: ArcadeGameEntry {
-            title: title.into(),
-            mra_path: path.into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: "unknown".into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
-        },
+        game: arcade_game(title).path(path).system_id("unknown").build(),
         discovered_at_unix: None,
         source_kind: "mgl".to_string(),
         setname: String::new(),
@@ -122,18 +179,7 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjection
 pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow {
     CatalogProjectionRow {
         launch_id: 0,
-        game: ArcadeGameEntry {
-            title: title.into(),
-            mra_path: path.into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: "amiga".into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
-        },
+        game: arcade_game(title).path(path).system_id("amiga").build(),
         discovered_at_unix: None,
         source_kind: "catalog-entry".to_string(),
         setname: String::new(),

@@ -20,6 +20,8 @@ pub mod raw565;
 pub mod runtime_status;
 pub mod settings;
 pub mod setup_nav;
+#[cfg(test)]
+mod test_support;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;
