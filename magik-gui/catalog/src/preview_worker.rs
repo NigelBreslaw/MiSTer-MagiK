@@ -553,13 +553,29 @@ fn preview_decoded_cache_cap() -> usize {
     })
 }
 
+fn preview_env_truthy(name: &str) -> bool {
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+    )
+}
+
+fn preview_archive_mem_primary_enabled() -> bool {
+    preview_env_truthy("MISTER_PREVIEW_ARCHIVE_MEM_PRIMARY")
+        || preview_env_truthy("MISTER_PREVIEW_FORCE_ARCHIVE_MEM")
+}
+
+fn preview_archive_mem_warm_enabled() -> bool {
+    preview_archive_mem_primary_enabled()
+        || preview_env_truthy("MISTER_PREVIEW_ARCHIVE_MEM_WARM")
+        || preview_env_truthy("MISTER_PREVIEW_ARCHIVE_BACKGROUND_WARM")
+}
+
 fn preview_archive_background_warm_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-        )
+        preview_archive_mem_warm_enabled()
+            && !preview_env_truthy("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
     })
 }
 
@@ -828,37 +844,65 @@ fn load_raw565_preview_asset_timed(
         return Err("preview asset missing archive path or key".to_string());
     }
     let entry_name = format!("{asset_key}.rgb565");
-    if let Some(archives) = cached_preview_archives_for_paths(&[archive_path.to_string()]) {
-        for archive in archives.iter() {
-            if let Some(loaded) = archive.load_timed(&entry_name, scratch)? {
-                return Ok(loaded);
-            }
+    if preview_archive_mem_primary_enabled() {
+        if let Some(loaded) = load_raw565_preview_asset_from_archive_mem(
+            archive_path,
+            &entry_name,
+            scratch,
+        )? {
+            return Ok(loaded);
         }
     }
     if let Some(loaded) =
         try_load_raw565_preview_asset_from_index(Path::new(archive_path), &entry_name, scratch)
     {
-        if preview_archive_background_warm_enabled() {
-            start_background_preview_archive_load(archive_path.to_string());
+        match loaded {
+            PreviewIndexLoad::Loaded(loaded) => {
+                if preview_archive_background_warm_enabled() {
+                    start_background_preview_archive_load(archive_path.to_string());
+                }
+                return Ok(loaded);
+            }
+            PreviewIndexLoad::MissingEntry => {
+                return Err(format!(
+                    "preview asset {entry_name} missing from index for archive {archive_path}"
+                ));
+            }
+            PreviewIndexLoad::NoSidecar => {}
         }
+    }
+    if let Some(loaded) =
+        load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
+    {
         return Ok(loaded);
     }
-    if !preview_archive_background_warm_enabled() {
-        return Err(format!(
-            "preview asset {entry_name} missing from index for archive {archive_path}"
-        ));
+    Err(format!(
+        "preview asset {entry_name} missing from archive {archive_path}"
+    ))
+}
+
+fn load_raw565_preview_asset_from_archive_mem(
+    archive_path: &str,
+    entry_name: &str,
+    scratch: &mut PreviewArchiveScratch,
+) -> Result<Option<LoadedPreviewPixels>, String> {
+    let paths = [archive_path.to_string()];
+    if let Some(archives) = cached_preview_archives_for_paths(&paths) {
+        for archive in archives.iter() {
+            if let Some(loaded) = archive.load_timed(entry_name, scratch)? {
+                return Ok(Some(loaded));
+            }
+        }
     }
     let Some(archives) = preview_archives_for_paths(vec![archive_path.to_string()])? else {
         return Err(format!("preview archive not configured {archive_path}"));
     };
     for archive in archives.iter() {
-        if let Some(loaded) = archive.load_timed(&entry_name, scratch)? {
-            return Ok(loaded);
+        if let Some(loaded) = archive.load_timed(entry_name, scratch)? {
+            return Ok(Some(loaded));
         }
     }
-    Err(format!(
-        "preview asset {entry_name} missing from archive {archive_path}"
-    ))
+    Ok(None)
 }
 
 #[derive(Clone, Debug)]
@@ -947,7 +991,30 @@ fn preview_archives() -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
 
 /// Open and cache configured preview archives before latency-sensitive work starts.
 pub fn warm_preview_archives_from_env() -> Result<bool, String> {
-    preview_archives().map(|archives| archives.is_some())
+    if preview_archive_mem_warm_enabled() {
+        return preview_archives().map(|archives| archives.is_some());
+    }
+    warm_preview_sidecar_indexes_from_env()
+}
+
+fn warm_preview_sidecar_indexes_from_env() -> Result<bool, String> {
+    let mut warmed = false;
+    for path in preview_archive_paths_from_env() {
+        let resolved_path = resolve_preview_archive_path(&path);
+        match preview_archive_sidecar_lookup(Path::new(&resolved_path)) {
+            Ok(Some(_)) => warmed = true,
+            Ok(None) => {}
+            Err(error) => {
+                if preview_trace_enabled() {
+                    eprintln!(
+                        "preview_trace sidecar_warm_skipped archive_path={} error={}",
+                        resolved_path, error
+                    );
+                }
+            }
+        }
+    }
+    Ok(warmed)
 }
 
 pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
@@ -1549,13 +1616,19 @@ fn size_qualified_archive_path_for_system(
         .map(|path| path.display().to_string())
 }
 
+enum PreviewIndexLoad {
+    Loaded(LoadedPreviewPixels),
+    NoSidecar,
+    MissingEntry,
+}
+
 fn try_load_raw565_preview_asset_from_index(
     archive_path: &Path,
     entry_name: &str,
     scratch: &mut PreviewArchiveScratch,
-) -> Option<LoadedPreviewPixels> {
+) -> Option<PreviewIndexLoad> {
     match load_raw565_preview_asset_from_index(archive_path, entry_name, scratch) {
-        Ok(loaded) => loaded,
+        Ok(loaded) => Some(loaded),
         Err(error) => {
             if preview_trace_enabled() {
                 eprintln!(
@@ -1574,13 +1647,13 @@ fn load_raw565_preview_asset_from_index(
     archive_path: &Path,
     entry_name: &str,
     scratch: &mut PreviewArchiveScratch,
-) -> Result<Option<LoadedPreviewPixels>, String> {
+) -> Result<PreviewIndexLoad, String> {
     let Some(sidecar) = preview_archive_sidecar_lookup(archive_path)? else {
-        return Ok(None);
+        return Ok(PreviewIndexLoad::NoSidecar);
     };
     let key = entry_name.to_ascii_lowercase();
     let Some(entry) = sidecar.index.entries.get(&key).copied() else {
-        return Ok(None);
+        return Ok(PreviewIndexLoad::MissingEntry);
     };
     let total_t = Instant::now();
     let read_t = Instant::now();
@@ -1602,7 +1675,7 @@ fn load_raw565_preview_asset_from_index(
     let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
     let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
     let total_us = total_t.elapsed().as_micros() as u64;
-    Ok(Some(LoadedPreviewPixels {
+    Ok(PreviewIndexLoad::Loaded(LoadedPreviewPixels {
         timing: ImageLoadTiming {
             read_us,
             decode_us,
@@ -2889,9 +2962,44 @@ mod tests {
         let _ = preview_archives_for_paths(vec![path.display().to_string()])
             .expect("warm archive after index pread");
         let second = load_preview_pixels(&path.display().to_string(), "tiny", &mut scratch, resize)
-            .expect("load via warmed archive");
-        assert_eq!(second.timing.load_source, PreviewLoadSource::ArchiveMem);
+            .expect("load via index pread with warmed archive available");
+        assert_eq!(second.timing.load_source, PreviewLoadSource::IndexPread);
 
+        let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn valid_preview_index_missing_entry_does_not_full_load_archive() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-preview-index-missing-entry-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_lz4_block_archive_with_index(
+            &path,
+            "tiny.rgb565",
+            &raw565_fixture(1, 1, &[0xf800]),
+        );
+        preview_archives_for_paths(vec![path.display().to_string()])
+            .expect("warm archive before missing indexed load");
+        let mut scratch = PreviewArchiveScratch::default();
+
+        let err = load_preview_pixels(
+            &path.display().to_string(),
+            "other",
+            &mut scratch,
+            PreviewResizeSpec {
+                filter: PreviewResizeFilter::Hybrid,
+                max_w: 320,
+                max_h: 320,
+            },
+        )
+        .expect_err("valid index missing entry should not fall back to archive_mem");
+
+        assert!(
+            err.contains("missing from index"),
+            "unexpected error: {err}"
+        );
         let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
         let _ = std::fs::remove_file(path);
     }
@@ -3559,19 +3667,25 @@ mod tests {
         let path_text = path.display().to_string();
         let mut scratch = PreviewArchiveScratch::default();
 
-        assert!(load_raw565_preview_asset_from_index(&path, name, &mut scratch)
-            .expect("first index pread")
-            .is_some());
-        assert!(load_raw565_preview_asset_from_index(&path, name, &mut scratch)
-            .expect("second index pread")
-            .is_some());
+        assert!(matches!(
+            load_raw565_preview_asset_from_index(&path, name, &mut scratch)
+                .expect("first index pread"),
+            PreviewIndexLoad::Loaded(_)
+        ));
+        assert!(matches!(
+            load_raw565_preview_asset_from_index(&path, name, &mut scratch)
+                .expect("second index pread"),
+            PreviewIndexLoad::Loaded(_)
+        ));
         assert_eq!(index_pread_archive_open_calls(&path_text), 1);
 
         write_lz4_block_archive_with_index(&path, name, &raw565_fixture(2, 1, &[0x07e0, 0x001f]));
         expire_preview_archive_metadata_cache_for_tests();
-        assert!(load_raw565_preview_asset_from_index(&path, name, &mut scratch)
-            .expect("changed index pread")
-            .is_some());
+        assert!(matches!(
+            load_raw565_preview_asset_from_index(&path, name, &mut scratch)
+                .expect("changed index pread"),
+            PreviewIndexLoad::Loaded(_)
+        ));
         assert_eq!(index_pread_archive_open_calls(&path_text), 2);
 
         let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
