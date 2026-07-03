@@ -164,11 +164,18 @@ impl UiFrameTargetPreviewExt for UiFrameTarget {
         frame: &PreviewRawFrame<'_>,
         clear_screen: bool,
     ) -> Option<DirtyRect> {
-        Raw565PreviewRenderer::compose_frame(
-            self.direct_preview_565_mut(frame_target_geometry(ui)),
+        let screen = preview_screen_rect(ui);
+        let (direct_preview, stride) = self.direct_preview_565_rect_mut(screen);
+        Raw565PreviewRenderer::compose_frame_strided(
+            direct_preview,
             ui,
             frame,
             clear_screen,
+            PreviewSurface {
+                x0: screen.x0,
+                y0: screen.y0,
+                stride,
+            },
         )
     }
 
@@ -179,12 +186,19 @@ impl UiFrameTargetPreviewExt for UiFrameTarget {
         effect: PreviewTransitionEffect,
         progress: f32,
     ) -> DirtyRect {
-        Raw565PreviewRenderer::compose_transition(
-            self.direct_preview_565_mut(frame_target_geometry(ui)),
+        let screen = preview_screen_rect(ui);
+        let (direct_preview, stride) = self.direct_preview_565_rect_mut(screen);
+        Raw565PreviewRenderer::compose_transition_strided(
+            direct_preview,
             ui,
             frame,
             effect,
             progress,
+            PreviewSurface {
+                x0: screen.x0,
+                y0: screen.y0,
+                stride,
+            },
         )
     }
 }
@@ -450,6 +464,34 @@ mod tests {
         let cached = target.into_cached_565();
         let center = ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
         assert_eq!(cached[center].0, 0);
+    }
+
+    #[test]
+    fn direct_preview_uses_preview_rect_backing() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let mut target = UiFrameTarget::cached(frame_target_geometry(&ui));
+        let screen = preview_screen_rect(&ui);
+        let pixel = <Rgb565Pixel as TargetPixel>::from_rgb(255, 0, 0);
+        let pixels = vec![pixel; 4];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+
+        let dirty = target
+            .blit_raw_preview_direct(&ui, &frame, true)
+            .expect("direct preview dirty");
+        let (backing, stride) = target.direct_preview_565_rect_mut(screen);
+
+        assert_eq!(stride, screen.width());
+        assert_eq!(backing.len(), screen.width() * (screen.y1 - screen.y0));
+        assert!(screen.contains(dirty));
     }
 
     #[test]

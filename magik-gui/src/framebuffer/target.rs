@@ -373,6 +373,7 @@ pub fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
     direct_preview: Vec<Rgb565Pixel>,
+    direct_preview_rect: Option<DirtyRect>,
 }
 
 impl UiFrameTarget {
@@ -380,6 +381,7 @@ impl UiFrameTarget {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
             direct_preview: Vec::new(),
+            direct_preview_rect: None,
         }
     }
 
@@ -446,32 +448,36 @@ impl UiFrameTarget {
         }
     }
 
-    pub fn direct_preview_565_mut(
-        &mut self,
-        geometry: FramebufferTargetGeometry,
-    ) -> &mut [Rgb565Pixel] {
-        let len = geometry.render_w() * geometry.render_h();
+    pub fn direct_preview_565_rect_mut(&mut self, rect: DirtyRect) -> (&mut [Rgb565Pixel], usize) {
+        let stride = rect.width();
+        let len = stride * (rect.y1 - rect.y0);
         if self.direct_preview.len() != len {
             self.direct_preview.resize(len, Rgb565Pixel(0));
         }
-        &mut self.direct_preview
+        self.direct_preview_rect = Some(rect);
+        (&mut self.direct_preview, stride)
     }
 
     pub fn present_direct_preview_rect(
         &mut self,
         disp: &mut MappedRgb565Framebuffer,
-        geometry: FramebufferTargetGeometry,
         rect: DirtyRect,
     ) -> u32 {
+        let Some(backing_rect) = self.direct_preview_rect else {
+            return 0;
+        };
+        if !backing_rect.contains(rect) {
+            return 0;
+        }
         if let Err(e) = disp.present_rect_565_strided(
             rect.x0,
             rect.y0,
             rect.x1 - rect.x0,
             rect.y1 - rect.y0,
             &self.direct_preview,
-            geometry.render_w(),
-            rect.x0,
-            rect.y0,
+            backing_rect.width(),
+            rect.x0 - backing_rect.x0,
+            rect.y0 - backing_rect.y0,
         ) {
             log_present_error("direct preview rect", &e);
         }
