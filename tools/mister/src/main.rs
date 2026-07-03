@@ -1,6 +1,7 @@
 use flate2::read::GzDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
+use mister_magik_catalog::sqlite_inspect::{sqlite_query_is_read_only, sqlite_query_to_tsv};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection, OpenFlags};
@@ -3067,96 +3068,10 @@ fn parse_library_db_query(args: &[String]) -> Result<(String, String)> {
         return Err("usage: scripts/mister db [--path PATH] SELECT ...".into());
     }
     let query = query_parts.join(" ");
-    if !library_db_query_is_read_only(&query) {
+    if !sqlite_query_is_read_only(&query) {
         return Err("scripts/mister db only allows read-only SELECT/WITH queries".into());
     }
     Ok((remote_path, query))
-}
-
-fn library_db_query_is_read_only(query: &str) -> bool {
-    let tokens = library_db_query_tokens(query);
-    let Some(first) = tokens.first().map(String::as_str) else {
-        return false;
-    };
-    (first == "select" || first == "with") && !library_db_query_tokens_contain_write(&tokens)
-}
-
-fn library_db_query_tokens_contain_write(tokens: &[String]) -> bool {
-    tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "insert"
-                | "update"
-                | "delete"
-                | "replace"
-                | "create"
-                | "drop"
-                | "alter"
-                | "pragma"
-                | "attach"
-                | "detach"
-                | "vacuum"
-                | "reindex"
-        )
-    })
-}
-
-fn library_db_query_tokens(query: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut token = String::new();
-    let mut chars = query.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' | '"' => {
-                if !token.is_empty() {
-                    tokens.push(std::mem::take(&mut token));
-                }
-                while let Some(quoted) = chars.next() {
-                    if quoted == ch {
-                        if chars.peek() == Some(&ch) {
-                            let _ = chars.next();
-                            continue;
-                        }
-                        break;
-                    }
-                }
-            }
-            '-' if chars.peek() == Some(&'-') => {
-                if !token.is_empty() {
-                    tokens.push(std::mem::take(&mut token));
-                }
-                let _ = chars.next();
-                for comment in chars.by_ref() {
-                    if comment == '\n' {
-                        break;
-                    }
-                }
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                if !token.is_empty() {
-                    tokens.push(std::mem::take(&mut token));
-                }
-                let _ = chars.next();
-                let mut prev = '\0';
-                for comment in chars.by_ref() {
-                    if prev == '*' && comment == '/' {
-                        break;
-                    }
-                    prev = comment;
-                }
-            }
-            ch if ch.is_ascii_alphanumeric() || ch == '_' => token.push(ch.to_ascii_lowercase()),
-            _ => {
-                if !token.is_empty() {
-                    tokens.push(std::mem::take(&mut token));
-                }
-            }
-        }
-    }
-    if !token.is_empty() {
-        tokens.push(token);
-    }
-    tokens
 }
 
 fn temporary_library_db_path() -> PathBuf {
@@ -3182,36 +3097,7 @@ fn run_local_read_only_sqlite_query(path: &Path, query: &str) -> Result<String> 
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    let mut stmt = conn.prepare(query)?;
-    let column_count = stmt.column_count();
-    let mut out = String::new();
-    if column_count > 0 {
-        out.push_str(&stmt.column_names().join("\t"));
-        out.push('\n');
-    }
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        for col in 0..column_count {
-            if col > 0 {
-                out.push('\t');
-            }
-            out.push_str(&sqlite_cell_to_string(row, col)?);
-        }
-        out.push('\n');
-    }
-    Ok(out)
-}
-
-fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> Result<String> {
-    use rusqlite::types::ValueRef;
-
-    match row.get_ref(col)? {
-        ValueRef::Null => Ok(String::new()),
-        ValueRef::Integer(value) => Ok(value.to_string()),
-        ValueRef::Real(value) => Ok(value.to_string()),
-        ValueRef::Text(value) => Ok(String::from_utf8_lossy(value).into_owned()),
-        ValueRef::Blob(value) => Ok(format!("<blob:{}>", value.len())),
-    }
+    Ok(sqlite_query_to_tsv(&conn, query)?)
 }
 
 fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
