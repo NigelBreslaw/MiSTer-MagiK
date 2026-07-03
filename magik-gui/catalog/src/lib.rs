@@ -28,5 +28,6 @@ pub mod preview_worker;
 pub mod runtime_thread;
 mod software_identity;
 mod sqlite_catalog;
+pub mod sqlite_inspect;
 #[cfg(test)]
 mod test_support;
