@@ -482,42 +482,61 @@ struct CatalogSqlQueryResult {
     timing: CatalogSqlQueryTiming,
 }
 
+const CATALOG_GAME_ENTRY_COLUMNS: [&str; 9] = [
+    "title",
+    "launch_ref",
+    "preview_asset_key",
+    "has_preview",
+    "system_id",
+    "year",
+    "manufacturer",
+    "category",
+    "discovered_at_unix",
+];
+
+const GAME_ENTRY_TITLE: usize = 0;
+const GAME_ENTRY_LAUNCH_REF: usize = 1;
+const GAME_ENTRY_PREVIEW_ASSET_KEY: usize = 2;
+const GAME_ENTRY_HAS_PREVIEW: usize = 3;
+const GAME_ENTRY_SYSTEM_ID: usize = 4;
+const GAME_ENTRY_YEAR: usize = 5;
+const GAME_ENTRY_MANUFACTURER: usize = 6;
+const GAME_ENTRY_CATEGORY: usize = 7;
+const GAME_ENTRY_DISCOVERED_AT_UNIX: usize = 8;
+
+fn catalog_game_entry_select_sql(source: &str, where_sql: &str, order_by: &str) -> String {
+    format!(
+        "SELECT {}
+         FROM {source}{where_sql}
+         ORDER BY {order_by}",
+        CATALOG_GAME_ENTRY_COLUMNS.join(",\n                ")
+    )
+}
+
+#[cfg(test)]
+fn catalog_game_entry_column_names() -> &'static [&'static str] {
+    &CATALOG_GAME_ENTRY_COLUMNS
+}
+
 pub(crate) fn load_materialized_ui_catalog(
     conn: &Connection,
 ) -> Result<Option<Vec<ArcadeGameEntry>>, String> {
     if !sqlite_table_exists(conn, "ui_arcade_preferred")? {
         return Ok(None);
     }
-    let mut games = query_game_entries(
+    let mut games = query_game_entries_from_source(
         conn,
-        "SELECT title,
-                launch_ref,
-                preview_asset_key,
-                has_preview,
-                system_id,
-                year,
-                manufacturer,
-                category,
-                discovered_at_unix
-         FROM ui_arcade_preferred_text
-         ORDER BY ordinal",
+        "ui_arcade_preferred_text",
+        "",
+        "ordinal",
         "ui arcade preferred",
     )?;
     if sqlite_table_exists(conn, "launcher_catalog")? {
-        games.extend(query_game_entries(
+        games.extend(query_game_entries_from_source(
             conn,
-            "SELECT title,
-                    launch_ref,
-                    preview_asset_key,
-                    has_preview,
-                    system_id,
-                    year,
-                    manufacturer,
-                    category,
-                    discovered_at_unix
-             FROM launcher_catalog_text
-             WHERE system_id NOT IN ('arcade','neogeo')
-             ORDER BY ordinal",
+            "launcher_catalog_text",
+            " WHERE system_id NOT IN ('arcade','neogeo')",
+            "ordinal",
             "launcher catalog extras",
         )?);
     }
@@ -530,29 +549,35 @@ fn load_materialized_launcher_catalog(
     if !sqlite_table_exists(conn, "launcher_catalog")? {
         return Ok(None);
     }
-    Ok(Some(query_game_entries_with_timing(
+    Ok(Some(query_game_entries_from_source_with_timing(
         conn,
-        "SELECT title,
-                launch_ref,
-                preview_asset_key,
-                has_preview,
-                system_id,
-                year,
-                manufacturer,
-                category,
-                discovered_at_unix
-         FROM launcher_catalog_text
-         ORDER BY ordinal",
+        "launcher_catalog_text",
+        "",
+        "ordinal",
         "launcher catalog",
     )?))
 }
 
-pub(crate) fn query_game_entries(
+fn query_game_entries_from_source(
     conn: &Connection,
-    sql: &str,
+    source: &str,
+    where_sql: &str,
+    order_by: &str,
     label: &str,
 ) -> Result<Vec<ArcadeGameEntry>, String> {
-    query_game_entries_with_timing(conn, sql, label).map(|result| result.games)
+    query_game_entries_from_source_with_timing(conn, source, where_sql, order_by, label)
+        .map(|result| result.games)
+}
+
+fn query_game_entries_from_source_with_timing(
+    conn: &Connection,
+    source: &str,
+    where_sql: &str,
+    order_by: &str,
+    label: &str,
+) -> Result<CatalogSqlQueryResult, String> {
+    let sql = catalog_game_entry_select_sql(source, where_sql, order_by);
+    query_game_entries_with_timing(conn, &sql, label)
 }
 
 fn query_game_entries_with_timing(
@@ -605,8 +630,8 @@ fn game_entry_from_row(
     now_unix: i64,
     preview_archive_paths_by_system: &mut HashMap<String, std::sync::Arc<str>>,
 ) -> rusqlite::Result<ArcadeGameEntry> {
-    let system_id: String = row.get(4)?;
-    let preview_asset_key: String = row.get(2)?;
+    let system_id: String = row.get(GAME_ENTRY_SYSTEM_ID)?;
+    let preview_asset_key: String = row.get(GAME_ENTRY_PREVIEW_ASSET_KEY)?;
     let preview_archive_path = if preview_asset_key.is_empty() {
         std::sync::Arc::<str>::from("")
     } else {
@@ -615,17 +640,23 @@ fn game_entry_from_row(
             .or_insert_with(|| preview_worker::preview_archive_path_for_system(&system_id).into())
             .clone()
     };
-    let discovered_at_unix = row.get::<_, Option<i64>>(8)?;
+    let discovered_at_unix = row.get::<_, Option<i64>>(GAME_ENTRY_DISCOVERED_AT_UNIX)?;
     Ok(ArcadeGameEntry {
-        title: row.get::<_, String>(0)?.into(),
-        mra_path: row.get::<_, String>(1)?.into(),
+        title: row.get::<_, String>(GAME_ENTRY_TITLE)?.into(),
+        mra_path: row.get::<_, String>(GAME_ENTRY_LAUNCH_REF)?.into(),
         preview_archive_path,
         preview_asset_key: preview_asset_key.into(),
-        has_preview: row.get::<_, i64>(3)? != 0,
+        has_preview: row.get::<_, i64>(GAME_ENTRY_HAS_PREVIEW)? != 0,
         system_id: system_id.into(),
-        year: optional_year_from_row(row, 5)?,
-        manufacturer: row.get::<_, Option<String>>(6)?.unwrap_or_default().into(),
-        category: row.get::<_, Option<String>>(7)?.unwrap_or_default().into(),
+        year: optional_year_from_row(row, GAME_ENTRY_YEAR)?,
+        manufacturer: row
+            .get::<_, Option<String>>(GAME_ENTRY_MANUFACTURER)?
+            .unwrap_or_default()
+            .into(),
+        category: row
+            .get::<_, Option<String>>(GAME_ENTRY_CATEGORY)?
+            .unwrap_or_default()
+            .into(),
         is_new: is_new_discovery(discovered_at_unix, now_unix),
     })
 }
@@ -4399,6 +4430,31 @@ mod tests {
             )
             .expect("default region view row");
         assert_eq!(default_region, (None, "unknown".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialized_catalog_entry_queries_match_hydrator_shape() {
+        let root = unique_temp_dir("sqlite-catalog-entry-row-shape");
+        let db = root.join("library.sqlite3");
+        let mut arcade = mra_discovery(1, "Shape Arcade");
+        arcade.launch_ref = "/media/fat/_Arcade/Shape Arcade.mra".to_string();
+        arcade.source_path = arcade.launch_ref.clone();
+        arcade.setname = Some("shape".to_string());
+        let mut console = payload("/media/fat/games/SNES/Shape Console.sfc");
+        console.platform_id = "snes".to_string();
+        console.core_id = "SNES".to_string();
+        console.hardware_id = "snes".to_string();
+
+        save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![arcade, console]))
+            .expect("write sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+
+        for source in ["ui_arcade_preferred_text", "launcher_catalog_text"] {
+            let sql = catalog_game_entry_select_sql(source, "", "ordinal");
+            let stmt = conn.prepare(&sql).expect("prepare canonical row query");
+            assert_eq!(stmt.column_names(), catalog_game_entry_column_names());
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

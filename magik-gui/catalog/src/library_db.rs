@@ -38,7 +38,7 @@ use crate::software_identity::{
     console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows, PreviewArchivePaths,
-    SoftwareHashCache,
+    MameSoftwareMetadata, SoftwareHashCache,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -847,83 +847,127 @@ fn build_catalog_from_scan_with_sources(
     let mut arcade_rows = Vec::<CatalogProjectionRow>::new();
     let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
     let mut launch_plans = Vec::<StructuredLaunchPlan>::new();
+    let mut projection_context = CatalogProjectionBuildContext {
+        scan,
+        software_metadata: &software_metadata,
+        arcade_metadata: &arcade_metadata,
+        preview_paths,
+        software_hash_cache: &mut software_hash_cache,
+        discovery_history: discovery_history.as_ref(),
+        now,
+    };
 
     for (key, discovery) in discoveries {
-        let system_id = catalog_system_id_for_discovery(discovery);
-        let launch_ref = launch_ref_for_discovery(&key, discovery);
-        if !is_launcher_launch_ref(&launch_ref) {
+        let Some(projection) = projection_context.projection_for_discovery(&key, discovery) else {
             continue;
-        }
-        if let Some(plan) =
-            structured_launch_plan_for_discovery(discovery, &launch_ref, &scan.profiles)
-        {
+        };
+        if let Some(plan) = projection.launch_plan {
             launch_plans.push(plan);
         }
-        let discovered_at_unix = discovery_history
-            .as_ref()
-            .and_then(|history| history.discovered_at_for(&key, scan));
+        if projection.is_arcade {
+            arcade_rows.push(projection.row);
+        } else {
+            launcher_rows.push(projection.row);
+        }
+    }
+
+    catalog_from_sqlite_launcher_projection_order(root, arcade_rows, launcher_rows, launch_plans)
+}
+
+struct CatalogProjectionBuildContext<'a> {
+    scan: &'a LibraryScan,
+    software_metadata: &'a MameSoftwareMetadata,
+    arcade_metadata: &'a ArcadeMachineMetadata,
+    preview_paths: &'a PreviewArchivePaths,
+    software_hash_cache: &'a mut SoftwareHashCache,
+    discovery_history: Option<&'a sqlite_catalog::DiscoveryHistory>,
+    now: i64,
+}
+
+struct CatalogProjectionForDiscovery {
+    row: CatalogProjectionRow,
+    is_arcade: bool,
+    launch_plan: Option<StructuredLaunchPlan>,
+}
+
+impl CatalogProjectionBuildContext<'_> {
+    fn projection_for_discovery(
+        &mut self,
+        key: &str,
+        discovery: &GameDiscovery,
+    ) -> Option<CatalogProjectionForDiscovery> {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        let launch_ref = launch_ref_for_discovery(key, discovery);
+        if !is_launcher_launch_ref(&launch_ref) {
+            return None;
+        }
+        let is_arcade = system_id == "arcade" || system_id == "neogeo";
+        let launch_plan =
+            structured_launch_plan_for_discovery(discovery, &launch_ref, &self.scan.profiles);
+        let discovered_at_unix = self
+            .discovery_history
+            .and_then(|history| history.discovered_at_for(key, self.scan));
         let software_identity = mame_software_identity_for_discovery(
             discovery,
-            &software_metadata,
-            &mut software_hash_cache,
+            self.software_metadata,
+            self.software_hash_cache,
         );
-        let (preview, setname, parent, family_key, metadata) =
-            if system_id == "arcade" || system_id == "neogeo" {
-                let (identity_id, family_id, arcade_family_key, metadata) =
-                    catalog_arcade_projection_fields_for_discovery(
-                        &key,
-                        discovery,
-                        &arcade_metadata,
-                    );
-                let preview_key = if family_id.is_empty() {
-                    identity_id.clone()
-                } else {
-                    family_id.clone()
-                };
-                let preview = if preview_key.is_empty() {
-                    LauncherPreviewAsset::none()
-                } else {
-                    LauncherPreviewAsset::new(
-                        preview_worker::preview_archive_path_for_system(&system_id),
-                        preview_key,
-                    )
-                };
-                (preview, identity_id, family_id, Some(arcade_family_key), metadata)
+        let (preview, setname, parent, family_key, metadata) = if is_arcade {
+            let (identity_id, family_id, arcade_family_key, metadata) =
+                catalog_arcade_projection_fields_for_discovery(
+                    key,
+                    discovery,
+                    self.arcade_metadata,
+                );
+            let preview_key = if family_id.is_empty() {
+                identity_id.clone()
             } else {
-                let preview = software_identity
-                    .as_ref()
-                    .and_then(|identity| console_preview_asset(identity, preview_paths));
-                let preview = preview
-                    .as_ref()
-                    .map(|asset| {
-                        LauncherPreviewAsset::new(
-                            preview_worker::preview_archive_path_for_system(&system_id),
-                            asset.asset_key.to_string(),
-                        )
-                    })
-                    .unwrap_or_else(LauncherPreviewAsset::none);
-                let family_key = software_identity
-                    .as_ref()
-                    .map(|identity| format!("mame-software:{}", identity.family_id));
-                (
-                    preview,
-                    discovery.setname.clone().unwrap_or_default(),
-                    discovery.parent.clone().unwrap_or_default(),
-                    family_key,
-                    ArcadeGameMetadataKey {
-                        year: discovery.year,
-                        manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                        category: discovery.genre.clone().unwrap_or_default(),
-                    },
+                family_id.clone()
+            };
+            let preview = if preview_key.is_empty() {
+                LauncherPreviewAsset::none()
+            } else {
+                LauncherPreviewAsset::new(
+                    preview_worker::preview_archive_path_for_system(&system_id),
+                    preview_key,
                 )
             };
+            (preview, identity_id, family_id, Some(arcade_family_key), metadata)
+        } else {
+            let preview = software_identity
+                .as_ref()
+                .and_then(|identity| console_preview_asset(identity, self.preview_paths));
+            let preview = preview
+                .as_ref()
+                .map(|asset| {
+                    LauncherPreviewAsset::new(
+                        preview_worker::preview_archive_path_for_system(&system_id),
+                        asset.asset_key.to_string(),
+                    )
+                })
+                .unwrap_or_else(LauncherPreviewAsset::none);
+            let family_key = software_identity
+                .as_ref()
+                .map(|identity| format!("mame-software:{}", identity.family_id));
+            (
+                preview,
+                discovery.setname.clone().unwrap_or_default(),
+                discovery.parent.clone().unwrap_or_default(),
+                family_key,
+                ArcadeGameMetadataKey {
+                    year: discovery.year,
+                    manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                    category: discovery.genre.clone().unwrap_or_default(),
+                },
+            )
+        };
         let mut row = CatalogProjectionRow::new(
             discovery.title.clone(),
             launch_ref,
             system_id.clone(),
             preview,
             metadata,
-            sqlite_catalog::is_new_discovery(discovered_at_unix, now),
+            sqlite_catalog::is_new_discovery(discovered_at_unix, self.now),
             CatalogProjectionSource {
                 discovered_at_unix,
                 source_kind: launch_kind_for_discovery(discovery).to_string(),
@@ -932,16 +976,16 @@ fn build_catalog_from_scan_with_sources(
                 family_key,
             },
         );
-        if system_id == "arcade" || system_id == "neogeo" {
+        if is_arcade {
             row.game.has_preview = row.game.has_preview
-                && preview_paths.archive_for_platform(&system_id).is_some();
-            arcade_rows.push(row);
-        } else {
-            launcher_rows.push(row);
+                && self.preview_paths.archive_for_platform(&system_id).is_some();
         }
+        Some(CatalogProjectionForDiscovery {
+            row,
+            is_arcade,
+            launch_plan,
+        })
     }
-
-    catalog_from_sqlite_launcher_projection_order(root, arcade_rows, launcher_rows, launch_plans)
 }
 
 fn catalog_from_sqlite_launcher_projection_order(
