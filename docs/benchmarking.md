@@ -114,6 +114,22 @@ Acceptance depends on `/tmp/mister-magik/status.json` reporting
 `startup_splash_visible`; return-from-game must restore Arcade selection before
 `launcher_revealed` and wait for `return_preview_ready`.
 
+## Home System Row Scenarios
+
+Use `home-repeat-hold` when measuring the experience of holding left or right
+on the Home system row. The scenario feeds held d-pad input through the normal
+launcher input path, so it includes the real repeat behavior: immediate first
+move, 1s initial repeat delay, then 80ms repeat. At either end of the system
+list it reverses direction and repeats, which keeps long traces exercising both
+left and right movement.
+
+```bash
+scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --launcher-scenario home-repeat-hold --ui-scope launcher
+```
+
+Use `home-nav` only for synthetic fixed-period Home-row stepping; it does not
+model the real d-pad repeat gate.
+
 ## Arcade And Preview Scenarios
 
 Approved arcade scroll scenarios:
