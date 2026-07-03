@@ -2950,11 +2950,11 @@ fn apply_start_system_from_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     #[cfg(mister_experiments)]
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
     #[cfg(mister_experiments)]
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
-    use std::sync::Arc;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -2985,39 +2985,24 @@ mod tests {
         let mut games = Vec::new();
         let mut systems = Vec::new();
         for system_id in system_ids {
-            games.push(ArcadeGameEntry {
-                title: Arc::from(format!("{system_id} game")),
-                mra_path: Arc::from(format!("/media/fat/_Arcade/{system_id}.mra")),
-                preview_archive_path: Arc::from(format!(
-                    "/media/fat/mister-magik/assets/{system_id}-screenshots.mmlz4b"
-                )),
-                preview_asset_key: Arc::from(format!("{system_id}.raw565")),
-                has_preview: true,
-                system_id: Arc::from(*system_id),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            });
-            systems.push(arcade_catalog::GameSystemEntry {
-                id: (*system_id).to_string(),
-                title: (*system_id).to_string(),
-                count: 1,
-            });
+            games.push(
+                arcade_game(format!("{system_id} game"))
+                    .path(format!("/media/fat/_Arcade/{system_id}.mra"))
+                    .preview(format!("{system_id}.raw565"))
+                    .system_id(*system_id)
+                    .build(),
+            );
+            systems.push(arcade_system(*system_id, 1));
         }
-        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), games, systems)
+        arcade_catalog(games, systems)
     }
 
     fn summary_catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
         let systems = system_ids
             .iter()
-            .map(|system_id| arcade_catalog::GameSystemEntry {
-                id: (*system_id).to_string(),
-                title: (*system_id).to_string(),
-                count: 1,
-            })
+            .map(|system_id| arcade_system(*system_id, 1))
             .collect();
-        ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), systems)
+        arcade_catalog(Vec::new(), systems)
     }
 
     #[test]
@@ -3253,39 +3238,22 @@ mod tests {
 
     #[test]
     pub(super) fn arcade_filter_list_item_cache_reuses_rows_until_menu_key_changes() {
-        let catalog = ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
+        let catalog = arcade_catalog(
             vec![
-                ArcadeGameEntry {
-                    title: "Alpha".into(),
-                    mra_path: "/media/fat/_Arcade/alpha.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1986),
-                    manufacturer: "Capcom".into(),
-                    category: "Shooter".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Beta".into(),
-                    mra_path: "/media/fat/_Arcade/beta.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1991),
-                    manufacturer: "Namco".into(),
-                    category: "Maze".into(),
-                    is_new: false,
-                },
+                arcade_game("Alpha")
+                    .path("/media/fat/_Arcade/alpha.mra")
+                    .year(1986)
+                    .manufacturer("Capcom")
+                    .category("Shooter")
+                    .build(),
+                arcade_game("Beta")
+                    .path("/media/fat/_Arcade/beta.mra")
+                    .year(1991)
+                    .manufacturer("Namco")
+                    .category("Maze")
+                    .build(),
             ],
-            vec![arcade_catalog::GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 2,
-            }],
+            vec![arcade_system("arcade", 2)],
         );
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;

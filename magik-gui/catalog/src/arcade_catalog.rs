@@ -124,9 +124,9 @@ impl<'a> ArcadeGameView<'a> {
     pub fn get(self, index: usize) -> Option<&'a ArcadeGameEntry> {
         match self {
             Self::Contiguous(games) => games.get(index),
-            Self::Indexed { games, indexes } => {
-                indexes.get(index).and_then(|game_index| games.get(*game_index))
-            }
+            Self::Indexed { games, indexes } => indexes
+                .get(index)
+                .and_then(|game_index| games.get(*game_index)),
         }
     }
 
@@ -433,15 +433,13 @@ impl ArcadeCatalog {
         }
     }
 
-    pub fn filtered_game_view(
-        &self,
-        system_id: &str,
-        filter: &ArcadeFilter,
-    ) -> ArcadeGameView<'_> {
+    pub fn filtered_game_view(&self, system_id: &str, filter: &ArcadeFilter) -> ArcadeGameView<'_> {
         match filter {
             ArcadeFilter::All => self.system_game_view(system_id),
             ArcadeFilter::Search => self.system_game_view(system_id),
-            _ => ArcadeGameView::indexed(&self.games, self.filtered_game_indexes(system_id, filter)),
+            _ => {
+                ArcadeGameView::indexed(&self.games, self.filtered_game_indexes(system_id, filter))
+            }
         }
     }
 
@@ -631,9 +629,7 @@ fn build_arcade_catalog_indexes(
             let preview_indexes = preview_games_by_system
                 .entry(system_id_string.clone())
                 .or_default();
-            let best_by_key = preview_best_by_system
-                .entry(system_id_string)
-                .or_default();
+            let best_by_key = preview_best_by_system.entry(system_id_string).or_default();
             let key = preview_dedupe_key(&game.title);
             if let Some(&preview_pos) = best_by_key.get(&key) {
                 if prefer_preview_game(game, &games[preview_indexes[preview_pos]]) {
@@ -736,7 +732,11 @@ impl ArcadeSearchKey {
                 compact_needle,
                 74,
             ));
-            score = score.max(search_field_score(&self.compact_category, compact_needle, 64));
+            score = score.max(search_field_score(
+                &self.compact_category,
+                compact_needle,
+                64,
+            ));
             score = score.max(search_field_score(&self.compact_path, compact_needle, 35));
         }
         (score > 0).then_some(score)
@@ -825,15 +825,27 @@ impl ArcadeAutocompleteIndex {
 
     fn add_game(&mut self, game: &ArcadeGameEntry) {
         self.add_words(&game.system_id, &game.title, AutocompleteSource::Title);
-        self.add_words(&game.system_id, &game.manufacturer, AutocompleteSource::Metadata);
-        self.add_words(&game.system_id, &game.category, AutocompleteSource::Metadata);
+        self.add_words(
+            &game.system_id,
+            &game.manufacturer,
+            AutocompleteSource::Metadata,
+        );
+        self.add_words(
+            &game.system_id,
+            &game.category,
+            AutocompleteSource::Metadata,
+        );
         self.add_words(
             &game.system_id,
             mra_basename(&game.mra_path),
             AutocompleteSource::Path,
         );
         if let Some(year) = game.year {
-            self.add_word(&game.system_id, &year.to_string(), AutocompleteSource::Metadata);
+            self.add_word(
+                &game.system_id,
+                &year.to_string(),
+                AutocompleteSource::Metadata,
+            );
             self.add_word(
                 &game.system_id,
                 &format!("{}0s", year / 10),
@@ -891,7 +903,11 @@ impl ArcadeAutocompleteIndex {
                     .get(system_id)
                     .copied()
                     .unwrap_or(stats.source_rank),
-                system_score: stats.system_scores.get(system_id).copied().unwrap_or_default(),
+                system_score: stats
+                    .system_scores
+                    .get(system_id)
+                    .copied()
+                    .unwrap_or_default(),
                 total_score: stats.total_score,
             })
             .max()
@@ -1145,6 +1161,7 @@ pub fn system_title(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::arcade_game;
 
     fn game(
         title: &str,
@@ -1152,22 +1169,11 @@ mod tests {
         preview_asset_key: &str,
         system_id: &str,
     ) -> ArcadeGameEntry {
-        let has_preview = !preview_asset_key.is_empty();
-        ArcadeGameEntry {
-            title: title.into(),
-            mra_path: mra_path.into(),
-            preview_archive_path: if has_preview {
-                "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".into()
-            } else {
-                "".into()
-            },
-            preview_asset_key: preview_asset_key.into(),
-            has_preview,
-            system_id: system_id.into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
+        let game = arcade_game(title).path(mra_path).system_id(system_id);
+        if preview_asset_key.is_empty() {
+            game.build()
+        } else {
+            game.preview(preview_asset_key).build()
         }
     }
 
@@ -1609,12 +1615,14 @@ mod tests {
         let built = catalog
             .lazy_text_indexes
             .get()
-            .expect("search should build text indexes") as *const ArcadeTextIndexes;
+            .expect("search should build text indexes")
+            as *const ArcadeTextIndexes;
         assert_eq!(catalog.autocomplete_search_word("arcade", "19"), "1942");
         let reused = catalog
             .lazy_text_indexes
             .get()
-            .expect("autocomplete should reuse text indexes") as *const ArcadeTextIndexes;
+            .expect("autocomplete should reuse text indexes")
+            as *const ArcadeTextIndexes;
         assert_eq!(built, reused);
     }
 
@@ -1683,7 +1691,11 @@ mod tests {
         let mut catalog_games = vec![capcom];
         catalog_games.extend(path_noise);
 
-        let catalog = ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), catalog_games, Vec::new());
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            catalog_games,
+            Vec::new(),
+        );
 
         assert_eq!(catalog.autocomplete_search_word("arcade", "cap"), "capcom");
     }
@@ -1696,7 +1708,9 @@ mod tests {
 
         assert!(catalog.search_game_indexes("arcade", "capcom").len() >= 50);
         assert!(catalog.search_game_indexes("arcade", "maze").len() >= 10);
-        assert!(!catalog.search_game_indexes("arcade", "street fighter").is_empty());
+        assert!(!catalog
+            .search_game_indexes("arcade", "street fighter")
+            .is_empty());
         assert!(!catalog.search_game_indexes("arcade", "pac man").is_empty());
         assert!(!catalog.search_game_indexes("arcade", "194").is_empty());
 

@@ -451,6 +451,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     use std::path::Path;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -466,25 +467,11 @@ mod tests {
     }
 
     fn one_game_catalog() -> ArcadeCatalog {
-        ArcadeCatalog::new(
-            PathBuf::from("/media/fat/_Arcade"),
-            vec![ArcadeGameEntry {
-                title: "1942".into(),
-                mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            }],
-            vec![arcade_catalog::GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 1,
-            }],
+        arcade_catalog(
+            vec![arcade_game("1942")
+                .path("/media/fat/_Arcade/1942.mra")
+                .build()],
+            vec![arcade_system("arcade", 1)],
         )
     }
 

@@ -2532,7 +2532,7 @@ pub fn reboot_mister() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arcade_catalog::{ArcadeGameEntry, GameSystemEntry};
+    use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     use std::sync::Mutex;
 
     static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -2675,218 +2675,93 @@ mod tests {
     }
 
     fn image_less_amiga_catalog() -> ArcadeCatalog {
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            vec![ArcadeGameEntry {
-                title: "Agony".into(),
-                mra_path: "magik-plan:amiga-agony".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "amiga".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            }],
-            vec![GameSystemEntry {
-                id: "amiga".into(),
-                title: "Amiga".into(),
-                count: 1,
-            }],
+        arcade_catalog(
+            vec![arcade_game("Agony")
+                .path("magik-plan:amiga-agony")
+                .system_id("amiga")
+                .build()],
+            vec![arcade_system("amiga", 1)],
         )
     }
 
     fn multi_system_catalog() -> ArcadeCatalog {
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
+        arcade_catalog(
             vec![
-                ArcadeGameEntry {
-                    title: "1942".into(),
-                    mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                    preview_archive_path:
-                        "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".into(),
-                    preview_asset_key: "1942".into(),
-                    has_preview: true,
-                    system_id: "arcade".into(),
-                    year: None,
-                    manufacturer: "".into(),
-                    category: "".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Agony".into(),
-                    mra_path: "magik-plan:amiga-agony".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "amiga".into(),
-                    year: None,
-                    manufacturer: "".into(),
-                    category: "".into(),
-                    is_new: false,
-                },
+                arcade_game("1942")
+                    .path("/media/fat/_Arcade/1942.mra")
+                    .preview("1942")
+                    .build(),
+                arcade_game("Agony")
+                    .path("magik-plan:amiga-agony")
+                    .system_id("amiga")
+                    .build(),
             ],
-            vec![
-                GameSystemEntry {
-                    id: "arcade".into(),
-                    title: "Arcade".into(),
-                    count: 1,
-                },
-                GameSystemEntry {
-                    id: "amiga".into(),
-                    title: "Amiga".into(),
-                    count: 1,
-                },
-            ],
+            vec![arcade_system("arcade", 1), arcade_system("amiga", 1)],
         )
     }
 
     fn multi_game_catalog() -> ArcadeCatalog {
         let mut games = Vec::new();
         for i in 0..5 {
-            games.push(ArcadeGameEntry {
-                title: format!("Arcade {i}").into(),
-                mra_path: format!("/media/fat/_Arcade/arcade-{i}.mra").into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            });
+            games.push(
+                arcade_game(format!("Arcade {i}"))
+                    .path(format!("/media/fat/_Arcade/arcade-{i}.mra"))
+                    .build(),
+            );
         }
         for i in 0..3 {
-            games.push(ArcadeGameEntry {
-                title: format!("Amiga {i}").into(),
-                mra_path: format!("magik-plan:amiga-{i}").into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "amiga".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            });
+            games.push(
+                arcade_game(format!("Amiga {i}"))
+                    .path(format!("magik-plan:amiga-{i}"))
+                    .system_id("amiga")
+                    .build(),
+            );
         }
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
+        arcade_catalog(
             games,
-            vec![
-                GameSystemEntry {
-                    id: "arcade".into(),
-                    title: "Arcade".into(),
-                    count: 5,
-                },
-                GameSystemEntry {
-                    id: "amiga".into(),
-                    title: "Amiga".into(),
-                    count: 3,
-                },
-            ],
+            vec![arcade_system("arcade", 5), arcade_system("amiga", 3)],
         )
     }
 
     fn reordered_arcade_catalog() -> ArcadeCatalog {
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
+        arcade_catalog(
             vec![
-                ArcadeGameEntry {
-                    title: "Arcade 4".into(),
-                    mra_path: "/media/fat/_Arcade/arcade-4.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: None,
-                    manufacturer: "".into(),
-                    category: "".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Arcade 2".into(),
-                    mra_path: "/media/fat/_Arcade/arcade-2.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: None,
-                    manufacturer: "".into(),
-                    category: "".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Arcade 0".into(),
-                    mra_path: "/media/fat/_Arcade/arcade-0.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: None,
-                    manufacturer: "".into(),
-                    category: "".into(),
-                    is_new: false,
-                },
+                arcade_game("Arcade 4")
+                    .path("/media/fat/_Arcade/arcade-4.mra")
+                    .build(),
+                arcade_game("Arcade 2")
+                    .path("/media/fat/_Arcade/arcade-2.mra")
+                    .build(),
+                arcade_game("Arcade 0")
+                    .path("/media/fat/_Arcade/arcade-0.mra")
+                    .build(),
             ],
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 3,
-            }],
+            vec![arcade_system("arcade", 3)],
         )
     }
 
     fn filter_catalog() -> ArcadeCatalog {
         let games = vec![
-            ArcadeGameEntry {
-                title: "Astro 1978".into(),
-                mra_path: "/media/fat/_Arcade/astro-1978.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: Some(1978),
-                manufacturer: "Atari".into(),
-                category: "Shooter / Gallery".into(),
-                is_new: false,
-            },
-            ArcadeGameEntry {
-                title: "Battle 1981".into(),
-                mra_path: "/media/fat/_Arcade/battle-1981.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: Some(1981),
-                manufacturer: "Capcom".into(),
-                category: "Shooter / Vertical".into(),
-                is_new: false,
-            },
-            ArcadeGameEntry {
-                title: "Brawl 1988".into(),
-                mra_path: "/media/fat/_Arcade/brawl-1988.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: Some(1988),
-                manufacturer: "Capcom".into(),
-                category: "Fighter / 2D".into(),
-                is_new: false,
-            },
+            arcade_game("Astro 1978")
+                .path("/media/fat/_Arcade/astro-1978.mra")
+                .year(1978)
+                .manufacturer("Atari")
+                .category("Shooter / Gallery")
+                .build(),
+            arcade_game("Battle 1981")
+                .path("/media/fat/_Arcade/battle-1981.mra")
+                .year(1981)
+                .manufacturer("Capcom")
+                .category("Shooter / Vertical")
+                .build(),
+            arcade_game("Brawl 1988")
+                .path("/media/fat/_Arcade/brawl-1988.mra")
+                .year(1988)
+                .manufacturer("Capcom")
+                .category("Fighter / 2D")
+                .build(),
         ];
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            games,
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 3,
-            }],
-        )
+        arcade_catalog(games, vec![arcade_system("arcade", 3)])
     }
 
     fn alphabet_catalog() -> ArcadeCatalog {
@@ -2899,92 +2774,45 @@ mod tests {
             "Pac-Man",
         ]
         .into_iter()
-        .map(|title| ArcadeGameEntry {
-            title: title.into(),
-            mra_path: format!("/media/fat/_Arcade/{title}.mra").into(),
-            preview_archive_path: "".into(),
-            preview_asset_key: "".into(),
-            has_preview: false,
-            system_id: "arcade".into(),
-            year: None,
-            manufacturer: "".into(),
-            category: "".into(),
-            is_new: false,
-        })
+        .map(|title| arcade_game(title).build())
         .collect();
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            games,
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 6,
-            }],
-        )
+        arcade_catalog(games, vec![arcade_system("arcade", 6)])
     }
 
     fn deferred_search_catalog() -> ArcadeCatalog {
         ArcadeCatalog::new_with_deferred_text_indexes(
             Path::new("/media/fat/_Arcade").to_path_buf(),
             vec![
-                ArcadeGameEntry {
-                    title: "Street Fighter II".into(),
-                    mra_path: "/media/fat/_Arcade/sf2.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1991),
-                    manufacturer: "Capcom".into(),
-                    category: "Fighter / 2D".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Pac-Man".into(),
-                    mra_path: "/media/fat/_Arcade/pacman.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1980),
-                    manufacturer: "Namco".into(),
-                    category: "Maze".into(),
-                    is_new: false,
-                },
+                arcade_game("Street Fighter II")
+                    .path("/media/fat/_Arcade/sf2.mra")
+                    .year(1991)
+                    .manufacturer("Capcom")
+                    .category("Fighter / 2D")
+                    .build(),
+                arcade_game("Pac-Man")
+                    .path("/media/fat/_Arcade/pacman.mra")
+                    .year(1980)
+                    .manufacturer("Namco")
+                    .category("Maze")
+                    .build(),
             ],
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 2,
-            }],
+            vec![arcade_system("arcade", 2)],
             Vec::new(),
         )
     }
 
     fn many_manufacturer_catalog() -> ArcadeCatalog {
         let games = (0..12)
-            .map(|idx| ArcadeGameEntry {
-                title: format!("Maker Game {idx}").into(),
-                mra_path: format!("/media/fat/_Arcade/maker-game-{idx}.mra").into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: Some(1980 + idx as u16),
-                manufacturer: format!("Maker {idx:02}").into(),
-                category: "Test".into(),
-                is_new: false,
+            .map(|idx| {
+                arcade_game(format!("Maker Game {idx}"))
+                    .path(format!("/media/fat/_Arcade/maker-game-{idx}.mra"))
+                    .year(1980 + idx as u16)
+                    .manufacturer(format!("Maker {idx:02}"))
+                    .category("Test")
+                    .build()
             })
             .collect();
-        ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            games,
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 12,
-            }],
-        )
+        arcade_catalog(games, vec![arcade_system("arcade", 12)])
     }
 
     fn pad_with(mut set: impl FnMut(&mut PadState)) -> PadState {
@@ -3032,11 +2860,7 @@ mod tests {
 
     #[test]
     fn launcher_ignores_home_launch_when_catalog_has_no_systems() {
-        let catalog = ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            vec![],
-            vec![],
-        );
+        let catalog = arcade_catalog(vec![], vec![]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
@@ -3050,15 +2874,7 @@ mod tests {
 
     #[test]
     fn launcher_enters_arcade_when_summary_projection_has_no_game_rows() {
-        let catalog = ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
-            vec![],
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 911,
-            }],
-        );
+        let catalog = arcade_catalog(vec![], vec![arcade_system("arcade", 911)]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
@@ -3341,39 +3157,22 @@ mod tests {
 
     #[test]
     fn arcade_search_accepts_autocomplete_word_with_y() {
-        let catalog = ArcadeCatalog::new(
-            Path::new("/media/fat/_Arcade").to_path_buf(),
+        let catalog = arcade_catalog(
             vec![
-                ArcadeGameEntry {
-                    title: "Street Fighter II".into(),
-                    mra_path: "/media/fat/_Arcade/sf2.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1991),
-                    manufacturer: "Capcom".into(),
-                    category: "Fighter / 2D".into(),
-                    is_new: false,
-                },
-                ArcadeGameEntry {
-                    title: "Street Hoop".into(),
-                    mra_path: "/media/fat/_Arcade/strhoop.mra".into(),
-                    preview_archive_path: "".into(),
-                    preview_asset_key: "".into(),
-                    has_preview: false,
-                    system_id: "arcade".into(),
-                    year: Some(1994),
-                    manufacturer: "Data East".into(),
-                    category: "Sports".into(),
-                    is_new: false,
-                },
+                arcade_game("Street Fighter II")
+                    .path("/media/fat/_Arcade/sf2.mra")
+                    .year(1991)
+                    .manufacturer("Capcom")
+                    .category("Fighter / 2D")
+                    .build(),
+                arcade_game("Street Hoop")
+                    .path("/media/fat/_Arcade/strhoop.mra")
+                    .year(1994)
+                    .manufacturer("Data East")
+                    .category("Sports")
+                    .build(),
             ],
-            vec![GameSystemEntry {
-                id: "arcade".into(),
-                title: "Arcade".into(),
-                count: 2,
-            }],
+            vec![arcade_system("arcade", 2)],
         );
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
