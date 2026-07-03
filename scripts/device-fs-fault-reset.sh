@@ -305,9 +305,9 @@ trigger_settings_toggle() {
 }
 
 trigger_media_pack_bench() {
-  local point="$1" iteration="$2"
+  local point="$1" iteration="$2" artifact="${3:-pack}"
   arm_fault_session "$point" "$iteration"
-  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
+  remote "$(fault_env_prefix "$point") $(sq "$REMOTE_BIN") media-bench-save --label $(sq "$LABEL-$iteration") --system arcade --iterations 1 --size-bytes 1048576 --artifact $(sq "$artifact")" >/tmp/mister-magik-fs-fault-trigger.log 2>&1 &
   ACTIVE_TRIGGER_PID=$!
 }
 
@@ -351,7 +351,8 @@ trigger_point() {
   ACTIVE_TRIGGER_PID=""
   case "$scenario:$point" in
     media:media.pack.*) trigger_media_pack_bench "$point" "$iteration"; TRIGGER_LABEL=media-bench-save ;;
-    media:*) cleanup_destructive_state; trigger_launcher_with_env "$point" ""; TRIGGER_LABEL=launcher-media-worker ;;
+    media:media.index.*) trigger_media_pack_bench "$point" "$iteration" "index"; TRIGGER_LABEL=media-bench-save-index ;;
+    media:media.state.*) trigger_media_pack_bench "$point" "$iteration" "state"; TRIGGER_LABEL=media-bench-save-state ;;
     settings-marker:settings.*) trigger_settings_toggle "$point"; TRIGGER_LABEL=toggle-simple-joystick-setting ;;
     settings-marker:launcher.rebuild_marker.after_write) trigger_rebuild_marker "$point"; TRIGGER_LABEL=request-library-rebuild ;;
     reset-delete:reset_delete.screenshot_asset.after_remove) cleanup_destructive_state; recover_catalog_and_launcher >/dev/null || true; trigger_reset_delete_screenshot_packs "$point"; TRIGGER_LABEL=reset-delete-screenshot-packs ;;
