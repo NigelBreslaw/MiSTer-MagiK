@@ -18,6 +18,17 @@ transition, and the minimal runtime command surface. Experiment builds add:
 - expanded preview transition variants under
   `scripts/experiments/preview/profile-preview-transition-mega.sh`
 
+The source layout mirrors that boundary. Standalone effect renderers live under
+`magik-gui/src/experiments/effects/`, and the matching UI runner loops live
+under `magik-gui/src/ui_runner/experiments/effects/`. The root library exports
+only `experiments::effects` behind `#[cfg(mister_experiments)]`; do not add
+root `pub mod` exports or production imports for unfinished effect work.
+
+Production preview transitions should stay fade-only. Non-fade preview
+transition metadata and renderer helpers belong behind the experiment gate, even
+when they sit near production preview code for access to internal raw565
+helpers.
+
 `effect-bench` supports `native`, `2x`, `half`, and `full` fill modes. All
 modes now prepare RGB565 scratch pixels and present through the checked
 framebuffer APIs; there is no direct raw/scaled framebuffer copy path or FPGA

@@ -3,6 +3,8 @@
 
 use std::time::Instant;
 
+use super::render_helpers::{clear, elapsed_us, time};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct CameraPixel(pub u16);
@@ -384,16 +386,6 @@ pub fn synthetic_images(count: usize) -> Vec<CameraImage> {
     images
 }
 
-fn time(out: &mut u64, f: impl FnOnce()) {
-    let t = Instant::now();
-    f();
-    *out += elapsed_us(t);
-}
-
-fn elapsed_us(t: Instant) -> u64 {
-    t.elapsed().as_micros() as u64
-}
-
 pub fn color(r: u8, g: u8, b: u8) -> CameraPixel {
     CameraPixel(((r as u16 & 0xf8) << 8) | ((g as u16 & 0xfc) << 3) | ((b as u16) >> 3))
 }
@@ -403,10 +395,6 @@ pub fn pixel_to_rgb888(pixel: CameraPixel) -> u32 {
     let g = ((pixel.0 >> 5) & 0x3f) as u32;
     let b = (pixel.0 & 0x1f) as u32;
     ((r * 255 / 31) << 16) | ((g * 255 / 63) << 8) | (b * 255 / 31)
-}
-
-fn clear(dst: &mut [CameraPixel], color: CameraPixel) {
-    dst.fill(color);
 }
 
 fn fill_rect(

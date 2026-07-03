@@ -55,7 +55,9 @@ use crate::screenshot_transitions::{
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
 #[cfg(mister_experiments)]
-use mister_magik_fb::effects::{EffectKind, EffectSize, EFFECT_SIZES};
+use mister_magik_fb::experiments::effects::framebuffer_effects::{
+    EffectKind, EffectSize, EFFECT_SIZES,
+};
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
@@ -68,13 +70,11 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::{mpsc, OnceLock};
 
-#[cfg(mister_experiments)]
-mod camera_effects_loop;
 mod catalog_worker;
 mod controller_loop;
 mod controller_setup_input_session;
 #[cfg(mister_experiments)]
-mod effect_loop_support;
+mod experiments;
 mod launch_handoff_session;
 mod launcher_bench;
 mod launcher_bridge;
@@ -87,29 +87,22 @@ mod launcher_loop;
 mod launcher_scheduler;
 mod launcher_worker_intents;
 mod media_worker;
-#[cfg(mister_experiments)]
-mod raster_effects_loop;
 mod raw565_preview_renderer;
-#[cfg(mister_experiments)]
-mod screensaver_loop;
 mod screenshot_media_update_session;
-#[cfg(mister_experiments)]
-mod sprite_effects_loop;
-#[cfg(mister_experiments)]
-mod text_effects_loop;
-#[cfg(mister_experiments)]
-mod transition_effects_loop;
 pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 #[cfg(mister_video_scene)]
 mod video_loop;
 
-#[cfg(mister_experiments)]
-use camera_effects_loop::run_camera_effects_loop;
 use catalog_worker::*;
 use controller_loop::*;
 use controller_setup_input_session::*;
+#[cfg(mister_experiments)]
+use experiments::effects::{
+    run_camera_effects_loop, run_raster_effects_loop, run_screensaver_loop,
+    run_sprite_effects_loop, run_text_effects_loop, run_transition_effects_loop,
+};
 use launch_handoff_session::*;
 use launcher_bench::*;
 use launcher_bridge::*;
@@ -121,18 +114,8 @@ use launcher_lifecycle::*;
 use launcher_loop::*;
 use launcher_scheduler::*;
 use media_worker::*;
-#[cfg(mister_experiments)]
-use raster_effects_loop::run_raster_effects_loop;
 use raw565_preview_renderer::*;
-#[cfg(mister_experiments)]
-use screensaver_loop::*;
 use screenshot_media_update_session::*;
-#[cfg(mister_experiments)]
-use sprite_effects_loop::run_sprite_effects_loop;
-#[cfg(mister_experiments)]
-use text_effects_loop::run_text_effects_loop;
-#[cfg(mister_experiments)]
-use transition_effects_loop::run_transition_effects_loop;
 use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
@@ -221,27 +204,27 @@ pub fn print_effects() {
 
 #[cfg(mister_experiments)]
 pub fn print_camera_effects() {
-    camera_effects_loop::print_camera_effects();
+    experiments::effects::print_camera_effects();
 }
 
 #[cfg(mister_experiments)]
 pub fn print_sprite_effects() {
-    sprite_effects_loop::print_sprite_effects();
+    experiments::effects::print_sprite_effects();
 }
 
 #[cfg(mister_experiments)]
 pub fn print_text_effects() {
-    text_effects_loop::print_text_effects();
+    experiments::effects::print_text_effects();
 }
 
 #[cfg(mister_experiments)]
 pub fn print_raster_effects() {
-    raster_effects_loop::print_raster_effects();
+    experiments::effects::print_raster_effects();
 }
 
 #[cfg(mister_experiments)]
 pub fn print_transition_effects() {
-    transition_effects_loop::print_transition_effects();
+    experiments::effects::print_transition_effects();
 }
 
 macro_rules! with_scene_app {

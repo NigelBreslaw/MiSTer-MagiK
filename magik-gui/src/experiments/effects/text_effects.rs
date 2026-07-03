@@ -3,8 +3,9 @@
 
 use std::time::Instant;
 
-pub use crate::camera_effects::pixel_to_rgb888;
-use crate::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+pub use super::camera_effects::pixel_to_rgb888;
+use super::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+use super::render_helpers::{clear, elapsed_us, time};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextEffectKind {
@@ -729,20 +730,6 @@ pub fn render_text_effect_frame(
 
 pub fn synthetic_text_images(count: usize) -> Vec<CameraImage> {
     synthetic_images(count)
-}
-
-fn time(out: &mut u64, f: impl FnOnce()) {
-    let t = Instant::now();
-    f();
-    *out += elapsed_us(t);
-}
-
-fn elapsed_us(t: Instant) -> u64 {
-    t.elapsed().as_micros() as u64
-}
-
-fn clear(dst: &mut [CameraPixel], c: CameraPixel) {
-    dst.fill(c);
 }
 
 fn put(dst: &mut [CameraPixel], w: usize, h: usize, x: isize, y: isize, c: CameraPixel) -> u64 {
