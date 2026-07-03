@@ -1042,6 +1042,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
     }
 
     let discovery_history = DiscoveryHistory::load(path);
+    let mut projections = None;
     let bytes = {
         let mut writer =
             |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
@@ -1053,7 +1054,11 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
-                )
+                )?;
+                projections = Some(build_catalog_projections_from_materialized_sqlite(
+                    build_path, root, stamp,
+                )?);
+                Ok(())
             };
         save_sqlite_scan_with_progress_using_writer(
             path,
@@ -1063,22 +1068,42 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
             &mut writer,
         )?
     };
-    write_catalog_projections_from_materialized_sqlite(path, root, stamp)?;
+    let projections =
+        projections.ok_or_else(|| "catalog projections were not built before publish".to_string())?;
+    write_catalog_projection_pair(path, projections)?;
     Ok(bytes)
 }
 
-fn write_catalog_projections_from_materialized_sqlite(
+struct CatalogProjectionPair {
+    summary: catalog_summary::CatalogSummaryProjection,
+    navigation: catalog_navigation::CatalogNavigationProjection,
+}
+
+fn build_catalog_projections_from_materialized_sqlite(
     sqlite_path: &Path,
     root: &Path,
     stamp: &catalog_stamp::CatalogStamp,
-) -> Result<(), String> {
+) -> Result<CatalogProjectionPair, String> {
     let loaded = load_arcade_catalog_from_sqlite_at(root, sqlite_path)?;
     let summary = catalog_summary::CatalogSummaryProjection::from_catalog(&loaded.catalog, stamp);
     let navigation =
         catalog_navigation::CatalogNavigationProjection::from_catalog(&loaded.catalog, stamp);
+    Ok(CatalogProjectionPair {
+        summary,
+        navigation,
+    })
+}
+
+fn write_catalog_projection_pair(
+    sqlite_path: &Path,
+    projections: CatalogProjectionPair,
+) -> Result<(), String> {
     remove_catalog_projection_files(sqlite_path)?;
-    catalog_summary::write_catalog_summary_projection(sqlite_path, &summary)?;
-    catalog_navigation::write_catalog_navigation_projection_for_sqlite(sqlite_path, &navigation)
+    catalog_summary::write_catalog_summary_projection(sqlite_path, &projections.summary)?;
+    catalog_navigation::write_catalog_navigation_projection_for_sqlite(
+        sqlite_path,
+        &projections.navigation,
+    )
 }
 
 fn remove_catalog_projection_files(sqlite_path: &Path) -> Result<(), String> {
