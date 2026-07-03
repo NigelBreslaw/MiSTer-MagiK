@@ -18,6 +18,12 @@ use crate::media_identity::{
     supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_ASSET_DIR,
     DEFAULT_SCREENSHOT_IMAGE_SIZE,
 };
+use crate::preview_archive::{
+    read_file_entry, read_sidecar_entry, read_u32, validate_entry_count, validate_entry_geometry,
+    PreviewArchiveEntry, SIDECAR_INDEX_MAGIC, V2_PIXELS_MAGIC,
+};
+#[cfg(test)]
+use crate::preview_archive::{MAX_PREVIEW_ARCHIVE_ENTRIES, MAX_PREVIEW_ARCHIVE_RAW_BYTES};
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
@@ -26,8 +32,6 @@ pub const TURBO_PREVIEW_DECODED_CACHE_CAP: usize = 96;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
 const PREVIEW_ARCHIVE_METADATA_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
-const MAX_PREVIEW_ARCHIVE_ENTRIES: usize = 100_000;
-const MAX_PREVIEW_ARCHIVE_RAW_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct PreviewRequest {
@@ -857,17 +861,6 @@ fn load_raw565_preview_asset_timed(
     ))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PreviewArchiveEntry {
-    raw_len: usize,
-    compressed_len: usize,
-    offset: u64,
-    width: u32,
-    height: u32,
-    stride_bytes: u32,
-    payload_flag: u8,
-}
-
 #[derive(Clone, Debug)]
 struct PreviewArchiveSidecarIndex {
     archive_sha256: String,
@@ -1311,50 +1304,14 @@ pub fn preview_archive_index(path: &Path) -> Result<PreviewArchiveIndex, String>
     let mut magic = [0u8; 8];
     file.read_exact(&mut magic)
         .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-    if &magic != PreviewArchive::V2_PIXELS_MAGIC {
+    if &magic != V2_PIXELS_MAGIC {
         return Err(format!("{}: bad preview archive v2 magic", path.display()));
     }
     let count = read_u32(&mut file)? as usize;
-    validate_preview_archive_entry_count(count, "preview archive index")?;
+    validate_entry_count(count, "preview archive index")?;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
-        let name_len = read_u16(&mut file)? as usize;
-        let width = read_u32(&mut file)?;
-        let height = read_u32(&mut file)?;
-        let stride_bytes = read_u32(&mut file)?;
-        let raw_len = read_u32(&mut file)? as usize;
-        let mut payload_flag = [0u8; 1];
-        file.read_exact(&mut payload_flag)
-            .map_err(|e| format!("read preview archive payload flag: {e}"))?;
-        let compressed_len = read_u32(&mut file)? as usize;
-        let offset = read_u64(&mut file)?;
-        let mut name = vec![0u8; name_len];
-        file.read_exact(&mut name)
-            .map_err(|e| format!("read preview archive entry name: {e}"))?;
-        let name =
-            String::from_utf8(name).map_err(|e| format!("preview archive entry name utf8: {e}"))?;
-        validate_preview_archive_entry_geometry(
-            "preview archive index",
-            &name,
-            width,
-            height,
-            stride_bytes,
-            raw_len,
-        )?;
-        validate_preview_archive_entry_payload(
-            "preview archive index",
-            &name,
-            payload_flag[0],
-            raw_len,
-            compressed_len,
-        )?;
-        validate_preview_archive_entry_bounds(
-            "preview archive index",
-            &name,
-            offset,
-            compressed_len,
-            archive_bytes,
-        )?;
+        let (name, _) = read_file_entry(&mut file, "preview archive index", archive_bytes)?;
         if let Some(stem) = Path::new(&name).file_stem().and_then(|s| s.to_str()) {
             entries.push(stem.to_ascii_lowercase());
         }
@@ -1941,7 +1898,7 @@ fn read_preview_archive_sidecar_index(
             index_path.display()
         ));
     }
-    if &bytes[..8] != b"MMIDX02\0" {
+    if &bytes[..8] != SIDECAR_INDEX_MAGIC {
         return Err(format!(
             "{}: bad preview archive index magic",
             index_path.display()
@@ -1964,85 +1921,14 @@ fn read_preview_archive_sidecar_index(
         ));
     }
     let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
-    validate_preview_archive_entry_count(count, "preview archive sidecar index")?;
+    validate_entry_count(count, "preview archive sidecar index")?;
     let mut pos = 84usize;
     let mut entries = HashMap::with_capacity(count);
     for _ in 0..count {
-        if bytes.len().saturating_sub(pos) < 31 {
-            return Err(format!(
-                "{}: truncated preview archive index",
-                index_path.display()
-            ));
-        }
-        let name_len = u16::from_le_bytes(bytes[pos..pos + 2].try_into().unwrap()) as usize;
-        pos += 2;
-        let width = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        let height = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        let stride_bytes = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
-        pos += 4;
-        let raw_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        let payload_flag = bytes[pos];
-        pos += 1;
-        let compressed_len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4;
-        let offset = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
-        pos += 8;
-        let end = pos.checked_add(name_len).ok_or_else(|| {
-            format!(
-                "{}: preview archive index name overflow",
-                index_path.display()
-            )
-        })?;
-        if end > bytes.len() {
-            return Err(format!(
-                "{}: truncated preview archive index name",
-                index_path.display()
-            ));
-        }
-        let name = String::from_utf8(bytes[pos..end].to_vec())
-            .map_err(|e| format!("preview archive index name utf8: {e}"))?;
-        pos = end;
-        validate_preview_archive_entry_geometry(
-            &format!("preview archive index {}", index_path.display()),
-            &name,
-            width,
-            height,
-            stride_bytes,
-            raw_len,
-        )?;
-        validate_preview_archive_entry_payload(
-            &format!("preview archive index {}", index_path.display()),
-            &name,
-            payload_flag,
-            raw_len,
-            compressed_len,
-        )?;
-        validate_preview_archive_entry_bounds(
-            &format!("preview archive index {}", index_path.display()),
-            &name,
-            offset,
-            compressed_len,
-            archive_bytes,
-        )?;
+        let context = format!("preview archive index {}", index_path.display());
+        let (name, entry) = read_sidecar_entry(&bytes, &mut pos, &context, archive_bytes)?;
         let key = name.to_ascii_lowercase();
-        if entries
-            .insert(
-                key.clone(),
-                PreviewArchiveEntry {
-                    raw_len,
-                    compressed_len,
-                    offset,
-                    width,
-                    height,
-                    stride_bytes,
-                    payload_flag,
-                },
-            )
-            .is_some()
-        {
+        if entries.insert(key.clone(), entry).is_some() {
             return Err(format!(
                 "{}: duplicate preview archive index entry {key}",
                 index_path.display()
@@ -2106,8 +1992,6 @@ fn start_background_preview_archive_load(archive_path: String) {
 }
 
 impl PreviewArchive {
-    const V2_PIXELS_MAGIC: &'static [u8; 8] = b"MMPX2B1\0";
-
     fn open(path: &Path) -> Result<Self, String> {
         let mut file = File::open(path)
             .map_err(|e| format!("open preview archive {}: {e}", path.display()))?;
@@ -2118,80 +2002,13 @@ impl PreviewArchive {
         let mut magic = [0u8; 8];
         file.read_exact(&mut magic)
             .map_err(|e| format!("read preview archive magic {}: {e}", path.display()))?;
-        if &magic != Self::V2_PIXELS_MAGIC {
+        if &magic != V2_PIXELS_MAGIC {
             return Err(format!("{}: bad preview archive v2 magic", path.display()));
         }
         let count = read_u32(&mut file)? as usize;
-        let entries = Self::read_v2_pixel_entries(&mut file, count, archive_bytes)?;
+        let entries = read_v2_pixel_entries(&mut file, count, archive_bytes)?;
         let bytes = Arc::from(read_archive_bytes(path)?.into_boxed_slice());
         Ok(Self { bytes, entries })
-    }
-
-    fn read_v2_pixel_entries(
-        file: &mut File,
-        count: usize,
-        archive_bytes: u64,
-    ) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
-        validate_preview_archive_entry_count(count, "preview archive v2")?;
-        let mut entries = HashMap::with_capacity(count);
-        for _ in 0..count {
-            let name_len = read_u16(file)? as usize;
-            let width = read_u32(file)?;
-            let height = read_u32(file)?;
-            let stride_bytes = read_u32(file)?;
-            let raw_len = read_u32(file)? as usize;
-            let mut payload_flag = [0u8; 1];
-            file.read_exact(&mut payload_flag)
-                .map_err(|e| format!("read preview archive v2 payload flag: {e}"))?;
-            let compressed_len = read_u32(file)? as usize;
-            let offset = read_u64(file)?;
-            let mut name = vec![0u8; name_len];
-            file.read_exact(&mut name)
-                .map_err(|e| format!("read preview archive v2 entry name: {e}"))?;
-            let name = String::from_utf8(name)
-                .map_err(|e| format!("preview archive v2 entry name utf8: {e}"))?;
-            validate_preview_archive_entry_geometry(
-                "preview archive v2",
-                &name,
-                width,
-                height,
-                stride_bytes,
-                raw_len,
-            )?;
-            validate_preview_archive_entry_payload(
-                "preview archive v2",
-                &name,
-                payload_flag[0],
-                raw_len,
-                compressed_len,
-            )?;
-            validate_preview_archive_entry_bounds(
-                "preview archive v2",
-                &name,
-                offset,
-                compressed_len,
-                archive_bytes,
-            )?;
-            let key = name.to_ascii_lowercase();
-            if entries
-                .insert(
-                    key.clone(),
-                    PreviewArchiveEntry {
-                        raw_len,
-                        compressed_len,
-                        offset,
-                        width,
-                        height,
-                        stride_bytes,
-                        payload_flag: payload_flag[0],
-                    },
-                )
-                .is_some()
-            {
-                return Err(format!("preview archive v2 duplicate entry {key}"));
-            }
-        }
-        Ok(entries)
     }
 
     fn load_timed(
@@ -2247,6 +2064,23 @@ impl PreviewArchive {
     }
 }
 
+fn read_v2_pixel_entries(
+    file: &mut File,
+    count: usize,
+    archive_bytes: u64,
+) -> Result<HashMap<String, PreviewArchiveEntry>, String> {
+    validate_entry_count(count, "preview archive v2")?;
+    let mut entries = HashMap::with_capacity(count);
+    for _ in 0..count {
+        let (name, entry) = read_file_entry(file, "preview archive v2", archive_bytes)?;
+        let key = name.to_ascii_lowercase();
+        if entries.insert(key.clone(), entry).is_some() {
+            return Err(format!("preview archive v2 duplicate entry {key}"));
+        }
+    }
+    Ok(entries)
+}
+
 fn read_archive_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let mut file =
         File::open(path).map_err(|e| format!("preload preview archive {}: {e}", path.display()))?;
@@ -2281,105 +2115,6 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
     start
         .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
         .unwrap_or(0)
-}
-
-fn validate_preview_archive_entry_count(count: usize, context: &str) -> Result<(), String> {
-    if count > MAX_PREVIEW_ARCHIVE_ENTRIES {
-        return Err(format!(
-            "{context} has {count} entries, max {MAX_PREVIEW_ARCHIVE_ENTRIES}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_preview_archive_entry_geometry(
-    context: &str,
-    name: &str,
-    width: u32,
-    height: u32,
-    stride_bytes: u32,
-    raw_len: usize,
-) -> Result<usize, String> {
-    if width == 0 || height == 0 {
-        return Err(format!(
-            "{context} bad geometry for {name}: width={width} height={height}"
-        ));
-    }
-    let width_bytes = (width as usize)
-        .checked_mul(2)
-        .ok_or_else(|| format!("{context} width overflow for {name}: width={width}"))?;
-    let stride = stride_bytes as usize;
-    if !stride.is_multiple_of(2) || stride < width_bytes {
-        return Err(format!(
-            "{context} bad stride for {name}: width={width} stride={stride_bytes}"
-        ));
-    }
-    let expected = stride
-        .checked_mul(height as usize)
-        .ok_or_else(|| format!("{context} raw length overflow for {name}"))?;
-    if expected > MAX_PREVIEW_ARCHIVE_RAW_BYTES {
-        return Err(format!(
-            "{context} raw length too large for {name}: {expected} > {MAX_PREVIEW_ARCHIVE_RAW_BYTES}"
-        ));
-    }
-    if raw_len != expected {
-        return Err(format!(
-            "{context} bad geometry for {name}: width={width} height={height} stride={stride_bytes} raw_len={raw_len} expected={expected}"
-        ));
-    }
-    Ok(expected)
-}
-
-fn validate_preview_archive_entry_payload(
-    context: &str,
-    name: &str,
-    payload_flag: u8,
-    raw_len: usize,
-    compressed_len: usize,
-) -> Result<(), String> {
-    let max_encoded = match payload_flag {
-        0 => raw_len
-            .checked_add(raw_len / 255)
-            .and_then(|n| n.checked_add(16))
-            .ok_or_else(|| format!("{context} compressed length overflow for {name}"))?,
-        1 => {
-            if compressed_len != raw_len {
-                return Err(format!(
-                    "{context} raw payload length mismatch for {name}: compressed_len={compressed_len} raw_len={raw_len}"
-                ));
-            }
-            raw_len
-        }
-        other => {
-            return Err(format!(
-                "{context} unsupported payload flag {other} for {name}"
-            ));
-        }
-    };
-    if compressed_len == 0 || compressed_len > max_encoded {
-        return Err(format!(
-            "{context} encoded length too large for {name}: {compressed_len} > {max_encoded}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_preview_archive_entry_bounds(
-    context: &str,
-    name: &str,
-    offset: u64,
-    compressed_len: usize,
-    archive_bytes: u64,
-) -> Result<(), String> {
-    let payload_end = offset
-        .checked_add(compressed_len as u64)
-        .ok_or_else(|| format!("{context} offset overflow for {name}"))?;
-    if payload_end > archive_bytes {
-        return Err(format!(
-            "{context} payload outside archive for {name}: end={payload_end} archive_bytes={archive_bytes}"
-        ));
-    }
-    Ok(())
 }
 
 fn decode_preview_archive_entry_into<'a>(
@@ -2456,7 +2191,7 @@ fn decode_pixel_preview_bytes(
     entry: PreviewArchiveEntry,
     data: &[u8],
 ) -> Result<PreviewPixels, String> {
-    validate_preview_archive_entry_geometry(
+    validate_entry_geometry(
         "pixel preview",
         "<decoded>",
         entry.width,
@@ -2485,24 +2220,6 @@ fn raw565_words_from_le_bytes(data: &[u8], context: &str) -> Result<Vec<u16>, St
         words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
     }
     Ok(words)
-}
-
-fn read_u16(file: &mut File) -> Result<u16, String> {
-    let mut buf = [0u8; 2];
-    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-    Ok(u16::from_le_bytes(buf))
-}
-
-fn read_u32(file: &mut File) -> Result<u32, String> {
-    let mut buf = [0u8; 4];
-    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-    Ok(u32::from_le_bytes(buf))
-}
-
-fn read_u64(file: &mut File) -> Result<u64, String> {
-    let mut buf = [0u8; 8];
-    file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-    Ok(u64::from_le_bytes(buf))
 }
 
 #[cfg(test)]
@@ -2812,7 +2529,7 @@ mod tests {
         let name = b"mpatrol.rgb565";
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -2841,7 +2558,7 @@ mod tests {
         let name = b"1941u.rgb565";
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -2871,7 +2588,7 @@ mod tests {
         let name = b"bad.rgb565";
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&2u32.to_le_bytes());
@@ -3440,7 +3157,7 @@ mod tests {
             std::process::id()
         ));
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&((MAX_PREVIEW_ARCHIVE_ENTRIES as u32) + 1).to_le_bytes());
         std::fs::write(&path, bytes).expect("write oversized count archive fixture");
 
@@ -3463,7 +3180,7 @@ mod tests {
         let raw_len = MAX_PREVIEW_ARCHIVE_RAW_BYTES + 2;
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -3976,7 +3693,7 @@ mod tests {
         let pixels = &payload[20..];
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&width.to_le_bytes());
@@ -4056,7 +3773,7 @@ mod tests {
         let pixels = &payload[20..];
         let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(PreviewArchive::V2_PIXELS_MAGIC);
+        bytes.extend_from_slice(V2_PIXELS_MAGIC);
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&width.to_le_bytes());
