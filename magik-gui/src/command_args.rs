@@ -1,55 +1,90 @@
-pub const COMMANDS: &[&str] = &[
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandKind {
+    PreFpga,
+    Fpga,
+    ListOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommandSpec {
+    pub name: &'static str,
+    pub kind: CommandKind,
+}
+
+impl CommandSpec {
+    const fn new(name: &'static str, kind: CommandKind) -> Self {
+        Self { name, kind }
+    }
+}
+
+pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
-    "read",
-    "early-black",
-    "ui",
+    CommandSpec::new("read", CommandKind::Fpga),
+    CommandSpec::new("early-black", CommandKind::Fpga),
+    CommandSpec::new("ui", CommandKind::Fpga),
     #[cfg(mister_bench_scenes)]
-    "scenes",
+    CommandSpec::new("scenes", CommandKind::Fpga),
     #[cfg(mister_experiments)]
-    "experiment-capabilities",
+    CommandSpec::new("experiment-capabilities", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "preview-transitions",
+    CommandSpec::new("preview-transitions", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "effects",
+    CommandSpec::new("effects", CommandKind::Fpga),
     #[cfg(mister_experiments)]
-    "camera-effects",
+    CommandSpec::new("camera-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "sprite-effects",
+    CommandSpec::new("sprite-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "text-effects",
+    CommandSpec::new("text-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "raster-effects",
+    CommandSpec::new("raster-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "transition-effects",
+    CommandSpec::new("transition-effects", CommandKind::ListOnly),
     #[cfg(mister_experiments)]
-    "effect-bench",
+    CommandSpec::new("effect-bench", CommandKind::Fpga),
     #[cfg(feature = "diagnostics")]
-    "vsync-probe",
+    CommandSpec::new("vsync-probe", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "cpu-profile-smoke",
+    CommandSpec::new("cpu-profile-smoke", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "input",
-    "library-refresh",
-    "request-library-rebuild",
-    "toggle-simple-joystick-setting",
-    "reset-delete-database",
-    "reset-delete-screenshot-packs",
+    CommandSpec::new("input", CommandKind::Fpga),
+    CommandSpec::new("library-refresh", CommandKind::PreFpga),
+    CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
+    CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
+    CommandSpec::new("reset-delete-database", CommandKind::PreFpga),
+    CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
-    "media-bench-download",
+    CommandSpec::new("media-bench-download", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
-    "media-bench-save",
+    CommandSpec::new("media-bench-save", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "preview-pack-bench",
+    CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "preview-index-refresh-bench",
-    "library-sql",
+    CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
+    CommandSpec::new("library-sql", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "hbmame-metadata-from-library",
+    CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    "library-scan-bench",
+    CommandSpec::new("library-scan-bench", CommandKind::Fpga),
     #[cfg(feature = "bench-tools")]
-    "launch-prep-bench",
+    CommandSpec::new("launch-prep-bench", CommandKind::PreFpga),
 ];
+
+pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
+    COMMANDS.iter().find(|command| command.name == name)
+}
+
+pub fn is_known_command(name: &str) -> bool {
+    find_command(name).is_some()
+}
+
+pub fn command_names() -> impl Iterator<Item = &'static str> {
+    COMMANDS.iter().map(|command| command.name)
+}
+
+pub fn command_usage() -> String {
+    command_names().collect::<Vec<_>>().join(" | ")
+}
 
 pub fn resolve_command(args: &[String]) -> String {
     match args.get(1).map(|s| s.as_str()) {
@@ -65,7 +100,7 @@ pub fn is_launcher_boot(arg: &str) -> bool {
 }
 
 pub fn should_handoff_to_mister(arg: &str) -> bool {
-    if COMMANDS.contains(&arg) || is_launcher_boot(arg) {
+    if is_known_command(arg) || is_launcher_boot(arg) {
         return false;
     }
     false
@@ -103,22 +138,34 @@ mod tests {
 
     #[test]
     fn recognizes_explicit_commands() {
-        assert!(COMMANDS.contains(&"library-refresh"));
-        assert!(COMMANDS.contains(&"reset-delete-database"));
-        assert!(COMMANDS.contains(&"reset-delete-screenshot-packs"));
-        for command in COMMANDS {
+        assert_command_kind("library-refresh", CommandKind::PreFpga);
+        assert_command_kind("reset-delete-database", CommandKind::PreFpga);
+        assert_command_kind("reset-delete-screenshot-packs", CommandKind::PreFpga);
+        assert_command_kind("ui", CommandKind::Fpga);
+        for command in command_names() {
             assert_eq!(
                 resolve_command(&args(&["mister-magik-fb", command])),
-                *command
+                command
             );
             assert!(!should_handoff_to_mister(command));
         }
     }
 
     #[test]
+    fn command_table_has_unique_names() {
+        let names = command_names().collect::<Vec<_>>();
+        for (index, name) in names.iter().enumerate() {
+            assert!(
+                !names[..index].contains(name),
+                "duplicate command entry: {name}"
+            );
+        }
+    }
+
+    #[test]
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
-        assert!(COMMANDS.contains(&"library-sql"));
+        assert!(is_known_command("library-sql"));
         for command in [
             "read",
             "vsync-probe",
@@ -129,7 +176,7 @@ mod tests {
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
-            assert!(!COMMANDS.contains(&command), "{command}");
+            assert!(!is_known_command(command), "{command}");
         }
         for command in [
             "media-bench-download",
@@ -137,7 +184,7 @@ mod tests {
             "launch-prep-bench",
             "audio-tone",
         ] {
-            assert!(!COMMANDS.contains(&command), "{command}");
+            assert!(!is_known_command(command), "{command}");
         }
     }
 
@@ -155,9 +202,13 @@ mod tests {
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
-            assert!(COMMANDS.contains(&command), "{command}");
+            assert!(is_known_command(command), "{command}");
         }
-        assert!(!COMMANDS.contains(&"audio-tone"));
+        assert!(!is_known_command("audio-tone"));
+        assert_command_kind("read", CommandKind::Fpga);
+        assert_command_kind("vsync-probe", CommandKind::PreFpga);
+        assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
+        assert_command_kind("input", CommandKind::Fpga);
     }
 
     #[test]
@@ -168,11 +219,11 @@ mod tests {
             "media-bench-save",
             "launch-prep-bench",
         ] {
-            assert!(COMMANDS.contains(&command), "{command}");
+            assert!(is_known_command(command), "{command}");
         }
-        assert!(!COMMANDS.contains(&"preview-pack-bench"));
-        assert!(!COMMANDS.contains(&"preview-index-refresh-bench"));
-        assert!(!COMMANDS.contains(&"audio-tone"));
+        assert!(!is_known_command("preview-pack-bench"));
+        assert!(!is_known_command("preview-index-refresh-bench"));
+        assert!(!is_known_command("audio-tone"));
     }
 
     #[test]
@@ -189,12 +240,12 @@ mod tests {
             "effect-bench",
             "experiment-capabilities",
         ] {
-            assert!(!COMMANDS.contains(&command), "{command}");
+            assert!(!is_known_command(command), "{command}");
         }
         #[cfg(not(mister_bench_scenes))]
-        assert!(!COMMANDS.contains(&"scenes"), "scenes");
+        assert!(!is_known_command("scenes"), "scenes");
         #[cfg(mister_bench_scenes)]
-        assert!(COMMANDS.contains(&"scenes"), "scenes");
+        assert!(is_known_command("scenes"), "scenes");
     }
 
     #[test]
@@ -211,8 +262,13 @@ mod tests {
             "effect-bench",
             "experiment-capabilities",
         ] {
-            assert!(COMMANDS.contains(&command), "{command}");
+            assert!(is_known_command(command), "{command}");
         }
+        assert_command_kind("experiment-capabilities", CommandKind::ListOnly);
+        assert_command_kind("preview-transitions", CommandKind::ListOnly);
+        assert_command_kind("camera-effects", CommandKind::ListOnly);
+        assert_command_kind("effects", CommandKind::Fpga);
+        assert_command_kind("effect-bench", CommandKind::Fpga);
     }
 
     #[test]
@@ -259,5 +315,9 @@ mod tests {
     fn keeps_menu_boot_in_launcher() {
         assert!(!should_handoff_to_mister("menu.rbf"));
         assert!(!should_handoff_to_mister("/media/fat/menu.rbf"));
+    }
+
+    fn assert_command_kind(command: &str, kind: CommandKind) {
+        assert_eq!(find_command(command).map(|spec| spec.kind), Some(kind));
     }
 }
