@@ -5,24 +5,31 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
-use ssh2::{ExtendedData, Session};
+use ssh2::Session;
 use std::collections::HashMap;
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::fs::{self, OpenOptions};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod agent_client;
 mod media;
+mod remote;
+
+use agent_client::{
+    agent_request, agent_stream_request, agent_token, verify_agent_deploy_result, AGENT_PORT,
+};
+use remote::{
+    connect, connect_timed, exec, get, host, host_wait_diagnostics, port_open, put, put_bytes,
+    put_dir, sftp_write_profile, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
+};
 
 const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
-const AGENT_PORT: u16 = 7498;
-const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
@@ -1098,182 +1105,6 @@ fn write_mame_metadata_db(
     Ok(())
 }
 
-fn host() -> String {
-    env::var("MISTER_IP").unwrap_or_else(|_| "192.168.1.117".to_string())
-}
-
-fn user() -> String {
-    env::var("MISTER_USER").unwrap_or_else(|_| "root".to_string())
-}
-
-fn pass() -> String {
-    env::var("MISTER_PASS").unwrap_or_else(|_| "1".to_string())
-}
-
-fn connect(timeout_secs: u64) -> Result<Session> {
-    let addr = format!("{}:22", host())
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer host")?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(timeout_secs))?;
-    tcp.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
-    tcp.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
-    let mut sess = Session::new()?;
-    sess.set_tcp_stream(tcp);
-    sess.handshake()?;
-    sess.userauth_password(&user(), &pass())?;
-    if !sess.authenticated() {
-        return Err("SSH password authentication failed".into());
-    }
-    Ok(sess)
-}
-
-struct ExecOutput {
-    rc: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn exec(sess: &Session, command: &str, merge_stderr: bool) -> Result<ExecOutput> {
-    let mut channel = sess.channel_session()?;
-    if merge_stderr {
-        channel.handle_extended_data(ExtendedData::Merge)?;
-    }
-    channel.exec(command)?;
-    let mut stdout = String::new();
-    channel.read_to_string(&mut stdout)?;
-    let mut stderr = String::new();
-    if !merge_stderr {
-        channel.stderr().read_to_string(&mut stderr)?;
-    }
-    channel.wait_close()?;
-    Ok(ExecOutput {
-        rc: channel.exit_status()?,
-        stdout,
-        stderr,
-    })
-}
-
-fn stream_command(sess: &Session, command: &str) -> Result<()> {
-    let mut channel = sess.channel_session()?;
-    channel.handle_extended_data(ExtendedData::Merge)?;
-    channel.exec(command)?;
-    let mut buf = [0u8; 8192];
-    loop {
-        match channel.read(&mut buf) {
-            Ok(0) => {
-                if channel.eof() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Ok(n) => {
-                io::stdout().write_all(&buf[..n])?;
-                io::stdout().flush()?;
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    channel.wait_close()?;
-    std::process::exit(channel.exit_status()?);
-}
-
-fn put(sess: &Session, local: &Path, remote: &str) -> Result<()> {
-    let sftp = sess.sftp()?;
-    ensure_remote_parent_dir(&sftp, Path::new(remote))?;
-    let mut src = File::open(local)?;
-    let mut dst = sftp.create(Path::new(remote))?;
-    io::copy(&mut src, &mut dst)?;
-    Ok(())
-}
-
-fn put_bytes(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
-    let sftp = sess.sftp()?;
-    put_bytes_with_sftp(&sftp, remote, bytes)
-}
-
-fn put_bytes_with_sftp(sftp: &ssh2::Sftp, remote: &str, bytes: &[u8]) -> Result<()> {
-    ensure_remote_parent_dir(sftp, Path::new(remote))?;
-    let mut dst = sftp.create(Path::new(remote))?;
-    dst.write_all(bytes)?;
-    Ok(())
-}
-
-fn put_dir(sess: &Session, local_dir: &Path, remote_dir: &str) -> Result<usize> {
-    let sftp = sess.sftp()?;
-    if !local_dir.is_dir() {
-        return Err(format!("{} is not a directory", local_dir.display()).into());
-    }
-    ensure_remote_dir(&sftp, Path::new(remote_dir))?;
-    let mut count = 0;
-    put_dir_recursive(&sftp, local_dir, local_dir, Path::new(remote_dir), &mut count)?;
-    Ok(count)
-}
-
-fn put_dir_recursive(
-    sftp: &ssh2::Sftp,
-    root: &Path,
-    dir: &Path,
-    remote_root: &Path,
-    count: &mut usize,
-) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            put_dir_recursive(sftp, root, &path, remote_root, count)?;
-        } else if metadata.is_file() {
-            let rel = path.strip_prefix(root)?;
-            let remote = remote_root.join(rel);
-            ensure_remote_parent_dir(sftp, &remote)?;
-            let mut src = File::open(&path)?;
-            let mut dst = sftp.create(&remote)?;
-            io::copy(&mut src, &mut dst)?;
-            *count += 1;
-        }
-    }
-    Ok(())
-}
-
-fn ensure_remote_parent_dir(sftp: &ssh2::Sftp, remote: &Path) -> Result<()> {
-    if let Some(parent) = remote.parent() {
-        ensure_remote_dir(sftp, parent)?;
-    }
-    Ok(())
-}
-
-fn ensure_remote_dir(sftp: &ssh2::Sftp, remote: &Path) -> Result<()> {
-    if remote.as_os_str().is_empty() || remote == Path::new("/") {
-        return Ok(());
-    }
-    if sftp.stat(remote).is_ok() {
-        return Ok(());
-    }
-    if let Some(parent) = remote.parent() {
-        ensure_remote_dir(sftp, parent)?;
-    }
-    match sftp.mkdir(remote, 0o755) {
-        Ok(()) => Ok(()),
-        Err(_) if sftp.stat(remote).is_ok() => Ok(()),
-        Err(e) => Err(e.into()),
-    }
-}
-
-fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
-    if let Some(parent) = local.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let sftp = sess.sftp()?;
-    let mut src = sftp.open(Path::new(remote))?;
-    let mut dst = File::create(local)?;
-    io::copy(&mut src, &mut dst)?;
-    Ok(())
-}
-
 fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let total_t = Instant::now();
     let validate_t = Instant::now();
@@ -1483,31 +1314,6 @@ fn parse_wc_byte_count(text: &str) -> Option<u64> {
     text.split_whitespace().next()?.parse::<u64>().ok()
 }
 
-fn verify_agent_deploy_result(
-    result: &Value,
-    expected_bytes: u64,
-    expected_remote: &str,
-) -> Result<u64> {
-    let remote = result.get("remote").and_then(Value::as_str).unwrap_or("");
-    if remote != expected_remote {
-        return Err(format!(
-            "agent deploy remote mismatch expected={expected_remote} actual={remote}"
-        )
-        .into());
-    }
-    let remote_bytes = result
-        .get("remote_bytes")
-        .and_then(Value::as_u64)
-        .ok_or("agent deploy response missing remote_bytes")?;
-    if remote_bytes != expected_bytes {
-        return Err(format!(
-            "agent deployed size mismatch expected={expected_bytes} remote={remote_bytes}"
-        )
-        .into());
-    }
-    Ok(remote_bytes)
-}
-
 fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
     let out = exec(
         sess,
@@ -1522,48 +1328,6 @@ fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
     } else {
         Err(format!("MiSTer command failed: {command}").into())
     }
-}
-
-struct TimedSession {
-    sess: Session,
-    resolve_ms: u128,
-    tcp_ms: u128,
-    handshake_ms: u128,
-    auth_ms: u128,
-}
-
-fn connect_timed(timeout_secs: u64) -> Result<TimedSession> {
-    let resolve_t = Instant::now();
-    let addr = format!("{}:22", host())
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer host")?;
-    let resolve_ms = resolve_t.elapsed().as_millis();
-
-    let tcp_t = Instant::now();
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(timeout_secs))?;
-    let tcp_ms = tcp_t.elapsed().as_millis();
-    tcp.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
-    tcp.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
-
-    let mut sess = Session::new()?;
-    sess.set_tcp_stream(tcp);
-    let handshake_t = Instant::now();
-    sess.handshake()?;
-    let handshake_ms = handshake_t.elapsed().as_millis();
-    let auth_t = Instant::now();
-    sess.userauth_password(&user(), &pass())?;
-    let auth_ms = auth_t.elapsed().as_millis();
-    if !sess.authenticated() {
-        return Err("SSH password authentication failed".into());
-    }
-    Ok(TimedSession {
-        sess,
-        resolve_ms,
-        tcp_ms,
-        handshake_ms,
-        auth_ms,
-    })
 }
 
 fn append_profile_row(path: &str, header: &str, row: &str) -> Result<()> {
@@ -1618,14 +1382,6 @@ fn parse_profile_bytes(args: &[String], default: usize) -> usize {
     option_value(args, "--bytes")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(default)
-}
-
-fn sftp_write_profile(sess: &Session, remote: &str, bytes: &[u8]) -> Result<u128> {
-    let sftp = sess.sftp()?;
-    let t = Instant::now();
-    let mut dst = sftp.create(Path::new(remote))?;
-    dst.write_all(bytes)?;
-    Ok(t.elapsed().as_millis())
 }
 
 fn connection_profile(args: &[String]) -> Result<()> {
@@ -1696,11 +1452,6 @@ fn connection_profile(args: &[String]) -> Result<()> {
     }
     eprintln!("connection-profile: appended {samples} row(s) to {out_path}");
     Ok(())
-}
-
-struct AgentResponse {
-    response: Value,
-    elapsed_ms: u128,
 }
 
 fn agent_cli(args: &[String]) -> Result<()> {
@@ -2476,95 +2227,6 @@ fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Re
     Ok(())
 }
 
-fn agent_token() -> Result<String> {
-    if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            return Ok(token);
-        }
-    }
-    match fs::read_to_string(AGENT_TOKEN_LOCAL) {
-        Ok(token) => Ok(token.trim().to_string()),
-        Err(err) => {
-            eprintln!(
-                "warning: agent token unavailable ({AGENT_TOKEN_LOCAL}: {err}); using unauthenticated agent request"
-            );
-            Ok(String::new())
-        }
-    }
-}
-
-fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result<AgentResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
-    let start = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    parse_agent_response_line(line, start)
-}
-
-fn agent_stream_request(
-    cmd: &str,
-    args: Value,
-    payload: &[u8],
-    timeout: Duration,
-) -> Result<AgentResponse> {
-    let token = agent_token()?;
-    let addr = format!("{}:{AGENT_PORT}", host())
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
-    let start = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    stream.write_all(payload)?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    parse_agent_response_line(line, start)
-}
-
-fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentResponse> {
-    if line.trim().is_empty() {
-        return Err("empty response from agent".into());
-    }
-    let response: Value = serde_json::from_str(line.trim())?;
-    if response.get("ok").and_then(Value::as_bool) == Some(true) {
-        Ok(AgentResponse {
-            response,
-            elapsed_ms: start.elapsed().as_millis(),
-        })
-    } else {
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("agent command failed");
-        Err(error.to_string().into())
-    }
-}
-
 fn agent_probe_label(timeout: Duration) -> String {
     match agent_request("ping", json!({}), timeout) {
         Ok(_) => "ok".to_string(),
@@ -3036,68 +2698,6 @@ impl TcpProbeStats {
             self.transitions.push(format!("{elapsed_ms}:{label}"));
             self.last_label = label.to_string();
         }
-    }
-}
-
-fn tcp_probe_label(timeout: Duration) -> String {
-    tcp_probe_label_port(22, timeout)
-}
-
-fn tcp_probe_label_port(port: u16, timeout: Duration) -> String {
-    let addr = match format!("{}:{port}", host()).to_socket_addrs() {
-        Ok(mut addrs) => match addrs.next() {
-            Some(addr) => addr,
-            None => return "resolve_none".to_string(),
-        },
-        Err(err) => return format!("resolve_{}", err.kind() as u8),
-    };
-
-    match TcpStream::connect_timeout(&addr, timeout) {
-        Ok(_) => "ok".to_string(),
-        Err(err) => match err.raw_os_error() {
-            Some(64) => "hostdown".to_string(),
-            Some(65) => "noroute".to_string(),
-            Some(60) => "timeout".to_string(),
-            Some(61) => "refused".to_string(),
-            Some(code) => format!("os{code}"),
-            None if err.kind() == io::ErrorKind::TimedOut => "timeout".to_string(),
-            None if err.kind() == io::ErrorKind::ConnectionRefused => "refused".to_string(),
-            None => format!("{:?}", err.kind()).to_lowercase(),
-        },
-    }
-}
-
-fn host_wait_diagnostics() -> String {
-    let host = host();
-    let tcp = tcp_probe_label(Duration::from_millis(500));
-    let arp = command_summary("arp", &["-an"], Some(&host));
-    let ping = if cfg!(target_os = "macos") {
-        command_summary("ping", &["-c", "1", "-W", "1000", &host], None)
-    } else {
-        command_summary("ping", &["-c", "1", "-W", "1", &host], None)
-    };
-    format!("tcp={tcp}; arp={arp}; ping={ping}")
-}
-
-fn command_summary(program: &str, args: &[&str], contains: Option<&str>) -> String {
-    match Command::new(program).args(args).output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut lines = stdout
-                .lines()
-                .chain(stderr.lines())
-                .filter(|line| contains.map(|needle| line.contains(needle)).unwrap_or(true))
-                .map(str::trim)
-                .filter(|line| !line.is_empty());
-            let text = lines.next().unwrap_or("no matching output");
-            format!(
-                "rc={} {}",
-                output.status.code().unwrap_or(-1),
-                text.replace('\t', " ")
-            )
-        }
-        Err(err) => format!("error={}", err),
     }
 }
 
@@ -3619,16 +3219,6 @@ fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
     let mut dst = sftp.create(Path::new(remote))?;
     dst.write_all(bytes)?;
     Ok(())
-}
-
-fn port_open(timeout: Duration) -> bool {
-    let Ok(mut addrs) = format!("{}:22", host()).to_socket_addrs() else {
-        return false;
-    };
-    let Some(addr) = addrs.next() else {
-        return false;
-    };
-    TcpStream::connect_timeout(&addr, timeout).is_ok()
 }
 
 fn userspace_ready_fast() -> Option<String> {
