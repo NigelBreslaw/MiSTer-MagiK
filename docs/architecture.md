@@ -234,6 +234,10 @@ a filter group or applies the highlighted value; `A` is the same action. D-pad
 left backs out one filter level; `B` is the same action except at the filter
 top level, where left is a no-op and `B` returns to the Home launcher. `Home`
 always jumps back to the Home launcher from Arcade or any open drawer level.
+The Rust-painted game list viewport shows ten 48 px rows and is 510 logical px
+wide, intentionally borrowing a little space across the old half-screen split
+so longer game titles remain visible without covering the centered preview
+cabinet.
 
 Arcade search is a top-level filter, but it behaves like its own mode instead
 of another hierarchical drawer level. The left pane becomes an on-screen
