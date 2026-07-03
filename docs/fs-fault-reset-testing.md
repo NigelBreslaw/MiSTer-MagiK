@@ -35,6 +35,9 @@ scripts/device-catalog-acceptance.sh --settle 5
 history/toolchain-bench/results-fs-fault-reset.tsv
 ```
 
+Current findings are summarized in
+[`history/2026-07-03-fs-fault-reset-findings.md`](../history/2026-07-03-fs-fault-reset-findings.md).
+
 Each row records the fault point, trigger path, whether the host observed the
 device go down, launcher readiness, DB query health, media-state health,
 catalog acceptance, and notes.
