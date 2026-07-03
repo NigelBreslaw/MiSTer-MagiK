@@ -14,8 +14,8 @@ pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 
 /// Logical row height for the Rust-painted arcade list viewport.
 pub const ARCADE_ROW_HEIGHT: i32 = 48;
-/// Visible list height: 8 exact arcade rows (matches `arcade_list.slint` left pane).
-pub const ARCADE_LIST_VISIBLE_H: i32 = 384;
+/// Visible list height: 10 exact arcade rows (matches the Rust-painted viewport).
+pub const ARCADE_LIST_VISIBLE_H: i32 = ARCADE_ROW_HEIGHT * 10;
 pub const HOME_TILE_WIDTH: i32 = 220;
 pub const HOME_TILE_GAP: i32 = 16;
 pub const HOME_LIST_VISIBLE_W: i32 = 912;

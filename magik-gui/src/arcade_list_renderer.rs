@@ -2,7 +2,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView, ARCADE_ROW_HEIGHT};
+use crate::arcade_catalog::{
+    ArcadeGameEntry, ArcadeGameView, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
+};
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
@@ -10,10 +12,14 @@ use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
 pub(crate) const ARCADE_LIST_Y: usize = 56;
-pub(crate) const ARCADE_SEARCH_LIST_X: usize = 488;
+// Wider than the half-screen pane on purpose: the list can borrow boundary
+// space without covering the centered preview cabinet.
+pub(crate) const ARCADE_LIST_W: usize = 510;
+pub(crate) const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
+// Search results use the same wider viewport, mirrored to keep the right inset.
+pub(crate) const ARCADE_SEARCH_LIST_X: usize =
+    crate::ui_display::UI_FB_W - ARCADE_LIST_X - ARCADE_LIST_W;
 pub(crate) const ARCADE_SEARCH_LIST_Y: usize = 56;
-pub(crate) const ARCADE_LIST_W: usize = 464;
-pub(crate) const ARCADE_LIST_H: usize = 384;
 pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
 pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 pub(crate) const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
@@ -700,7 +706,7 @@ impl ArcadeListRenderer {
     fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(title, if is_new { 24 } else { 30 });
+        let title = clipped_title(title, if is_new { 26 } else { 33 });
         self.title_font.draw_text_clipped_gradient(
             &mut row,
             ARCADE_LIST_W,
@@ -721,7 +727,7 @@ impl ArcadeListRenderer {
     fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
         let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
         draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(&item.title, if item.count.is_some() { 26 } else { 30 });
+        let title = clipped_title(&item.title, if item.count.is_some() { 29 } else { 33 });
         let gradient = if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
         } else {
@@ -1135,14 +1141,14 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                (0, 0, ARCADE_LIST_W, 192),
+                (0, 0, ARCADE_LIST_W, 240),
                 (
                     ARCADE_SELECTION_FRAME_THICKNESS,
-                    195,
+                    243,
                     ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
                     42
                 ),
-                (0, 240, ARCADE_LIST_W, 144),
+                (0, 288, ARCADE_LIST_W, 192),
             ]
         );
 

@@ -216,7 +216,7 @@ export component ArcadeListScreen inherits Rectangle {
                 x: MisterBridge.arcade-list-x * 1px * s;
                 y: (MisterBridge.arcade-list-y + MisterBridge.arcade-list-height + 4) * 1px * s;
                 width: MisterBridge.arcade-list-width * 1px * s;
-                height: parent.height - self.y - 8px * s;
+                height: parent.height > self.y + 8px * s ? parent.height - self.y - 8px * s : 0px;
                 background: #131018;
                 border-width: 1px;
                 border-color: #352848;
