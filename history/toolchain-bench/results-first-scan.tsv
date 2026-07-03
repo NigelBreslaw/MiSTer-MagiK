@@ -3382,3 +3382,77 @@ ITEM02-AFTER	907050dff-dirty	sqlite_publish_progress	796	bytes=10268672 copy_ms=
 ITEM02-AFTER	907050dff-dirty	library_db_saved	69320	bytes=10268672 scan_us=49918154 discover_us=43362556 classify_us=43827651 import_us=14221486 discoveries=13205 normal_files=10617 containers=162 entries=1151 audit_rows=468
 ITEM02-AFTER	907050dff-dirty	counter_plateau	10001	from=target=900 to=target=650
 ITEM02-AFTER	907050dff-dirty	db_count	0	13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	first_frame	156	catalog_ready=false
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	bootstrap_counter_climb	473	target=50
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	bootstrap_counter_sustained_climb	773	target=900
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_targets	0	roots=4 targets=21 extensions=36
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_first_candidate	2451	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_first_discovery	2514	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	5465	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	436	path=/media/fat/games/Saturn dirs=12 files=465 candidates=155
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	2	path=/media/fat/games/PSX dirs=1 files=6 candidates=6
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	12	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	86	path=/media/fat/games/NEOGEO dirs=2 files=275 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	0	path=/media/fat/games/Atari5200 dirs=1 files=1 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	150	path=/media/fat/games/Atari7800 dirs=26 files=86 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	87	path=/media/fat/games/AtariLynx dirs=1 files=758 candidates=379
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	full_scan_counter_climb	12489	target=750
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	14158	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	8563	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	1448	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	8527	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	1	path=/media/fat/games/S32X dirs=1 files=2 candidates=2
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	0	path=/media/fat/games/SMS dirs=1 files=2 candidates=2
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	788	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	53	path=/media/fat/games/Vectrex dirs=2 files=91 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	1	path=/media/fat/games/WonderSwan dirs=1 files=3 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	1	path=/media/fat/games/WonderSwanColor dirs=1 files=3 candidates=1
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	40	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk_target	12	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_walk	42483	candidates=10637
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_profile_match	203	calls=10637
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_installed_collection	222	calls=10619
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_archive_toc	1062	containers=162
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_collection_listings	0	collections=0
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_file_discovery	31205	files=10617
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_classify_total	43141	discoveries=13330 normal_files=10617 containers=162 entries=1151
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	library_scan_complete	44423	scan_us=43364828 discover_us=42482628 classify_us=43140982 discoveries=13205 normal_files=10617 containers=162 entries=1151
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	library_ready	49045	games=11041 load_us=4542280
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	catalog_bridge_sync_update	49046	games=11041 elapsed_us=138
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	catalog_worker_ram_catalog	49046	games=11041 catalog_us=4542280
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	scan_stage_coverage_audit_deferred	5839	rows=469
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_schema	35	tables=14
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_metadata_load	1530	mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_begin_tx	0	-
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_profiles	3	rows=21
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_catalog_audit	9	rows=469
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	273	from=0 to=1000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	188	from=1000 to=2000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	166	from=2000 to=3000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	141	from=3000 to=4000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	165	from=4000 to=5000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	140	from=5000 to=6000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	154	from=6000 to=7000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	174	from=7000 to=8000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	264	from=8000 to=9000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	298	from=9000 to=10000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	265	from=10000 to=11000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	295	from=11000 to=12000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	362	from=12000 to=13000 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_chunk	92	from=13000 to=13205 total=13205
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_games_total	3665	rows=13205 launcher_rows=10213
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_materialize_arcade_ui	1995	-
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_launcher_arcade	556	-
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_launcher_console	597	rows=9967
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_launcher_launch_plans	87	rows=8279
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_meta	253	rows=12
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_catalog_stamp	1117	stamp_rows=482 checkpoint_rows=334
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_insert_software_hash_cache	0	rows=0
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_commit	12	-
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	import_stage_total	9861	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.622
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	sqlite_publish_progress	732	bytes=10268672 copy_ms=724 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	library_db_saved	69891	bytes=10268672 scan_us=49204324 discover_us=42482628 classify_us=43140982 import_us=14916870 discoveries=13205 normal_files=10617 containers=162 entries=1151 audit_rows=469
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	counter_plateau	11716	from=target=900 to=target=750
+P2-20260703-FIRST-SCAN	e76d3df6-dirty	db_count	0	13205

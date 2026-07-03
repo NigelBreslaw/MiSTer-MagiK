@@ -2170,3 +2170,107 @@ PHASE2-20260701-LIBIO	import_stage_total	7167											path=/tmp/mister-magik/s
 PHASE2-20260701-LIBIO	sqlite_publish_progress	1											bytes=10268672 copy_ms=684 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
 PHASE2-20260701-LIBIO	refresh_done	0											skipped=false bytes=10268672 scan_us=5323492 discover_us=4639743 classify_us=5100262 import_us=13608065 discoveries=13205 normal_files=10617 containers=162 entries=1151
 PHASE2-20260701-LIBIO	done	20											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	0	2	2	0	0	2720	3944	1567	1292	11724	21	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	2	9	10	4550144	0	2749	4064	1567	1363	12078	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	3	19	18	8964608	0	2784	4178	1567	1427	12472	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	4	28	34	12416000	0	2814	4299	1567	1488	12982	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	5	41	54	16179200	0	2849	4427	1567	1535	13725	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	6	58	74	18463232	0	2882	4554	1567	1583	14648	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	7	76	109	20562944	0	2918	4700	1567	1613	15516	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	8	89	153	23263232	0	2954	4853	1567	1637	16146	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	9	99	211	24744448	0	2987	5021	1567	1653	16690	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	10	109	270	25816576	0	3018	5191	1567	1672	17176	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	12	119	334	28627968	0	3051	5359	1567	1692	17572	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	13	128	390	31898624	0	3082	5516	1567	1727	17840	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	14	138	456	34996224	0	3113	5686	1567	1747	18118	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	15	148	519	38478848	0	3147	5848	1567	1774	18475	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	16	157	560	39796224	0	3183	6012	1567	1841	19443	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	17	171	594	40179200	0	3217	6141	1567	1886	19798	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	18	179	658	40372736	0	3244	6302	1567	1910	20178	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	20	186	733	40526336	0	3270	6472	1567	1927	20481	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	21	193	777	40836096	0	3297	6612	1567	1973	21081	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	22	203	815	41095168	0	3325	6746	1567	2017	21587	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	23	208	870	41277952	0	3350	6897	1567	2051	21946	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	24	214	944	41441792	0	3377	7067	1567	2072	22273	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	25	220	1030	41583616	0	3399	7253	1567	2084	22545	27	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	26	226	1118	41698816	0	3425	7440	1568	2093	22802	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	27	244	1156	42506752	0	3458	7581	1568	2130	23750	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	28	271	1201	43332608	0	3512	7720	1568	2162	23971	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	30	361	1211	47580160	0	3628	7822	1568	2170	24044	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	31	412	1219	54256640	0	3709	7930	1568	2213	24360	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	32	505	1225	55829504	0	3833	8028	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	33	611	1232	55829504	0	3963	8127	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	34	716	1239	55829504	0	4096	8224	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	35	821	1245	55829504	0	4228	8319	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	36	926	1252	55829504	0	4362	8414	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	38	1036	1256	55829504	0	4498	8508	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	39	1133	1273	55829504	0	4617	8631	1568	2223	24424	37	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	40	1173	1301	55829504	8404992	4678	8751	1568	2266	24424	70	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	41	1258	1309	55829504	10285056	4793	8852	1568	2276	24424	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	sample	42	1363	1317	55829504	10285056	4923	8950	1568	2276	24424	83	disk_io_ms=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+P2-20260703-LIB-IO	scan_stage_walk_targets	0											roots=4 targets=21 extensions=36
+P2-20260703-LIB-IO	scan_stage_first_candidate	34											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P2-20260703-LIB-IO	scan_stage_first_discovery	80											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P2-20260703-LIB-IO	scan_stage_walk_target	4722											path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P2-20260703-LIB-IO	scan_stage_walk_target	243											path=/media/fat/games/Saturn dirs=12 files=465 candidates=155
+P2-20260703-LIB-IO	scan_stage_walk_target	1											path=/media/fat/games/PSX dirs=1 files=6 candidates=6
+P2-20260703-LIB-IO	scan_stage_walk_target	6											path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P2-20260703-LIB-IO	scan_stage_walk_target	71											path=/media/fat/games/NEOGEO dirs=2 files=275 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	3											path=/media/fat/games/Atari5200 dirs=1 files=1 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	136											path=/media/fat/games/Atari7800 dirs=26 files=86 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	43											path=/media/fat/games/AtariLynx dirs=1 files=758 candidates=379
+P2-20260703-LIB-IO	scan_stage_walk_target	0											path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P2-20260703-LIB-IO	scan_stage_walk_target	8576											path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P2-20260703-LIB-IO	scan_stage_walk_target	5385											path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P2-20260703-LIB-IO	scan_stage_walk_target	750											path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P2-20260703-LIB-IO	scan_stage_walk_target	6015											path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P2-20260703-LIB-IO	scan_stage_walk_target	1											path=/media/fat/games/S32X dirs=1 files=2 candidates=2
+P2-20260703-LIB-IO	scan_stage_walk_target	0											path=/media/fat/games/SMS dirs=1 files=2 candidates=2
+P2-20260703-LIB-IO	scan_stage_walk_target	673											path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P2-20260703-LIB-IO	scan_stage_walk_target	15											path=/media/fat/games/Vectrex dirs=2 files=91 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	1											path=/media/fat/games/WonderSwan dirs=1 files=3 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	1											path=/media/fat/games/WonderSwanColor dirs=1 files=3 candidates=1
+P2-20260703-LIB-IO	scan_stage_walk_target	22											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P2-20260703-LIB-IO	scan_stage_walk_target	9											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P2-20260703-LIB-IO	scan_stage_walk	26715											candidates=10637
+P2-20260703-LIB-IO	scan_stage_profile_match	124											calls=10637
+P2-20260703-LIB-IO	scan_stage_installed_collection	136											calls=10619
+P2-20260703-LIB-IO	scan_stage_archive_toc	973											containers=162
+P2-20260703-LIB-IO	scan_stage_collection_listings	0											collections=0
+P2-20260703-LIB-IO	scan_stage_file_discovery	15661											files=10617
+P2-20260703-LIB-IO	scan_stage_classify_total	27405											discoveries=13330 normal_files=10617 containers=162 entries=1151
+P2-20260703-LIB-IO	scan_stage_coverage_audit	513											rows=469
+P2-20260703-LIB-IO	import_stage_precompute_catalog	3384											rows=11041
+P2-20260703-LIB-IO	import_stage_schema	26											tables=14
+P2-20260703-LIB-IO	import_stage_metadata_load	1211											mame=2679 hbmame=608 mame_needed=2983 software_lists=14979 preview_paths=8
+P2-20260703-LIB-IO	import_stage_begin_tx	0											
+P2-20260703-LIB-IO	import_stage_insert_profiles	1											rows=21
+P2-20260703-LIB-IO	import_stage_insert_catalog_audit	6											rows=469
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	139											from=0 to=1000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	94											from=1000 to=2000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	92											from=2000 to=3000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	104											from=3000 to=4000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	121											from=4000 to=5000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	100											from=5000 to=6000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	106											from=6000 to=7000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	134											from=7000 to=8000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	209											from=8000 to=9000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	189											from=9000 to=10000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	179											from=10000 to=11000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	205											from=11000 to=12000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	191											from=12000 to=13000 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_chunk	42											from=13000 to=13205 total=13205
+P2-20260703-LIB-IO	import_stage_insert_games_total	2423											rows=13205 launcher_rows=10213
+P2-20260703-LIB-IO	import_stage_materialize_arcade_ui	1492											
+P2-20260703-LIB-IO	import_stage_insert_launcher_arcade	421											
+P2-20260703-LIB-IO	import_stage_insert_launcher_console	462											rows=9967
+P2-20260703-LIB-IO	import_stage_insert_launcher_launch_plans	59											rows=8279
+P2-20260703-LIB-IO	import_stage_insert_meta	205											rows=12
+P2-20260703-LIB-IO	import_stage_insert_catalog_stamp	760											stamp_rows=482 checkpoint_rows=334
+P2-20260703-LIB-IO	import_stage_insert_software_hash_cache	0											rows=0
+P2-20260703-LIB-IO	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+P2-20260703-LIB-IO	import_stage_commit	8											
+P2-20260703-LIB-IO	import_stage_total	7075											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.1353
+P2-20260703-LIB-IO	sqlite_publish_progress	1											bytes=10268672 copy_ms=763 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
+P2-20260703-LIB-IO	refresh_done	0											skipped=false bytes=10268672 scan_us=28165515 discover_us=26714912 classify_us=27918509 import_us=14379442 discoveries=13205 normal_files=10617 containers=162 entries=1151
+P2-20260703-LIB-IO	done	43											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
