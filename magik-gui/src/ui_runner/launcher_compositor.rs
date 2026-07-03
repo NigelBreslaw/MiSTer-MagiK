@@ -61,8 +61,7 @@ impl<'a> LayerTarget<'a> {
     }
 
     fn present_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
-        self.target
-            .present_direct_preview_rect(self.disp, frame_target_geometry(self.ui), rect)
+        self.target.present_direct_preview_rect(self.disp, rect)
     }
 
     fn present_arcade_list_update(

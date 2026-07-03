@@ -8,6 +8,32 @@ use std::sync::OnceLock;
 
 pub(super) struct Raw565PreviewRenderer;
 
+#[derive(Clone, Copy)]
+pub(super) struct PreviewSurface {
+    pub(super) x0: usize,
+    pub(super) y0: usize,
+    pub(super) stride: usize,
+}
+
+impl PreviewSurface {
+    fn full(ui: &UiDisplay) -> Self {
+        Self {
+            x0: 0,
+            y0: 0,
+            stride: ui.render_w(),
+        }
+    }
+
+    fn row_start(self, y: usize, x: usize) -> usize {
+        (y - self.y0) * self.stride + (x - self.x0)
+    }
+
+    fn row_range(self, y: usize, x0: usize, x1: usize) -> std::ops::Range<usize> {
+        let start = self.row_start(y, x0);
+        start..start + (x1 - x0)
+    }
+}
+
 pub(super) fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
     const CABINET_W: usize = 336;
     const CABINET_H: usize = 520;
@@ -950,38 +976,38 @@ fn blit_preview_frame_565_cut(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
+    surface: PreviewSurface,
     frame: &PreviewRawFrame<'_>,
 ) -> Option<()> {
     if matches!(frame.pixels, PreviewRawPixels::Empty) {
-        clear_preview_screen(cached, ui, screen);
+        clear_preview_screen(cached, ui, screen, surface);
         return Some(());
     }
     let current = raw565_view(frame, screen, 0)?;
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
     let image_rect = raw565_view_screen_rect(&current, ui, screen)?;
     for y in screen.y0..screen.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
         if y < image_rect.y0 || y >= image_rect.y1 {
             for x in screen.x0..screen.x1.min(ui.render_w()) {
-                cached[row + x] = black;
+                cached[surface.row_start(y, x)] = black;
             }
             continue;
         }
         for x in screen.x0..image_rect.x0 {
-            cached[row + x] = black;
+            cached[surface.row_start(y, x)] = black;
         }
-        let dst_a = row + image_rect.x0;
+        let dst_a = surface.row_start(y, image_rect.x0);
         if let Some(src_row) = raw565_row_for_screen_y(&current, y) {
             let src_x = (image_rect.x0 as isize - current.x) as usize;
             cached[dst_a..dst_a + image_rect.width()]
                 .copy_from_slice(&src_row[src_x..src_x + image_rect.width()]);
         } else {
             for x in image_rect.x0..image_rect.x1 {
-                cached[row + x] = sample_raw565(&current, x, y).unwrap_or(black);
+                cached[surface.row_start(y, x)] = sample_raw565(&current, x, y).unwrap_or(black);
             }
         }
         for x in image_rect.x1..screen.x1.min(ui.render_w()) {
-            cached[row + x] = black;
+            cached[surface.row_start(y, x)] = black;
         }
     }
     Some(())
@@ -991,6 +1017,7 @@ fn blit_transition_565_fade(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
+    surface: PreviewSurface,
     frame: &PreviewRawTransitionFrame<'_>,
     progress: f32,
 ) {
@@ -1007,16 +1034,16 @@ fn blit_transition_565_fade(
     let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
     if alpha == 0 {
         if let Some(previous) = frame.previous.as_ref() {
-            if blit_preview_frame_565_cut(cached, ui, screen, previous).is_some() {
+            if blit_preview_frame_565_cut(cached, ui, screen, surface, previous).is_some() {
                 return;
             }
         }
-        clear_preview_screen(cached, ui, screen);
+        clear_preview_screen(cached, ui, screen, surface);
         return;
     }
     if alpha == 255 {
-        if blit_preview_frame_565_cut(cached, ui, screen, &frame.current).is_none() {
-            clear_preview_screen(cached, ui, screen);
+        if blit_preview_frame_565_cut(cached, ui, screen, surface, &frame.current).is_none() {
+            clear_preview_screen(cached, ui, screen, surface);
         }
         return;
     }
@@ -1025,6 +1052,7 @@ fn blit_transition_565_fade(
             cached,
             ui,
             screen,
+            surface,
             previous.as_ref(),
             current.as_ref(),
             alpha,
@@ -1038,6 +1066,7 @@ fn blit_transition_565_fade(
             cached,
             ui,
             screen,
+            surface,
             previous.as_ref(),
             current.as_ref(),
             alpha,
@@ -1050,6 +1079,7 @@ fn blit_transition_565_fade(
         cached,
         ui,
         screen,
+        surface,
         previous.as_ref(),
         current.as_ref(),
         alpha,
@@ -1060,6 +1090,7 @@ fn blit_transition_565_fade_same_geometry(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
+    surface: PreviewSurface,
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
@@ -1083,10 +1114,9 @@ fn blit_transition_565_fade_same_geometry(
     }
     let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
     for y in rect.y0..rect.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
         let previous_row = raw565_screen_row_for_y(previous, y, rect.x0, rect.x1, ui.render_w())?;
         let current_row = raw565_screen_row_for_y(current, y, rect.x0, rect.x1, ui.render_w())?;
-        let dst = &mut cached[row + rect.x0..row + rect.x1];
+        let dst = &mut cached[surface.row_range(y, rect.x0, rect.x1)];
         blend_565_row_bucketed(dst, previous_row.row, current_row.row, alpha_bucket);
     }
     Some(())
@@ -1096,6 +1126,7 @@ fn blit_transition_565_fade_single_geometry(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
+    surface: PreviewSurface,
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
@@ -1111,9 +1142,8 @@ fn blit_transition_565_fade_single_geometry(
     let rect = raw565_view_screen_rect(view, ui, screen)?;
     let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
     for y in rect.y0..rect.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
         let src_row = raw565_screen_row_for_y(view, y, rect.x0, rect.x1, ui.render_w())?;
-        let dst = &mut cached[row + rect.x0..row + rect.x1];
+        let dst = &mut cached[surface.row_range(y, rect.x0, rect.x1)];
         blend_565_row_with_black(dst, src_row.row, alpha_bucket, fade_in);
     }
     Some(())
@@ -1123,6 +1153,7 @@ fn blit_transition_565_fade_rows(
     cached: &mut [Rgb565Pixel],
     ui: &UiDisplay,
     screen: DirtyRect,
+    surface: PreviewSurface,
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
@@ -1138,7 +1169,6 @@ fn blit_transition_565_fade_rows(
     let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
     let x1 = fade_rect.x1.min(ui.render_w());
     for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
         let previous_bounds = previous.as_ref().and_then(|view| {
             raw565_screen_bounds_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
         });
@@ -1175,7 +1205,7 @@ fn blit_transition_565_fade_rows(
             let current_segment = current_row
                 .as_ref()
                 .filter(|row| seg_x0 >= row.x0 && seg_x1 <= row.x1);
-            let dst = &mut cached[row + seg_x0..row + seg_x1];
+            let dst = &mut cached[surface.row_range(y, seg_x0, seg_x1)];
             match (previous_segment, current_segment) {
                 (Some(previous_row), Some(current_row)) => {
                     let previous_start = seg_x0 - previous_row.x0;
@@ -1803,12 +1833,16 @@ mod transition_experiments {
     }
 }
 
-fn clear_preview_screen(cached: &mut [Rgb565Pixel], ui: &UiDisplay, screen: DirtyRect) {
+fn clear_preview_screen(
+    cached: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    surface: PreviewSurface,
+) {
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
     for y in screen.y0..screen.y1.min(ui.render_h()) {
-        let row = y * ui.render_w();
         for x in screen.x0..screen.x1.min(ui.render_w()) {
-            cached[row + x] = black;
+            cached[surface.row_start(y, x)] = black;
         }
     }
 }
@@ -1819,6 +1853,16 @@ impl Raw565PreviewRenderer {
         ui: &UiDisplay,
         frame: &PreviewRawFrame<'_>,
         clear_screen: bool,
+    ) -> Option<DirtyRect> {
+        Self::compose_frame_strided(cached, ui, frame, clear_screen, PreviewSurface::full(ui))
+    }
+
+    pub(super) fn compose_frame_strided(
+        cached: &mut [Rgb565Pixel],
+        ui: &UiDisplay,
+        frame: &PreviewRawFrame<'_>,
+        clear_screen: bool,
+        surface: PreviewSurface,
     ) -> Option<DirtyRect> {
         let rect = raw_preview_scaled_rect(ui, frame)?;
         let screen = preview_screen_rect(ui);
@@ -1832,11 +1876,11 @@ impl Raw565PreviewRenderer {
         let src_h = frame.source_h as usize;
 
         if clear_screen {
-            clear_preview_screen(cached, ui, screen);
+            clear_preview_screen(cached, ui, screen, surface);
         }
         match frame.pixels {
             PreviewRawPixels::Empty => {
-                clear_preview_screen(cached, ui, screen);
+                clear_preview_screen(cached, ui, screen, surface);
             }
             PreviewRawPixels::Rgb565 {
                 pixels,
@@ -1846,7 +1890,7 @@ impl Raw565PreviewRenderer {
                     let src_y = (y as isize - image_y).max(0) as usize;
                     let src_x = (rect.x0 as isize - image_x).max(0) as usize;
                     let src_a = src_y * stride_pixels + src_x;
-                    let dst_a = y * ui.render_w() + rect.x0;
+                    let dst_a = surface.row_start(y, rect.x0);
                     cached[dst_a..dst_a + rect.width()]
                         .copy_from_slice(&pixels[src_a..src_a + rect.width()]);
                 }
@@ -1857,23 +1901,21 @@ impl Raw565PreviewRenderer {
             } => {
                 for y in rect.y0..rect.y1 {
                     let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    let row = y * ui.render_w();
                     for x in rect.x0..rect.x1 {
                         let src_x =
                             ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
-                        cached[row + x] = pixels[src_y * stride_pixels + src_x];
+                        cached[surface.row_start(y, x)] = pixels[src_y * stride_pixels + src_x];
                     }
                 }
             }
             PreviewRawPixels::Rgb8(rgb) => {
                 for y in rect.y0..rect.y1 {
                     let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
-                    let row = y * ui.render_w();
                     for x in rect.x0..rect.x1 {
                         let src_x =
                             ((x as isize - image_x).max(0) as usize / scale_x).min(src_w - 1);
                         let si = (src_y * src_w + src_x) * 3;
-                        cached[row + x] = <Rgb565Pixel as TargetPixel>::from_rgb(
+                        cached[surface.row_start(y, x)] = <Rgb565Pixel as TargetPixel>::from_rgb(
                             rgb[si],
                             rgb[si + 1],
                             rgb[si + 2],
@@ -1892,10 +1934,28 @@ impl Raw565PreviewRenderer {
         effect: PreviewTransitionEffect,
         progress: f32,
     ) -> DirtyRect {
+        Self::compose_transition_strided(
+            cached,
+            ui,
+            frame,
+            effect,
+            progress,
+            PreviewSurface::full(ui),
+        )
+    }
+
+    pub(super) fn compose_transition_strided(
+        cached: &mut [Rgb565Pixel],
+        ui: &UiDisplay,
+        frame: &PreviewRawTransitionFrame<'_>,
+        effect: PreviewTransitionEffect,
+        progress: f32,
+        surface: PreviewSurface,
+    ) -> DirtyRect {
         let screen = preview_screen_rect(ui);
         match effect {
             PreviewTransitionEffect::Fade => {
-                blit_transition_565_fade(cached, ui, screen, frame, progress)
+                blit_transition_565_fade(cached, ui, screen, surface, frame, progress)
             }
             #[cfg(mister_experiments)]
             _ => {
@@ -2251,6 +2311,7 @@ mod tests {
             &mut actual,
             &ui,
             screen,
+            PreviewSurface::full(&ui),
             previous_view.as_ref(),
             current_view.as_ref(),
             128,
