@@ -1,10 +1,240 @@
 use super::*;
+use crate::input::PadPool;
+use crate::input_repeat::RepeatNav;
 use crate::preview_worker;
-use mister_magik_fb::camera_effects::{CameraImage, CameraPixel};
+use mister_magik_fb::experiments::effects::camera_effects::{CameraImage, CameraPixel};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
+use mister_magik_fb::framebuffer::vsync::VsyncPace;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::File;
 use std::io::Write;
+
+pub(super) struct EffectLoopConfig<Kind, State, Stats>
+where
+    Kind: Copy + Eq + 'static,
+{
+    pub(super) family_label: &'static str,
+    pub(super) effects_env: &'static str,
+    pub(super) segment_env: &'static str,
+    pub(super) cache_cap_env: &'static str,
+    pub(super) auto_env: &'static str,
+    pub(super) hud_env: &'static str,
+    pub(super) trace_env: &'static str,
+    pub(super) trace_header: &'static [u8],
+    pub(super) all_effects: &'static [Kind],
+    pub(super) parse_effect: fn(&str) -> Option<Kind>,
+    pub(super) label_effect: fn(Kind) -> &'static str,
+    pub(super) default_effect: Kind,
+    pub(super) synthetic_min: usize,
+    pub(super) synthetic_max: usize,
+    pub(super) synthetic_images: fn(usize) -> Vec<CameraImage>,
+    pub(super) new_state: fn(usize, usize) -> State,
+    pub(super) render: fn(
+        &mut [CameraPixel],
+        &mut State,
+        usize,
+        usize,
+        &[CameraImage],
+        Kind,
+        u64,
+        Option<&str>,
+    ) -> Stats,
+    pub(super) draw_us: fn(&Stats) -> u64,
+    pub(super) write_trace_row: fn(&mut File, &EffectTraceRow<Kind>, &Stats),
+    pub(super) controller_exit_grace: Option<Duration>,
+}
+
+pub(super) struct EffectTraceRow<Kind> {
+    pub(super) effect: Kind,
+    pub(super) frame: u64,
+    pub(super) elapsed_us: u128,
+    pub(super) wall_us: u64,
+    pub(super) cpu_us: u64,
+    pub(super) cpu_pct: u64,
+    pub(super) draw_us: u64,
+    pub(super) present_us: u64,
+    pub(super) vsync: VsyncPace,
+}
+
+pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut MappedRgb565Framebuffer,
+    spec: EffectLoopConfig<Kind, State, Stats>,
+) where
+    Kind: Copy + Eq + 'static,
+{
+    let effects = parse_effects_env(
+        spec.effects_env,
+        spec.family_label,
+        spec.all_effects,
+        spec.parse_effect,
+        spec.default_effect,
+    );
+    let segment = segment_from_env(spec.segment_env, 20);
+    let cache_cap = cache_cap_from_env(spec.cache_cap_env, 64);
+    let auto = env_truthy(spec.auto_env);
+    let hud = env_truthy(spec.hud_env);
+    let mut trace = create_trace(spec.trace_env, spec.family_label, spec.trace_header);
+    let arcade_root = arcade_root_from_env();
+    let images = load_effect_images(
+        &arcade_root,
+        cache_cap,
+        spec.synthetic_min,
+        spec.synthetic_max,
+        spec.synthetic_images,
+    );
+    println!(
+        "{} effects={} auto={} hud={} segment_secs={} cache_cap={} images={}",
+        spec.family_label,
+        effects
+            .iter()
+            .map(|effect| (spec.label_effect)(*effect))
+            .collect::<Vec<_>>()
+            .join(","),
+        auto,
+        hud,
+        segment.as_secs(),
+        cache_cap,
+        images.len()
+    );
+
+    let mut pad = if auto {
+        None
+    } else {
+        match PadPool::open_all() {
+            Ok(pad) => Some(pad),
+            Err(e) => {
+                eprintln!("pad: unavailable for {} picker: {e}", spec.family_label);
+                None
+            }
+        }
+    };
+    let mut repeat = RepeatNav::default();
+    let mut selected_idx = 0usize;
+    let mut backbuffer = vec![CameraPixel(0); ui.render_w() * ui.render_h()];
+    let mut present_buffer = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
+    let mut render_state = (spec.new_state)(ui.render_w(), ui.render_h());
+    let mut pacer = VsyncPacer::from_env();
+    let start = Instant::now();
+    let mut frame = 0u64;
+    let mut last_effect = spec.default_effect;
+    let mut exit_was_held = false;
+    let selected_log = format!(
+        "{}_effect_selected",
+        spec.family_label
+            .trim_end_matches("-effects")
+            .replace('-', "_")
+    );
+    let exit_log = format!("{}_exit=controller", spec.family_label.replace('-', "_"));
+
+    loop {
+        let frame_start = Instant::now();
+        let cpu_start = process_cpu_us();
+        let elapsed = start.elapsed();
+        if secs > 0 && elapsed >= Duration::from_secs(secs) {
+            break;
+        }
+
+        if let Some(pad) = pad.as_mut() {
+            let _ = pad.poll();
+            let state = pad.state();
+            let now = Instant::now();
+            if repeat.tick_left(state.dpad_left, now) && !effects.is_empty() {
+                selected_idx =
+                    selected_idx.wrapping_add(effects.len()).wrapping_sub(1) % effects.len();
+                println!(
+                    "{}={}",
+                    selected_log,
+                    (spec.label_effect)(effects[selected_idx])
+                );
+            }
+            if repeat.tick_right(state.dpad_right, now) && !effects.is_empty() {
+                selected_idx = (selected_idx + 1) % effects.len();
+                println!(
+                    "{}={}",
+                    selected_log,
+                    (spec.label_effect)(effects[selected_idx])
+                );
+            }
+            let exit_held = state.btn_b || state.btn_start;
+            let exit_requested = match spec.controller_exit_grace {
+                Some(grace) => elapsed >= grace && exit_held && !exit_was_held,
+                None => exit_held,
+            };
+            if exit_requested {
+                println!("{exit_log}");
+                break;
+            }
+            exit_was_held = exit_held;
+        }
+
+        let effect = selected_effect(
+            &effects,
+            auto,
+            segment,
+            elapsed,
+            selected_idx,
+            spec.default_effect,
+        );
+        if effect != last_effect {
+            frame = 0;
+            last_effect = effect;
+        }
+        let effect_idx = effects
+            .iter()
+            .position(|candidate| *candidate == effect)
+            .unwrap_or(selected_idx);
+        let hud_text = hud.then(|| {
+            format!(
+                "{} {}/{}",
+                (spec.label_effect)(effect),
+                effect_idx + 1,
+                effects.len()
+            )
+        });
+        let stats = (spec.render)(
+            &mut backbuffer,
+            &mut render_state,
+            ui.render_w(),
+            ui.render_h(),
+            &images,
+            effect,
+            frame,
+            hud_text.as_deref(),
+        );
+        let draw_us = (spec.draw_us)(&stats);
+
+        let vsync = pacer.wait();
+        let present_start = Instant::now();
+        present_camera_pixels_565(disp, &backbuffer, &mut present_buffer, 0, ui.render_h());
+        let present_us = present_start.elapsed().as_micros() as u64;
+        let wall_us = frame_start.elapsed().as_micros() as u64;
+        let cpu_us = process_cpu_us().saturating_sub(cpu_start);
+        let cpu_pct = if wall_us == 0 {
+            0
+        } else {
+            ((cpu_us as u128 * 100) / wall_us as u128) as u64
+        };
+
+        if let Some(trace) = trace.as_mut() {
+            let row = EffectTraceRow {
+                effect,
+                frame,
+                elapsed_us: elapsed.as_micros(),
+                wall_us,
+                cpu_us,
+                cpu_pct,
+                draw_us,
+                present_us,
+                vsync,
+            };
+            (spec.write_trace_row)(trace, &row, &stats);
+        }
+
+        frame = frame.wrapping_add(1);
+    }
+}
 
 pub(super) fn parse_effects_env<T: Copy>(
     env_name: &str,

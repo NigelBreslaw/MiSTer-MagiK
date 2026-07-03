@@ -209,7 +209,11 @@ impl ScreensaverRenderState {
     }
 }
 
-pub(super) fn run_screensaver_loop(secs: u64, ui: &UiDisplay, disp: &mut MappedRgb565Framebuffer) {
+pub(in crate::ui_runner) fn run_screensaver_loop(
+    secs: u64,
+    ui: &UiDisplay,
+    disp: &mut MappedRgb565Framebuffer,
+) {
     let mut cfg = ScreensaverConfig::from_env();
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());

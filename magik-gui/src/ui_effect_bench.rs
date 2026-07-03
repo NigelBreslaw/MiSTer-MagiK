@@ -6,7 +6,9 @@ use crate::fpga::Fpga;
 use crate::ui_display::{UiDisplay, SLINT_UI_SCALE};
 use crate::ui_runner::ui_platform::{update_slint_animations, AnimationClock, MisterPlatform};
 use crate::vt::VtGraphicsGuard;
-use mister_magik_fb::effects::{EffectKind, EffectSize, EffectState};
+use mister_magik_fb::experiments::effects::framebuffer_effects::{
+    EffectKind, EffectSize, EffectState,
+};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::VsyncPacer;

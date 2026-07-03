@@ -3,8 +3,8 @@
 
 use std::time::Instant;
 
-pub use crate::camera_effects::pixel_to_rgb888;
-use crate::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+use super::camera_effects::{color, synthetic_images, CameraImage, CameraPixel};
+use super::render_helpers::{clear, elapsed_us, time};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransitionEffectKind {
@@ -465,20 +465,6 @@ pub fn render_transition_effect_frame(
 
 pub fn synthetic_transition_images(count: usize) -> Vec<CameraImage> {
     synthetic_images(count)
-}
-
-fn time(out: &mut u64, f: impl FnOnce()) {
-    let t = Instant::now();
-    f();
-    *out += elapsed_us(t);
-}
-
-fn elapsed_us(t: Instant) -> u64 {
-    t.elapsed().as_micros() as u64
-}
-
-fn clear(dst: &mut [CameraPixel], c: CameraPixel) {
-    dst.fill(c);
 }
 
 fn fill_source(

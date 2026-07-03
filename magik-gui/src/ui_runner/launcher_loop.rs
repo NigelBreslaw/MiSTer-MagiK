@@ -2953,7 +2953,7 @@ mod tests {
     #[cfg(mister_experiments)]
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
     #[cfg(mister_experiments)]
-    use mister_magik_fb::effects::EffectSize;
+    use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
     use std::sync::Arc;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
