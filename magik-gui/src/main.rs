@@ -124,128 +124,13 @@ fn main() {
         println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
-    #[cfg(feature = "diagnostics")]
-    if cmd == "vsync-probe" {
-        run_vsync_probe();
+    let command = command_args::find_command(&cmd).unwrap_or_else(|| unknown_command(&cmd));
+    if matches!(
+        command.kind,
+        command_args::CommandKind::PreFpga | command_args::CommandKind::ListOnly
+    ) {
+        dispatch_pre_fpga(&cmd, &args);
         return;
-    }
-
-    #[cfg(feature = "diagnostics")]
-    if cmd == "cpu-profile-smoke" {
-        run_cpu_profile_smoke();
-        return;
-    }
-
-    if cmd == "library-refresh" {
-        run_library_refresh();
-        return;
-    }
-
-    if cmd == "request-library-rebuild" {
-        run_request_library_rebuild();
-        return;
-    }
-
-    if cmd == "toggle-simple-joystick-setting" {
-        run_toggle_simple_joystick_setting();
-        return;
-    }
-
-    if cmd == "reset-delete-database" {
-        run_reset_delete_database(&args);
-        return;
-    }
-
-    if cmd == "reset-delete-screenshot-packs" {
-        run_reset_delete_screenshot_packs(&args);
-        return;
-    }
-
-    #[cfg(feature = "bench-tools")]
-    if cmd == "media-bench-download" {
-        media_bench_download::run();
-        return;
-    }
-
-    #[cfg(feature = "bench-tools")]
-    if cmd == "media-bench-save" {
-        media_bench_save::run();
-        return;
-    }
-
-    #[cfg(feature = "diagnostics")]
-    if cmd == "preview-pack-bench" {
-        preview_pack_bench::run();
-        return;
-    }
-
-    #[cfg(feature = "diagnostics")]
-    if cmd == "preview-index-refresh-bench" {
-        run_preview_index_refresh_bench();
-        return;
-    }
-
-    if cmd == "library-sql" {
-        run_library_sql();
-        return;
-    }
-
-    #[cfg(feature = "diagnostics")]
-    if cmd == "hbmame-metadata-from-library" {
-        run_hbmame_metadata_from_library();
-        return;
-    }
-
-    #[cfg(feature = "bench-tools")]
-    if cmd == "launch-prep-bench" {
-        launch_preparation::run_launch_prep_bench();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "experiment-capabilities" {
-        print_experiment_capabilities();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "preview-transitions" {
-        print_preview_transitions();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "camera-effects" {
-        ui_runner::print_camera_effects();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "sprite-effects" {
-        ui_runner::print_sprite_effects();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "text-effects" {
-        ui_runner::print_text_effects();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "raster-effects" {
-        ui_runner::print_raster_effects();
-        return;
-    }
-
-    #[cfg(mister_experiments)]
-    if cmd == "transition-effects" {
-        ui_runner::print_transition_effects();
-        return;
-    }
-
-    if !command_args::COMMANDS.contains(&cmd.as_str()) {
-        unknown_command(&cmd);
     }
 
     let mut f = match Fpga::open() {
@@ -256,17 +141,63 @@ fn main() {
         }
     };
 
-    match cmd.as_str() {
+    dispatch_fpga(&cmd, &mut f);
+}
+
+fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
+    match cmd {
         #[cfg(feature = "diagnostics")]
-        "read" => read_mode(&mut f),
-        "early-black" => early_black_route(&mut f),
-        "ui" => ui_runner::run_ui(&mut f),
+        "vsync-probe" => run_vsync_probe(),
+        #[cfg(feature = "diagnostics")]
+        "cpu-profile-smoke" => run_cpu_profile_smoke(),
+        "library-refresh" => run_library_refresh(),
+        "request-library-rebuild" => run_request_library_rebuild(),
+        "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
+        "reset-delete-database" => run_reset_delete_database(args),
+        "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
+        #[cfg(feature = "bench-tools")]
+        "media-bench-download" => media_bench_download::run(),
+        #[cfg(feature = "bench-tools")]
+        "media-bench-save" => media_bench_save::run(),
+        #[cfg(feature = "diagnostics")]
+        "preview-pack-bench" => preview_pack_bench::run(),
+        #[cfg(feature = "diagnostics")]
+        "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
+        "library-sql" => run_library_sql(),
+        #[cfg(feature = "diagnostics")]
+        "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
+        #[cfg(feature = "bench-tools")]
+        "launch-prep-bench" => launch_preparation::run_launch_prep_bench(),
+        #[cfg(mister_experiments)]
+        "experiment-capabilities" => print_experiment_capabilities(),
+        #[cfg(mister_experiments)]
+        "preview-transitions" => print_preview_transitions(),
+        #[cfg(mister_experiments)]
+        "camera-effects" => ui_runner::print_camera_effects(),
+        #[cfg(mister_experiments)]
+        "sprite-effects" => ui_runner::print_sprite_effects(),
+        #[cfg(mister_experiments)]
+        "text-effects" => ui_runner::print_text_effects(),
+        #[cfg(mister_experiments)]
+        "raster-effects" => ui_runner::print_raster_effects(),
+        #[cfg(mister_experiments)]
+        "transition-effects" => ui_runner::print_transition_effects(),
+        other => unknown_command(other),
+    }
+}
+
+fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
+    match cmd {
+        #[cfg(feature = "diagnostics")]
+        "read" => read_mode(f),
+        "early-black" => early_black_route(f),
+        "ui" => ui_runner::run_ui(f),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
         #[cfg(mister_experiments)]
         "effects" => ui_runner::print_effects(),
         #[cfg(mister_experiments)]
-        "effect-bench" => ui_effect_bench::run_effect_bench(&mut f),
+        "effect-bench" => ui_effect_bench::run_effect_bench(f),
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
         #[cfg(feature = "diagnostics")]
@@ -278,7 +209,7 @@ fn main() {
 fn unknown_command(cmd: &str) -> ! {
     eprintln!(
         "unknown command '{cmd}' (use: {})",
-        command_args::COMMANDS.join(" | ")
+        command_args::command_usage()
     );
     std::process::exit(2);
 }
