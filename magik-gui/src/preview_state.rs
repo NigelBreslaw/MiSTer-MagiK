@@ -286,6 +286,7 @@ pub(crate) struct PreviewState {
     previous_image: Option<Arc<PreviewImage>>,
     raw_transition_id: u64,
     window_preview_keys: Vec<String>,
+    window_shape: Option<PreviewWindowShape>,
     pending_prefetch_keys: HashSet<String>,
     ready_backlog: VecDeque<PreviewResult>,
     raw_dirty: bool,
@@ -293,6 +294,14 @@ pub(crate) struct PreviewState {
     prefetch_direction: i8,
     last_prefetch_window: Option<PreviewPrefetchWindow>,
     prefetch_throttle_until: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreviewWindowShape {
+    selected: usize,
+    len: usize,
+    radius: usize,
+    signature: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,6 +416,7 @@ impl PreviewState {
             previous_image: None,
             raw_transition_id: 0,
             window_preview_keys: Vec::new(),
+            window_shape: None,
             pending_prefetch_keys: HashSet::new(),
             ready_backlog: VecDeque::new(),
             raw_dirty: false,
@@ -431,6 +441,7 @@ impl PreviewState {
             self.previous_image = None;
             self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
             self.window_preview_keys.clear();
+            self.window_shape = None;
             self.pending_prefetch_keys.clear();
             self.ready_backlog.clear();
             self.raw_dirty = false;
@@ -596,6 +607,57 @@ fn preview_window_keys(games: ArcadeGameView<'_>, selected: usize, radius: usize
         }
     }
     out
+}
+
+fn hash_preview_window_part(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn preview_window_signature(games: ArcadeGameView<'_>, selected: usize, radius: usize) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for idx in preview_window_indices(games.len(), selected, radius) {
+        hash ^= idx as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        let Some(game) = games.get(idx) else {
+            continue;
+        };
+        hash ^= u64::from(game.has_preview);
+        hash = hash_preview_window_part(hash, game.preview_archive_path.as_bytes());
+        hash = hash_preview_window_part(hash, game.preview_asset_key.as_bytes());
+        hash = hash_preview_window_part(hash, game.mra_path.as_bytes());
+    }
+    hash
+}
+
+fn preview_window_shape(
+    games: ArcadeGameView<'_>,
+    selected: usize,
+    radius: usize,
+) -> PreviewWindowShape {
+    PreviewWindowShape {
+        selected,
+        len: games.len(),
+        radius,
+        signature: preview_window_signature(games, selected, radius),
+    }
+}
+
+fn refresh_preview_window(
+    games: ArcadeGameView<'_>,
+    selected: usize,
+    radius: usize,
+    preview: &mut PreviewState,
+) {
+    preview.window_preview_keys = preview_window_keys(games, selected, radius);
+    preview.window_shape = Some(preview_window_shape(games, selected, radius));
+    preview.cache.retain_window(
+        &preview.window_preview_keys,
+        Some(&preview.visible_preview_key),
+    );
 }
 
 struct PreviewCandidate<'a> {
@@ -825,6 +887,7 @@ pub(crate) fn request_arcade_preview_window(
         preview.has_visible_preview = false;
         preview.visible_preview_key.clear();
         preview.window_preview_keys.clear();
+        preview.window_shape = None;
         preview.pending_prefetch_keys.clear();
         preview.last_prefetch_selected = None;
         preview.prefetch_direction = 0;
@@ -843,11 +906,6 @@ pub(crate) fn request_arcade_preview_window(
     } else {
         DEFAULT_PREVIEW_RADIUS
     };
-    preview.window_preview_keys = preview_window_keys(games, selected, prefetch_radius);
-    preview.cache.retain_window(
-        &preview.window_preview_keys,
-        Some(&preview.visible_preview_key),
-    );
 
     let candidate = first_available_preview_candidate(
         games,
@@ -864,6 +922,10 @@ pub(crate) fn request_arcade_preview_window(
         .is_some_and(|path| path == selected_game.mra_path.as_ref())
         && preview.selected_preview_key.as_deref() == candidate_preview_key
     {
+        let window_shape = preview_window_shape(games, selected, prefetch_radius);
+        if preview.window_shape != Some(window_shape) {
+            refresh_preview_window(games, selected, prefetch_radius, preview);
+        }
         if let Some(path) = preview.selected_preview_key.clone() {
             if preview.visible_preview_key != path {
                 if let Some(image) = preview.cache.get(&path) {
@@ -916,6 +978,7 @@ pub(crate) fn request_arcade_preview_window(
         );
         return false;
     }
+    refresh_preview_window(games, selected, prefetch_radius, preview);
     preview.selected_mra_path = Some(selected_game.mra_path.to_string());
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
