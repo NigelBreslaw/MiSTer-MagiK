@@ -444,6 +444,7 @@ pub(super) fn sync_bridge_launcher_light(
     catalog: &ArcadeCatalog,
     active_arcade_games: Option<ArcadeGameView<'_>>,
     preview: &mut PreviewState,
+    defer_arcade_overlay_bridge: bool,
     defer_selected_preview: bool,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
@@ -485,7 +486,7 @@ pub(super) fn sync_bridge_launcher_light(
         nav.settings.simple_joystick_handling
     );
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav);
-    if !(defer_selected_preview && nav.screen == Screen::Arcade) {
+    if !(defer_arcade_overlay_bridge && nav.screen == Screen::Arcade) {
         set_bridge_if_changed!(
             bridge,
             get_arcade_selected,

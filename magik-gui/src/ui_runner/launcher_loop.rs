@@ -26,6 +26,19 @@ const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
+fn should_defer_arcade_overlay_bridge(
+    dirty_opt: bool,
+    launching: bool,
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+) -> bool {
+    dirty_opt
+        && !launching
+        && nav.screen == Screen::Arcade
+        && !nav.arcade_search.is_active(&nav.arcade_filter.active)
+        && !active_system_games_loading(catalog, nav)
+}
+
 struct LauncherStatusTextSnapshot {
     catalog_scan_message: SharedString,
     catalog_scan_title: SharedString,
@@ -1746,6 +1759,7 @@ pub(super) fn run_launcher_loop(
                     &catalog,
                     active_games,
                     &mut preview,
+                    should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_selected_preview,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
@@ -2355,7 +2369,10 @@ fn apply_pending_launch_return_state(
 
 fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    bridge.set_startup_visible(lifecycle.startup_should_show_splash());
+    let visible = lifecycle.startup_should_show_splash();
+    if bridge.get_startup_visible() != visible {
+        bridge.set_startup_visible(visible);
+    }
 }
 
 fn emit_return_context_restored(
