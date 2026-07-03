@@ -1,10 +1,12 @@
 use super::*;
+use crate::input_state::PadState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LauncherBenchScenario {
     Idle,
     PreviewIdle,
     HomeNav,
+    HomeRepeatHold,
     QuickTap,
     RapidTaps,
     HeldScroll,
@@ -30,6 +32,8 @@ impl LauncherBenchScenario {
                 "idle" => Some(Self::Idle),
                 "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
                 "home-nav" | "home_nav" => Some(Self::HomeNav),
+                "home-repeat-hold" | "home_repeat_hold" | "home-hold-repeat"
+                | "home_hold_repeat" => Some(Self::HomeRepeatHold),
                 "velocity-scroll" | "velocity_scroll" => Some(Self::HeldScroll),
                 "quick-tap" | "quick_tap" => Some(Self::QuickTap),
                 "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
@@ -50,6 +54,7 @@ impl LauncherBenchScenario {
             Self::Idle => "idle",
             Self::PreviewIdle => "preview-idle",
             Self::HomeNav => "home-nav",
+            Self::HomeRepeatHold => "home-repeat-hold",
             Self::QuickTap => "quick-tap",
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
@@ -64,6 +69,7 @@ impl LauncherBenchScenario {
         match self {
             Self::Idle | Self::PreviewIdle | Self::LaunchHandoff => Duration::MAX,
             Self::HomeNav => Duration::from_millis(300),
+            Self::HomeRepeatHold => Duration::ZERO,
             Self::ModelSync => Duration::from_millis(300),
             Self::QuickTap
             | Self::RapidTaps
@@ -124,12 +130,35 @@ pub(super) fn preview_step_hold_frames() -> usize {
     })
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct LauncherBenchState {
+    step: usize,
+    home_repeat_dir: i32,
+}
+
+impl Default for LauncherBenchState {
+    fn default() -> Self {
+        Self {
+            step: 0,
+            home_repeat_dir: 1,
+        }
+    }
+}
+
+impl LauncherBenchState {
+    pub(super) fn advance_if(&mut self, step_ran: bool) {
+        if step_ran {
+            self.step = self.step.wrapping_add(1);
+        }
+    }
+}
+
 pub(super) fn launcher_bench_step(
     scenario: LauncherBenchScenario,
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
     active_game_count: Option<usize>,
-    step: usize,
+    state: &mut LauncherBenchState,
     now: Instant,
 ) -> bool {
     match scenario {
@@ -143,7 +172,7 @@ pub(super) fn launcher_bench_step(
             }
             nav.screen = Screen::Home;
             nav.settings_focused = false;
-            let selected = step % count;
+            let selected = state.step % count;
             if selected < nav.selected {
                 nav.scroll_x = 0;
             }
@@ -151,18 +180,44 @@ pub(super) fn launcher_bench_step(
             keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             true
         }
+        LauncherBenchScenario::HomeRepeatHold => {
+            let count = catalog.systems.len();
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Home;
+            nav.settings_focused = false;
+            if nav.selected >= count {
+                nav.selected = count - 1;
+                keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
+            }
+
+            if nav.selected == 0 {
+                state.home_repeat_dir = 1;
+            } else if nav.selected + 1 >= count {
+                state.home_repeat_dir = -1;
+            }
+            let mut input = PadState::default();
+            if state.home_repeat_dir < 0 {
+                input.dpad_left = true;
+            } else {
+                input.dpad_right = true;
+            }
+            let _ = nav.handle_input(&input, now, catalog);
+            true
+        }
         LauncherBenchScenario::ModelSync => {
             let count = catalog.systems.len();
             if count == 0 {
                 return false;
             }
-            let selected = (step / 2) % count;
+            let selected = (state.step / 2) % count;
             if selected < nav.selected {
                 nav.scroll_x = 0;
             }
             nav.selected = selected;
             nav.settings_focused = false;
-            if step % 2 == 0 {
+            if state.step % 2 == 0 {
                 nav.screen = Screen::Home;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             } else {
@@ -187,7 +242,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let previous_dir = if step == 0 { 0 } else { 1 };
+            let previous_dir = if state.step == 0 { 0 } else { 1 };
             nav.arcade.bench_direction_tick(1, previous_dir, count, now);
             true
         }
@@ -200,7 +255,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            if step % preview_step_hold_frames() == 0 {
+            if state.step % preview_step_hold_frames() == 0 {
                 nav.arcade.handle_direction_input(1, 0, now, count);
             }
             nav.arcade.tick(count);
@@ -215,7 +270,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let (dir, previous_dir) = match step {
+            let (dir, previous_dir) = match state.step {
                 0 => (1, 0),
                 1 => (0, 1),
                 _ => (0, 0),
@@ -233,8 +288,8 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let (dir, previous_dir) = if step < 10 {
-                if step % 2 == 0 {
+            let (dir, previous_dir) = if state.step < 10 {
+                if state.step % 2 == 0 {
                     (1, 0)
                 } else {
                     (0, 1)
@@ -258,14 +313,6 @@ pub(super) fn launcher_bench_step(
             nav.arcade.bench_turbo_bounce_tick(count, now);
             true
         }
-    }
-}
-
-pub(super) fn launcher_bench_next_step_index(current: usize, step_ran: bool) -> usize {
-    if step_ran {
-        current.wrapping_add(1)
-    } else {
-        current
     }
 }
 
@@ -511,11 +558,19 @@ mod tests {
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), Vec::new())
     }
 
+    fn system(id: &str) -> arcade_catalog::GameSystemEntry {
+        arcade_catalog::GameSystemEntry {
+            id: id.to_string(),
+            title: id.to_string(),
+            count: 1,
+        }
+    }
+
     #[test]
     fn held_scroll_keeps_initial_press_when_summary_has_no_rows() {
         let catalog = empty_catalog();
         let mut nav = LauncherNav::new();
-        let mut step = 0usize;
+        let mut state = LauncherBenchState::default();
         let t0 = Instant::now();
 
         let ran_without_rows = launcher_bench_step(
@@ -523,13 +578,13 @@ mod tests {
             &mut nav,
             &catalog,
             Some(0),
-            step,
+            &mut state,
             t0,
         );
-        step = launcher_bench_next_step_index(step, ran_without_rows);
+        state.advance_if(ran_without_rows);
 
         assert!(!ran_without_rows);
-        assert_eq!(step, 0);
+        assert_eq!(state.step, 0);
         assert_eq!(nav.arcade.selected, 0);
         assert!(!nav.arcade.is_scroll_active());
 
@@ -538,27 +593,112 @@ mod tests {
             &mut nav,
             &catalog,
             Some(10),
-            step,
+            &mut state,
             t0 + Duration::from_millis(16),
         );
-        step = launcher_bench_next_step_index(step, ran_with_rows);
+        state.advance_if(ran_with_rows);
 
         assert!(ran_with_rows);
-        assert_eq!(step, 1);
+        assert_eq!(state.step, 1);
         assert_eq!(nav.arcade.selected, 1);
         assert!(nav.arcade.is_scroll_active());
+    }
+
+    #[test]
+    fn home_repeat_hold_reverses_only_at_list_edges() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            Vec::new(),
+            vec![system("a"), system("b"), system("c")],
+        );
+        let mut nav = LauncherNav::new();
+        let mut state = LauncherBenchState::default();
+        let t0 = Instant::now();
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0,
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(state.home_repeat_dir, 1);
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_millis(1000),
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 2);
+        assert_eq!(state.home_repeat_dir, 1);
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_millis(1080),
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(state.home_repeat_dir, -1);
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_millis(1160),
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(state.home_repeat_dir, -1);
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_millis(2080),
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 0);
+        assert_eq!(state.home_repeat_dir, -1);
+
+        let ran = launcher_bench_step(
+            LauncherBenchScenario::HomeRepeatHold,
+            &mut nav,
+            &catalog,
+            None,
+            &mut state,
+            t0 + Duration::from_millis(2160),
+        );
+        state.advance_if(ran);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(state.home_repeat_dir, 1);
     }
 
     #[test]
     fn preview_idle_starts_on_arcade_without_running_steps() {
         let catalog = empty_catalog();
         let mut nav = LauncherNav::new();
+        let mut state = LauncherBenchState::default();
         let ran = launcher_bench_step(
             LauncherBenchScenario::PreviewIdle,
             &mut nav,
             &catalog,
             Some(10),
-            0,
+            &mut state,
             Instant::now(),
         );
 

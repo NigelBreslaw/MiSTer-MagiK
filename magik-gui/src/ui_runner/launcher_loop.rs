@@ -527,7 +527,7 @@ pub(super) fn run_launcher_loop(
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
     let mut launcher_bench_next_step: Instant;
-    let mut launcher_bench_step_idx = 0usize;
+    let mut launcher_bench_state = LauncherBenchState::default();
     let auto_launch_selected = launcher_auto_launch_selected_enabled();
     let mut auto_launch_selected_done = false;
     let dirty_opt = launcher_dirty_opt_enabled();
@@ -1302,7 +1302,7 @@ pub(super) fn run_launcher_loop(
                     &mut nav,
                     &catalog,
                     None,
-                    launcher_bench_step_idx,
+                    &mut launcher_bench_state,
                     Instant::now(),
                 );
                 if bench_step_ran {
@@ -1316,8 +1316,7 @@ pub(super) fn run_launcher_loop(
                         }
                     }
                 }
-                launcher_bench_step_idx =
-                    launcher_bench_next_step_index(launcher_bench_step_idx, bench_step_ran);
+                launcher_bench_state.advance_if(bench_step_ran);
                 launcher_bench_next_step = Instant::now();
             }
         }

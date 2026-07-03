@@ -65,7 +65,7 @@ usage() {
   echo "         --device (default; build profile release-device / A3)  --video  --video-lab  --scene NAME  --self-test  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
-  echo "         --launcher-scenario idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
+  echo "         --launcher-scenario idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-render-mode direct-blit (slint-image requires --video-lab)"
   echo "         --video-queue-depth N  --video-scale source (fit-height|fit-width|native require --video-lab)"
@@ -132,7 +132,7 @@ if [[ "$DIRTY_RECT_BROAD_PCT" -lt 1 || "$DIRTY_RECT_BROAD_PCT" -gt 100 ]]; then
 fi
 if [[ -n "$LAUNCHER_SCENARIO" ]]; then
   case "$LAUNCHER_SCENARIO" in
-    idle|home-nav|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync) ;;
+    idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync) ;;
     *) echo "Unknown --launcher-scenario: $LAUNCHER_SCENARIO" >&2; exit 1 ;;
   esac
   BUILD_FLAG+=(--bench-tools)

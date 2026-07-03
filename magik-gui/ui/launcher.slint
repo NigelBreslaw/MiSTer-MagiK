@@ -149,6 +149,7 @@ component HomeGrid inherits Rectangle {
                 viewport-width: root.content-width;
                 viewport-height: self.height;
                 viewport-x: -scroll-x;
+                animate viewport-x { duration: 160ms; easing: ease-out; }
 
                 for _ in 1: Rectangle {
                     width: root.content-width;
