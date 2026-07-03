@@ -1,8 +1,13 @@
+use crate::artifact_publish::{
+    prepare_artifact_publish, sync_path_rust_best_effort, timestamped_temp_path_for,
+    ArtifactPublishLabels,
+};
 use crate::media_pack_save::{
     publish_pack_file_for_bench, temp_path_for, PackSaveMetrics, PROGRESS_COPY_CHUNK_BYTES,
 };
 use mister_magik_fb::media_update::{
-    size_qualified_pack_path, valid_image_size, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
+    index_path_for_pack_path, size_qualified_pack_path, state_path, valid_image_size,
+    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE,
 };
 use std::fs::{self, File};
 use std::io::Write;
@@ -20,6 +25,7 @@ struct BenchConfig {
     asset_dir: PathBuf,
     size_bytes: u64,
     iterations: usize,
+    artifact: BenchArtifact,
 }
 
 #[derive(Clone, Debug)]
@@ -27,8 +33,35 @@ struct SaveRow {
     label: String,
     system: String,
     iteration: usize,
+    artifact: BenchArtifact,
     metrics: PackSaveMetrics,
     result: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BenchArtifact {
+    Pack,
+    Index,
+    State,
+}
+
+impl BenchArtifact {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pack" => Ok(Self::Pack),
+            "index" => Ok(Self::Index),
+            "state" => Ok(Self::State),
+            other => Err(format!("unsupported --artifact: {other}")),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pack => "progress",
+            Self::Index => "index",
+            Self::State => "state",
+        }
+    }
 }
 
 pub(crate) fn run() {
@@ -75,6 +108,7 @@ where
         ),
         size_bytes: DEFAULT_SIZE_BYTES,
         iterations: 1,
+        artifact: BenchArtifact::Pack,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -104,6 +138,11 @@ where
                     .ok_or("--iterations requires a count")?
                     .parse::<usize>()
                     .map_err(|e| format!("invalid --iterations: {e}"))?;
+            }
+            "--artifact" => {
+                config.artifact = BenchArtifact::parse(
+                    &args.next().ok_or("--artifact requires pack|index|state")?,
+                )?;
             }
             "--modes" => {
                 return Err(
@@ -137,7 +176,9 @@ where
 }
 
 fn print_usage() {
-    println!("usage: mister-magik-fb media-bench-save --label LABEL --system ID --iterations N");
+    println!(
+        "usage: mister-magik-fb media-bench-save --label LABEL --system ID --iterations N [--artifact pack|index|state]"
+    );
 }
 
 fn resolve_source_path(config: &BenchConfig) -> Result<PathBuf, String> {
@@ -185,16 +226,23 @@ fn run_one(config: &BenchConfig, source: &Path, iteration: usize) -> SaveRow {
         label: config.label.clone(),
         system: config.system.clone(),
         iteration,
+        artifact: config.artifact,
         metrics: PackSaveMetrics::default(),
         result: "bench-ok".to_string(),
     };
     let final_path = bench_final_path(config, iteration);
-    let result = publish_pack_file_for_bench(source, &final_path, |_| {});
+    let result = match config.artifact {
+        BenchArtifact::Pack => publish_pack_file_for_bench(source, &final_path, |_| {}),
+        BenchArtifact::Index => publish_index_for_bench(source, &final_path),
+        BenchArtifact::State => publish_state_for_bench(config, iteration),
+    };
     match result {
         Ok(metrics) => row.metrics = metrics,
         Err(error) => row.result = error,
     }
     let _ = fs::remove_file(&final_path);
+    let _ = fs::remove_file(index_path_for_pack_path(&final_path));
+    let _ = fs::remove_file(bench_state_path(&config.asset_dir, iteration));
     let _ = fs::remove_file(temp_path_for(&final_path));
     row
 }
@@ -205,6 +253,94 @@ fn bench_final_path(config: &BenchConfig, iteration: usize) -> PathBuf {
         config.system,
         config.image_size,
         iteration,
+        unix_ms_now()
+    ))
+}
+
+fn publish_index_for_bench(source: &Path, pack_path: &Path) -> Result<PackSaveMetrics, String> {
+    let final_path = index_path_for_pack_path(pack_path);
+    let publish = prepare_artifact_publish(
+        &final_path,
+        timestamped_temp_path_for(&final_path, "screenshot-pack-index", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "bench index destination",
+            parent: "bench index parent",
+        },
+    )?;
+    let mut input = File::open(source).map_err(|e| format!("open {}: {e}", source.display()))?;
+    let mut output = File::create(publish.temp_path())
+        .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
+    let bytes = std::io::copy(&mut input, &mut output)
+        .map_err(|e| format!("copy bench index {}: {e}", publish.temp_path().display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.index.after_temp_write", &final_path);
+    output
+        .sync_all()
+        .map_err(|e| format!("sync bench index {}: {e}", publish.temp_path().display()))?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.index.after_temp_sync", &final_path);
+    drop(output);
+    publish.install_temp(Some("bench index"))?;
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "media.index.after_rename_before_parent_sync",
+        &final_path,
+    );
+    sync_path_rust_best_effort(publish.parent());
+    Ok(PackSaveMetrics {
+        bytes,
+        progress_events: 3,
+        ..Default::default()
+    })
+}
+
+fn publish_state_for_bench(
+    config: &BenchConfig,
+    iteration: usize,
+) -> Result<PackSaveMetrics, String> {
+    let path = bench_state_path(&config.asset_dir, iteration);
+    let publish = prepare_artifact_publish(
+        &path,
+        timestamped_temp_path_for(&path, "media-state", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "bench media state",
+            parent: "bench media state parent",
+        },
+    )?;
+    let text = format!(
+        "{{\n  \"schema\": 1,\n  \"bench\": \"media-bench-save\",\n  \"system\": \"{}\",\n  \"image_size\": \"{}\",\n  \"iteration\": {}\n}}\n",
+        config.system, config.image_size, iteration
+    );
+    fs::write(publish.temp_path(), text.as_bytes()).map_err(|e| {
+        format!(
+            "write bench media state {}: {e}",
+            publish.temp_path().display()
+        )
+    })?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_write", &path);
+    File::open(publish.temp_path())
+        .and_then(|file| file.sync_all())
+        .map_err(|e| {
+            format!(
+                "sync bench media state {}: {e}",
+                publish.temp_path().display()
+            )
+        })?;
+    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_sync", &path);
+    publish.install_temp(Some("bench media state"))?;
+    mister_magik_catalog::fs_fault::maybe_fault(
+        "media.state.after_rename_before_parent_sync",
+        &path,
+    );
+    sync_path_rust_best_effort(publish.parent());
+    Ok(PackSaveMetrics {
+        bytes: text.len() as u64,
+        progress_events: 3,
+        ..Default::default()
+    })
+}
+
+fn bench_state_path(asset_dir: &Path, iteration: usize) -> PathBuf {
+    PathBuf::from(format!(
+        "{}.save-bench-{iteration}-{}",
+        state_path(&asset_dir.display().to_string()),
         unix_ms_now()
     ))
 }
@@ -226,7 +362,7 @@ impl SaveRow {
             "screenshot_save_bench_tsv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.label,
             self.system,
-            "progress",
+            self.artifact.label(),
             self.iteration,
             self.metrics.bytes,
             self.metrics.copy_ms,
@@ -269,6 +405,16 @@ mod tests {
         assert_eq!(config.system, "neogeo");
         assert_eq!(config.iterations, 10);
         assert_eq!(config.size_bytes, 1234);
+        assert_eq!(config.artifact, BenchArtifact::Pack);
+    }
+
+    #[test]
+    fn parses_save_benchmark_artifact_modes() {
+        let index = parse_args(["--artifact".to_string(), "index".to_string()]).unwrap();
+        let state = parse_args(["--artifact".to_string(), "state".to_string()]).unwrap();
+
+        assert_eq!(index.artifact, BenchArtifact::Index);
+        assert_eq!(state.artifact, BenchArtifact::State);
     }
 
     #[test]
