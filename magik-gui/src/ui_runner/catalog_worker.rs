@@ -181,23 +181,6 @@ pub(super) fn start_library_catalog_worker(
             }
             if plan == CatalogWorkerPlan::ForceBuild {
                 if first_catalog_build {
-                    let bootstrap =
-                        library_db::bootstrap_default_library_progress(Some(&mut progress));
-                    let _ = tx.send(CatalogWorkerMessage::Timing {
-                        name: "bootstrap_scan_complete".to_string(),
-                        detail: format!(
-                            "launchers={} scan_us={}",
-                            bootstrap.launchers, bootstrap.scan_us
-                        ),
-                    });
-                    if bootstrap.launchers > 50 {
-                        send_catalog_progress(
-                            &tx,
-                            library_db::CatalogProgress::finding_games_found(bootstrap.launchers),
-                        );
-                    }
-                }
-                if first_catalog_build {
                     let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
                         Some(&mut progress),
                         Some(&mut scan_events),
