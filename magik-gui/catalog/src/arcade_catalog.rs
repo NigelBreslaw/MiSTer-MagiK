@@ -230,10 +230,11 @@ impl ArcadeCatalog {
     fn new_with_launch_plans_and_index_mode(
         root: PathBuf,
         games: Vec<ArcadeGameEntry>,
-        systems: Vec<GameSystemEntry>,
+        mut systems: Vec<GameSystemEntry>,
         launch_plans: Vec<StructuredLaunchPlan>,
         index_mode: CatalogIndexMode,
     ) -> Self {
+        sort_systems_by_title(&mut systems);
         let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
         Self {
             root,
@@ -1092,30 +1093,12 @@ pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
             count,
         })
         .collect();
-    systems.sort_by_cached_key(system_sort_key);
+    sort_systems_by_title(&mut systems);
     systems
 }
 
-fn system_sort_key(system: &GameSystemEntry) -> String {
-    let rank = match system.id.as_str() {
-        "arcade" => 0,
-        "amiga" => 1,
-        "neogeo" => 2,
-        "nes" => 3,
-        "snes" => 4,
-        "saturn" => 5,
-        "megadrive" => 6,
-        "gba" => 7,
-        "gbc" => 8,
-        "n64" => 9,
-        "gamegear" => 10,
-        "vectrex" => 11,
-        "ao486" => 12,
-        "dos" => 13,
-        "unknown" => 999,
-        _ => 100,
-    };
-    format!("{rank:03}-{}", system.title.to_lowercase())
+fn sort_systems_by_title(systems: &mut [GameSystemEntry]) {
+    systems.sort_by_cached_key(|system| (system.title.to_ascii_lowercase(), system.id.clone()));
 }
 
 pub fn system_title(id: &str) -> String {
@@ -1805,56 +1788,68 @@ mod tests {
     }
 
     #[test]
-    fn systems_from_games_uses_runtime_order_and_human_titles() {
+    fn arcade_catalog_sorts_systems_by_human_title() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "neogeo".into(),
+                    title: "NeoGeo".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 1,
+                },
+            ],
+        );
+
+        assert_eq!(
+            catalog
+                .systems
+                .iter()
+                .map(|system| system.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Amiga", "Arcade", "NeoGeo"]
+        );
+    }
+
+    #[test]
+    fn systems_from_games_uses_alphabetical_human_titles() {
         let games = vec![
-            ArcadeGameEntry {
-                title: "Unknown Thing".into(),
-                mra_path: "/media/fat/_Arcade/Unknown.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "unknown".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            },
-            ArcadeGameEntry {
-                title: "Sonic".into(),
-                mra_path: "/media/fat/games/MegaDrive/Sonic.md".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "megadrive".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            },
-            ArcadeGameEntry {
-                title: "1942".into(),
-                mra_path: "/media/fat/_Arcade/1942.mra".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "arcade".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            },
-            ArcadeGameEntry {
-                title: "Another Sonic".into(),
-                mra_path: "/media/fat/games/MegaDrive/Another Sonic.md".into(),
-                preview_archive_path: "".into(),
-                preview_asset_key: "".into(),
-                has_preview: false,
-                system_id: "megadrive".into(),
-                year: None,
-                manufacturer: "".into(),
-                category: "".into(),
-                is_new: false,
-            },
+            game(
+                "Unknown Thing",
+                "/media/fat/_Arcade/Unknown.mra",
+                "",
+                "unknown",
+            ),
+            game(
+                "Metal Slug",
+                "/media/fat/_Arcade/Metal Slug.mra",
+                "",
+                "neogeo",
+            ),
+            game(
+                "Sonic",
+                "/media/fat/games/MegaDrive/Sonic.md",
+                "",
+                "megadrive",
+            ),
+            game("1942", "/media/fat/_Arcade/1942.mra", "", "arcade"),
+            game(
+                "Another Sonic",
+                "/media/fat/games/MegaDrive/Another Sonic.md",
+                "",
+                "megadrive",
+            ),
+            game("Workbench", "/media/fat/_Computer/Amiga.mgl", "", "amiga"),
         ];
 
         let systems = systems_from_games(&games);
@@ -1862,6 +1857,11 @@ mod tests {
         assert_eq!(
             systems,
             vec![
+                GameSystemEntry {
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 1
+                },
                 GameSystemEntry {
                     id: "arcade".into(),
                     title: "Arcade".into(),
@@ -1871,6 +1871,11 @@ mod tests {
                     id: "megadrive".into(),
                     title: "Mega Drive".into(),
                     count: 2
+                },
+                GameSystemEntry {
+                    id: "neogeo".into(),
+                    title: "NeoGeo".into(),
+                    count: 1
                 },
                 GameSystemEntry {
                     id: "unknown".into(),

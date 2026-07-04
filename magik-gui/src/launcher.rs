@@ -2729,6 +2729,14 @@ mod tests {
         )
     }
 
+    fn catalog_system_index(catalog: &ArcadeCatalog, system_id: &str) -> usize {
+        catalog
+            .systems
+            .iter()
+            .position(|system| system.id == system_id)
+            .expect("system should exist")
+    }
+
     fn reordered_arcade_catalog() -> ArcadeCatalog {
         arcade_catalog(
             vec![
@@ -3604,6 +3612,7 @@ mod tests {
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
         let back = pad_with(|pad| pad.btn_b = true);
+        nav.selected = catalog_system_index(&catalog, "arcade");
 
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Arcade);
@@ -3672,7 +3681,7 @@ mod tests {
         let catalog = multi_game_catalog();
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.selected = 0;
+        nav.selected = catalog_system_index(&catalog, "arcade");
         nav.arcade.selected = 2;
         nav.arcade.snap_to_selected();
 
@@ -3682,7 +3691,7 @@ mod tests {
         assert_eq!(state.schema_version, LAUNCH_RETURN_STATE_SCHEMA);
         assert_eq!(state.screen, "arcade");
         assert_eq!(state.system_id, "arcade");
-        assert_eq!(state.system_index, 0);
+        assert_eq!(state.system_index, catalog_system_index(&catalog, "arcade"));
         assert_eq!(state.game_path, "/media/fat/_Arcade/arcade-2.mra");
         assert_eq!(state.game_index, 2);
     }
@@ -3692,7 +3701,7 @@ mod tests {
         let catalog = multi_game_catalog();
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.selected = 0;
+        nav.selected = catalog_system_index(&catalog, "arcade");
         nav.arcade.selected = 2;
         nav.arcade.snap_to_selected();
         let state = capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/arcade-2.mra")
@@ -3706,7 +3715,10 @@ mod tests {
         ));
 
         assert_eq!(restored.screen, Screen::Arcade);
-        assert_eq!(restored.selected, 0);
+        assert_eq!(
+            restored.selected,
+            catalog_system_index(&reordered_arcade_catalog(), "arcade")
+        );
         assert_eq!(restored.arcade.selected, 1);
         assert_eq!(restored.arcade.scroll_y, ARCADE_ROW_HEIGHT);
     }

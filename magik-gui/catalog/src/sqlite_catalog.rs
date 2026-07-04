@@ -3795,13 +3795,13 @@ mod tests {
                     count: 2,
                 },
                 GameSystemEntry {
-                    id: "snes".to_string(),
-                    title: "SNES".to_string(),
+                    id: "saturn".to_string(),
+                    title: "Saturn".to_string(),
                     count: 1,
                 },
                 GameSystemEntry {
-                    id: "saturn".to_string(),
-                    title: "Saturn".to_string(),
+                    id: "snes".to_string(),
+                    title: "SNES".to_string(),
                     count: 1,
                 },
             ]
