@@ -5,9 +5,10 @@
 //! when the matching core is installed, so game folders alone do not become
 //! launchable by guesswork.
 
+use crate::catalog_discovery;
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const PROFILE_SET_VERSION: u32 = 3;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
@@ -339,32 +340,10 @@ pub fn profile_for_game_dir<'a>(
 }
 
 pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for search_root in core_search_roots(roots) {
-        if !search_root.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(search_root)
-            .follow_links(false)
-            .max_depth(3)
-            .into_iter()
-            .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if stem.eq_ignore_ascii_case("menu") {
-                continue;
-            }
-            out.insert(canonical_core_id(stem).to_ascii_lowercase());
-        }
-    }
-    out
+    catalog_discovery::installed_cores_for_roots(roots)
+        .into_iter()
+        .map(|core| core.core_id.to_ascii_lowercase())
+        .collect()
 }
 
 pub fn core_launch_manifest_fingerprint() -> u64 {
@@ -412,7 +391,10 @@ pub fn validate_core_launch_manifest() -> Result<(), String> {
         }
         let id = row.id.to_ascii_lowercase();
         if special_ids.contains(&id) {
-            return Err(format!("manifest row {} collides with special profile id", row.id));
+            return Err(format!(
+                "manifest row {} collides with special profile id",
+                row.id
+            ));
         }
         if !ids.insert(id) {
             return Err(format!("duplicate manifest profile id {}", row.id));
@@ -808,44 +790,6 @@ fn path_ext(path: &Path) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-fn core_search_roots(roots: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        let root = Path::new(root);
-        let candidates = if path_name_eq(root, "games") {
-            let base = root.parent().unwrap_or(root);
-            vec![
-                base.join("_Console"),
-                base.join("_Computer"),
-                base.join("_Arcade/cores"),
-                base.join("_LLAPI"),
-            ]
-        } else if path_name_eq(root, "_Arcade") {
-            vec![root.join("cores")]
-        } else if path_name_eq(root, "_Console")
-            || path_name_eq(root, "_Computer")
-            || path_name_eq(root, "_LLAPI")
-        {
-            vec![root.to_path_buf()]
-        } else {
-            vec![
-                root.join("_Console"),
-                root.join("_Computer"),
-                root.join("_Arcade/cores"),
-                root.join("_LLAPI"),
-            ]
-        };
-        for candidate in candidates {
-            let key = candidate.display().to_string().to_ascii_lowercase();
-            if seen.insert(key) {
-                out.push(candidate);
-            }
-        }
-    }
-    out
-}
-
 pub(crate) fn canonical_core_id(stem: &str) -> String {
     let mut core = stem;
     if let Some((prefix, suffix)) = stem.rsplit_once('_') {
@@ -854,25 +798,6 @@ pub(crate) fn canonical_core_id(stem: &str) -> String {
         }
     }
     core.to_string()
-}
-
-fn path_name_eq(path: &Path, expected: &str) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
-}
-
-fn path_ext_eq(path: &Path, expected: &str) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
-}
-
-fn should_ignore_hidden_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy();
-        name.len() > 1 && name.starts_with('.')
-    })
 }
 
 #[cfg(test)]
@@ -1003,9 +928,8 @@ mod tests {
             .classify_archive_entry(Path::new("Gunpey EX.wsc"))
             .is_some());
         assert!(matches!(
-            wonderswan_color.classify_path(Path::new(
-                "/media/fat/games/WonderSwanColor/Gunpey EX.wsc"
-            )),
+            wonderswan_color
+                .classify_path(Path::new("/media/fat/games/WonderSwanColor/Gunpey EX.wsc")),
             ProfilePathClass::Payload {
                 rule: PayloadRule {
                     disposition: PayloadDisposition::Playable,

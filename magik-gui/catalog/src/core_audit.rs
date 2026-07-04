@@ -3,10 +3,10 @@
 //! The audit records launchable-looking things the catalog scanner did not turn
 //! into games. These rows are diagnostics and stamp inputs, not launch entries.
 
-use crate::catalog_scan::should_ignore_path;
+use crate::catalog_discovery;
 use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogAuditRow {
@@ -35,88 +35,29 @@ fn audit_installed_cores(
     profiles: &[LaunchProfile],
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
-    for search_root in core_search_roots(roots) {
-        if !search_root.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(search_root)
-            .follow_links(false)
-            .max_depth(3)
-            .into_iter()
-            .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if stem.eq_ignore_ascii_case("menu") {
-                continue;
-            }
-            let core_id = canonical_core_id(stem);
-            let game_dir = main_default_game_dir_for_core(&core_id);
-            let profile = profile_for_core_or_dir(profiles, &core_id, &game_dir);
-            let row = match profile {
-                Some(profile) => cataloged_row_for_profile(
-                    profile,
-                    path.display().to_string(),
-                    format!("games/{game_dir}"),
-                ),
-                None => CatalogAuditRow {
-                    core_id: core_id.clone(),
-                    core_path: path.display().to_string(),
-                    expected_game_dir: format!("games/{game_dir}"),
-                    extensions: inferred_extensions_for_game_dir(&game_dir),
-                    mount_kind: "load-file".to_string(),
-                    source: "main-derived".to_string(),
-                    catalog_status: "uncataloged".to_string(),
-                    reason: "installed-core-has-no-catalog-profile".to_string(),
-                },
-            };
-            insert_audit_row(rows, row);
-        }
-    }
-}
-
-fn core_search_roots(roots: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        let root = Path::new(root);
-        let candidates = if path_name_eq(root, "games") {
-            let base = root.parent().unwrap_or(root);
-            vec![
-                base.join("_Console"),
-                base.join("_Computer"),
-                base.join("_Arcade/cores"),
-                base.join("_LLAPI"),
-            ]
-        } else if path_name_eq(root, "_Arcade") {
-            vec![root.join("cores")]
-        } else if path_name_eq(root, "_Console")
-            || path_name_eq(root, "_Computer")
-            || path_name_eq(root, "_LLAPI")
-        {
-            vec![root.to_path_buf()]
-        } else {
-            vec![
-                root.join("_Console"),
-                root.join("_Computer"),
-                root.join("_Arcade/cores"),
-                root.join("_LLAPI"),
-            ]
+    for core in catalog_discovery::installed_cores_for_roots(roots) {
+        let core_id = core.core_id;
+        let game_dir = main_default_game_dir_for_core(&core_id);
+        let profile = profile_for_core_or_dir(profiles, &core_id, &game_dir);
+        let row = match profile {
+            Some(profile) => cataloged_row_for_profile(
+                profile,
+                core.path.display().to_string(),
+                format!("games/{game_dir}"),
+            ),
+            None => CatalogAuditRow {
+                core_id: core_id.clone(),
+                core_path: core.path.display().to_string(),
+                expected_game_dir: format!("games/{game_dir}"),
+                extensions: inferred_extensions_for_game_dir(&game_dir),
+                mount_kind: "load-file".to_string(),
+                source: "main-derived".to_string(),
+                catalog_status: "uncataloged".to_string(),
+                reason: "installed-core-has-no-catalog-profile".to_string(),
+            },
         };
-        for candidate in candidates {
-            let key = candidate.display().to_string().to_ascii_lowercase();
-            if seen.insert(key) {
-                out.push(candidate);
-            }
-        }
+        insert_audit_row(rows, row);
     }
-    out
 }
 
 fn audit_game_directories(
@@ -125,70 +66,50 @@ fn audit_game_directories(
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
     let cataloged_dirs = cataloged_game_dirs(profiles);
-    for games_dir in game_roots(roots) {
-        if !games_dir.is_dir() {
+    for fact in catalog_discovery::top_level_game_dirs_for_roots(roots) {
+        let name = fact.name.as_str();
+        let path = &fact.path;
+        let key = name.to_ascii_lowercase();
+        if cataloged_dirs.contains(&key) {
+            audit_non_indexed_zips_in_cataloged_dir(path, name, profiles, rows);
             continue;
         }
-        let Ok(read_dir) = std::fs::read_dir(&games_dir) else {
+        if !fact.has_payloadish_files() {
             continue;
-        };
-        for entry in read_dir.filter_map(Result::ok) {
-            let path = entry.path();
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            if !metadata.is_dir() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if should_ignore_game_dir(name) {
-                continue;
-            }
-            let key = name.to_ascii_lowercase();
-            if cataloged_dirs.contains(&key) {
-                audit_non_indexed_zips_in_cataloged_dir(&path, name, profiles, rows);
-                continue;
-            }
-            let (has_payload, has_zip) = game_dir_has_payloadish_files(&path);
-            if !has_payload && !has_zip {
-                continue;
-            }
-            if let Some(profile) = launch_profiles::generic_manifest_profile_for_game_dir(name) {
-                insert_audit_row(
-                    rows,
-                    CatalogAuditRow {
-                        core_id: profile.core_name.to_string(),
-                        core_path: profile.core_path.as_deref().unwrap_or_default().to_string(),
-                        expected_game_dir: format!("games/{name}"),
-                        extensions: profile_payload_extensions(&profile),
-                        mount_kind: "load-file".to_string(),
-                        source: source_name(profile.provenance.kind).to_string(),
-                        catalog_status: "support-only".to_string(),
-                        reason: "known-game-dir-without-installed-core".to_string(),
-                    },
-                );
-                continue;
-            }
+        }
+        if let Some(profile) = launch_profiles::generic_manifest_profile_for_game_dir(name) {
             insert_audit_row(
                 rows,
                 CatalogAuditRow {
-                    core_id: name.to_string(),
-                    core_path: String::new(),
+                    core_id: profile.core_name.to_string(),
+                    core_path: profile.core_path.as_deref().unwrap_or_default().to_string(),
                     expected_game_dir: format!("games/{name}"),
-                    extensions: inferred_extensions_for_game_dir(name),
+                    extensions: profile_payload_extensions(&profile),
                     mount_kind: "load-file".to_string(),
-                    source: "unknown".to_string(),
-                    catalog_status: "uncataloged".to_string(),
-                    reason: if has_zip && !has_payload {
-                        "game-dir-only-has-unindexed-zip-archives".to_string()
-                    } else {
-                        "game-dir-has-no-catalog-profile".to_string()
-                    },
+                    source: source_name(profile.provenance.kind).to_string(),
+                    catalog_status: "support-only".to_string(),
+                    reason: "known-game-dir-without-installed-core".to_string(),
                 },
             );
+            continue;
         }
+        insert_audit_row(
+            rows,
+            CatalogAuditRow {
+                core_id: name.to_string(),
+                core_path: String::new(),
+                expected_game_dir: format!("games/{name}"),
+                extensions: inferred_extensions_for_game_dir(name),
+                mount_kind: "load-file".to_string(),
+                source: "unknown".to_string(),
+                catalog_status: "uncataloged".to_string(),
+                reason: if fact.has_zip_files && !fact.has_payload_files {
+                    "game-dir-only-has-unindexed-zip-archives".to_string()
+                } else {
+                    "game-dir-has-no-catalog-profile".to_string()
+                },
+            },
+        );
     }
 }
 
@@ -293,60 +214,6 @@ fn profile_for_core_or_dir<'a>(
     })
 }
 
-fn game_roots(roots: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        let path = Path::new(root);
-        let games = if path_name_eq(path, "games") {
-            path.to_path_buf()
-        } else {
-            path.join("games")
-        };
-        let key = games.display().to_string().to_ascii_lowercase();
-        if seen.insert(key) {
-            out.push(games);
-        }
-    }
-    out
-}
-
-fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
-    let mut has_payload = false;
-    let mut has_zip = false;
-    for entry in walkdir::WalkDir::new(path)
-        .follow_links(false)
-        .max_depth(2)
-        .into_iter()
-        .filter_entry(|entry| !should_ignore_path(entry.path()))
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let p = entry.path();
-        if path_ext_eq(p, "zip") {
-            has_zip = true;
-        } else {
-            has_payload = true;
-        }
-        if has_payload && has_zip {
-            break;
-        }
-    }
-    (has_payload, has_zip)
-}
-
-fn canonical_core_id(stem: &str) -> String {
-    let mut core = stem;
-    if let Some((prefix, suffix)) = stem.rsplit_once('_') {
-        if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
-            core = prefix;
-        }
-    }
-    core.to_string()
-}
-
 fn main_default_game_dir_for_core(core_id: &str) -> String {
     if core_id.eq_ignore_ascii_case("minimig") {
         "Amiga".to_string()
@@ -377,24 +244,6 @@ fn inferred_extensions_for_game_dir(game_dir: &str) -> String {
         _ => &[],
     };
     exts.join(",")
-}
-
-fn should_ignore_game_dir(name: &str) -> bool {
-    (name.len() > 1 && name.starts_with('.'))
-        || name.eq_ignore_ascii_case("palettes")
-        || name.eq_ignore_ascii_case("images")
-        || name.eq_ignore_ascii_case("manuals")
-        || name.eq_ignore_ascii_case("screenshot")
-        || name.eq_ignore_ascii_case("screenshots")
-        || name.eq_ignore_ascii_case("screenshot-magik")
-        || name.eq_ignore_ascii_case("_organized")
-        || name.eq_ignore_ascii_case("boxart")
-}
-
-fn path_name_eq(path: &Path, expected: &str) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
 }
 
 fn path_ext_eq(path: &Path, expected: &str) -> bool {
@@ -454,7 +303,10 @@ mod tests {
         let root = unique_temp_dir("audit-psx-zip");
         let dir = root.join("games/PSX");
         std::fs::create_dir_all(&dir).expect("create psx dir");
-        write_stored_zip(&dir.join("MiSTer MagiK Additions - PSX.zip"), &[("Game.cue", b"cue")]);
+        write_stored_zip(
+            &dir.join("MiSTer MagiK Additions - PSX.zip"),
+            &[("Game.cue", b"cue")],
+        );
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
@@ -474,17 +326,19 @@ mod tests {
         let root = unique_temp_dir("audit-appledouble-zip");
         let dir = root.join("games/SMS");
         std::fs::create_dir_all(&dir).expect("create sms dir");
-        write_stored_zip(&dir.join("._MiSTer MagiK Additions - SMS.zip"), &[("Game.sms", b"rom")]);
+        write_stored_zip(
+            &dir.join("._MiSTer MagiK Additions - SMS.zip"),
+            &[("Game.sms", b"rom")],
+        );
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
             &launch_profiles::builtin_profiles(),
         );
 
-        assert!(!rows.iter().any(|row| {
-            row.reason
-                .contains("._MiSTer MagiK Additions - SMS.zip")
-        }));
+        assert!(!rows
+            .iter()
+            .any(|row| { row.reason.contains("._MiSTer MagiK Additions - SMS.zip") }));
         let _ = std::fs::remove_dir_all(root);
     }
 
