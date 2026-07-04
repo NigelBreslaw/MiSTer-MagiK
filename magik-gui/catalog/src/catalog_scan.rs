@@ -681,6 +681,7 @@ mod tests {
     use crate::library_db::{mtime_secs, scan_library, BenchConfig};
     use crate::sqlite_catalog::{load_arcade_catalog_from_sqlite_at, save_sqlite_scan};
     use crate::test_support::*;
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     #[test]
@@ -713,6 +714,120 @@ mod tests {
             Path::new("/media/fat/_LLAPI/NES_LLAPI_20251206.rbf")
         )
         .is_none());
+    }
+
+    #[test]
+    fn survivability_wild_sd_card_builds_limited_usable_catalog_and_audit() {
+        let root = WildSdCardFixture::new("survivability-wild-sd")
+            .install_console_core("Gameboy")
+            .install_console_core("ColecoVision")
+            .install_console_core("SMS")
+            .install_console_core("NeoGeo")
+            .write_arcade_mra("Puck Man.mra", "Puck Man", "puckman")
+            .write_game("Gameboy", "Tetris.gb", b"gb")
+            .write_game("Gameboy-Sinden", "Camera.gb", b"gb")
+            .write_game("Coleco", "Smurf Rescue.col", b"col")
+            .write_game_zip("SMS", "Packed.zip", &[("Hang On.sms", b"sms")])
+            .write_game("Loose", "Zaxxon.sg", b"sg")
+            .write_game("NotInstalledCore", "Mystery.nes", b"nes")
+            .write_game("Saturn", "boot.rom", b"bios")
+            .write_game(
+                "NeoGeo-CD",
+                "Metal Slug.cue",
+                b"FILE \"Metal Slug.bin\" BINARY",
+            )
+            .write_game("NeoGeo-CD", "Metal Slug.bin", b"track")
+            .write_game("NeoGeo-CD", "neocd.rom", b"bios")
+            .build();
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+        let profile_ids = scan
+            .profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>();
+        let unique_profile_ids = profile_ids.iter().copied().collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            profile_ids.len(),
+            unique_profile_ids.len(),
+            "{profile_ids:?}"
+        );
+        assert!(scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris"));
+        assert!(scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Camera"));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
+        }));
+        assert!(scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.platform_id == "sms" && discovery.title == "Hang On"));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "neogeo-cd" && discovery.title == "Metal Slug"
+        }));
+        assert!(!scan.discoveries.iter().any(|discovery| {
+            discovery.title.contains("boot")
+                || discovery.title.contains("neocd")
+                || discovery.title.contains("Metal Slug.bin")
+        }));
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/Loose"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "ambiguous-alias"
+        }));
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/NotInstalledCore"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "no-installed-core"
+        }));
+
+        save_sqlite_scan(&db, &scan).expect("save limited but usable sqlite catalog");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let duplicate_profiles: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM (
+                    SELECT profile_id FROM profiles GROUP BY profile_id HAVING count(*) > 1
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query duplicate profiles");
+        let launcher_rows_without_games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog
+                 LEFT JOIN launch_targets ON launch_targets.launch_id = launcher_catalog.launch_id
+                 LEFT JOIN games ON games.game_key_id = launch_targets.game_key_id
+                 WHERE launch_targets.launch_id IS NULL OR games.game_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher consistency");
+        let audit_rows: i64 = conn
+            .query_row("SELECT count(*) FROM catalog_audit", [], |row| row.get(0))
+            .expect("query audit rows");
+
+        assert_eq!(duplicate_profiles, 0);
+        assert_eq!(launcher_rows_without_games, 0);
+        assert!(audit_rows >= 2);
+        assert_eq!(loaded.catalog.system_game_count("gameboy"), 2);
+        assert_eq!(loaded.catalog.system_game_count("colecovision"), 1);
+        assert_eq!(loaded.catalog.system_game_count("sms"), 1);
+        assert_eq!(loaded.catalog.system_game_count("neogeo-cd"), 1);
+        assert!(loaded.catalog.system_game_count("arcade") >= 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
