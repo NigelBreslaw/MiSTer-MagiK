@@ -220,7 +220,13 @@ impl ArcadeNav {
         self.selected = selected.min(count - 1);
         self.scroll = ArcadeScrollState::default();
         self.scroll.target_index = self.selected;
-        self.scroll.visual_px = scroll_y.clamp(0, self.max_scroll_y(count));
+        let selected_px = self.selected as i32 * self.row_height;
+        let saved_scroll_y = scroll_y.clamp(0, self.max_scroll_y(count));
+        self.scroll.visual_px = if saved_scroll_y == selected_px {
+            saved_scroll_y
+        } else {
+            selected_px
+        };
         self.sync_visual_from_px();
     }
 
@@ -1010,7 +1016,7 @@ impl LauncherNav {
     fn save_game_list_state(&mut self, system_id: &str) {
         let memory = GameListMemory {
             selected: self.arcade.selected,
-            scroll_y: self.arcade.scroll_y,
+            scroll_y: self.arcade.selected as i32 * self.arcade.row_height,
         };
         self.game_list_memory.insert(system_id.to_string(), memory);
         self.arcade_filter
@@ -3674,6 +3680,38 @@ mod tests {
         nav.restore_game_list_state("amiga", catalog.system_game_count("amiga"));
         assert_eq!(nav.arcade.selected, 2);
         assert_eq!(nav.arcade.scroll_y, 2 * ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn launcher_restores_saved_game_position_without_sub_row_offset() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+
+        nav.selected = catalog_system_index(&catalog, "arcade");
+        nav.screen = Screen::Arcade;
+        nav.arcade.selected = 3;
+        nav.arcade.scroll_y = 3 * ARCADE_ROW_HEIGHT + 6;
+        nav.save_game_list_state("arcade");
+
+        nav.arcade.reset();
+        nav.restore_game_list_state("arcade", catalog.system_game_count("arcade"));
+
+        assert_eq!(nav.arcade.selected, 3);
+        assert_eq!(nav.arcade.scroll_y, 3 * ARCADE_ROW_HEIGHT);
+        assert_eq!(nav.arcade.visual_index, 3.0);
+        assert!(nav.arcade.is_settled());
+    }
+
+    #[test]
+    fn arcade_restore_position_treats_selected_row_as_authority() {
+        let mut nav = ArcadeNav::new();
+
+        nav.restore_position(4, 4 * ARCADE_ROW_HEIGHT - 5, 8);
+
+        assert_eq!(nav.selected, 4);
+        assert_eq!(nav.scroll_y, 4 * ARCADE_ROW_HEIGHT);
+        assert_eq!(nav.visual_index, 4.0);
+        assert!(nav.is_settled());
     }
 
     #[test]

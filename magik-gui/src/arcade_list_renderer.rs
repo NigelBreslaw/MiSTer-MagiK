@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::arcade_catalog::{
@@ -70,12 +71,14 @@ pub(crate) struct ArcadeListRenderer {
     row_cache: HashMap<usize, CachedArcadeRow>,
     surface: Vec<Rgb565Pixel>,
     band_scratch: Vec<Pixel>,
+    selection_invert_scratch: Vec<Rgb565Pixel>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
     row_cache_epoch: u64,
     row_fingerprint_epoch: u64,
     row_fingerprint_cache: HashMap<usize, CachedArcadeRowFingerprint>,
     surface_y: usize,
+    selection_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
     last_filter_draw: Option<ArcadeFilterListDrawKey>,
     geometry: ArcadeListGeometry,
@@ -105,6 +108,7 @@ impl CachedArcadeRowFingerprint {
 struct ArcadeListDrawKey {
     len: usize,
     visual_px: i32,
+    selection_y: usize,
     anchor_hash: u64,
     visible_hash: Option<u64>,
 }
@@ -120,6 +124,7 @@ pub(crate) struct ArcadeListItem {
 struct ArcadeFilterListDrawKey {
     len: usize,
     visual_px: i32,
+    selection_y: usize,
     visible_hash: u64,
 }
 
@@ -143,12 +148,14 @@ impl ArcadeListRenderer {
             row_cache: HashMap::new(),
             surface: vec![ARCADE_LIST_BG_COLOR_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
+            selection_invert_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             row_cache_epoch: 0,
             row_fingerprint_epoch: 0,
             row_fingerprint_cache: HashMap::new(),
             surface_y: 0,
+            selection_y: Self::centered_selection_y(),
             last_draw: None,
             last_filter_draw: None,
             geometry: ArcadeListGeometry::NORMAL,
@@ -177,11 +184,17 @@ impl ArcadeListRenderer {
     pub(crate) fn draw(
         &mut self,
         games: ArcadeGameView<'_>,
+        selected: usize,
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_filter_draw = None;
         let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
+        let selection_y = if games.is_empty() {
+            Self::centered_selection_y()
+        } else {
+            Self::selection_y_for(selected.min(games.len() - 1), visual_index)
+        };
         let anchor = visual_index
             .round()
             .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
@@ -203,6 +216,7 @@ impl ArcadeListRenderer {
         let key = ArcadeListDrawKey {
             len: games.len(),
             visual_px,
+            selection_y,
             anchor_hash,
             visible_hash,
         };
@@ -226,6 +240,7 @@ impl ArcadeListRenderer {
         });
         let can_reuse_scrolled_surface = same_len && !visible_content_changed_at_same_position;
         self.last_draw = Some(key);
+        self.selection_y = selection_y;
         if previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
             self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
@@ -263,13 +278,20 @@ impl ArcadeListRenderer {
     pub(crate) fn draw_filter_items(
         &mut self,
         items: &[ArcadeListItem],
+        selected: usize,
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_draw = None;
+        let selection_y = if items.is_empty() {
+            Self::centered_selection_y()
+        } else {
+            Self::selection_y_for(selected.min(items.len() - 1), visual_index)
+        };
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
             visual_px: (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32,
+            selection_y,
             visible_hash: arcade_filter_visible_window_hash(items, visual_index),
         };
         if !force && self.last_filter_draw.as_ref() == Some(&key) {
@@ -277,6 +299,7 @@ impl ArcadeListRenderer {
         }
         let previous = self.last_filter_draw;
         self.last_filter_draw = Some(key);
+        self.selection_y = selection_y;
         if force && previous.as_ref() == Some(&key) {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
@@ -321,7 +344,7 @@ impl ArcadeListRenderer {
     }
 
     pub(crate) fn selection_rect(&self) -> DirtyRect {
-        let y = Self::selection_y();
+        let y = self.selection_y;
         DirtyRect {
             x0: self.geometry.x,
             y0: self.geometry.y + y,
@@ -330,10 +353,18 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn selection_y() -> usize {
+    fn centered_selection_y() -> usize {
         let row_h = ARCADE_ROW_HEIGHT as usize;
         let visible_rows = (ARCADE_LIST_H / row_h).max(1);
         (visible_rows / 2) * row_h
+    }
+
+    fn selection_y_for(selected: usize, visual_index: f32) -> usize {
+        let row_h = ARCADE_ROW_HEIGHT as usize;
+        let max_y = ARCADE_LIST_H.saturating_sub(row_h) as isize;
+        let y = Self::centered_selection_y() as isize
+            + ((selected as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
+        y.clamp(0, max_y) as usize
     }
 
     fn draw_content_band(
@@ -368,7 +399,7 @@ impl ArcadeListRenderer {
         }
         self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
         let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = Self::selection_y() as isize;
+        let local_anchor_y = Self::centered_selection_y() as isize;
         let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
             return;
         };
@@ -419,11 +450,11 @@ impl ArcadeListRenderer {
             return;
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = Self::selection_y() as isize;
+        let local_anchor_y = Self::centered_selection_y() as isize;
         let Some((first, end)) = arcade_visible_window_range(items.len(), visual_index) else {
             return;
         };
-        for idx in first..=end {
+        for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
             let y =
                 local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
             let clip_y0 = y.max(band_y as isize);
@@ -431,7 +462,7 @@ impl ArcadeListRenderer {
             if clip_y1 <= clip_y0 {
                 continue;
             }
-            let row = self.render_filter_row(&items[idx], idx);
+            let row = self.render_filter_row(item, idx);
             let copy_h = (clip_y1 - clip_y0) as usize;
             let src_y = (clip_y0 - y) as usize;
             for row_y in 0..copy_h {
@@ -575,7 +606,7 @@ impl ArcadeListRenderer {
         redraw_selection_frame: bool,
     ) {
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_target(target, disp, viewport_y, h, !redraw_selection_frame);
+            self.copy_viewport_band_to_target(target, disp, viewport_y, h);
         }
         if redraw_selection_frame {
             self.copy_selection_frame_to_target(target, disp);
@@ -588,15 +619,24 @@ impl ArcadeListRenderer {
         disp: &mut MappedRgb565Framebuffer,
         viewport_y: usize,
         h: usize,
-        preserve_selection_frame: bool,
     ) {
         if h == 0 || viewport_y >= ARCADE_LIST_H {
             return;
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_copy_segment(viewport_y, h, preserve_selection_frame, |x, y, w, h| {
-            self.copy_surface_rect_to_target(target, disp, x, y, w, h);
-        });
+        for_each_arcade_list_present_segment_at(
+            self.selection_y,
+            viewport_y,
+            h,
+            |kind, x, y, w, h| match kind {
+                ArcadeListPresentKind::Normal => {
+                    self.copy_surface_rect_to_target(target, disp, x, y, w, h);
+                }
+                ArcadeListPresentKind::Inverted => {
+                    self.copy_inverted_surface_rect_to_target(target, disp, x, y, w, h);
+                }
+            },
+        );
     }
 
     fn copy_surface_rect_to_target(
@@ -653,6 +693,50 @@ impl ArcadeListRenderer {
             x,
             src_y,
         );
+    }
+
+    fn copy_inverted_surface_rect_to_target(
+        &mut self,
+        target: &mut UiFrameTarget,
+        disp: &mut MappedRgb565Framebuffer,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let target_x = self.geometry.x + x;
+            let target_y = self.geometry.y + viewport_y + copied;
+            let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
+            target.present_rect_565(disp, target_x, target_y, w, copy_h, inverted);
+            copied += copy_h;
+        }
+    }
+
+    fn prepare_inverted_surface_chunk(
+        &mut self,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) -> &[Rgb565Pixel] {
+        self.selection_invert_scratch
+            .resize(w.saturating_mul(h), Rgb565Pixel(0));
+        if w == 0 || h == 0 {
+            return &self.selection_invert_scratch;
+        }
+        let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
+        for row in 0..h {
+            let src = (src_y + row) * ARCADE_LIST_W + x;
+            let dst = row * w;
+            for col in 0..w {
+                self.selection_invert_scratch[dst + col] = invert_rgb565(self.surface[src + col]);
+            }
+        }
+        &self.selection_invert_scratch
     }
 
     fn copy_selection_frame_to_target(
@@ -789,61 +873,79 @@ fn draw_new_badge(row: &mut [Pixel], font: &mut ConsoleFont) {
     );
 }
 
-pub(crate) fn for_each_arcade_list_copy_segment(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArcadeListPresentKind {
+    Normal,
+    Inverted,
+}
+
+pub(crate) fn for_each_arcade_list_present_segment(
     viewport_y: usize,
     h: usize,
-    preserve_selection_frame: bool,
-    mut emit: impl FnMut(usize, usize, usize, usize),
+    emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
+) {
+    for_each_arcade_list_present_segment_at(
+        ArcadeListRenderer::centered_selection_y(),
+        viewport_y,
+        h,
+        emit,
+    );
+}
+
+fn for_each_arcade_list_present_segment_at(
+    selection_y: usize,
+    viewport_y: usize,
+    h: usize,
+    mut emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
 ) {
     if h == 0 || viewport_y >= ARCADE_LIST_H {
         return;
     }
     let y0 = viewport_y;
     let y1 = (viewport_y + h).min(ARCADE_LIST_H);
-    if !preserve_selection_frame {
-        emit(0, y0, ARCADE_LIST_W, y1 - y0);
-        return;
-    }
 
-    let selection_y = ArcadeListRenderer::selection_y();
     let selection_bottom = selection_y + ARCADE_ROW_HEIGHT as usize;
     let inner_top = selection_y + ARCADE_SELECTION_FRAME_THICKNESS;
     let inner_bottom = selection_bottom.saturating_sub(ARCADE_SELECTION_FRAME_THICKNESS);
 
-    emit_row_overlap(y0, y1, 0, selection_y, 0, ARCADE_LIST_W, &mut emit);
     emit_row_overlap(
-        y0,
-        y1,
-        inner_top,
-        inner_bottom,
-        ARCADE_SELECTION_FRAME_THICKNESS,
-        ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+        y0..y1,
+        0..selection_y,
+        0,
+        ARCADE_LIST_W,
+        ArcadeListPresentKind::Normal,
         &mut emit,
     );
     emit_row_overlap(
-        y0,
-        y1,
-        selection_bottom,
-        ARCADE_LIST_H,
+        y0..y1,
+        inner_top..inner_bottom,
+        ARCADE_SELECTION_FRAME_THICKNESS,
+        ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+        ArcadeListPresentKind::Inverted,
+        &mut emit,
+    );
+    emit_row_overlap(
+        y0..y1,
+        selection_bottom..ARCADE_LIST_H,
         0,
         ARCADE_LIST_W,
+        ArcadeListPresentKind::Normal,
         &mut emit,
     );
 }
 
 fn emit_row_overlap(
-    y0: usize,
-    y1: usize,
-    band_y0: usize,
-    band_y1: usize,
+    viewport: Range<usize>,
+    band: Range<usize>,
     x: usize,
     w: usize,
-    emit: &mut impl FnMut(usize, usize, usize, usize),
+    kind: ArcadeListPresentKind,
+    emit: &mut impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
 ) {
-    let out_y0 = y0.max(band_y0);
-    let out_y1 = y1.min(band_y1);
+    let out_y0 = viewport.start.max(band.start);
+    let out_y1 = viewport.end.min(band.end);
     if out_y1 > out_y0 && w > 0 {
-        emit(x, out_y0, w, out_y1 - out_y0);
+        emit(kind, x, out_y0, w, out_y1 - out_y0);
     }
 }
 
@@ -913,11 +1015,11 @@ fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_index: f32
     };
     arcade_hash_usize(&mut hash, first);
     arcade_hash_usize(&mut hash, end);
-    for idx in first..=end {
+    for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
         arcade_hash_usize(&mut hash, idx);
-        arcade_hash_bytes(&mut hash, items[idx].title.as_bytes());
-        arcade_hash_usize(&mut hash, items[idx].count.unwrap_or(usize::MAX));
-        arcade_hash_bytes(&mut hash, &[items[idx].active as u8]);
+        arcade_hash_bytes(&mut hash, item.title.as_bytes());
+        arcade_hash_usize(&mut hash, item.count.unwrap_or(usize::MAX));
+        arcade_hash_bytes(&mut hash, &[item.active as u8]);
     }
     hash
 }
@@ -964,7 +1066,7 @@ fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
 }
 
 pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
-    let bg = if idx % 2 == 0 {
+    let bg = if idx.is_multiple_of(2) {
         Pixel(0x001a1424)
     } else {
         Pixel(0x00150f20)
@@ -985,7 +1087,11 @@ pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
 }
 
 const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
-    Rgb565Pixel((((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)) as u16)
+    Rgb565Pixel(((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3))
+}
+
+fn invert_rgb565(pixel: Rgb565Pixel) -> Rgb565Pixel {
+    Rgb565Pixel(!pixel.0)
 }
 
 fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
@@ -1068,17 +1174,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
         assert!(renderer
-            .draw(ArcadeGameView::contiguous(&games), 7.0, false)
+            .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
             .is_none());
 
         games[3].title = "Changed visible row".into();
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
     }
@@ -1097,13 +1203,13 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
         let before = renderer.surface.clone();
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, true),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, true),
             Some(ArcadeListUpdate::Full(_))
         ));
 
@@ -1135,28 +1241,57 @@ mod tests {
     }
 
     #[test]
-    fn preserved_selection_frame_copy_segments_skip_only_frame_pixels() {
+    fn selection_frame_tracks_selected_row_during_fractional_scroll() {
+        let mut renderer = ArcadeListRenderer::new();
+        let games = (0..4)
+            .map(|idx| {
+                game(
+                    "intellivision",
+                    &format!("/media/fat/games/Intellivision/{idx}.int"),
+                    &format!("Game {idx}"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 1, 0.5, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        let rect = renderer.selection_rect();
+        assert_eq!(
+            rect.y0,
+            ARCADE_LIST_Y
+                + ArcadeListRenderer::centered_selection_y()
+                + ARCADE_ROW_HEIGHT as usize / 2
+        );
+        assert_eq!(rect.y1 - rect.y0, ARCADE_ROW_HEIGHT as usize);
+    }
+
+    #[test]
+    fn arcade_present_segments_invert_selected_row_inner_and_skip_frame_pixels() {
         let mut segments = Vec::new();
 
-        for_each_arcade_list_copy_segment(0, ARCADE_LIST_H, true, |x, y, w, h| {
-            segments.push((x, y, w, h));
+        for_each_arcade_list_present_segment(0, ARCADE_LIST_H, |kind, x, y, w, h| {
+            segments.push((kind, x, y, w, h));
         });
 
         assert_eq!(
             segments,
             vec![
-                (0, 0, ARCADE_LIST_W, 240),
+                (ArcadeListPresentKind::Normal, 0, 0, ARCADE_LIST_W, 240),
                 (
+                    ArcadeListPresentKind::Inverted,
                     ARCADE_SELECTION_FRAME_THICKNESS,
                     243,
                     ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
                     42
                 ),
-                (0, 288, ARCADE_LIST_W, 192),
+                (ArcadeListPresentKind::Normal, 0, 288, ARCADE_LIST_W, 192),
             ]
         );
 
-        let copied_px = segments.iter().map(|(_, _, w, h)| w * h).sum::<usize>();
+        let copied_px = segments.iter().map(|(_, _, _, w, h)| w * h).sum::<usize>();
         let skipped_px = ARCADE_LIST_W * ARCADE_LIST_H - copied_px;
         let frame_px = ARCADE_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2
             + (ARCADE_ROW_HEIGHT as usize - ARCADE_SELECTION_FRAME_THICKNESS * 2)
@@ -1167,14 +1302,65 @@ mod tests {
     }
 
     #[test]
-    fn full_redraw_copy_segment_keeps_complete_surface() {
+    fn arcade_present_segments_follow_supplied_selection_y() {
         let mut segments = Vec::new();
+        let selection_y = ArcadeListRenderer::centered_selection_y() + 24;
 
-        for_each_arcade_list_copy_segment(0, ARCADE_LIST_H, false, |x, y, w, h| {
-            segments.push((x, y, w, h));
-        });
+        for_each_arcade_list_present_segment_at(
+            selection_y,
+            0,
+            ARCADE_LIST_H,
+            |kind, x, y, w, h| {
+                segments.push((kind, x, y, w, h));
+            },
+        );
 
-        assert_eq!(segments, vec![(0, 0, ARCADE_LIST_W, ARCADE_LIST_H)]);
+        assert_eq!(
+            segments,
+            vec![
+                (ArcadeListPresentKind::Normal, 0, 0, ARCADE_LIST_W, 264),
+                (
+                    ArcadeListPresentKind::Inverted,
+                    ARCADE_SELECTION_FRAME_THICKNESS,
+                    267,
+                    ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+                    42
+                ),
+                (ArcadeListPresentKind::Normal, 0, 312, ARCADE_LIST_W, 168),
+            ]
+        );
+    }
+
+    #[test]
+    fn rgb565_inversion_flips_all_color_bits() {
+        assert_eq!(invert_rgb565(Rgb565Pixel(0xffff)), Rgb565Pixel(0x0000));
+        assert_eq!(invert_rgb565(Rgb565Pixel(0x0000)), Rgb565Pixel(0xffff));
+        assert_eq!(invert_rgb565(Rgb565Pixel(0x1234)), Rgb565Pixel(!0x1234));
+    }
+
+    #[test]
+    fn preparing_inverted_selection_chunk_does_not_mutate_surface() {
+        let mut renderer = ArcadeListRenderer::new();
+        for (idx, pixel) in renderer.surface.iter_mut().enumerate() {
+            *pixel = Rgb565Pixel(idx as u16);
+        }
+        renderer.surface_y = 5;
+        let before = renderer.surface.clone();
+        let x = ARCADE_SELECTION_FRAME_THICKNESS;
+        let y = ArcadeListRenderer::centered_selection_y() + ARCADE_SELECTION_FRAME_THICKNESS;
+        let w = 4;
+        let h = 2;
+
+        let inverted = renderer.prepare_inverted_surface_chunk(x, y, w, h).to_vec();
+
+        assert_eq!(renderer.surface, before);
+        for row in 0..h {
+            let src_y = (renderer.surface_y + y + row) % ARCADE_LIST_H;
+            for col in 0..w {
+                let src = before[src_y * ARCADE_LIST_W + x + col];
+                assert_eq!(inverted[row * w + col], invert_rgb565(src));
+            }
+        }
     }
 
     #[test]
@@ -1213,17 +1399,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
         assert!(renderer
-            .draw(ArcadeGameView::contiguous(&games), 7.0, false)
+            .draw(ArcadeGameView::contiguous(&games), 7, 7.0, false)
             .is_none());
 
         games[3].is_new = true;
 
         assert!(matches!(
-            renderer.draw(ArcadeGameView::contiguous(&games), 7.0, false),
+            renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
     }

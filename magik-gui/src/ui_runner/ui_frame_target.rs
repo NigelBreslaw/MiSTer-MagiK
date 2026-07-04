@@ -315,7 +315,7 @@ pub(super) fn copy_arcade_list_update(
             // prior live-framebuffer scroll-present path was visually correct
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
-            renderer.copy_layer_to_target(target, disp, false);
+            renderer.copy_layer_to_target(target, disp, true);
             rect.rows()
         }
     }
