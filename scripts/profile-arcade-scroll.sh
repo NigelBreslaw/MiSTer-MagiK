@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -22,6 +22,7 @@ pulls the raw TSV/log, then prints frame timing summaries.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
+--selection-invert on|off toggles selected-row inversion for A/B cost runs.
 
 Do not use row-step `list-scroll` for arcade performance benchmarking. It does
 not reproduce real velocity scrolling.
@@ -34,6 +35,7 @@ secs="30"
 label="arcade-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 scenario="turbo-hold"
 deploy="skip"
+selection_invert=""
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -49,6 +51,11 @@ while [[ $# -gt 0 ]]; do
     --scenario)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--scenario needs a value" >&2; usage >&2; exit 2; fi
       scenario="$2"
+      shift 2
+      ;;
+    --selection-invert)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--selection-invert needs on or off" >&2; usage >&2; exit 2; fi
+      selection_invert="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -85,6 +92,10 @@ case "$scenario" in
     exit 2
     ;;
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
+esac
+case "$selection_invert" in
+  ""|on|off) ;;
+  *) echo "--selection-invert must be on or off" >&2; usage >&2; exit 2 ;;
 esac
 remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
@@ -139,6 +150,11 @@ echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=
   printf 'export MISTER_PREVIEW_TRACE=1\n'
   printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
   printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
+  if [[ "$selection_invert" == "off" ]]; then
+    printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
+  elif [[ "$selection_invert" == "on" ]]; then
+    printf 'export MISTER_ARCADE_SELECTION_INVERT=1\n'
+  fi
 } >"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
