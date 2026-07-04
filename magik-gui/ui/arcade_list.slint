@@ -245,7 +245,7 @@ export component ArcadeListScreen inherits Rectangle {
                 }
 
                 Rectangle {
-                    x: (MisterBridge.arcade-list-x - 480) * 1px * root.s;
+                    x: (MisterBridge.arcade-list-x - MisterUi.window-width / 2) * 1px * root.s;
                     y: MisterBridge.arcade-list-y * 1px * root.s;
                     width: MisterBridge.arcade-list-width * 1px * root.s;
                     height: MisterBridge.arcade-list-height * 1px * root.s;

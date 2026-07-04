@@ -17,9 +17,6 @@ pub(crate) const ARCADE_LIST_Y: usize = 56;
 // space without covering the centered preview cabinet.
 pub(crate) const ARCADE_LIST_W: usize = 510;
 pub(crate) const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
-// Search results use the same wider viewport, mirrored to keep the right inset.
-pub(crate) const ARCADE_SEARCH_LIST_X: usize =
-    crate::ui_display::UI_FB_W - ARCADE_LIST_X - ARCADE_LIST_W;
 pub(crate) const ARCADE_SEARCH_LIST_Y: usize = 56;
 pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
 pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
@@ -54,10 +51,13 @@ impl ArcadeListGeometry {
         x: ARCADE_LIST_X,
         y: ARCADE_LIST_Y,
     };
-    pub(crate) const SEARCH: Self = Self {
-        x: ARCADE_SEARCH_LIST_X,
-        y: ARCADE_SEARCH_LIST_Y,
-    };
+
+    pub(crate) fn search_for_render_w(render_w: usize) -> Self {
+        Self {
+            x: render_w.saturating_sub(ARCADE_LIST_X + ARCADE_LIST_W),
+            y: ARCADE_SEARCH_LIST_Y,
+        }
+    }
 
     pub(crate) fn dirty_rect(self) -> DirtyRect {
         DirtyRect {
@@ -1169,6 +1169,24 @@ mod tests {
             pixels.extend_from_slice(&renderer.surface[src..src + ARCADE_LIST_W]);
         }
         pixels
+    }
+
+    #[test]
+    fn search_geometry_right_aligns_to_render_width() {
+        assert_eq!(
+            ArcadeListGeometry::search_for_render_w(960),
+            ArcadeListGeometry {
+                x: 442,
+                y: ARCADE_SEARCH_LIST_Y,
+            }
+        );
+        assert_eq!(
+            ArcadeListGeometry::search_for_render_w(1280),
+            ArcadeListGeometry {
+                x: 762,
+                y: ARCADE_SEARCH_LIST_Y,
+            }
+        );
     }
 
     #[test]
