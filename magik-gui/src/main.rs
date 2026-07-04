@@ -75,6 +75,7 @@ mod media_bench_download;
 #[cfg(feature = "bench-tools")]
 mod media_bench_save;
 mod media_pack_save;
+mod memory_pressure;
 mod mr_audio;
 #[cfg(feature = "diagnostics")]
 mod preview_pack_bench;
