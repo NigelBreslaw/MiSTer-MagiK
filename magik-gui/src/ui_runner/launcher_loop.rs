@@ -275,12 +275,75 @@ impl LauncherInputScriptDriver {
         self.frame_in_button = 0;
         Some(PadState::default())
     }
+
+    fn active(&self) -> bool {
+        self.button_idx < self.buttons.len()
+    }
 }
 
 fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
     let mut state = PadState::default();
     set(&mut state);
     state
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LauncherIdleInput {
+    first_visible_copy_done: bool,
+    redraw_pending: bool,
+    status_write_due: bool,
+    launching: bool,
+    setup_active: bool,
+    benchmark_active: bool,
+    scripted_input_active: bool,
+    startup_input_enabled: bool,
+    route_forces_full_present: bool,
+    bridge_dirty: bool,
+    catalog_messages_active: bool,
+    media_message_seen: bool,
+    catalog_scan_visible: bool,
+    catalog_background_scan_visible: bool,
+    catalog_scan_redraw_due: bool,
+    catalog_games_found_detail_changed: bool,
+    arcade_scroll_active: bool,
+    arcade_filter_scroll_active: bool,
+    arcade_search_active: bool,
+    preview_dirty: bool,
+    preview_scheduled_this_loop: bool,
+    composition_forces_full_present: bool,
+    composition_clears_direct_layers: bool,
+}
+
+impl LauncherIdleInput {
+    fn can_sleep(self) -> bool {
+        self.first_visible_copy_done
+            && !self.redraw_pending
+            && !self.status_write_due
+            && !self.launching
+            && !self.setup_active
+            && !self.benchmark_active
+            && !self.scripted_input_active
+            && self.startup_input_enabled
+            && !self.route_forces_full_present
+            && !self.bridge_dirty
+            && !self.catalog_messages_active
+            && !self.media_message_seen
+            && !self.catalog_scan_visible
+            && !self.catalog_background_scan_visible
+            && !self.catalog_scan_redraw_due
+            && !self.catalog_games_found_detail_changed
+            && !self.arcade_scroll_active
+            && !self.arcade_filter_scroll_active
+            && !self.arcade_search_active
+            && !self.preview_dirty
+            && !self.preview_scheduled_this_loop
+            && !self.composition_forces_full_present
+            && !self.composition_clears_direct_layers
+    }
+}
+
+fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
+    Duration::from_micros(pacer.period_us().max(1))
 }
 
 fn catalog_from_summary(
@@ -917,6 +980,13 @@ pub(super) fn run_launcher_loop(
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
+    let mut launcher_redraw_pending = true;
+    macro_rules! request_launcher_redraw {
+        () => {{
+            launcher_redraw_pending = true;
+            window.request_redraw();
+        }};
+    }
     let run_start =
         if arcade_catalog_required_at_start && arcade_navigation_ready(catalog_ready, &catalog) {
             Instant::now()
@@ -1197,8 +1267,10 @@ pub(super) fn run_launcher_loop(
         }
 
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
+        let mut media_message_seen = false;
         scheduler.poll_media(&mut media_events);
         for message in media_events.drain() {
+            media_message_seen = true;
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             let catalog_scan_visible = bridge.get_catalog_scan_visible();
             let effects =
@@ -1254,7 +1326,7 @@ pub(super) fn run_launcher_loop(
                         target.present_rows(disp, 0, ui.render_h());
                     }
                     let recovery_presented = Instant::now();
-                    window.request_redraw();
+                    request_launcher_redraw!();
                     scheduler.finish_launch_failure_recovery(recovery_presented);
                     lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
@@ -1434,7 +1506,7 @@ pub(super) fn run_launcher_loop(
                                 preview_transition
                                     .current_label(frame_now.duration_since(run_start))
                             );
-                            window.request_redraw();
+                            request_launcher_redraw!();
                         }
                     }
                     transition_picker_prev_left = launcher_state.dpad_left;
@@ -1609,7 +1681,7 @@ pub(super) fn run_launcher_loop(
                                     &mut full_bridge_dirty,
                                     start,
                                 );
-                                window.request_redraw();
+                                request_launcher_redraw!();
                                 continue;
                             }
                             LauncherAction::RebuildLibrary => {
@@ -1634,7 +1706,7 @@ pub(super) fn run_launcher_loop(
                                     &mut full_bridge_dirty,
                                     start,
                                 );
-                                window.request_redraw();
+                                request_launcher_redraw!();
                                 continue;
                             }
                             LauncherAction::LaunchGame => {}
@@ -1696,7 +1768,7 @@ pub(super) fn run_launcher_loop(
                         lifecycle
                             .loading_frame_presented(loading_presented, &mut lifecycle_effects);
                         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        window.request_redraw();
+                        request_launcher_redraw!();
                     }
                     let nav_after = LauncherBridgeKey::from_nav(&nav);
                     if nav_before != nav_after {
@@ -1772,7 +1844,7 @@ pub(super) fn run_launcher_loop(
                     defer_selected_preview,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
-                window.request_redraw();
+                request_launcher_redraw!();
             } else if light_bridge_dirty {
                 let active_games = if nav.screen == Screen::Arcade {
                     Some(active_system_game_view(&catalog, &nav))
@@ -1792,7 +1864,7 @@ pub(super) fn run_launcher_loop(
                     defer_selected_preview,
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
-                window.request_redraw();
+                request_launcher_redraw!();
             }
             sync_startup_visibility(&app, &lifecycle);
         } else {
@@ -1895,16 +1967,14 @@ pub(super) fn run_launcher_loop(
         } else {
             false
         };
-        if launching
-            || games_found_detail_changed
-            || catalog_scan_redraw.should_request(
-                catalog_scan_visible,
-                catalog_background_scan_visible,
-                catalog_scan_percent,
-                loop_start,
-            )
-        {
-            window.request_redraw();
+        let catalog_scan_redraw_due = catalog_scan_redraw.should_request(
+            catalog_scan_visible,
+            catalog_background_scan_visible,
+            catalog_scan_percent,
+            loop_start,
+        );
+        if launching || games_found_detail_changed || catalog_scan_redraw_due {
+            request_launcher_redraw!();
         }
         let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
             active_system_game_view(&catalog, &nav)
@@ -1969,7 +2039,7 @@ pub(super) fn run_launcher_loop(
                 defer_selected_preview,
                 nav.arcade.is_scroll_active(),
             ) {
-                window.request_redraw();
+                request_launcher_redraw!();
             }
         }
         if let Some(trace_start) = preview_schedule_trace_start {
@@ -1981,7 +2051,7 @@ pub(super) fn run_launcher_loop(
             && !memory_guard.active()
             && apply_ready_preview(&app, &mut preview, defer_selected_preview)
         {
-            window.request_redraw();
+            request_launcher_redraw!();
         }
         if let Some(trace_start) = preview_apply_trace_start {
             prepare_trace.preview_apply_us = trace_start.elapsed().as_micros();
@@ -1995,15 +2065,6 @@ pub(super) fn run_launcher_loop(
         );
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
-
-        let frame_t0 = Instant::now();
-        let prepare_us = (frame_t0 - loop_start).as_micros();
-        update_slint_animations(animation_clock);
-        let mut layer_target = LayerTarget::new(target, disp, ui);
-        let frame_t1 = Instant::now();
-        let this_rect = layer_target.render_slint_base(&window);
-        let frame_t2 = Instant::now();
-        let custom_draw_start = Instant::now();
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
         let mut full_frame_present =
@@ -2035,8 +2096,52 @@ pub(super) fn run_launcher_loop(
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 preview.clear(&bridge);
             }
-            window.request_redraw();
+            request_launcher_redraw!();
         }
+        let startup_status = lifecycle.startup_status();
+        let idle_input = LauncherIdleInput {
+            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+            redraw_pending: launcher_redraw_pending,
+            status_write_due,
+            launching,
+            setup_active,
+            benchmark_active: launcher_bench_scenario.is_some(),
+            scripted_input_active: launcher_input_script.active(),
+            startup_input_enabled: startup_status.input_enabled,
+            route_forces_full_present: route_action.force_full_present,
+            bridge_dirty: full_bridge_dirty || light_bridge_dirty,
+            catalog_messages_active: prepare_trace.catalog_message_count > 0
+                || prepare_trace.catalog_backlog > 0
+                || pending_catalog_ready.is_some(),
+            media_message_seen,
+            catalog_scan_visible,
+            catalog_background_scan_visible,
+            catalog_scan_redraw_due,
+            catalog_games_found_detail_changed: games_found_detail_changed,
+            arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+            arcade_filter_scroll_active: nav.screen == Screen::Arcade
+                && nav.arcade_filter.drawer_open
+                && nav.arcade_filter.is_scroll_active(),
+            arcade_search_active,
+            preview_dirty: preview.raw_dirty(),
+            preview_scheduled_this_loop,
+            composition_forces_full_present: composition_decision.force_full_slint_present,
+            composition_clears_direct_layers: composition_decision.clear_direct_layers,
+        };
+        if idle_input.can_sleep() {
+            std::thread::sleep(launcher_idle_sleep_duration(&pacer));
+            continue;
+        }
+
+        let frame_t0 = Instant::now();
+        let prepare_us = (frame_t0 - loop_start).as_micros();
+        update_slint_animations(animation_clock);
+        let mut layer_target = LayerTarget::new(target, disp, ui);
+        let frame_t1 = Instant::now();
+        let this_rect = layer_target.render_slint_base(&window);
+        launcher_redraw_pending = false;
+        let frame_t2 = Instant::now();
+        let custom_draw_start = Instant::now();
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             arcade_list_renderer.set_geometry(if arcade_search_active {
@@ -2082,7 +2187,7 @@ pub(super) fn run_launcher_loop(
             };
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
-            window.request_redraw();
+            request_launcher_redraw!();
         }
         let effect_label_us = 0;
         let custom_draw_trace = LauncherCustomDrawTrace {
@@ -3686,6 +3791,62 @@ mod tests {
             true,
             "Library scan failed"
         ));
+    }
+
+    #[test]
+    pub(super) fn launcher_idle_wait_requires_first_visible_copy_and_no_redraw() {
+        let mut input = LauncherIdleInput {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            ..LauncherIdleInput::default()
+        };
+
+        assert!(input.can_sleep());
+        input.first_visible_copy_done = false;
+        assert!(!input.can_sleep());
+        input.first_visible_copy_done = true;
+        input.redraw_pending = true;
+        assert!(!input.can_sleep());
+    }
+
+    #[test]
+    pub(super) fn launcher_idle_wait_rejects_active_work() {
+        let base = LauncherIdleInput {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            ..LauncherIdleInput::default()
+        };
+
+        assert!(!LauncherIdleInput {
+            launching: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            catalog_messages_active: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            media_message_seen: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            preview_dirty: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            arcade_scroll_active: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            composition_forces_full_present: true,
+            ..base
+        }
+        .can_sleep());
     }
 
     #[test]

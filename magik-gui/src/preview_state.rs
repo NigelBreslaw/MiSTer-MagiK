@@ -479,6 +479,10 @@ impl PreviewState {
         dirty
     }
 
+    pub(crate) fn raw_dirty(&self) -> bool {
+        self.raw_dirty
+    }
+
     fn raw_frame_from_image(image: &PreviewImage) -> PreviewRawFrame<'_> {
         PreviewRawFrame {
             pixels: match &image.pixels {
