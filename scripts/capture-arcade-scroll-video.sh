@@ -12,10 +12,11 @@ device_index=0
 device_name=""
 size="1920x1080"
 fps="60.000240"
+ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/capture-arcade-scroll-video.sh [LABEL] [--secs N] [--capture-secs N] [--device-index N|--device-name NAME] [--size WxH] [--fps N]
+Usage: scripts/capture-arcade-scroll-video.sh [LABEL] [--secs N] [--capture-secs N] [--device-index N|--device-name NAME] [--size WxH] [--fps N] [--ui-fb-size auto|960x540|1280x720]
 
 Starts a native macOS AVFoundation camera recording, then runs the real
 Main-supervised Arcade velocity-scroll profile. The recording intentionally
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --device-name) device_name="${2:?}"; shift 2 ;;
     --size) size="${2:?}"; shift 2 ;;
     --fps) fps="${2:?}"; shift 2 ;;
+    --ui-fb-size) ui_fb_size="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
@@ -53,6 +55,10 @@ if [[ ! "$capture_secs" =~ ^[0-9]+$ || "$capture_secs" -lt "$secs" ]]; then
   echo "capture-secs must be an integer >= secs" >&2
   exit 2
 fi
+case "$ui_fb_size" in
+  auto|960x540|1280x720) ;;
+  *) echo "--ui-fb-size must be auto, 960x540, or 1280x720" >&2; exit 2 ;;
+esac
 if ! command -v ffprobe >/dev/null 2>&1; then
   echo "ffprobe is required to verify the captured video" >&2
   exit 1
@@ -65,6 +71,7 @@ profile_log="$OUT_DIR/${label}.profile.log"
 probe_log="$OUT_DIR/${label}.probe.txt"
 
 echo "==> recording $video"
+echo "==> requested capture ${size}@${fps}; ui_fb_size=$ui_fb_size"
 camera_selector=(--device-index "$device_index")
 if [[ -n "$device_name" ]]; then
   camera_selector=(--device-name "$device_name")
@@ -88,16 +95,21 @@ trap cleanup EXIT
 
 sleep 1
 set +e
-"$HERE/scripts/profile-arcade-scroll.sh" "$label" --secs "$secs" --scenario velocity-scroll --skip-build | tee "$profile_log"
+"$HERE/scripts/profile-arcade-scroll.sh" "$label" --secs "$secs" --scenario velocity-scroll --skip-build --ui-fb-size "$ui_fb_size" | tee "$profile_log"
 profile_status=${PIPESTATUS[0]}
 set -e
 wait "$camera_pid"
 trap - EXIT
 
-ffprobe -hide_banner -v error \
-  -select_streams v:0 \
-  -show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration \
-  -of default=noprint_wrappers=1 "$video" >"$probe_log"
+{
+  printf 'requested_size=%s\n' "$size"
+  printf 'requested_fps=%s\n' "$fps"
+  printf 'ui_fb_size=%s\n' "$ui_fb_size"
+  ffprobe -hide_banner -v error \
+    -select_streams v:0 \
+    -show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration \
+    -of default=noprint_wrappers=1 "$video"
+} >"$probe_log"
 
 echo "wrote $video"
 echo "wrote $camera_log"
