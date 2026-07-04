@@ -133,6 +133,7 @@ echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=
 {
   printf 'export MISTER_CATALOG_REFRESH=default\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+  printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
   printf 'export MISTER_PREVIEW_TRACE=1\n'
