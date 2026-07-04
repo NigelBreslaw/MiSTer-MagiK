@@ -12,8 +12,57 @@ pub const DEFAULT_OUTPUT_W: u16 = 1920;
 pub const DEFAULT_OUTPUT_H: u16 = 1080;
 pub const UI_FB_W: usize = 960;
 pub const UI_FB_H: usize = 540;
+pub const UI_FB_720P_W: usize = 1280;
+pub const UI_FB_720P_H: usize = 720;
 const MIN_RUNTIME_SCAN_W: u16 = 320;
 const MIN_RUNTIME_SCAN_H: u16 = 200;
+const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiFramebufferSizePolicy {
+    Auto,
+    Force960x540,
+    Force1280x720,
+}
+
+impl UiFramebufferSizePolicy {
+    pub fn from_env() -> Self {
+        std::env::var(UI_FB_SIZE_ENV)
+            .ok()
+            .as_deref()
+            .and_then(Self::parse)
+            .unwrap_or(Self::Auto)
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Some(Self::Auto),
+            "960x540" => Some(Self::Force960x540),
+            "1280x720" => Some(Self::Force1280x720),
+            _ => None,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Force960x540 => "forced-960x540",
+            Self::Force1280x720 => "forced-1280x720",
+        }
+    }
+
+    pub const fn env_name() -> &'static str {
+        UI_FB_SIZE_ENV
+    }
+
+    fn framebuffer_size(self, output_w: usize, output_h: usize) -> (usize, usize) {
+        match self {
+            Self::Auto => launcher_framebuffer_size(output_w, output_h),
+            Self::Force960x540 => (UI_FB_W, UI_FB_H),
+            Self::Force1280x720 => (UI_FB_720P_W, UI_FB_720P_H),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiDisplayPlan {
@@ -24,6 +73,7 @@ pub struct UiDisplayPlan {
     pub scan_w: u16,
     pub scan_h: u16,
     pub direct_video: bool,
+    pub fb_policy: UiFramebufferSizePolicy,
     pub source: &'static str,
     pub fallback: bool,
 }
@@ -31,20 +81,29 @@ pub struct UiDisplayPlan {
 impl UiDisplayPlan {
     pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
         let ini = std::fs::read_to_string(MISTER_INI_PATH).ok();
+        let fb_policy = UiFramebufferSizePolicy::from_env();
         if let Some(runtime) = runtime {
-            return Self::from_runtime_geometry(
+            return Self::from_runtime_geometry_with_policy(
                 runtime,
                 ini.as_deref()
                     .is_some_and(Self::direct_video_policy_from_mister_ini_text),
+                fb_policy,
             );
         }
-        ini.and_then(|ini| Self::from_mister_ini_text(&ini))
-            .unwrap_or_else(Self::fallback_1080p)
+        ini.and_then(|ini| Self::from_mister_ini_text_with_policy(&ini, fb_policy))
+            .unwrap_or_else(|| Self::fallback_1080p_with_policy(fb_policy))
     }
 
     pub fn from_mister_ini_text(ini: &str) -> Option<Self> {
+        Self::from_mister_ini_text_with_policy(ini, UiFramebufferSizePolicy::Auto)
+    }
+
+    pub fn from_mister_ini_text_with_policy(
+        ini: &str,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Option<Self> {
         let parsed = ParsedIni::parse(ini);
-        Self::from_parsed_mister_ini(&parsed)
+        Self::from_parsed_mister_ini(&parsed, fb_policy)
     }
 
     #[cfg(test)]
@@ -53,9 +112,10 @@ impl UiDisplayPlan {
         ini: &str,
     ) -> Option<Self> {
         if let Some(runtime) = runtime {
-            return Some(Self::from_runtime_geometry(
+            return Some(Self::from_runtime_geometry_with_policy(
                 runtime,
                 Self::direct_video_policy_from_mister_ini_text(ini),
+                UiFramebufferSizePolicy::Auto,
             ));
         }
         Self::from_mister_ini_text(ini)
@@ -65,7 +125,10 @@ impl UiDisplayPlan {
         direct_video_from_parsed(&ParsedIni::parse(ini))
     }
 
-    fn from_parsed_mister_ini(parsed: &ParsedIni<'_>) -> Option<Self> {
+    fn from_parsed_mister_ini(
+        parsed: &ParsedIni<'_>,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Option<Self> {
         let direct_video = direct_video_from_parsed(parsed);
         if direct_video {
             let pal = parsed
@@ -82,11 +145,12 @@ impl UiDisplayPlan {
                 (true, false) => (640, 288),
                 (true, true) => (640, 576),
             };
-            return Some(Self::from_output(
+            return Some(Self::from_output_with_policy(
                 output_w,
                 output_h,
                 true,
                 "mister-ini-direct-video",
+                fb_policy,
             ));
         }
 
@@ -99,10 +163,23 @@ impl UiDisplayPlan {
             geometry,
             false,
             "mister-ini-video-mode",
+            fb_policy,
         ))
     }
 
     pub fn from_runtime_geometry(runtime: RuntimeDisplayGeometry, direct_video: bool) -> Self {
+        Self::from_runtime_geometry_with_policy(
+            runtime,
+            direct_video,
+            UiFramebufferSizePolicy::Auto,
+        )
+    }
+
+    pub fn from_runtime_geometry_with_policy(
+        runtime: RuntimeDisplayGeometry,
+        direct_video: bool,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Self {
         Self::from_geometry(
             VideoModeGeometry::with_scan(
                 runtime.output_w,
@@ -112,21 +189,49 @@ impl UiDisplayPlan {
             ),
             direct_video,
             "runtime-video-info",
+            fb_policy,
         )
     }
 
     pub fn fallback_1080p() -> Self {
+        Self::fallback_1080p_with_policy(UiFramebufferSizePolicy::Auto)
+    }
+
+    fn fallback_1080p_with_policy(fb_policy: UiFramebufferSizePolicy) -> Self {
         Self {
             fallback: true,
-            ..Self::from_output(DEFAULT_OUTPUT_W, DEFAULT_OUTPUT_H, false, "fallback-1080p")
+            ..Self::from_output_with_policy(
+                DEFAULT_OUTPUT_W,
+                DEFAULT_OUTPUT_H,
+                false,
+                "fallback-1080p",
+                fb_policy,
+            )
         }
     }
 
     fn from_output(output_w: u16, output_h: u16, direct_video: bool, source: &'static str) -> Self {
+        Self::from_output_with_policy(
+            output_w,
+            output_h,
+            direct_video,
+            source,
+            UiFramebufferSizePolicy::Auto,
+        )
+    }
+
+    fn from_output_with_policy(
+        output_w: u16,
+        output_h: u16,
+        direct_video: bool,
+        source: &'static str,
+        fb_policy: UiFramebufferSizePolicy,
+    ) -> Self {
         Self::from_geometry(
             VideoModeGeometry::new(output_w, output_h),
             direct_video,
             source,
+            fb_policy,
         )
     }
 
@@ -134,9 +239,10 @@ impl UiDisplayPlan {
         geometry: VideoModeGeometry,
         direct_video: bool,
         source: &'static str,
+        fb_policy: UiFramebufferSizePolicy,
     ) -> Self {
         let (fb_w, fb_h) =
-            launcher_framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
+            fb_policy.framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
         Self {
             fb_w,
             fb_h,
@@ -145,6 +251,7 @@ impl UiDisplayPlan {
             scan_w: geometry.scan_w,
             scan_h: geometry.scan_h,
             direct_video,
+            fb_policy,
             source,
             fallback: false,
         }
@@ -152,7 +259,7 @@ impl UiDisplayPlan {
 
     pub fn log_line(self) -> String {
         format!(
-            "display-plan: source={} output={}x{} scan={}x{} fb={}x{} direct_video={} fallback={}",
+            "display-plan: source={} output={}x{} scan={}x{} fb={}x{} fb_policy={} direct_video={} fallback={}",
             self.source,
             self.output_w,
             self.output_h,
@@ -160,6 +267,7 @@ impl UiDisplayPlan {
             self.scan_h,
             self.fb_w,
             self.fb_h,
+            self.fb_policy.label(),
             self.direct_video,
             self.fallback
         )
@@ -415,9 +523,61 @@ mod tests {
     fn display_plan_halves_hd_modes() {
         let plan = UiDisplayPlan::from_output(1920, 1080, false, "test");
         assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
+        assert_eq!(plan.fb_policy, UiFramebufferSizePolicy::Auto);
         let ui = UiDisplay::for_plan(plan);
         assert_eq!(ui.render_w(), 960);
         assert_eq!(ui.render_h(), 540);
+    }
+
+    #[test]
+    fn framebuffer_size_policy_parses_supported_env_values() {
+        assert_eq!(
+            UiFramebufferSizePolicy::parse("auto"),
+            Some(UiFramebufferSizePolicy::Auto)
+        );
+        assert_eq!(
+            UiFramebufferSizePolicy::parse("960x540"),
+            Some(UiFramebufferSizePolicy::Force960x540)
+        );
+        assert_eq!(
+            UiFramebufferSizePolicy::parse("1280x720"),
+            Some(UiFramebufferSizePolicy::Force1280x720)
+        );
+        assert_eq!(UiFramebufferSizePolicy::parse("1920x1080"), None);
+        assert_eq!(UiFramebufferSizePolicy::env_name(), "MISTER_UI_FB_SIZE");
+    }
+
+    #[test]
+    fn forced_1280x720_policy_keeps_1080p_output_and_scan_geometry() {
+        let runtime =
+            RuntimeDisplayGeometry::from_video_words(1920, 1080, 1920, 1080).expect("runtime");
+        let plan = UiDisplayPlan::from_runtime_geometry_with_policy(
+            runtime,
+            false,
+            UiFramebufferSizePolicy::Force1280x720,
+        );
+
+        assert_eq!((plan.output_w, plan.output_h), (1920, 1080));
+        assert_eq!((plan.scan_w, plan.scan_h), (1920, 1080));
+        assert_eq!((plan.fb_w, plan.fb_h), (1280, 720));
+        assert_eq!(plan.fb_policy.label(), "forced-1280x720");
+        assert!(plan.log_line().contains("fb_policy=forced-1280x720"));
+    }
+
+    #[test]
+    fn forced_960x540_policy_can_override_native_720p_output() {
+        let runtime =
+            RuntimeDisplayGeometry::from_video_words(1280, 720, 1280, 720).expect("runtime");
+        let plan = UiDisplayPlan::from_runtime_geometry_with_policy(
+            runtime,
+            false,
+            UiFramebufferSizePolicy::Force960x540,
+        );
+
+        assert_eq!((plan.output_w, plan.output_h), (1280, 720));
+        assert_eq!((plan.scan_w, plan.scan_h), (1280, 720));
+        assert_eq!((plan.fb_w, plan.fb_h), (960, 540));
+        assert_eq!(plan.fb_policy.label(), "forced-960x540");
     }
 
     #[test]
