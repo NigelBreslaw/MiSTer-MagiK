@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const PROFILE_SET_VERSION: u32 = 3;
+pub const PROFILE_SET_VERSION: u32 = 4;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
@@ -175,14 +175,12 @@ pub struct ProfileSet {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct RuntimeProfilePlan {
     pub(crate) game_dir_name: String,
     pub(crate) decision: RuntimeProfileDecision,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum RuntimeProfileDecision {
     Catalogable { profile: Box<LaunchProfile> },
     NoInstalledCore,
@@ -332,6 +330,32 @@ pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
     profiles.extend(generic_manifest_profiles().into_iter().filter(|profile| {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
+    let mut active_game_dirs = active_profile_game_dirs(&profiles);
+    profiles.extend(
+        runtime_profile_plans_for_roots(roots)
+            .into_iter()
+            .filter_map(|plan| match plan.decision {
+                RuntimeProfileDecision::Catalogable { profile } => {
+                    let profile = *profile;
+                    if profile
+                        .game_dirs
+                        .iter()
+                        .any(|dir| active_game_dirs.contains(&dir.to_ascii_lowercase()))
+                    {
+                        None
+                    } else {
+                        for dir in &profile.game_dirs {
+                            active_game_dirs.insert(dir.to_ascii_lowercase());
+                        }
+                        Some(profile)
+                    }
+                }
+                RuntimeProfileDecision::NoInstalledCore
+                | RuntimeProfileDecision::EmptyOrMediaOnly
+                | RuntimeProfileDecision::NoKnownPayloadExtension
+                | RuntimeProfileDecision::Ambiguous { .. } => None,
+            }),
+    );
     profiles
 }
 
@@ -349,6 +373,14 @@ pub fn generic_manifest_profile_for_core(core_id: &str) -> Option<LaunchProfile>
     generic_manifest_profiles()
         .into_iter()
         .find(|profile| profile.core_name.eq_ignore_ascii_case(&normalized))
+}
+
+fn active_profile_game_dirs(profiles: &[LaunchProfile]) -> BTreeSet<String> {
+    profiles
+        .iter()
+        .flat_map(|profile| profile.game_dirs.iter())
+        .map(|dir| dir.to_ascii_lowercase())
+        .collect()
 }
 
 pub fn profile_for_game_dir<'a>(
@@ -370,7 +402,6 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
         .collect()
 }
 
-#[allow(dead_code)]
 pub(crate) fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
     catalog_discovery::top_level_game_dirs_for_roots(roots)
@@ -379,7 +410,6 @@ pub(crate) fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimePr
         .collect()
 }
 
-#[allow(dead_code)]
 fn runtime_profile_plan_for_game_dir(
     game_dir: catalog_discovery::GameDirFact,
     cores: &[catalog_discovery::InstalledCore],
@@ -411,7 +441,6 @@ fn runtime_profile_plan_for_game_dir(
     }
 }
 
-#[allow(dead_code)]
 fn exact_runtime_core_candidates<'a>(
     game_dir_name: &str,
     cores: &'a [catalog_discovery::InstalledCore],
@@ -430,7 +459,6 @@ fn exact_runtime_core_candidates<'a>(
     out
 }
 
-#[allow(dead_code)]
 fn runtime_profile_for_exact_match(
     game_dir: &catalog_discovery::GameDirFact,
     core: &catalog_discovery::InstalledCore,
@@ -475,7 +503,6 @@ fn runtime_profile_for_exact_match(
     })
 }
 
-#[allow(dead_code)]
 fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> Vec<String> {
     let mut extensions = BTreeSet::new();
     if let Some(profile) = generic_manifest_profile_for_core(core_id)
@@ -494,7 +521,6 @@ fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> 
     extensions.into_iter().collect()
 }
 
-#[allow(dead_code)]
 fn playable_payload_extensions(profile: &LaunchProfile) -> Vec<String> {
     let mut extensions = BTreeSet::new();
     for rule in &profile.payload_rules {
@@ -507,7 +533,6 @@ fn playable_payload_extensions(profile: &LaunchProfile) -> Vec<String> {
     extensions.into_iter().collect()
 }
 
-#[allow(dead_code)]
 fn runtime_payload_extension_hints(name: &str) -> Vec<String> {
     let exts = match name.to_ascii_lowercase().as_str() {
         "atari2600" | "atari2600-sinden" => &["a26", "bin"][..],
@@ -532,7 +557,6 @@ fn runtime_payload_extension_hints(name: &str) -> Vec<String> {
     exts.iter().map(|ext| ext.to_string()).collect()
 }
 
-#[allow(dead_code)]
 fn category_for_installed_core_path(path: &Path) -> &'static str {
     if path_has_component(path, "_Computer") {
         "Computer"
@@ -545,7 +569,6 @@ fn category_for_installed_core_path(path: &Path) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 fn relative_core_path_for_installed_core(path: &Path) -> Option<String> {
     let components = path
         .components()
@@ -564,7 +587,6 @@ fn relative_core_path_for_installed_core(path: &Path) -> Option<String> {
     Some(relative)
 }
 
-#[allow(dead_code)]
 fn path_has_component(path: &Path, expected: &str) -> bool {
     path.components().any(|component| {
         component
