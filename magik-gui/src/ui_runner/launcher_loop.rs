@@ -306,6 +306,9 @@ struct LauncherIdleInput {
     catalog_games_found_detail_changed: bool,
     slint_animation_active: bool,
     home_pan_present_active: bool,
+    // Arcade list motion lives outside Slint's bridge key, so the final visual
+    // tick still has to present before the launcher is allowed to idle.
+    arcade_visual_changed_this_loop: bool,
     arcade_scroll_active: bool,
     arcade_filter_scroll_active: bool,
     arcade_search_active: bool,
@@ -334,6 +337,7 @@ impl LauncherIdleInput {
             && !self.catalog_games_found_detail_changed
             && !self.slint_animation_active
             && !self.home_pan_present_active
+            && !self.arcade_visual_changed_this_loop
             && !self.arcade_scroll_active
             && !self.arcade_filter_scroll_active
             && !self.arcade_search_active
@@ -1069,6 +1073,8 @@ pub(super) fn run_launcher_loop(
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         let loop_start = Instant::now();
+        let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
+        let arcade_filter_visual_index_at_loop_start = nav.arcade_filter.visual_index;
         let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
         let mut prepare_trace = LauncherPrepareTrace::default();
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
@@ -2169,6 +2175,9 @@ pub(super) fn run_launcher_loop(
             &mut home_pan_present_until,
             loop_start,
         );
+        let arcade_visual_changed_this_loop = nav.arcade.visual_index
+            != arcade_visual_index_at_loop_start
+            || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
         let idle_input = LauncherIdleInput {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             redraw_pending: launcher_redraw_pending,
@@ -2189,6 +2198,7 @@ pub(super) fn run_launcher_loop(
             catalog_games_found_detail_changed: games_found_detail_changed,
             slint_animation_active,
             home_pan_present_active,
+            arcade_visual_changed_this_loop,
             arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
             arcade_filter_scroll_active: nav.screen == Screen::Arcade
                 && nav.arcade_filter.drawer_open
@@ -3976,6 +3986,11 @@ mod tests {
         .can_sleep());
         assert!(!LauncherIdleInput {
             home_pan_present_active: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            arcade_visual_changed_this_loop: true,
             ..base
         }
         .can_sleep());
