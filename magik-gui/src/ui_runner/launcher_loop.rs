@@ -2161,6 +2161,7 @@ pub(super) fn run_launcher_loop(
         let composition_decision = composition.tick(UiCompositionInput {
             screen: nav.screen,
             confirm_visible,
+            fullscreen_overlay_visible: catalog_scan_visible,
             arcade_ready: !active_arcade_games_loading && active_arcade_games.len() > 0,
             route_ok: last_route_reassert_error.is_empty(),
             wants_arcade_list,

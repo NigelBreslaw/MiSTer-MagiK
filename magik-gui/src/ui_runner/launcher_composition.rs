@@ -48,6 +48,7 @@ impl Default for UiCompositionStatus {
 pub(super) struct UiCompositionInput {
     pub(super) screen: Screen,
     pub(super) confirm_visible: bool,
+    pub(super) fullscreen_overlay_visible: bool,
     pub(super) arcade_ready: bool,
     pub(super) route_ok: bool,
     pub(super) wants_arcade_list: bool,
@@ -171,7 +172,9 @@ struct CompositionInvariant {
 }
 
 fn requested_state(input: UiCompositionInput) -> UiCompositionState {
-    if input.confirm_visible {
+    if input.fullscreen_overlay_visible {
+        UiCompositionState::ModalFullSlint
+    } else if input.confirm_visible {
         if input.screen == Screen::Arcade && input.arcade_ready {
             UiCompositionState::ModalOverArcade
         } else {
@@ -195,7 +198,8 @@ fn composition_invariant(
         });
     }
 
-    let direct_requested = input.wants_arcade_list || input.wants_preview;
+    let direct_requested =
+        !input.fullscreen_overlay_visible && (input.wants_arcade_list || input.wants_preview);
     if direct_requested && !requested_state.allows_direct_layers() {
         return Some(CompositionInvariant {
             kind: "direct-layer-outside-arcade",
@@ -228,6 +232,7 @@ mod tests {
         UiCompositionInput {
             screen,
             confirm_visible: false,
+            fullscreen_overlay_visible: false,
             arcade_ready: screen == Screen::Arcade,
             route_ok: true,
             wants_arcade_list: false,
@@ -319,6 +324,50 @@ mod tests {
 
         assert_eq!(decision.state, UiCompositionState::Recovering);
         assert_eq!(decision.last_invariant_kind, "direct-layer-outside-arcade");
+    }
+
+    #[test]
+    fn fullscreen_overlay_transitions_from_arcade_to_full_slint() {
+        let mut controller = UiCompositionController::new();
+        let _ = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            preview_cache_state: "exact",
+            preview_frame_status: PreviewRawFrameStatus::Ready,
+            ..input(Screen::Arcade)
+        });
+
+        let decision = controller.tick(UiCompositionInput {
+            fullscreen_overlay_visible: true,
+            wants_arcade_list: true,
+            wants_preview: true,
+            preview_cache_state: "exact",
+            preview_frame_status: PreviewRawFrameStatus::Ready,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::ModalFullSlint);
+        assert!(!decision.allow_arcade_list_blit);
+        assert!(!decision.allow_preview_blit);
+        assert!(decision.clear_direct_layers);
+        assert!(decision.force_full_slint_present);
+        assert_eq!(decision.recovery_count, 0);
+        assert_eq!(decision.last_invariant_kind, "");
+
+        let steady = controller.tick(UiCompositionInput {
+            fullscreen_overlay_visible: true,
+            wants_arcade_list: true,
+            wants_preview: true,
+            preview_cache_state: "exact",
+            preview_frame_status: PreviewRawFrameStatus::Ready,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(steady.state, UiCompositionState::ModalFullSlint);
+        assert!(!steady.allow_arcade_list_blit);
+        assert!(!steady.allow_preview_blit);
+        assert!(!steady.force_full_slint_present);
+        assert!(!steady.clear_direct_layers);
+        assert_eq!(steady.recovery_count, 0);
     }
 
     #[test]
