@@ -324,6 +324,11 @@ extension, and it does not create launcher systems for folders with no playable
 payloads. Folders that cannot be cataloged are recorded in `catalog_audit`
 instead of being silently skipped.
 
+Raw `games/mame/*.zip` and `games/hbmame/*.zip` folders are treated as Arcade
+coverage inputs, not independent launcher rows. A zip set is visible only
+through an existing launchable Arcade/MRA target for the same set; unknown raw
+zip sets remain diagnostics and must not create dead virtual launch entries.
+
 The default scan does not include `_Games`. That tree is treated as an organizer
 mirror of generated `.mgl` launchers for games already available through
 source/core game directories. Set `MISTER_LIBRARY_ROOTS` explicitly for a
@@ -335,7 +340,8 @@ Catalog profiles come from two sources:
 
 - explicit special profiles for behavior that needs hand modeling: MRA, MGL,
   DOS installed MGL launchers, Saturn, PlayStation/PSX, AO486, Amiga/Minimig,
-  AmigaVision, and NeoGeo ZIP/XML behavior;
+  AmigaVision, NeoGeo ZIP/XML behavior, NeoGeo CD disc images, and raw
+  MAME/HBMAME zip-set coverage;
 - generated generic profiles from
   `magik-gui/catalog/data/core_launch_manifest.json`, activated only when a
   matching `.rbf` is installed in `_Console`, `_Computer`, `_Arcade/cores`, or

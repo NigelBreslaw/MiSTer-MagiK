@@ -3,11 +3,11 @@
 use crate::arcade_catalog::{
     self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, StructuredLaunchPlan,
 };
+use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
-use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_load_metrics;
 use crate::catalog_navigation;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
@@ -21,9 +21,9 @@ use crate::catalog_summary;
 use crate::core_audit;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
-    launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
-    profile_id_for_discovery, system_title_for_discovery, unique_discovery_count,
-    DiscoverySourceKind, GameDiscovery,
+    is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
+    preferred_playable_discoveries_by_key, profile_id_for_discovery, system_title_for_discovery,
+    unique_discovery_count, DiscoverySourceKind, GameDiscovery,
 };
 use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
@@ -250,20 +250,16 @@ fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
 
 fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
     match std::fs::remove_file(path) {
-        Ok(()) => {
-            match label {
-                "database" => {
-                    crate::fs_fault::maybe_fault("reset_delete.database.after_remove", path)
-                }
-                "catalog summary" => {
-                    crate::fs_fault::maybe_fault("reset_delete.summary.after_remove", path)
-                }
-                "catalog navigation" => {
-                    crate::fs_fault::maybe_fault("reset_delete.navigation.after_remove", path)
-                }
-                _ => {}
+        Ok(()) => match label {
+            "database" => crate::fs_fault::maybe_fault("reset_delete.database.after_remove", path),
+            "catalog summary" => {
+                crate::fs_fault::maybe_fault("reset_delete.summary.after_remove", path)
             }
-        }
+            "catalog navigation" => {
+                crate::fs_fault::maybe_fault("reset_delete.navigation.after_remove", path)
+            }
+            _ => {}
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("failed to delete {label} {}: {e}", path.display())),
     }
@@ -758,7 +754,9 @@ pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection>
     )
 }
 
-pub(crate) fn read_sqlite_catalog_stamp(path: &Path) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
+pub(crate) fn read_sqlite_catalog_stamp(
+    path: &Path,
+) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
     let conn = open_sqlite_read_only(path)
         .map_err(|e| format!("open catalog stamp db {}: {e}", path.display()))?;
     catalog_store::read_catalog_stamp(&conn)
@@ -867,8 +865,7 @@ pub(crate) fn sqlite_catalog_stamp_check(
         audit_t.elapsed().as_micros() as u64,
         format!("rows={}", audit_rows.len()),
     );
-    let current =
-        catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
+    let current = catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
     let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint(
         &cfg.roots,
         &default_mame_sqlite_path(),
@@ -891,7 +888,8 @@ pub(crate) fn sqlite_catalog_stamp_check(
         None => (None, 0, false),
     };
     let checkpoint_compare_t = Instant::now();
-    let drift = CatalogDriftSummary::from_checkpoints(stored_checkpoint.as_ref(), &current_checkpoint);
+    let drift =
+        CatalogDriftSummary::from_checkpoints(stored_checkpoint.as_ref(), &current_checkpoint);
     let checkpoint_compare_us = checkpoint_compare_t.elapsed().as_micros() as u64;
     catalog_checkpoint::report_drift_summary(&drift);
     let (stored_checkpoint_fingerprint, stored_checkpoint_lines) =
@@ -1068,8 +1066,8 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
             &mut writer,
         )?
     };
-    let projections =
-        projections.ok_or_else(|| "catalog projections were not built before publish".to_string())?;
+    let projections = projections
+        .ok_or_else(|| "catalog projections were not built before publish".to_string())?;
     write_catalog_projection_pair(path, projections)?;
     Ok(bytes)
 }
@@ -2039,6 +2037,9 @@ fn write_sqlite_scan_with_sources_inner(
         let mut chunk_t = Instant::now();
         let mut chunk_start = 0usize;
         for (idx, (key, discovery)) in discoveries.into_iter().enumerate() {
+            if is_raw_arcade_zip_set_discovery(discovery) {
+                continue;
+            }
             let game_key_id = (idx + 1) as i64;
             let launch_id = game_key_id;
             if idx > 0 && idx % 250 == 0 {
@@ -2091,26 +2092,28 @@ fn write_sqlite_scan_with_sources_inner(
                 let software_family_key = software_identity
                     .as_ref()
                     .map(|identity| format!("mame-software:{}", identity.family_id));
-                launcher_rows.push(CatalogProjectionRow::new(
-                    discovery.title.clone(),
-                    plan_launch_ref.clone(),
-                    system_id.clone(),
-                    LauncherPreviewAsset::from_console_asset(preview_asset.as_ref()),
-                    ArcadeGameMetadataKey {
-                        year: discovery.year,
-                        manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                        category: discovery.genre.clone().unwrap_or_default(),
-                    },
-                    false,
-                    CatalogProjectionSource {
-                        discovered_at_unix,
-                        source_kind: launch_kind_for_discovery(discovery).to_string(),
-                        setname: discovery.setname.clone().unwrap_or_default(),
-                        parent: discovery.parent.clone().unwrap_or_default(),
-                        family_key: software_family_key,
-                    },
-                )
-                .with_launch_id(launch_id));
+                launcher_rows.push(
+                    CatalogProjectionRow::new(
+                        discovery.title.clone(),
+                        plan_launch_ref.clone(),
+                        system_id.clone(),
+                        LauncherPreviewAsset::from_console_asset(preview_asset.as_ref()),
+                        ArcadeGameMetadataKey {
+                            year: discovery.year,
+                            manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
+                            category: discovery.genre.clone().unwrap_or_default(),
+                        },
+                        false,
+                        CatalogProjectionSource {
+                            discovered_at_unix,
+                            source_kind: launch_kind_for_discovery(discovery).to_string(),
+                            setname: discovery.setname.clone().unwrap_or_default(),
+                            parent: discovery.parent.clone().unwrap_or_default(),
+                            family_key: software_family_key,
+                        },
+                    )
+                    .with_launch_id(launch_id),
+                );
             }
             let source_path_id = path_interner.intern(discovery.source_path.as_str());
             let launcher_path_id = path_interner.intern_optional(launcher_path);
@@ -2196,11 +2199,7 @@ fn write_sqlite_scan_with_sources_inner(
                 .unwrap_or_else(|| media_metadata::infer_region_metadata(discovery));
             if region.region.is_some() || region.confidence != "unknown" {
                 region_stmt
-                    .execute(params![
-                        game_key_id,
-                        region.region,
-                        region.confidence
-                    ])
+                    .execute(params![game_key_id, region.region, region.confidence])
                     .map_err(|e| format!("insert region metadata: {e}"))?;
             }
             let written = idx + 1;
@@ -2791,12 +2790,12 @@ fn launch_target_mount_for_discovery(
             DiscoverySourceKind::ArchiveEntry => profile
                 .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
                 .map(|rule| rule.mount),
-            DiscoverySourceKind::PayloadFile => match profile.classify_path(Path::new(
-                discovery.launch_ref.as_str(),
-            )) {
-                launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),
-                _ => None,
-            },
+            DiscoverySourceKind::PayloadFile => {
+                match profile.classify_path(Path::new(discovery.launch_ref.as_str())) {
+                    launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .unwrap_or_else(|| MountSpec::mount_image(0));
@@ -3940,7 +3939,10 @@ mod tests {
         repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
             .expect("repair projection pair");
 
-        assert!(summary_path.exists(), "explicit repair should write summary");
+        assert!(
+            summary_path.exists(),
+            "explicit repair should write summary"
+        );
         assert!(
             navigation_path.exists(),
             "explicit repair should write projection"
@@ -3954,8 +3956,14 @@ mod tests {
                 .expect("current repaired projection");
         let repaired_catalog =
             ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", repaired);
-        assert_eq!(repaired_summary.catalog_stamp_fingerprint, stamp.fingerprint_hex());
-        assert_eq!(repaired_summary.total_game_count, loaded.catalog.games.len());
+        assert_eq!(
+            repaired_summary.catalog_stamp_fingerprint,
+            stamp.fingerprint_hex()
+        );
+        assert_eq!(
+            repaired_summary.total_game_count,
+            loaded.catalog.games.len()
+        );
         assert_eq!(repaired_catalog.games.len(), loaded.catalog.games.len());
         assert_eq!(repaired_catalog.systems, loaded.catalog.systems);
         assert_eq!(
@@ -4370,25 +4378,53 @@ mod tests {
         let conn = Connection::open(&db).expect("open sqlite");
 
         assert!(sqlite_column_exists(&conn, "launcher_catalog", "launch_id").expect("launch_id"));
-        assert!(!sqlite_column_exists(&conn, "launcher_catalog", "launch_ref").expect("launch_ref"));
-        assert!(sqlite_column_exists(&conn, "launcher_launch_plans", "launch_id").expect("plan launch_id"));
-        assert!(!sqlite_column_exists(&conn, "launcher_launch_plans", "payload_path").expect("payload_path"));
+        assert!(
+            !sqlite_column_exists(&conn, "launcher_catalog", "launch_ref").expect("launch_ref")
+        );
+        assert!(
+            sqlite_column_exists(&conn, "launcher_launch_plans", "launch_id")
+                .expect("plan launch_id")
+        );
+        assert!(
+            !sqlite_column_exists(&conn, "launcher_launch_plans", "payload_path")
+                .expect("payload_path")
+        );
         assert!(sqlite_column_exists(&conn, "games", "game_key_id").expect("game_key_id"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "game_key_id").expect("target game_key_id"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_kind").expect("target mount_kind"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_index").expect("target mount_index"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "delay_secs").expect("target delay_secs"));
-        assert!(sqlite_column_exists(&conn, "launch_targets", "launch_ref_kind").expect("target launch_ref_kind"));
+        assert!(sqlite_column_exists(&conn, "launch_targets", "game_key_id")
+            .expect("target game_key_id"));
+        assert!(
+            sqlite_column_exists(&conn, "launch_targets", "mount_kind").expect("target mount_kind")
+        );
+        assert!(sqlite_column_exists(&conn, "launch_targets", "mount_index")
+            .expect("target mount_index"));
+        assert!(
+            sqlite_column_exists(&conn, "launch_targets", "delay_secs").expect("target delay_secs")
+        );
+        assert!(
+            sqlite_column_exists(&conn, "launch_targets", "launch_ref_kind")
+                .expect("target launch_ref_kind")
+        );
         assert!(!sqlite_column_exists(&conn, "launch_targets", "game_id").expect("target game_id"));
         assert!(!sqlite_column_exists(&conn, "launch_targets", "plan_id").expect("target plan_id"));
-        assert!(!sqlite_column_exists(&conn, "launch_targets", "priority").expect("target priority"));
-        assert!(sqlite_column_exists(&conn, "region_metadata_rows", "game_key_id").expect("region game_key_id"));
-        assert!(!sqlite_column_exists(&conn, "region_metadata_rows", "game_id").expect("region game_id"));
+        assert!(
+            !sqlite_column_exists(&conn, "launch_targets", "priority").expect("target priority")
+        );
+        assert!(
+            sqlite_column_exists(&conn, "region_metadata_rows", "game_key_id")
+                .expect("region game_key_id")
+        );
+        assert!(
+            !sqlite_column_exists(&conn, "region_metadata_rows", "game_id")
+                .expect("region game_id")
+        );
         assert!(
             !sqlite_column_exists(&conn, "region_metadata_rows", "override_region")
                 .expect("region override")
         );
-        assert!(sqlite_column_exists(&conn, "launchable_identity_rows", "game_key_id").expect("identity game_key_id"));
+        assert!(
+            sqlite_column_exists(&conn, "launchable_identity_rows", "game_key_id")
+                .expect("identity game_key_id")
+        );
         assert!(
             !sqlite_column_exists(&conn, "launchable_identity_rows", "launchable_id")
                 .expect("identity launchable_id")
@@ -4397,12 +4433,17 @@ mod tests {
             !sqlite_column_exists(&conn, "ui_arcade_preferred", "asset_pack_id")
                 .expect("preferred asset pack")
         );
-        assert!(sqlite_column_exists(&conn, "ui_arcade_preferred", "family_id").expect("preferred family"));
+        assert!(
+            sqlite_column_exists(&conn, "ui_arcade_preferred", "family_id")
+                .expect("preferred family")
+        );
         assert!(
             sqlite_column_exists(&conn, "ui_arcade_preferred", "variant_ordinal")
                 .expect("preferred variant ordinal")
         );
-        assert!(!sqlite_column_exists(&conn, "ui_arcade_preferred", "title").expect("preferred title"));
+        assert!(
+            !sqlite_column_exists(&conn, "ui_arcade_preferred", "title").expect("preferred title")
+        );
         assert!(
             !sqlite_column_exists(&conn, "ui_arcade_preferred", "preview_asset_key")
                 .expect("preferred preview")
@@ -4439,10 +4480,15 @@ mod tests {
         assert!(reconstructed.0.starts_with("magik-plan:payload:"));
         assert_eq!(reconstructed.1, "/media/fat/games/Saturn/Nights.chd");
         assert!(reconstructed.2.starts_with("plan:payload:"));
-        assert_eq!(reconstructed.3, "payload:/media/fat/games/Saturn/Nights.chd");
+        assert_eq!(
+            reconstructed.3,
+            "payload:/media/fat/games/Saturn/Nights.chd"
+        );
 
         let region_rows: i64 = conn
-            .query_row("SELECT count(*) FROM region_metadata_rows", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM region_metadata_rows", [], |row| {
+                row.get(0)
+            })
             .expect("region row count");
         assert_eq!(region_rows, 0);
         let default_region: (Option<String>, String) = conn
@@ -4511,8 +4557,8 @@ mod tests {
         };
 
         let mut scan = sqlite_scan_with_discoveries(vec![saturn, neogeo]);
-        scan.normal_files = sqlite_scan_with_normal_files(&["/media/fat/games/Saturn/Nights.chd"])
-            .normal_files;
+        scan.normal_files =
+            sqlite_scan_with_normal_files(&["/media/fat/games/Saturn/Nights.chd"]).normal_files;
         let neogeo_rule = launch_profiles::builtin_profiles()
             .into_iter()
             .find(|profile| profile.id == "neogeo")
