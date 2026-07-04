@@ -63,14 +63,14 @@ pub(crate) fn update_slint_animations(animation_clock: &AnimationClock) {
     slint::platform::update_timers_and_animations();
 }
 
+const PRESENT_DELAY_ENV: &str = "MISTER_FB_PRESENT_DELAY_US";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(any(mister_bench_scenes, mister_video_scene))]
 pub(super) enum FrameOrder {
     RenderThenVsync,
     VsyncThenRender,
 }
 
-#[cfg(any(mister_bench_scenes, mister_video_scene))]
 impl FrameOrder {
     pub(super) fn from_env() -> Self {
         match std::env::var("MISTER_FRAME_ORDER")
@@ -99,6 +99,53 @@ impl FrameOrder {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PresentTiming {
+    delay_us: u64,
+}
+
+impl PresentTiming {
+    pub(super) fn from_env() -> Self {
+        let delay_us = std::env::var(PRESENT_DELAY_ENV)
+            .ok()
+            .and_then(|value| present_delay_from_value(&value));
+        Self {
+            delay_us: delay_us.unwrap_or(0),
+        }
+    }
+
+    pub(super) fn delay_us(self) -> u64 {
+        self.delay_us
+    }
+
+    pub(super) fn wait_until_present_time(self, vsync_done: std::time::Instant) {
+        if self.delay_us == 0 {
+            return;
+        }
+        let target = vsync_done + Duration::from_micros(self.delay_us);
+        let now = std::time::Instant::now();
+        if target > now {
+            std::thread::sleep(target - now);
+        }
+    }
+}
+
+fn present_delay_from_value(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(delay) => Some(delay.min(50_000)),
+        Err(_) => {
+            crate::ui_errln!(
+                "ui: ignoring invalid {PRESENT_DELAY_ENV}={value:?}; expected microseconds"
+            );
+            None
+        }
+    }
+}
+
 impl Platform for MisterPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(self.window.clone())
@@ -108,5 +155,26 @@ impl Platform for MisterPlatform {
             .as_ref()
             .map(|t| t.get())
             .unwrap_or_else(|| self.start.elapsed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_delay_parses_microseconds() {
+        assert_eq!(present_delay_from_value("2500"), Some(2500));
+        assert_eq!(present_delay_from_value(""), None);
+    }
+
+    #[test]
+    fn present_delay_clamps_extreme_values() {
+        assert_eq!(present_delay_from_value("999999"), Some(50_000));
+    }
+
+    #[test]
+    fn present_delay_rejects_invalid_text() {
+        assert_eq!(present_delay_from_value("later"), None);
     }
 }

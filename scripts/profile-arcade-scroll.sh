@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -37,6 +37,7 @@ scenario="turbo-hold"
 deploy="skip"
 selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
+present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +63,11 @@ while [[ $# -gt 0 ]]; do
     --ui-fb-size)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--ui-fb-size needs auto, 960x540, or 1280x720" >&2; usage >&2; exit 2; fi
       ui_fb_size="$2"
+      shift 2
+      ;;
+    --present-delay-us)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--present-delay-us needs a non-negative integer" >&2; usage >&2; exit 2; fi
+      present_delay_us="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -107,6 +113,10 @@ case "$ui_fb_size" in
   auto|960x540|1280x720) ;;
   *) echo "--ui-fb-size must be auto, 960x540, or 1280x720" >&2; exit 2 ;;
 esac
+if [[ ! "$present_delay_us" =~ ^[0-9]+$ ]]; then
+  echo "--present-delay-us must be a non-negative integer" >&2
+  exit 2
+fi
 remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 
@@ -150,9 +160,10 @@ case "$deploy" in
   skip) : ;;
 esac
 
-echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size"
+echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us"
 {
   printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
+  printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
   printf 'export MISTER_CATALOG_REFRESH=default\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'

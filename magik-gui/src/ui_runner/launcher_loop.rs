@@ -700,6 +700,7 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
+    let present_timing = PresentTiming::from_env();
     if launcher_bench_scenario.is_some() && !preview_archive_warm_skip_enabled() {
         let warm_t = Instant::now();
         match preview_worker::warm_preview_archives_from_env() {
@@ -747,6 +748,7 @@ pub(super) fn run_launcher_loop(
         preview_transition.segment.as_secs(),
         preview_transition.duration.as_millis()
     );
+    crate::ui_logln!("fb_present_delay_us={}", present_timing.delay_us());
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
     let mut arcade_search_indexes_prewarmed_for: Option<usize> = None;
@@ -2358,6 +2360,8 @@ pub(super) fn run_launcher_loop(
         }
         let pace = if frame_accounting.first_visible_copy_done() {
             let pace = pacer.wait();
+            let vsync_done = Instant::now();
+            present_timing.wait_until_present_time(vsync_done);
             let frame_t3 = Instant::now();
             (Some(pace), frame_t3)
         } else {

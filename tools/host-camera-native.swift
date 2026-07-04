@@ -112,14 +112,22 @@ func listDevices() {
     }
 }
 
-func chooseFormat(device: AVCaptureDevice, width: Int32, height: Int32, fps: Double) -> AVCaptureDevice.Format? {
-    device.formats.first { format in
+func chooseFormatAndRate(
+    device: AVCaptureDevice,
+    width: Int32,
+    height: Int32,
+    fps: Double
+) -> (AVCaptureDevice.Format, AVFrameRateRange)? {
+    for format in device.formats {
         let dims = dimensions(format)
-        guard dims.width == width && dims.height == height else { return false }
-        return format.videoSupportedFrameRateRanges.contains { range in
+        guard dims.width == width && dims.height == height else { continue }
+        if let range = format.videoSupportedFrameRateRanges.first(where: { range in
             fps >= range.minFrameRate - 0.001 && fps <= range.maxFrameRate + 0.001
+        }) {
+            return (format, range)
         }
     }
+    return nil
 }
 
 func chooseDevice(options: Options) throws -> AVCaptureDevice {
@@ -162,21 +170,17 @@ final class MovieRecorder {
 
     func start() throws {
         let device = try chooseDevice(options: options)
-        guard let format = chooseFormat(device: device, width: Int32(options.width), height: Int32(options.height), fps: options.fps) else {
+        guard let (format, frameRateRange) = chooseFormatAndRate(device: device, width: Int32(options.width), height: Int32(options.height), fps: options.fps) else {
             throw NSError(domain: "host-camera-native", code: 3, userInfo: [NSLocalizedDescriptionKey: "no matching \(options.width)x\(options.height)@\(options.fps) format for \(device.localizedName)"])
         }
 
         try device.lockForConfiguration()
         device.activeFormat = format
-        let frameDuration = CMTime(value: 1_000_000, timescale: CMTimeScale((options.fps * 1_000_000.0).rounded()))
-        device.activeVideoMinFrameDuration = frameDuration
-        device.activeVideoMaxFrameDuration = frameDuration
+        device.activeVideoMinFrameDuration = frameRateRange.minFrameDuration
+        device.activeVideoMaxFrameDuration = frameRateRange.maxFrameDuration
         device.unlockForConfiguration()
 
         session.beginConfiguration()
-        if session.canSetSessionPreset(.inputPriority) {
-            session.sessionPreset = .inputPriority
-        }
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else {
             throw NSError(domain: "host-camera-native", code: 4, userInfo: [NSLocalizedDescriptionKey: "cannot add camera input"])
@@ -193,7 +197,7 @@ final class MovieRecorder {
 
         let outputURL = URL(fileURLWithPath: options.output)
         try? FileManager.default.removeItem(at: outputURL)
-        print("recording \(device.localizedName) \(options.width)x\(options.height)@\(options.fps) -> \(options.output)")
+        print("recording \(device.localizedName) \(options.width)x\(options.height)@\(frameRateRange.maxFrameRate) -> \(options.output)")
         session.startRunning()
         output.startRecording(to: outputURL, recordingDelegate: delegate)
         Thread.sleep(forTimeInterval: options.duration)
