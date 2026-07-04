@@ -627,8 +627,7 @@ pub(crate) fn is_archive_entry_container_candidate(
     {
         return false;
     }
-    profile_for_path(profiles, path)
-        .is_some_and(|profile| !profile.archive_entry_rules.is_empty())
+    profile_for_path(profiles, path).is_some_and(|profile| !profile.archive_entry_rules.is_empty())
 }
 
 /// Returns true for catalog-irrelevant paths that should be pruned before
@@ -1290,8 +1289,7 @@ mod tests {
 
         assert_eq!(scan.normal_files.len(), 1);
         assert!(scan.profiles.iter().any(|profile| {
-            profile.id == "runtime-colecovision"
-                && profile.game_dirs == vec!["Coleco".to_string()]
+            profile.id == "runtime-colecovision" && profile.game_dirs == vec!["Coleco".to_string()]
         }));
         assert!(scan.discoveries.iter().any(|discovery| {
             discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
@@ -1316,6 +1314,67 @@ mod tests {
         let launcher_rows: i64 = conn
             .query_row(
                 "SELECT count(*) FROM launcher_catalog WHERE system_id='colecovision'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher");
+        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_catalogs_spectrum_alias_without_shared_rom_ambiguity() {
+        let root = unique_temp_dir("target-runtime-spectrum-alias");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        install_test_console_core(&root, "ColecoVision");
+        install_test_console_core(&root, "Intellivision");
+        let spectrum_dir = root.join("games/Spectrum");
+        std::fs::create_dir_all(&spectrum_dir).expect("create spectrum dir");
+        std::fs::write(root.join("_Computer/ZX-Spectrum_20260630.rbf"), b"rbf")
+            .expect("write spectrum core");
+        std::fs::write(spectrum_dir.join("Jet Set Willy.tzx"), "tape")
+            .expect("write spectrum tape");
+        std::fs::write(spectrum_dir.join("support.rom"), "bios").expect("write support rom");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.profiles.iter().any(|profile| {
+            profile.id == "runtime-zx-spectrum"
+                && profile.system_id == "zx-spectrum"
+                && profile.game_dirs == vec!["Spectrum".to_string()]
+        }));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "zx-spectrum" && discovery.title == "Jet Set Willy"
+        }));
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.ends_with("support.rom")));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let systems: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM systems WHERE system_id='zx-spectrum'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query systems");
+        let games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM games WHERE system_id='zx-spectrum'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let launcher_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog WHERE system_id='zx-spectrum'",
                 [],
                 |row| row.get(0),
             )
@@ -1372,8 +1431,7 @@ mod tests {
             .iter()
             .all(|discovery| discovery.platform_id == "sms"));
         assert!(scan.audit_rows.iter().all(|row| {
-            row.expected_game_dir != "games/SMS"
-                || !row.reason.contains("zip-archive-not-indexed")
+            row.expected_game_dir != "games/SMS" || !row.reason.contains("zip-archive-not-indexed")
         }));
         let _ = std::fs::remove_dir_all(root);
     }
