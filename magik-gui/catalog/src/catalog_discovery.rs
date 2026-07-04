@@ -17,6 +17,7 @@ pub(crate) struct GameDirFact {
     pub(crate) path: PathBuf,
     pub(crate) has_payload_files: bool,
     pub(crate) has_zip_files: bool,
+    pub(crate) payload_extensions: BTreeSet<String>,
 }
 
 impl GameDirFact {
@@ -86,12 +87,14 @@ pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact
             }
             let key = path.display().to_string().to_ascii_lowercase();
             if seen.insert(key) {
-                let (has_payload_files, has_zip_files) = game_dir_has_payloadish_files(&path);
+                let (has_payload_files, has_zip_files, payload_extensions) =
+                    game_dir_payload_facts(&path);
                 entries.push(GameDirFact {
                     name: name.to_string(),
                     path,
                     has_payload_files,
                     has_zip_files,
+                    payload_extensions,
                 });
             }
         }
@@ -169,9 +172,10 @@ pub(crate) fn should_ignore_game_dir(name: &str) -> bool {
         || name.eq_ignore_ascii_case("boxart")
 }
 
-fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
+fn game_dir_payload_facts(path: &Path) -> (bool, bool, BTreeSet<String>) {
     let mut has_payload = false;
     let mut has_zip = false;
+    let mut payload_extensions = BTreeSet::new();
     for entry in walkdir::WalkDir::new(path)
         .follow_links(false)
         .max_depth(2)
@@ -187,12 +191,16 @@ fn game_dir_has_payloadish_files(path: &Path) -> (bool, bool) {
             has_zip = true;
         } else {
             has_payload = true;
-        }
-        if has_payload && has_zip {
-            break;
+            if let Some(ext) = p
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+            {
+                payload_extensions.insert(ext);
+            }
         }
     }
-    (has_payload, has_zip)
+    (has_payload, has_zip, payload_extensions)
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {
@@ -250,9 +258,12 @@ mod tests {
 
         let dirs = top_level_game_dirs_for_roots(&[root.display().to_string()]);
 
-        assert!(dirs
-            .iter()
-            .any(|dir| { dir.name == "Gameboy" && dir.has_payload_files && !dir.has_zip_files }));
+        assert!(dirs.iter().any(|dir| {
+            dir.name == "Gameboy"
+                && dir.has_payload_files
+                && !dir.has_zip_files
+                && dir.payload_extensions.contains("gb")
+        }));
         assert!(dirs.iter().any(|dir| {
             dir.name == "NeoGeoPocket" && !dir.has_payload_files && dir.has_zip_files
         }));
