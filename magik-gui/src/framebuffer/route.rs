@@ -62,4 +62,13 @@ mod tests {
         assert_eq!(route.mode().vact, 540);
         assert!(route.set_vga_fb());
     }
+
+    #[test]
+    fn launcher_route_stays_scan_sized_for_forced_720p_framebuffer() {
+        let route = LauncherFramebufferRoute::for_scan(1920, 1080, false);
+
+        assert_eq!(route.mode().hact, 1920);
+        assert_eq!(route.mode().vact, 1080);
+        assert!(!route.set_vga_fb());
+    }
 }
