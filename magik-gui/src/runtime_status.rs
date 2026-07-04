@@ -13,6 +13,8 @@ pub struct LauncherStatus<'a> {
     pub scene: &'a str,
     pub screen: &'a str,
     pub frames: u64,
+    pub idle: bool,
+    pub idle_loops: u64,
     pub fps_estimate: f64,
     pub rolling_fps: f64,
     pub rolling_prepare_us: u64,
@@ -115,6 +117,8 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("scene", status.scene);
     insert!("screen", status.screen);
     insert!("frames", status.frames);
+    insert!("idle", status.idle);
+    insert!("idle_loops", status.idle_loops);
     insert!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     insert!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     insert!("rolling_prepare_us", status.rolling_prepare_us);
@@ -292,6 +296,8 @@ mod tests {
                 scene: "launcher",
                 screen: "home",
                 frames: 42,
+                idle: true,
+                idle_loops: 12,
                 fps_estimate: 59.94,
                 rolling_fps: 60.0,
                 rolling_prepare_us: 1,
@@ -358,6 +364,8 @@ mod tests {
         assert_eq!(value["scene"], "launcher");
         assert_eq!(value["screen"], "home");
         assert_eq!(value["frames"], 42);
+        assert_eq!(value["idle"], true);
+        assert_eq!(value["idle_loops"], 12);
         assert_eq!(value["fps_estimate"], 59.9);
         assert_eq!(value["rolling_fps"], 60.0);
         assert_eq!(value["rolling_present_us"], 5);
@@ -428,6 +436,8 @@ mod tests {
             scene: "launcher",
             screen: "arcade",
             frames: 7,
+            idle: false,
+            idle_loops: 0,
             fps_estimate: 60.04,
             rolling_fps: 59.9,
             rolling_prepare_us: 11,
@@ -489,6 +499,8 @@ mod tests {
         assert_eq!(value["schema"], "mister-magik-slint-status-v1");
         assert_eq!(value["screen"], "arcade");
         assert_eq!(value["frames"], 7);
+        assert_eq!(value["idle"], false);
+        assert_eq!(value["idle_loops"], 0);
         assert_eq!(value["fps_estimate"], 60.0);
         assert_eq!(value["catalog_ready"], false);
         assert_eq!(value["catalog_refresh_done"], true);
