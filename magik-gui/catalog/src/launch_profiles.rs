@@ -417,10 +417,10 @@ fn runtime_profile_plan_for_game_dir(
     let decision = if !game_dir.has_payloadish_files() {
         RuntimeProfileDecision::EmptyOrMediaOnly
     } else {
-        let candidates = exact_runtime_core_candidates(&game_dir.name, cores);
+        let candidates = runtime_core_candidates(&game_dir, cores);
         match candidates.as_slice() {
             [] => RuntimeProfileDecision::NoInstalledCore,
-            [core] => runtime_profile_for_exact_match(&game_dir, core)
+            [candidate] => runtime_profile_for_match(&game_dir, candidate.core)
                 .map(|profile| RuntimeProfileDecision::Catalogable {
                     profile: Box::new(profile),
                 })
@@ -428,7 +428,7 @@ fn runtime_profile_plan_for_game_dir(
             _ => RuntimeProfileDecision::Ambiguous {
                 core_ids: candidates
                     .iter()
-                    .map(|core| core.core_id.clone())
+                    .map(|candidate| candidate.core.core_id.clone())
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect(),
@@ -441,25 +441,81 @@ fn runtime_profile_plan_for_game_dir(
     }
 }
 
-fn exact_runtime_core_candidates<'a>(
-    game_dir_name: &str,
+struct RuntimeCoreCandidate<'a> {
+    core: &'a catalog_discovery::InstalledCore,
+}
+
+fn runtime_core_candidates<'a>(
+    game_dir: &catalog_discovery::GameDirFact,
     cores: &'a [catalog_discovery::InstalledCore],
-) -> Vec<&'a catalog_discovery::InstalledCore> {
+) -> Vec<RuntimeCoreCandidate<'a>> {
+    let exact = core_candidates_by_name(&game_dir.name, cores);
+    if !exact.is_empty() {
+        return exact;
+    }
+    if let Some(base) = sinden_base_name(&game_dir.name) {
+        let candidates = core_candidates_by_name(&base, cores);
+        if !candidates.is_empty() {
+            return candidates;
+        }
+    }
+    unique_extension_core_candidates(game_dir, cores)
+}
+
+fn core_candidates_by_name<'a>(
+    name: &str,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<RuntimeCoreCandidate<'a>> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for core in cores {
-        if !core.core_id.eq_ignore_ascii_case(game_dir_name) {
+        if !core.core_id.eq_ignore_ascii_case(name) {
             continue;
         }
         let key = core.core_id.to_ascii_lowercase();
         if seen.insert(key) {
-            out.push(core);
+            out.push(RuntimeCoreCandidate { core });
         }
     }
     out
 }
 
-fn runtime_profile_for_exact_match(
+fn unique_extension_core_candidates<'a>(
+    game_dir: &catalog_discovery::GameDirFact,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<RuntimeCoreCandidate<'a>> {
+    if game_dir.payload_extensions.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for core in cores {
+        let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name);
+        if extensions.is_empty()
+            || !game_dir
+                .payload_extensions
+                .iter()
+                .any(|ext| contains_ignore_ascii_case(&extensions, ext))
+        {
+            continue;
+        }
+        let key = core.core_id.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(RuntimeCoreCandidate { core });
+        }
+    }
+    out
+}
+
+fn sinden_base_name(name: &str) -> Option<String> {
+    let suffix_len = "-sinden".len();
+    if name.len() <= suffix_len || !name.to_ascii_lowercase().ends_with("-sinden") {
+        return None;
+    }
+    Some(name[..name.len() - suffix_len].to_string())
+}
+
+fn runtime_profile_for_match(
     game_dir: &catalog_discovery::GameDirFact,
     core: &catalog_discovery::InstalledCore,
 ) -> Option<LaunchProfile> {
@@ -1100,6 +1156,81 @@ mod tests {
         assert_eq!(profile.system_id, "gameboy");
         assert_eq!(profile.game_dirs, vec!["Gameboy"]);
         assert_eq!(playable_payload_extensions(profile), vec!["gb"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_catalogs_case_insensitive_exact_matches() {
+        let root = unique_temp_dir("runtime-plan-gameboy-case");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/gameboy")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/gameboy/Tetris.gb"), b"rom").expect("write rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "gameboy")
+            .expect("gameboy plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!(
+                "expected catalogable case-insensitive gameboy plan, got {:?}",
+                plan.decision
+            );
+        };
+        assert_eq!(profile.system_id, "gameboy");
+        assert_eq!(profile.game_dirs, vec!["gameboy"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_catalogs_unique_sinden_suffix_aliases() {
+        let root = unique_temp_dir("runtime-plan-gameboy-sinden");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy-Sinden")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Gameboy-Sinden/Tetris.gb"), b"rom").expect("write rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Gameboy-Sinden")
+            .expect("gameboy-sinden plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!(
+                "expected catalogable sinden gameboy plan, got {:?}",
+                plan.decision
+            );
+        };
+        assert_eq!(profile.system_id, "gameboy");
+        assert_eq!(profile.game_dirs, vec!["Gameboy-Sinden"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_marks_shared_extension_aliases_ambiguous() {
+        let root = unique_temp_dir("runtime-plan-ambiguous-sg");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Loose")).expect("create loose dir");
+        std::fs::write(root.join("_Console/ColecoVision_20260630.rbf"), b"rbf")
+            .expect("write coleco core");
+        std::fs::write(root.join("_Console/SMS_20260630.rbf"), b"rbf").expect("write sms core");
+        std::fs::write(root.join("games/Loose/Zaxxon.sg"), b"rom").expect("write sg rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Loose")
+            .expect("loose plan");
+
+        assert_eq!(
+            plan.decision,
+            RuntimeProfileDecision::Ambiguous {
+                core_ids: vec!["ColecoVision".to_string(), "SMS".to_string()]
+            }
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
