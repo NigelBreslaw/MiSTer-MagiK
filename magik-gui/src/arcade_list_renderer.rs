@@ -25,6 +25,9 @@ pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
 pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
 pub(crate) const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
 pub(crate) const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
+const ARCADE_LIST_ALT_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x15, 0x0f, 0x20);
+const ARCADE_LIST_ROW_BORDER_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x25, 0x1c, 0x34);
+const ARCADE_SELECTION_FILL_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0xe7, 0xe3, 0xec);
 pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
 pub(crate) const ARCADE_FILTER_ACTIVE_GRADIENT: TextGradient =
@@ -37,6 +40,7 @@ const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
 const ARCADE_SELECTION_FRAME_THICKNESS: usize = 3;
 const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
+const ARCADE_NEW_BADGE_FILL_565: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,7 +710,8 @@ impl ArcadeListRenderer {
             let src = (src_y + row) * ARCADE_LIST_W + x;
             let dst = row * w;
             for col in 0..w {
-                self.selection_invert_scratch[dst + col] = invert_rgb565(self.surface[src + col]);
+                self.selection_invert_scratch[dst + col] =
+                    selected_aperture_pixel(self.surface[src + col]);
             }
         }
         &self.selection_invert_scratch
@@ -1055,6 +1060,24 @@ fn invert_rgb565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(!pixel.0)
 }
 
+fn selected_aperture_pixel(pixel: Rgb565Pixel) -> Rgb565Pixel {
+    if is_arcade_row_background_pixel(pixel) {
+        ARCADE_SELECTION_FILL_COLOR_565
+    } else {
+        invert_rgb565(pixel)
+    }
+}
+
+fn is_arcade_row_background_pixel(pixel: Rgb565Pixel) -> bool {
+    matches!(
+        pixel,
+        ARCADE_LIST_BG_COLOR_565
+            | ARCADE_LIST_ALT_BG_COLOR_565
+            | ARCADE_LIST_ROW_BORDER_COLOR_565
+            | ARCADE_NEW_BADGE_FILL_565
+    )
+}
+
 fn arcade_selection_inversion_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -1313,26 +1336,60 @@ mod tests {
     }
 
     #[test]
-    fn preparing_inverted_selection_chunk_does_not_mutate_surface() {
+    fn selected_aperture_uses_fixed_fill_for_row_chrome_and_inverts_foreground() {
+        assert_eq!(
+            selected_aperture_pixel(ARCADE_LIST_BG_COLOR_565),
+            ARCADE_SELECTION_FILL_COLOR_565
+        );
+        assert_eq!(
+            selected_aperture_pixel(ARCADE_LIST_ALT_BG_COLOR_565),
+            ARCADE_SELECTION_FILL_COLOR_565
+        );
+        assert_eq!(
+            selected_aperture_pixel(ARCADE_LIST_ROW_BORDER_COLOR_565),
+            ARCADE_SELECTION_FILL_COLOR_565
+        );
+        assert_eq!(
+            selected_aperture_pixel(ARCADE_NEW_BADGE_FILL_565),
+            ARCADE_SELECTION_FILL_COLOR_565
+        );
+        assert_eq!(
+            selected_aperture_pixel(rgb565_from_rgb888(0xff, 0xf6, 0xff)),
+            invert_rgb565(rgb565_from_rgb888(0xff, 0xf6, 0xff))
+        );
+    }
+
+    #[test]
+    fn preparing_inverted_selection_chunk_flattens_chrome_without_mutating_surface() {
         let mut renderer = ArcadeListRenderer::new();
         for (idx, pixel) in renderer.surface.iter_mut().enumerate() {
             *pixel = Rgb565Pixel(idx as u16);
         }
         renderer.surface_y = 5;
-        let before = renderer.surface.clone();
         let x = ARCADE_SELECTION_FRAME_THICKNESS;
         let y = ArcadeListRenderer::centered_selection_y() + ARCADE_SELECTION_FRAME_THICKNESS;
         let w = 4;
         let h = 2;
+        let src_y = (renderer.surface_y + y) % ARCADE_LIST_H;
+        let src = src_y * ARCADE_LIST_W + x;
+        renderer.surface[src] = ARCADE_LIST_BG_COLOR_565;
+        renderer.surface[src + 1] = ARCADE_LIST_ALT_BG_COLOR_565;
+        renderer.surface[src + 2] = ARCADE_LIST_ROW_BORDER_COLOR_565;
+        renderer.surface[src + 3] = rgb565_from_rgb888(0xff, 0xf6, 0xff);
+        let before = renderer.surface.clone();
 
         let inverted = renderer.prepare_inverted_surface_chunk(x, y, w, h).to_vec();
 
         assert_eq!(renderer.surface, before);
+        assert_eq!(inverted[0], ARCADE_SELECTION_FILL_COLOR_565);
+        assert_eq!(inverted[1], ARCADE_SELECTION_FILL_COLOR_565);
+        assert_eq!(inverted[2], ARCADE_SELECTION_FILL_COLOR_565);
+        assert_eq!(inverted[3], invert_rgb565(before[src + 3]));
         for row in 0..h {
             let src_y = (renderer.surface_y + y + row) % ARCADE_LIST_H;
             for col in 0..w {
                 let src = before[src_y * ARCADE_LIST_W + x + col];
-                assert_eq!(inverted[row * w + col], invert_rgb565(src));
+                assert_eq!(inverted[row * w + col], selected_aperture_pixel(src));
             }
         }
     }
