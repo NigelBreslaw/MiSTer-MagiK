@@ -142,6 +142,20 @@ The launcher path relies on Rust-owned framebuffer setup:
 - Route buffer 0 with the FPGA `SET_FBUF` command.
 - Keep the route alive while the launcher runs.
 
+MagiK chooses the UI framebuffer size with `MISTER_UI_FB_SIZE`:
+
+- `auto` is the production default. 1080p-class HDMI output uses a 960x540
+  RGB565 framebuffer, while native 720p output keeps a 1280x720 framebuffer.
+- `960x540` forces the existing half-1080p framebuffer.
+- `1280x720` forces a 1280x720 RGB565 framebuffer while keeping the active HDMI
+  output and FPGA scan route unchanged.
+
+Keep `auto` as the default until forced 1280x720 has current device evidence.
+For visual evidence, use `scripts/capture-tear-pattern-video.sh` or
+`scripts/capture-arcade-scroll-video.sh` with `--ui-fb-size 1280x720`; their
+probe files record the requested capture mode and the encoded video geometry,
+because USB capture devices can advertise one mode and write another.
+
 Debugging tip: framebuffer dumps are useful only while the UI is running. After
 exit, fbcon can redraw the login console into `/dev/fb0`.
 
