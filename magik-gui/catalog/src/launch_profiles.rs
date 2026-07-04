@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const PROFILE_SET_VERSION: u32 = 4;
+pub const PROFILE_SET_VERSION: u32 = 5;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
@@ -490,7 +490,7 @@ fn unique_extension_core_candidates<'a>(
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for core in cores {
-        let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name);
+        let extensions = runtime_payload_extensions_for_core(&core.core_id);
         if extensions.is_empty()
             || !game_dir
                 .payload_extensions
@@ -557,6 +557,19 @@ fn runtime_profile_for_match(
             "Runtime top-level games folder matched an installed core",
         ),
     })
+}
+
+fn runtime_payload_extensions_for_core(core_id: &str) -> Vec<String> {
+    let mut extensions = BTreeSet::new();
+    if let Some(profile) = generic_manifest_profile_for_core(core_id) {
+        for ext in playable_payload_extensions(&profile) {
+            extensions.insert(ext);
+        }
+    }
+    for ext in runtime_payload_extension_hints(core_id) {
+        extensions.insert(ext);
+    }
+    extensions.into_iter().collect()
 }
 
 fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> Vec<String> {
@@ -754,6 +767,9 @@ fn special_profiles() -> Vec<LaunchProfile> {
         ao486_profile(),
         amiga_profile(),
         neogeo_profile(),
+        neogeo_cd_profile(),
+        mame_zip_profile(),
+        hbmame_zip_profile(),
     ]
 }
 
@@ -1058,6 +1074,94 @@ fn neogeo_profile() -> LaunchProfile {
     }
 }
 
+fn neogeo_cd_profile() -> LaunchProfile {
+    LaunchProfile {
+        id: "neogeo-cd".into(),
+        system_id: "neogeo-cd".into(),
+        category: "Console".into(),
+        title: "NeoGeo CD".into(),
+        core_name: "NeoGeo".into(),
+        core_path: Some("_Console/NeoGeo".into()),
+        game_dirs: str_vec(&["NeoGeo-CD"]),
+        payload_rules: vec![PayloadRule {
+            extensions: str_vec(&["cue", "chd"]),
+            mount: MountSpec::mount_image(0),
+            disposition: PayloadDisposition::Playable,
+            provenance: RuleProvenance::main(
+                "menu.cpp routes NeoGeo CD cue/chd image selection through NeoGeo-CD and neocd_set_image",
+            ),
+        }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
+        ignore_rules: vec![
+            IgnoreRule {
+                file_names: Vec::new(),
+                extensions: str_vec(&["bin"]),
+                reason: IgnoreReason::CueTrack,
+                provenance: RuleProvenance::main(
+                    "NeoGeo CD CUE files reference BIN tracks as support media",
+                ),
+            },
+            IgnoreRule {
+                file_names: Vec::new(),
+                extensions: str_vec(&["rom"]),
+                reason: IgnoreReason::Bios,
+                provenance: RuleProvenance::main(
+                    "NeoGeo CD ROM files under the game directory are BIOS/support payloads",
+                ),
+            },
+        ],
+        provenance: RuleProvenance::main(
+            "Main has NeoGeo CD-specific image handling for the NeoGeo core",
+        ),
+    }
+}
+
+fn mame_zip_profile() -> LaunchProfile {
+    arcade_zip_set_profile(
+        "mame",
+        "MAME Zip Sets",
+        "mame",
+        "Raw MAME zip sets are folded into existing Arcade MRA launch targets when their set names match",
+    )
+}
+
+fn hbmame_zip_profile() -> LaunchProfile {
+    arcade_zip_set_profile(
+        "hbmame",
+        "HBMAME Zip Sets",
+        "hbmame",
+        "Raw HBMAME zip sets are folded into existing Arcade MRA launch targets when their set names match",
+    )
+}
+
+fn arcade_zip_set_profile(
+    id: &str,
+    title: &str,
+    game_dir: &str,
+    provenance: &str,
+) -> LaunchProfile {
+    LaunchProfile {
+        id: id.into(),
+        system_id: "arcade".into(),
+        category: "Arcade".into(),
+        title: title.into(),
+        core_name: "Arcade".into(),
+        core_path: None,
+        game_dirs: str_vec(&[game_dir]),
+        payload_rules: vec![PayloadRule {
+            extensions: str_vec(&["zip"]),
+            mount: MountSpec::load_file(1),
+            disposition: PayloadDisposition::Playable,
+            provenance: RuleProvenance::magik(provenance),
+        }],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::magik(provenance),
+    }
+}
+
 fn launcher_payload_rule() -> PayloadRule {
     PayloadRule {
         extensions: str_vec(&["mra", "mgl"]),
@@ -1206,6 +1310,61 @@ mod tests {
         };
         assert_eq!(profile.system_id, "gameboy");
         assert_eq!(profile.game_dirs, vec!["Gameboy-Sinden"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_resolves_coleco_alias_without_ambiguous_extension_leak() {
+        let root = unique_temp_dir("runtime-plan-coleco-alias");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Coleco")).expect("create coleco dir");
+        std::fs::write(root.join("_Console/ColecoVision_20260630.rbf"), b"rbf")
+            .expect("write coleco core");
+        std::fs::write(root.join("_Console/Atari5200_20260630.rbf"), b"rbf")
+            .expect("write atari core");
+        std::fs::write(root.join("_Console/Intellivision_20260630.rbf"), b"rbf")
+            .expect("write intellivision core");
+        std::fs::write(root.join("games/Coleco/Smurf Rescue.col"), b"rom").expect("write rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Coleco")
+            .expect("coleco plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!("expected catalogable coleco plan, got {:?}", plan.decision);
+        };
+        assert_eq!(profile.system_id, "colecovision");
+        assert_eq!(profile.game_dirs, vec!["Coleco"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_keeps_unprofiled_cd_aliases_unsupported() {
+        let root = unique_temp_dir("runtime-plan-unprofiled-cd");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/TGFX16-CD")).expect("create tgfx dir");
+        std::fs::create_dir_all(root.join("games/MegaCD")).expect("create megacd dir");
+        std::fs::write(root.join("_Console/ColecoVision_20260630.rbf"), b"rbf")
+            .expect("write coleco core");
+        std::fs::write(root.join("_Console/SMS_20260630.rbf"), b"rbf").expect("write sms core");
+        std::fs::write(root.join("games/TGFX16-CD/Dracula X.chd"), b"disc")
+            .expect("write tgfx disc");
+        std::fs::write(root.join("games/MegaCD/Sonic CD.chd"), b"disc").expect("write mega disc");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let tgfx = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "TGFX16-CD")
+            .expect("tgfx plan");
+        let megacd = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "MegaCD")
+            .expect("megacd plan");
+
+        assert_eq!(tgfx.decision, RuntimeProfileDecision::NoInstalledCore);
+        assert_eq!(megacd.decision, RuntimeProfileDecision::NoInstalledCore);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1422,6 +1581,47 @@ mod tests {
                     },
                     ..
                 }
+            }
+        ));
+    }
+
+    #[test]
+    fn neogeo_cd_profile_launches_disc_images_and_ignores_support_files() {
+        let profiles = builtin_profiles();
+        let neogeo_cd = profile_for_game_dir(&profiles, "NeoGeo-CD").expect("neogeo-cd profile");
+
+        assert_eq!(neogeo_cd.id, "neogeo-cd");
+        assert_eq!(neogeo_cd.system_id, "neogeo-cd");
+        assert!(matches!(
+            neogeo_cd.classify_path(Path::new("/media/fat/games/NeoGeo-CD/Last Blade.chd")),
+            ProfilePathClass::Payload {
+                rule: PayloadRule {
+                    disposition: PayloadDisposition::Playable,
+                    mount: MountSpec {
+                        kind: MountKind::MountImage,
+                        index: 0,
+                        ..
+                    },
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            neogeo_cd.classify_path(Path::new("/media/fat/games/NeoGeo-CD/Viewpoint.cue")),
+            ProfilePathClass::Payload { .. }
+        ));
+        assert!(matches!(
+            neogeo_cd.classify_path(Path::new("/media/fat/games/NeoGeo-CD/track01.bin")),
+            ProfilePathClass::Ignored {
+                reason: IgnoreReason::CueTrack,
+                ..
+            }
+        ));
+        assert!(matches!(
+            neogeo_cd.classify_path(Path::new("/media/fat/games/NeoGeo-CD/neocd.rom")),
+            ProfilePathClass::Ignored {
+                reason: IgnoreReason::Bios,
+                ..
             }
         ));
     }

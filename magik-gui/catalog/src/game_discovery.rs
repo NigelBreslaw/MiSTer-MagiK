@@ -253,6 +253,15 @@ pub(crate) fn discovery_from_profile_file(
         }
     }
 
+    let raw_arcade_zip_setname = if matches!(profile.id.as_str(), "mame" | "hbmame") {
+        file.path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(library_db::normalize_id)
+    } else {
+        None
+    };
+
     GameDiscovery {
         source_path: source_path.clone(),
         launch_ref: source_path.clone(),
@@ -265,7 +274,7 @@ pub(crate) fn discovery_from_profile_file(
         manufacturer: None,
         genre: None,
         year: None,
-        setname: None,
+        setname: raw_arcade_zip_setname,
         parent: None,
         covered_payload_path: None,
         confidence: profile_confidence(rule),
@@ -410,6 +419,9 @@ pub(crate) fn is_playable_discovery_with_coverage(
     d: &GameDiscovery,
     covered_payloads: &HashSet<String>,
 ) -> bool {
+    if is_raw_arcade_zip_set_discovery(d) {
+        return false;
+    }
     match d.source_kind {
         DiscoverySourceKind::Mra => true,
         DiscoverySourceKind::Mgl => is_launcher_launch_ref(&d.launch_ref),
@@ -498,6 +510,22 @@ pub(crate) fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> Stri
     } else {
         discovery.platform_id.clone()
     }
+}
+
+pub(crate) fn is_raw_arcade_zip_set_discovery(discovery: &GameDiscovery) -> bool {
+    discovery.platform_id == "arcade"
+        && discovery.core_id == "Arcade"
+        && discovery.source_kind == DiscoverySourceKind::PayloadFile
+        && library_db::path_ext(&discovery.source_path)
+            .as_deref()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+        && Path::new(&discovery.source_path)
+            .components()
+            .any(|component| {
+                component.as_os_str().to_str().is_some_and(|part| {
+                    part.eq_ignore_ascii_case("mame") || part.eq_ignore_ascii_case("hbmame")
+                })
+            })
 }
 
 pub(crate) fn system_title_for_discovery(_discovery: &GameDiscovery, system_id: &str) -> String {

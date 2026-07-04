@@ -5,6 +5,7 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameMetadataKey, StructuredLaunchPlan};
 use crate::catalog_build::CatalogRefreshPipeline;
+use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_config;
 use crate::catalog_config::DEFAULT_SQLITE_PATH;
 pub use crate::catalog_config::{
@@ -23,13 +24,13 @@ pub(crate) use crate::catalog_projection::canonical_variant_title;
 use crate::catalog_projection::{
     self, CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
 };
-use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_stamp;
 use crate::core_audit::{self, CatalogAuditRow};
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
-    launch_kind_for_discovery, launch_ref_for_discovery, preferred_playable_discoveries_by_key,
-    profile_id_for_discovery, DiscoverySourceKind, GameDiscovery,
+    is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
+    preferred_playable_discoveries_by_key, profile_id_for_discovery, DiscoverySourceKind,
+    GameDiscovery,
 };
 use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
@@ -37,8 +38,8 @@ use crate::preview_worker;
 use crate::software_identity::{
     console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows, PreviewArchivePaths,
-    MameSoftwareMetadata, SoftwareHashCache,
+    write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
+    MameSoftwareMetadata, PreviewArchivePaths, SoftwareHashCache,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -500,7 +501,9 @@ pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection>
     sqlite_catalog::open_sqlite_read_only(path)
 }
 
-pub fn read_sqlite_catalog_stamp(path: &Path) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
+pub fn read_sqlite_catalog_stamp(
+    path: &Path,
+) -> Result<Option<catalog_stamp::CatalogStamp>, String> {
     sqlite_catalog::read_sqlite_catalog_stamp(path)
 }
 
@@ -858,6 +861,9 @@ fn build_catalog_from_scan_with_sources(
     };
 
     for (key, discovery) in discoveries {
+        if is_raw_arcade_zip_set_discovery(discovery) {
+            continue;
+        }
         let Some(projection) = projection_context.projection_for_discovery(&key, discovery) else {
             continue;
         };
@@ -932,7 +938,13 @@ impl CatalogProjectionBuildContext<'_> {
                     preview_key,
                 )
             };
-            (preview, identity_id, family_id, Some(arcade_family_key), metadata)
+            (
+                preview,
+                identity_id,
+                family_id,
+                Some(arcade_family_key),
+                metadata,
+            )
         } else {
             let preview = software_identity
                 .as_ref()
@@ -978,7 +990,10 @@ impl CatalogProjectionBuildContext<'_> {
         );
         if is_arcade {
             row.game.has_preview = row.game.has_preview
-                && self.preview_paths.archive_for_platform(&system_id).is_some();
+                && self
+                    .preview_paths
+                    .archive_for_platform(&system_id)
+                    .is_some();
         }
         Some(CatalogProjectionForDiscovery {
             row,
@@ -1343,6 +1358,26 @@ mod tests {
             .collect()
     }
 
+    fn raw_arcade_zip_set(path: &str, setname: &str) -> GameDiscovery {
+        GameDiscovery {
+            source_path: path.to_string(),
+            launch_ref: path.to_string(),
+            source_kind: DiscoverySourceKind::PayloadFile,
+            title: title_from_path(path),
+            category: "Arcade".to_string(),
+            platform_id: "arcade".to_string(),
+            core_id: "Arcade".to_string(),
+            hardware_id: "arcade".to_string(),
+            manufacturer: None,
+            genre: None,
+            year: None,
+            setname: Some(setname.to_string()),
+            parent: None,
+            covered_payload_path: None,
+            confidence: crate::game_discovery::DiscoveryConfidence::PayloadPath,
+        }
+    }
+
     #[test]
     fn ram_catalog_from_scan_matches_sqlite_catalog_for_simple_mra_fixture() {
         let scan = sqlite_scan_with_discoveries(vec![
@@ -1421,11 +1456,61 @@ mod tests {
     }
 
     #[test]
+    fn raw_mame_zip_sets_do_not_create_dead_launcher_rows() {
+        let root = unique_temp_dir("raw-mame-zip-fold");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[("puckman", None, "Puck Man", Some("1980"), Some("Namco"))],
+        );
+        let mut mra = mra_discovery(1, "Puck Man");
+        mra.launch_ref = "/media/fat/_Arcade/Puck Man.mra".to_string();
+        mra.source_path = mra.launch_ref.clone();
+        mra.setname = Some("puckman".to_string());
+        let known_zip = raw_arcade_zip_set("/media/fat/games/mame/puckman.zip", "puckman");
+        let unknown_zip =
+            raw_arcade_zip_set("/media/fat/games/hbmame/notarealset.zip", "notarealset");
+        let scan = sqlite_scan_with_discoveries(vec![mra, known_zip, unknown_zip]);
+
+        assert_eq!(unique_discovery_count(&scan.discoveries), 1);
+
+        let ram_catalog = build_catalog_from_scan_with_sources(
+            "/media/fat/_Arcade",
+            &scan,
+            &mame_db,
+            &PathBuf::new(),
+            &PreviewArchivePaths::from_paths(Vec::<String>::new()),
+            SoftwareHashCache::load(&db),
+            None,
+        );
+        write_sqlite_scan_with_mame(&db, &scan, &mame_db).expect("save sqlite");
+        let sqlite_catalog =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let stored_games: i64 = conn
+            .query_row("SELECT count(*) FROM games", [], |row| row.get(0))
+            .expect("count games");
+
+        assert_eq!(ram_catalog.system_game_count("arcade"), 1);
+        assert_eq!(sqlite_catalog.catalog.system_game_count("arcade"), 1);
+        assert_eq!(ram_catalog.games[0].title.as_ref(), "Puck Man");
+        assert_eq!(sqlite_catalog.catalog.games[0].title.as_ref(), "Puck Man");
+        assert!(!ram_catalog
+            .games
+            .iter()
+            .any(|game| game.mra_path.contains("/games/mame/")
+                || game.mra_path.contains("/games/hbmame/")));
+        assert_eq!(stored_games, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ram_scan_artifact_completes_coverage_audit_before_save_artifact() {
         let root = unique_temp_dir("ram-scan-deferred-audit");
         std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
-        std::fs::write(root.join("_Console/UnknownCore_20260701.rbf"), b"rbf")
-            .expect("write core");
+        std::fs::write(root.join("_Console/UnknownCore_20260701.rbf"), b"rbf").expect("write core");
         let mut scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "1942")]);
         scan.roots = vec![root.display().to_string()];
         let ram_artifact = LibraryRamScanArtifact {
@@ -1547,8 +1632,8 @@ mod tests {
         let archive_launch_ref =
             "/media/fat/games/NES/Collection.zip/Collection/Legend of Zelda.nes";
         let archive_entry = GameDiscovery {
-            source_path:
-                "/media/fat/games/NES/Collection.zip::Collection/Legend of Zelda.nes".to_string(),
+            source_path: "/media/fat/games/NES/Collection.zip::Collection/Legend of Zelda.nes"
+                .to_string(),
             launch_ref: archive_launch_ref.to_string(),
             source_kind: DiscoverySourceKind::ArchiveEntry,
             title: "Legend of Zelda".to_string(),

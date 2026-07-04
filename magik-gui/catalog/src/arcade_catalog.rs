@@ -1103,8 +1103,16 @@ fn sort_systems_by_title(systems: &mut [GameSystemEntry]) {
 
 pub fn system_title(id: &str) -> String {
     match id {
+        "amiga" => "Amiga".to_string(),
         "arcade" => "Arcade".to_string(),
+        "atari2600" => "Atari 2600".to_string(),
+        "atari5200" => "Atari 5200".to_string(),
+        "atari7800" => "Atari 7800".to_string(),
+        "atarilynx" => "Atari Lynx".to_string(),
+        "colecovision" => "ColecoVision".to_string(),
         "neogeo" | "neo-geo" | "snk-neo-geo" => "NeoGeo".to_string(),
+        "neogeo-cd" => "NeoGeo CD".to_string(),
+        "neogeopocket" => "NeoGeo Pocket".to_string(),
         "cps1" | "capcom-cps1" => "CPS1".to_string(),
         "cps2" | "capcom-cps2" => "CPS2".to_string(),
         "cps3" | "capcom-cps3" => "CPS3".to_string(),
@@ -1112,19 +1120,25 @@ pub fn system_title(id: &str) -> String {
         "system18" | "sega-system18" => "System 18".to_string(),
         "m72" | "irem-m72" => "Irem M72".to_string(),
         "m92" | "irem-m92" => "Irem M92".to_string(),
+        "gameboy" => "Game Boy".to_string(),
         "gba" => "GBA".to_string(),
-        "gbc" => "GBC".to_string(),
-        "gb" => "GB".to_string(),
+        "gbc" => "Game Boy Color".to_string(),
+        "gb" => "Game Boy".to_string(),
         "nes" => "NES".to_string(),
         "snes" => "SNES".to_string(),
-        "n64" => "N64".to_string(),
-        "sms" => "SMS".to_string(),
-        "psx" => "PSX".to_string(),
-        "ao486" => "ao486".to_string(),
+        "n64" => "Nintendo 64".to_string(),
+        "sms" => "Sega Master System".to_string(),
+        "psx" => "PlayStation".to_string(),
+        "ao486" => "AO486".to_string(),
         "dos" => "DOS Games".to_string(),
         "megadrive" => "Mega Drive".to_string(),
         "megacd" => "Mega CD".to_string(),
+        "s32x" => "Sega 32X".to_string(),
         "gamegear" => "Game Gear".to_string(),
+        "intellivision" => "Intellivision".to_string(),
+        "saturn" => "Saturn".to_string(),
+        "vectrex" => "Vectrex".to_string(),
+        "wonderswan" => "WonderSwan".to_string(),
         "unknown" => "Unknown".to_string(),
         other => other
             .split(['-', '_'])
@@ -1275,6 +1289,73 @@ mod tests {
         assert_eq!(catalog.system_game_count("amiga"), 1);
         assert_eq!(catalog.system_game_view("amiga").len(), 1);
         assert_eq!(catalog.system_preview_game_count("amiga"), 0);
+    }
+
+    #[test]
+    fn systems_are_strictly_sorted_by_display_title() {
+        let deployed_system_ids = [
+            "amiga",
+            "arcade",
+            "atari5200",
+            "atari7800",
+            "atarilynx",
+            "colecovision",
+            "dos",
+            "gameboy",
+            "gba",
+            "intellivision",
+            "megadrive",
+            "n64",
+            "neogeo",
+            "neogeo-cd",
+            "neogeopocket",
+            "nes",
+            "psx",
+            "s32x",
+            "saturn",
+            "sms",
+            "snes",
+            "vectrex",
+            "wonderswan",
+        ];
+        let games = deployed_system_ids
+            .iter()
+            .map(|system_id| game(system_id, &format!("/games/{system_id}.mgl"), "", system_id))
+            .collect::<Vec<_>>();
+
+        let systems = systems_from_games(&games)
+            .into_iter()
+            .map(|system| (system.id, system.title))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            systems,
+            vec![
+                ("amiga".to_string(), "Amiga".to_string()),
+                ("arcade".to_string(), "Arcade".to_string()),
+                ("atari5200".to_string(), "Atari 5200".to_string()),
+                ("atari7800".to_string(), "Atari 7800".to_string()),
+                ("atarilynx".to_string(), "Atari Lynx".to_string()),
+                ("colecovision".to_string(), "ColecoVision".to_string()),
+                ("dos".to_string(), "DOS Games".to_string()),
+                ("gameboy".to_string(), "Game Boy".to_string()),
+                ("gba".to_string(), "GBA".to_string()),
+                ("intellivision".to_string(), "Intellivision".to_string()),
+                ("megadrive".to_string(), "Mega Drive".to_string()),
+                ("neogeo".to_string(), "NeoGeo".to_string()),
+                ("neogeo-cd".to_string(), "NeoGeo CD".to_string()),
+                ("neogeopocket".to_string(), "NeoGeo Pocket".to_string()),
+                ("nes".to_string(), "NES".to_string()),
+                ("n64".to_string(), "Nintendo 64".to_string()),
+                ("psx".to_string(), "PlayStation".to_string()),
+                ("saturn".to_string(), "Saturn".to_string()),
+                ("s32x".to_string(), "Sega 32X".to_string()),
+                ("sms".to_string(), "Sega Master System".to_string()),
+                ("snes".to_string(), "SNES".to_string()),
+                ("vectrex".to_string(), "Vectrex".to_string()),
+                ("wonderswan".to_string(), "WonderSwan".to_string()),
+            ]
+        );
     }
 
     #[test]
