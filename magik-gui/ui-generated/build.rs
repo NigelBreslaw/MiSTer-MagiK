@@ -25,7 +25,11 @@ fn main() {
         println!("cargo:rustc-cfg=mister_ui_scope_launcher");
     }
 
-    let mut sources = vec!["../ui/controller_test.slint", "../ui/launcher.slint"];
+    let mut sources = vec![
+        "../ui/controller_test.slint",
+        "../ui/launcher.slint",
+        "../ui/bench/tear_pattern.slint",
+    ];
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
         sources.push("../ui/experiments/effect_hud.slint");
@@ -42,6 +46,7 @@ fn main() {
         "../ui/controller_panel.slint",
         "../ui/controller_setup.slint",
         "../ui/controller_test.slint",
+        "../ui/bench/tear_pattern.slint",
         "../ui/launcher.slint",
         "../ui/mister_bridge.slint",
         "../ui/mister_window.slint",

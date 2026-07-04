@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Native macOS camera probe/capture via Swift + AVFoundation.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+swift "$HERE/tools/host-camera-native.swift" "$@"

@@ -6,6 +6,7 @@
 #
 #   scripts/run-rust.sh                  # restart supervised launcher, forever
 #   scripts/run-rust.sh launcher 0       # restart supervised launcher, forever
+#   scripts/run-rust.sh tear_pattern 10  # run the visual tearing test scene
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,20 +17,32 @@ LOG="/tmp/mister-magik-${SCENE}.log"
 REMOTE_SCENE="$SCENE"
 EXTRA_ENV=""
 
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/run-rust.sh [launcher] [0]
+  scripts/run-rust.sh controller_test [SECS]
+  scripts/run-rust.sh tear_pattern [SECS]
+  scripts/run-rust.sh video_playback [SECS]
+
+Runs the already-deployed Rust frontend on the MiSTer.
+EOF
+}
+
 case "$SCENE" in
   launcher) ;;
   arcade|arcade-effects)
     echo "The direct arcade scene was removed. Use scripts/profile-preview-scroll.sh for supervised real Arcade benchmarks." >&2
     exit 2
     ;;
-  controller_test|video_playback) ;;
+  controller_test|tear_pattern|video_playback) ;;
   camera-effects|sprite-effects|text-effects|raster-effects|transition-effects)
     echo "'$SCENE' is an experimental effect scene, not a production UI scene." >&2
     echo "Use scripts/experiments/ and deploy with scripts/deploy-rust.sh --experiments." >&2
     exit 2
     ;;
   -h|--help)
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    usage
     exit 0
     ;;
   *)

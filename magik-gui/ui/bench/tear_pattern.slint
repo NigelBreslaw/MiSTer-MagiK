@@ -1,0 +1,117 @@
+import { MisterWindow, MisterUi } from "../mister_window.slint";
+export { MisterUi }
+import "../fonts/PressStart2P-Regular.ttf";
+
+export component TearPattern inherits MisterWindow {
+    background: #05070b;
+    default-font-family: "Press Start 2P";
+
+    property <int> s: MisterUi.scale;
+    property <duration> tick: animation-tick();
+    property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
+    property <length> pan: root.phase * 288px * root.s;
+    property <int> phase-ms: Math.mod(tick / 1ms, 1200);
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        background: #05070b;
+    }
+
+    for band[i] in 18: Rectangle {
+        x: 0;
+        y: i * 30px * root.s;
+        width: 100%;
+        height: 30px * root.s;
+        background: Math.mod(i, 2) == 0 ? #091521 : #160b22;
+    }
+
+    for stripe[i] in 96: Rectangle {
+        property <int> stripe-kind: Math.mod(i, 6);
+        x: i * 18px * root.s - root.pan;
+        y: 0;
+        width: (stripe-kind == 0 ? 2px : stripe-kind == 1 ? 5px : stripe-kind == 2 ? 9px : stripe-kind == 3 ? 13px : 16px) * root.s;
+        height: 100%;
+        background: stripe-kind == 0 ? #ffffff
+            : stripe-kind == 1 ? #00f5ff
+            : stripe-kind == 2 ? #ff2d55
+            : stripe-kind == 3 ? #fff06a
+            : stripe-kind == 4 ? #06d6a0
+            : #7c4dff;
+    }
+
+    for stripe2[i] in 96: Rectangle {
+        property <int> stripe-kind: Math.mod(i, 6);
+        x: i * 18px * root.s - root.pan + 1728px * root.s;
+        y: 0;
+        width: (stripe-kind == 0 ? 2px : stripe-kind == 1 ? 5px : stripe-kind == 2 ? 9px : stripe-kind == 3 ? 13px : 16px) * root.s;
+        height: 100%;
+        background: stripe-kind == 0 ? #ffffff
+            : stripe-kind == 1 ? #00f5ff
+            : stripe-kind == 2 ? #ff2d55
+            : stripe-kind == 3 ? #fff06a
+            : stripe-kind == 4 ? #06d6a0
+            : #7c4dff;
+    }
+
+    for tickline[i] in 34: Rectangle {
+        x: 0;
+        y: i * 16px * root.s;
+        width: 100%;
+        height: (Math.mod(i, 4) == 0 ? 2px : 1px) * root.s;
+        background: Math.mod(i, 4) == 0 ? #ffffff : #345068;
+    }
+
+    for marker[i] in 90: Rectangle {
+        x: Math.mod(i, 18) * 54px * root.s + (i / 18) * 10px * root.s - root.pan / 2;
+        y: (i / 18) * 108px * root.s;
+        width: 4px * root.s;
+        height: 110px * root.s;
+        background: #06d6a0;
+    }
+
+    for box[i] in 12: Rectangle {
+        x: i * 90px * root.s - root.pan;
+        y: 212px * root.s + Math.mod(i, 3) * 34px * root.s;
+        width: 54px * root.s;
+        height: 54px * root.s;
+        background: transparent;
+        border-width: 3px * root.s;
+        border-color: Math.mod(i, 2) == 0 ? #ffffff : #ff2d55;
+    }
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 30px * root.s;
+        background: #000000;
+        opacity: 0.82;
+    }
+
+    Text {
+        x: 12px * root.s;
+        y: 9px * root.s;
+        text: "tear_pattern phase " + root.phase-ms;
+        color: #ffffff;
+        font-size: 8px * root.s;
+    }
+
+    Text {
+        x: 376px * root.s;
+        y: 9px * root.s;
+        text: "watch for horizontal step/kink";
+        color: #fff06a;
+        font-size: 8px * root.s;
+    }
+
+    Text {
+        x: 12px * root.s;
+        y: 498px * root.s;
+        text: "rulers: 16 logical px";
+        color: #ffffff;
+        font-size: 8px * root.s;
+    }
+}

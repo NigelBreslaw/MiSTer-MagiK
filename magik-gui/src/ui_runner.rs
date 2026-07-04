@@ -87,6 +87,7 @@ mod launcher_worker_intents;
 mod media_worker;
 mod raw565_preview_renderer;
 mod screenshot_media_update_session;
+mod tear_pattern_loop;
 pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
@@ -114,6 +115,7 @@ use launcher_scheduler::*;
 use media_worker::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
+use tear_pattern_loop::*;
 use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
@@ -149,6 +151,7 @@ pub const UI_SCENES: &[&str] = &[
     #[cfg(mister_experiments)]
     "transition-effects",
     "controller_test",
+    "tear_pattern",
     #[cfg(mister_video_scene)]
     "video_playback",
 ];
@@ -327,6 +330,13 @@ pub fn run_ui(f: &mut Fpga) {
                 app.show().expect("show");
                 window.request_redraw();
                 run_controller_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+            });
+        }
+        "tear_pattern" => {
+            with_scene_app!(tear_pattern::TearPattern, &ui, &window, app, {
+                app.show().expect("show");
+                window.request_redraw();
+                run_tear_pattern_loop(secs, &ui, &mut disp, &window, &animation_clock);
             });
         }
         "launcher" => {
