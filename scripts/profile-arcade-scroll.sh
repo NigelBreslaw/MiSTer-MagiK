@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -36,6 +36,7 @@ label="arcade-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 scenario="turbo-hold"
 deploy="skip"
 selection_invert=""
+ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -56,6 +57,11 @@ while [[ $# -gt 0 ]]; do
     --selection-invert)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--selection-invert needs on or off" >&2; usage >&2; exit 2; fi
       selection_invert="$2"
+      shift 2
+      ;;
+    --ui-fb-size)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--ui-fb-size needs auto, 960x540, or 1280x720" >&2; usage >&2; exit 2; fi
+      ui_fb_size="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -96,6 +102,10 @@ esac
 case "$selection_invert" in
   ""|on|off) ;;
   *) echo "--selection-invert must be on or off" >&2; usage >&2; exit 2 ;;
+esac
+case "$ui_fb_size" in
+  auto|960x540|1280x720) ;;
+  *) echo "--ui-fb-size must be auto, 960x540, or 1280x720" >&2; exit 2 ;;
 esac
 remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
@@ -140,8 +150,9 @@ case "$deploy" in
   skip) : ;;
 esac
 
-echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy"
+echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size"
 {
+  printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
   printf 'export MISTER_CATALOG_REFRESH=default\n'
   printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
