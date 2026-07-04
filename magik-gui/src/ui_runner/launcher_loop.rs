@@ -304,6 +304,7 @@ struct LauncherIdleInput {
     catalog_background_scan_visible: bool,
     catalog_scan_redraw_due: bool,
     catalog_games_found_detail_changed: bool,
+    slint_animation_active: bool,
     arcade_scroll_active: bool,
     arcade_filter_scroll_active: bool,
     arcade_search_active: bool,
@@ -330,6 +331,7 @@ impl LauncherIdleInput {
             && !self.catalog_background_scan_visible
             && !self.catalog_scan_redraw_due
             && !self.catalog_games_found_detail_changed
+            && !self.slint_animation_active
             && !self.arcade_scroll_active
             && !self.arcade_filter_scroll_active
             && !self.arcade_search_active
@@ -2098,6 +2100,7 @@ pub(super) fn run_launcher_loop(
         }
         let startup_status = lifecycle.startup_status();
         let composition_status = composition_decision.status();
+        let slint_animation_active = app.window().has_active_animations();
         let idle_input = LauncherIdleInput {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             redraw_pending: launcher_redraw_pending,
@@ -2116,6 +2119,7 @@ pub(super) fn run_launcher_loop(
             catalog_background_scan_visible,
             catalog_scan_redraw_due,
             catalog_games_found_detail_changed: games_found_detail_changed,
+            slint_animation_active,
             arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
             arcade_filter_scroll_active: nav.screen == Screen::Arcade
                 && nav.arcade_filter.drawer_open
@@ -3887,6 +3891,11 @@ mod tests {
         .can_sleep());
         assert!(!LauncherIdleInput {
             preview_dirty: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
+            slint_animation_active: true,
             ..base
         }
         .can_sleep());
