@@ -137,7 +137,6 @@ impl UiCompositionController {
                     });
                 }
                 let full_frame = previous != requested_state
-                    || !requested_state.allows_direct_layers()
                     || requested_state == UiCompositionState::ModalOverArcade;
                 let clear_layers = previous.allows_direct_layers()
                     && (!requested_state.allows_direct_layers()
@@ -253,6 +252,45 @@ mod tests {
         assert!(decision.allow_arcade_list_blit);
         assert!(decision.allow_preview_blit);
         assert_eq!(decision.recovery_count, 0);
+    }
+
+    #[test]
+    fn steady_full_slint_does_not_force_full_present() {
+        let mut controller = UiCompositionController::new();
+        let decision = controller.tick(input(Screen::Home));
+
+        assert_eq!(decision.state, UiCompositionState::FullSlint);
+        assert!(!decision.force_full_slint_present);
+        assert!(!decision.clear_direct_layers);
+    }
+
+    #[test]
+    fn transition_from_arcade_to_full_slint_forces_full_present() {
+        let mut controller = UiCompositionController::new();
+        let _ = controller.tick(input(Screen::Arcade));
+        let decision = controller.tick(input(Screen::Home));
+
+        assert_eq!(decision.state, UiCompositionState::FullSlint);
+        assert!(decision.force_full_slint_present);
+        assert!(decision.clear_direct_layers);
+    }
+
+    #[test]
+    fn full_slint_modal_transition_forces_full_present_once() {
+        let mut controller = UiCompositionController::new();
+        let decision = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Home)
+        });
+        let steady = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Home)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::ModalFullSlint);
+        assert!(decision.force_full_slint_present);
+        assert_eq!(steady.state, UiCompositionState::ModalFullSlint);
+        assert!(!steady.force_full_slint_present);
     }
 
     #[test]
