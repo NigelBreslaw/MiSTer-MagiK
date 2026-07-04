@@ -11,7 +11,7 @@ MISTER="$ROOT/scripts/mister"
 RUN_RUST="$ROOT/scripts/run-rust.sh"
 
 SCENARIO="tmp-enospc"
-EXPECT="crash"
+EXPECT="survive"
 LABEL=""
 POLL_SECS="${MISTER_RESOURCE_EXHAUSTION_POLL_SECS:-30}"
 
@@ -23,7 +23,7 @@ Attended MiSTer device repros for launcher resource exhaustion.
 
 Defaults:
   --scenario tmp-enospc
-  --expect crash
+  --expect survive
 
 Environment:
   MISTER_RESOURCE_EXHAUSTION_POLL_SECS       poll window, default 30
@@ -108,6 +108,14 @@ launcher_running() {
   remote "pidof mister-magik-fb >/dev/null 2>&1" >/dev/null 2>&1
 }
 
+latest_crash_report() {
+  remote "ls -1t '$REMOTE_CRASH_DIR'/report-*.json 2>/dev/null | sed -n '1p'" 2>/dev/null || true
+}
+
+main_reports_launcher_crashed() {
+  remote "grep -q '\"launcher_state\":\"LauncherCrashed\"' '$REMOTE_MAIN_STATUS' 2>/dev/null" >/dev/null 2>&1
+}
+
 cleanup_remote() {
   echo "==> Cleaning resource-exhaustion repro files"
   remote "if [ -s '$REMOTE_MEM_PID' ]; then kill -9 \$(cat '$REMOTE_MEM_PID') 2>/dev/null || true; fi; rm -rf '$REMOTE_FILL_DIR'; rm -f '$REMOTE_DD_LOG' '$REMOTE_MEM_LOG'; df -h /tmp; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" || true
@@ -139,6 +147,7 @@ start_clean_launcher() {
     exit 1
   }
   launcher_pid >"$OUT/before.pid"
+  latest_crash_report >"$OUT/before-crash-report.txt"
 }
 
 run_tmp_enospc() {
@@ -213,7 +222,19 @@ poll_launcher() {
   done
 
   if [ "$crashed" -eq 0 ]; then
-    echo "launcher_survived_${POLL_SECS}s=true pid=$(launcher_pid)" | tee "$OUT/result.txt"
+    local before_crash
+    local after_crash
+    before_crash="$(cat "$OUT/before-crash-report.txt" 2>/dev/null || true)"
+    after_crash="$(latest_crash_report)"
+    if [ -n "$after_crash" ] && [ "$after_crash" != "$before_crash" ]; then
+      crashed=1
+      echo "new_crash_report_after_survival_poll=$after_crash before=$before_crash" | tee "$OUT/result.txt"
+    elif main_reports_launcher_crashed; then
+      crashed=1
+      echo "main_reported_launcher_crashed_after_survival_poll=true" | tee "$OUT/result.txt"
+    else
+      echo "launcher_survived_${POLL_SECS}s=true pid=$(launcher_pid)" | tee "$OUT/result.txt"
+    fi
   fi
   echo "crashed=$crashed changed=$changed" >>"$OUT/result.txt"
   return "$crashed"
