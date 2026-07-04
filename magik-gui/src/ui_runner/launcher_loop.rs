@@ -305,6 +305,7 @@ struct LauncherIdleInput {
     catalog_scan_redraw_due: bool,
     catalog_games_found_detail_changed: bool,
     slint_animation_active: bool,
+    home_pan_present_active: bool,
     arcade_scroll_active: bool,
     arcade_filter_scroll_active: bool,
     arcade_search_active: bool,
@@ -332,6 +333,7 @@ impl LauncherIdleInput {
             && !self.catalog_scan_redraw_due
             && !self.catalog_games_found_detail_changed
             && !self.slint_animation_active
+            && !self.home_pan_present_active
             && !self.arcade_scroll_active
             && !self.arcade_filter_scroll_active
             && !self.arcade_search_active
@@ -340,6 +342,63 @@ impl LauncherIdleInput {
             && !self.composition_forces_full_present
             && !self.composition_clears_direct_layers
     }
+}
+
+const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
+const HOME_SIDE_LABEL_W: usize = 56;
+const HOME_LAYOUT_PADDING: usize = 18;
+const HOME_HEADER_H: usize = 42;
+const HOME_LAYOUT_SPACING: usize = 14;
+
+fn update_home_pan_present_window(
+    screen: Screen,
+    scroll_x: i32,
+    last_scroll_x: &mut i32,
+    present_until: &mut Option<Instant>,
+    now: Instant,
+) -> bool {
+    if screen != Screen::Home {
+        *last_scroll_x = scroll_x;
+        *present_until = None;
+        return false;
+    }
+
+    if scroll_x != *last_scroll_x {
+        *last_scroll_x = scroll_x;
+        *present_until = Some(now + HOME_PAN_PRESENT_DURATION);
+    }
+
+    let active = present_until.is_some_and(|deadline| now <= deadline);
+    if !active {
+        *present_until = None;
+    }
+    active
+}
+
+fn home_pan_present_rect(ui: &UiDisplay) -> DirtyRect {
+    let scale = SLINT_UI_SCALE.max(1) as usize;
+    let x0 = (HOME_SIDE_LABEL_W + HOME_LAYOUT_PADDING) * scale;
+    let y0 = (HOME_LAYOUT_PADDING + HOME_HEADER_H + HOME_LAYOUT_SPACING) * scale;
+    let x1 = ui.render_w().saturating_sub(HOME_LAYOUT_PADDING * scale);
+    let y1 = ui.render_h().saturating_sub(HOME_LAYOUT_PADDING * scale);
+    DirtyRect {
+        x0: x0.min(ui.render_w()),
+        y0: y0.min(ui.render_h()),
+        x1: x1.max(x0).min(ui.render_w()),
+        y1: y1.max(y0).min(ui.render_h()),
+    }
+}
+
+fn expand_home_pan_dirty_rect(
+    dirty: Option<DirtyRect>,
+    ui: &UiDisplay,
+    home_pan_present_active: bool,
+) -> Option<DirtyRect> {
+    if !home_pan_present_active {
+        return dirty;
+    }
+    let band = home_pan_present_rect(ui);
+    Some(dirty.map_or(band, |rect| rect.union(band)))
 }
 
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
@@ -1004,6 +1063,8 @@ pub(super) fn run_launcher_loop(
     let mut last_route_reassert_frame = 0u64;
     let mut last_route_reassert_ok = false;
     let mut last_route_reassert_error = String::new();
+    let mut last_home_pan_scroll_x = nav.scroll_x;
+    let mut home_pan_present_until = None;
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
@@ -2101,6 +2162,13 @@ pub(super) fn run_launcher_loop(
         let startup_status = lifecycle.startup_status();
         let composition_status = composition_decision.status();
         let slint_animation_active = app.window().has_active_animations();
+        let home_pan_present_active = update_home_pan_present_window(
+            nav.screen,
+            nav.scroll_x,
+            &mut last_home_pan_scroll_x,
+            &mut home_pan_present_until,
+            loop_start,
+        );
         let idle_input = LauncherIdleInput {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             redraw_pending: launcher_redraw_pending,
@@ -2120,6 +2188,7 @@ pub(super) fn run_launcher_loop(
             catalog_scan_redraw_due,
             catalog_games_found_detail_changed: games_found_detail_changed,
             slint_animation_active,
+            home_pan_present_active,
             arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
             arcade_filter_scroll_active: nav.screen == Screen::Arcade
                 && nav.arcade_filter.drawer_open
@@ -2195,7 +2264,11 @@ pub(super) fn run_launcher_loop(
         update_slint_animations(animation_clock);
         let mut layer_target = LayerTarget::new(target, disp, ui);
         let frame_t1 = Instant::now();
-        let this_rect = layer_target.render_slint_base(&window);
+        let this_rect = expand_home_pan_dirty_rect(
+            layer_target.render_slint_base(&window),
+            ui,
+            home_pan_present_active,
+        );
         launcher_redraw_pending = false;
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
@@ -3900,6 +3973,11 @@ mod tests {
         }
         .can_sleep());
         assert!(!LauncherIdleInput {
+            home_pan_present_active: true,
+            ..base
+        }
+        .can_sleep());
+        assert!(!LauncherIdleInput {
             arcade_scroll_active: true,
             ..base
         }
@@ -3909,6 +3987,114 @@ mod tests {
             ..base
         }
         .can_sleep());
+    }
+
+    #[test]
+    pub(super) fn home_pan_present_window_follows_scroll_changes() {
+        let now = Instant::now();
+        let mut last_scroll_x = 0;
+        let mut present_until = None;
+
+        assert!(!update_home_pan_present_window(
+            Screen::Home,
+            0,
+            &mut last_scroll_x,
+            &mut present_until,
+            now,
+        ));
+        assert!(update_home_pan_present_window(
+            Screen::Home,
+            220,
+            &mut last_scroll_x,
+            &mut present_until,
+            now,
+        ));
+        assert!(update_home_pan_present_window(
+            Screen::Home,
+            220,
+            &mut last_scroll_x,
+            &mut present_until,
+            now + HOME_PAN_PRESENT_DURATION - Duration::from_millis(1),
+        ));
+        assert!(!update_home_pan_present_window(
+            Screen::Home,
+            220,
+            &mut last_scroll_x,
+            &mut present_until,
+            now + HOME_PAN_PRESENT_DURATION + Duration::from_millis(1),
+        ));
+        assert!(present_until.is_none());
+    }
+
+    #[test]
+    pub(super) fn home_pan_present_window_clears_off_home() {
+        let now = Instant::now();
+        let mut last_scroll_x = 0;
+        let mut present_until = None;
+
+        assert!(update_home_pan_present_window(
+            Screen::Home,
+            220,
+            &mut last_scroll_x,
+            &mut present_until,
+            now,
+        ));
+        assert!(!update_home_pan_present_window(
+            Screen::Arcade,
+            220,
+            &mut last_scroll_x,
+            &mut present_until,
+            now,
+        ));
+        assert!(present_until.is_none());
+    }
+
+    #[test]
+    pub(super) fn home_pan_present_rect_matches_home_list_band() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        assert_eq!(
+            home_pan_present_rect(&ui),
+            DirtyRect {
+                x0: 74,
+                y0: 74,
+                x1: 942,
+                y1: 522,
+            }
+        );
+    }
+
+    #[test]
+    pub(super) fn home_pan_present_expands_dirty_rect_to_rail_band_only() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        let dirty = DirtyRect {
+            x0: 100,
+            y0: 120,
+            x1: 200,
+            y1: 220,
+        };
+
+        assert_eq!(
+            expand_home_pan_dirty_rect(Some(dirty), &ui, false),
+            Some(dirty)
+        );
+        assert_eq!(
+            expand_home_pan_dirty_rect(Some(dirty), &ui, true),
+            Some(DirtyRect {
+                x0: 74,
+                y0: 74,
+                x1: 942,
+                y1: 522,
+            })
+        );
+        assert_eq!(
+            expand_home_pan_dirty_rect(None, &ui, true),
+            Some(DirtyRect {
+                x0: 74,
+                y0: 74,
+                x1: 942,
+                y1: 522,
+            })
+        );
     }
 
     #[test]
