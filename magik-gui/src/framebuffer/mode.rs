@@ -126,6 +126,10 @@ mod tests {
             fb_mode_action(current, 960, 540),
             FbModeAction::AdoptCurrent
         );
+        assert_eq!(
+            fb_mode_action(fb_info(1280, 720, 2560, 16), 1280, 720),
+            FbModeAction::AdoptCurrent
+        );
         assert_eq!(FbModeAction::AdoptCurrent.label(), "adopt");
     }
 
@@ -137,6 +141,10 @@ mod tests {
         );
         assert_eq!(
             fb_mode_action(fb_info(960, 540, 3840, 32), 960, 540),
+            FbModeAction::WriteMode
+        );
+        assert_eq!(
+            fb_mode_action(fb_info(1280, 720, 3840, 16), 1280, 720),
             FbModeAction::WriteMode
         );
         assert_eq!(FbModeAction::WriteMode.label(), "write");

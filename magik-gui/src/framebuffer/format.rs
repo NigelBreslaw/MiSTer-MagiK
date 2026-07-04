@@ -66,12 +66,14 @@ mod tests {
     fn rgb565_stride_matches_mister_alignment() {
         assert_eq!(rgb565_stride_bytes(960), 1920);
         assert_eq!(rgb565_stride_bytes(961), 1936);
+        assert_eq!(rgb565_stride_bytes(1280), 2560);
     }
 
     #[test]
     fn rgb565_mode_line_uses_production_contract() {
         assert_eq!(rgb565_mode_line(960, 540, 0), "565 1 960 540 1920");
         assert_eq!(rgb565_mode_line(960, 540, 1920), "565 1 960 540 1920");
+        assert_eq!(rgb565_mode_line(1280, 720, 0), "565 1 1280 720 2560");
     }
 
     #[test]
