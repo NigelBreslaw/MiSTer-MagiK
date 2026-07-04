@@ -748,7 +748,11 @@ pub(super) fn run_launcher_loop(
         preview_transition.segment.as_secs(),
         preview_transition.duration.as_millis()
     );
-    crate::ui_logln!("fb_present_delay_us={}", present_timing.delay_us());
+    crate::ui_logln!(
+        "fb_present_delay_us={} vsync_fresh_hit_max_age_us={}",
+        present_timing.delay_us(),
+        pacer.fresh_hit_max_age_us()
+    );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
     let mut arcade_search_indexes_prewarmed_for: Option<usize> = None;
@@ -2375,6 +2379,13 @@ pub(super) fn run_launcher_loop(
             .map(|pace| pace.period_us)
             .unwrap_or_else(|| pacer.period_us());
         let vsync_miss_streak = pace.0.as_ref().map(|pace| pace.miss_streak).unwrap_or(0);
+        let vsync_stale_hits = pace.0.as_ref().map(|pace| pace.stale_hits).unwrap_or(0);
+        let present_phase_us = pace
+            .0
+            .as_ref()
+            .and_then(|pace| pace.hit_at)
+            .map(|hit_at| frame_t3.saturating_duration_since(hit_at).as_micros())
+            .unwrap_or(0);
         if !first_vsync_logged
             && pace
                 .0
@@ -2438,6 +2449,8 @@ pub(super) fn run_launcher_loop(
                 vsync_source,
                 vsync_period_us,
                 vsync_miss_streak,
+                vsync_stale_hits,
+                present_phase_us,
                 arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,

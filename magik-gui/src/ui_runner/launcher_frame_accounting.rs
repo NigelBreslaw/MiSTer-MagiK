@@ -65,6 +65,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
+    pub(super) vsync_stale_hits: u32,
+    pub(super) present_phase_us: u128,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
     pub(super) preview_transition: PreviewTransitionTrace,
@@ -131,6 +133,10 @@ struct PreviewScrollTraceRow {
     vsync_source: &'static str,
     vsync_period_us: u64,
     vsync_miss_streak: u32,
+    vsync_stale_hits: u32,
+    present_phase_us: u128,
+    dirty_y0: usize,
+    dirty_y1: usize,
     status_write_due: u8,
     status_string_copy_us: u128,
     status_string_copy_bytes: usize,
@@ -161,7 +167,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -196,6 +202,10 @@ impl PreviewScrollTrace {
                 row.vsync_source,
                 row.vsync_period_us,
                 row.vsync_miss_streak,
+                row.vsync_stale_hits,
+                row.present_phase_us,
+                row.dirty_y0,
+                row.dirty_y1,
                 row.status_write_due,
                 row.status_string_copy_us,
                 row.status_string_copy_bytes,
@@ -549,6 +559,10 @@ impl LauncherFrameAccounting {
                 .unwrap_or("none"),
             vsync_period_us: frame.vsync_period_us,
             vsync_miss_streak: frame.vsync_miss_streak,
+            vsync_stale_hits: frame.vsync_stale_hits,
+            present_phase_us: frame.present_phase_us,
+            dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
+            dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
             status_write_due: u8::from(frame.status_write_due),
             status_string_copy_us: frame.prepare_trace.status_string_copy_us,
             status_string_copy_bytes: frame.status_string_copy_bytes,
@@ -882,7 +896,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

@@ -12,6 +12,7 @@ const FBIO_WAITFORVSYNC: libc::c_ulong = 0x4004_4620;
 const DEFAULT_VSYNC_FALLBACK_US: u64 = 16_667;
 const PAL_VSYNC_FALLBACK_US: u64 = 20_000;
 const VSYNC_GRACE_US: u64 = 1_500;
+const DEFAULT_FRESH_HIT_MAX_AGE_US: u64 = 500;
 const PERIOD_ALPHA_NUM: u64 = 1;
 const PERIOD_ALPHA_DEN: u64 = 8;
 const VSYNC_WORKER_QUEUE_DEPTH: usize = 1;
@@ -121,6 +122,8 @@ pub struct VsyncPace {
     pub wait_us: u64,
     pub period_us: u64,
     pub miss_streak: u32,
+    pub hit_at: Option<Instant>,
+    pub stale_hits: u32,
     pub message: Option<String>,
 }
 
@@ -136,6 +139,7 @@ pub struct VsyncPacer {
     timeouts: u64,
     errors: u64,
     fallback_frames: u64,
+    fresh_hit_max_age_us: u64,
 }
 
 pub fn wait_vsync_fd(fd: std::os::unix::io::RawFd) -> VsyncWaitStatus {
@@ -186,6 +190,7 @@ impl VsyncPacer {
             timeouts: 0,
             errors: 0,
             fallback_frames: 0,
+            fresh_hit_max_age_us: configured_fresh_hit_max_age_us(),
         }
     }
 
@@ -209,15 +214,41 @@ impl VsyncPacer {
         self.fallback_frames
     }
 
+    pub fn fresh_hit_max_age_us(&self) -> u64 {
+        self.fresh_hit_max_age_us
+    }
+
     pub fn max_miss_streak(&self) -> u32 {
         self.observed_max_miss_streak
     }
 
     pub fn wait(&mut self) -> VsyncPace {
+        let wait_started_at = Instant::now();
         let deadline = Duration::from_micros(self.period_us + VSYNC_GRACE_US);
-        let status = self
-            .drain_ready()
-            .or_else(|| self.rx.recv_timeout(deadline).ok());
+        let deadline_at = wait_started_at + deadline;
+        let mut stale_hits = 0u32;
+        let status = loop {
+            if let Some(status) = self.drain_ready() {
+                if self.is_stale_hit(&status, wait_started_at) {
+                    stale_hits += 1;
+                    continue;
+                }
+                break Some(status);
+            }
+
+            let now = Instant::now();
+            if now >= deadline_at {
+                break None;
+            }
+            let Ok(status) = self.rx.recv_timeout(deadline_at - now) else {
+                break None;
+            };
+            if self.is_stale_hit(&status, wait_started_at) {
+                stale_hits += 1;
+                continue;
+            }
+            break Some(status);
+        };
 
         match status {
             Some(VsyncWaitStatus::Hit { wait_us, at }) => {
@@ -228,20 +259,32 @@ impl VsyncPacer {
                     wait_us,
                     period_us: self.period_us,
                     miss_streak: self.miss_streak,
+                    hit_at: Some(at),
+                    stale_hits,
                     message: None,
                 }
             }
             Some(VsyncWaitStatus::Timeout { wait_us }) => {
                 self.timeouts += 1;
-                self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, None)
+                let mut pace = self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, None);
+                pace.stale_hits = stale_hits;
+                pace
             }
             Some(VsyncWaitStatus::Error {
                 wait_us, message, ..
             }) => {
                 self.errors += 1;
-                self.fallback_after_miss(VsyncPaceSource::Error, wait_us, Some(message))
+                let mut pace =
+                    self.fallback_after_miss(VsyncPaceSource::Error, wait_us, Some(message));
+                pace.stale_hits = stale_hits;
+                pace
             }
-            None => self.fallback_after_miss(VsyncPaceSource::Fallback, self.period_us, None),
+            None => {
+                let mut pace =
+                    self.fallback_after_miss(VsyncPaceSource::Fallback, self.period_us, None);
+                pace.stale_hits = stale_hits;
+                pace
+            }
         }
     }
 
@@ -251,6 +294,14 @@ impl VsyncPacer {
             latest = Some(status);
         }
         latest
+    }
+
+    fn is_stale_hit(&self, status: &VsyncWaitStatus, wait_started_at: Instant) -> bool {
+        let VsyncWaitStatus::Hit { at, .. } = status else {
+            return false;
+        };
+        wait_started_at.saturating_duration_since(*at).as_micros()
+            > u128::from(self.fresh_hit_max_age_us)
     }
 
     fn record_hit(&mut self, at: Instant) {
@@ -301,6 +352,8 @@ impl VsyncPacer {
             wait_us,
             period_us: self.period_us,
             miss_streak: self.miss_streak,
+            hit_at: None,
+            stale_hits: 0,
             message,
         }
     }
@@ -351,6 +404,14 @@ fn configured_fallback_period_us() -> u64 {
     } else {
         DEFAULT_VSYNC_FALLBACK_US
     }
+}
+
+fn configured_fresh_hit_max_age_us() -> u64 {
+    std::env::var("MISTER_VSYNC_FRESH_HIT_MAX_AGE_US")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_FRESH_HIT_MAX_AGE_US)
+        .min(10_000)
 }
 
 fn mister_ini_menu_pal_enabled() -> bool {
@@ -480,6 +541,7 @@ mod tests {
             timeouts: 0,
             errors: 0,
             fallback_frames: 0,
+            fresh_hit_max_age_us: DEFAULT_FRESH_HIT_MAX_AGE_US,
         }
     }
 
@@ -538,6 +600,7 @@ mod tests {
             timeouts: 0,
             errors: 0,
             fallback_frames: 0,
+            fresh_hit_max_age_us: DEFAULT_FRESH_HIT_MAX_AGE_US,
         };
 
         for expected in 1..=3 {
@@ -641,5 +704,46 @@ mod tests {
         assert_eq!(pacer.miss_streak, 0);
         assert_eq!(pacer.hits(), 1);
         assert_eq!(pacer.max_miss_streak(), 3);
+    }
+
+    #[test]
+    fn stale_queued_hit_is_discarded_before_waiting_for_fresh_hit() {
+        let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
+        let mut pacer = VsyncPacer {
+            rx,
+            period_us: DEFAULT_VSYNC_FALLBACK_US,
+            last_hit_at: None,
+            last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),
+            miss_streak: 0,
+            degraded_threshold: 3,
+            observed_max_miss_streak: 0,
+            hits: 0,
+            timeouts: 0,
+            errors: 0,
+            fallback_frames: 0,
+            fresh_hit_max_age_us: DEFAULT_FRESH_HIT_MAX_AGE_US,
+        };
+        tx.try_send(VsyncWaitStatus::Hit {
+            wait_us: 16_000,
+            at: Instant::now() - Duration::from_micros(DEFAULT_FRESH_HIT_MAX_AGE_US + 1_000),
+        })
+        .expect("stale hit queued");
+        let sender = std::thread::spawn(move || {
+            let fresh_at = Instant::now();
+            tx.send(VsyncWaitStatus::Hit {
+                wait_us: 16_000,
+                at: fresh_at,
+            })
+            .expect("fresh hit queued after stale one is drained");
+            fresh_at
+        });
+
+        let pace = pacer.wait();
+        let fresh_at = sender.join().expect("fresh sender joins");
+
+        assert_eq!(pace.source, VsyncPaceSource::Vsync);
+        assert_eq!(pace.hit_at, Some(fresh_at));
+        assert_eq!(pace.stale_hits, 1);
+        assert_eq!(pacer.hits(), 1);
     }
 }
