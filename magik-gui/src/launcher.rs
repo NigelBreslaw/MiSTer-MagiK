@@ -575,6 +575,10 @@ impl ArcadeFilterState {
         }
     }
 
+    pub fn is_scroll_active(&self) -> bool {
+        self.scroll.is_scroll_active()
+    }
+
     fn active_group_index(&self) -> usize {
         match self.active {
             ArcadeFilter::All => 0,
