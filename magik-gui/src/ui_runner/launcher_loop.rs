@@ -2288,12 +2288,14 @@ pub(super) fn run_launcher_loop(
                 let items = arcade_filter_items_cache.items(&catalog, &nav, catalog_version);
                 arcade_list_renderer.draw_filter_items(
                     items,
+                    nav.arcade_filter.selected,
                     nav.arcade_filter.visual_index,
                     force_arcade_redraw,
                 )
             } else {
                 arcade_list_renderer.draw(
                     active_arcade_games,
+                    nav.arcade.selected,
                     nav.arcade.visual_index,
                     force_arcade_redraw,
                 )
