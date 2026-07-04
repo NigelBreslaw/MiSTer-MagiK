@@ -1018,6 +1018,10 @@ mod tests {
     use super::*;
     use crate::test_support::arcade_game;
 
+    fn game(system_id: &str, path: &str, title: &str) -> ArcadeGameEntry {
+        arcade_game(title).system_id(system_id).path(path).build()
+    }
+
     #[test]
     fn arcade_anchor_hash_tracks_visible_row_fields_only() {
         let base = game("arcade", "/media/fat/_Arcade/a.mra", "Alpha");

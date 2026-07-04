@@ -21,8 +21,6 @@ use std::time::{Duration, Instant};
 
 use mister_magik_ui as slint_ui;
 
-#[cfg(test)]
-use crate::arcade_catalog::ArcadeGameEntry;
 use crate::arcade_catalog::{
     self, ArcadeCatalog, ArcadeGameView, LaunchTarget, ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT,
     HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH,

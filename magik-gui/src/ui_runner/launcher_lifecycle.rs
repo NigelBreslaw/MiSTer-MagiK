@@ -271,6 +271,7 @@ pub(super) struct LauncherLifecycle {
 
 impl LauncherLifecycle {
     pub(super) const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
+    pub(super) const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(1500);
 
     pub(super) fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {
@@ -345,6 +346,12 @@ impl LauncherLifecycle {
             }
             StartupRevealState::HoldBlack if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
+            }
+            StartupRevealState::WaitRelevantPreview
+                if now.saturating_duration_since(self.startup_started_at)
+                    >= Self::RETURN_PREVIEW_HOLD_TIMEOUT =>
+            {
+                self.mark_reveal_ready("preview_state=timeout", out);
             }
             _ => {}
         }
@@ -946,6 +953,54 @@ mod tests {
         );
         assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"return_preview_ready"));
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+    }
+
+    #[test]
+    fn return_start_reveals_if_preview_never_becomes_ready() {
+        let now = Instant::now();
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+
+        lifecycle.begin_startup_reveal(StartupMode::ReturnFromGame, now, &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnCatalogHydrationNeeded,
+            &mut effects,
+        );
+        lifecycle.handle(
+            LauncherLifecycleInput::StartupReturnContextRestored {
+                screen: "arcade",
+                system_id: "neogeo".to_string(),
+                game_index: 144,
+                visual_index: 144.0,
+                preview_expected: true,
+            },
+            &mut effects,
+        );
+        effects.clear();
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_PREVIEW_HOLD_TIMEOUT - Duration::from_millis(1),
+            true,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::WaitRelevantPreview
+        );
+        assert!(!lifecycle.startup_can_present_frame());
+        assert!(effects.as_slice().is_empty());
+
+        lifecycle.tick_startup_reveal(
+            now + LauncherLifecycle::RETURN_PREVIEW_HOLD_TIMEOUT,
+            true,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.startup_status().state,
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
     }
 

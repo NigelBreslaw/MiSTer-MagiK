@@ -152,8 +152,8 @@ stateDiagram-v2
     HoldBlackReturn --> HydrateReturnCatalog: cached summary lacks navigation rows
     HydrateReturnCatalog --> RestoreContext: navigation catalog loaded
     HoldBlackReturn --> RestoreContext: navigation catalog already loaded
-    RestoreContext --> WaitRelevantPreview: selected preview exact, or no preview exists
-    WaitRelevantPreview --> RevealLauncher: restored frame ready
+    RestoreContext --> WaitRelevantPreview: restored selection known
+    WaitRelevantPreview --> RevealLauncher: selected preview exact, no preview exists, or preview wait times out
 
     RevealLauncher --> InputEnabled
     InputEnabled --> [*]
@@ -166,7 +166,11 @@ intended launcher frame is ready. Warm summary startup may defer background
 catalog validation so the first visible frame wins, but return-from-game treats
 navigation hydration as foreground reveal work: it starts immediately, even when
 normal refresh is disabled, because restoring the exact Arcade row requires
-hydrated navigation rows. Return-from-game is authorized by Main's
+hydrated navigation rows. Return-from-game may briefly wait for the selected
+preview so the restored Arcade frame is complete, but preview readiness is not a
+hard visibility dependency: if the relevant preview never becomes exact, the
+launcher must reveal after the bounded preview hold rather than leaving HDMI
+black. Return-from-game is authorized by Main's
 volatile `MISTER_MAGIK_RETURN_TO_LAUNCHER=1` launcher environment; the
 `/tmp/mister-magik/launcher-return-state.json` file is only the restore payload
 for screen, system, selection, and filters. A stale return-state file without
