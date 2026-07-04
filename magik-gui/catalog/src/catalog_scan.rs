@@ -1081,7 +1081,7 @@ mod tests {
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/NotACoreProfile"
                 && row.catalog_status == "uncataloged"
-                && row.reason == "game-dir-has-no-catalog-profile"
+                && row.reason == "no-installed-core"
         }));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
@@ -1229,7 +1229,7 @@ mod tests {
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/Loose"
                 && row.catalog_status == "uncataloged"
-                && row.reason == "game-dir-has-no-catalog-profile"
+                && row.reason == "ambiguous-alias"
         }));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1378,7 +1378,7 @@ mod tests {
             row.core_id == "ColecoVision"
                 && row.expected_game_dir == "games/ColecoVision"
                 && row.catalog_status == "support-only"
-                && row.reason == "known-game-dir-without-installed-core"
+                && row.reason == "no-installed-core"
         }));
         let _ = std::fs::remove_dir_all(root);
     }

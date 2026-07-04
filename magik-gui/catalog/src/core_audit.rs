@@ -4,7 +4,9 @@
 //! into games. These rows are diagnostics and stamp inputs, not launch entries.
 
 use crate::catalog_discovery;
-use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition};
+use crate::launch_profiles::{
+    self, LaunchProfile, PayloadDisposition, RuleSourceKind, RuntimeProfileDecision,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -66,15 +68,28 @@ fn audit_game_directories(
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
     let cataloged_dirs = cataloged_game_dirs(profiles);
+    let runtime_plans = launch_profiles::runtime_profile_plans_for_roots(roots)
+        .into_iter()
+        .map(|plan| (plan.game_dir_name.to_ascii_lowercase(), plan.decision))
+        .collect::<BTreeMap<_, _>>();
     for fact in catalog_discovery::top_level_game_dirs_for_roots(roots) {
         let name = fact.name.as_str();
         let path = &fact.path;
         let key = name.to_ascii_lowercase();
         if cataloged_dirs.contains(&key) {
+            if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, name) {
+                if profile.provenance.kind == RuleSourceKind::ConfStr {
+                    insert_audit_row(
+                        rows,
+                        cataloged_row_for_profile(
+                            profile,
+                            profile.core_path.as_deref().unwrap_or_default().to_string(),
+                            format!("games/{name}"),
+                        ),
+                    );
+                }
+            }
             audit_non_indexed_zips_in_cataloged_dir(path, name, profiles, rows);
-            continue;
-        }
-        if !fact.has_payloadish_files() {
             continue;
         }
         if let Some(profile) = launch_profiles::generic_manifest_profile_for_game_dir(name) {
@@ -88,9 +103,13 @@ fn audit_game_directories(
                     mount_kind: "load-file".to_string(),
                     source: source_name(profile.provenance.kind).to_string(),
                     catalog_status: "support-only".to_string(),
-                    reason: "known-game-dir-without-installed-core".to_string(),
+                    reason: "no-installed-core".to_string(),
                 },
             );
+            continue;
+        }
+        if let Some(decision) = runtime_plans.get(&key) {
+            insert_audit_row(rows, audit_row_for_runtime_decision(&fact, decision));
             continue;
         }
         insert_audit_row(
@@ -110,6 +129,49 @@ fn audit_game_directories(
                 },
             },
         );
+    }
+}
+
+fn audit_row_for_runtime_decision(
+    fact: &catalog_discovery::GameDirFact,
+    decision: &RuntimeProfileDecision,
+) -> CatalogAuditRow {
+    let (core_id, catalog_status, reason) = match decision {
+        RuntimeProfileDecision::Catalogable { profile } => (
+            profile.core_name.clone(),
+            "cataloged".to_string(),
+            "matched-catalog-profile".to_string(),
+        ),
+        RuntimeProfileDecision::NoInstalledCore => (
+            fact.name.clone(),
+            "uncataloged".to_string(),
+            "no-installed-core".to_string(),
+        ),
+        RuntimeProfileDecision::EmptyOrMediaOnly => (
+            fact.name.clone(),
+            "support-only".to_string(),
+            "no-valid-games".to_string(),
+        ),
+        RuntimeProfileDecision::NoKnownPayloadExtension => (
+            fact.name.clone(),
+            "uncataloged".to_string(),
+            "unsupported-extension".to_string(),
+        ),
+        RuntimeProfileDecision::Ambiguous { core_ids } => (
+            core_ids.join(","),
+            "uncataloged".to_string(),
+            "ambiguous-alias".to_string(),
+        ),
+    };
+    CatalogAuditRow {
+        core_id,
+        core_path: String::new(),
+        expected_game_dir: format!("games/{}", fact.name),
+        extensions: observed_or_inferred_extensions(fact),
+        mount_kind: "load-file".to_string(),
+        source: "runtime-discovered".to_string(),
+        catalog_status,
+        reason,
     }
 }
 
@@ -191,6 +253,18 @@ fn profile_payload_extensions(profile: &LaunchProfile) -> String {
     extensions.into_iter().collect::<Vec<_>>().join(",")
 }
 
+fn observed_or_inferred_extensions(fact: &catalog_discovery::GameDirFact) -> String {
+    if fact.payload_extensions.is_empty() {
+        inferred_extensions_for_game_dir(&fact.name)
+    } else {
+        fact.payload_extensions
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 fn cataloged_game_dirs(profiles: &[LaunchProfile]) -> BTreeSet<String> {
     profiles
         .iter()
@@ -264,7 +338,7 @@ fn source_name(kind: crate::launch_profiles::RuleSourceKind) -> &'static str {
         crate::launch_profiles::RuleSourceKind::MainSource => "main-derived",
         crate::launch_profiles::RuleSourceKind::Mgl => "mgl",
         crate::launch_profiles::RuleSourceKind::Mra => "mra",
-        crate::launch_profiles::RuleSourceKind::ConfStr => "main-derived",
+        crate::launch_profiles::RuleSourceKind::ConfStr => "runtime-discovered",
         crate::launch_profiles::RuleSourceKind::MagikProfile => "magik-special",
     }
 }
@@ -293,7 +367,7 @@ mod tests {
         assert!(rows.iter().any(|row| {
             row.expected_game_dir == "games/ChannelF"
                 && row.catalog_status == "uncataloged"
-                && row.reason == "game-dir-only-has-unindexed-zip-archives"
+                && row.reason == "no-installed-core"
         }));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -383,6 +457,115 @@ mod tests {
                 && row.expected_game_dir == "games/ChannelF"
                 && row.catalog_status == "uncataloged"
                 && row.reason == "installed-core-has-no-catalog-profile"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_game_dir_without_core_reports_no_installed_core() {
+        let root = unique_temp_dir("audit-runtime-no-core");
+        let gameboy = root.join("games/Gameboy");
+        std::fs::create_dir_all(&gameboy).expect("create gameboy dir");
+        std::fs::write(gameboy.join("Tetris.gb"), b"rom").expect("write rom");
+        let roots = vec![root.display().to_string()];
+        let profiles = launch_profiles::active_profiles_for_roots(&roots);
+
+        let rows = audit_catalog_coverage(&roots, &profiles);
+
+        assert!(rows.iter().any(|row| {
+            row.expected_game_dir == "games/Gameboy"
+                && row.source == "runtime-discovered"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "no-installed-core"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_empty_game_dir_reports_no_valid_games() {
+        let root = unique_temp_dir("audit-runtime-empty");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        let roots = vec![root.display().to_string()];
+        let profiles = launch_profiles::active_profiles_for_roots(&roots);
+
+        let rows = audit_catalog_coverage(&roots, &profiles);
+
+        assert!(rows.iter().any(|row| {
+            row.expected_game_dir == "games/Gameboy"
+                && row.source == "runtime-discovered"
+                && row.catalog_status == "support-only"
+                && row.reason == "no-valid-games"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_unsupported_extension_reports_stable_reason() {
+        let root = unique_temp_dir("audit-runtime-unsupported-extension");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(root.join("games/C64")).expect("create c64 dir");
+        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/C64/Impossible Mission.d64"), b"disk").expect("write disk");
+        let roots = vec![root.display().to_string()];
+        let profiles = launch_profiles::active_profiles_for_roots(&roots);
+
+        let rows = audit_catalog_coverage(&roots, &profiles);
+
+        assert!(rows.iter().any(|row| {
+            row.expected_game_dir == "games/C64"
+                && row.extensions == "d64"
+                && row.source == "runtime-discovered"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "unsupported-extension"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_ambiguous_alias_reports_stable_reason() {
+        let root = unique_temp_dir("audit-runtime-ambiguous-alias");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Loose")).expect("create loose dir");
+        std::fs::write(root.join("_Console/ColecoVision_20260630.rbf"), b"rbf")
+            .expect("write coleco core");
+        std::fs::write(root.join("_Console/SMS_20260630.rbf"), b"rbf").expect("write sms core");
+        std::fs::write(root.join("games/Loose/Zaxxon.sg"), b"rom").expect("write rom");
+        let roots = vec![root.display().to_string()];
+        let profiles = launch_profiles::active_profiles_for_roots(&roots);
+
+        let rows = audit_catalog_coverage(&roots, &profiles);
+
+        assert!(rows.iter().any(|row| {
+            row.core_id == "ColecoVision,SMS"
+                && row.expected_game_dir == "games/Loose"
+                && row.extensions == "sg"
+                && row.source == "runtime-discovered"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "ambiguous-alias"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_cataloged_game_dir_reports_runtime_source() {
+        let root = unique_temp_dir("audit-runtime-cataloged");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Gameboy/Tetris.gb"), b"rom").expect("write rom");
+        let roots = vec![root.display().to_string()];
+        let profiles = launch_profiles::active_profiles_for_roots(&roots);
+
+        let rows = audit_catalog_coverage(&roots, &profiles);
+
+        assert!(rows.iter().any(|row| {
+            row.core_id == "Gameboy"
+                && row.expected_game_dir == "games/Gameboy"
+                && row.source == "runtime-discovered"
+                && row.catalog_status == "cataloged"
+                && row.reason == "matched-catalog-profile"
         }));
         let _ = std::fs::remove_dir_all(root);
     }
