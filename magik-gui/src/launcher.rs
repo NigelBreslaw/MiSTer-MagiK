@@ -921,7 +921,9 @@ impl LauncherNav {
                 next_settings.simple_joystick_handling = !next_settings.simple_joystick_handling;
                 match next_settings.save() {
                     Ok(()) => self.settings = next_settings,
-                    Err(e) => eprintln!("settings: failed to save simple joystick toggle: {e}"),
+                    Err(e) => {
+                        crate::ui_errln!("settings: failed to save simple joystick toggle: {e}")
+                    }
                 }
                 return None;
             }
@@ -1640,7 +1642,7 @@ fn remove_launch_return_state_at(path: &Path) {
     match fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => eprintln!(
+        Err(e) => crate::ui_errln!(
             "failed to remove launch return state {}: {e}",
             path.display()
         ),
@@ -1664,7 +1666,7 @@ fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
         }
         Ok(_) => None,
         Err(e) => {
-            eprintln!("invalid launch return state {}: {e}", path.display());
+            crate::ui_errln!("invalid launch return state {}: {e}", path.display());
             None
         }
     }
@@ -1971,7 +1973,7 @@ fn mister_running() -> bool {
 
 /// Main owns HDMI/OSD/input state; do not kill it from Slint.
 pub fn stop_mister() {
-    eprintln!(
+    crate::ui_errln!(
         "refusing to kill MiSTer/MiSTer_MagiK; reboot or hand off through Main to recover display ownership"
     );
 }
@@ -2351,7 +2353,7 @@ fn execute_game_launch_with(
     let spawned = if io.mister_running() {
         false
     } else {
-        println!("launch: starting {MISTER_BIN} for load_core");
+        crate::ui_logln!("launch: starting {MISTER_BIN} for load_core");
         io.start_mister().map_err(|e| LaunchError::new(e, false))?;
         if !io.wait_for_started_mister() {
             return Err(LaunchError::new(
@@ -2409,7 +2411,7 @@ fn execute_game_launch_with(
             ));
         }
     };
-    println!("launch: {}", cmd.trim_end());
+    crate::ui_logln!("launch: {}", cmd.trim_end());
     if let Err(e) = io.write_mister_command(&cmd) {
         if magik_running {
             let _ = io.write_input_policy_marker(false);

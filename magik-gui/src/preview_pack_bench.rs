@@ -104,7 +104,7 @@ pub(crate) fn run() {
     match run_inner(std::env::args().skip(2)) {
         Ok(()) => {}
         Err(error) => {
-            eprintln!("preview-pack-bench failed: {error}");
+            crate::ui_errln!("preview-pack-bench failed: {error}");
             std::process::exit(1);
         }
     }
@@ -122,13 +122,13 @@ where
     let warm_t = Instant::now();
     let archive = read_archive(&config.pack)?;
     let warm_us = warm_t.elapsed().as_micros() as u64;
-    println!(
+    crate::ui_logln!(
         "warm_meta\tmode={}\telapsed_us={}\tloaded=1\tpack_bytes={}",
         config.warm.label(),
         warm_us,
         archive.bytes.len()
     );
-    println!("{HEADER}");
+    crate::ui_logln!("{HEADER}");
 
     let order = ordered_indices(&archive.entries, config.order, config.sample);
     let mut scratch = Vec::new();
@@ -146,7 +146,7 @@ where
                 ordinal + 1,
                 &mut scratch,
             );
-            println!("{}", row.to_tsv());
+            crate::ui_logln!("{}", row.to_tsv());
             if row.result != "ok" {
                 return Err(row.error);
             }
@@ -221,7 +221,7 @@ where
 }
 
 fn print_usage() {
-    println!(
+    crate::ui_logln!(
         "usage: mister-magik-fb preview-pack-bench --pack PATH [--label LABEL] [--variant NAME] [--iterations N] [--order sequential|random|catalog-scroll] [--warm full] [--cache decoded-off] [--sample all|N] [--pack-size system=PATH]..."
     );
 }
@@ -711,7 +711,7 @@ fn print_pack_sizes(config: &Config) -> Result<(), String> {
                 } else {
                     bytes as f64 / raw_bytes as f64
                 };
-                println!(
+                crate::ui_logln!(
                     "pack_size_tsv\tvariant={}\tsystem={}\tbytes={}\tentries={}\traw_bytes={}\tratio={:.6}\tpath={}",
                     tsv(&config.variant),
                     tsv(&spec.system),
@@ -723,7 +723,7 @@ fn print_pack_sizes(config: &Config) -> Result<(), String> {
                 );
             }
             Err(error) => {
-                println!(
+                crate::ui_logln!(
                     "pack_size_tsv\tvariant={}\tsystem={}\tbytes=0\tentries=0\traw_bytes=0\tratio=0\tpath={}\terror={}",
                     tsv(&config.variant),
                     tsv(&spec.system),
@@ -759,7 +759,7 @@ fn print_device_meta() {
     let loadavg = fs::read_to_string("/proc/loadavg")
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    println!(
+    crate::ui_logln!(
         "device_meta\tarch={}\tcpu_model={}\tmem_available_kb={}\tgovernor=unknown\tloadavg={}",
         std::env::consts::ARCH,
         tsv(&cpu_model),
@@ -773,7 +773,7 @@ fn print_binary_meta() {
         .ok()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    println!(
+    crate::ui_logln!(
         "binary_meta\tgit_sha={}\tbinary_sha256={}\tbuild_profile={}\tbinary={}",
         option_env!("GIT_HASH").unwrap_or("unknown"),
         "unknown",

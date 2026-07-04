@@ -62,7 +62,7 @@ pub(super) fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
     let config = match MediaWorkerConfig::from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("screenshot media worker disabled: {error}");
+            crate::ui_errln!("screenshot media worker disabled: {error}");
             return None;
         }
     };

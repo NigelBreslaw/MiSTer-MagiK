@@ -63,6 +63,7 @@ mod cpu_profile;
 mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
+mod fallible_log;
 mod fpga;
 #[cfg(any(mister_bench_scenes, mister_video_scene))]
 mod frame_profile;
@@ -123,7 +124,7 @@ fn main() {
     let cmd = command_args::resolve_command(&args);
 
     if cmd != "library-sql" {
-        println!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
+        crate::ui_logln!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
     let command = command_args::find_command(&cmd).unwrap_or_else(|| unknown_command(&cmd));
@@ -138,7 +139,7 @@ fn main() {
     let mut f = match Fpga::open() {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("failed to open FPGA (/dev/mem): {e}");
+            crate::ui_errln!("failed to open FPGA (/dev/mem): {e}");
             std::process::exit(1);
         }
     };
@@ -209,7 +210,7 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
 }
 
 fn unknown_command(cmd: &str) -> ! {
-    eprintln!(
+    crate::ui_errln!(
         "unknown command '{cmd}' (use: {})",
         command_args::command_usage()
     );
@@ -217,7 +218,7 @@ fn unknown_command(cmd: &str) -> ! {
 }
 
 fn reject_direct_launch_arg(arg: &str) -> ! {
-    eprintln!(
+    crate::ui_errln!(
         "direct launch argument '{arg}' is unsupported; launch games through MiSTer_MagiK supervision"
     );
     std::process::exit(2);
@@ -225,7 +226,7 @@ fn reject_direct_launch_arg(arg: &str) -> ! {
 
 #[cfg(mister_experiments)]
 fn print_preview_transitions() {
-    println!(
+    crate::ui_logln!(
         "{}",
         screenshot_transitions::PreviewTransitionEffect::labels()
     );
@@ -234,13 +235,13 @@ fn print_preview_transitions() {
 fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
-        println!("experiments=1");
-        println!("commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench");
+        crate::ui_logln!("experiments=1");
+        crate::ui_logln!("commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench");
     }
     #[cfg(not(mister_experiments))]
     {
-        println!("experiments=0");
-        println!("commands=");
+        crate::ui_logln!("experiments=0");
+        crate::ui_logln!("commands=");
     }
 }
 
@@ -249,28 +250,28 @@ fn run_library_refresh() {
     let database_exists = usable_library_database_exists(&library_db::default_sqlite_path());
     let force_foreground = std::env::var_os("MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH").is_some();
     if should_defer_parent_boot_library_refresh(parent_boot, database_exists, force_foreground) {
-        println!("library_refresh\tdeferred\tmissing_database_parent_boot");
+        crate::ui_logln!("library_refresh\tdeferred\tmissing_database_parent_boot");
         return;
     }
     let lock_path = library_refresh_lock_path();
     let lock = match LibraryRefreshLock::acquire(&lock_path) {
         Ok(RefreshLockState::Acquired(lock)) => lock,
         Ok(RefreshLockState::Active { pid }) => {
-            println!("library_refresh\tskipped\tactive_pid={pid}");
+            crate::ui_logln!("library_refresh\tskipped\tactive_pid={pid}");
             return;
         }
         Err(e) => {
-            eprintln!("library_refresh\tfailed\tlock {e}");
+            crate::ui_errln!("library_refresh\tfailed\tlock {e}");
             std::process::exit(1);
         }
     };
     let mut progress = |title: &str, detail: &str| {
-        println!("library_refresh\tprogress\t{title}\t{detail}");
+        crate::ui_logln!("library_refresh\tprogress\t{title}\t{detail}");
     };
     match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
         Ok(summary) => {
             drop(lock);
-            println!(
+            crate::ui_logln!(
                 "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
                 summary.skipped,
                 summary.bytes,
@@ -286,7 +287,7 @@ fn run_library_refresh() {
         }
         Err(e) => {
             drop(lock);
-            eprintln!("library_refresh\tfailed\t{e}");
+            crate::ui_errln!("library_refresh\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -294,9 +295,9 @@ fn run_library_refresh() {
 
 fn run_request_library_rebuild() {
     match launcher::request_library_rebuild_on_next_boot() {
-        Ok(()) => println!("request_library_rebuild\tdone"),
+        Ok(()) => crate::ui_logln!("request_library_rebuild\tdone"),
         Err(e) => {
-            eprintln!("request_library_rebuild\tfailed\t{e}");
+            crate::ui_errln!("request_library_rebuild\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -306,12 +307,12 @@ fn run_toggle_simple_joystick_setting() {
     let mut settings = settings::MagikSettings::load();
     settings.simple_joystick_handling = !settings.simple_joystick_handling;
     match settings.save() {
-        Ok(()) => println!(
+        Ok(()) => crate::ui_logln!(
             "toggle_simple_joystick_setting\tdone\tsimple_joystick_handling={}",
             settings.simple_joystick_handling
         ),
         Err(e) => {
-            eprintln!("toggle_simple_joystick_setting\tfailed\t{e}");
+            crate::ui_errln!("toggle_simple_joystick_setting\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -322,13 +323,13 @@ fn run_reset_delete_database(args: &[String]) {
         .get(2)
         .is_some_and(|arg| arg == "-h" || arg == "--help")
     {
-        println!("usage: mister-magik-fb reset-delete-database");
+        crate::ui_logln!("usage: mister-magik-fb reset-delete-database");
         return;
     }
     match library_db::remove_default_sqlite_database() {
-        Ok(()) => println!("reset_delete_database\tdone"),
+        Ok(()) => crate::ui_logln!("reset_delete_database\tdone"),
         Err(e) => {
-            eprintln!("reset_delete_database\tfailed\t{e}");
+            crate::ui_errln!("reset_delete_database\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -339,13 +340,13 @@ fn run_reset_delete_screenshot_packs(args: &[String]) {
         .get(2)
         .is_some_and(|arg| arg == "-h" || arg == "--help")
     {
-        println!("usage: mister-magik-fb reset-delete-screenshot-packs");
+        crate::ui_logln!("usage: mister-magik-fb reset-delete-screenshot-packs");
         return;
     }
     match launcher::delete_screenshot_packs() {
-        Ok(removed) => println!("reset_delete_screenshot_packs\tdone\tremoved={removed}"),
+        Ok(removed) => crate::ui_logln!("reset_delete_screenshot_packs\tdone\tremoved={removed}"),
         Err(e) => {
-            eprintln!("reset_delete_screenshot_packs\tfailed\t{e}");
+            crate::ui_errln!("reset_delete_screenshot_packs\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -487,13 +488,13 @@ fn run_library_sql() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     match library_db::run_sqlite_inspect_cli(&args) {
         Ok(output) => {
-            print!("{output}");
+            crate::ui_log!("{output}");
             if !output.ends_with('\n') {
-                println!();
+                crate::ui_logln!();
             }
         }
         Err(e) => {
-            eprintln!("library_sql\tfailed\t{e}");
+            crate::ui_errln!("library_sql\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -502,14 +503,14 @@ fn run_library_sql() {
 fn run_hbmame_metadata_from_library() {
     match library_db::write_default_hbmame_metadata_from_library() {
         Ok(summary) => {
-            println!(
+            crate::ui_logln!(
                 "hbmame_metadata_from_library\tdone\tpath={}\trows={}",
                 summary.path.display(),
                 summary.rows
             );
         }
         Err(e) => {
-            eprintln!("hbmame_metadata_from_library\tfailed\t{e}");
+            crate::ui_errln!("hbmame_metadata_from_library\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -521,15 +522,15 @@ fn run_preview_index_refresh_bench() {
         .nth(2)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "PREVIEW-INDEX-REFRESH".to_string());
-    println!("{}", library_db::PREVIEW_INDEX_REFRESH_TSV_HEADER);
+    crate::ui_logln!("{}", library_db::PREVIEW_INDEX_REFRESH_TSV_HEADER);
     match library_db::refresh_default_preview_index_flags(&label) {
         Ok(rows) => {
             for row in rows {
-                println!("{}", row.to_tsv());
+                crate::ui_logln!("{}", row.to_tsv());
             }
         }
         Err(e) => {
-            eprintln!("preview_index_refresh\tfailed\t{e}");
+            crate::ui_errln!("preview_index_refresh\tfailed\t{e}");
             std::process::exit(1);
         }
     }
@@ -541,13 +542,13 @@ fn run_cpu_profile_smoke() {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(3);
     if std::env::var("MISTER_PPROF").ok().as_deref() != Some("1") {
-        eprintln!("cpu-profile-smoke requires MISTER_PPROF=1");
+        crate::ui_errln!("cpu-profile-smoke requires MISTER_PPROF=1");
         std::process::exit(2);
     }
-    println!("cpu_profile_smoke: burning CPU for {secs}s");
+    crate::ui_logln!("cpu_profile_smoke: burning CPU for {secs}s");
     let cpu = cpu_profile::start();
     if cpu.is_none() {
-        eprintln!("cpu_profile_smoke: profiler did not start");
+        crate::ui_errln!("cpu_profile_smoke: profiler did not start");
         std::process::exit(1);
     }
     let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
@@ -561,10 +562,10 @@ fn run_cpu_profile_smoke() {
         std::hint::black_box(state);
         rounds = rounds.wrapping_add(1);
     }
-    println!("cpu_profile_smoke: rounds={rounds} state={state:#018x}");
+    crate::ui_logln!("cpu_profile_smoke: rounds={rounds} state={state:#018x}");
     match cpu_profile::finish(cpu) {
         Ok(Some(summary)) if summary.sample_hits > 0 && summary.bytes > 0 => {
-            println!(
+            crate::ui_logln!(
                 "cpu_profile_smoke: ok samples={} stacks={} duration={:.1}s hz={} bytes={} out={}",
                 summary.sample_hits,
                 summary.sample_stacks,
@@ -575,18 +576,19 @@ fn run_cpu_profile_smoke() {
             );
         }
         Ok(Some(summary)) => {
-            eprintln!(
+            crate::ui_errln!(
                 "cpu_profile_smoke: profiler produced unusable output samples={} bytes={}",
-                summary.sample_hits, summary.bytes
+                summary.sample_hits,
+                summary.bytes
             );
             std::process::exit(1);
         }
         Ok(None) => {
-            eprintln!("cpu_profile_smoke: profiling feature is not enabled");
+            crate::ui_errln!("cpu_profile_smoke: profiling feature is not enabled");
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("{e}");
+            crate::ui_errln!("{e}");
             std::process::exit(1);
         }
     }
@@ -605,7 +607,9 @@ fn run_vsync_probe() {
         return;
     }
     let mut pacer = VsyncPacer::from_env();
-    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage");
+    crate::ui_logln!(
+        "frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage"
+    );
     let mut last_frame_at: Option<std::time::Instant> = None;
     for frame in 0..frames {
         let frame_at = std::time::Instant::now();
@@ -614,7 +618,7 @@ fn run_vsync_probe() {
             .map(|prev| frame_at.saturating_duration_since(prev).as_micros() as u64)
             .unwrap_or(0);
         last_frame_at = Some(frame_at);
-        println!(
+        crate::ui_logln!(
             "{frame}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}",
             pace.source.label(),
             pace.wait_us,
@@ -628,7 +632,7 @@ fn run_vsync_probe() {
             std::thread::sleep(std::time::Duration::from_micros(work_us));
         }
     }
-    println!(
+    crate::ui_logln!(
         "vsync_probe_summary mode=pacer frames={frames} work_us={work_us} hits={} timeouts={} fallback_frames={} errors={} max_miss_streak={} inferred_hz={:.2}",
         pacer.hits(),
         pacer.timeouts(),
@@ -646,11 +650,13 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
     let disp = match MappedRgb565Framebuffer::open_current_rgb565() {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("vsync-probe direct: failed to open current RGB565 display: {e}");
+            crate::ui_errln!("vsync-probe direct: failed to open current RGB565 display: {e}");
             std::process::exit(1);
         }
     };
-    println!("frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage");
+    crate::ui_logln!(
+        "frame\tsource\twait_us\tperiod_us\tinferred_hz\tmiss_streak\tloop_delta_us\tmessage"
+    );
     let mut hits = 0u64;
     let mut timeouts = 0u64;
     let mut errors = 0u64;
@@ -692,7 +698,7 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
                 ("error", wait_us, message)
             }
         };
-        println!(
+        crate::ui_logln!(
             "{frame}\t{source}\t{wait_us}\t{period_us}\t{:.2}\t{miss_streak}\t{loop_delta_us}\t{message}",
             1_000_000.0 / period_us as f64
         );
@@ -700,7 +706,7 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
             std::thread::sleep(std::time::Duration::from_micros(work_us));
         }
     }
-    println!(
+    crate::ui_logln!(
         "vsync_probe_summary mode=direct frames={frames} work_us={work_us} hits={hits} timeouts={timeouts} fallback_frames=0 errors={errors} max_miss_streak={max_miss_streak} inferred_hz={:.2}",
         1_000_000.0 / period_us as f64
     );
@@ -710,7 +716,7 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
 }
 
 fn exec_mister(args: &[String]) {
-    println!("core handoff → {MISTER_BIN} {}", args[1..].join(" "));
+    crate::ui_logln!("core handoff → {MISTER_BIN} {}", args[1..].join(" "));
     let c_path = CString::new(MISTER_BIN).expect("CString");
     let c_args: Vec<CString> = std::iter::once(c_path.clone())
         .chain(
@@ -728,14 +734,14 @@ fn exec_mister(args: &[String]) {
     // alive across the call, and ptrs is terminated by a null pointer. On
     // success execv does not return; on failure we only inspect errno.
     let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
-    eprintln!("execv({MISTER_BIN}) failed: {err}");
+    crate::ui_errln!("execv({MISTER_BIN}) failed: {err}");
     std::process::exit(1);
 }
 
 fn early_black_route(f: &mut Fpga) {
     let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "early-black");
     let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
-    println!("{}", display_plan.log_line());
+    crate::ui_logln!("{}", display_plan.log_line());
     if display_plan.fallback {
         boot_analytics::event("display_plan_fallback", display_plan.log_line());
     }
@@ -744,7 +750,7 @@ fn early_black_route(f: &mut Fpga) {
         display_plan.fb_h,
         rgb565_stride_bytes(display_plan.fb_w),
     ) {
-        eprintln!("early-black: failed to set framebuffer mode: {e}");
+        crate::ui_errln!("early-black: failed to set framebuffer mode: {e}");
         std::process::exit(1);
     }
 
@@ -752,7 +758,7 @@ fn early_black_route(f: &mut Fpga) {
     {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("early-black: failed to open /dev/fb0: {e}");
+            crate::ui_errln!("early-black: failed to open /dev/fb0: {e}");
             std::process::exit(1);
         }
     };
@@ -776,7 +782,7 @@ fn early_black_route(f: &mut Fpga) {
     let flag = match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
-            eprintln!("early-black: failed to route framebuffer: {e}");
+            crate::ui_errln!("early-black: failed to route framebuffer: {e}");
             std::process::exit(1);
         }
     };
@@ -793,7 +799,7 @@ fn early_black_route(f: &mut Fpga) {
             route_mode.vact
         ),
     );
-    println!(
+    crate::ui_logln!(
         "early-black: routed {} {}x{} -> {}x{} support_flag={flag}",
         production_label(),
         disp.width(),
@@ -804,11 +810,11 @@ fn early_black_route(f: &mut Fpga) {
 }
 
 fn read_mode(f: &mut Fpga) {
-    println!("\n=== UIO_GET_VRES (0x23) ===");
+    crate::ui_logln!("\n=== UIO_GET_VRES (0x23) ===");
     let cmd = match f.cmd_capture(UIO_GET_VRES) {
         Ok(cmd) => cmd,
         Err(e) => {
-            eprintln!("failed to issue UIO_GET_VRES: {e}");
+            crate::ui_errln!("failed to issue UIO_GET_VRES: {e}");
             std::process::exit(1);
         }
     };
@@ -819,7 +825,7 @@ fn read_mode(f: &mut Fpga) {
             Ok(w) => w,
             Err(e) => {
                 f.disable_io();
-                eprintln!("failed to read UIO_GET_VRES word: {e}");
+                crate::ui_errln!("failed to read UIO_GET_VRES word: {e}");
                 std::process::exit(1);
             }
         };
@@ -829,17 +835,17 @@ fn read_mode(f: &mut Fpga) {
         print_word(&format!("  w{i:<2}"), *w);
     }
     let lo = |i: usize| vres[i].1 as u32;
-    println!(
+    crate::ui_logln!(
         "  -> width={} height={}",
         lo(1) | (lo(2) << 16),
         lo(3) | (lo(4) << 16)
     );
 
-    println!("\n=== UIO_GET_FB_PAR (0x40) ===");
+    crate::ui_logln!("\n=== UIO_GET_FB_PAR (0x40) ===");
     let cmd = match f.cmd_capture(UIO_GET_FB_PAR) {
         Ok(cmd) => cmd,
         Err(e) => {
-            eprintln!("failed to issue UIO_GET_FB_PAR: {e}");
+            crate::ui_errln!("failed to issue UIO_GET_FB_PAR: {e}");
             std::process::exit(1);
         }
     };
@@ -850,7 +856,7 @@ fn read_mode(f: &mut Fpga) {
             Ok(w) => w,
             Err(e) => {
                 f.disable_io();
-                eprintln!("failed to read UIO_GET_FB_PAR word: {e}");
+                crate::ui_errln!("failed to read UIO_GET_FB_PAR word: {e}");
                 std::process::exit(1);
             }
         };
@@ -859,7 +865,7 @@ fn read_mode(f: &mut Fpga) {
     for (i, w) in fbp.iter().enumerate() {
         print_word(&format!("  w{i:<2}"), *w);
     }
-    println!(
+    crate::ui_logln!(
         "  -> arx={} ary={} fb_fmt=0x{:04x} fb_w={} fb_h={} fb_en={}",
         fbp[0].1,
         fbp[1].1,
@@ -871,9 +877,12 @@ fn read_mode(f: &mut Fpga) {
 }
 
 fn print_word(label: &str, w: (u16, u16)) {
-    println!(
+    crate::ui_logln!(
         "{label} hi=0x{:04x} ({:5})   lo=0x{:04x} ({:5})",
-        w.0, w.0, w.1, w.1
+        w.0,
+        w.0,
+        w.1,
+        w.1
     );
 }
 
@@ -884,26 +893,26 @@ fn run_input() {
         "calibrate" => {
             let path = args.get(1).map(|s| s.as_str());
             if let Err(e) = input::calibrate(path) {
-                eprintln!("input calibrate failed: {e}");
+                crate::ui_errln!("input calibrate failed: {e}");
                 std::process::exit(1);
             }
         }
         "log" => {
             let (path, secs) = parse_input_log_args(&args[1..]);
             if let Err(e) = input::log_js_events(path, secs) {
-                eprintln!("input log failed: {e}");
+                crate::ui_errln!("input log failed: {e}");
                 std::process::exit(1);
             }
         }
         "sniff" => {
             let (path, secs) = parse_input_log_args(&args[1..]);
             if let Err(e) = input::sniff(path, secs) {
-                eprintln!("input sniff failed: {e}");
+                crate::ui_errln!("input sniff failed: {e}");
                 std::process::exit(1);
             }
         }
         other => {
-            eprintln!(
+            crate::ui_errln!(
                 "unknown input subcommand '{other}' \
                  (use: input log [path] [secs] | input sniff [path] [secs] | input calibrate [path])"
             );

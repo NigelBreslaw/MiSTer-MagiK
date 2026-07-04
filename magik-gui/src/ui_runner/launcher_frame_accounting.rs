@@ -528,7 +528,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_vsync_us = (self.vsync_us / n) as u64;
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
-            println!(
+            crate::ui_logln!(
                 "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
                 self.fps_frames,
                 self.prepare_us / n,
@@ -760,15 +760,15 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
         .ok()
         .and_then(|path| {
             let file = std::fs::File::create(&path)
-                .map_err(|e| eprintln!("preview scroll trace: create {path} failed: {e}"))
+                .map_err(|e| crate::ui_errln!("preview scroll trace: create {path} failed: {e}"))
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
                 b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
-            .map_err(|e| eprintln!("preview scroll trace: header write failed: {e}"))
+            .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
-            println!("preview_scroll_trace={path}");
+            crate::ui_logln!("preview_scroll_trace={path}");
             Some(PreviewScrollTrace::new(file))
         })
 }

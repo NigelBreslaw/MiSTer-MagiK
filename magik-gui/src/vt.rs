@@ -34,7 +34,7 @@ impl VtGraphicsGuard {
             return Err(e);
         }
         boot_analytics::event("vt_graphics_result", format!("ok=1 path={path}"));
-        eprintln!("vt: KD_GRAPHICS (fbcon cursor hidden)");
+        crate::ui_errln!("vt: KD_GRAPHICS (fbcon cursor hidden)");
         Ok(Self { tty })
     }
 
@@ -43,7 +43,7 @@ impl VtGraphicsGuard {
         match Self::enter() {
             Ok(g) => Some(g),
             Err(e) => {
-                eprintln!("vt: KD_GRAPHICS failed ({e}) — fbcon cursor may still blink");
+                crate::ui_errln!("vt: KD_GRAPHICS failed ({e}) — fbcon cursor may still blink");
                 None
             }
         }
@@ -56,7 +56,7 @@ impl Drop for VtGraphicsGuard {
         // SAFETY: fd remains owned by self.tty during Drop; KDSETMODE takes an
         // integer mode value and does not dereference Rust memory.
         if unsafe { libc::ioctl(fd, KDSETMODE, KD_TEXT) } < 0 {
-            eprintln!("vt: KD_TEXT restore failed: {}", io::Error::last_os_error());
+            crate::ui_errln!("vt: KD_TEXT restore failed: {}", io::Error::last_os_error());
         }
     }
 }
@@ -67,7 +67,7 @@ fn open_vt_tty() -> io::Result<(File, &'static str)> {
             Ok(f) => return Ok((f, path)),
             Err(e) => {
                 boot_analytics::event("vt_open_failed", format!("path={path} error={e}"));
-                eprintln!("vt: open {path}: {e}");
+                crate::ui_errln!("vt: open {path}: {e}");
             }
         }
     }

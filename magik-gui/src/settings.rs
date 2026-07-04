@@ -36,7 +36,7 @@ impl MagikSettings {
             Ok(text) => match serde_json::from_str::<Self>(&text) {
                 Ok(settings) if settings.version == SETTINGS_VERSION => settings,
                 Ok(settings) => {
-                    eprintln!(
+                    crate::ui_errln!(
                         "settings: unsupported version {} in {}, using defaults",
                         settings.version,
                         path.display()
@@ -44,7 +44,7 @@ impl MagikSettings {
                     Self::default()
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::ui_errln!(
                         "settings: parse error in {}: {e}, using defaults",
                         path.display()
                     );
@@ -53,7 +53,7 @@ impl MagikSettings {
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(e) => {
-                eprintln!("settings: read {}: {e}, using defaults", path.display());
+                crate::ui_errln!("settings: read {}: {e}, using defaults", path.display());
                 Self::default()
             }
         }

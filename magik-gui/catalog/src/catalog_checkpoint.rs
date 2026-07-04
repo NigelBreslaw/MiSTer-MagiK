@@ -197,11 +197,11 @@ pub(crate) fn catalog_trace_detail_enabled() -> bool {
 }
 
 pub(crate) fn report_checkpoint_timing(stage: &str, us: u64, detail: impl std::fmt::Display) {
-    println!("catalog_checkpoint_tsv\t{stage}\t{us}\t{detail}");
+    crate::catalog_logln!("catalog_checkpoint_tsv\t{stage}\t{us}\t{detail}");
 }
 
 pub(crate) fn report_drift_summary(summary: &CatalogDriftSummary) {
-    println!(
+    crate::catalog_logln!(
         "catalog_drift_tsv\tunchanged={}\tadded={}\tremoved={}\tversions={}\troots={}\tcore_roots={}\tcores={}\tgame_dirs={}\taudit={}\tmetadata={}\tdetail={}",
         summary.unchanged,
         summary.added_lines,
@@ -356,7 +356,7 @@ fn append_installed_core_signature(
                 mtime_nanos(&meta)
             ));
             if catalog_trace_detail_enabled() {
-                println!(
+                crate::catalog_logln!(
                     "catalog_profile_manifest_tsv\tcore_id={core_id}\tstatus={status}\tpath={}\tsize={}\tmtime_nanos={}",
                     path.display(),
                     meta.len(),

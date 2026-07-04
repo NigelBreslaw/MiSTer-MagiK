@@ -297,7 +297,7 @@ pub fn run_launch_prep_bench() {
     ) {
         Ok(loaded) => loaded.catalog,
         Err(e) => {
-            eprintln!("launch_prep_bench\tfailed\tload catalog: {e}");
+            crate::ui_errln!("launch_prep_bench\tfailed\tload catalog: {e}");
             std::process::exit(1);
         }
     };
@@ -306,18 +306,18 @@ pub fn run_launch_prep_bench() {
     {
         Ok(refs) => refs,
         Err(e) => {
-            eprintln!("launch_prep_bench\tfailed\t{e}");
+            crate::ui_errln!("launch_prep_bench\tfailed\t{e}");
             std::process::exit(1);
         }
     };
-    println!(
+    crate::ui_logln!(
         "launch_prep_bench label={label} scenario={} iterations={} refs={}",
         scenario.label(),
         iterations,
         refs.len()
     );
     if refs.is_empty() {
-        println!(
+        crate::ui_logln!(
             "launch_prep_bench_summary\t{label}\t{}\tcount=0\terrors=0\tp50_us=0\tp95_us=0\tread_bytes=0\trchar=0\tsyscr=0\twrite_bytes=0\twchar=0\tsyscw=0",
             scenario.label()
         );
@@ -353,7 +353,7 @@ pub fn run_launch_prep_bench() {
             total_write_bytes = total_write_bytes.saturating_add(write_bytes);
             total_wchar = total_wchar.saturating_add(wchar);
             total_syscw = total_syscw.saturating_add(syscw);
-            println!(
+            crate::ui_logln!(
                 "launch_prep_bench_prewarm_tsv\t{label}\t{}\t{iteration}\tstatus=removed\ttotal=0\twritten=0\tunchanged=0\terrors=0\tprewarm_us={prewarm_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}",
                 scenario.label()
             );
@@ -394,7 +394,7 @@ pub fn run_launch_prep_bench() {
             if status == "ok" {
                 samples.push(prepare_us);
             }
-            println!(
+            crate::ui_logln!(
                 "launch_prep_bench_tsv\t{label}\t{}\t{iteration}\t{idx}\t{}\t{status}\t{prepare_us}\tread_bytes={read_bytes}\trchar={rchar}\tsyscr={syscr}\twrite_bytes={write_bytes}\twchar={wchar}\tsyscw={syscw}\tdescriptor_written={}\tdescriptor_skipped={}\tdescriptor_bytes={}\ttarget={}\tref={}",
                 scenario.label(),
                 bench_ref.kind,
@@ -409,7 +409,7 @@ pub fn run_launch_prep_bench() {
     samples.sort_unstable();
     let p50 = percentile_sample(&samples, 0.50);
     let p95 = percentile_sample(&samples, 0.95);
-    println!(
+    crate::ui_logln!(
         "launch_prep_bench_summary\t{label}\t{}\tcount={}\terrors={errors}\tp50_us={p50}\tp95_us={p95}\tread_bytes={total_read_bytes}\trchar={total_rchar}\tsyscr={total_syscr}\twrite_bytes={total_write_bytes}\twchar={total_wchar}\tsyscw={total_syscw}\tdescriptor_written={total_descriptor_written}\tdescriptor_skipped={total_descriptor_skipped}\tdescriptor_bytes={total_descriptor_bytes}",
         scenario.label(),
         samples.len()

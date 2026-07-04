@@ -36,7 +36,7 @@ impl PadPool {
     /// Open all joystick nodes under `/dev/input/js*` and load the controller registry.
     pub fn open_all() -> io::Result<Self> {
         let mut db = crate::controller_db::ControllerDb::load();
-        eprintln!("controller db: {} entries from {}", db.len(), db.path());
+        crate::ui_errln!("controller db: {} entries from {}", db.len(), db.path());
         let paths = discover_js_devices();
         let mut pads = Vec::new();
         for path in paths {
@@ -45,13 +45,13 @@ impl PadPool {
                     db.note_sighting(r.info());
                     pads.push(r);
                 }
-                Err(e) => eprintln!("pad: skip {path}: {e}"),
+                Err(e) => crate::ui_errln!("pad: skip {path}: {e}"),
             }
         }
         if pads.is_empty() {
-            eprintln!("pad: no joystick device found; waiting for hotplug");
+            crate::ui_errln!("pad: no joystick device found; waiting for hotplug");
         } else {
-            eprintln!("pad: listening on {} device(s)", pads.len());
+            crate::ui_errln!("pad: listening on {} device(s)", pads.len());
         }
         Ok(Self {
             pads,
@@ -198,7 +198,7 @@ impl PadPool {
                 }
                 Err(e) => {
                     let path = self.pads[i].path.clone();
-                    eprintln!("pad: disconnected {path}: {e}");
+                    crate::ui_errln!("pad: disconnected {path}: {e}");
                     self.pads.remove(i);
                     changed = true;
                     if self.active_idx >= self.pads.len() {
@@ -235,10 +235,10 @@ impl PadPool {
                 Ok(reader) => {
                     self.db.note_sighting(reader.info());
                     self.pads.push(reader);
-                    eprintln!("pad: hotplug added {path} ({} device(s))", self.pads.len());
+                    crate::ui_errln!("pad: hotplug added {path} ({} device(s))", self.pads.len());
                     changed = true;
                 }
-                Err(e) => eprintln!("pad: hotplug skip {path}: {e}"),
+                Err(e) => crate::ui_errln!("pad: hotplug skip {path}: {e}"),
             }
         }
         changed
@@ -335,9 +335,13 @@ impl PadReader {
         let info = read_pad_info(path, &file)?;
         let profile = InputProfile::guess(&info);
         db.log_pad_status(&info, path);
-        eprintln!(
+        crate::ui_errln!(
             "pad: opened {path} ({} usb={} {} btn={} axes={}) input_profile={profile:?}",
-            info.name, info.usb_port, info.vendor_id, info.js_buttons, info.js_axes
+            info.name,
+            info.usb_port,
+            info.vendor_id,
+            info.js_buttons,
+            info.js_axes
         );
         Ok(Self {
             path: path.to_string(),
@@ -652,17 +656,19 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
         set_nonblocking(h)?;
     }
 
-    eprintln!("sniff {secs}s on:");
-    eprintln!("  js     {js_path}");
-    eprintln!("  evdev  {event_path}");
+    crate::ui_errln!("sniff {secs}s on:");
+    crate::ui_errln!("  js     {js_path}");
+    crate::ui_errln!("  evdev  {event_path}");
     if let Some(ref h) = hidraw_path {
-        eprintln!("  hidraw {h}");
+        crate::ui_errln!("  hidraw {h}");
     } else {
-        eprintln!("  hidraw (not found)");
+        crate::ui_errln!("  hidraw (not found)");
     }
-    eprintln!(
+    crate::ui_errln!(
         "  {} usb={} {} — press Capture (and anything else)…",
-        info.name, info.usb_port, info.vendor_id
+        info.name,
+        info.usb_port,
+        info.vendor_id
     );
 
     let start = std::time::Instant::now();
@@ -679,7 +685,7 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
                 let ty = js_buf[6] & !JS_EVENT_INIT;
                 let num = js_buf[7];
                 let val = i16::from_le_bytes([js_buf[4], js_buf[5]]);
-                println!("[js]     {} {} = {val}", js_kind(ty), num);
+                crate::ui_logln!("[js]     {} {} = {val}", js_kind(ty), num);
                 activity = true;
             }
             Err(e) if e.kind() != io::ErrorKind::WouldBlock => return Err(e),
@@ -690,7 +696,7 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
             Ok(n) if n >= 16 => {
                 let (ty, code, val) = parse_input_event(&ev_buf[..n]);
                 if ty != EV_SYN {
-                    println!(
+                    crate::ui_logln!(
                         "[evdev]  {} code={} ({}) val={val}",
                         ev_type_name(ty),
                         code,
@@ -709,7 +715,7 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
                     let slice = &hid_buf[..n];
                     let changed = hid_idle.map(|prev| prev[..n] != slice[..]).unwrap_or(true);
                     if changed {
-                        println!("[hidraw] {} bytes: {}", n, hex_bytes(slice));
+                        crate::ui_logln!("[hidraw] {} bytes: {}", n, hex_bytes(slice));
                         hid_idle = Some({
                             let mut a = [0u8; 64];
                             a[..n].copy_from_slice(slice);
@@ -873,7 +879,7 @@ pub fn log_js_events(path: Option<&str>, secs: u64) -> io::Result<()> {
         Some(p) => PadReader::open_path(p)?,
         None => PadReader::open()?,
     };
-    eprintln!(
+    crate::ui_errln!(
         "logging {} for {secs}s (press buttons / move sticks)...",
         reader.path
     );
@@ -894,7 +900,7 @@ pub fn log_js_events(path: Option<&str>, secs: u64) -> io::Result<()> {
                     JS_EVENT_AXIS => "axis",
                     _ => "?",
                 };
-                println!("{kind} {number} = {value}");
+                crate::ui_logln!("{kind} {number} = {value}");
             }
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -912,7 +918,7 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
         Some(p) => PadReader::open_path(p)?,
         None => PadReader::open()?,
     };
-    eprintln!(
+    crate::ui_errln!(
         "calibrate on {} — press each control when prompted (10s timeout each)",
         reader.path
     );
@@ -939,24 +945,28 @@ pub fn calibrate(path: Option<&str>) -> io::Result<()> {
     let mut buf = [0u8; JS_EVENT_SIZE];
     let mut state = PadState::default();
     for (label, _) in prompts {
-        println!("\n>>> Press [{label}] ...");
+        crate::ui_logln!("\n>>> Press [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
             if read_one_event(&mut file, &mut buf, profile, &mut state) {
-                println!("    raw: {}", state.last_raw);
+                crate::ui_logln!("    raw: {}", state.last_raw);
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
-    println!("\ncalibrate done — move left stick, then right stick (5s each)");
+    crate::ui_logln!("\ncalibrate done — move left stick, then right stick (5s each)");
     for label in ["left stick", "right stick"] {
-        println!("\n>>> Move [{label}] ...");
+        crate::ui_logln!("\n>>> Move [{label}] ...");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             if read_one_event(&mut file, &mut buf, profile, &mut state) {
-                println!(
+                crate::ui_logln!(
                     "    raw: {}  L=({:.2},{:.2}) R=({:.2},{:.2})",
-                    state.last_raw, state.left_x, state.left_y, state.right_x, state.right_y
+                    state.last_raw,
+                    state.left_x,
+                    state.left_y,
+                    state.right_x,
+                    state.right_y
                 );
             }
             std::thread::sleep(std::time::Duration::from_millis(5));

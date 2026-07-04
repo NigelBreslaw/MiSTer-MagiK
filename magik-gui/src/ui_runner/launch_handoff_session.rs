@@ -151,7 +151,7 @@ impl LaunchHandoffBenchConfig {
             sample.handoff_wait_us,
             u8::from(recovery),
         );
-        println!("{line}");
+        crate::ui_logln!("{line}");
         if let Some(path) = self.trace_path.as_deref() {
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
@@ -284,7 +284,7 @@ impl LaunchHandoffSession {
         };
         if let Some(state) = staged.return_state {
             if let Err(e) = launcher::save_launch_return_state(&state) {
-                eprintln!("failed to save launch return state: {e}");
+                crate::ui_errln!("failed to save launch return state: {e}");
             }
         }
         let rx = (self.spawn_worker)(LaunchWorkerRequest {
@@ -373,7 +373,9 @@ impl LaunchHandoffSession {
             let route =
                 LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
             if let Err(e) = f.enable_launcher_framebuffer_route(route, ui.fb_w(), ui.fb_h()) {
-                eprintln!("failed to recover Slint framebuffer route after launch failure: {e}");
+                crate::ui_errln!(
+                    "failed to recover Slint framebuffer route after launch failure: {e}"
+                );
             }
             self.spawned_mister = false;
         }

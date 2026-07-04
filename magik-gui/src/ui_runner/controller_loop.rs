@@ -18,7 +18,7 @@ pub(super) fn run_controller_loop(
     } else {
         format!("{secs}s")
     };
-    println!(
+    crate::ui_logln!(
         "controller_test running {label} — {} pad(s) connected",
         pad.len()
     );
@@ -40,7 +40,7 @@ pub(super) fn run_controller_loop(
         frames += 1;
     }
     let elapsed = start.elapsed().as_secs_f64();
-    println!(
+    crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );

@@ -178,7 +178,7 @@ impl PreviewTransitionDemo {
                 if let Some(effect) = PreviewTransitionEffect::parse(part) {
                     effects.push(effect);
                 } else {
-                    eprintln!(
+                    crate::ui_errln!(
                         "ui: unknown MISTER_PREVIEW_TRANSITION effect {part:?}; use `mister-magik-fb preview-transitions` for labels"
                     );
                 }

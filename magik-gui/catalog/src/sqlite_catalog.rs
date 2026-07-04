@@ -1145,7 +1145,7 @@ pub(crate) fn save_sqlite_scan_with_progress_using_writer(
             if initial_plan.source == SqliteBuildTempSource::DefaultTmpfs
                 && sqlite_build_error_should_retry_beside_final(&e) =>
         {
-            eprintln!(
+            crate::catalog_errln!(
                 "library sqlite build temp failed at {}; retrying beside final DB: {e}",
                 initial_plan.build_tmp_path.display()
             );
@@ -1285,7 +1285,7 @@ fn report_sqlite_publish_metrics(metrics: &SqlitePublishMetrics, result: &str) {
         std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
     let iteration =
         std::env::var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION").unwrap_or_else(|_| "0".to_string());
-    println!(
+    crate::catalog_logln!(
         "library_sqlite_publish_tsv\t{label}\t{iteration}\tprogress\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         metrics.bytes,
         metrics.build_sync_ms,
@@ -2388,7 +2388,7 @@ pub(crate) fn report_library_import_timing(
     started: Instant,
     detail: impl std::fmt::Display,
 ) {
-    println!(
+    crate::catalog_logln!(
         "library_import_timing\t{stage}\t{}\t{detail}",
         started.elapsed().as_micros()
     );

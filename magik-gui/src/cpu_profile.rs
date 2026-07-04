@@ -36,9 +36,9 @@ mod imp {
         let out_path =
             std::env::var("MISTER_PPROF_OUT").unwrap_or_else(|_| "/tmp/mister-pprof.svg".into());
         let folded_out_path = std::env::var("MISTER_PPROF_FOLDED_OUT").ok();
-        println!("cpu_profile: sampling at {hz} Hz → {out_path}");
+        crate::ui_logln!("cpu_profile: sampling at {hz} Hz → {out_path}");
         if let Some(path) = folded_out_path.as_deref() {
-            println!("cpu_profile: folded stacks → {path}");
+            crate::ui_logln!("cpu_profile: folded stacks → {path}");
         }
         match pprof::ProfilerGuard::new(hz) {
             Ok(guard) => Some(CpuProfiler {
@@ -48,7 +48,7 @@ mod imp {
                 folded_out_path,
             }),
             Err(e) => {
-                eprintln!("cpu_profile: ProfilerGuard::new failed: {e}");
+                crate::ui_errln!("cpu_profile: ProfilerGuard::new failed: {e}");
                 None
             }
         }
@@ -63,9 +63,12 @@ mod imp {
         let sample_stacks = report.data.len();
         let sample_hits: isize = report.data.values().sum();
         let duration_secs = report.timing.duration.as_secs_f64();
-        println!(
+        crate::ui_logln!(
             "cpu_profile: {} unique stacks, {} sample hits, {:.1}s at {} Hz",
-            sample_stacks, sample_hits, duration_secs, p.hz
+            sample_stacks,
+            sample_hits,
+            duration_secs,
+            p.hz
         );
         if sample_hits == 0 {
             return Err(
@@ -81,7 +84,7 @@ mod imp {
                     return Err(format!("cpu_profile: flamegraph write failed: {e}"));
                 }
                 let bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
-                println!(
+                crate::ui_logln!(
                     "cpu_profile: wrote flamegraph to {} ({bytes} bytes)",
                     p.out_path
                 );
@@ -132,7 +135,7 @@ mod imp {
             .metadata()
             .map(|m| m.len())
             .map_err(|e| format!("cpu_profile: stat folded stack file {path} failed: {e}"))?;
-        println!("cpu_profile: wrote folded stacks to {path} ({bytes} bytes)");
+        crate::ui_logln!("cpu_profile: wrote folded stacks to {path} ({bytes} bytes)");
         Ok(bytes)
     }
 }
@@ -148,7 +151,7 @@ mod stub {
 
     pub fn start() -> Option<CpuProfiler> {
         if std::env::var("MISTER_PPROF").ok().as_deref() == Some("1") {
-            eprintln!(
+            crate::ui_errln!(
                 "cpu_profile: MISTER_PPROF=1 ignored — rebuild with \
                  `build-arm.sh --profile` (Cargo feature `profile`)"
             );

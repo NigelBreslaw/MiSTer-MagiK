@@ -15,11 +15,11 @@ impl UiBootFramebufferSession {
     pub(crate) fn start_ui_or_exit(f: &mut Fpga) -> Self {
         let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
         let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
-        println!("{}", display_plan.log_line());
+        crate::ui_logln!("{}", display_plan.log_line());
         if display_plan.fallback {
             boot_analytics::event("display_plan_fallback", display_plan.log_line());
         }
-        println!(
+        crate::ui_logln!(
             "ui-fb-mode=temporary {}x{} format={} output={}x{} scan={}x{} restore=on-drop",
             display_plan.fb_w,
             display_plan.fb_h,
@@ -33,12 +33,12 @@ impl UiBootFramebufferSession {
         let current_fb = match MappedRgb565Framebuffer::current_info() {
             Ok(info) => info,
             Err(e) => {
-                eprintln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
+                crate::ui_errln!("failed to read current framebuffer mode for FPGA-scaled UI: {e}");
                 std::process::exit(1);
             }
         };
         let fb_mode_action = fb_mode_action(current_fb, display_plan.fb_w, display_plan.fb_h);
-        println!("fb_mode_action={}", fb_mode_action.label());
+        crate::ui_logln!("fb_mode_action={}", fb_mode_action.label());
         boot_analytics::event("fb_mode_action", fb_mode_action.label());
         let fb_mode_guard = match fb_mode_action {
             FbModeAction::AdoptCurrent => None,
@@ -46,7 +46,7 @@ impl UiBootFramebufferSession {
                 match FbModeGuard::set_temporary(display_plan.fb_w, display_plan.fb_h) {
                     Ok(guard) => Some(guard),
                     Err(e) => {
-                        eprintln!(
+                        crate::ui_errln!(
                             "failed to set temporary framebuffer mode for FPGA-scaled UI: {e}"
                         );
                         std::process::exit(1);
@@ -55,17 +55,17 @@ impl UiBootFramebufferSession {
             }
         };
 
-        println!("display-open-path=temporary-fb-fpga-scale");
+        crate::ui_logln!("display-open-path=temporary-fb-fpga-scale");
         let mut disp =
             match MappedRgb565Framebuffer::open_rgb565(display_plan.fb_w, display_plan.fb_h) {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!("failed to open display (/dev/fb0): {e}");
+                    crate::ui_errln!("failed to open display (/dev/fb0): {e}");
                     std::process::exit(1);
                 }
             };
         let ui = UiDisplay::for_plan(display_plan);
-        println!("{}", ui.log_line());
+        crate::ui_logln!("{}", ui.log_line());
         disp.clear_black();
         boot_analytics::event(
             "ui_black_frame_copied",
@@ -79,16 +79,16 @@ impl UiBootFramebufferSession {
         disp.record_visual_sample("after_ui_black_frame_before_initial_route");
         match DisplayConfig::detect(f, disp.info(), &ui) {
             Ok(config) => {
-                println!("{}", config.log_line());
+                crate::ui_logln!("{}", config.log_line());
                 boot_analytics::event("display_config_detected", config.boot_analytics_detail());
             }
             Err(e) => {
-                eprintln!("warning: failed to read display configuration from FPGA: {e}");
+                crate::ui_errln!("warning: failed to read display configuration from FPGA: {e}");
                 boot_analytics::event("display_config_detect_failed", format!("error={e}"));
             }
         }
         if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
-            println!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
+            crate::ui_logln!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
         let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
@@ -107,7 +107,7 @@ impl UiBootFramebufferSession {
             match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
                 Ok(flag) => flag,
                 Err(e) => {
-                    eprintln!("failed to route framebuffer for Slint UI: {e}");
+                    crate::ui_errln!("failed to route framebuffer for Slint UI: {e}");
                     std::process::exit(1);
                 }
             };
@@ -132,7 +132,7 @@ impl UiBootFramebufferSession {
             settle_boot_black_frame("ui-startup", &mut disp, f, route);
         }
         disp.record_visual_sample("after_initial_route_before_slint_draw");
-        println!(
+        crate::ui_logln!(
             "fb routed (support_flag={support_flag}); Slint software renderer (vsync, dirty-row copy, fpga_scale=true)"
         );
 
@@ -169,7 +169,7 @@ pub(crate) fn settle_boot_black_frame(
                 last_flag = flag;
             }
             Err(e) => {
-                eprintln!(
+                crate::ui_errln!(
                     "warning: failed to reassert black framebuffer route during {label}: {e}"
                 );
                 boot_analytics::event(
@@ -201,7 +201,7 @@ pub(crate) fn detect_runtime_display_geometry_for_plan(
 ) -> Option<RuntimeDisplayGeometry> {
     match detect_runtime_display_geometry(f) {
         Ok(detected) => {
-            println!("runtime-video-info[{label}]: {}", detected.video.log_line());
+            crate::ui_logln!("runtime-video-info[{label}]: {}", detected.video.log_line());
             match detected.geometry {
                 Some(geometry) => {
                     boot_analytics::event(
@@ -214,7 +214,7 @@ pub(crate) fn detect_runtime_display_geometry_for_plan(
                     Some(geometry)
                 }
                 None => {
-                    eprintln!(
+                    crate::ui_errln!(
                         "warning: runtime display geometry invalid for {label}; falling back to MiSTer.ini"
                     );
                     boot_analytics::event(
@@ -226,7 +226,7 @@ pub(crate) fn detect_runtime_display_geometry_for_plan(
             }
         }
         Err(e) => {
-            eprintln!("warning: failed to detect runtime display geometry for {label}: {e}");
+            crate::ui_errln!("warning: failed to detect runtime display geometry for {label}: {e}");
             boot_analytics::event(
                 "runtime_display_geometry_detect_failed",
                 format!("label={label} error={e}"),

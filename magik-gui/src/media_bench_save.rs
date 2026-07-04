@@ -68,7 +68,7 @@ pub(crate) fn run() {
     match run_inner(std::env::args().skip(2)) {
         Ok(()) => {}
         Err(error) => {
-            eprintln!("media-bench-save failed: {error}");
+            crate::ui_errln!("media-bench-save failed: {error}");
             std::process::exit(1);
         }
     }
@@ -82,10 +82,10 @@ where
     fs::create_dir_all(&config.asset_dir)
         .map_err(|e| format!("create asset dir {}: {e}", config.asset_dir.display()))?;
     let source = resolve_source_path(&config)?;
-    println!("{HEADER}");
+    crate::ui_logln!("{HEADER}");
     for iteration in 1..=config.iterations {
         let row = run_one(&config, &source, iteration);
-        println!("{}", row.to_tsv());
+        crate::ui_logln!("{}", row.to_tsv());
         if row.result != "bench-ok" {
             return Err(row.to_tsv());
         }
@@ -176,7 +176,7 @@ where
 }
 
 fn print_usage() {
-    println!(
+    crate::ui_logln!(
         "usage: mister-magik-fb media-bench-save --label LABEL --system ID --iterations N [--artifact pack|index|state]"
     );
 }

@@ -159,7 +159,7 @@ impl SetupNav {
         self.phase = SetupPhase::None;
         if let Some(idx) = pad.index_needing_setup() {
             let status = pad.db().registry_status(pad.info_at(idx));
-            eprintln!("controller setup: advancing to pad {idx} ({status:?})");
+            crate::ui_errln!("controller setup: advancing to pad {idx} ({status:?})");
             self.open_for(status, idx);
         }
     }
