@@ -1052,7 +1052,7 @@ mod tests {
         std::fs::create_dir_all(&gameboy_dir).expect("create gameboy dir");
         std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
         std::fs::write(gameboy_dir.join("Tetris.gb"), "rom").expect("write gameboy rom");
-        std::fs::write(unrelated_dir.join("Ghost.gb"), "rom").expect("write unrelated rom");
+        std::fs::write(unrelated_dir.join("Ghost.nope"), "rom").expect("write unrelated rom");
         let db = root.join("library.sqlite3");
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
@@ -1077,7 +1077,7 @@ mod tests {
         assert!(scan
             .discoveries
             .iter()
-            .all(|discovery| !discovery.launch_ref.contains("Ghost.gb")));
+            .all(|discovery| !discovery.launch_ref.contains("Ghost.nope")));
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/NotACoreProfile"
                 && row.catalog_status == "uncataloged"
@@ -1155,6 +1155,82 @@ mod tests {
             )
             .expect("query launcher");
         assert_eq!((systems, games, launcher_rows), (0, 0, 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_catalogs_unique_extension_alias_game_dirs() {
+        let root = unique_temp_dir("target-runtime-coleco-alias");
+        install_test_console_core(&root, "ColecoVision");
+        let coleco_dir = root.join("games/Coleco");
+        std::fs::create_dir_all(&coleco_dir).expect("create coleco alias dir");
+        std::fs::write(coleco_dir.join("Smurf Rescue.col"), "rom").expect("write coleco rom");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert!(scan.profiles.iter().any(|profile| {
+            profile.id == "runtime-colecovision"
+                && profile.game_dirs == vec!["Coleco".to_string()]
+        }));
+        assert!(scan.discoveries.iter().any(|discovery| {
+            discovery.platform_id == "colecovision" && discovery.title == "Smurf Rescue"
+        }));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let systems: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM systems WHERE system_id='colecovision'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query systems");
+        let games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM games WHERE system_id='colecovision'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let launcher_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog WHERE system_id='colecovision'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher");
+        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_keeps_ambiguous_extension_aliases_audited_only() {
+        let root = unique_temp_dir("target-runtime-ambiguous-alias");
+        install_test_console_core(&root, "ColecoVision");
+        install_test_console_core(&root, "SMS");
+        let loose_dir = root.join("games/Loose");
+        std::fs::create_dir_all(&loose_dir).expect("create loose dir");
+        std::fs::write(loose_dir.join("Zaxxon.sg"), "rom").expect("write sg rom");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/Loose"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "game-dir-has-no-catalog-profile"
+        }));
         let _ = std::fs::remove_dir_all(root);
     }
 
