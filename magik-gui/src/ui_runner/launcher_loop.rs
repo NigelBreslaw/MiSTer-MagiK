@@ -928,6 +928,7 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
+    let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut route_reassert_count = 0u64;
     let mut last_route_reassert_frame = 0u64;
@@ -947,6 +948,33 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
+        if let Some(sample) = memory_guard.tick(loop_start) {
+            if sample.changed {
+                runtime_status::event(
+                    "memory_pressure",
+                    &format!(
+                        "active={} available_kib={} threshold_kib={}",
+                        u8::from(sample.active),
+                        sample.available_kib,
+                        sample.threshold_kib
+                    ),
+                );
+                if sample.active {
+                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                    preview.clear(&bridge);
+                    apply_screenshot_media_update_effects(
+                        media_session.pause_for_low_memory(),
+                        &app,
+                        &catalog,
+                        &mut scheduler,
+                        Some(&mut preview),
+                        &mut full_bridge_dirty,
+                        start,
+                    );
+                    full_bridge_dirty = true;
+                }
+            }
+        }
         apply_screenshot_media_update_effects(
             media_session.clear_progress_if_due(loop_start),
             &app,
@@ -1797,6 +1825,14 @@ pub(super) fn run_launcher_loop(
                 benchmark_media_interaction_active,
                 loop_start,
             );
+            let media_gate = if memory_guard.active() {
+                MediaInteractionGate {
+                    active: true,
+                    reason: "low-memory",
+                }
+            } else {
+                media_gate
+            };
             apply_screenshot_media_update_effects(
                 media_session.sync_gate(media_gate),
                 &app,
@@ -1922,6 +1958,7 @@ pub(super) fn run_launcher_loop(
             && nav.screen == Screen::Arcade
             && !active_arcade_games_loading
             && !arcade_search_active
+            && !memory_guard.active()
         {
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             if schedule_arcade_preview_window(
@@ -1941,6 +1978,7 @@ pub(super) fn run_launcher_loop(
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         if !launching
             && !arcade_search_active
+            && !memory_guard.active()
             && apply_ready_preview(&app, &mut preview, defer_selected_preview)
         {
             window.request_redraw();
@@ -1972,7 +2010,7 @@ pub(super) fn run_launcher_loop(
             should_present_full_frame(launching, route_action) || startup_reveal_ready;
         let wants_arcade_list =
             should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading);
-        let wants_preview = preview.raw_transition_frame().is_some();
+        let wants_preview = !memory_guard.active() && preview.raw_transition_frame().is_some();
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
         let composition_decision = composition.tick(UiCompositionInput {
@@ -2030,17 +2068,18 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let (raw_preview, preview_transition_trace) = if composition_decision.allow_preview_blit {
-            layer_target.blit_raw_preview_if_needed(
-                &mut preview,
-                &mut preview_transition,
-                loop_start.duration_since(run_start),
-                this_rect,
-                full_frame_present,
-            )
-        } else {
-            (None, PreviewTransitionTrace::default())
-        };
+        let (raw_preview, preview_transition_trace) =
+            if composition_decision.allow_preview_blit && !memory_guard.active() {
+                layer_target.blit_raw_preview_if_needed(
+                    &mut preview,
+                    &mut preview_transition,
+                    loop_start.duration_since(run_start),
+                    this_rect,
+                    full_frame_present,
+                )
+            } else {
+                (None, PreviewTransitionTrace::default())
+            };
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             window.request_redraw();

@@ -222,6 +222,21 @@ impl ScreenshotMediaUpdateSession {
         effects
     }
 
+    pub(super) fn pause_for_low_memory(&mut self) -> ScreenshotMediaUpdateEffects {
+        let mut effects = ScreenshotMediaUpdateEffects::default();
+        self.catalog_seed_pending = true;
+        self.catalog_seed_defer_reason = Some("low-memory");
+        self.progress_clear_at = None;
+        effects.event("screenshot_media_low_memory_pause", "reason=low-memory");
+        effects.ui(self.progress_display.clear_intent());
+        effects.push(ScreenshotMediaUpdateEffect::SetInteractionActive {
+            active: true,
+            reason: "low-memory",
+        });
+        effects.push(ScreenshotMediaUpdateEffect::DropWorker);
+        effects
+    }
+
     pub(super) fn clear_progress_if_due(&mut self, now: Instant) -> ScreenshotMediaUpdateEffects {
         let mut effects = ScreenshotMediaUpdateEffects::default();
         if self
