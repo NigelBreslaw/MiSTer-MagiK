@@ -992,6 +992,7 @@ pub(super) fn run_launcher_loop(
         &mut bridge_models,
         catalog_version,
         false,
+        ui.render_w(),
     );
     print_startup_event(
         start,
@@ -1246,6 +1247,7 @@ pub(super) fn run_launcher_loop(
                         &mut lifecycle_effects,
                         &mut full_bridge_dirty,
                         start,
+                        ui.render_w(),
                     );
                 }
             }
@@ -1301,6 +1303,7 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
                     start,
+                    ui.render_w(),
                 );
             }
             prepare_trace.catalog_backlog = deferred_catalog_events
@@ -1636,6 +1639,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
+                                    ui.render_w(),
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -1676,6 +1680,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
+                                    ui.render_w(),
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -1708,6 +1713,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
+                                    ui.render_w(),
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
@@ -1747,6 +1753,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
                                     start,
+                                    ui.render_w(),
                                 );
                                 request_launcher_redraw!();
                                 continue;
@@ -1772,6 +1779,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
                                     start,
+                                    ui.render_w(),
                                 );
                                 request_launcher_redraw!();
                                 continue;
@@ -1822,6 +1830,7 @@ pub(super) fn run_launcher_loop(
                             &mut bridge_models,
                             catalog_version,
                             false,
+                            ui.render_w(),
                         );
                         window.request_redraw();
                         update_slint_animations(animation_clock);
@@ -1909,6 +1918,7 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     catalog_version,
                     defer_selected_preview,
+                    ui.render_w(),
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
@@ -1929,6 +1939,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_selected_preview,
+                    ui.render_w(),
                 );
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
@@ -2285,7 +2296,7 @@ pub(super) fn run_launcher_loop(
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             arcade_list_renderer.set_geometry(if arcade_search_active {
-                ArcadeListGeometry::SEARCH
+                ArcadeListGeometry::search_for_render_w(ui.render_w())
             } else {
                 ArcadeListGeometry::NORMAL
             });
@@ -2536,6 +2547,7 @@ fn process_catalog_worker_message(
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
     start: Instant,
+    render_w: usize,
 ) {
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
     let media_gate = if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
@@ -2586,6 +2598,7 @@ fn process_catalog_worker_message(
         lifecycle_effects,
         full_bridge_dirty,
         start,
+        render_w,
     );
 }
 
@@ -2799,6 +2812,7 @@ fn apply_catalog_session_effects(
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
     start: Instant,
+    render_w: usize,
 ) {
     for effect in effects.into_effects() {
         match effect {
@@ -2849,6 +2863,7 @@ fn apply_catalog_session_effects(
                     bridge_models,
                     *catalog_version,
                     false,
+                    render_w,
                 );
                 print_startup_event(
                     start,

@@ -149,9 +149,13 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
     bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
 }
 
-fn sync_arcade_list_geometry_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &LauncherNav) {
+fn sync_arcade_list_geometry_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+    render_w: usize,
+) {
     let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
-        ArcadeListGeometry::SEARCH
+        ArcadeListGeometry::search_for_render_w(render_w)
     } else {
         ArcadeListGeometry::NORMAL
     };
@@ -383,6 +387,7 @@ pub(super) fn sync_bridge_launcher(
     models: &mut LauncherBridgeModels,
     catalog_version: usize,
     defer_selected_preview: bool,
+    render_w: usize,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(false);
@@ -399,7 +404,7 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
-    sync_arcade_list_geometry_bridge(&bridge, nav);
+    sync_arcade_list_geometry_bridge(&bridge, nav, render_w);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
         bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
@@ -466,6 +471,7 @@ pub(super) fn sync_bridge_launcher_light(
     preview: &mut PreviewState,
     defer_arcade_overlay_bridge: bool,
     defer_selected_preview: bool,
+    render_w: usize,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
@@ -505,7 +511,7 @@ pub(super) fn sync_bridge_launcher_light(
         set_simple_joystick_handling,
         nav.settings.simple_joystick_handling
     );
-    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav);
+    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, render_w);
     if !(defer_arcade_overlay_bridge && nav.screen == Screen::Arcade) {
         set_bridge_if_changed!(
             bridge,
@@ -627,9 +633,10 @@ fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &La
 fn sync_arcade_list_geometry_bridge_if_changed(
     bridge: &slint_ui::launcher::MisterBridge,
     nav: &LauncherNav,
+    render_w: usize,
 ) {
     let geometry = if nav.arcade_search.is_active(&nav.arcade_filter.active) {
-        ArcadeListGeometry::SEARCH
+        ArcadeListGeometry::search_for_render_w(render_w)
     } else {
         ArcadeListGeometry::NORMAL
     };
