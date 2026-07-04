@@ -81,6 +81,8 @@ mod preview_state;
 mod runtime_status;
 mod screenshot_transitions;
 mod settings;
+#[cfg(test)]
+mod test_support;
 mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
