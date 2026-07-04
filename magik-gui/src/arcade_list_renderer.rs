@@ -189,10 +189,8 @@ impl ArcadeListRenderer {
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_filter_draw = None;
-        let visual_px = (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32;
-        let anchor = visual_index
-            .round()
-            .clamp(0.0, games.len().saturating_sub(1) as f32) as usize;
+        let visual_px = arcade_visual_px(visual_index);
+        let anchor = arcade_anchor_for_visual_px(games.len(), visual_px);
         let previous = self.last_draw;
         let anchor_hash = games
             .get(anchor)
@@ -204,7 +202,7 @@ impl ArcadeListRenderer {
                 && previous.anchor_hash == anchor_hash
         });
         let visible_hash = if previous.is_none() || same_position {
-            Some(self.arcade_visible_window_hash(games, visual_index))
+            Some(self.arcade_visible_window_hash(games, visual_px))
         } else {
             None
         };
@@ -236,19 +234,19 @@ impl ArcadeListRenderer {
         self.last_draw = Some(key);
         if previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
-            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
+            self.draw_content_band(games, visual_px, 0, ARCADE_LIST_H);
         } else if content_delta == 0 {
         } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             self.surface_y = 0;
-            self.draw_content_band(games, visual_index, 0, ARCADE_LIST_H);
+            self.draw_content_band(games, visual_px, 0, ARCADE_LIST_H);
         } else if content_delta < 0 {
             let d = content_delta.unsigned_abs() as usize;
             self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
-            self.draw_content_band(games, visual_index, ARCADE_LIST_H - d, d);
+            self.draw_content_band(games, visual_px, ARCADE_LIST_H - d, d);
         } else {
             let d = content_delta as usize;
             self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
-            self.draw_content_band(games, visual_index, 0, d);
+            self.draw_content_band(games, visual_px, 0, d);
         }
         if force {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
@@ -276,10 +274,11 @@ impl ArcadeListRenderer {
         force: bool,
     ) -> Option<ArcadeListUpdate> {
         self.last_draw = None;
+        let visual_px = arcade_visual_px(visual_index);
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
-            visual_px: (visual_index * ARCADE_ROW_HEIGHT as f32).round() as i32,
-            visible_hash: arcade_filter_visible_window_hash(items, visual_index),
+            visual_px,
+            visible_hash: arcade_filter_visible_window_hash(items, visual_px),
         };
         if !force && self.last_filter_draw.as_ref() == Some(&key) {
             return None;
@@ -303,19 +302,19 @@ impl ArcadeListRenderer {
             });
         if previous.is_none() || !can_reuse_scrolled_surface || items.is_empty() {
             self.surface_y = 0;
-            self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
+            self.draw_filter_content_band(items, visual_px, 0, ARCADE_LIST_H);
         } else if content_delta == 0 {
         } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             self.surface_y = 0;
-            self.draw_filter_content_band(items, visual_index, 0, ARCADE_LIST_H);
+            self.draw_filter_content_band(items, visual_px, 0, ARCADE_LIST_H);
         } else if content_delta < 0 {
             let d = content_delta.unsigned_abs() as usize;
             self.surface_y = (self.surface_y + d) % ARCADE_LIST_H;
-            self.draw_filter_content_band(items, visual_index, ARCADE_LIST_H - d, d);
+            self.draw_filter_content_band(items, visual_px, ARCADE_LIST_H - d, d);
         } else {
             let d = content_delta as usize;
             self.surface_y = (self.surface_y + ARCADE_LIST_H - d) % ARCADE_LIST_H;
-            self.draw_filter_content_band(items, visual_index, 0, d);
+            self.draw_filter_content_band(items, visual_px, 0, d);
         }
         if force || previous.is_none() || !can_reuse_scrolled_surface {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
@@ -348,7 +347,7 @@ impl ArcadeListRenderer {
     fn draw_content_band(
         &mut self,
         games: ArcadeGameView<'_>,
-        visual_index: f32,
+        visual_px: i32,
         band_y: usize,
         band_h: usize,
     ) {
@@ -377,13 +376,11 @@ impl ArcadeListRenderer {
         }
         self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
         let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = Self::centered_selection_y() as isize;
-        let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+        let Some((first, end)) = arcade_visible_window_range_px(games.len(), visual_px) else {
             return;
         };
         for idx in first..=end {
-            let y =
-                local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
+            let y = arcade_row_y(idx, visual_px);
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -399,7 +396,7 @@ impl ArcadeListRenderer {
     fn draw_filter_content_band(
         &mut self,
         items: &[ArcadeListItem],
-        visual_index: f32,
+        visual_px: i32,
         band_y: usize,
         band_h: usize,
     ) {
@@ -428,13 +425,11 @@ impl ArcadeListRenderer {
             return;
         }
         let row_h = ARCADE_ROW_HEIGHT as isize;
-        let local_anchor_y = Self::centered_selection_y() as isize;
-        let Some((first, end)) = arcade_visible_window_range(items.len(), visual_index) else {
+        let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px) else {
             return;
         };
         for (idx, item) in items.iter().enumerate().take(end + 1).skip(first) {
-            let y =
-                local_anchor_y + ((idx as f32 - visual_index) * ARCADE_ROW_HEIGHT as f32) as isize;
+            let y = arcade_row_y(idx, visual_px);
             let clip_y0 = y.max(band_y as isize);
             let clip_y1 = (y + row_h).min((band_y + band_h) as isize);
             if clip_y1 <= clip_y0 {
@@ -523,9 +518,9 @@ impl ArcadeListRenderer {
         self.row_fingerprint_epoch
     }
 
-    fn arcade_visible_window_hash(&mut self, games: ArcadeGameView<'_>, visual_index: f32) -> u64 {
+    fn arcade_visible_window_hash(&mut self, games: ArcadeGameView<'_>, visual_px: i32) -> u64 {
         let mut hash = ARCADE_LIST_HASH_OFFSET;
-        let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+        let Some((first, end)) = arcade_visible_window_range_px(games.len(), visual_px) else {
             return hash;
         };
         arcade_hash_usize(&mut hash, first);
@@ -960,7 +955,9 @@ fn arcade_anchor_hash(game: Option<&ArcadeGameEntry>) -> u64 {
 #[cfg(test)]
 fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
-    let Some((first, end)) = arcade_visible_window_range(games.len(), visual_index) else {
+    let Some((first, end)) =
+        arcade_visible_window_range_px(games.len(), arcade_visual_px(visual_index))
+    else {
         return hash;
     };
     arcade_hash_usize(&mut hash, first);
@@ -974,9 +971,9 @@ fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u
     hash
 }
 
-fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_index: f32) -> u64 {
+fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_px: i32) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
-    let Some((first, end)) = arcade_visible_window_range(items.len(), visual_index) else {
+    let Some((first, end)) = arcade_visible_window_range_px(items.len(), visual_px) else {
         return hash;
     };
     arcade_hash_usize(&mut hash, first);
@@ -996,12 +993,37 @@ fn arcade_game_hash(game: &ArcadeGameEntry) -> u64 {
     hash
 }
 
-fn arcade_visible_window_range(len: usize, visual_index: f32) -> Option<(usize, usize)> {
+fn arcade_visual_px(visual_index: f32) -> i32 {
+    if !visual_index.is_finite() {
+        return 0;
+    }
+    (visual_index * ARCADE_ROW_HEIGHT as f32).round().max(0.0) as i32
+}
+
+fn arcade_anchor_for_visual_px(len: usize, visual_px: i32) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let row_h = ARCADE_ROW_HEIGHT.max(1);
+    let anchor = (visual_px.max(0) + row_h / 2).div_euclid(row_h);
+    (anchor as usize).min(len - 1)
+}
+
+fn arcade_row_y(idx: usize, visual_px: i32) -> isize {
+    ArcadeListRenderer::centered_selection_y() as isize + idx as isize * ARCADE_ROW_HEIGHT as isize
+        - visual_px.max(0) as isize
+}
+
+fn arcade_visible_window_range_px(len: usize, visual_px: i32) -> Option<(usize, usize)> {
     if len == 0 {
         return None;
     }
-    let first = ((visual_index.floor() as isize) - 7).max(0) as usize;
-    let last = ((visual_index.ceil() as isize) + 8).max(0) as usize;
+    let row_h = ARCADE_ROW_HEIGHT.max(1);
+    let visual_px = visual_px.max(0);
+    let floor = visual_px.div_euclid(row_h);
+    let ceil = (visual_px + row_h - 1).div_euclid(row_h);
+    let first = (floor as isize - 7).max(0) as usize;
+    let last = (ceil as isize + 8).max(0) as usize;
     Some((first.min(len - 1), last.min(len - 1)))
 }
 
@@ -1127,6 +1149,28 @@ mod tests {
         arcade_game(title).system_id(system_id).path(path).build()
     }
 
+    fn games(system_id: &str, count: usize) -> Vec<ArcadeGameEntry> {
+        (0..count)
+            .map(|idx| {
+                game(
+                    system_id,
+                    &format!("/media/fat/games/{system_id}/{idx}.rom"),
+                    &format!("Game {idx}"),
+                )
+            })
+            .collect()
+    }
+
+    fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
+        let mut pixels = Vec::with_capacity(ARCADE_LIST_W * ARCADE_LIST_H);
+        for y in 0..ARCADE_LIST_H {
+            let src_y = (renderer.surface_y + y) % ARCADE_LIST_H;
+            let src = src_y * ARCADE_LIST_W;
+            pixels.extend_from_slice(&renderer.surface[src..src + ARCADE_LIST_W]);
+        }
+        pixels
+    }
+
     #[test]
     fn arcade_anchor_hash_tracks_visible_row_fields_only() {
         let base = game("arcade", "/media/fat/_Arcade/a.mra", "Alpha");
@@ -1191,15 +1235,7 @@ mod tests {
     #[test]
     fn forced_present_reuses_surface_when_draw_key_is_unchanged() {
         let mut renderer = ArcadeListRenderer::new();
-        let games = (0..20)
-            .map(|idx| {
-                game(
-                    "arcade",
-                    &format!("/media/fat/_Arcade/{idx}.mra"),
-                    &format!("Game {idx}"),
-                )
-            })
-            .collect::<Vec<_>>();
+        let games = games("arcade", 20);
 
         assert!(matches!(
             renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
@@ -1213,6 +1249,57 @@ mod tests {
         ));
 
         assert_eq!(renderer.surface, before);
+    }
+
+    #[test]
+    fn scrolled_settled_surface_matches_fresh_full_redraw() {
+        let games = games("intellivision", 20);
+        let mut scrolled = ArcadeListRenderer::new();
+        assert!(matches!(
+            scrolled.draw(ArcadeGameView::contiguous(&games), 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        for visual_px in 1..=ARCADE_ROW_HEIGHT {
+            let visual_index = visual_px as f32 / ARCADE_ROW_HEIGHT as f32;
+            scrolled.draw(ArcadeGameView::contiguous(&games), 1, visual_index, false);
+        }
+        assert_eq!(scrolled.surface_y, ARCADE_ROW_HEIGHT as usize);
+        let scrolled_pixels = surface_in_viewport_order(&scrolled);
+
+        let mut fresh = ArcadeListRenderer::new();
+        assert!(matches!(
+            fresh.draw(ArcadeGameView::contiguous(&games), 1, 1.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let fresh_pixels = surface_in_viewport_order(&fresh);
+
+        assert_eq!(scrolled_pixels, fresh_pixels);
+    }
+
+    #[test]
+    fn scrolled_settled_surface_matches_fresh_full_redraw_after_upward_motion() {
+        let games = games("intellivision", 20);
+        let mut scrolled = ArcadeListRenderer::new();
+        assert!(matches!(
+            scrolled.draw(ArcadeGameView::contiguous(&games), 2, 2.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        for visual_px in (ARCADE_ROW_HEIGHT..2 * ARCADE_ROW_HEIGHT).rev() {
+            let visual_index = visual_px as f32 / ARCADE_ROW_HEIGHT as f32;
+            scrolled.draw(ArcadeGameView::contiguous(&games), 1, visual_index, false);
+        }
+        let scrolled_pixels = surface_in_viewport_order(&scrolled);
+
+        let mut fresh = ArcadeListRenderer::new();
+        assert!(matches!(
+            fresh.draw(ArcadeGameView::contiguous(&games), 1, 1.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let fresh_pixels = surface_in_viewport_order(&fresh);
+
+        assert_eq!(scrolled_pixels, fresh_pixels);
     }
 
     #[test]

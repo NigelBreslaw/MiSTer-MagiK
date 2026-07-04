@@ -107,6 +107,13 @@ stateDiagram-v2
 direct-layer assumptions, and forces a full Slint present. Device gates should
 treat unexpected composition recovery as a failure.
 
+Launcher idle decisions must include custom-layer motion, not just Slint bridge
+changes. Arcade rows are Rust-painted and keyed by pixel scroll position; a
+selected-index change can finish its nav state on the same loop that moves the
+direct layer to its final row alignment. That final visual tick must still be
+rendered and copied before the idle path may sleep, otherwise the stale
+intermediate row pixels can remain visible until an unrelated redraw.
+
 ## Game Launch Handoff
 
 Slint does not directly load cores. It hands launch requests back to Main so the
