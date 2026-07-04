@@ -189,10 +189,13 @@ then uses the existing `Library changed` dialog: `Continue` keeps the old
 catalog for this session and writes `rebuild-on-next-boot`, while `Rebuild`
 starts a foreground full build immediately.
 
-Runtime never infers unsupported launch behavior from folder contents alone.
-Baked Main-derived profiles decide which generic systems are launchable. Unknown
-cores and game folders remain `catalog_audit` diagnostics until a source-backed
-manifest row or special profile is added.
+Runtime discovery is hybrid. Baked Main-derived profiles still make known
+systems fast, but foreground full builds also consider every top-level
+`games/*` directory under the configured game roots. A top-level folder becomes
+catalogable only when the installed cores and known launch facts produce a safe
+runtime profile with playable payloads. Unknown folders, missing cores,
+unsupported payload extensions, empty/media-only folders, and ambiguous aliases
+remain `catalog_audit` diagnostics instead of becoming launcher systems.
 
 ## Discovery Dates
 
@@ -302,11 +305,24 @@ remain in scope.
 Main_MiSTer is the source for the directory model. `SelectFile` resolves normal
 file pickers through `user_io_get_core_path(...)`, which maps to `games/<core>`
 except for source-defined special suffixes such as PCE-CD and NeoGeo-CD. MagiK
-models this with an active `ProfileSet`: explicit special profiles plus
-generated manifest rows for installed generic cores with source-backed
-extensions. Game folder contents are not used to guess new profile support.
-Installed cores or launchable-looking game folders that cannot be cataloged are
-recorded in `catalog_audit` instead of being silently skipped.
+models this with an active `ProfileSet`: explicit special profiles, generated
+manifest rows for installed generic cores with source-backed extensions, and
+runtime-discovered top-level profiles for folders that match installed cores
+and known payload rules.
+
+The scanner remains bounded. It checks special roots plus top-level `games/*`;
+it does not crawl arbitrary SD-card trees to discover systems. For each
+top-level game folder, the runtime planner can activate:
+
+- exact case-insensitive folder/core matches,
+- safe `*-Sinden` aliases when the base installed-core strategy is unique,
+- unique extension-based aliases such as `games/Coleco/*.col` resolving to an
+  installed `ColecoVision` core.
+
+It does not guess when multiple installed cores accept the same payload
+extension, and it does not create launcher systems for folders with no playable
+payloads. Folders that cannot be cataloged are recorded in `catalog_audit`
+instead of being silently skipped.
 
 The default scan does not include `_Games`. That tree is treated as an organizer
 mirror of generated `.mgl` launchers for games already available through
@@ -328,8 +344,9 @@ Catalog profiles come from two sources:
 Generated manifest rows carry the core ID, title/category, expected
 `games/<core>` directories, payload extensions, mount behavior, archive-entry
 support, and source evidence. The checked-in manifest is the runtime source of
-truth for generic auto-cataloging; arbitrary game folders never create new
-profiles by themselves.
+truth for known generic auto-cataloging. Runtime-discovered profiles extend that
+set only from top-level game folders that have an installed core, known payload
+extensions, and non-ambiguous launch semantics.
 
 The manifest can be regenerated from host-side evidence gathered from the
 maintained Main_MiSTer checkout and installed device cores. Observed core file
@@ -347,12 +364,21 @@ source-backed manifest row or special profile is added.
 Every full scan writes `catalog_audit` rows. Query them with
 `scripts/mister db "SELECT * FROM catalog_audit ORDER BY catalog_status, expected_game_dir"`.
 
+Useful summary queries:
+
+```bash
+scripts/mister db "SELECT system_id, count(*) FROM launcher_catalog GROUP BY system_id ORDER BY system_id"
+scripts/mister db "SELECT catalog_status, source, reason, count(*) FROM catalog_audit GROUP BY catalog_status, source, reason ORDER BY count(*) DESC"
+```
+
 The audit records:
 
 - installed `.rbf` cores in normal core locations that have no catalog profile,
-- `games/<system>` folders with payload-looking files but no active catalog
-  profile, including known manifest folders when the matching core is not
-  installed,
+- top-level `games/*` folders skipped by hybrid discovery, including
+  `no-installed-core`, `no-valid-games`, `unsupported-extension`, and
+  `ambiguous-alias`,
+- runtime-discovered folders that were cataloged, with source
+  `runtime-discovered`,
 - collection ZIPs in loose-file-only profiles that will not be indexed.
 
 Audit rows are diagnostic only. They do not become launch rows until a real
