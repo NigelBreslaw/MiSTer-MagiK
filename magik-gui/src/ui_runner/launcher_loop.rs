@@ -291,7 +291,6 @@ fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
 struct LauncherIdleInput {
     first_visible_copy_done: bool,
     redraw_pending: bool,
-    status_write_due: bool,
     launching: bool,
     setup_active: bool,
     benchmark_active: bool,
@@ -318,7 +317,6 @@ impl LauncherIdleInput {
     fn can_sleep(self) -> bool {
         self.first_visible_copy_done
             && !self.redraw_pending
-            && !self.status_write_due
             && !self.launching
             && !self.setup_active
             && !self.benchmark_active
@@ -2099,10 +2097,10 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         let startup_status = lifecycle.startup_status();
+        let composition_status = composition_decision.status();
         let idle_input = LauncherIdleInput {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             redraw_pending: launcher_redraw_pending,
-            status_write_due,
             launching,
             setup_active,
             benchmark_active: launcher_bench_scenario.is_some(),
@@ -2129,6 +2127,61 @@ pub(super) fn run_launcher_loop(
             composition_clears_direct_layers: composition_decision.clear_direct_layers,
         };
         if idle_input.can_sleep() {
+            frame_accounting.finish_idle_loop(
+                frames,
+                run_start,
+                Instant::now(),
+                &nav,
+                &pad,
+                &catalog,
+                catalog_ready,
+                catalog_session.refresh_done(),
+                launching,
+                scheduler.visible_loading_title(&loading_title),
+                catalog_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_title.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_detail.as_str())
+                    .unwrap_or(""),
+                catalog_scan_percent,
+                catalog_background_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_message.as_str())
+                    .unwrap_or(""),
+                confirm_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_title.as_str())
+                    .unwrap_or(""),
+                confirm_selected,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_left_label.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_right_label.as_str())
+                    .unwrap_or(""),
+                nav.arcade.selected,
+                nav.arcade.visual_index,
+                preview.trace_cache_state(),
+                preview_transition.current_label(loop_start.duration_since(run_start)),
+                1.0,
+                &composition_status,
+                launcher_bench_scenario,
+                start_screen,
+                lock_screen,
+                route_reassert_count,
+                last_route_reassert_frame,
+                last_route_reassert_ok,
+                &last_route_reassert_error,
+                startup_status,
+            );
             std::thread::sleep(launcher_idle_sleep_duration(&pacer));
             continue;
         }
@@ -2284,7 +2337,7 @@ pub(super) fn run_launcher_loop(
                 arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
-                composition_status: composition_decision.status(),
+                composition_status: composition_status.clone(),
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,

@@ -29,6 +29,8 @@ pub(super) struct LauncherFrameAccounting {
     first_frame_logged: bool,
     first_visible_copy_done: bool,
     stable_frame_logged: bool,
+    last_rendered_frame_at: Instant,
+    idle_loops_since_status: u64,
     last_rolling_fps: f64,
     last_rolling_prepare_us: u64,
     last_rolling_render_us: u64,
@@ -274,6 +276,8 @@ impl LauncherFrameAccounting {
             first_frame_logged: false,
             first_visible_copy_done: false,
             stable_frame_logged: false,
+            last_rendered_frame_at: run_start,
+            idle_loops_since_status: 0,
             last_rolling_fps: 0.0,
             last_rolling_prepare_us: 0,
             last_rolling_render_us: 0,
@@ -339,6 +343,8 @@ impl LauncherFrameAccounting {
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
         self.record_stable_samples(frame.frames, disp);
+        self.last_rendered_frame_at = frame.frame_t4;
+        self.idle_loops_since_status = 0;
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         self.record_boot_frame_profile(&frame, disp);
         self.record_first_frame(&frame, start, catalog_ready);
@@ -381,6 +387,7 @@ impl LauncherFrameAccounting {
             last_route_reassert_ok,
             last_route_reassert_error,
             startup_status,
+            None,
         );
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         {
@@ -389,6 +396,90 @@ impl LauncherFrameAccounting {
                 .unwrap_or(0);
             self.write_preview_trace(&frame, runtime_status_write_us);
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn finish_idle_loop(
+        &mut self,
+        frames: u64,
+        run_start: Instant,
+        now: Instant,
+        nav: &LauncherNav,
+        pad: &PadPool,
+        catalog: &ArcadeCatalog,
+        catalog_ready: bool,
+        catalog_refresh_done: bool,
+        launching: bool,
+        loading_title: &str,
+        catalog_scan_visible: bool,
+        catalog_scan_title: &str,
+        catalog_scan_detail: &str,
+        catalog_scan_percent: i32,
+        catalog_background_scan_visible: bool,
+        catalog_scan_message: &str,
+        confirm_visible: bool,
+        confirm_title: &str,
+        confirm_selected: i32,
+        confirm_left_label: &str,
+        confirm_right_label: &str,
+        arcade_selected: usize,
+        arcade_visual_index: f32,
+        preview_cache_state: &str,
+        preview_transition_effect: &str,
+        preview_transition_progress: f32,
+        composition_status: &UiCompositionStatus,
+        launcher_bench_scenario: Option<LauncherBenchScenario>,
+        start_screen: Screen,
+        lock_screen: Option<Screen>,
+        route_reassert_count: u64,
+        last_route_reassert_frame: u64,
+        last_route_reassert_ok: bool,
+        last_route_reassert_error: &str,
+        startup_status: StartupRevealStatus,
+    ) {
+        self.idle_loops_since_status = self.idle_loops_since_status.saturating_add(1);
+        let last_frame_ms_ago = now
+            .saturating_duration_since(self.last_rendered_frame_at)
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
+        self.write_runtime_status(
+            self.status_write_due(),
+            frames,
+            run_start,
+            nav,
+            pad,
+            catalog,
+            catalog_ready,
+            catalog_refresh_done,
+            launching,
+            loading_title,
+            catalog_scan_visible,
+            catalog_scan_title,
+            catalog_scan_detail,
+            catalog_scan_percent,
+            catalog_background_scan_visible,
+            catalog_scan_message,
+            confirm_visible,
+            confirm_title,
+            confirm_selected,
+            confirm_left_label,
+            confirm_right_label,
+            arcade_selected,
+            arcade_visual_index,
+            preview_cache_state,
+            preview_transition_effect,
+            preview_transition_progress,
+            composition_status,
+            launcher_bench_scenario,
+            start_screen,
+            lock_screen,
+            route_reassert_count,
+            last_route_reassert_frame,
+            last_route_reassert_ok,
+            last_route_reassert_error,
+            startup_status,
+            Some((self.idle_loops_since_status, last_frame_ms_ago)),
+        );
     }
 
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -667,28 +758,52 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
+        idle_status: Option<(u64, u64)>,
     ) {
         if !status_write_due {
             return;
         }
+        let idle = idle_status.is_some();
+        let (idle_loops, last_frame_ms_ago) = idle_status.unwrap_or((0, 0));
         let fps_estimate = if run_start.elapsed().as_secs_f64() > 0.0 {
             frames as f64 / run_start.elapsed().as_secs_f64()
         } else {
             0.0
         };
+        let rolling_fps = if idle { 0.0 } else { self.last_rolling_fps };
+        let rolling_prepare_us = if idle {
+            0
+        } else {
+            self.last_rolling_prepare_us
+        };
+        let rolling_render_us = if idle { 0 } else { self.last_rolling_render_us };
+        let rolling_custom_draw_us = if idle {
+            0
+        } else {
+            self.last_rolling_custom_draw_us
+        };
+        let rolling_vsync_us = if idle { 0 } else { self.last_rolling_vsync_us };
+        let rolling_present_us = if idle {
+            0
+        } else {
+            self.last_rolling_present_us
+        };
+        let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
         runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
             frames,
+            idle,
+            idle_loops,
             fps_estimate,
-            rolling_fps: self.last_rolling_fps,
-            rolling_prepare_us: self.last_rolling_prepare_us,
-            rolling_render_us: self.last_rolling_render_us,
-            rolling_custom_draw_us: self.last_rolling_custom_draw_us,
-            rolling_vsync_us: self.last_rolling_vsync_us,
-            rolling_present_us: self.last_rolling_present_us,
-            rolling_rows: self.last_rolling_rows,
-            last_frame_ms_ago: 0,
+            rolling_fps,
+            rolling_prepare_us,
+            rolling_render_us,
+            rolling_custom_draw_us,
+            rolling_vsync_us,
+            rolling_present_us,
+            rolling_rows,
+            last_frame_ms_ago,
             catalog_ready,
             catalog_games: catalog.len(),
             catalog_systems: catalog.systems.len(),
@@ -742,6 +857,9 @@ impl LauncherFrameAccounting {
             input_enabled_ms: startup_status.input_enabled_ms,
         });
         self.last_status_write = Instant::now();
+        if idle {
+            self.idle_loops_since_status = 0;
+        }
     }
 }
 
