@@ -17,3 +17,7 @@ pub mod controller {
 pub mod launcher {
     include!(concat!(env!("OUT_DIR"), "/launcher.rs"));
 }
+
+pub mod tear_pattern {
+    include!(concat!(env!("OUT_DIR"), "/tear_pattern.rs"));
+}
