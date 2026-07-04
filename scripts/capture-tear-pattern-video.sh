@@ -13,10 +13,11 @@ device_name=""
 size="1920x1080"
 fps="25"
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
+present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/capture-tear-pattern-video.sh [LABEL] [--secs N] [--capture-secs N] [--device-index N|--device-name NAME] [--size WxH] [--fps N] [--ui-fb-size auto|960x540|1280x720]
+Usage: scripts/capture-tear-pattern-video.sh [LABEL] [--secs N] [--capture-secs N] [--device-index N|--device-name NAME] [--size WxH] [--fps N] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N]
 
 Starts the native macOS USB-camera recorder, runs the deployed MiSTer MagiK
 tear_pattern scene, writes a contact strip PNG, and probes the encoded video.
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --size) size="${2:?}"; shift 2 ;;
     --fps) fps="${2:?}"; shift 2 ;;
     --ui-fb-size) ui_fb_size="${2:?}"; shift 2 ;;
+    --present-delay-us) present_delay_us="${2:?}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
@@ -57,6 +59,10 @@ case "$ui_fb_size" in
   auto|960x540|1280x720) ;;
   *) echo "--ui-fb-size must be auto, 960x540, or 1280x720" >&2; exit 2 ;;
 esac
+if [[ ! "$present_delay_us" =~ ^[0-9]+$ ]]; then
+  echo "--present-delay-us must be a non-negative integer" >&2
+  exit 2
+fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg is required to build the contact strip" >&2
@@ -75,7 +81,7 @@ scene_log="$OUT_DIR/${label}.scene.log"
 probe_log="$OUT_DIR/${label}.probe.txt"
 
 echo "==> recording $video"
-echo "==> requested capture ${size}@${fps}; ui_fb_size=$ui_fb_size"
+echo "==> requested capture ${size}@${fps}; ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us"
 camera_selector=(--device-index "$device_index")
 if [[ -n "$device_name" ]]; then
   camera_selector=(--device-name "$device_name")
@@ -99,7 +105,7 @@ trap cleanup EXIT
 
 sleep 1
 set +e
-"$HERE/scripts/mister" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; sleep 0.5; MISTER_UI_FB_SIZE='$ui_fb_size' /media/fat/mister-magik/mister-magik-fb ui tear_pattern $secs" | tee "$scene_log"
+"$HERE/scripts/mister" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; sleep 0.5; MISTER_UI_FB_SIZE='$ui_fb_size' MISTER_FB_PRESENT_DELAY_US='$present_delay_us' /media/fat/mister-magik/mister-magik-fb ui tear_pattern $secs" | tee "$scene_log"
 scene_status=${PIPESTATUS[0]}
 set -e
 wait "$camera_pid"
@@ -114,6 +120,7 @@ ffmpeg -hide_banner -loglevel warning -y \
   printf 'requested_size=%s\n' "$size"
   printf 'requested_fps=%s\n' "$fps"
   printf 'ui_fb_size=%s\n' "$ui_fb_size"
+  printf 'present_delay_us=%s\n' "$present_delay_us"
   ffprobe -hide_banner -v error \
     -select_streams v:0 \
     -show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames,duration \

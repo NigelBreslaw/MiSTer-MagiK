@@ -9,6 +9,7 @@ pub(super) fn run_bench_frame(
     frame_order: FrameOrder,
     animation_clock: &AnimationClock,
     pacer: &mut VsyncPacer,
+    present_timing: PresentTiming,
 ) -> FrameSample {
     let frame_start = Instant::now();
     let t0 = Instant::now();
@@ -24,6 +25,8 @@ pub(super) fn run_bench_frame(
             });
             let t2 = Instant::now();
             let pace = pacer.wait();
+            let vsync_done = Instant::now();
+            present_timing.wait_until_present_time(vsync_done);
             let t3 = Instant::now();
             let mut copy_us = 0;
             let mut present_rect = None;
@@ -57,13 +60,15 @@ pub(super) fn run_bench_frame(
         }
         FrameOrder::VsyncThenRender => {
             let pace = pacer.wait();
-            let t1 = Instant::now();
+            let vsync_done = Instant::now();
+            let t1 = vsync_done;
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
                 let region = target.render(renderer, frame_target_geometry(ui));
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
+            present_timing.wait_until_present_time(vsync_done);
             let t3 = Instant::now();
             let mut copy_us = 0;
             let mut present_rect = None;
@@ -122,6 +127,7 @@ pub(super) fn run_frame_loop(
     let mut copy_rows_acc = 0u128;
     let configured_frame_order = FrameOrder::from_env();
     let frame_order = configured_frame_order;
+    let present_timing = PresentTiming::from_env();
     let mut pacer = VsyncPacer::from_env();
 
     let label = if secs == 0 {
@@ -130,10 +136,11 @@ pub(super) fn run_frame_loop(
         format!("{secs}s")
     };
     crate::ui_logln!(
-        "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, render-mode={}, animation-clock={})...",
+        "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, render-mode={}, animation-clock={}, present-delay-us={})...",
         frame_order.label(),
         target.label(),
-        animation_clock.label()
+        animation_clock.label(),
+        present_timing.delay_us()
     );
     crate::ui_logln!(
         "slint-render-mode={} frame-order={} requested-frame-order={}",
@@ -151,6 +158,7 @@ pub(super) fn run_frame_loop(
             frame_order,
             animation_clock,
             &mut pacer,
+            present_timing,
         );
         frames += 1;
 

@@ -33,10 +33,7 @@ use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
 use crate::display_config::{detect_runtime_display_geometry, DisplayConfig};
-#[cfg(any(mister_bench_scenes, mister_video_scene))]
-use crate::frame_profile::FrameRect;
-#[cfg(mister_video_scene)]
-use crate::frame_profile::{FrameProfiler, FrameSample, VideoFrameProfile};
+use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
 use crate::launcher::{self, LauncherAction, LauncherNav, Screen};
 use crate::library_db;

@@ -65,7 +65,7 @@ mod display_config;
 mod experiments;
 mod fallible_log;
 mod fpga;
-#[cfg(any(mister_bench_scenes, mister_video_scene))]
+#[cfg(feature = "ui")]
 mod frame_profile;
 mod input;
 mod launch_preparation;
