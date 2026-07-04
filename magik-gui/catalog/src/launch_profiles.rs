@@ -52,6 +52,13 @@ impl RuleProvenance {
         }
     }
 
+    pub fn conf_str(detail: impl Into<String>) -> Self {
+        Self {
+            kind: RuleSourceKind::ConfStr,
+            detail: detail.into(),
+        }
+    }
+
     pub fn magik(detail: impl Into<String>) -> Self {
         Self {
             kind: RuleSourceKind::MagikProfile,
@@ -165,6 +172,23 @@ pub struct LaunchProfile {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileSet {
     profiles: Vec<LaunchProfile>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub(crate) struct RuntimeProfilePlan {
+    pub(crate) game_dir_name: String,
+    pub(crate) decision: RuntimeProfileDecision,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub(crate) enum RuntimeProfileDecision {
+    Catalogable { profile: Box<LaunchProfile> },
+    NoInstalledCore,
+    EmptyOrMediaOnly,
+    NoKnownPayloadExtension,
+    Ambiguous { core_ids: Vec<String> },
 }
 
 impl ProfileSet {
@@ -344,6 +368,210 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
         .into_iter()
         .map(|core| core.core_id.to_ascii_lowercase())
         .collect()
+}
+
+#[allow(dead_code)]
+pub(crate) fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
+    let cores = catalog_discovery::installed_cores_for_roots(roots);
+    catalog_discovery::top_level_game_dirs_for_roots(roots)
+        .into_iter()
+        .map(|game_dir| runtime_profile_plan_for_game_dir(game_dir, &cores))
+        .collect()
+}
+
+#[allow(dead_code)]
+fn runtime_profile_plan_for_game_dir(
+    game_dir: catalog_discovery::GameDirFact,
+    cores: &[catalog_discovery::InstalledCore],
+) -> RuntimeProfilePlan {
+    let decision = if !game_dir.has_payloadish_files() {
+        RuntimeProfileDecision::EmptyOrMediaOnly
+    } else {
+        let candidates = exact_runtime_core_candidates(&game_dir.name, cores);
+        match candidates.as_slice() {
+            [] => RuntimeProfileDecision::NoInstalledCore,
+            [core] => runtime_profile_for_exact_match(&game_dir, core)
+                .map(|profile| RuntimeProfileDecision::Catalogable {
+                    profile: Box::new(profile),
+                })
+                .unwrap_or(RuntimeProfileDecision::NoKnownPayloadExtension),
+            _ => RuntimeProfileDecision::Ambiguous {
+                core_ids: candidates
+                    .iter()
+                    .map(|core| core.core_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            },
+        }
+    };
+    RuntimeProfilePlan {
+        game_dir_name: game_dir.name,
+        decision,
+    }
+}
+
+#[allow(dead_code)]
+fn exact_runtime_core_candidates<'a>(
+    game_dir_name: &str,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<&'a catalog_discovery::InstalledCore> {
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for core in cores {
+        if !core.core_id.eq_ignore_ascii_case(game_dir_name) {
+            continue;
+        }
+        let key = core.core_id.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(core);
+        }
+    }
+    out
+}
+
+#[allow(dead_code)]
+fn runtime_profile_for_exact_match(
+    game_dir: &catalog_discovery::GameDirFact,
+    core: &catalog_discovery::InstalledCore,
+) -> Option<LaunchProfile> {
+    let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name);
+    if extensions.is_empty() {
+        return None;
+    }
+    if !game_dir.has_zip_files
+        && !game_dir
+            .payload_extensions
+            .iter()
+            .any(|ext| contains_ignore_ascii_case(&extensions, ext))
+    {
+        return None;
+    }
+
+    let payload_rule = PayloadRule {
+        extensions,
+        mount: MountSpec::load_file(1),
+        disposition: PayloadDisposition::Playable,
+        provenance: RuleProvenance::conf_str(
+            "Runtime top-level games folder matched an installed core with known payload extensions",
+        ),
+    };
+    let id = canonical_core_id(&core.core_id).to_ascii_lowercase();
+    Some(LaunchProfile {
+        id: format!("runtime-{id}"),
+        system_id: id,
+        category: category_for_installed_core_path(&core.path).to_string(),
+        title: core.core_id.clone(),
+        core_name: core.core_id.clone(),
+        core_path: relative_core_path_for_installed_core(&core.path),
+        game_dirs: vec![game_dir.name.clone()],
+        payload_rules: vec![payload_rule.clone()],
+        archive_entry_rules: vec![payload_rule],
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::conf_str(
+            "Runtime top-level games folder matched an installed core",
+        ),
+    })
+}
+
+#[allow(dead_code)]
+fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> Vec<String> {
+    let mut extensions = BTreeSet::new();
+    if let Some(profile) = generic_manifest_profile_for_core(core_id)
+        .or_else(|| generic_manifest_profile_for_game_dir(game_dir))
+    {
+        for ext in playable_payload_extensions(&profile) {
+            extensions.insert(ext);
+        }
+    }
+    for ext in runtime_payload_extension_hints(core_id)
+        .into_iter()
+        .chain(runtime_payload_extension_hints(game_dir))
+    {
+        extensions.insert(ext);
+    }
+    extensions.into_iter().collect()
+}
+
+#[allow(dead_code)]
+fn playable_payload_extensions(profile: &LaunchProfile) -> Vec<String> {
+    let mut extensions = BTreeSet::new();
+    for rule in &profile.payload_rules {
+        if rule.disposition == PayloadDisposition::Playable {
+            for ext in &rule.extensions {
+                extensions.insert(ext.to_ascii_lowercase());
+            }
+        }
+    }
+    extensions.into_iter().collect()
+}
+
+#[allow(dead_code)]
+fn runtime_payload_extension_hints(name: &str) -> Vec<String> {
+    let exts = match name.to_ascii_lowercase().as_str() {
+        "atari2600" | "atari2600-sinden" => &["a26", "bin"][..],
+        "atari5200" => &["a52", "bin"],
+        "atari7800" => &["a78", "bin"],
+        "atarilynx" => &["lnx"],
+        "coleco" => &["col", "rom"],
+        "fds" => &["fds"],
+        "gameboy" | "gameboy2p" => &["gb"],
+        "intellivision" => &["int", "rom", "bin"],
+        "ngpc" => &["ngc"],
+        "neogeopocket" => &["ngp"],
+        "s32x" => &["32x"],
+        "sgb2" => &["sfc", "smc"],
+        "satellaview" => &["sfc", "smc", "bs"],
+        "supergrafx" | "tgfx16" => &["pce"],
+        "vectrex" => &["vec"],
+        "wonderswan" => &["ws"],
+        "wonderswancolor" => &["wsc"],
+        _ => &[],
+    };
+    exts.iter().map(|ext| ext.to_string()).collect()
+}
+
+#[allow(dead_code)]
+fn category_for_installed_core_path(path: &Path) -> &'static str {
+    if path_has_component(path, "_Computer") {
+        "Computer"
+    } else if path_has_component(path, "_Arcade") {
+        "Arcade"
+    } else if path_has_component(path, "_LLAPI") {
+        "LLAPI"
+    } else {
+        "Console"
+    }
+}
+
+#[allow(dead_code)]
+fn relative_core_path_for_installed_core(path: &Path) -> Option<String> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let start = components.iter().position(|component| {
+        component.eq_ignore_ascii_case("_Console")
+            || component.eq_ignore_ascii_case("_Computer")
+            || component.eq_ignore_ascii_case("_LLAPI")
+            || component.eq_ignore_ascii_case("_Arcade")
+    })?;
+    let mut relative = components[start..].join("/");
+    if relative.to_ascii_lowercase().ends_with(".rbf") {
+        relative.truncate(relative.len() - 4);
+    }
+    Some(relative)
+}
+
+#[allow(dead_code)]
+fn path_has_component(path: &Path, expected: &str) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|component| component.eq_ignore_ascii_case(expected))
+    })
 }
 
 pub fn core_launch_manifest_fingerprint() -> u64 {
@@ -827,6 +1055,67 @@ mod tests {
         assert!(coleco
             .classify_archive_entry(Path::new("Smurf Rescue.col"))
             .is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_catalogs_exact_gameboy_payloads() {
+        let root = unique_temp_dir("runtime-plan-gameboy");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Gameboy/Tetris.gb"), b"rom").expect("write rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Gameboy")
+            .expect("gameboy plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!("expected catalogable gameboy plan, got {:?}", plan.decision);
+        };
+        assert_eq!(profile.system_id, "gameboy");
+        assert_eq!(profile.game_dirs, vec!["Gameboy"]);
+        assert_eq!(playable_payload_extensions(profile), vec!["gb"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_rejects_exact_core_without_known_payload_rule() {
+        let root = unique_temp_dir("runtime-plan-c64");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(root.join("games/C64")).expect("create c64 dir");
+        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/C64/Impossible Mission.d64"), b"disk").expect("write disk");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "C64")
+            .expect("c64 plan");
+
+        assert_eq!(
+            plan.decision,
+            RuntimeProfileDecision::NoKnownPayloadExtension
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_rejects_empty_exact_game_folders() {
+        let root = unique_temp_dir("runtime-plan-empty");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Gameboy")
+            .expect("gameboy plan");
+
+        assert_eq!(plan.decision, RuntimeProfileDecision::EmptyOrMediaOnly);
         let _ = std::fs::remove_dir_all(root);
     }
 
