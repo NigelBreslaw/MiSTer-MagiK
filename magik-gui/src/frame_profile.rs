@@ -158,7 +158,7 @@ impl ProfileMode {
             Some("full") => Self::Full,
             Some("trace") => Self::Trace,
             other => {
-                eprintln!(
+                crate::ui_errln!(
                     "frame_profile: unknown MISTER_PROFILE={other:?}; use 1|summary|slow|full|trace"
                 );
                 Self::Summary
@@ -218,7 +218,7 @@ impl FrameProfiler {
                 (mode == ProfileMode::Trace).then(|| "/tmp/mister-frame-trace.json".to_string())
             });
         if mode != ProfileMode::Off {
-            println!(
+            crate::ui_logln!(
                 "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}{}",
                 mode,
                 out_path
@@ -277,7 +277,7 @@ impl FrameProfiler {
         let total = sample.wall_us;
         match self.mode {
             ProfileMode::Slow if total >= self.slow_threshold_us => {
-                println!(
+                crate::ui_logln!(
                     "  SLOW frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={} dominant={}",
                     self.frames.len(),
                     sample.phases_us(),
@@ -294,7 +294,7 @@ impl FrameProfiler {
                 );
             }
             ProfileMode::Full => {
-                println!(
+                crate::ui_logln!(
                     "  frame {}: wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={}",
                     self.frames.len(),
                     sample.phases_us(),
@@ -358,7 +358,7 @@ impl FrameProfiler {
 
     fn flush_window(&mut self) {
         let nn = self.window_frames.max(1) as u128;
-        println!(
+        crate::ui_logln!(
             "  fps ~ {}  | prepare {}us  anim {}us  slint-render {}us  custom-draw {}us  vsync-wait {}us  fb-present {}us cached-present {}us arcade-list-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={}",
             self.window_frames,
             self.window_prepare / nn,
@@ -385,7 +385,7 @@ impl FrameProfiler {
             + self.window_audio_write
             > 0
         {
-            println!(
+            crate::ui_logln!(
                 "  video-profile | updates {} decode {}us scale {}us recv {}us image {}us blit {}us audio-decode {}us audio-resample {}us audio-write {}us underruns {}",
                 self.window_video_updates,
                 self.window_video_decode / nn,
@@ -434,14 +434,14 @@ impl FrameProfiler {
             self.flush_window();
         }
         if self.frames.is_empty() {
-            println!("frame_profile: no frames recorded");
+            crate::ui_logln!("frame_profile: no frames recorded");
             return;
         }
         if let Some(path) = &self.out_path {
             if let Err(e) = self.write_tsv(path) {
-                eprintln!("frame_profile: failed to write {path}: {e}");
+                crate::ui_errln!("frame_profile: failed to write {path}: {e}");
             } else {
-                println!(
+                crate::ui_logln!(
                     "frame_profile: wrote {} frames to {path}",
                     self.frames.len()
                 );
@@ -449,9 +449,9 @@ impl FrameProfiler {
         }
         if let Some(path) = &self.trace_path {
             if let Err(e) = self.write_trace(path) {
-                eprintln!("frame_profile: failed to write trace {path}: {e}");
+                crate::ui_errln!("frame_profile: failed to write trace {path}: {e}");
             } else {
-                println!(
+                crate::ui_logln!(
                     "frame_profile: wrote Chrome trace for {} frames to {path}",
                     self.frames.len()
                 );
@@ -580,7 +580,7 @@ impl FrameProfiler {
             .count();
         let over_pct = (over as f64) * 100.0 / n as f64;
 
-        println!("=== frame profile summary ({n} frames) ===");
+        crate::ui_logln!("=== frame profile summary ({n} frames) ===");
         print_phase_stats("wall", &totals);
         print_phase_stats("phases_sum", &phases);
         print_phase_stats("prepare", &col(&self.frames, |s| s.prepare_us));
@@ -632,11 +632,11 @@ impl FrameProfiler {
             .find(|s| s.vsync_period_us > 0)
             .map(|s| 1_000_000.0 / s.vsync_period_us as f64)
             .unwrap_or(0.0);
-        println!(
+        crate::ui_logln!(
             "vsync: hits={hits} timeouts={timeouts} fallback_frames={fallback} errors={errors} max_miss_streak={max_miss_streak} inferred_hz={inferred_hz:.2}"
         );
 
-        println!(
+        crate::ui_logln!(
             "frames >= {}us ({} Hz budget): {over} ({over_pct:.2}%)",
             self.slow_threshold_us,
             1_000_000 / FRAME_BUDGET_US
@@ -658,7 +658,7 @@ impl FrameProfiler {
                 }
             }
         }
-        println!(
+        crate::ui_logln!(
             "slow-frame dominant phase: prepare={} anim={} slint-render={} custom-draw={} vsync-or-fb-present={} video-or-audio={}",
             slow_by_phase[0], slow_by_phase[1], slow_by_phase[2], slow_by_phase[3], slow_by_phase[4], slow_by_phase[5]
         );
@@ -670,7 +670,7 @@ impl FrameProfiler {
             US_BUCKETS,
         );
 
-        println!("worst 10 frames (by wall_us):");
+        crate::ui_logln!("worst 10 frames (by wall_us):");
         let mut indexed: Vec<(usize, u64)> = self
             .frames
             .iter()
@@ -680,7 +680,7 @@ impl FrameProfiler {
         indexed.sort_by_key(|&(_, t)| std::cmp::Reverse(t));
         for (i, total) in indexed.into_iter().take(10) {
             let s = &self.frames[i];
-            println!(
+            crate::ui_logln!(
                 "  #{i} wall={total}us phases={} prepare={} anim={} slint-render={} custom-draw={} vsync={} fb-present={} cached-present={} arcade-list-present={} rows={} dominant={}",
                 s.phases_us(),
                 s.prepare_us,
@@ -701,7 +701,7 @@ impl FrameProfiler {
         if !self.frames.iter().any(|s| s.video.video_frame_updated) {
             return;
         }
-        println!("video profile summary:");
+        crate::ui_logln!("video profile summary:");
         print_phase_stats(
             "video-decode",
             &col(&self.frames, |s| s.video.video_decode_us),
@@ -738,7 +738,7 @@ impl FrameProfiler {
             .iter()
             .filter(|s| s.video.audio_underrun)
             .count();
-        println!("video-updates={updates} audio-underrun-frames={underruns}");
+        crate::ui_logln!("video-updates={updates} audio-underrun-frames={underruns}");
     }
 
     fn print_present_bandwidth(&self) {
@@ -760,13 +760,13 @@ impl FrameProfiler {
             max_bytes = max_bytes.max(bytes);
         }
         if presented_frames == 0 || total_present_us == 0 {
-            println!("present-bandwidth: no presented rects");
+            crate::ui_logln!("present-bandwidth: no presented rects");
             return;
         }
         let avg_bytes = total_bytes / presented_frames;
         let mib_per_s =
             (total_bytes as f64 / 1_048_576.0) / (total_present_us as f64 / 1_000_000.0);
-        println!(
+        crate::ui_logln!(
             "present-bandwidth: frames={presented_frames} avg_bytes={} max_bytes={} total_bytes={} active_copy_mib_s={mib_per_s:.1}",
             avg_bytes,
             max_bytes,
@@ -848,7 +848,7 @@ fn print_phase_stats(label: &str, sorted: &[u64]) {
     if sorted.is_empty() {
         return;
     }
-    println!(
+    crate::ui_logln!(
         "  {label}: min={} p50={} p95={} p99={} max={} avg={}",
         sorted[0],
         percentile(sorted, 50.0),
@@ -880,14 +880,14 @@ const US_BUCKETS: &[(u64, u64, &str)] = &[
 ];
 
 fn print_histogram(label: &str, sorted: &[u64], buckets: &[(u64, u64, &str)]) {
-    print!("  {label} histogram:");
+    crate::ui_log!("  {label} histogram:");
     for &(lo, hi, name) in buckets {
         let c = sorted.iter().filter(|&&v| v >= lo && v < hi).count();
         if c > 0 {
-            print!(" {name}={c}");
+            crate::ui_log!(" {name}={c}");
         }
     }
-    println!();
+    crate::ui_logln!();
 }
 
 #[cfg(test)]

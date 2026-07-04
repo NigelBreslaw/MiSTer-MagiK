@@ -44,7 +44,7 @@ impl FbModeGuard {
                 self.active = false;
             }
             Err(e) => {
-                eprintln!("warning: failed to restore framebuffer mode: {e}");
+                crate::ui_errln!("warning: failed to restore framebuffer mode: {e}");
             }
         }
     }

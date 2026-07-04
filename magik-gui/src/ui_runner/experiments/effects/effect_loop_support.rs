@@ -84,7 +84,7 @@ pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
         spec.synthetic_max,
         spec.synthetic_images,
     );
-    println!(
+    crate::ui_logln!(
         "{} effects={} auto={} hud={} segment_secs={} cache_cap={} images={}",
         spec.family_label,
         effects
@@ -105,7 +105,7 @@ pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
         match PadPool::open_all() {
             Ok(pad) => Some(pad),
             Err(e) => {
-                eprintln!("pad: unavailable for {} picker: {e}", spec.family_label);
+                crate::ui_errln!("pad: unavailable for {} picker: {e}", spec.family_label);
                 None
             }
         }
@@ -143,7 +143,7 @@ pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
             if repeat.tick_left(state.dpad_left, now) && !effects.is_empty() {
                 selected_idx =
                     selected_idx.wrapping_add(effects.len()).wrapping_sub(1) % effects.len();
-                println!(
+                crate::ui_logln!(
                     "{}={}",
                     selected_log,
                     (spec.label_effect)(effects[selected_idx])
@@ -151,7 +151,7 @@ pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
             }
             if repeat.tick_right(state.dpad_right, now) && !effects.is_empty() {
                 selected_idx = (selected_idx + 1) % effects.len();
-                println!(
+                crate::ui_logln!(
                     "{}={}",
                     selected_log,
                     (spec.label_effect)(effects[selected_idx])
@@ -163,7 +163,7 @@ pub(super) fn run_effect_picker_loop<Kind, State, Stats>(
                 None => exit_held,
             };
             if exit_requested {
-                println!("{exit_log}");
+                crate::ui_logln!("{exit_log}");
                 break;
             }
             exit_was_held = exit_held;
@@ -255,7 +255,7 @@ pub(super) fn parse_effects_env<T: Copy>(
         if let Some(effect) = parse(part) {
             effects.push(effect);
         } else {
-            eprintln!("{family_label}: unknown effect {part:?}");
+            crate::ui_errln!("{family_label}: unknown effect {part:?}");
         }
     }
     if effects.is_empty() {
@@ -324,7 +324,7 @@ pub(super) fn present_camera_pixels_565(
         *dst = Rgb565Pixel(src.0);
     }
     if let Err(e) = disp.present_rows_565(scratch, y0, y1) {
-        eprintln!("effect present failed: {e}");
+        crate::ui_errln!("effect present failed: {e}");
     }
 }
 
@@ -335,10 +335,10 @@ pub(super) fn create_trace(
 ) -> Option<File> {
     std::env::var(env_name).ok().and_then(|path| {
         let mut f = File::create(&path)
-            .map_err(|e| eprintln!("{family_label} trace: create {path} failed: {e}"))
+            .map_err(|e| crate::ui_errln!("{family_label} trace: create {path} failed: {e}"))
             .ok()?;
         f.write_all(header).ok()?;
-        println!("{}_trace={path}", family_label.replace('-', "_"));
+        crate::ui_logln!("{}_trace={path}", family_label.replace('-', "_"));
         Some(f)
     })
 }

@@ -614,7 +614,7 @@ fn prune_stale_prefetch_requests(queue: &mut Vec<PreviewRequest>, newest_generat
         let keep =
             matches!(req.priority, PreviewPriority::Selected) || req.generation >= keep_after;
         if !keep && preview_trace_enabled() {
-            eprintln!(
+            crate::catalog_errln!(
                 "preview_trace prefetch_cancelled generation={} newest_generation={} reason=stale_generation archive_path={} asset_key={}",
                 req.generation, newest_generation, req.preview_archive_path, req.preview_asset_key
             );
@@ -666,7 +666,7 @@ fn load_preview(
     match loaded_result {
         Ok(loaded) => {
             if preview_trace_enabled() {
-                eprintln!(
+                crate::catalog_errln!(
                     "preview_trace decoded generation={} priority={:?} queue_age_us={} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} decode_cpu_us={} raw565_parse_us={} raw565_parse_cpu_us={} decode_plus_parse_us={} decode_plus_parse_cpu_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     req.generation,
                     req.priority,
@@ -721,7 +721,7 @@ fn load_preview(
         }
         Err(e) => {
             if preview_trace_enabled() {
-                eprintln!(
+                crate::catalog_errln!(
                     "preview_trace decode_failed generation={} queue_age_us={} age_us={} archive_path={} asset_key={} error={}",
                     req.generation,
                     queue_age_us,
@@ -1006,7 +1006,7 @@ fn warm_preview_sidecar_indexes_from_env() -> Result<bool, String> {
             Ok(None) => {}
             Err(error) => {
                 if preview_trace_enabled() {
-                    eprintln!(
+                    crate::catalog_errln!(
                         "preview_trace sidecar_warm_skipped archive_path={} error={}",
                         resolved_path, error
                     );
@@ -1025,7 +1025,7 @@ pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
         cached.clear();
     }
     if preview_trace_enabled() {
-        eprintln!("preview_trace metadata_cache event=forced_invalidation reason={reason}");
+        crate::catalog_errln!("preview_trace metadata_cache event=forced_invalidation reason={reason}");
     }
 }
 
@@ -1111,7 +1111,7 @@ fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<Preview
     let now = Instant::now();
     if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
         if preview_trace_enabled() {
-            eprintln!(
+            crate::catalog_errln!(
                 "preview_trace metadata_cache event=hit scope=archive paths={} ttl_ms={}",
                 paths.len(),
                 PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
@@ -1123,7 +1123,7 @@ fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<Preview
     if cached.fingerprints == fingerprints {
         cached.checked_at = now;
         if preview_trace_enabled() {
-            eprintln!(
+            crate::catalog_errln!(
                 "preview_trace metadata_cache event=miss scope=archive reason=ttl_revalidated paths={}",
                 paths.len()
             );
@@ -1131,7 +1131,7 @@ fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<Preview
         Some(Arc::clone(&cached.archives))
     } else {
         if preview_trace_enabled() {
-            eprintln!(
+            crate::catalog_errln!(
                 "preview_trace metadata_cache event=forced_invalidation scope=archive reason=fingerprint_changed paths={}",
                 paths.len()
             );
@@ -1631,7 +1631,7 @@ fn try_load_raw565_preview_asset_from_index(
         Ok(loaded) => Some(loaded),
         Err(error) => {
             if preview_trace_enabled() {
-                eprintln!(
+                crate::catalog_errln!(
                     "preview_trace index_pread_failed archive_path={} asset_key={} error={}",
                     archive_path.display(),
                     entry_name,
@@ -1710,7 +1710,7 @@ fn preview_archive_sidecar_lookup(
         if let Some(cached) = cache.get_mut(&cache_key) {
             if now.duration_since(cached.checked_at) < PREVIEW_ARCHIVE_METADATA_TTL {
                 if preview_trace_enabled() {
-                    eprintln!(
+                    crate::catalog_errln!(
                         "preview_trace metadata_cache event=hit scope=sidecar archive_path={} ttl_ms={}",
                         archive_path.display(),
                         PREVIEW_ARCHIVE_METADATA_TTL.as_millis()
@@ -1728,7 +1728,7 @@ fn preview_archive_sidecar_lookup(
             {
                 cached.checked_at = now;
                 if preview_trace_enabled() {
-                    eprintln!(
+                    crate::catalog_errln!(
                         "preview_trace metadata_cache event=miss scope=sidecar reason=ttl_revalidated archive_path={}",
                         archive_path.display()
                     );
@@ -1738,7 +1738,7 @@ fn preview_archive_sidecar_lookup(
                     index: Arc::clone(&cached.index),
                 }));
             } else if preview_trace_enabled() {
-                eprintln!(
+                crate::catalog_errln!(
                     "preview_trace metadata_cache event=forced_invalidation scope=sidecar reason=fingerprint_changed archive_path={}",
                     archive_path.display()
                 );
@@ -1755,7 +1755,7 @@ fn preview_archive_sidecar_lookup(
     let trust = preview_archive_sidecar_trust(archive_path, &index_path, &archive_fingerprint, &index)?;
     let read_us = read_t.elapsed().as_micros() as u64;
     if preview_trace_enabled() {
-        eprintln!(
+        crate::catalog_errln!(
             "preview_trace sidecar_index_trusted archive_path={} index_path={} entries={} archive_bytes={} archive_sha256={} trust={} read_us={}",
             archive_path.display(),
             index_path.display(),

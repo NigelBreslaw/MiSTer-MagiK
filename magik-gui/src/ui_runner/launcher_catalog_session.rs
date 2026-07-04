@@ -461,7 +461,7 @@ pub(super) fn consume_library_rebuild_marker(worker_enabled: bool, start: Instan
             pending
         }
         Err(e) => {
-            eprintln!("failed to consume library rebuild marker: {e}");
+            crate::ui_errln!("failed to consume library rebuild marker: {e}");
             print_startup_event(start, "library_rebuild_marker_consume_failed", e);
             false
         }
@@ -491,7 +491,7 @@ fn push_catalog_coverage_diagnostic(
     if summary.audit_rows == 0 {
         return;
     }
-    eprintln!(
+    crate::ui_errln!(
         "catalog coverage audit: rows={} (query catalog_audit for details)",
         summary.audit_rows
     );

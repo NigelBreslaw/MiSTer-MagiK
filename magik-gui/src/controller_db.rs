@@ -133,30 +133,30 @@ impl ControllerDb {
                     entries: file.controllers,
                 },
                 Ok(file) if file.version == 1 => {
-                    eprintln!("controller db: migrating v1 → v2 in {path}");
+                    crate::ui_errln!("controller db: migrating v1 → v2 in {path}");
                     Self {
                         path: path.to_string(),
                         entries: migrate_v1_entries(file.controllers),
                     }
                 }
                 Ok(file) => {
-                    eprintln!(
+                    crate::ui_errln!(
                         "controller db: unsupported version {} in {path}, starting empty",
                         file.version
                     );
                     Self::empty(path)
                 }
                 Err(e) => {
-                    eprintln!("controller db: parse error in {path}: {e}, starting empty");
+                    crate::ui_errln!("controller db: parse error in {path}: {e}, starting empty");
                     Self::empty(path)
                 }
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                eprintln!("controller db: no file at {path} (starting empty)");
+                crate::ui_errln!("controller db: no file at {path} (starting empty)");
                 Self::empty(path)
             }
             Err(e) => {
-                eprintln!("controller db: read {path}: {e}, starting empty");
+                crate::ui_errln!("controller db: read {path}: {e}, starting empty");
                 Self::empty(path)
             }
         }
@@ -370,7 +370,7 @@ impl ControllerDb {
         let plug = Self::plug_id(info);
         match self.registry_status(info) {
             PadRegistryStatus::Unknown => {
-                eprintln!(
+                crate::ui_errln!(
                     "controller db: {js_path} plug={plug} unknown ({}) kind={:?}",
                     info.name,
                     Self::infer_kind(info)
@@ -378,23 +378,27 @@ impl ControllerDb {
             }
             PadRegistryStatus::PendingSetup => {
                 let e = self.get(info).unwrap();
-                eprintln!(
+                crate::ui_errln!(
                     "controller db: {js_path} id={logical} pending setup \"{}\" port={}",
-                    e.label, e.last_usb_port
+                    e.label,
+                    e.last_usb_port
                 );
             }
             PadRegistryStatus::MovedPort => {
                 let e = self.get(info).unwrap();
-                eprintln!(
+                crate::ui_errln!(
                     "controller db: {js_path} id={logical} moved \"{}\" was {} now {}",
-                    e.label, e.last_usb_port, info.usb_port
+                    e.label,
+                    e.last_usb_port,
+                    info.usb_port
                 );
             }
             PadRegistryStatus::Known => {
                 let e = self.get(info).unwrap();
-                eprintln!(
+                crate::ui_errln!(
                     "controller db: {js_path} id={logical} known \"{}\" port={}",
-                    e.label, e.last_usb_port
+                    e.label,
+                    e.last_usb_port
                 );
             }
         }

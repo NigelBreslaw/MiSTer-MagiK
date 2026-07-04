@@ -794,7 +794,7 @@ fn trace_preview_coverage_sample(
     } else {
         "index_or_cache"
     };
-    eprintln!(
+    crate::ui_errln!(
         "startup_timing\t{event}\t{}ms\tsystem={}\tselected_index={}\tcandidate_index={}\ttitle={}\thas_preview={}\tasset_key={}\tvisible_asset_key={}\tgeneration={}\tturbo_active={}\tcache_state={}\tload_source={}\tpack_state={}",
         preview.trace_elapsed_ms(),
         system,
@@ -811,7 +811,7 @@ fn trace_preview_coverage_sample(
         pack_state
     );
     if preview_state_is_miss(cache_state, has_candidate) {
-        eprintln!(
+        crate::ui_errln!(
             "startup_timing\tpreview_miss\t{}ms\tsystem={}\tselected_index={}\tcandidate_index={}\ttitle={}\thas_preview=1\tasset_key={}\tvisible_asset_key={}\tgeneration={}\tturbo_active={}\tcache_state={}\tload_source={}\tpack_state={}",
             preview.trace_elapsed_ms(),
             system,
@@ -983,7 +983,7 @@ pub(crate) fn request_arcade_preview_window(
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
     let Some(candidate) = candidate else {
-        eprintln!(
+        crate::ui_errln!(
             "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=0\tasset_key=\tcandidate_index=\tselected_has_preview={}",
             preview.trace_elapsed_ms(),
             selected_game.system_id,
@@ -1002,7 +1002,7 @@ pub(crate) fn request_arcade_preview_window(
 
     let candidate_game = candidate.game;
     bridge.set_arcade_preview_title(candidate_game.title.as_ref().into());
-    eprintln!(
+    crate::ui_errln!(
         "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tcandidate_index={}\tselected_has_preview={}",
         preview.trace_elapsed_ms(),
         candidate_game.system_id,
@@ -1036,14 +1036,14 @@ pub(crate) fn request_arcade_preview_window(
         preview.has_visible_preview = true;
         preview.visible_preview_load_source = "decoded_cache";
         if preview_trace_enabled() {
-            eprintln!(
+            crate::ui_errln!(
                 "preview_trace cache_hit title={} archive_path={} asset_key={}",
                 candidate_game.title,
                 candidate_game.preview_archive_path,
                 candidate_game.preview_asset_key
             );
         }
-        eprintln!(
+        crate::ui_errln!(
             "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source=decoded_cache\ttotal_us=0\tread_us=0\tdecode_us=0\tage_us=0",
             preview.trace_elapsed_ms(),
             candidate_game.system_id,
@@ -1066,7 +1066,7 @@ pub(crate) fn request_arcade_preview_window(
         return true;
     }
     let requested_at_ms = preview.trace_elapsed_ms();
-    eprintln!(
+    crate::ui_errln!(
         "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0",
         requested_at_ms,
         candidate_game.system_id,
@@ -1086,7 +1086,7 @@ pub(crate) fn request_arcade_preview_window(
             let decode_us = loaded.decode_us;
             let raw565_parse_us = loaded.raw565_parse_us;
             let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
-            eprintln!(
+            crate::ui_errln!(
                 "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
                 completed_at_ms,
                 candidate_game.system_id,
@@ -1100,7 +1100,7 @@ pub(crate) fn request_arcade_preview_window(
                 age_us
             );
             if load_source == PreviewLoadSource::IndexPread {
-                eprintln!(
+                crate::ui_errln!(
                     "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\tread_us={}",
                     completed_at_ms,
                     candidate_game.system_id,
@@ -1125,7 +1125,7 @@ pub(crate) fn request_arcade_preview_window(
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &loaded_image);
-            eprintln!(
+            crate::ui_errln!(
                 "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
                 preview.trace_elapsed_ms(),
                 candidate_game.system_id,
@@ -1150,7 +1150,7 @@ pub(crate) fn request_arcade_preview_window(
         }
         Err(err) => {
             if preview_trace_enabled() {
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace sync_selected_failed title={} archive_path={} asset_key={} error={}",
                     candidate_game.title,
                     candidate_game.preview_archive_path,
@@ -1272,7 +1272,7 @@ fn request_preview_prefetches(
             rank + 1,
         );
         if preview_trace_enabled() {
-            eprintln!(
+            crate::ui_errln!(
                 "preview_trace prefetch distance={} rank={} direction={} title={} archive_path={} asset_key={}",
                 distance,
                 rank + 1,
@@ -1320,7 +1320,7 @@ fn prefetch_should_throttle(
         preview.prefetch_throttle_until = Some(now + PREFETCH_SCROLL_SETTLE);
         preview.pending_prefetch_keys.clear();
         if preview_trace_enabled() {
-            eprintln!(
+            crate::ui_errln!(
                 "preview_trace prefetch_throttled reason=selection_changed duration_ms={}",
                 PREFETCH_SCROLL_SETTLE.as_millis()
             );
@@ -1331,7 +1331,7 @@ fn prefetch_should_throttle(
         if now < until {
             if preview_trace_enabled() {
                 let remaining_ms = until.duration_since(now).as_millis();
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace prefetch_throttled reason=settle_wait remaining_ms={remaining_ms}"
                 );
             }
@@ -1526,7 +1526,7 @@ pub(crate) fn apply_ready_preview(
         }
         if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
             if preview_trace_enabled() {
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace stale_result generation={} current_generation={} archive_path={} asset_key={}",
                     result.generation,
                     preview.current_generation,
@@ -1540,7 +1540,7 @@ pub(crate) fn apply_ready_preview(
         let result_title = result.title.clone();
         if let Some(image) = result.image {
             if preview_trace_enabled() && is_selected_result {
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace apply generation={} priority={:?} selected={} age_us={} load_source={} total_us={} read_us={} decode_us={} archive_path={} asset_key={}",
                     result.generation,
                     result.priority,
@@ -1556,7 +1556,7 @@ pub(crate) fn apply_ready_preview(
             }
             if is_selected_result {
                 if result.load_source == PreviewLoadSource::IndexPread {
-                    eprintln!(
+                    crate::ui_errln!(
                         "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\tread_us={}",
                         result.completed_at_ms,
                         result_system_id,
@@ -1567,7 +1567,7 @@ pub(crate) fn apply_ready_preview(
                         result.read_us
                     );
                 }
-                eprintln!(
+                crate::ui_errln!(
                     "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
                     result.completed_at_ms,
                     result_system_id,
@@ -1585,7 +1585,7 @@ pub(crate) fn apply_ready_preview(
             let source_w = image.width();
             let source_h = image.height();
             if preview_trace_enabled() && is_selected_result {
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace raw_image generation={} output={}x{} archive_path={} asset_key={}",
                     result.generation,
                     source_w,
@@ -1610,7 +1610,7 @@ pub(crate) fn apply_ready_preview(
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
-                eprintln!(
+                crate::ui_errln!(
                     "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
                     preview.trace_elapsed_ms(),
                     result_system_id,
@@ -1628,7 +1628,7 @@ pub(crate) fn apply_ready_preview(
         } else {
             preview.cache.insert_failed(result_preview_key);
             if preview_trace_enabled() {
-                eprintln!(
+                crate::ui_errln!(
                     "preview_trace cache_failed priority={:?} selected={} archive_path={} asset_key={}",
                     result.priority,
                     is_selected_result,

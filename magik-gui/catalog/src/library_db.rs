@@ -1220,7 +1220,7 @@ pub(crate) fn normalize_id(value: &str) -> String {
 }
 
 pub(crate) fn report_library_scan_timing(stage: &str, us: u64, detail: impl std::fmt::Display) {
-    println!("library_scan_timing\t{stage}\t{us}\t{detail}");
+    crate::catalog_logln!("library_scan_timing\t{stage}\t{us}\t{detail}");
 }
 
 pub(crate) fn normalize_title(path: &str) -> String {

@@ -65,7 +65,7 @@ pub(super) fn start_library_catalog_worker(
                             });
                         }
                         Err(e) => {
-                            eprintln!("library navigation projection load failed: {e}");
+                            crate::ui_errln!("library navigation projection load failed: {e}");
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_navigation_load_failed".to_string(),
                                 detail: format!("{e} {}", library_db::catalog_load_counter_detail()),
@@ -96,7 +96,7 @@ pub(super) fn start_library_catalog_worker(
                                 }
                             }
                             Err(e) => {
-                                eprintln!("library catalog cache load failed: {e}");
+                                crate::ui_errln!("library catalog cache load failed: {e}");
                                 let _ = tx.send(CatalogWorkerMessage::Timing {
                                     name: "catalog_worker_cache_load_failed".to_string(),
                                     detail: e,
@@ -128,7 +128,7 @@ pub(super) fn start_library_catalog_worker(
                             }
                         }
                         Err(e) => {
-                            eprintln!("library catalog cache load failed: {e}");
+                            crate::ui_errln!("library catalog cache load failed: {e}");
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_cache_load_failed".to_string(),
                                 detail: e,
@@ -188,7 +188,7 @@ pub(super) fn start_library_catalog_worker(
                     let ram_artifact = match ram_artifact_result {
                         Ok(artifact) => artifact,
                         Err(e) => {
-                            eprintln!("library scan failed: {e}");
+                            crate::ui_errln!("library scan failed: {e}");
                             send_catalog_progress(
                                 &tx,
                                 library_db::CatalogProgress::library_scan_failed(e),
@@ -243,7 +243,7 @@ pub(super) fn start_library_catalog_worker(
                             });
                         }
                         Err(e) => {
-                            eprintln!("library persistence failed after RAM catalog ready: {e}");
+                            crate::ui_errln!("library persistence failed after RAM catalog ready: {e}");
                             let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: e });
                         }
                     }
@@ -256,7 +256,7 @@ pub(super) fn start_library_catalog_worker(
                 let artifact = match artifact_result {
                     Ok(artifact) => artifact,
                     Err(e) => {
-                        eprintln!("library scan failed: {e}");
+                        crate::ui_errln!("library scan failed: {e}");
                         send_catalog_progress(
                             &tx,
                             library_db::CatalogProgress::library_scan_failed(e),
@@ -312,7 +312,7 @@ pub(super) fn start_library_catalog_worker(
                         });
                     }
                     Err(e) => {
-                        eprintln!("library persistence failed after RAM catalog ready: {e}");
+                        crate::ui_errln!("library persistence failed after RAM catalog ready: {e}");
                         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error: e });
                     }
                 }
@@ -838,7 +838,7 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
     let elapsed_ms = start.elapsed().as_millis();
     let detail = detail.to_string();
     boot_analytics::event(name, format!("since_run_ui_ms={elapsed_ms} {detail}"));
-    println!("startup_timing\t{name}\t{}ms\t{detail}", elapsed_ms);
+    crate::ui_logln!("startup_timing\t{name}\t{}ms\t{detail}", elapsed_ms);
 }
 
 #[cfg(test)]

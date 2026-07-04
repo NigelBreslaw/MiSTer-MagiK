@@ -308,7 +308,7 @@ impl FramebufferTargetGeometry {
 #[cold]
 #[inline(never)]
 fn log_present_error(context: &str, err: &dyn std::fmt::Display) {
-    eprintln!("framebuffer present {context} failed: {err}");
+    crate::ui_errln!("framebuffer present {context} failed: {err}");
 }
 
 pub fn copy_cached_rows_565(
@@ -386,7 +386,7 @@ impl UiFrameTarget {
     }
 
     pub fn open(geometry: FramebufferTargetGeometry) -> Self {
-        println!(
+        crate::ui_logln!(
             "slint-render-target=cached fb-format={}",
             production_label()
         );

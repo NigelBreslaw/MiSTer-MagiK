@@ -536,27 +536,27 @@ pub(super) fn run_launcher_loop(
     } else {
         format!("{secs}s")
     };
-    println!(
+    crate::ui_logln!(
         "launcher running {label} — {} pad(s), D-pad to move, A to select, Home to go back...",
         pad.len()
     );
-    println!(
+    crate::ui_logln!(
         "launcher_mode={} fb_format={}",
         "launcher",
         production_label()
     );
     if let Some(scenario) = launcher_bench_scenario {
-        println!("launcher_bench_scenario={}", scenario.label());
+        crate::ui_logln!("launcher_bench_scenario={}", scenario.label());
     }
-    println!(
+    crate::ui_logln!(
         "launcher_start_screen={} launcher_lock_screen={}",
         screen_label(start_screen),
         lock_screen.map(screen_label).unwrap_or("none")
     );
     if let Some(system_id) = env_start_system.as_ref() {
-        println!("launcher_start_system={system_id}");
+        crate::ui_logln!("launcher_start_system={system_id}");
     }
-    println!(
+    crate::ui_logln!(
         "launcher_dirty_opt={}",
         if dirty_opt { "on" } else { "off" }
     );
@@ -567,7 +567,9 @@ pub(super) fn run_launcher_loop(
     if AUTO_CONTROLLER_SETUP_ENABLED {
         if let Some(idx) = pad.index_needing_setup() {
             let status = pad.db().registry_status(pad.info_at(idx));
-            eprintln!("controller setup: pad {idx} needs setup ({status:?}) - showing prompt");
+            crate::ui_errln!(
+                "controller setup: pad {idx} needs setup ({status:?}) - showing prompt"
+            );
             setup.open_for(status, idx);
         }
     }
@@ -585,7 +587,7 @@ pub(super) fn run_launcher_loop(
                 ),
             ),
             Err(e) => {
-                eprintln!("preview archive warm failed before launcher benchmark: {e}");
+                crate::ui_errln!("preview archive warm failed before launcher benchmark: {e}");
                 print_startup_event(start, "preview_archive_warm_failed", e);
                 std::process::exit(13);
             }
@@ -609,11 +611,11 @@ pub(super) fn run_launcher_loop(
     let mut catalog_version = 0usize;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
-    println!(
+    crate::ui_logln!(
         "preview_visual_pct={} preview_blitter=raw",
         preview_visual_pct()
     );
-    println!(
+    crate::ui_logln!(
         "preview_transition={} segment_secs={} duration_ms={}",
         preview_transition.labels(),
         preview_transition.segment.as_secs(),
@@ -776,7 +778,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
             Err(e) => {
-                eprintln!("arcade catalog cache load failed: {e}");
+                crate::ui_errln!("arcade catalog cache load failed: {e}");
                 print_startup_event(start, "catalog_cache_load_failed", e);
                 if catalog_worker_enabled {
                     print_startup_event(start, "catalog_worker_start", &arcade_root);
@@ -977,7 +979,7 @@ pub(super) fn run_launcher_loop(
                         );
                     }
                     Err(e) => {
-                        eprintln!("failed to reassert Slint framebuffer route: {e}");
+                        crate::ui_errln!("failed to reassert Slint framebuffer route: {e}");
                         route_action.force_full_present = false;
                         route_reassert_count = route_reassert_count.saturating_add(1);
                         last_route_reassert_frame = frames;
@@ -1230,7 +1232,7 @@ pub(super) fn run_launcher_loop(
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                     LauncherStatusPresenter::new(&bridge)
                         .sync_loading(scheduler.launch_loading_title(), "");
-                    eprintln!("game launch failed: {error}");
+                    crate::ui_errln!("game launch failed: {error}");
                 }
             }
         }
@@ -1330,7 +1332,7 @@ pub(super) fn run_launcher_loop(
             let frame_now = Instant::now();
 
             if setup_active && setup.target_pad_idx >= pad.len() {
-                eprintln!(
+                crate::ui_errln!(
                     "controller setup: pad {} disappeared; closing setup flow",
                     setup.target_pad_idx
                 );
@@ -1352,21 +1354,21 @@ pub(super) fn run_launcher_loop(
                     SetupAction::RegisterNew => {
                         let idx = setup.target_pad_idx;
                         if let Err(e) = pad.register_new_at(idx) {
-                            eprintln!("controller setup: register new: {e}");
+                            crate::ui_errln!("controller setup: register new: {e}");
                         }
                     }
                     SetupAction::ClaimExisting { list_index } => {
                         let idx = setup.target_pad_idx;
                         if let Err(e) = pad.claim_existing_at(idx, list_index) {
-                            eprintln!("controller setup: claim existing: {e}");
+                            crate::ui_errln!("controller setup: claim existing: {e}");
                         }
                     }
                     SetupAction::SaveFinish { label, kind } => {
                         let idx = setup.target_pad_idx;
                         if let Err(e) = pad.finish_setup_at(idx, label, kind) {
-                            eprintln!("controller setup: save: {e}");
+                            crate::ui_errln!("controller setup: save: {e}");
                         } else {
-                            eprintln!(
+                            crate::ui_errln!(
                                 "controller setup: saved \"{}\" ({})",
                                 pad.db().display_label(pad.info_at(idx)),
                                 kind.as_str()
@@ -1399,7 +1401,7 @@ pub(super) fn run_launcher_loop(
                             false
                         };
                         if changed {
-                            println!(
+                            crate::ui_logln!(
                                 "preview_transition_picker={}",
                                 preview_transition
                                     .current_label(frame_now.duration_since(run_start))
@@ -1479,7 +1481,7 @@ pub(super) fn run_launcher_loop(
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
-                                        eprintln!("exit to MiSTer failed: {e}");
+                                        crate::ui_errln!("exit to MiSTer failed: {e}");
                                         loading_title.clear();
                                     }
                                 }
@@ -1520,7 +1522,7 @@ pub(super) fn run_launcher_loop(
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
                                     Err(e) => {
-                                        eprintln!("reset database failed: {e}");
+                                        crate::ui_errln!("reset database failed: {e}");
                                         loading_title.clear();
                                     }
                                 }
@@ -1552,7 +1554,7 @@ pub(super) fn run_launcher_loop(
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
                                     Err(e) => {
-                                        eprintln!("restart failed: {e}");
+                                        crate::ui_errln!("restart failed: {e}");
                                         loading_title.clear();
                                     }
                                 }
@@ -1770,11 +1772,11 @@ pub(super) fn run_launcher_loop(
             if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
                 match action {
                     LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
-                        println!("arcade core running — handing off to MiSTer");
+                        crate::ui_logln!("arcade core running — handing off to MiSTer");
                         std::process::exit(0);
                     }
                     LaunchHandoffRuntimeAction::TimedOut => {
-                        eprintln!("game launch timed out");
+                        crate::ui_errln!("game launch timed out");
                         lifecycle.handle(
                             LauncherLifecycleInput::LaunchTimedOut,
                             &mut lifecycle_effects,
@@ -1880,7 +1882,7 @@ pub(super) fn run_launcher_loop(
         if !launching && nav.screen == Screen::Arcade {
             if let Some(system) = active_system(&catalog, &nav) {
                 if preview_systems_entered.insert(system.id.clone()) {
-                    println!(
+                    crate::ui_logln!(
                         "startup_timing\tpreview_system_entered\t{}ms\tsystem={}\tselected_index={}",
                         start.elapsed().as_millis(),
                         system.id,
@@ -1893,7 +1895,7 @@ pub(super) fn run_launcher_loop(
                 {
                     let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
                     if let Some(game) = active_arcade_games.get(selected) {
-                        println!(
+                        crate::ui_logln!(
                             "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview={}\tasset_key={}",
                             start.elapsed().as_millis(),
                             system.id,
@@ -1903,7 +1905,7 @@ pub(super) fn run_launcher_loop(
                             game.preview_asset_key
                         );
                     } else {
-                        println!(
+                        crate::ui_logln!(
                             "startup_timing\tpreview_initial_list_ready\t{}ms\tsystem={}\tselected_index={}\ttitle=\thas_preview=0\tasset_key=",
                             start.elapsed().as_millis(),
                             system.id,
@@ -2193,12 +2195,12 @@ pub(super) fn run_launcher_loop(
         frames += 1;
     }
     let elapsed = run_start.elapsed().as_secs_f64();
-    println!(
+    crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
     if let Err(e) = cpu_profile::finish(cpu) {
-        eprintln!("{e}");
+        crate::ui_errln!("{e}");
     }
 }
 
@@ -2627,7 +2629,7 @@ fn apply_catalog_session_effects(
                         print_startup_event(start, "library_rebuild_deferred", "marker=written");
                     }
                     Err(e) => {
-                        eprintln!("failed to defer library rebuild: {e}");
+                        crate::ui_errln!("failed to defer library rebuild: {e}");
                         print_startup_event(start, "library_rebuild_defer_failed", e);
                     }
                 }
@@ -2799,7 +2801,7 @@ fn library_changed_test_dialog_choice_from_env(
     match launcher::parse_library_changed_test_dialog_choice(&value) {
         Ok(choice) => choice,
         Err(e) => {
-            eprintln!("{e}");
+            crate::ui_errln!("{e}");
             print_startup_event(start, "library_changed_test_dialog_choice_invalid", e);
             None
         }

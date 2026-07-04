@@ -21,9 +21,9 @@ pub(crate) fn run_scan_bench() {
         .max(1);
     let bench_force_rebuild = library_db::env_bool("MISTER_LIBRARY_BENCH_FORCE_REBUILD");
     let bench_precount = library_db::env_bool("MISTER_LIBRARY_BENCH_PRECOUNT");
-    println!("library-scan-bench label={label}");
-    println!("library-scan-bench roots={}", cfg.roots.join("|"));
-    println!(
+    crate::catalog_logln!("library-scan-bench label={label}");
+    crate::catalog_logln!("library-scan-bench roots={}", cfg.roots.join("|"));
+    crate::catalog_logln!(
         "library-scan-bench sqlite_path={}",
         cfg.sqlite_path.display()
     );
@@ -31,13 +31,13 @@ pub(crate) fn run_scan_bench() {
         match std::fs::remove_file(&cfg.sqlite_path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("library-scan-bench remove old sqlite: {e}"),
+            Err(e) => crate::catalog_errln!("library-scan-bench remove old sqlite: {e}"),
         }
 
         if bench_precount {
             let (candidates, dirs, precount_us) =
                 catalog_scan::precount_discovery_candidates(&cfg.roots);
-            println!(
+            crate::catalog_logln!(
                 "library_scan_bench_tsv\t{label}\t{iteration}\tprecount_discovery\t{precount_us}\tcandidates={candidates}\tdirs={dirs}"
             );
         }
@@ -56,7 +56,7 @@ pub(crate) fn run_scan_bench() {
             Ok(summary) => summary,
             Err(e) => {
                 std::env::remove_var("MISTER_LIBRARY_BENCH_ACTIVE_ITERATION");
-                println!(
+                crate::catalog_logln!(
                     "library_scan_bench_tsv\t{label}\t{iteration}\timport_error\t{}\t{e}",
                     import_t.elapsed().as_micros()
                 );
@@ -72,7 +72,7 @@ pub(crate) fn run_scan_bench() {
         let (load_us, arcade_rows) = match loaded {
             Ok(load) => (load.us, load.rows),
             Err(e) => {
-                eprintln!("library-scan-bench arcade load failed: {e}");
+                crate::catalog_errln!("library-scan-bench arcade load failed: {e}");
                 (load_t.elapsed().as_micros() as u64, 0)
             }
         };
@@ -91,7 +91,7 @@ pub(crate) fn run_scan_bench() {
             let change_path =
                 change_parent.join(format!("Mister_Magik_Refresh_Bench_{iteration}.nes"));
             if let Err(e) = std::fs::write(&change_path, b"[mister]\nrbf=menu\n") {
-                eprintln!(
+                crate::catalog_errln!(
                     "library-scan-bench force rebuild setup failed at {}: {e}",
                     change_path.display()
                 );
@@ -103,7 +103,7 @@ pub(crate) fn run_scan_bench() {
             None
         };
 
-        println!(
+        crate::catalog_logln!(
             "library_scan_bench_tsv\t{label}\t{iteration}\tfresh_build\t{build_us}\tdiscover_us={}\tclassify_us={}\tnormal_files={}\tcontainers={}\tentries={}\taudit_rows={}\tdiscoveries={}",
             stats.discover_us,
             stats.classify_us,
@@ -113,14 +113,14 @@ pub(crate) fn run_scan_bench() {
             stats.audit_rows,
             stats.discoveries
         );
-        println!(
+        crate::catalog_logln!(
             "library_scan_bench_tsv\t{label}\t{iteration}\timport\t{import_us}\tbytes={bytes}"
         );
-        println!(
+        crate::catalog_logln!(
             "library_scan_bench_tsv\t{label}\t{iteration}\tcached_arcade_load\t{load_us}\trows={arcade_rows}"
         );
         match stamp_check {
-            Ok(check) => println!(
+            Ok(check) => crate::catalog_logln!(
                 "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check\t{stamp_us}\tunchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={}",
                 check.unchanged,
                 check.check_us,
@@ -140,13 +140,13 @@ pub(crate) fn run_scan_bench() {
                 check.current_checkpoint_lines,
                 check.drift.detail
             ),
-            Err(e) => println!(
+            Err(e) => crate::catalog_logln!(
                 "library_scan_bench_tsv\t{label}\t{iteration}\troot_stamp_check_error\t{stamp_us}\t{e}"
             ),
         }
         if let Some((force_rebuild_us, force_rebuild_summary)) = force_rebuild {
             match force_rebuild_summary {
-                Ok(summary) => println!(
+                Ok(summary) => crate::catalog_logln!(
                     "library_scan_bench_tsv\t{label}\t{iteration}\tforce_rebuild\t{force_rebuild_us}\tscan_us={}\tdiscover_us={}\tclassify_us={}\timport_us={}\tskipped={}\tdiscoveries={}",
                     summary.scan_us,
                     summary.discover_us,
@@ -155,7 +155,7 @@ pub(crate) fn run_scan_bench() {
                     summary.skipped,
                     summary.discoveries
                 ),
-                Err(e) => println!(
+                Err(e) => crate::catalog_logln!(
                     "library_scan_bench_tsv\t{label}\t{iteration}\tforce_rebuild_error\t{force_rebuild_us}\t{e}"
                 ),
             }

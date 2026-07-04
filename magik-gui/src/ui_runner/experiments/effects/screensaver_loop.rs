@@ -97,7 +97,7 @@ impl ScreensaverConfig {
                 if let Some(mode) = ScreensaverMode::parse(part) {
                     modes.push(mode);
                 } else {
-                    eprintln!("screensaver: unknown mode {part:?}");
+                    crate::ui_errln!("screensaver: unknown mode {part:?}");
                 }
             }
             if modes.is_empty() {
@@ -120,11 +120,11 @@ impl ScreensaverConfig {
             .ok()
             .and_then(|path| {
                 let mut f = File::create(&path)
-                    .map_err(|e| eprintln!("screensaver trace: create {path} failed: {e}"))
+                    .map_err(|e| crate::ui_errln!("screensaver trace: create {path} failed: {e}"))
                     .ok()?;
                 f.write_all(b"frame\telapsed_us\tmode\timage_count\tdraw_us\tvsync_us\tfb_present_us\twall_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\n")
                     .ok()?;
-                println!("screensaver_trace={path}");
+                crate::ui_logln!("screensaver_trace={path}");
                 Some(f)
             });
         Self {
@@ -218,7 +218,7 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     let images = load_screensaver_images(&arcade_root, cfg.cache_cap);
-    println!(
+    crate::ui_logln!(
         "screensaver modes={} segment_secs={} cache_cap={} images={}",
         cfg.modes
             .iter()
@@ -256,7 +256,7 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
         let vsync = pacer.wait();
         let present_start = Instant::now();
         if let Err(e) = disp.present_rows_565(&backbuffer, 0, ui.render_h()) {
-            eprintln!("framebuffer present screensaver rows failed: {e}");
+            crate::ui_errln!("framebuffer present screensaver rows failed: {e}");
         }
         let present_us = present_start.elapsed().as_micros() as u64;
         let wall_us = frame_start.elapsed().as_micros() as u64;

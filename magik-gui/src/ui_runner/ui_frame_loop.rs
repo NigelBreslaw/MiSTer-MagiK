@@ -129,13 +129,13 @@ pub(super) fn run_frame_loop(
     } else {
         format!("{secs}s")
     };
-    println!(
+    crate::ui_logln!(
         "bench scene running {label} (vsync-locked, dirty-row copy, frame-order={}, render-mode={}, animation-clock={})...",
         frame_order.label(),
         target.label(),
         animation_clock.label()
     );
-    println!(
+    crate::ui_logln!(
         "slint-render-mode={} frame-order={} requested-frame-order={}",
         target.label(),
         frame_order.label(),
@@ -164,7 +164,7 @@ pub(super) fn run_frame_loop(
             copy_rows_acc += sample.rows as u128;
             if fps_window_start.elapsed().as_millis() >= 1000 {
                 let nn = fps_frames.max(1) as u128;
-                println!(
+                crate::ui_logln!(
                     "  fps ~ {fps_frames}  | slint-render {}us  vsync-wait {}us  fb-present {}us ({} logical rows avg)  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                     render_us / nn,
                     vsync_us / nn,
@@ -186,7 +186,7 @@ pub(super) fn run_frame_loop(
         }
     }
     let elapsed = start.elapsed().as_secs_f64();
-    println!(
+    crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
@@ -194,6 +194,6 @@ pub(super) fn run_frame_loop(
         profiler.finish();
     }
     if let Err(e) = cpu_profile::finish(cpu) {
-        eprintln!("{e}");
+        crate::ui_errln!("{e}");
     }
 }

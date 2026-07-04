@@ -170,32 +170,32 @@ fn normalize_scene(s: &str) -> String {
     if UI_SCENES.contains(&s) {
         s.to_string()
     } else {
-        eprintln!("unknown scene '{s}' (use: {})", UI_SCENES.join(" | "));
+        crate::ui_errln!("unknown scene '{s}' (use: {})", UI_SCENES.join(" | "));
         std::process::exit(2);
     }
 }
 
 #[cfg_attr(not(mister_bench_scenes), allow(dead_code))]
 pub fn print_scenes() {
-    println!("Slint UI scenes (runtime framebuffer sized, ui-scale {SLINT_UI_SCALE}):");
+    crate::ui_logln!("Slint UI scenes (runtime framebuffer sized, ui-scale {SLINT_UI_SCALE}):");
     for s in UI_SCENES {
-        println!("  {s}");
+        crate::ui_logln!("  {s}");
     }
 }
 
 #[cfg(mister_experiments)]
 pub fn print_effects() {
-    println!("Framebuffer effects:");
+    crate::ui_logln!("Framebuffer effects:");
     for &kind in EffectKind::all() {
-        println!("  {}", kind.name());
+        crate::ui_logln!("  {}", kind.name());
     }
-    println!("Supported internal sizes:");
+    crate::ui_logln!("Supported internal sizes:");
     for &(w, h) in EFFECT_SIZES {
         let scale = EffectSize { w, h }.scale_to_1080p().unwrap_or(0);
         if scale > 0 {
-            println!("  {w}x{h} ({scale}x to 1920x1080)");
+            crate::ui_logln!("  {w}x{h} ({scale}x to 1920x1080)");
         } else {
-            println!("  {w}x{h}");
+            crate::ui_logln!("  {w}x{h}");
         }
     }
 }
@@ -248,8 +248,8 @@ macro_rules! with_scene_app {
 pub fn run_ui(f: &mut Fpga) {
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
-    println!("ui scene={scene} secs={secs}");
-    println!("ui_render_mode=cached");
+    crate::ui_logln!("ui scene={scene} secs={secs}");
+    crate::ui_logln!("ui_render_mode=cached");
 
     let _vt = VtGraphicsGuard::enter_or_warn();
     let UiBootFramebufferSession {
@@ -261,7 +261,7 @@ pub fn run_ui(f: &mut Fpga) {
     match f.set_audio_volume(0) {
         Ok(()) => boot_analytics::event("set_audio_volume", "attenuation=0"),
         Err(e) => {
-            eprintln!("warning: failed to set FPGA audio volume: {e}");
+            crate::ui_errln!("warning: failed to set FPGA audio volume: {e}");
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
     }

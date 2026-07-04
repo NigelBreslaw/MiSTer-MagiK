@@ -11,7 +11,7 @@ const CONTROLLER_EXIT_GRACE: Duration = Duration::from_millis(500);
 const TRACE_HEADER: &[u8] = b"effect\tframe\telapsed_us\twall_us\tcpu_us\tcpu_pct\tdraw_us\tpresent_us\tvsync_us\tclear_us\tbackground_us\tprojection_us\timage_blit_us\tsprite_us\tpost_us\thud_us\tmask_cell_count\trevealed_pixel_count\thidden_pixel_count\tsource_a_pixel_count\tsource_b_pixel_count\tshake_offset_px\tflash_pixel_count\twarp_sample_count\tghost_pixel_count\tglitch_band_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\n";
 
 pub(in crate::ui_runner) fn print_transition_effects() {
-    println!("{}", TransitionEffectKind::labels());
+    crate::ui_logln!("{}", TransitionEffectKind::labels());
 }
 
 pub(in crate::ui_runner) fn run_transition_effects_loop(

@@ -540,7 +540,7 @@ impl MappedRgb565Framebuffer {
                         ),
                     );
                     if attempt > 0 {
-                        println!("display current open ok after {attempt} retries");
+                        crate::ui_logln!("display current open ok after {attempt} retries");
                     }
                     return Ok(d);
                 }
@@ -550,7 +550,7 @@ impl MappedRgb565Framebuffer {
                         format!("attempt={attempt} error={e}"),
                     );
                     if attempt == 0 || attempt % 5 == 0 {
-                        eprintln!("display current open attempt {attempt}: {e}");
+                        crate::ui_errln!("display current open attempt {attempt}: {e}");
                     }
                     last_err = e;
                 }
@@ -824,7 +824,7 @@ impl MappedRgb565Framebuffer {
         if let VsyncWaitStatus::Error { message, .. } = &status {
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!("warning: FBIO_WAITFORVSYNC failed: {message}");
+                crate::ui_errln!("warning: FBIO_WAITFORVSYNC failed: {message}");
             }
         }
         status

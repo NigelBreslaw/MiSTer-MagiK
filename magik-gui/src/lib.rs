@@ -9,6 +9,7 @@ pub mod boot_analytics;
 pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
+mod fallible_log;
 pub mod framebuffer;
 pub mod input_info;
 pub mod input_repeat;

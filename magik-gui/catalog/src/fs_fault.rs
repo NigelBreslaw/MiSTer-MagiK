@@ -66,14 +66,14 @@ fn maybe_fault_with(
         return;
     }
     if config.action == DIRECT_RESET_NO_SYNC && !session_is_armed(config, runtime) {
-        eprintln!("fs_fault: direct-reset-no-sync ignored at {point}; volatile session not armed");
+        crate::catalog_errln!("fs_fault: direct-reset-no-sync ignored at {point}; volatile session not armed");
         return;
     }
     let _ = runtime.write_marker(MARKER_PATH, &marker_json(point, target, config));
     if config.action == DIRECT_RESET_NO_SYNC {
         let _ = runtime.send_mister_command(MISTER_CMD, DIRECT_RESET_NO_SYNC_CMD);
     } else {
-        eprintln!(
+        crate::catalog_errln!(
             "fs_fault: unsupported action {} at point {}",
             config.action, point
         );

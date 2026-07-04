@@ -49,7 +49,7 @@ fn present_video_frame_direct(
         0,
         0,
     ) {
-        eprintln!("framebuffer present video direct failed: {e}");
+        crate::ui_errln!("framebuffer present video direct failed: {e}");
     }
 }
 
@@ -192,13 +192,13 @@ impl VideoRenderMode {
             "slint-image" | "slint_image" => Self::SlintImage,
             #[cfg(not(feature = "video-lab"))]
             "slint-image" | "slint_image" => {
-                eprintln!(
+                crate::ui_errln!(
                     "MISTER_VIDEO_RENDER_MODE=slint-image requires a --video-lab build; production video supports only direct-blit"
                 );
                 std::process::exit(2);
             }
             other => {
-                eprintln!("unknown MISTER_VIDEO_RENDER_MODE={other:?}; use direct-blit");
+                crate::ui_errln!("unknown MISTER_VIDEO_RENDER_MODE={other:?}; use direct-blit");
                 std::process::exit(2);
             }
         }
@@ -256,7 +256,7 @@ pub(super) fn run_video_playback_loop(
     let paths = match crate::video_player::video_paths_from_env() {
         Ok(paths) => paths,
         Err(e) => {
-            eprintln!("video_playback: {e}");
+            crate::ui_errln!("video_playback: {e}");
             std::process::exit(1);
         }
     };
@@ -268,14 +268,14 @@ pub(super) fn run_video_playback_loop(
     let frame_worker = match crate::video_player::VideoFrameWorker::start(paths.clone()) {
         Ok(worker) => worker,
         Err(e) => {
-            eprintln!("video_playback: {e}");
+            crate::ui_errln!("video_playback: {e}");
             std::process::exit(1);
         }
     };
     let audio_writer = match AudioWriteWorker::start() {
         Ok(worker) => worker,
         Err(e) => {
-            eprintln!("video_playback audio: {e}");
+            crate::ui_errln!("video_playback audio: {e}");
             std::process::exit(1);
         }
     };
@@ -304,14 +304,14 @@ pub(super) fn run_video_playback_loop(
     } else {
         format!("{secs}s")
     };
-    println!(
+    crate::ui_logln!(
         "video_playback running {label} playlist={playlist_label} frame-order={} animation-clock={} video-render-mode={}",
         frame_order.label(),
         animation_clock.label(),
         render_mode.label()
     );
-    println!("video_render_mode={}", render_mode.label());
-    println!(
+    crate::ui_logln!("video_render_mode={}", render_mode.label());
+    crate::ui_logln!(
         "video_controls queue_depth={} scale={} profile={} threads={}",
         std::env::var("MISTER_VIDEO_QUEUE_DEPTH").unwrap_or_else(|_| "2".into()),
         std::env::var("MISTER_VIDEO_SCALE").unwrap_or_else(|_| "source".into()),
@@ -320,7 +320,7 @@ pub(super) fn run_video_playback_loop(
             .unwrap_or_else(|_| "off".into()),
         std::env::var("MISTER_VIDEO_THREADS").unwrap_or_else(|_| "auto".into())
     );
-    println!(
+    crate::ui_logln!(
         "video_dirty_clip=on rect={}x{}+{},{}",
         VIDEO_IMAGE_RECT.width(),
         VIDEO_IMAGE_RECT.rows(),
@@ -413,7 +413,7 @@ pub(super) fn run_video_playback_loop(
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                         }
                         Err(e) => {
-                            eprintln!("video_playback: {e}");
+                            crate::ui_errln!("video_playback: {e}");
                             break;
                         }
                     }
@@ -554,7 +554,7 @@ pub(super) fn run_video_playback_loop(
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                         }
                         Err(e) => {
-                            eprintln!("video_playback: {e}");
+                            crate::ui_errln!("video_playback: {e}");
                             break;
                         }
                     }
@@ -628,24 +628,26 @@ pub(super) fn run_video_playback_loop(
 
     let _ = drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats);
     let elapsed = start.elapsed().as_secs_f64();
-    println!(
+    crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
     if let Ok(status) = crate::mr_audio::read_status() {
-        print!("video_playback audio status: {status}");
+        crate::ui_log!("video_playback audio status: {status}");
     }
     if let Some(cpu) = video_cpu.final_sample() {
-        println!(
+        crate::ui_logln!(
             "video_cpu final main={:.1}% decode={:.1}% process={:.1}%",
-            cpu.main_pct, cpu.decode_pct, cpu.process_pct
+            cpu.main_pct,
+            cpu.decode_pct,
+            cpu.process_pct
         );
     }
     if profile_on {
         profiler.finish();
     }
     if let Err(e) = cpu_profile::finish(cpu) {
-        eprintln!("{e}");
+        crate::ui_errln!("{e}");
     }
 }
 
@@ -766,7 +768,7 @@ fn drain_audio_write_results(
         match audio_writer.try_recv() {
             Ok(result) => {
                 if let Some(e) = result.error {
-                    eprintln!("video_playback audio: {e}");
+                    crate::ui_errln!("video_playback audio: {e}");
                     frame_worker.recycle_audio(result.audio);
                     return false;
                 }
@@ -780,7 +782,7 @@ fn drain_audio_write_results(
             }
             Err(mpsc::TryRecvError::Empty) => return true,
             Err(mpsc::TryRecvError::Disconnected) => {
-                eprintln!("video_playback audio: writer stopped");
+                crate::ui_errln!("video_playback audio: writer stopped");
                 return false;
             }
         }
@@ -826,7 +828,7 @@ fn enqueue_audio_write(
             true
         }
         Err(mpsc::TrySendError::Disconnected(job)) => {
-            eprintln!("video_playback audio: writer stopped");
+            crate::ui_errln!("video_playback audio: writer stopped");
             frame_worker.recycle_audio(job.audio);
             false
         }
@@ -850,9 +852,11 @@ pub(super) fn record_video_sample(
     if profiler.enabled() {
         profiler.record(sample);
         if let Some(cpu) = cpu_window {
-            println!(
+            crate::ui_logln!(
                 "  video-cpu | main={:.1}% decode={:.1}% process={:.1}%",
-                cpu.main_pct, cpu.decode_pct, cpu.process_pct
+                cpu.main_pct,
+                cpu.decode_pct,
+                cpu.process_pct
             );
         }
         return;
@@ -862,7 +866,7 @@ pub(super) fn record_video_sample(
     totals.record(phases, sample, copy_rect);
     if fps_window_start.elapsed().as_millis() >= 1000 {
         let video_nn = totals.video_frames.max(1);
-        println!(
+        crate::ui_logln!(
             "  fps ~ {}  | video-frames {} recv {}us video-decode {}us/frame video-scale {}us/frame image-update {}us/frame blit {}us/frame slint-render {}us vsync-wait {}us fb-present {}us ({} logical rows avg, {} px avg) audio-decode {}us/frame audio-resample {}us/frame audio-write {}us/frame audio {}/{}f underruns {} loops {}",
             *fps_frames,
             totals.video_frames,
@@ -885,9 +889,11 @@ pub(super) fn record_video_sample(
             audio_stats.loop_count
         );
         if let Some(cpu) = cpu_window {
-            println!(
+            crate::ui_logln!(
                 "  video-cpu | main={:.1}% decode={:.1}% process={:.1}%",
-                cpu.main_pct, cpu.decode_pct, cpu.process_pct
+                cpu.main_pct,
+                cpu.decode_pct,
+                cpu.process_pct
             );
         }
         *fps_frames = 0;

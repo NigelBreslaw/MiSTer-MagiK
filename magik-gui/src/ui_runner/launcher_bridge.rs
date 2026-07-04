@@ -20,7 +20,7 @@ macro_rules! set_bridge_string_if_changed {
 
 pub(super) fn open_pads() -> PadPool {
     PadPool::open_all().unwrap_or_else(|e| {
-        eprintln!("failed to initialize gamepad input: {e}");
+        crate::ui_errln!("failed to initialize gamepad input: {e}");
         std::process::exit(1);
     })
 }
@@ -77,7 +77,7 @@ fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {
     let path = std::env::var("MISTER_CABINET_IMAGE_PATH").unwrap_or_else(|_| DEFAULT_PATH.into());
     match load_raw_rgba_image(std::path::Path::new(&path)) {
         Ok(image) => bridge.set_arcade_cabinet_image(image),
-        Err(error) => eprintln!("launcher: failed to load cabinet image {path}: {error}"),
+        Err(error) => crate::ui_errln!("launcher: failed to load cabinet image {path}: {error}"),
     }
 }
 

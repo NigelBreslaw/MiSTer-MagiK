@@ -89,7 +89,7 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
     if policy_disabled() {
         let actual_nice = current_nice();
         let processor = current_processor();
-        println!(
+        crate::catalog_logln!(
             "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice=inherit\tactual_nice={}\taffinity=any\tprocessor={}\tnice_status=skipped\taffinity_status=skipped",
             role.label(),
             actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
@@ -102,7 +102,7 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
     let affinity_status = apply_affinity(policy.affinity);
     let actual_nice = current_nice();
     let processor = current_processor();
-    println!(
+    crate::catalog_logln!(
         "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tprocessor={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
         role.label(),
         policy.nice,

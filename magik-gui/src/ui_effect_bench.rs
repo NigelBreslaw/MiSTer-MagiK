@@ -125,7 +125,7 @@ fn parse_effect_bench_args() -> (
         match EffectKind::parse(effect_arg) {
             Some(kind) => vec![kind],
             None => {
-                eprintln!("unknown effect '{effect_arg}' (use `effects` to list names)");
+                crate::ui_errln!("unknown effect '{effect_arg}' (use `effects` to list names)");
                 std::process::exit(2);
             }
         }
@@ -136,7 +136,7 @@ fn parse_effect_bench_args() -> (
         "overlay" => vec![EffectBenchMode::Overlay],
         "both" => vec![EffectBenchMode::Raw, EffectBenchMode::Overlay],
         other => {
-            eprintln!("unknown effect-bench mode '{other}' (use raw|overlay|both)");
+            crate::ui_errln!("unknown effect-bench mode '{other}' (use raw|overlay|both)");
             std::process::exit(2);
         }
     };
@@ -144,7 +144,9 @@ fn parse_effect_bench_args() -> (
         Some(s) => match EffectSize::parse(s) {
             Some(size) => size,
             None => {
-                eprintln!("unsupported effect size '{s}' (use `effects` to list supported sizes)");
+                crate::ui_errln!(
+                    "unsupported effect size '{s}' (use `effects` to list supported sizes)"
+                );
                 std::process::exit(2);
             }
         },
@@ -152,7 +154,7 @@ fn parse_effect_bench_args() -> (
     };
     let fill = match args.get(4).map(String::as_str) {
         Some(s) => EffectFill::parse(s).unwrap_or_else(|| {
-            eprintln!("unknown effect fill '{s}' (use full|half|2x|native)");
+            crate::ui_errln!("unknown effect fill '{s}' (use full|half|2x|native)");
             std::process::exit(2);
         }),
         None => EffectFill::Full,
@@ -245,14 +247,14 @@ fn present_effect_target(
         target.render_h,
         pixels,
     ) {
-        eprintln!("effect-bench present failed: {e}");
+        crate::ui_errln!("effect-bench present failed: {e}");
     }
 }
 
 #[cfg(mister_experiments)]
 pub fn run_effect_bench(f: &mut Fpga) {
     let (effects, secs, modes, size, fill) = parse_effect_bench_args();
-    println!(
+    crate::ui_logln!(
         "effect-bench effects={} secs={} modes={} fill={} internal={}x{}",
         effects
             .iter()
@@ -274,13 +276,13 @@ pub fn run_effect_bench(f: &mut Fpga) {
     let mut disp = match MappedRgb565Framebuffer::open_current_boot() {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("failed to open display (/dev/fb0): {e}");
+            crate::ui_errln!("failed to open display (/dev/fb0): {e}");
             std::process::exit(1);
         }
     };
     let ui = UiDisplay::for_framebuffer(disp.width(), disp.height());
     let target = EffectTarget::new(fill, size, &ui).unwrap_or_else(|| {
-        eprintln!(
+        crate::ui_errln!(
             "effect size {}x{} cannot fill={} on framebuffer {}x{}",
             size.w,
             size.h,
@@ -290,27 +292,27 @@ pub fn run_effect_bench(f: &mut Fpga) {
         );
         std::process::exit(2);
     });
-    println!("{}", ui.log_line());
+    crate::ui_logln!("{}", ui.log_line());
     let display_config = match DisplayConfig::detect(f, disp.info(), &ui) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("failed to read display configuration from FPGA: {e}");
+            crate::ui_errln!("failed to read display configuration from FPGA: {e}");
             std::process::exit(1);
         }
     };
-    println!("{}", display_config.log_line());
+    crate::ui_logln!("{}", display_config.log_line());
     let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
     let flag = match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
         Ok(flag) => flag,
         Err(e) => {
-            eprintln!("failed to route framebuffer for effect benchmark: {e}");
+            crate::ui_errln!("failed to route framebuffer for effect benchmark: {e}");
             std::process::exit(1);
         }
     };
     if let Err(e) = f.set_audio_volume(0) {
-        eprintln!("warning: failed to set FPGA audio volume: {e}");
+        crate::ui_errln!("warning: failed to set FPGA audio volume: {e}");
     }
-    println!(
+    crate::ui_logln!(
         "fb routed (support_flag={flag}); native retro effect benchmark checked_rgb565_present=true"
     );
 
@@ -364,7 +366,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
 
 #[cfg(not(mister_experiments))]
 pub fn run_effect_bench(_f: &mut Fpga) {
-    eprintln!("effect-bench is unavailable in launcher-only UI builds");
+    crate::ui_errln!("effect-bench is unavailable in launcher-only UI builds");
     std::process::exit(2);
 }
 
@@ -395,7 +397,7 @@ fn run_one_effect_bench(
     let mut pacer = VsyncPacer::from_env();
     let mut raw_pixels = vec![Rgb565Pixel(0); target.render_w * target.render_h];
 
-    println!(
+    crate::ui_logln!(
         "effect bench running {} mode={} fill={} internal={}x{} target={}x{}+{},{} scale={} secs={}...",
         kind.name(),
         mode.label(),
@@ -437,7 +439,7 @@ fn run_one_effect_bench(
             }
             EffectBenchMode::Overlay => {
                 let Some((window, app, animation_clock, full)) = overlay_ctx.as_mut() else {
-                    eprintln!("effect-bench internal error: overlay context missing");
+                    crate::ui_errln!("effect-bench internal error: overlay context missing");
                     std::process::exit(1);
                 };
                 let c0 = Instant::now();
@@ -474,7 +476,7 @@ fn run_one_effect_bench(
         live_frames += 1;
         if live_start.elapsed().as_millis() >= 1000 {
             let nn = live_frames.max(1) as u128;
-            println!(
+            crate::ui_logln!(
                 "  fps ~ {live_frames}  | effect {}us  slint {}us  scale-copy {}us  vsync-wait {}us  vsync hits={} timeouts={} fallback={} errors={} hz={:.2}",
                 totals.effect_us / totals.frames.max(1) as u128,
                 totals.slint_us / totals.frames.max(1) as u128,
@@ -497,7 +499,7 @@ fn run_one_effect_bench(
     } else {
         0.0
     };
-    println!(
+    crate::ui_logln!(
         "effect_bench_result\t{}\t{}\t{}\t{}\t{}x{}\t{}\t{}\t{:.1}\t{}\t{}\t{}\t{}\t{}",
         std::env::var("MISTER_EFFECT_BENCH_LABEL").unwrap_or_else(|_| "manual".into()),
         kind.name(),
@@ -514,7 +516,7 @@ fn run_one_effect_bench(
         EffectBenchTotals::avg(totals.vsync_us, totals.frames),
         EffectBenchTotals::avg(totals.wall_us, totals.frames)
     );
-    println!(
+    crate::ui_logln!(
         "effect_bench_summary effect={} mode={} fill={} slow_frames={} elapsed={elapsed:.1}s vsync_hits={} vsync_timeouts={} fallback_frames={} vsync_errors={} max_miss_streak={} inferred_hz={:.2}",
         kind.name(),
         mode.label(),

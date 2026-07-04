@@ -10,7 +10,7 @@ use std::io::Write;
 const TRACE_HEADER: &[u8] = b"effect\tframe\telapsed_us\twall_us\tcpu_us\tcpu_pct\tdraw_us\tpresent_us\tvsync_us\tclear_us\tbackground_us\tprojection_us\timage_blit_us\tsprite_us\tpost_us\thud_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\n";
 
 pub(in crate::ui_runner) fn print_camera_effects() {
-    println!("{}", CameraEffectKind::labels());
+    crate::ui_logln!("{}", CameraEffectKind::labels());
 }
 
 pub(in crate::ui_runner) fn run_camera_effects_loop(

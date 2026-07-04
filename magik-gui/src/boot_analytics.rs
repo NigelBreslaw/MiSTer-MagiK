@@ -44,7 +44,7 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
             let _ = writeln!(f, "{seq}\tslint\t{boot_ms}\t{name}\t{pid}\t{detail}");
         }
         Err(e) => {
-            eprintln!("boot_analytics: open {OUT_PATH}: {e}");
+            crate::ui_errln!("boot_analytics: open {OUT_PATH}: {e}");
         }
     }
 }

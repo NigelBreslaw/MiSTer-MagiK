@@ -29,7 +29,7 @@ impl AnimationClock {
                 fixed_step: Duration::from_nanos(16_666_667),
             },
             other => {
-                eprintln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
+                crate::ui_errln!("ui: unknown MISTER_ANIMATION_CLOCK={other:?}; use wall|fixed60");
                 Self {
                     fixed_time: None,
                     fixed_step: Duration::from_nanos(16_666_667),
@@ -83,7 +83,7 @@ impl FrameOrder {
                 Self::VsyncThenRender
             }
             other => {
-                eprintln!(
+                crate::ui_errln!(
                     "ui: unknown MISTER_FRAME_ORDER={other:?}; use render-then-vsync|vsync-first"
                 );
                 Self::RenderThenVsync

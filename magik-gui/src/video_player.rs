@@ -457,7 +457,7 @@ impl VideoPlayer {
             return Err("video playlist is empty".into());
         }
         let player = Self::open_inner(paths, 0, 0)?;
-        println!(
+        crate::ui_logln!(
             "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={} convert={})",
             player.path,
             player.playlist.len(),
@@ -587,7 +587,7 @@ impl VideoPlayer {
         let playlist_index = (self.playlist_index + 1) % playlist.len();
         let loop_count = self.loop_count + 1;
         *self = Self::open_inner(playlist, playlist_index, loop_count)?;
-        println!(
+        crate::ui_logln!(
             "video: advanced to {} (file={} playlist={} loops={})",
             self.path,
             self.playlist_index + 1,

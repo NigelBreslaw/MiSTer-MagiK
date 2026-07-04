@@ -86,7 +86,7 @@ pub(crate) fn run() {
     match run_inner(std::env::args().skip(2)) {
         Ok(()) => {}
         Err(error) => {
-            eprintln!("media-bench-download failed: {error}");
+            crate::ui_errln!("media-bench-download failed: {error}");
             std::process::exit(1);
         }
     }
@@ -113,7 +113,7 @@ where
             config.system, config.image_size
         ));
     }
-    println!("{HEADER}");
+    crate::ui_logln!("{HEADER}");
     for pack in packs {
         let local_path = PathBuf::from(size_qualified_pack_path(
             &config.asset_dir.display().to_string(),
@@ -125,15 +125,18 @@ where
             .ok_or_else(|| format!("pack {} has no raw identity variant", pack.id))?;
         if config.prime_cache {
             let row = run_one(&config, pack, variant, &local_path, "prime-cache")?;
-            eprintln!(
+            crate::ui_errln!(
                 "media_bench_prime\tsystem={}\tvariant={}\tcf_cache_status={}\ttotal_ms={}",
-                pack.id, config.variant, row.cf_cache_status, row.total_ms
+                pack.id,
+                config.variant,
+                row.cf_cache_status,
+                row.total_ms
             );
         }
         for iteration in 1..=config.iterations {
             let label = format!("{}-{:02}", config.label, iteration);
             let row = run_one(&config, pack, variant, &local_path, &label)?;
-            println!("{}", row.to_tsv());
+            crate::ui_logln!("{}", row.to_tsv());
         }
     }
     Ok(())
@@ -221,7 +224,7 @@ where
 }
 
 fn print_usage() {
-    println!(
+    crate::ui_logln!(
         "usage: mister-magik-fb media-bench-download --system ID [--variant identity] --iterations N [--prime-cache] [--save-strategy staged|stream-fat]"
     );
 }
@@ -769,7 +772,7 @@ fn emit_stage_row(
     result: &str,
     detail: &str,
 ) {
-    println!(
+    crate::ui_logln!(
         "stage_tsv\tlabel={}\tsuite_label={}\tbenchmark=media-bench-download\tsystem={}\tstage={}\tms={}\tbytes={}\tresult={}\tdetail={}",
         tsv(label),
         suite_label(label),
