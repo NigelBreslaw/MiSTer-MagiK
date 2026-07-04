@@ -455,6 +455,105 @@ struct RuntimeCoreCandidate<'a> {
     core: &'a catalog_discovery::InstalledCore,
 }
 
+struct RuntimeProfileHint {
+    names: &'static [&'static str],
+    core_alias: Option<&'static str>,
+    extensions: &'static [&'static str],
+}
+
+const RUNTIME_PROFILE_HINTS: &[RuntimeProfileHint] = &[
+    RuntimeProfileHint {
+        names: &["atari2600", "atari2600-sinden"],
+        core_alias: None,
+        extensions: &["a26", "bin"],
+    },
+    RuntimeProfileHint {
+        names: &["atari5200"],
+        core_alias: None,
+        extensions: &["a52", "bin"],
+    },
+    RuntimeProfileHint {
+        names: &["atari7800"],
+        core_alias: None,
+        extensions: &["a78", "bin"],
+    },
+    RuntimeProfileHint {
+        names: &["atarilynx"],
+        core_alias: None,
+        extensions: &["lnx"],
+    },
+    RuntimeProfileHint {
+        names: &["coleco"],
+        core_alias: None,
+        extensions: &["col", "rom"],
+    },
+    RuntimeProfileHint {
+        names: &["fds"],
+        core_alias: None,
+        extensions: &["fds"],
+    },
+    RuntimeProfileHint {
+        names: &["gameboy", "gameboy2p"],
+        core_alias: None,
+        extensions: &["gb"],
+    },
+    RuntimeProfileHint {
+        names: &["intellivision"],
+        core_alias: None,
+        extensions: &["int", "rom", "bin"],
+    },
+    RuntimeProfileHint {
+        names: &["ngpc"],
+        core_alias: None,
+        extensions: &["ngc"],
+    },
+    RuntimeProfileHint {
+        names: &["neogeopocket"],
+        core_alias: None,
+        extensions: &["ngp"],
+    },
+    RuntimeProfileHint {
+        names: &["s32x"],
+        core_alias: None,
+        extensions: &["32x"],
+    },
+    RuntimeProfileHint {
+        names: &["sgb2"],
+        core_alias: None,
+        extensions: &["sfc", "smc"],
+    },
+    RuntimeProfileHint {
+        names: &["satellaview"],
+        core_alias: None,
+        extensions: &["sfc", "smc", "bs"],
+    },
+    RuntimeProfileHint {
+        names: &["supergrafx", "tgfx16"],
+        core_alias: None,
+        extensions: &["pce"],
+    },
+    RuntimeProfileHint {
+        names: &["vectrex"],
+        core_alias: None,
+        extensions: &["vec"],
+    },
+    RuntimeProfileHint {
+        names: &["wonderswan"],
+        core_alias: None,
+        extensions: &["ws"],
+    },
+    RuntimeProfileHint {
+        names: &["wonderswancolor"],
+        core_alias: None,
+        extensions: &["wsc"],
+    },
+    RuntimeProfileHint {
+        names: &["spectrum", "zx-spectrum"],
+        core_alias: Some("ZX-Spectrum"),
+        extensions: &["sna", "szx", "tap", "tzx", "z80"],
+    },
+];
+
 fn runtime_core_candidates<'a>(
     game_dir: &catalog_discovery::GameDirFact,
     cores: &'a [catalog_discovery::InstalledCore],
@@ -463,6 +562,10 @@ fn runtime_core_candidates<'a>(
     if !exact.is_empty() {
         return exact;
     }
+    let aliases = core_candidates_by_game_dir_alias(&game_dir.name, cores);
+    if !aliases.is_empty() {
+        return aliases;
+    }
     if let Some(base) = sinden_base_name(&game_dir.name) {
         let candidates = core_candidates_by_name(&base, cores);
         if !candidates.is_empty() {
@@ -470,6 +573,23 @@ fn runtime_core_candidates<'a>(
         }
     }
     unique_extension_core_candidates(game_dir, cores)
+}
+
+fn core_candidates_by_game_dir_alias<'a>(
+    game_dir_name: &str,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<RuntimeCoreCandidate<'a>> {
+    let Some(core_id) = runtime_game_dir_core_alias(game_dir_name) else {
+        return Vec::new();
+    };
+    core_candidates_by_name(core_id, cores)
+}
+
+fn runtime_game_dir_core_alias(name: &str) -> Option<&'static str> {
+    RUNTIME_PROFILE_HINTS
+        .iter()
+        .find(|hint| hint_matches_name(hint, name))
+        .and_then(|hint| hint.core_alias)
 }
 
 fn core_candidates_by_name<'a>(
@@ -613,27 +733,23 @@ fn playable_payload_extensions(profile: &LaunchProfile) -> Vec<String> {
 }
 
 fn runtime_payload_extension_hints(name: &str) -> Vec<String> {
-    let exts = match name.to_ascii_lowercase().as_str() {
-        "atari2600" | "atari2600-sinden" => &["a26", "bin"][..],
-        "atari5200" => &["a52", "bin"],
-        "atari7800" => &["a78", "bin"],
-        "atarilynx" => &["lnx"],
-        "coleco" => &["col", "rom"],
-        "fds" => &["fds"],
-        "gameboy" | "gameboy2p" => &["gb"],
-        "intellivision" => &["int", "rom", "bin"],
-        "ngpc" => &["ngc"],
-        "neogeopocket" => &["ngp"],
-        "s32x" => &["32x"],
-        "sgb2" => &["sfc", "smc"],
-        "satellaview" => &["sfc", "smc", "bs"],
-        "supergrafx" | "tgfx16" => &["pce"],
-        "vectrex" => &["vec"],
-        "wonderswan" => &["ws"],
-        "wonderswancolor" => &["wsc"],
-        _ => &[],
-    };
-    exts.iter().map(|ext| ext.to_string()).collect()
+    RUNTIME_PROFILE_HINTS
+        .iter()
+        .filter(|hint| {
+            hint_matches_name(hint, name)
+                || hint
+                    .core_alias
+                    .is_some_and(|core_alias| core_alias.eq_ignore_ascii_case(name))
+        })
+        .flat_map(|hint| hint.extensions.iter().copied())
+        .map(str::to_string)
+        .collect()
+}
+
+fn hint_matches_name(hint: &RuntimeProfileHint, name: &str) -> bool {
+    hint.names
+        .iter()
+        .any(|hint_name| hint_name.eq_ignore_ascii_case(name))
 }
 
 fn category_for_installed_core_path(path: &Path) -> &'static str {
@@ -1379,6 +1495,45 @@ mod tests {
         };
         assert_eq!(profile.system_id, "colecovision");
         assert_eq!(profile.game_dirs, vec!["Coleco"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_resolves_spectrum_alias_to_zx_spectrum_core() {
+        let root = unique_temp_dir("runtime-plan-spectrum-alias");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Spectrum")).expect("create spectrum dir");
+        std::fs::write(root.join("_Computer/ZX-Spectrum_20260630.rbf"), b"rbf")
+            .expect("write spectrum core");
+        std::fs::write(root.join("_Console/ColecoVision_20260630.rbf"), b"rbf")
+            .expect("write coleco core");
+        std::fs::write(root.join("_Console/Intellivision_20260630.rbf"), b"rbf")
+            .expect("write intellivision core");
+        std::fs::write(root.join("games/Spectrum/Jet Set Willy.tzx"), b"tape")
+            .expect("write spectrum tape");
+        std::fs::write(root.join("games/Spectrum/support.rom"), b"rom").expect("write support rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Spectrum")
+            .expect("spectrum plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!(
+                "expected catalogable spectrum plan, got {:?}",
+                plan.decision
+            );
+        };
+        assert_eq!(profile.system_id, "zx-spectrum");
+        assert_eq!(profile.title, "ZX-Spectrum");
+        assert_eq!(profile.category, "Computer");
+        assert_eq!(profile.game_dirs, vec!["Spectrum"]);
+        assert_eq!(
+            playable_payload_extensions(profile),
+            vec!["sna", "szx", "tap", "tzx", "z80"]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
