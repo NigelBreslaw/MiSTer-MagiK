@@ -355,7 +355,7 @@ mod tests {
         let dir = root.join("games/ChannelF");
         std::fs::create_dir_all(&dir).expect("create unknown dir");
         write_stored_zip(
-            &dir.join("MiSTer MagiK Additions - ChannelF.zip"),
+            &dir.join("Packed ChannelF Games.zip"),
             &[("Alien Invasion.chf", b"rom")],
         );
 
@@ -378,7 +378,7 @@ mod tests {
         let dir = root.join("games/PSX");
         std::fs::create_dir_all(&dir).expect("create psx dir");
         write_stored_zip(
-            &dir.join("MiSTer MagiK Additions - PSX.zip"),
+            &dir.join("Packed PSX Games.zip"),
             &[("Game.cue", b"cue")],
         );
 
@@ -401,7 +401,7 @@ mod tests {
         let dir = root.join("games/SMS");
         std::fs::create_dir_all(&dir).expect("create sms dir");
         write_stored_zip(
-            &dir.join("._MiSTer MagiK Additions - SMS.zip"),
+            &dir.join("._Packed SMS Games.zip"),
             &[("Game.sms", b"rom")],
         );
 
@@ -412,7 +412,7 @@ mod tests {
 
         assert!(!rows
             .iter()
-            .any(|row| { row.reason.contains("._MiSTer MagiK Additions - SMS.zip") }));
+            .any(|row| { row.reason.contains("._Packed SMS Games.zip") }));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -1390,7 +1390,7 @@ mod tests {
         let ws_dir = root.join("games/WonderSwan");
         std::fs::create_dir_all(&ws_dir).expect("create wonderswan dir");
         write_stored_zip(
-            &ws_dir.join("MiSTer MagiK Additions - WonderSwan.zip"),
+            &ws_dir.join("Packed WonderSwan Games.zip"),
             &[("Gunpey (Japan).ws", b"rom")],
         );
         let db = root.join("library.sqlite3");

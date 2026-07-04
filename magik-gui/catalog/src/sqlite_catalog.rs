@@ -3548,7 +3548,7 @@ mod tests {
         let unknown = root.join("games/ChannelF");
         std::fs::create_dir_all(&unknown).expect("create unknown dir");
         write_stored_zip(
-            &unknown.join("MiSTer MagiK Additions.zip"),
+            &unknown.join("Packed ChannelF Games.zip"),
             &[("Alien Invasion.chf", b"rom")],
         );
         let cfg = BenchConfig {
