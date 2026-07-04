@@ -1226,6 +1226,71 @@ mod tests {
     }
 
     #[test]
+    fn scanner_derives_exact_runtime_extensions_for_unmanifested_cores() {
+        let root = unique_temp_dir("target-runtime-derived-extensions");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::write(root.join("_Computer/BBCMicro_20260630.rbf"), b"rbf")
+            .expect("write bbc micro core");
+        let bbc_dir = root.join("games/BBCMicro");
+        std::fs::create_dir_all(&bbc_dir).expect("create bbc micro dir");
+        std::fs::write(bbc_dir.join("Elite.ssd"), "disk").expect("write disk");
+        std::fs::write(bbc_dir.join("metadata.xml"), "xml").expect("write metadata");
+        std::fs::write(bbc_dir.join("cover.jpg"), "jpg").expect("write image");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert_eq!(scan.normal_files.len(), 1);
+        assert_eq!(
+            scan.normal_files[0].path,
+            bbc_dir.join("Elite.ssd").display().to_string()
+        );
+        assert!(scan.profiles.iter().any(|profile| {
+            profile.id == "runtime-bbcmicro"
+                && profile.system_id == "bbcmicro"
+                && profile.game_dirs == vec!["BBCMicro".to_string()]
+        }));
+        assert!(scan
+            .discoveries
+            .iter()
+            .any(|discovery| discovery.platform_id == "bbcmicro" && discovery.title == "Elite"));
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.ends_with("metadata.xml")));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let systems: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM systems WHERE system_id='bbcmicro'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query systems");
+        let games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM games WHERE system_id='bbcmicro'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let launcher_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog WHERE system_id='bbcmicro'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher");
+        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scanner_does_not_create_empty_runtime_system_rows() {
         let root = unique_temp_dir("target-runtime-empty");
         install_test_console_core(&root, "Gameboy");
@@ -1379,7 +1444,60 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query launcher");
+        let launch_target: (String, i64, i64) = conn
+            .query_row(
+                "SELECT launch_targets.mount_kind,
+                        launch_targets.mount_index,
+                        launch_targets.delay_secs
+                 FROM launch_targets
+                 JOIN games ON games.game_key_id=launch_targets.game_key_id
+                 WHERE games.system_id='zx-spectrum'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query spectrum launch target");
         assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        assert_eq!(launch_target, ("load-file".to_string(), 1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_preserves_runtime_profile_mounts_when_profile_id_is_system_id() {
+        let root = unique_temp_dir("target-runtime-profile-mount");
+        install_test_console_core(&root, "Intellivision");
+        let game_dir = root.join("games/Intellivision");
+        std::fs::create_dir_all(&game_dir).expect("create intellivision dir");
+        std::fs::write(game_dir.join("Armor Battle.int"), "rom").expect("write intellivision rom");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.profiles.iter().any(|profile| {
+            profile.id == "runtime-intellivision"
+                && profile.system_id == "intellivision"
+                && profile.game_dirs == vec!["Intellivision".to_string()]
+        }));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let launch_target: (String, i64, i64) = conn
+            .query_row(
+                "SELECT launch_targets.mount_kind,
+                        launch_targets.mount_index,
+                        launch_targets.delay_secs
+                 FROM launch_targets
+                 JOIN games ON games.game_key_id=launch_targets.game_key_id
+                 WHERE games.system_id='intellivision'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query intellivision launch target");
+
+        assert_eq!(launch_target, ("load-file".to_string(), 1, 1));
         let _ = std::fs::remove_dir_all(root);
     }
 
