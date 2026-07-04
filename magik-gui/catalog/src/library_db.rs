@@ -1322,7 +1322,9 @@ mod tests {
     use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind};
     use crate::media_metadata;
     use crate::software_identity::software_asset_key;
-    use crate::sqlite_catalog::write_sqlite_scan_with_mame_and_preview_pack;
+    use crate::sqlite_catalog::{
+        write_sqlite_scan_with_mame_and_hbmame, write_sqlite_scan_with_mame_and_preview_pack,
+    };
     use crate::test_support::*;
 
     #[derive(Debug, PartialEq, Eq)]
@@ -1503,6 +1505,75 @@ mod tests {
             .any(|game| game.mra_path.contains("/games/mame/")
                 || game.mra_path.contains("/games/hbmame/")));
         assert_eq!(stored_games, 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn survivability_raw_mame_and_hbmame_zip_sets_fold_only_when_launchable() {
+        let root = unique_temp_dir("survivability-raw-zip-fold");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let hbmame_db = root.join("hbmame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[("puckman", None, "Puck Man", Some("1980"), Some("Namco"))],
+        );
+        write_mame_fixture_db(
+            &hbmame_db,
+            &[(
+                "homebrew",
+                None,
+                "Homebrew Demo",
+                Some("2024"),
+                Some("HBMAME"),
+            )],
+        );
+        let mut puckman_mra = mra_discovery(1, "Puck Man");
+        puckman_mra.launch_ref = "/media/fat/_Arcade/Puck Man.mra".to_string();
+        puckman_mra.source_path = puckman_mra.launch_ref.clone();
+        puckman_mra.setname = Some("puckman".to_string());
+        let mut homebrew_mra = mra_discovery(2, "Homebrew Demo");
+        homebrew_mra.launch_ref = "/media/fat/_Arcade/Homebrew Demo.mra".to_string();
+        homebrew_mra.source_path = homebrew_mra.launch_ref.clone();
+        homebrew_mra.setname = Some("homebrew".to_string());
+        let known_mame_zip = raw_arcade_zip_set("/media/fat/games/mame/puckman.zip", "puckman");
+        let known_hbmame_zip =
+            raw_arcade_zip_set("/media/fat/games/hbmame/homebrew.zip", "homebrew");
+        let unknown_zip =
+            raw_arcade_zip_set("/media/fat/games/hbmame/notarealset.zip", "notarealset");
+        let scan = sqlite_scan_with_discoveries(vec![
+            puckman_mra,
+            homebrew_mra,
+            known_mame_zip,
+            known_hbmame_zip,
+            unknown_zip,
+        ]);
+
+        write_sqlite_scan_with_mame_and_hbmame(&db, &scan, &mame_db, &hbmame_db)
+            .expect("save sqlite");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
+        let conn = Connection::open(&db).expect("open sqlite");
+        let stored_games: i64 = conn
+            .query_row("SELECT count(*) FROM games", [], |row| row.get(0))
+            .expect("count games");
+
+        assert_eq!(unique_discovery_count(&scan.discoveries), 2);
+        assert_eq!(loaded.catalog.system_game_count("arcade"), 2);
+        assert_eq!(stored_games, 2);
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.title.as_ref() == "Puck Man"));
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.title.as_ref() == "Homebrew Demo"));
+        assert!(!loaded.catalog.games.iter().any(|game| {
+            game.mra_path.contains("/games/mame/") || game.mra_path.contains("/games/hbmame/")
+        }));
         let _ = std::fs::remove_dir_all(root);
     }
 

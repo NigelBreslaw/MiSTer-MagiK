@@ -267,6 +267,16 @@ launcher clears the update screen, shows a dismissible `Library update failed`
 dialog, and continues with the old catalog. The failure remains in logs so the
 user is not trapped away from the launcher.
 
+Survivability is a catalog contract. Wild SD cards often contain unsupported
+folders, BIOS payloads, cue support tracks, duplicate aliases, unknown raw ZIP
+sets, and partially installed systems. Those inputs should reduce coverage, not
+block boot. When MagiK can recover any launchable subset, it should publish or
+keep a usable catalog and record skipped or suspicious inputs in
+`catalog_audit` and logs. A true scan, save, or load failure must surface as a
+visible, continuable error such as `Library scan failed`, `Library load failed`,
+or `Library update failed`; it must not leave the launcher stuck indefinitely on
+an indexing or saving progress screen.
+
 ## Root Stamp
 
 The root stamp is the cheap unchanged validation. It includes:

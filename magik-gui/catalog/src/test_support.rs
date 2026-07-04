@@ -505,6 +505,59 @@ pub(crate) fn install_test_console_core(root: &Path, core_name: &str) -> PathBuf
     path
 }
 
+pub(crate) struct WildSdCardFixture {
+    root: PathBuf,
+}
+
+impl WildSdCardFixture {
+    pub(crate) fn new(label: &str) -> Self {
+        Self {
+            root: unique_temp_dir(label),
+        }
+    }
+
+    pub(crate) fn install_console_core(&self, core_name: &str) -> &Self {
+        install_test_console_core(&self.root, core_name);
+        self
+    }
+
+    pub(crate) fn write_game(&self, game_dir: &str, file_name: &str, bytes: &[u8]) -> &Self {
+        let dir = self.root.join("games").join(game_dir);
+        std::fs::create_dir_all(&dir).expect("create wild game dir");
+        std::fs::write(dir.join(file_name), bytes).expect("write wild game file");
+        self
+    }
+
+    pub(crate) fn write_game_zip(
+        &self,
+        game_dir: &str,
+        file_name: &str,
+        entries: &[(&str, &[u8])],
+    ) -> &Self {
+        let dir = self.root.join("games").join(game_dir);
+        std::fs::create_dir_all(&dir).expect("create wild zip game dir");
+        write_stored_zip(&dir.join(file_name), entries);
+        self
+    }
+
+    pub(crate) fn write_arcade_mra(&self, file_name: &str, title: &str, setname: &str) -> &Self {
+        let dir = self.root.join("_Arcade");
+        std::fs::create_dir_all(&dir).expect("create wild arcade dir");
+        std::fs::write(
+            dir.join(file_name),
+            format!(
+                "<misterromdescription><name>{title}</name><setname>{setname}</setname></misterromdescription>"
+            ),
+        )
+        .expect("write wild arcade mra");
+        self
+    }
+
+    pub(crate) fn build(&self) -> PathBuf {
+        self.root.clone()
+    }
+}
+
 pub(crate) fn unique_temp_dir(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "mister-magik-{label}-{}-{}",

@@ -186,6 +186,26 @@ impl CatalogScanBridgeStatus {
             percent,
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn visible(&self) -> bool {
+        self.visible
+    }
+
+    #[cfg(test)]
+    pub(super) fn background_visible(&self) -> bool {
+        self.background_visible
+    }
+
+    #[cfg(test)]
+    pub(super) fn title(&self) -> &str {
+        self.title.as_str()
+    }
+
+    #[cfg(test)]
+    pub(super) fn detail(&self) -> &str {
+        self.detail.as_str()
+    }
 }
 
 pub(super) struct LauncherStatusPresenter<'a, 'b> {

@@ -685,6 +685,19 @@ mod tests {
         (effect_names, ui_names)
     }
 
+    fn catalog_scan_statuses(effects: CatalogSessionEffects) -> Vec<CatalogScanBridgeStatus> {
+        effects
+            .into_effects()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                CatalogSessionEffect::Ui(LauncherWorkerUiIntent::CatalogScan(status)) => {
+                    Some(status)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn refresh_summary() -> library_db::LibraryRefreshSummary {
         library_db::LibraryRefreshSummary {
             skipped: false,
@@ -1005,6 +1018,46 @@ mod tests {
     }
 
     #[test]
+    fn survivability_failed_foreground_rebuild_with_cached_catalog_prompts_fallback() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        session.note_cached_catalog_ready();
+        let _ = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Progress {
+                title: "Library load failed".to_string(),
+                detail: "sqlite projection corrupt".to_string(),
+                percent: -1,
+            },
+            now,
+        );
+
+        let effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(3),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FullSqlite,
+                durable_save_pending: false,
+            },
+            now,
+        );
+
+        assert_eq!(effect_names(effects), vec!["ui", "confirm", "event"]);
+        assert!(session.refresh_done());
+        assert!(!session.foreground_update());
+    }
+
+    #[test]
     fn persistence_failure_replaces_finalizing_progress_with_error_state() {
         let mut session = LauncherCatalogSession::new(true);
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
@@ -1026,6 +1079,56 @@ mod tests {
         assert_eq!(ui_effects, vec!["catalog-scan"]);
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
+        assert!(session.refresh_failed);
+    }
+
+    #[test]
+    fn survivability_first_boot_persistence_failure_keeps_ram_catalog_and_reports_error() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let ready_effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_with_games(4),
+                summary: None,
+                load_us: 42,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: true,
+            },
+            now,
+        );
+
+        assert_eq!(
+            effect_names(ready_effects),
+            vec!["request-media-seed", "catalog", "event", "ui", "sync"]
+        );
+        assert!(!session.refresh_done());
+
+        let statuses = catalog_scan_statuses(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::PersistenceFailed {
+                error: "insert profile: UNIQUE constraint failed".to_string(),
+            },
+            now,
+        ));
+
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].visible());
+        assert!(!statuses[0].background_visible());
+        assert_eq!(statuses[0].title(), "Library load failed");
+        assert_eq!(
+            statuses[0].detail(),
+            "insert profile: UNIQUE constraint failed"
+        );
+        assert!(session.refresh_done());
         assert!(session.refresh_failed);
     }
 

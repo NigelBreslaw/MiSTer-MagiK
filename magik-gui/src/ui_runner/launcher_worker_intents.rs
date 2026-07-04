@@ -559,6 +559,51 @@ mod tests {
     }
 
     #[test]
+    fn survivability_persistence_failure_intent_is_visible_and_specific() {
+        let LauncherWorkerUiIntent::CatalogScan(status) =
+            catalog_persistence_failed_intent("insert profile: UNIQUE constraint failed")
+        else {
+            panic!("expected catalog scan intent");
+        };
+
+        assert!(status.visible());
+        assert!(!status.background_visible());
+        assert_eq!(status.title(), "Library load failed");
+        assert_eq!(status.detail(), "insert profile: UNIQUE constraint failed");
+    }
+
+    #[test]
+    fn survivability_catalog_failures_never_hide_in_background_progress() {
+        let scan_failed = CatalogProgressUiIntent::from_worker_progress(
+            CatalogWorkerUiContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                foreground_update: false,
+            },
+            "Library scan failed".to_string(),
+            "unsupported filesystem entry".to_string(),
+            -1,
+        );
+        let load_failed = CatalogProgressUiIntent::from_worker_progress(
+            CatalogWorkerUiContext {
+                catalog_ready: true,
+                screen: Screen::Arcade,
+                foreground_update: false,
+            },
+            "Library load failed".to_string(),
+            "sqlite projection corrupt".to_string(),
+            -1,
+        );
+
+        assert!(scan_failed.visible);
+        assert!(!scan_failed.background_visible);
+        assert!(scan_failed.failed);
+        assert!(load_failed.visible);
+        assert!(!load_failed.background_visible);
+        assert!(load_failed.failed);
+    }
+
+    #[test]
     fn catalog_progress_intent_extracts_counter_targets() {
         let intent = CatalogProgressUiIntent::from_worker_progress(
             CatalogWorkerUiContext {
