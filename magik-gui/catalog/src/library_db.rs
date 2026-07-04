@@ -1036,9 +1036,7 @@ fn structured_launch_plan_for_discovery(
         return None;
     }
     let profile_id = profile_id_for_discovery(discovery)?;
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.id.as_str() == profile_id)?;
+    let profile = launch_profiles::profile_for_launch_target_id(profiles, profile_id)?;
     let payload_path = discovery.launch_ref.as_str();
     let payload_rule = match discovery.source_kind {
         DiscoverySourceKind::ArchiveEntry => {

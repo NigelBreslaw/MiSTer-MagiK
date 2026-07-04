@@ -377,10 +377,7 @@ mod tests {
         let root = unique_temp_dir("audit-psx-zip");
         let dir = root.join("games/PSX");
         std::fs::create_dir_all(&dir).expect("create psx dir");
-        write_stored_zip(
-            &dir.join("Packed PSX Games.zip"),
-            &[("Game.cue", b"cue")],
-        );
+        write_stored_zip(&dir.join("Packed PSX Games.zip"), &[("Game.cue", b"cue")]);
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
@@ -400,10 +397,7 @@ mod tests {
         let root = unique_temp_dir("audit-appledouble-zip");
         let dir = root.join("games/SMS");
         std::fs::create_dir_all(&dir).expect("create sms dir");
-        write_stored_zip(
-            &dir.join("._Packed SMS Games.zip"),
-            &[("Game.sms", b"rom")],
-        );
+        write_stored_zip(&dir.join("._Packed SMS Games.zip"), &[("Game.sms", b"rom")]);
 
         let rows = audit_catalog_coverage(
             &[root.display().to_string()],
@@ -502,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_unsupported_extension_reports_stable_reason() {
-        let root = unique_temp_dir("audit-runtime-unsupported-extension");
+    fn runtime_exact_core_extension_derivation_reports_cataloged() {
+        let root = unique_temp_dir("audit-runtime-derived-extension");
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
         std::fs::create_dir_all(root.join("games/C64")).expect("create c64 dir");
         std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
@@ -517,8 +511,8 @@ mod tests {
             row.expected_game_dir == "games/C64"
                 && row.extensions == "d64"
                 && row.source == "runtime-discovered"
-                && row.catalog_status == "uncataloged"
-                && row.reason == "unsupported-extension"
+                && row.catalog_status == "cataloged"
+                && row.reason == "matched-catalog-profile"
         }));
         let _ = std::fs::remove_dir_all(root);
     }

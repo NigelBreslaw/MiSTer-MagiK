@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub const PROFILE_SET_VERSION: u32 = 5;
+pub const PROFILE_SET_VERSION: u32 = 6;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
@@ -385,6 +385,22 @@ pub fn generic_manifest_profile_for_core(core_id: &str) -> Option<LaunchProfile>
         .find(|profile| profile.core_name.eq_ignore_ascii_case(&normalized))
 }
 
+pub(crate) fn profile_for_launch_target_id<'a>(
+    profiles: &'a [LaunchProfile],
+    profile_id: &str,
+) -> Option<&'a LaunchProfile> {
+    profiles
+        .iter()
+        .find(|profile| profile.id.as_str() == profile_id)
+        .or_else(|| {
+            let mut matches = profiles
+                .iter()
+                .filter(|profile| profile.system_id.as_str() == profile_id);
+            let profile = matches.next()?;
+            matches.next().is_none().then_some(profile)
+        })
+}
+
 fn active_profile_game_dirs(profiles: &[LaunchProfile]) -> BTreeSet<String> {
     profiles
         .iter()
@@ -430,7 +446,7 @@ fn runtime_profile_plan_for_game_dir(
         let candidates = runtime_core_candidates(&game_dir, cores);
         match candidates.as_slice() {
             [] => RuntimeProfileDecision::NoInstalledCore,
-            [candidate] => runtime_profile_for_match(&game_dir, candidate.core)
+            [candidate] => runtime_profile_for_match(&game_dir, candidate)
                 .map(|profile| RuntimeProfileDecision::Catalogable {
                     profile: Box::new(profile),
                 })
@@ -453,6 +469,13 @@ fn runtime_profile_plan_for_game_dir(
 
 struct RuntimeCoreCandidate<'a> {
     core: &'a catalog_discovery::InstalledCore,
+    match_kind: RuntimeCoreMatchKind,
+}
+
+#[derive(Clone, Copy)]
+enum RuntimeCoreMatchKind {
+    Exact,
+    Alias,
 }
 
 struct RuntimeProfileHint {
@@ -567,7 +590,13 @@ fn runtime_core_candidates<'a>(
         return aliases;
     }
     if let Some(base) = sinden_base_name(&game_dir.name) {
-        let candidates = core_candidates_by_name(&base, cores);
+        let candidates = core_candidates_by_name(&base, cores)
+            .into_iter()
+            .map(|mut candidate| {
+                candidate.match_kind = RuntimeCoreMatchKind::Alias;
+                candidate
+            })
+            .collect::<Vec<_>>();
         if !candidates.is_empty() {
             return candidates;
         }
@@ -583,6 +612,12 @@ fn core_candidates_by_game_dir_alias<'a>(
         return Vec::new();
     };
     core_candidates_by_name(core_id, cores)
+        .into_iter()
+        .map(|mut candidate| {
+            candidate.match_kind = RuntimeCoreMatchKind::Alias;
+            candidate
+        })
+        .collect()
 }
 
 fn runtime_game_dir_core_alias(name: &str) -> Option<&'static str> {
@@ -604,7 +639,10 @@ fn core_candidates_by_name<'a>(
         }
         let key = core.core_id.to_ascii_lowercase();
         if seen.insert(key) {
-            out.push(RuntimeCoreCandidate { core });
+            out.push(RuntimeCoreCandidate {
+                core,
+                match_kind: RuntimeCoreMatchKind::Exact,
+            });
         }
     }
     out
@@ -620,18 +658,22 @@ fn unique_extension_core_candidates<'a>(
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for core in cores {
-        let extensions = runtime_payload_extensions_for_core(&core.core_id);
-        if extensions.is_empty()
-            || !game_dir
-                .payload_extensions
-                .iter()
-                .any(|ext| contains_ignore_ascii_case(&extensions, ext))
+        let Some(extensions) = runtime_payload_extensions_for_core(&core.core_id) else {
+            continue;
+        };
+        if !game_dir
+            .payload_extensions
+            .iter()
+            .any(|ext| contains_ignore_ascii_case(&extensions, ext))
         {
             continue;
         }
         let key = core.core_id.to_ascii_lowercase();
         if seen.insert(key) {
-            out.push(RuntimeCoreCandidate { core });
+            out.push(RuntimeCoreCandidate {
+                core,
+                match_kind: RuntimeCoreMatchKind::Alias,
+            });
         }
     }
     out
@@ -647,12 +689,15 @@ fn sinden_base_name(name: &str) -> Option<String> {
 
 fn runtime_profile_for_match(
     game_dir: &catalog_discovery::GameDirFact,
-    core: &catalog_discovery::InstalledCore,
+    candidate: &RuntimeCoreCandidate<'_>,
 ) -> Option<LaunchProfile> {
-    let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name);
-    if extensions.is_empty() {
-        return None;
-    }
+    let core = candidate.core;
+    let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name)
+        .or_else(|| {
+            matches!(candidate.match_kind, RuntimeCoreMatchKind::Exact)
+                .then(|| observed_runtime_payload_extensions(game_dir))
+                .filter(|extensions| !extensions.is_empty())
+        })?;
     if !game_dir.has_zip_files
         && !game_dir
             .payload_extensions
@@ -689,7 +734,7 @@ fn runtime_profile_for_match(
     })
 }
 
-fn runtime_payload_extensions_for_core(core_id: &str) -> Vec<String> {
+fn runtime_payload_extensions_for_core(core_id: &str) -> Option<Vec<String>> {
     let mut extensions = BTreeSet::new();
     if let Some(profile) = generic_manifest_profile_for_core(core_id) {
         for ext in playable_payload_extensions(&profile) {
@@ -699,10 +744,13 @@ fn runtime_payload_extensions_for_core(core_id: &str) -> Vec<String> {
     for ext in runtime_payload_extension_hints(core_id) {
         extensions.insert(ext);
     }
-    extensions.into_iter().collect()
+    runtime_extensions_from_set(extensions)
 }
 
-fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> Vec<String> {
+fn runtime_payload_extensions_for_core_or_dir(
+    core_id: &str,
+    game_dir: &str,
+) -> Option<Vec<String>> {
     let mut extensions = BTreeSet::new();
     if let Some(profile) = generic_manifest_profile_for_core(core_id)
         .or_else(|| generic_manifest_profile_for_game_dir(game_dir))
@@ -717,7 +765,54 @@ fn runtime_payload_extensions_for_core_or_dir(core_id: &str, game_dir: &str) -> 
     {
         extensions.insert(ext);
     }
-    extensions.into_iter().collect()
+    runtime_extensions_from_set(extensions)
+}
+
+fn observed_runtime_payload_extensions(game_dir: &catalog_discovery::GameDirFact) -> Vec<String> {
+    runtime_extensions_from_set(
+        game_dir
+            .payload_extensions
+            .iter()
+            .filter(|ext| is_observed_runtime_payload_extension(ext))
+            .cloned()
+            .collect(),
+    )
+    .unwrap_or_default()
+}
+
+fn runtime_extensions_from_set(extensions: BTreeSet<String>) -> Option<Vec<String>> {
+    if extensions.is_empty() {
+        None
+    } else {
+        Some(extensions.into_iter().collect())
+    }
+}
+
+fn is_observed_runtime_payload_extension(ext: &str) -> bool {
+    !matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "bak"
+            | "cfg"
+            | "conf"
+            | "dat"
+            | "db"
+            | "html"
+            | "ini"
+            | "jpeg"
+            | "jpg"
+            | "json"
+            | "log"
+            | "md"
+            | "nfo"
+            | "pdf"
+            | "png"
+            | "sav"
+            | "sqlite"
+            | "srm"
+            | "torrent"
+            | "txt"
+            | "xml"
+    )
 }
 
 fn playable_payload_extensions(profile: &LaunchProfile) -> Vec<String> {
@@ -1472,6 +1567,40 @@ mod tests {
     }
 
     #[test]
+    fn launch_target_profile_lookup_handles_runtime_profile_ids() {
+        let root = unique_temp_dir("runtime-profile-launch-target-lookup");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Intellivision"))
+            .expect("create intellivision dir");
+        std::fs::write(root.join("_Console/Intellivision_20260630.rbf"), b"rbf")
+            .expect("write intellivision core");
+        std::fs::write(root.join("games/Intellivision/Armor Battle.int"), b"rom")
+            .expect("write intellivision rom");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Intellivision")
+            .expect("intellivision plan");
+
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!(
+                "expected catalogable intellivision plan, got {:?}",
+                plan.decision
+            );
+        };
+        let profiles = vec![profile.as_ref().clone()];
+
+        let profile = profile_for_launch_target_id(&profiles, "intellivision")
+            .expect("runtime profile matched by system id");
+
+        assert_eq!(profile.id, "runtime-intellivision");
+        assert_eq!(profile.system_id, "intellivision");
+        assert_eq!(profile.payload_rules[0].mount, MountSpec::load_file(1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn runtime_planner_resolves_coleco_alias_without_ambiguous_extension_leak() {
         let root = unique_temp_dir("runtime-plan-coleco-alias");
         std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
@@ -1530,6 +1659,7 @@ mod tests {
         assert_eq!(profile.title, "ZX-Spectrum");
         assert_eq!(profile.category, "Computer");
         assert_eq!(profile.game_dirs, vec!["Spectrum"]);
+        assert_eq!(profile.payload_rules[0].mount, MountSpec::load_file(1));
         assert_eq!(
             playable_payload_extensions(profile),
             vec!["sna", "szx", "tap", "tzx", "z80"]
@@ -1591,12 +1721,14 @@ mod tests {
     }
 
     #[test]
-    fn runtime_planner_rejects_exact_core_without_known_payload_rule() {
-        let root = unique_temp_dir("runtime-plan-c64");
+    fn runtime_planner_derives_exact_core_payload_extensions() {
+        let root = unique_temp_dir("runtime-plan-derived-c64");
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
         std::fs::create_dir_all(root.join("games/C64")).expect("create c64 dir");
         std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
         std::fs::write(root.join("games/C64/Impossible Mission.d64"), b"disk").expect("write disk");
+        std::fs::write(root.join("games/C64/metadata.xml"), b"xml").expect("write metadata");
+        std::fs::write(root.join("games/C64/cover.png"), b"png").expect("write image");
 
         let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
         let plan = plans
@@ -1604,10 +1736,31 @@ mod tests {
             .find(|plan| plan.game_dir_name == "C64")
             .expect("c64 plan");
 
-        assert_eq!(
-            plan.decision,
-            RuntimeProfileDecision::NoKnownPayloadExtension
-        );
+        let RuntimeProfileDecision::Catalogable { profile } = &plan.decision else {
+            panic!("expected catalogable c64 plan, got {:?}", plan.decision);
+        };
+        assert_eq!(profile.system_id, "c64");
+        assert_eq!(profile.category, "Computer");
+        assert_eq!(playable_payload_extensions(profile), vec!["d64"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_planner_keeps_aliases_without_known_payload_rule_unsupported() {
+        let root = unique_temp_dir("runtime-plan-alias-unknown-ext");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(root.join("games/Computer")).expect("create computer dir");
+        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Computer/Impossible Mission.d64"), b"disk")
+            .expect("write disk");
+
+        let plans = runtime_profile_plans_for_roots(&[root.display().to_string()]);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.game_dir_name == "Computer")
+            .expect("computer plan");
+
+        assert_eq!(plan.decision, RuntimeProfileDecision::NoInstalledCore);
         let _ = std::fs::remove_dir_all(root);
     }
 

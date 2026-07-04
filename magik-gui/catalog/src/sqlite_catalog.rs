@@ -2781,11 +2781,7 @@ fn launch_target_mount_for_discovery(
         return None;
     }
     let mount = profile_id
-        .and_then(|profile_id| {
-            profiles
-                .iter()
-                .find(|profile| profile.id.as_str() == profile_id)
-        })
+        .and_then(|profile_id| launch_profiles::profile_for_launch_target_id(profiles, profile_id))
         .and_then(|profile| match discovery.source_kind {
             DiscoverySourceKind::ArchiveEntry => profile
                 .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
