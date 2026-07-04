@@ -319,6 +319,12 @@ top-level game folder, the runtime planner can activate:
 - unique extension-based aliases such as `games/Coleco/*.col` resolving to an
   installed `ColecoVision` core.
 
+When several top-level folders resolve to the same runtime core, the active
+profile list keeps a single profile ID and merges the distinct game directories
+into it. For example, `games/Gameboy` and `games/Gameboy-Sinden` both map to
+one `runtime-gameboy` profile row; SQLite profile IDs remain unique while both
+folders stay catalogable.
+
 It does not guess when multiple installed cores accept the same payload
 extension, and it does not create launcher systems for folders with no playable
 payloads. Folders that cannot be cataloged are recorded in `catalog_audit`

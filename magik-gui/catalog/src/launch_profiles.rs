@@ -331,32 +331,42 @@ pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    profiles.extend(
-        runtime_profile_plans_for_roots(roots)
-            .into_iter()
-            .filter_map(|plan| match plan.decision {
-                RuntimeProfileDecision::Catalogable { profile } => {
-                    let profile = *profile;
-                    if profile
-                        .game_dirs
-                        .iter()
-                        .any(|dir| active_game_dirs.contains(&dir.to_ascii_lowercase()))
-                    {
-                        None
-                    } else {
-                        for dir in &profile.game_dirs {
-                            active_game_dirs.insert(dir.to_ascii_lowercase());
-                        }
-                        Some(profile)
-                    }
-                }
-                RuntimeProfileDecision::NoInstalledCore
-                | RuntimeProfileDecision::EmptyOrMediaOnly
-                | RuntimeProfileDecision::NoKnownPayloadExtension
-                | RuntimeProfileDecision::Ambiguous { .. } => None,
-            }),
-    );
+    for plan in runtime_profile_plans_for_roots(roots) {
+        let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
+            continue;
+        };
+        activate_runtime_profile(*profile, &mut profiles, &mut active_game_dirs);
+    }
     profiles
+}
+
+fn activate_runtime_profile(
+    mut profile: LaunchProfile,
+    profiles: &mut Vec<LaunchProfile>,
+    active_game_dirs: &mut BTreeSet<String>,
+) {
+    profile
+        .game_dirs
+        .retain(|dir| active_game_dirs.insert(dir.to_ascii_lowercase()));
+    if profile.game_dirs.is_empty() {
+        return;
+    }
+    if let Some(existing) = profiles
+        .iter_mut()
+        .find(|existing| existing.id == profile.id)
+    {
+        for dir in profile.game_dirs {
+            if !existing
+                .game_dirs
+                .iter()
+                .any(|existing_dir| existing_dir.eq_ignore_ascii_case(&dir))
+            {
+                existing.game_dirs.push(dir);
+            }
+        }
+    } else {
+        profiles.push(profile);
+    }
 }
 
 pub fn generic_manifest_profile_for_game_dir(game_dir: &str) -> Option<LaunchProfile> {
@@ -1310,6 +1320,38 @@ mod tests {
         };
         assert_eq!(profile.system_id, "gameboy");
         assert_eq!(profile.game_dirs, vec!["Gameboy-Sinden"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn active_runtime_profiles_have_unique_ids_for_multiple_alias_dirs() {
+        let root = unique_temp_dir("active-runtime-profile-ids");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create gameboy dir");
+        std::fs::create_dir_all(root.join("games/Gameboy-Sinden")).expect("create sinden dir");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
+        std::fs::write(root.join("games/Gameboy/Tetris.gb"), b"rom").expect("write rom");
+        std::fs::write(root.join("games/Gameboy-Sinden/Tetris.gb"), b"rom").expect("write rom");
+
+        let profiles = active_profiles_for_roots(&[root.display().to_string()]);
+        let ids = profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>();
+        let unique_ids = ids.iter().copied().collect::<BTreeSet<_>>();
+
+        assert_eq!(ids.len(), unique_ids.len(), "{ids:?}");
+        let gameboy_profiles = profiles
+            .iter()
+            .filter(|profile| profile.id == "runtime-gameboy")
+            .collect::<Vec<_>>();
+        assert_eq!(gameboy_profiles.len(), 1, "{ids:?}");
+        let game_dirs = gameboy_profiles[0]
+            .game_dirs
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(game_dirs, BTreeSet::from(["Gameboy", "Gameboy-Sinden"]));
         let _ = std::fs::remove_dir_all(root);
     }
 
