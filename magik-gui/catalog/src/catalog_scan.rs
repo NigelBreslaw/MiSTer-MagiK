@@ -1044,18 +1044,19 @@ mod tests {
     }
 
     #[test]
-    fn scanner_uses_profile_game_dirs_instead_of_walking_every_games_child() {
-        let root = unique_temp_dir("target-profile-game-dirs");
-        install_test_console_core(&root, "NES");
-        let nes_dir = root.join("games/NES");
+    fn scanner_adds_exact_runtime_game_dirs_without_walking_unmatched_dirs() {
+        let root = unique_temp_dir("target-runtime-game-dirs");
+        install_test_console_core(&root, "Gameboy");
+        let gameboy_dir = root.join("games/Gameboy");
         let unrelated_dir = root.join("games/NotACoreProfile");
-        std::fs::create_dir_all(&nes_dir).expect("create nes dir");
+        std::fs::create_dir_all(&gameboy_dir).expect("create gameboy dir");
         std::fs::create_dir_all(&unrelated_dir).expect("create unrelated dir");
-        std::fs::write(nes_dir.join("Mario.nes"), "rom").expect("write nes rom");
-        std::fs::write(unrelated_dir.join("Ghost.nes"), "rom").expect("write unrelated rom");
+        std::fs::write(gameboy_dir.join("Tetris.gb"), "rom").expect("write gameboy rom");
+        std::fs::write(unrelated_dir.join("Ghost.gb"), "rom").expect("write unrelated rom");
+        let db = root.join("library.sqlite3");
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
-            sqlite_path: root.join("library.sqlite3"),
+            sqlite_path: db.clone(),
         };
 
         let scan = scan_library(&cfg);
@@ -1063,17 +1064,97 @@ mod tests {
         assert_eq!(scan.normal_files.len(), 1);
         assert_eq!(
             scan.normal_files[0].path,
-            nes_dir.join("Mario.nes").display().to_string()
+            gameboy_dir.join("Tetris.gb").display().to_string()
         );
+        assert!(scan
+            .profiles
+            .iter()
+            .any(|profile| profile.id == "runtime-gameboy"));
         assert!(scan
             .discoveries
             .iter()
-            .all(|discovery| !discovery.launch_ref.contains("Ghost.nes")));
+            .any(|discovery| discovery.platform_id == "gameboy" && discovery.title == "Tetris"));
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| !discovery.launch_ref.contains("Ghost.gb")));
         assert!(scan.audit_rows.iter().any(|row| {
             row.expected_game_dir == "games/NotACoreProfile"
                 && row.catalog_status == "uncataloged"
                 && row.reason == "game-dir-has-no-catalog-profile"
         }));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let systems: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM systems WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query systems");
+        let games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM games WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let launcher_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher");
+        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_does_not_create_empty_runtime_system_rows() {
+        let root = unique_temp_dir("target-runtime-empty");
+        install_test_console_core(&root, "Gameboy");
+        std::fs::create_dir_all(root.join("games/Gameboy")).expect("create empty gameboy dir");
+        let db = root.join("library.sqlite3");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.normal_files.is_empty());
+        assert!(scan.discoveries.is_empty());
+        assert!(scan
+            .profiles
+            .iter()
+            .all(|profile| profile.id != "runtime-gameboy"));
+
+        save_sqlite_scan(&db, &scan).expect("save sqlite");
+        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let systems: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM systems WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query systems");
+        let games: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM games WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query games");
+        let launcher_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launcher_catalog WHERE system_id='gameboy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query launcher");
+        assert_eq!((systems, games, launcher_rows), (0, 0, 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
