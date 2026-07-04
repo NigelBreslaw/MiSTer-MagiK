@@ -280,10 +280,10 @@ fn append_game_dir_summaries(lines: &mut Vec<String>, roots: &[String]) {
             if should_ignore_game_dir(name) {
                 continue;
             }
-            dirs.push((name.to_string(), path, metadata));
+            dirs.push((name.to_string(), path));
         }
         dirs.sort_by_key(|entry| entry.0.to_ascii_lowercase());
-        for (name, path, metadata) in dirs {
+        for (name, path) in dirs {
             let status = if launch_profiles::generic_manifest_profile_for_game_dir(&name).is_some()
                 || launch_profiles::builtin_profiles().iter().any(|profile| {
                     profile
@@ -297,13 +297,11 @@ fn append_game_dir_summaries(lines: &mut Vec<String>, roots: &[String]) {
             };
             let payloadish = game_dir_has_payloadish_files(&path);
             lines.push(format!(
-                "game-dir\t{dir_count}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "game-dir\t{dir_count}\t{}\t{}\t{}\t{}",
                 path.display(),
                 name,
                 status,
-                if payloadish { "payloadish" } else { "empty" },
-                metadata.len(),
-                mtime_nanos(&metadata)
+                if payloadish { "payloadish" } else { "empty" }
             ));
             dir_count += 1;
         }
@@ -585,6 +583,33 @@ mod tests {
             .lines()
             .iter()
             .any(|line| line.contains("game-dir") && line.contains("payloadish")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn existing_payloadish_game_dir_metadata_churn_is_not_checkpoint_drift() {
+        let root = unique_temp_dir("checkpoint-game-dir-metadata-churn");
+        let game_dir = root.join("games/NES");
+        std::fs::create_dir_all(&game_dir).expect("create game dir");
+        std::fs::write(game_dir.join("Mario.nes"), b"rom").expect("write rom");
+        let roots = vec![root.display().to_string()];
+
+        let first = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
+        std::fs::write(game_dir.join("Zelda.nes"), b"rom").expect("write second rom");
+        set_mtime_for_test(&game_dir, 20, 0);
+        let second = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
+
+        assert_eq!(first, second);
         let _ = std::fs::remove_dir_all(root);
     }
 
