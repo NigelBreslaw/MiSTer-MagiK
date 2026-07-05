@@ -17,19 +17,24 @@ use std::error::Error;
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(feature = "live-ui")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "live-ui")]
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
+type SharedLiveStreamGeneration = Arc<AtomicU64>;
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if let Some(frames) = framebuffer_stream_bench_frames()? {
+        run_framebuffer_stream_bench(frames)?;
+        return Ok(());
+    }
+
     if std::env::var_os("SLINT_BACKEND").is_none() {
         std::env::set_var("SLINT_BACKEND", "winit-skia");
     }
@@ -49,6 +54,57 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         compile_error!("enable either live-ui or compiled-ui");
     }
+}
+
+fn framebuffer_stream_bench_frames() -> Result<Option<u64>, Box<dyn Error>> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let Some(first) = args.first() else {
+        return Ok(None);
+    };
+    if first != "--framebuffer-stream-bench" {
+        return Ok(None);
+    }
+    let frames = match args.get(1) {
+        Some(value) => value.parse::<u64>()?,
+        None => 120,
+    };
+    Ok(Some(frames.max(1)))
+}
+
+fn run_framebuffer_stream_bench(frames: u64) -> Result<(), Box<dyn Error>> {
+    let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    let started = Instant::now();
+    let mut latencies = Vec::with_capacity(frames as usize);
+    let mut payload_bytes = 0_u64;
+    let mut raw_bytes = 0_u64;
+    for _ in 0..frames {
+        let frame_started = Instant::now();
+        let capture = fetch_framebuffer_capture(&host)?;
+        let _image = framebuffer_capture_image(&capture);
+        latencies.push(frame_started.elapsed());
+        payload_bytes += capture.payload_bytes;
+        raw_bytes += capture.raw_bytes;
+    }
+    latencies.sort();
+    let elapsed = started.elapsed();
+    let fps = frames as f64 / elapsed.as_secs_f64();
+    let p50 = latency_percentile_ms(&latencies, 0.50);
+    let p95 = latency_percentile_ms(&latencies, 0.95);
+    let payload_avg = payload_bytes / frames;
+    let raw_avg = raw_bytes / frames;
+    println!(
+        "framebuffer_stream_bench_tsv\tframes={frames}\tfps={fps:.2}\telapsed_ms={:.0}\tp50_ms={p50:.1}\tp95_ms={p95:.1}\tavg_payload_bytes={payload_avg}\tavg_raw_bytes={raw_avg}",
+        elapsed.as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+
+fn latency_percentile_ms(latencies: &[Duration], percentile: f64) -> f64 {
+    if latencies.is_empty() {
+        return 0.0;
+    }
+    let rank = ((latencies.len() - 1) as f64 * percentile).round() as usize;
+    latencies[rank].as_secs_f64() * 1000.0
 }
 
 fn select_backend() -> Result<(), slint::PlatformError> {
@@ -103,6 +159,7 @@ fn create_live_instance(
     let instance = definition.create()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
+    let live_stream_generation = Arc::new(AtomicU64::new(0));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -150,6 +207,37 @@ fn create_live_instance(
             apply_live_save_status(&instance, "Saving framebuffer PNG...", "");
         }
         spawn_live_save_framebuffer_capture(save_instance.clone(), Arc::clone(&save_capture));
+        Value::Void
+    })?;
+
+    let stream_instance = instance.as_weak();
+    let stream_host = host.to_string();
+    let stream_capture = Arc::clone(&framebuffer_capture);
+    let stream_generation = Arc::clone(&live_stream_generation);
+    instance.set_global_callback("Actions", "live-stream-changed", move |args| {
+        let Some(Value::Bool(enabled)) = args.first() else {
+            return Value::Void;
+        };
+        let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(instance) = stream_instance.upgrade() {
+            apply_live_stream_summary(
+                &instance,
+                if *enabled {
+                    "Live stream starting..."
+                } else {
+                    "Live stream off."
+                },
+            );
+        }
+        if *enabled {
+            spawn_live_framebuffer_stream(
+                stream_instance.clone(),
+                Arc::clone(&stream_capture),
+                Arc::clone(&stream_generation),
+                stream_host.clone(),
+                generation,
+            );
+        }
         Value::Void
     })?;
 
@@ -408,6 +496,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
+    let live_stream_generation = Arc::new(AtomicU64::new(0));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -446,6 +535,34 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
         }
         spawn_compiled_save_framebuffer_capture(save_ui.clone(), Arc::clone(&save_capture));
     });
+
+    let stream_ui = ui.as_weak();
+    let stream_host = host.clone();
+    let stream_capture = Arc::clone(&framebuffer_capture);
+    let stream_generation = Arc::clone(&live_stream_generation);
+    ui.global::<Actions>()
+        .on_live_stream_changed(move |enabled| {
+            let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Some(ui) = stream_ui.upgrade() {
+                apply_compiled_stream_summary(
+                    &ui,
+                    if enabled {
+                        "Live stream starting..."
+                    } else {
+                        "Live stream off."
+                    },
+                );
+            }
+            if enabled {
+                spawn_compiled_framebuffer_stream(
+                    stream_ui.clone(),
+                    Arc::clone(&stream_capture),
+                    Arc::clone(&stream_generation),
+                    stream_host.clone(),
+                    generation,
+                );
+            }
+        });
 
     let sd_toggle_ui = ui.as_weak();
     let sd_toggle_host = host.clone();
@@ -831,6 +948,36 @@ fn apply_compiled_save_status(ui: &AppWindow, status: &str, last_error: &str) {
     state.set_last_error(last_error.into());
 }
 
+#[cfg(feature = "live-ui")]
+fn apply_live_stream_summary(instance: &slint_interpreter::ComponentInstance, summary: &str) {
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "live-stream-summary",
+        Value::String(SharedString::from(summary)),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_stream_summary(ui: &AppWindow, summary: &str) {
+    ui.global::<AnalyticsState>()
+        .set_live_stream_summary(summary.into());
+}
+
+fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Duration) -> String {
+    let fps = if elapsed.is_zero() {
+        0.0
+    } else {
+        frames as f64 / elapsed.as_secs_f64()
+    };
+    format!(
+        "{fps:.1} fps avg, {:.0} ms last frame",
+        last_frame.as_secs_f64() * 1000.0
+    )
+}
+
 fn format_byte_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = 1024.0 * 1024.0;
@@ -962,6 +1109,57 @@ fn spawn_live_save_framebuffer_capture(
     });
 }
 
+#[cfg(feature = "live-ui")]
+fn spawn_live_framebuffer_stream(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    host: String,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let stream_start = Instant::now();
+        let mut frames = 0_u64;
+        while stream_generation.load(Ordering::SeqCst) == generation {
+            let frame_start = Instant::now();
+            let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+            let frame_elapsed = frame_start.elapsed();
+            if result.is_ok() {
+                frames += 1;
+            }
+            let summary = result
+                .as_ref()
+                .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
+                .unwrap_or_else(|err| format!("Live stream error: {err}"));
+            let capture = result.as_ref().ok().cloned();
+            let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
+            let event_generation = Arc::clone(&stream_generation);
+            let event_capture_state = Arc::clone(&capture_state);
+            let event_instance = instance.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if event_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if let Some(capture) = capture {
+                    if let Ok(mut state) = event_capture_state.lock() {
+                        *state = Some(capture);
+                    }
+                }
+                if let Some(instance) = event_instance.upgrade() {
+                    apply_live_framebuffer_capture_result(&instance, result);
+                    apply_live_stream_summary(&instance, &summary);
+                }
+            });
+            if !should_continue {
+                break;
+            }
+            if frames == 0 {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
+    });
+}
+
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_sd_fetch(
     ui: slint::Weak<AppWindow>,
@@ -1031,6 +1229,57 @@ fn spawn_compiled_save_framebuffer_capture(
                 }
             }
         });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_framebuffer_stream(
+    ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    host: String,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let stream_start = Instant::now();
+        let mut frames = 0_u64;
+        while stream_generation.load(Ordering::SeqCst) == generation {
+            let frame_start = Instant::now();
+            let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+            let frame_elapsed = frame_start.elapsed();
+            if result.is_ok() {
+                frames += 1;
+            }
+            let summary = result
+                .as_ref()
+                .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
+                .unwrap_or_else(|err| format!("Live stream error: {err}"));
+            let capture = result.as_ref().ok().cloned();
+            let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
+            let event_generation = Arc::clone(&stream_generation);
+            let event_capture_state = Arc::clone(&capture_state);
+            let event_ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if event_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if let Some(capture) = capture {
+                    if let Ok(mut state) = event_capture_state.lock() {
+                        *state = Some(capture);
+                    }
+                }
+                if let Some(ui) = event_ui.upgrade() {
+                    apply_compiled_framebuffer_capture_result(&ui, result);
+                    apply_compiled_stream_summary(&ui, &summary);
+                }
+            });
+            if !should_continue {
+                break;
+            }
+            if frames == 0 {
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        }
     });
 }
 
@@ -1166,5 +1415,20 @@ mod tests {
             framebuffer_capture_png_bytes(&capture).expect("RGBA pixels should encode as PNG");
 
         assert!(png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn framebuffer_stream_helpers_report_fps_and_latency() {
+        let latencies = [
+            Duration::from_millis(10),
+            Duration::from_millis(20),
+            Duration::from_millis(30),
+        ];
+
+        assert_eq!(latency_percentile_ms(&latencies, 0.50), 20.0);
+        assert_eq!(
+            framebuffer_stream_summary(30, Duration::from_secs(3), Duration::from_millis(75)),
+            "10.0 fps avg, 75 ms last frame"
+        );
     }
 }

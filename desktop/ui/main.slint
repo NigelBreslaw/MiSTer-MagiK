@@ -62,6 +62,8 @@ export global AnalyticsState {
     in-out property <bool> loading: false;
     in-out property <bool> has-image: false;
     in-out property <bool> can-save-image: false;
+    in-out property <bool> live-stream: false;
+    in-out property <string> live-stream-summary: "Live stream off.";
 }
 
 export global SdCardState {
@@ -100,6 +102,7 @@ export global Actions {
     callback select-page(string);
     callback capture-framebuffer();
     callback save-framebuffer-image();
+    callback live-stream-changed(bool);
     callback sd-row-toggle(string);
     callback sd-row-current(string);
     callback sd-refresh-folder();
@@ -516,6 +519,7 @@ component AnalyticsPage {
 
                 HorizontalLayout {
                     height: 32px;
+                    spacing: 16px;
                     alignment: start;
 
                     Button {
@@ -525,6 +529,25 @@ component AnalyticsPage {
                         disabled: !AnalyticsState.can-save-image || AnalyticsState.loading;
                         variant: ButtonVariant.default;
                         clicked => { Actions.save-framebuffer-image(); }
+                    }
+
+                    ToggleSwitch {
+                        checked: AnalyticsState.live-stream;
+                        size: ToggleSwitchSize.small;
+                        button-label-on: "Live stream";
+                        button-label-off: "Live stream";
+                        changed(checked) => {
+                            AnalyticsState.live-stream = checked;
+                            Actions.live-stream-changed(checked);
+                        }
+                    }
+
+                    Text {
+                        vertical-stretch: 1;
+                        text: AnalyticsState.live-stream-summary;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                        vertical-alignment: center;
                     }
                 }
 
