@@ -47,6 +47,8 @@ pub enum AgentError {
 pub struct FramebufferCapture {
     pub png_path: PathBuf,
     pub rgba_pixels: Vec<u8>,
+    pub raw_pixels: Vec<u8>,
+    pub raw_stride_bytes: u64,
     pub width: u64,
     pub height: u64,
     pub bpp: u64,
@@ -90,12 +92,22 @@ pub struct FramebufferStreamControl {
     stream: TcpStream,
 }
 
-#[derive(Default)]
 struct FramebufferStreamState {
     rgb565: Vec<u8>,
     geometry: Option<FrameGeometry>,
     expected_sequence: Option<u64>,
     awaiting_keyframe: bool,
+}
+
+impl Default for FramebufferStreamState {
+    fn default() -> Self {
+        Self {
+            rgb565: Vec::new(),
+            geometry: None,
+            expected_sequence: None,
+            awaiting_keyframe: true,
+        }
+    }
 }
 
 pub fn read_token() -> (String, TokenSource) {
@@ -194,6 +206,13 @@ pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, Agent
 }
 
 pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
+    connect_framebuffer_stream_seeded(host, None)
+}
+
+pub fn connect_framebuffer_stream_seeded(
+    host: &str,
+    seed: Option<&FramebufferCapture>,
+) -> Result<FramebufferStream, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
     let (_, reader) = request_framebuffer_stream_with_retry(&client)?;
@@ -203,10 +222,14 @@ pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, Agent
             .try_clone()
             .map_err(|err| AgentError::Unreachable(err.to_string()))?,
     };
+    let mut state = FramebufferStreamState::default();
+    if let Some(seed) = seed {
+        state.seed_from_capture(seed)?;
+    }
     Ok(FramebufferStream {
         reader,
         control,
-        state: FramebufferStreamState::default(),
+        state,
     })
 }
 
@@ -484,13 +507,22 @@ impl FramebufferStreamState {
         header
             .validate_shape()
             .map_err(|err| AgentError::Protocol(err.to_string()))?;
-        if header.kind == FrameKind::RectDelta && self.expected_sequence != Some(header.sequence) {
-            self.awaiting_keyframe = true;
-            self.expected_sequence = None;
-            return Ok(None);
-        }
         if self.awaiting_keyframe && header.kind != FrameKind::Keyframe {
             return Ok(None);
+        }
+        if header.kind == FrameKind::RectDelta {
+            if self.geometry != Some(header.geometry) {
+                self.awaiting_keyframe = true;
+                self.expected_sequence = None;
+                return Ok(None);
+            }
+            if let Some(expected) = self.expected_sequence {
+                if expected != header.sequence {
+                    self.awaiting_keyframe = true;
+                    self.expected_sequence = None;
+                    return Ok(None);
+                }
+            }
         }
         let raw = lz4_flex::decompress_size_prepended(payload)
             .map_err(|err| AgentError::Protocol(format!("decompress framebuffer stream: {err}")))?;
@@ -524,6 +556,8 @@ impl FramebufferStreamState {
         Ok(Some(FramebufferCapture {
             png_path: PathBuf::new(),
             rgba_pixels,
+            raw_pixels: Vec::new(),
+            raw_stride_bytes: 0,
             width: header.geometry.width as u64,
             height: header.geometry.height as u64,
             bpp: 16,
@@ -548,6 +582,69 @@ impl FramebufferStreamState {
         self.rgb565.resize(bytes, 0);
         self.expected_sequence = None;
         self.awaiting_keyframe = false;
+        Ok(())
+    }
+
+    fn seed_from_capture(&mut self, capture: &FramebufferCapture) -> Result<(), AgentError> {
+        if capture.bpp != 16 || capture.raw_pixels.is_empty() {
+            return Ok(());
+        }
+        if capture.width == 0 || capture.height == 0 || capture.raw_stride_bytes == 0 {
+            return Ok(());
+        }
+        if capture.raw_stride_bytes % 2 != 0 {
+            return Err(AgentError::Protocol(
+                "framebuffer capture stride is not 16bpp aligned".to_string(),
+            ));
+        }
+        let stride_pixels = capture.raw_stride_bytes / 2;
+        if stride_pixels < capture.width {
+            return Err(AgentError::Protocol(
+                "framebuffer capture stride is smaller than width".to_string(),
+            ));
+        }
+        let expected = capture
+            .raw_stride_bytes
+            .checked_mul(capture.height)
+            .ok_or_else(|| AgentError::Protocol("framebuffer seed size overflow".to_string()))?
+            as usize;
+        if capture.raw_pixels.len() != expected {
+            return Err(AgentError::Protocol(format!(
+                "framebuffer seed size mismatch expected={expected} actual={}",
+                capture.raw_pixels.len()
+            )));
+        }
+        let geometry = FrameGeometry {
+            width: u32::try_from(capture.width).map_err(|_| {
+                AgentError::Protocol("framebuffer seed width too large".to_string())
+            })?,
+            height: u32::try_from(capture.height).map_err(|_| {
+                AgentError::Protocol("framebuffer seed height too large".to_string())
+            })?,
+            stride_pixels: u32::try_from(stride_pixels).map_err(|_| {
+                AgentError::Protocol("framebuffer seed stride too large".to_string())
+            })?,
+        };
+        geometry.validate_seed_shape()?;
+        self.rgb565 = capture.raw_pixels.clone();
+        self.geometry = Some(geometry);
+        self.expected_sequence = None;
+        self.awaiting_keyframe = false;
+        Ok(())
+    }
+}
+
+trait FrameGeometrySeedExt {
+    fn validate_seed_shape(self) -> Result<(), AgentError>;
+}
+
+impl FrameGeometrySeedExt for FrameGeometry {
+    fn validate_seed_shape(self) -> Result<(), AgentError> {
+        if self.width == 0 || self.height == 0 || self.stride_pixels < self.width {
+            return Err(AgentError::Protocol(
+                "invalid framebuffer seed geometry".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -715,6 +812,8 @@ fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentE
     Ok(FramebufferCapture {
         png_path,
         rgba_pixels: Vec::new(),
+        raw_pixels: Vec::new(),
+        raw_stride_bytes: 0,
         width: value.pointer("/width").and_then(Value::as_u64).unwrap_or(0),
         height: value
             .pointer("/height")
@@ -775,14 +874,17 @@ fn parse_framebuffer_capture_lz4(
             raw.len()
         )));
     }
+    let raw_len = raw.len() as u64;
     let rgba_pixels = framebuffer_raw_to_rgba(&raw, width, height, stride, bpp)?;
     Ok(FramebufferCapture {
         png_path: PathBuf::new(),
         rgba_pixels,
+        raw_pixels: raw,
+        raw_stride_bytes: stride,
         width,
         height,
         bpp,
-        raw_bytes: raw.len() as u64,
+        raw_bytes: raw_len,
         payload_bytes: payload.len() as u64,
         encoding: encoding.to_string(),
         png_bytes: 0,
@@ -1260,6 +1362,8 @@ mod tests {
         assert_eq!(capture.raw_bytes, 4);
         assert_eq!(capture.payload_bytes, payload.len() as u64);
         assert_eq!(capture.encoding, "lz4-block-size-prepended");
+        assert_eq!(capture.raw_pixels, raw);
+        assert_eq!(capture.raw_stride_bytes, 4);
         assert_eq!(capture.rgba_pixels, vec![255, 0, 0, 255, 0, 255, 0, 255]);
         assert_eq!(capture.timing.raw_read_us, 10);
         assert_eq!(capture.timing.lz4_encode_us, 20);
@@ -1313,6 +1417,80 @@ mod tests {
             vec![0, 1, 0xaa, 0xbb, 4, 5, 6, 7, 0xcc, 0xdd, 10, 11]
         );
         assert_eq!(stream.expected_sequence, Some(3));
+    }
+
+    #[test]
+    fn framebuffer_stream_seed_capture_allows_first_rect_delta() {
+        let mut stream = FramebufferStreamState::default();
+        let seed = FramebufferCapture {
+            png_path: PathBuf::new(),
+            rgba_pixels: Vec::new(),
+            raw_pixels: vec![0, 1, 2, 3, 4, 5, 6, 7],
+            raw_stride_bytes: 4,
+            width: 2,
+            height: 2,
+            bpp: 16,
+            raw_bytes: 8,
+            payload_bytes: 8,
+            encoding: "lz4-block-size-prepended".to_string(),
+            png_bytes: 0,
+            png_hex_bytes: 0,
+            timing: FramebufferCaptureTiming::default(),
+        };
+        stream
+            .seed_from_capture(&seed)
+            .expect("seed capture should apply");
+
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 2,
+            stride_pixels: 2,
+        };
+        let rect = FrameRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        };
+        let (header, payload) =
+            encoded_stream_frame(FrameKind::RectDelta, 42, geometry, rect, &[8, 9, 10, 11]);
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("seeded delta should apply")
+            .expect("seeded delta should produce capture");
+
+        assert_eq!(capture.width, 2);
+        assert_eq!(stream.rgb565, vec![0, 1, 8, 9, 4, 5, 10, 11]);
+        assert_eq!(stream.expected_sequence, Some(43));
+    }
+
+    #[test]
+    fn framebuffer_stream_without_seed_waits_for_keyframe() {
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let mut stream = FramebufferStreamState::default();
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::RectDelta,
+            1,
+            geometry,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &[0xaa, 0xbb],
+        );
+
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("unseeded delta should be ignored");
+
+        assert!(capture.is_none());
+        assert!(stream.awaiting_keyframe);
     }
 
     #[test]

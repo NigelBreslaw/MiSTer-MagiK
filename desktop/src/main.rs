@@ -6,8 +6,8 @@ mod macos_titlebar;
 mod sd_card;
 
 use agent_client::{
-    connect_framebuffer_stream, drain_framebuffer_stream, fetch_dashboard,
-    fetch_framebuffer_capture, fetch_sd_directory, FramebufferStreamControl,
+    connect_framebuffer_stream, connect_framebuffer_stream_seeded, drain_framebuffer_stream,
+    fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory, FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -60,19 +60,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum FramebufferBenchMode {
     Poll,
     Stream,
     Drain,
+    Dump(PathBuf),
 }
 
 impl FramebufferBenchMode {
-    fn label(self) -> &'static str {
+    fn label(&self) -> &'static str {
         match self {
             Self::Poll => "poll",
             Self::Stream => "stream",
             Self::Drain => "drain",
+            Self::Dump(_) => "dump",
         }
     }
 }
@@ -86,9 +88,20 @@ fn framebuffer_stream_bench_args() -> Result<Option<(FramebufferBenchMode, u64)>
         "--framebuffer-stream-bench" => FramebufferBenchMode::Stream,
         "--framebuffer-poll-bench" => FramebufferBenchMode::Poll,
         "--framebuffer-stream-drain-bench" => FramebufferBenchMode::Drain,
+        "--framebuffer-stream-dump" => {
+            let dir = args
+                .get(1)
+                .ok_or("--framebuffer-stream-dump needs OUT_DIR [FRAMES]")?;
+            FramebufferBenchMode::Dump(PathBuf::from(dir))
+        }
         _ => return Ok(None),
     };
-    let frames = match args.get(1) {
+    let frame_arg_index = if matches!(mode, FramebufferBenchMode::Dump(_)) {
+        2
+    } else {
+        1
+    };
+    let frames = match args.get(frame_arg_index) {
         Some(value) => value.parse::<u64>()?,
         None => 120,
     };
@@ -127,6 +140,24 @@ fn run_framebuffer_stream_bench(
                 let frame_started = Instant::now();
                 let capture = fetch_framebuffer_capture(&host)?;
                 let _image = framebuffer_capture_image(&capture);
+                latencies.push(frame_started.elapsed());
+                payload_bytes += capture.payload_bytes;
+                raw_bytes += capture.raw_bytes;
+            }
+        }
+        FramebufferBenchMode::Dump(ref dir) => {
+            std::fs::create_dir_all(&dir)?;
+            let seed_capture = fetch_framebuffer_capture(&host).ok();
+            if let Some(capture) = seed_capture.as_ref() {
+                let png = framebuffer_capture_png_bytes(capture)?;
+                std::fs::write(dir.join("frame-0000-seed.png"), png)?;
+            }
+            let mut stream = connect_framebuffer_stream_seeded(&host, seed_capture.as_ref())?;
+            for idx in 0..frames {
+                let frame_started = Instant::now();
+                let capture = stream.next_capture()?;
+                let png = framebuffer_capture_png_bytes(&capture)?;
+                std::fs::write(dir.join(format!("frame-{idx:04}.png")), png)?;
                 latencies.push(frame_started.elapsed());
                 payload_bytes += capture.payload_bytes;
                 raw_bytes += capture.raw_bytes;
@@ -1235,7 +1266,24 @@ fn spawn_live_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
-        let mut stream = match connect_framebuffer_stream(&host) {
+        let seed_capture = fetch_framebuffer_capture(&host).ok();
+        if let Some(capture) = seed_capture.clone() {
+            let event_generation = Arc::clone(&stream_generation);
+            let event_capture_state = Arc::clone(&capture_state);
+            let event_instance = instance.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if event_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if let Ok(mut state) = event_capture_state.lock() {
+                    *state = Some(capture.clone());
+                }
+                if let Some(instance) = event_instance.upgrade() {
+                    apply_live_framebuffer_capture_result(&instance, Ok(capture));
+                }
+            });
+        }
+        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();
@@ -1402,7 +1450,24 @@ fn spawn_compiled_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
-        let mut stream = match connect_framebuffer_stream(&host) {
+        let seed_capture = fetch_framebuffer_capture(&host).ok();
+        if let Some(capture) = seed_capture.clone() {
+            let event_generation = Arc::clone(&stream_generation);
+            let event_capture_state = Arc::clone(&capture_state);
+            let event_ui = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if event_generation.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                if let Ok(mut state) = event_capture_state.lock() {
+                    *state = Some(capture.clone());
+                }
+                if let Some(ui) = event_ui.upgrade() {
+                    apply_compiled_framebuffer_capture_result(&ui, Ok(capture));
+                }
+            });
+        }
+        let mut stream = match connect_framebuffer_stream_seeded(&host, seed_capture.as_ref()) {
             Ok(stream) => stream,
             Err(err) => {
                 let err = err.to_string();
@@ -1578,6 +1643,8 @@ mod tests {
         let capture = agent_client::FramebufferCapture {
             png_path: std::path::PathBuf::from("/tmp/fb.png"),
             rgba_pixels: Vec::new(),
+            raw_pixels: Vec::new(),
+            raw_stride_bytes: 0,
             width: 960,
             height: 540,
             bpp: 16,
@@ -1602,6 +1669,8 @@ mod tests {
             rgba_pixels: vec![
                 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
             ],
+            raw_pixels: Vec::new(),
+            raw_stride_bytes: 0,
             width: 2,
             height: 2,
             bpp: 16,
