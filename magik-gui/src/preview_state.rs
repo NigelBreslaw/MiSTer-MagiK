@@ -1070,6 +1070,32 @@ pub(crate) fn request_arcade_preview_window(
         return true;
     }
     let requested_at_ms = preview.trace_elapsed_ms();
+    if turbo_active {
+        let generation = preview.worker.request_selected(
+            candidate_game.title.to_string(),
+            candidate_game.preview_archive_path.to_string(),
+            candidate_game.preview_asset_key.to_string(),
+        );
+        preview.current_generation = generation;
+        crate::ui_errln!(
+            "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
+            requested_at_ms,
+            candidate_game.system_id,
+            selected,
+            candidate_game.title,
+            candidate_game.preview_asset_key,
+            generation
+        );
+        request_preview_prefetches(games, selected, preview, turbo_runway_active);
+        trace_preview_coverage_sample(
+            preview,
+            selected,
+            selected_game,
+            Some(&candidate),
+            turbo_active,
+        );
+        return false;
+    }
     crate::ui_errln!(
         "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0",
         requested_at_ms,
