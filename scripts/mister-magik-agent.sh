@@ -76,20 +76,20 @@ fi
 cat >'$REMOTE_SCRIPT' <<'EOS'
 #!/bin/sh
 stop_agent() {
-  pids="$(pidof mister-magik-agent 2>/dev/null || true)"
-  if [ -z "$pids" ]; then
+  pids=\"\$(pidof mister-magik-agent 2>/dev/null || true)\"
+  if [ -z \"\$pids\" ]; then
     return 0
   fi
-  kill $pids 2>/dev/null || true
+  kill \$pids 2>/dev/null || true
   i=0
-  while [ "$i" -lt 20 ]; do
+  while [ \"\$i\" -lt 20 ]; do
     sleep 0.1
     if ! pidof mister-magik-agent >/dev/null 2>&1; then
       return 0
     fi
-    i=$((i + 1))
+    i=\$((i + 1))
   done
-  kill -9 $(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true
+  kill -9 \$(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true
 }
 case \"\$1\" in
   start)
