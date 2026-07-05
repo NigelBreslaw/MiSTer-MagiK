@@ -3,6 +3,9 @@ use crate::app_state::{
     ConnectionOutcome, DashboardSnapshot,
 };
 use crate::sd_card::{SdDirectoryListing, SdEntry, SdEntryKind};
+use mister_magik_framebuffer_stream::{
+    read_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
+};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -67,6 +70,18 @@ pub struct FramebufferCaptureTiming {
     pub hex_encode_us: u64,
     pub lz4_encode_us: u64,
     pub total_us: u64,
+}
+
+pub struct FramebufferStream {
+    reader: BufReader<TcpStream>,
+    state: FramebufferStreamState,
+}
+
+#[derive(Default)]
+struct FramebufferStreamState {
+    rgb565: Vec<u8>,
+    geometry: Option<FrameGeometry>,
+    expected_sequence: Option<u64>,
 }
 
 pub fn read_token() -> (String, TokenSource) {
@@ -164,6 +179,16 @@ pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, Agent
     parse_framebuffer_capture_lz4(&value, &payload)
 }
 
+pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let (_, reader) = client.request_stream("framebuffer_stream_v1", json!({}))?;
+    Ok(FramebufferStream {
+        reader,
+        state: FramebufferStreamState::default(),
+    })
+}
+
 struct AgentClient {
     host: String,
     token: String,
@@ -259,6 +284,191 @@ impl AgentClient {
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         Ok((value, payload))
     }
+
+    fn request_stream(
+        &self,
+        cmd: &str,
+        args: Value,
+    ) -> Result<(Value, BufReader<TcpStream>), AgentError> {
+        let addr = format!("{}:{AGENT_PORT}", self.host)
+            .to_socket_addrs()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?
+            .next()
+            .ok_or_else(|| {
+                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
+            })?;
+
+        let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_write_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let request = json!({
+            "token": self.token,
+            "id": 1,
+            "cmd": cmd,
+            "args": args,
+        });
+        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .flush()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        let value = parse_response(&line, Duration::ZERO)?;
+        Ok((value, reader))
+    }
+}
+
+impl FramebufferStream {
+    pub fn next_capture(&mut self) -> Result<FramebufferCapture, AgentError> {
+        let (header, payload) = read_frame(&mut self.reader)
+            .map_err(|err| AgentError::Unreachable(format!("read framebuffer stream: {err}")))?;
+        self.state.apply_frame(header, &payload)
+    }
+}
+
+impl FramebufferStreamState {
+    fn apply_frame(
+        &mut self,
+        header: FrameHeader,
+        payload: &[u8],
+    ) -> Result<FramebufferCapture, AgentError> {
+        if header.flags & FLAG_LZ4_SIZE_PREPENDED == 0 {
+            return Err(AgentError::Protocol(
+                "framebuffer stream frame is not LZ4 encoded".to_string(),
+            ));
+        }
+        if !matches!(header.kind, FrameKind::Keyframe | FrameKind::RectDelta) {
+            return Err(AgentError::Protocol(format!(
+                "unexpected framebuffer stream frame kind: {:?}",
+                header.kind
+            )));
+        }
+        header
+            .validate_shape()
+            .map_err(|err| AgentError::Protocol(err.to_string()))?;
+        if header.kind == FrameKind::RectDelta && self.expected_sequence != Some(header.sequence) {
+            return Err(AgentError::Protocol(format!(
+                "framebuffer stream sequence gap expected={:?} actual={}",
+                self.expected_sequence, header.sequence
+            )));
+        }
+        let raw = lz4_flex::decompress_size_prepended(payload)
+            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer stream: {err}")))?;
+        if raw.len() != header.raw_bytes as usize {
+            return Err(AgentError::Protocol(format!(
+                "framebuffer stream raw size mismatch expected={} actual={}",
+                header.raw_bytes,
+                raw.len()
+            )));
+        }
+        if self.geometry != Some(header.geometry) || header.kind == FrameKind::Keyframe {
+            self.reset_buffer(header.geometry)?;
+        }
+        apply_rgb565_rect(&mut self.rgb565, header.geometry, header.rect, &raw)?;
+        self.geometry = Some(header.geometry);
+        self.expected_sequence = Some(header.sequence.saturating_add(1));
+        let stride_bytes = header
+            .geometry
+            .stride_pixels
+            .checked_mul(2)
+            .ok_or_else(|| AgentError::Protocol("framebuffer stream stride overflow".to_string()))?
+            as u64;
+        let rgba_pixels = framebuffer_raw_to_rgba(
+            &self.rgb565,
+            header.geometry.width as u64,
+            header.geometry.height as u64,
+            stride_bytes,
+            16,
+        )?;
+        Ok(FramebufferCapture {
+            png_path: PathBuf::new(),
+            rgba_pixels,
+            width: header.geometry.width as u64,
+            height: header.geometry.height as u64,
+            bpp: 16,
+            raw_bytes: header.raw_bytes as u64,
+            payload_bytes: header.payload_bytes as u64,
+            encoding: "framebuffer-stream-v1/lz4-block-size-prepended".to_string(),
+            png_bytes: 0,
+            png_hex_bytes: 0,
+            timing: FramebufferCaptureTiming::default(),
+        })
+    }
+
+    fn reset_buffer(&mut self, geometry: FrameGeometry) -> Result<(), AgentError> {
+        let bytes = geometry
+            .stride_pixels
+            .checked_mul(geometry.height)
+            .and_then(|pixels| pixels.checked_mul(2))
+            .ok_or_else(|| {
+                AgentError::Protocol("framebuffer stream geometry overflow".to_string())
+            })? as usize;
+        self.rgb565.clear();
+        self.rgb565.resize(bytes, 0);
+        self.expected_sequence = None;
+        Ok(())
+    }
+}
+
+fn apply_rgb565_rect(
+    framebuffer: &mut [u8],
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    raw: &[u8],
+) -> Result<(), AgentError> {
+    let row_bytes = rect
+        .width
+        .checked_mul(2)
+        .ok_or_else(|| AgentError::Protocol("framebuffer stream rect overflow".to_string()))?
+        as usize;
+    if raw.len()
+        != row_bytes
+            .checked_mul(rect.height as usize)
+            .ok_or_else(|| AgentError::Protocol("framebuffer stream raw overflow".to_string()))?
+    {
+        return Err(AgentError::Protocol(
+            "framebuffer stream rect payload length mismatch".to_string(),
+        ));
+    }
+    let stride_bytes = geometry
+        .stride_pixels
+        .checked_mul(2)
+        .ok_or_else(|| AgentError::Protocol("framebuffer stream stride overflow".to_string()))?
+        as usize;
+    let x_bytes = rect
+        .x
+        .checked_mul(2)
+        .ok_or_else(|| AgentError::Protocol("framebuffer stream rect overflow".to_string()))?
+        as usize;
+    for row in 0..rect.height as usize {
+        let src = row * row_bytes;
+        let dst = (rect.y as usize + row)
+            .checked_mul(stride_bytes)
+            .and_then(|offset| offset.checked_add(x_bytes))
+            .ok_or_else(|| {
+                AgentError::Protocol("framebuffer stream offset overflow".to_string())
+            })?;
+        let dst_end = dst.checked_add(row_bytes).ok_or_else(|| {
+            AgentError::Protocol("framebuffer stream offset overflow".to_string())
+        })?;
+        let Some(dst_row) = framebuffer.get_mut(dst..dst_end) else {
+            return Err(AgentError::Protocol(
+                "framebuffer stream rect outside framebuffer".to_string(),
+            ));
+        };
+        dst_row.copy_from_slice(&raw[src..src + row_bytes]);
+    }
+    Ok(())
 }
 
 fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
@@ -925,6 +1135,133 @@ mod tests {
     }
 
     #[test]
+    fn framebuffer_stream_applies_keyframe_and_rect_delta() {
+        let geometry = FrameGeometry {
+            width: 3,
+            height: 2,
+            stride_pixels: 3,
+        };
+        let mut stream = FramebufferStreamState::default();
+        let keyframe = (0_u8..12).collect::<Vec<_>>();
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            1,
+            geometry,
+            FrameRect::full(geometry),
+            &keyframe,
+        );
+
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("keyframe should apply");
+
+        assert_eq!(capture.width, 3);
+        assert_eq!(capture.height, 2);
+        assert_eq!(stream.rgb565, keyframe);
+        assert_eq!(stream.expected_sequence, Some(2));
+
+        let rect = FrameRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        };
+        let delta = [0xaa, 0xbb, 0xcc, 0xdd];
+        let (header, payload) =
+            encoded_stream_frame(FrameKind::RectDelta, 2, geometry, rect, &delta);
+
+        stream
+            .apply_frame(header, &payload)
+            .expect("delta should apply");
+
+        assert_eq!(
+            stream.rgb565,
+            vec![0, 1, 0xaa, 0xbb, 4, 5, 6, 7, 0xcc, 0xdd, 10, 11]
+        );
+        assert_eq!(stream.expected_sequence, Some(3));
+    }
+
+    #[test]
+    fn framebuffer_stream_rejects_sequence_gap() {
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let mut stream = FramebufferStreamState::default();
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            10,
+            geometry,
+            FrameRect::full(geometry),
+            &[0, 1, 2, 3],
+        );
+        stream
+            .apply_frame(header, &payload)
+            .expect("keyframe should apply");
+
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::RectDelta,
+            12,
+            geometry,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &[4, 5],
+        );
+
+        let err = stream
+            .apply_frame(header, &payload)
+            .expect_err("sequence gap should fail");
+
+        assert!(matches!(err, AgentError::Protocol(message) if message.contains("sequence gap")));
+    }
+
+    #[test]
+    fn framebuffer_stream_reallocates_on_geometry_keyframe() {
+        let first = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let second = FrameGeometry {
+            width: 1,
+            height: 2,
+            stride_pixels: 1,
+        };
+        let mut stream = FramebufferStreamState::default();
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            1,
+            first,
+            FrameRect::full(first),
+            &[0, 1, 2, 3],
+        );
+        stream
+            .apply_frame(header, &payload)
+            .expect("first geometry should apply");
+
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            20,
+            second,
+            FrameRect::full(second),
+            &[4, 5, 6, 7],
+        );
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("geometry keyframe should apply");
+
+        assert_eq!(capture.width, 1);
+        assert_eq!(capture.height, 2);
+        assert_eq!(stream.rgb565, vec![4, 5, 6, 7]);
+        assert_eq!(stream.expected_sequence, Some(21));
+    }
+
+    #[test]
     fn parse_framebuffer_capture_rejects_bad_shape() {
         let schema = parse_framebuffer_capture(&json!({"schema": "wrong"}))
             .expect_err("schema mismatch should fail");
@@ -1019,5 +1356,28 @@ mod tests {
             AgentError::Command("bad command".to_string()).to_string(),
             "bad command"
         );
+    }
+
+    fn encoded_stream_frame(
+        kind: FrameKind,
+        sequence: u64,
+        geometry: FrameGeometry,
+        rect: FrameRect,
+        raw: &[u8],
+    ) -> (FrameHeader, Vec<u8>) {
+        let payload = lz4_flex::compress_prepend_size(raw);
+        (
+            FrameHeader {
+                kind,
+                flags: FLAG_LZ4_SIZE_PREPENDED,
+                sequence,
+                timestamp_us: 123,
+                geometry,
+                rect,
+                raw_bytes: raw.len() as u32,
+                payload_bytes: payload.len() as u32,
+            },
+            payload,
+        )
     }
 }

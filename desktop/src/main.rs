@@ -5,7 +5,9 @@ mod file_icons;
 mod macos_titlebar;
 mod sd_card;
 
-use agent_client::{fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory};
+use agent_client::{
+    connect_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
+};
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
@@ -61,7 +63,7 @@ fn framebuffer_stream_bench_frames() -> Result<Option<u64>, Box<dyn Error>> {
     let Some(first) = args.first() else {
         return Ok(None);
     };
-    if first != "--framebuffer-stream-bench" {
+    if first != "--framebuffer-stream-bench" && first != "--framebuffer-poll-bench" {
         return Ok(None);
     }
     let frames = match args.get(1) {
@@ -72,18 +74,33 @@ fn framebuffer_stream_bench_frames() -> Result<Option<u64>, Box<dyn Error>> {
 }
 
 fn run_framebuffer_stream_bench(frames: u64) -> Result<(), Box<dyn Error>> {
+    let stream_mode = std::env::args()
+        .nth(1)
+        .is_some_and(|arg| arg == "--framebuffer-stream-bench");
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let started = Instant::now();
     let mut latencies = Vec::with_capacity(frames as usize);
     let mut payload_bytes = 0_u64;
     let mut raw_bytes = 0_u64;
-    for _ in 0..frames {
-        let frame_started = Instant::now();
-        let capture = fetch_framebuffer_capture(&host)?;
-        let _image = framebuffer_capture_image(&capture);
-        latencies.push(frame_started.elapsed());
-        payload_bytes += capture.payload_bytes;
-        raw_bytes += capture.raw_bytes;
+    if stream_mode {
+        let mut stream = connect_framebuffer_stream(&host)?;
+        for _ in 0..frames {
+            let frame_started = Instant::now();
+            let capture = stream.next_capture()?;
+            let _image = framebuffer_capture_image(&capture);
+            latencies.push(frame_started.elapsed());
+            payload_bytes += capture.payload_bytes;
+            raw_bytes += capture.raw_bytes;
+        }
+    } else {
+        for _ in 0..frames {
+            let frame_started = Instant::now();
+            let capture = fetch_framebuffer_capture(&host)?;
+            let _image = framebuffer_capture_image(&capture);
+            latencies.push(frame_started.elapsed());
+            payload_bytes += capture.payload_bytes;
+            raw_bytes += capture.raw_bytes;
+        }
     }
     latencies.sort();
     let elapsed = started.elapsed();
@@ -93,7 +110,8 @@ fn run_framebuffer_stream_bench(frames: u64) -> Result<(), Box<dyn Error>> {
     let payload_avg = payload_bytes / frames;
     let raw_avg = raw_bytes / frames;
     println!(
-        "framebuffer_stream_bench_tsv\tframes={frames}\tfps={fps:.2}\telapsed_ms={:.0}\tp50_ms={p50:.1}\tp95_ms={p95:.1}\tavg_payload_bytes={payload_avg}\tavg_raw_bytes={raw_avg}",
+        "framebuffer_stream_bench_tsv\tmode={}\tframes={frames}\tfps={fps:.2}\telapsed_ms={:.0}\tp50_ms={p50:.1}\tp95_ms={p95:.1}\tavg_payload_bytes={payload_avg}\tavg_raw_bytes={raw_avg}",
+        if stream_mode { "stream" } else { "poll" },
         elapsed.as_secs_f64() * 1000.0
     );
     Ok(())
@@ -960,10 +978,36 @@ fn apply_live_stream_summary(instance: &slint_interpreter::ComponentInstance, su
     );
 }
 
+#[cfg(feature = "live-ui")]
+fn apply_live_stream_disconnected(instance: &slint_interpreter::ComponentInstance, err: &str) {
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property("AnalyticsState", "live-stream", Value::Bool(false));
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "live-stream-summary",
+        Value::String(SharedString::from("Live stream disconnected.")),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "last-error",
+        Value::String(SharedString::from(err)),
+    );
+}
+
 #[cfg(feature = "compiled-ui")]
 fn apply_compiled_stream_summary(ui: &AppWindow, summary: &str) {
     ui.global::<AnalyticsState>()
         .set_live_stream_summary(summary.into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_stream_disconnected(ui: &AppWindow, err: &str) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_live_stream(false);
+    state.set_live_stream_summary("Live stream disconnected.".into());
+    state.set_last_error(err.into());
 }
 
 fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Duration) -> String {
@@ -1120,9 +1164,25 @@ fn spawn_live_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
+        let mut stream = match connect_framebuffer_stream(&host) {
+            Ok(stream) => stream,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(instance) = instance.upgrade() {
+                        apply_live_stream_disconnected(&instance, &err);
+                    }
+                });
+                return;
+            }
+        };
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
-            let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+            let result = stream.next_capture().map_err(|err| err.to_string());
             let frame_elapsed = frame_start.elapsed();
             if result.is_ok() {
                 frames += 1;
@@ -1130,9 +1190,10 @@ fn spawn_live_framebuffer_stream(
             let summary = result
                 .as_ref()
                 .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
-                .unwrap_or_else(|err| format!("Live stream error: {err}"));
+                .unwrap_or_else(|_| "Live stream disconnected.".to_string());
             let capture = result.as_ref().ok().cloned();
             let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
+            let disconnected = result.is_err();
             let event_generation = Arc::clone(&stream_generation);
             let event_capture_state = Arc::clone(&capture_state);
             let event_instance = instance.clone();
@@ -1146,15 +1207,19 @@ fn spawn_live_framebuffer_stream(
                     }
                 }
                 if let Some(instance) = event_instance.upgrade() {
-                    apply_live_framebuffer_capture_result(&instance, result);
-                    apply_live_stream_summary(&instance, &summary);
+                    if disconnected {
+                        let err = result
+                            .err()
+                            .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
+                        apply_live_stream_disconnected(&instance, &err);
+                    } else {
+                        apply_live_framebuffer_capture_result(&instance, result);
+                        apply_live_stream_summary(&instance, &summary);
+                    }
                 }
             });
-            if !should_continue {
+            if !should_continue || disconnected {
                 break;
-            }
-            if frames == 0 {
-                std::thread::sleep(Duration::from_millis(250));
             }
         }
     });
@@ -1243,9 +1308,25 @@ fn spawn_compiled_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
+        let mut stream = match connect_framebuffer_stream(&host) {
+            Ok(stream) => stream,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(ui) = ui.upgrade() {
+                        apply_compiled_stream_disconnected(&ui, &err);
+                    }
+                });
+                return;
+            }
+        };
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
-            let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+            let result = stream.next_capture().map_err(|err| err.to_string());
             let frame_elapsed = frame_start.elapsed();
             if result.is_ok() {
                 frames += 1;
@@ -1253,9 +1334,10 @@ fn spawn_compiled_framebuffer_stream(
             let summary = result
                 .as_ref()
                 .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
-                .unwrap_or_else(|err| format!("Live stream error: {err}"));
+                .unwrap_or_else(|_| "Live stream disconnected.".to_string());
             let capture = result.as_ref().ok().cloned();
             let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
+            let disconnected = result.is_err();
             let event_generation = Arc::clone(&stream_generation);
             let event_capture_state = Arc::clone(&capture_state);
             let event_ui = ui.clone();
@@ -1269,15 +1351,19 @@ fn spawn_compiled_framebuffer_stream(
                     }
                 }
                 if let Some(ui) = event_ui.upgrade() {
-                    apply_compiled_framebuffer_capture_result(&ui, result);
-                    apply_compiled_stream_summary(&ui, &summary);
+                    if disconnected {
+                        let err = result
+                            .err()
+                            .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
+                        apply_compiled_stream_disconnected(&ui, &err);
+                    } else {
+                        apply_compiled_framebuffer_capture_result(&ui, result);
+                        apply_compiled_stream_summary(&ui, &summary);
+                    }
                 }
             });
-            if !should_continue {
+            if !should_continue || disconnected {
                 break;
-            }
-            if frames == 0 {
-                std::thread::sleep(Duration::from_millis(250));
             }
         }
     });
