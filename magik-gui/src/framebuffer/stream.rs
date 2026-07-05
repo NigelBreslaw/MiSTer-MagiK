@@ -24,6 +24,7 @@ static COALESCED_FRAMES: AtomicU64 = AtomicU64::new(0);
 struct ProducerState {
     latest_geometry: Option<FrameGeometry>,
     latest_pixels: Vec<Rgb565Pixel>,
+    has_full_frame_base: bool,
 }
 
 impl ProducerState {
@@ -31,6 +32,7 @@ impl ProducerState {
         Self {
             latest_geometry: None,
             latest_pixels: Vec::new(),
+            has_full_frame_base: false,
         }
     }
 
@@ -49,8 +51,18 @@ impl ProducerState {
             self.latest_pixels.clear();
             self.latest_pixels.resize(len, Rgb565Pixel(0));
             self.latest_geometry = Some(geometry);
+            self.has_full_frame_base = false;
         }
         copy_rect_into_latest(&mut self.latest_pixels, geometry, rect, rect_pixels);
+        if is_full_frame(geometry, rect) {
+            self.has_full_frame_base = true;
+        }
+    }
+}
+
+impl Default for ProducerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -83,6 +95,7 @@ struct WorkerQueue {
 struct WorkerQueueState {
     subscriber: Option<TcpStream>,
     frame: Option<FrameUpdate>,
+    latest: ProducerState,
 }
 
 impl WorkerQueue {
@@ -106,9 +119,27 @@ impl WorkerQueue {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
-        if state.frame.replace(frame).is_some() {
+        if let Some(pending) = state.frame.take() {
             COALESCED_FRAMES.fetch_add(1, Ordering::Relaxed);
-            NEEDS_KEYFRAME.store(true, Ordering::Release);
+            if pending.geometry == frame.geometry {
+                let rect = union_frame_rect(pending.rect, frame.rect);
+                state
+                    .latest
+                    .remember_rect_pixels(frame.geometry, frame.rect, &frame.pixels);
+                state.frame = rect
+                    .and_then(|rect| frame_update_from_latest(&state.latest, frame.geometry, rect));
+            } else {
+                NEEDS_KEYFRAME.store(true, Ordering::Release);
+                state
+                    .latest
+                    .remember_rect_pixels(frame.geometry, frame.rect, &frame.pixels);
+                state.frame = Some(frame);
+            }
+        } else {
+            state
+                .latest
+                .remember_rect_pixels(frame.geometry, frame.rect, &frame.pixels);
+            state.frame = Some(frame);
         }
         self.ready.notify_one();
         true
@@ -180,7 +211,14 @@ fn bind_listener() -> io::Result<TcpListener> {
 
 pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
-        remember_startup_keyframe(geometry, rect, pixels);
+        remember_idle_rect(
+            geometry,
+            rect,
+            pixels,
+            geometry.stride_pixels as usize,
+            rect.x as usize,
+            rect.y as usize,
+        );
         return;
     }
     publish_rect(
@@ -195,6 +233,7 @@ pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[R
 
 pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
+        remember_idle_rect(geometry, rect, pixels, rect.width as usize, 0, 0);
         return;
     }
     publish_rect(geometry, rect, pixels, rect.width as usize, 0, 0);
@@ -209,6 +248,7 @@ pub fn publish_strided_rect(
     src_y: usize,
 ) {
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
+        remember_idle_rect(geometry, rect, pixels, src_stride, src_x, src_y);
         return;
     }
     publish_rect(geometry, rect, pixels, src_stride, src_x, src_y);
@@ -255,23 +295,18 @@ fn install_subscriber(stream: TcpStream) {
     crate::ui_logln!("framebuffer stream producer subscriber connected");
 }
 
-fn remember_startup_keyframe(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
-    if !is_full_frame(geometry, rect) {
-        return;
-    }
+fn remember_idle_rect(
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    pixels: &[Rgb565Pixel],
+    src_stride: usize,
+    src_x: usize,
+    src_y: usize,
+) {
     let Ok(mut state) = state().lock() else {
         return;
     };
-    if state.latest_geometry.is_some() {
-        return;
-    }
-    let Some(rect_pixels) = collect_strided_rect(
-        pixels,
-        geometry.stride_pixels as usize,
-        rect.x as usize,
-        rect.y as usize,
-        rect,
-    ) else {
+    let Some(rect_pixels) = collect_strided_rect(pixels, src_stride, src_x, src_y, rect) else {
         return;
     };
     state.remember_rect_pixels(geometry, rect, &rect_pixels);
@@ -282,6 +317,9 @@ fn is_full_frame(geometry: FrameGeometry, rect: FrameRect) -> bool {
 }
 
 fn latest_keyframe_update(state: &ProducerState) -> Option<FrameUpdate> {
+    if !state.has_full_frame_base {
+        return None;
+    }
     let geometry = state.latest_geometry?;
     Some(FrameUpdate {
         geometry,
@@ -291,6 +329,9 @@ fn latest_keyframe_update(state: &ProducerState) -> Option<FrameUpdate> {
 }
 
 fn latest_keyframe_job(state: &ProducerState) -> Option<FrameJob> {
+    if !state.has_full_frame_base {
+        return None;
+    }
     let geometry = state.latest_geometry?;
     Some(frame_job_from_pixels(
         geometry,
@@ -356,6 +397,9 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 let job = if force_keyframe {
                     latest_keyframe_job(&producer_state)
                 } else {
+                    None
+                }
+                .or_else(|| {
                     Some(frame_job_from_pixels(
                         update.geometry,
                         update.rect,
@@ -363,7 +407,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                         &update.pixels,
                         update.rect.width as usize,
                     ))
-                };
+                });
                 let Some(job) = job else {
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
                     continue;
@@ -489,6 +533,41 @@ fn copy_rect_into_latest(
         };
         dst_row.copy_from_slice(src_row);
     }
+}
+
+fn frame_update_from_latest(
+    state: &ProducerState,
+    geometry: FrameGeometry,
+    rect: FrameRect,
+) -> Option<FrameUpdate> {
+    if state.latest_geometry != Some(geometry) {
+        return None;
+    }
+    let pixels = collect_strided_rect(
+        &state.latest_pixels,
+        geometry.stride_pixels as usize,
+        rect.x as usize,
+        rect.y as usize,
+        rect,
+    )?;
+    Some(FrameUpdate {
+        geometry,
+        rect,
+        pixels,
+    })
+}
+
+fn union_frame_rect(a: FrameRect, b: FrameRect) -> Option<FrameRect> {
+    let x0 = a.x.min(b.x);
+    let y0 = a.y.min(b.y);
+    let x1 = a.x.checked_add(a.width)?.max(b.x.checked_add(b.width)?);
+    let y1 = a.y.checked_add(a.height)?.max(b.y.checked_add(b.height)?);
+    Some(FrameRect {
+        x: x0,
+        y: y0,
+        width: x1.checked_sub(x0)?,
+        height: y1.checked_sub(y0)?,
+    })
 }
 
 fn rgb565_rect_bytes(
@@ -632,7 +711,85 @@ mod tests {
     }
 
     #[test]
-    fn worker_queue_replaces_pending_frame_and_requests_keyframe() {
+    fn idle_keyframe_replaces_previous_full_frame() {
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let mut state = ProducerState::new();
+        state.remember_rect_pixels(
+            geometry,
+            FrameRect::full(geometry),
+            &[Rgb565Pixel(1), Rgb565Pixel(2)],
+        );
+        state.remember_rect_pixels(
+            geometry,
+            FrameRect::full(geometry),
+            &[Rgb565Pixel(3), Rgb565Pixel(4)],
+        );
+
+        assert_eq!(state.latest_pixels, vec![Rgb565Pixel(3), Rgb565Pixel(4)]);
+    }
+
+    #[test]
+    fn idle_keyframe_includes_overlay_rects_after_full_frame() {
+        let geometry = FrameGeometry {
+            width: 4,
+            height: 2,
+            stride_pixels: 4,
+        };
+        let mut state = ProducerState::new();
+        state.remember_rect_pixels(
+            geometry,
+            FrameRect::full(geometry),
+            &[
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+            ],
+        );
+        state.remember_rect_pixels(
+            geometry,
+            FrameRect {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 2,
+            },
+            &[
+                Rgb565Pixel(9),
+                Rgb565Pixel(8),
+                Rgb565Pixel(7),
+                Rgb565Pixel(6),
+            ],
+        );
+
+        let update = latest_keyframe_update(&state).expect("complete keyframe");
+
+        assert_eq!(update.rect, FrameRect::full(geometry));
+        assert_eq!(
+            update.pixels,
+            vec![
+                Rgb565Pixel(1),
+                Rgb565Pixel(9),
+                Rgb565Pixel(8),
+                Rgb565Pixel(1),
+                Rgb565Pixel(1),
+                Rgb565Pixel(7),
+                Rgb565Pixel(6),
+                Rgb565Pixel(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn worker_queue_coalesces_same_rect_without_requesting_keyframe() {
         NEEDS_KEYFRAME.store(false, Ordering::Release);
         let queue = WorkerQueue::new();
         let geometry = FrameGeometry {
@@ -654,9 +811,109 @@ mod tests {
         assert!(queue.push_frame(first));
         assert!(queue.push_frame(second));
 
-        assert!(NEEDS_KEYFRAME.load(Ordering::Acquire));
+        assert!(!NEEDS_KEYFRAME.load(Ordering::Acquire));
         let state = queue.state.lock().expect("queue state");
         let pending = state.frame.as_ref().expect("latest frame remains queued");
         assert_eq!(pending.pixels, vec![Rgb565Pixel(3), Rgb565Pixel(4)]);
+    }
+
+    #[test]
+    fn worker_queue_requests_keyframe_when_geometry_changes() {
+        NEEDS_KEYFRAME.store(false, Ordering::Release);
+        let queue = WorkerQueue::new();
+        let first_geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let second_geometry = FrameGeometry {
+            width: 3,
+            height: 1,
+            stride_pixels: 3,
+        };
+
+        assert!(queue.push_frame(FrameUpdate {
+            geometry: first_geometry,
+            rect: FrameRect::full(first_geometry),
+            pixels: vec![Rgb565Pixel(1), Rgb565Pixel(2)],
+        }));
+        assert!(queue.push_frame(FrameUpdate {
+            geometry: second_geometry,
+            rect: FrameRect::full(second_geometry),
+            pixels: vec![Rgb565Pixel(3), Rgb565Pixel(4), Rgb565Pixel(5)],
+        }));
+
+        assert!(NEEDS_KEYFRAME.load(Ordering::Acquire));
+        let state = queue.state.lock().expect("queue state");
+        let pending = state.frame.as_ref().expect("latest frame remains queued");
+        assert_eq!(pending.geometry, second_geometry);
+    }
+
+    #[test]
+    fn worker_queue_coalesces_pending_frames_into_union_rect() {
+        NEEDS_KEYFRAME.store(false, Ordering::Release);
+        let queue = WorkerQueue::new();
+        let geometry = FrameGeometry {
+            width: 4,
+            height: 3,
+            stride_pixels: 4,
+        };
+        let first = FrameUpdate {
+            geometry,
+            rect: FrameRect {
+                x: 0,
+                y: 1,
+                width: 2,
+                height: 1,
+            },
+            pixels: vec![Rgb565Pixel(1), Rgb565Pixel(2)],
+        };
+        let second = FrameUpdate {
+            geometry,
+            rect: FrameRect {
+                x: 1,
+                y: 0,
+                width: 2,
+                height: 3,
+            },
+            pixels: vec![
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+                Rgb565Pixel(7),
+                Rgb565Pixel(8),
+            ],
+        };
+
+        assert!(queue.push_frame(first));
+        assert!(queue.push_frame(second));
+
+        assert!(!NEEDS_KEYFRAME.load(Ordering::Acquire));
+        let state = queue.state.lock().expect("queue state");
+        let pending = state.frame.as_ref().expect("merged frame remains queued");
+        assert_eq!(
+            pending.rect,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 3,
+                height: 3
+            }
+        );
+        assert_eq!(
+            pending.pixels,
+            vec![
+                Rgb565Pixel(0),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(1),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+                Rgb565Pixel(0),
+                Rgb565Pixel(7),
+                Rgb565Pixel(8),
+            ]
+        );
     }
 }
