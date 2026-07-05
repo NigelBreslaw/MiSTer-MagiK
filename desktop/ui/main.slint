@@ -71,9 +71,9 @@ component AppHeader {
         background: #24292f;
 
         TouchArea {
-            x: safe-left + 184px;
+            x: 0;
             y: 0;
-            width: max(0px, parent.width - self.x - safe-right - 236px);
+            width: parent.width;
             height: parent.height;
             pointer-event(event) => {
                 if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
