@@ -157,39 +157,11 @@ pub fn fetch_sd_directory(
     parse_sd_directory(&value)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FramebufferCaptureMode {
-    Screenshot,
-    Stream,
-}
-
-impl FramebufferCaptureMode {
-    pub fn from_value(value: &str) -> Self {
-        if value == "stream" {
-            Self::Stream
-        } else {
-            Self::Screenshot
-        }
-    }
-}
-
-pub fn fetch_framebuffer_capture(
-    host: &str,
-    mode: FramebufferCaptureMode,
-) -> Result<FramebufferCapture, AgentError> {
+pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
-    match mode {
-        FramebufferCaptureMode::Screenshot => {
-            let value = client.request("framebuffer_capture", json!({}))?;
-            parse_framebuffer_capture(&value)
-        }
-        FramebufferCaptureMode::Stream => {
-            let (value, payload) =
-                client.request_binary("framebuffer_capture_lz4_stream", json!({}))?;
-            parse_framebuffer_capture_lz4(&value, &payload)
-        }
-    }
+    let (value, payload) = client.request_binary("framebuffer_capture_lz4_stream", json!({}))?;
+    parse_framebuffer_capture_lz4(&value, &payload)
 }
 
 struct AgentClient {
@@ -380,6 +352,7 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
     })
 }
 
+#[cfg(test)]
 fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentError> {
     if string_at(value, "/schema") != Some("mister-magik-framebuffer-capture-v1") {
         return Err(AgentError::Protocol(
@@ -441,8 +414,14 @@ fn parse_framebuffer_capture_lz4(
         payload.to_vec()
     };
     let width = value.pointer("/width").and_then(Value::as_u64).unwrap_or(0);
-    let height = value.pointer("/height").and_then(Value::as_u64).unwrap_or(0);
-    let stride = value.pointer("/stride").and_then(Value::as_u64).unwrap_or(0);
+    let height = value
+        .pointer("/height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let stride = value
+        .pointer("/stride")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let bpp = value.pointer("/bpp").and_then(Value::as_u64).unwrap_or(0);
     let expected_raw = value
         .pointer("/raw_bytes")
@@ -566,6 +545,7 @@ fn parse_framebuffer_capture_timing(value: &Value) -> FramebufferCaptureTiming {
     }
 }
 
+#[cfg(test)]
 fn local_framebuffer_capture_path() -> PathBuf {
     env::temp_dir().join(format!(
         "mister-magik-framebuffer-{}.png",
@@ -573,6 +553,7 @@ fn local_framebuffer_capture_path() -> PathBuf {
     ))
 }
 
+#[cfg(test)]
 fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
         return Err("hex payload has odd length".to_string());
@@ -589,6 +570,7 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn hex_value(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -936,10 +918,7 @@ mod tests {
         assert_eq!(capture.raw_bytes, 4);
         assert_eq!(capture.payload_bytes, payload.len() as u64);
         assert_eq!(capture.encoding, "lz4-block-size-prepended");
-        assert_eq!(
-            capture.rgba_pixels,
-            vec![255, 0, 0, 255, 0, 255, 0, 255]
-        );
+        assert_eq!(capture.rgba_pixels, vec![255, 0, 0, 255, 0, 255, 0, 255]);
         assert_eq!(capture.timing.raw_read_us, 10);
         assert_eq!(capture.timing.lz4_encode_us, 20);
         assert_eq!(capture.timing.total_us, 30);
