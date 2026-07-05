@@ -27,12 +27,129 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
+type SharedLibraryBrowser = Arc<Mutex<LibraryBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
+
+#[derive(Clone, Debug)]
+struct LibraryBrowser {
+    catalog: Option<library::LibraryCatalog>,
+    query: library::LibraryQuery,
+    selected_game_id: String,
+    status: String,
+    warning: String,
+    last_error: String,
+    loading: bool,
+}
+
+impl LibraryBrowser {
+    fn new() -> Self {
+        Self {
+            catalog: None,
+            query: library::LibraryQuery::default(),
+            selected_game_id: String::new(),
+            status: "Sync the MiSTer library database to browse games.".to_string(),
+            warning: String::new(),
+            last_error: String::new(),
+            loading: false,
+        }
+    }
+
+    fn start_sync(&mut self) {
+        self.loading = true;
+        self.status = "Copying the MagiK library database from the MiSTer...".to_string();
+        self.warning.clear();
+        self.last_error.clear();
+    }
+
+    fn apply_sync_result(&mut self, result: Result<library::LibrarySyncResult, String>) {
+        self.loading = false;
+        match result {
+            Ok(result) => {
+                self.catalog = Some(result.catalog);
+                self.query.page = 1;
+                self.selected_game_id = self
+                    .current_view()
+                    .and_then(|view| view.rows.first().map(|game| game.id.clone()))
+                    .unwrap_or_default();
+                self.status = result.status;
+                self.warning = result.warning;
+                self.last_error.clear();
+            }
+            Err(err) => {
+                self.last_error = err;
+                self.status = "Library sync failed.".to_string();
+                self.warning.clear();
+            }
+        }
+    }
+
+    fn set_sort(&mut self, column_id: &str, direction_id: &str) {
+        let Some(column) = library_sort_column(column_id) else {
+            return;
+        };
+        let direction = library_sort_direction(direction_id);
+        self.query.sort_column = column;
+        self.query.sort_direction = direction;
+        self.query.page = 1;
+    }
+
+    fn current_view(&self) -> Option<library::LibraryView> {
+        self.catalog
+            .as_ref()
+            .map(|catalog| library::apply_library_query(catalog, &self.query))
+    }
+
+    fn result_summary(&self) -> String {
+        match (&self.catalog, self.current_view()) {
+            (Some(catalog), Some(view)) => {
+                let _selected = library::selected_game(catalog, &self.selected_game_id);
+                format!(
+                    "{} of {} games in the local library snapshot.",
+                    view.total_count,
+                    catalog.games.len()
+                )
+            }
+            _ => "No library loaded.".to_string(),
+        }
+    }
+}
+
+fn library_sort_column(column_id: &str) -> Option<library::LibrarySortColumn> {
+    match column_id {
+        "title" => Some(library::LibrarySortColumn::Title),
+        "system" => Some(library::LibrarySortColumn::System),
+        "year" => Some(library::LibrarySortColumn::Year),
+        "manufacturer" => Some(library::LibrarySortColumn::Manufacturer),
+        "category" => Some(library::LibrarySortColumn::Category),
+        "preview" => Some(library::LibrarySortColumn::Preview),
+        "discovered" => Some(library::LibrarySortColumn::Discovered),
+        _ => None,
+    }
+}
+
+fn library_sort_direction(direction_id: &str) -> library::LibrarySortDirection {
+    match direction_id {
+        "descending" | "Descending" => library::LibrarySortDirection::Descending,
+        _ => library::LibrarySortDirection::Ascending,
+    }
+}
+
+fn library_sort_column_id(column: library::LibrarySortColumn) -> &'static str {
+    match column {
+        library::LibrarySortColumn::Title => "title",
+        library::LibrarySortColumn::System => "system",
+        library::LibrarySortColumn::Year => "year",
+        library::LibrarySortColumn::Manufacturer => "manufacturer",
+        library::LibrarySortColumn::Category => "category",
+        library::LibrarySortColumn::Preview => "preview",
+        library::LibrarySortColumn::Discovered => "discovered",
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     if let Some((mode, frames)) = framebuffer_stream_bench_args()? {
@@ -239,6 +356,7 @@ fn create_live_instance(
         .ok_or("ui/main.slint must export AppWindow")?;
     let instance = definition.create()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
+    let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
@@ -423,6 +541,50 @@ fn create_live_instance(
         Value::Void
     })?;
 
+    let library_sync_instance = instance.as_weak();
+    let library_sync_host = host.to_string();
+    let library_sync_browser = Arc::clone(&library_browser);
+    instance.set_global_callback("Actions", "sync-library", move |_| {
+        if let Ok(mut browser) = library_sync_browser.lock() {
+            if browser.loading {
+                return Value::Void;
+            }
+            browser.start_sync();
+        }
+        if let Some(instance) = library_sync_instance.upgrade() {
+            apply_live_library_state(&instance, &library_sync_browser);
+        }
+        spawn_live_library_sync(
+            library_sync_instance.clone(),
+            Arc::clone(&library_sync_browser),
+            library_sync_host.clone(),
+        );
+        Value::Void
+    })?;
+
+    instance.set_global_callback("Actions", "library-query-changed", move |_| Value::Void)?;
+    instance.set_global_callback("Actions", "library-filter-changed", move |_| Value::Void)?;
+    let library_sort_instance = instance.as_weak();
+    let library_sort_browser = Arc::clone(&library_browser);
+    instance.set_global_callback("Actions", "library-sort-toggled", move |args| {
+        let Some(Value::String(column)) = args.first() else {
+            return Value::Void;
+        };
+        let direction = match args.get(1) {
+            Some(Value::EnumerationValue(_, direction)) => direction.as_str(),
+            _ => "ascending",
+        };
+        if let Ok(mut browser) = library_sort_browser.lock() {
+            browser.set_sort(column.as_str(), direction);
+        }
+        if let Some(instance) = library_sort_instance.upgrade() {
+            apply_live_library_state(&instance, &library_sort_browser);
+        }
+        Value::Void
+    })?;
+    instance.set_global_callback("Actions", "library-page-changed", move |_| Value::Void)?;
+    instance.set_global_callback("Actions", "library-row-selected", move |_| Value::Void)?;
+
     let drag_instance = instance.as_weak();
     instance.set_global_callback("WindowActions", "start-window-drag", move |_| {
         if let Some(instance) = drag_instance.upgrade() {
@@ -434,6 +596,7 @@ fn create_live_instance(
     let snapshot = fetch_dashboard(host);
     apply_live_snapshot(&instance, &snapshot);
     apply_live_sd_state(&instance, &sd_browser);
+    apply_live_library_state(&instance, &library_browser);
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_live_instance(&instance);
     Ok(instance)
@@ -522,6 +685,68 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
 }
 
 #[cfg(feature = "live-ui")]
+fn apply_live_library_state(
+    instance: &slint_interpreter::ComponentInstance,
+    browser: &SharedLibraryBrowser,
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::Value;
+
+    let Ok(browser) = browser.lock() else {
+        return;
+    };
+
+    fn set(instance: &slint_interpreter::ComponentInstance, name: &str, value: Value) {
+        let _ = instance.set_global_property("LibraryState", name, value);
+    }
+
+    set(
+        instance,
+        "status",
+        Value::String(SharedString::from(browser.status.as_str())),
+    );
+    set(
+        instance,
+        "warning",
+        Value::String(SharedString::from(browser.warning.as_str())),
+    );
+    set(
+        instance,
+        "last-error",
+        Value::String(SharedString::from(browser.last_error.as_str())),
+    );
+    set(instance, "loading", Value::Bool(browser.loading));
+    set(
+        instance,
+        "sort-column",
+        Value::String(SharedString::from(library_sort_column_id(
+            browser.query.sort_column,
+        ))),
+    );
+    set(
+        instance,
+        "sort-direction",
+        Value::EnumerationValue(
+            "DataTableSortDirection".to_string(),
+            match browser.query.sort_direction {
+                library::LibrarySortDirection::Ascending => "ascending".to_string(),
+                library::LibrarySortDirection::Descending => "descending".to_string(),
+            },
+        ),
+    );
+    set(
+        instance,
+        "result-summary",
+        Value::String(SharedString::from(browser.result_summary().as_str())),
+    );
+    set(
+        instance,
+        "rows",
+        Value::Model(ModelRc::new(VecModel::from(Vec::<Value>::new()))),
+    );
+}
+
+#[cfg(feature = "live-ui")]
 fn live_tree_row_struct(row: &sd_card::SdTreeRow) -> slint_interpreter::Struct {
     use slint::{Image, SharedString};
     use slint_interpreter::{Struct, Value};
@@ -580,6 +805,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let ui = AppWindow::new()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
+    let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
@@ -739,6 +965,50 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
             }
         });
 
+    let library_sync_ui = ui.as_weak();
+    let library_sync_host = host.clone();
+    let library_sync_browser = Arc::clone(&library_browser);
+    ui.global::<Actions>().on_sync_library(move || {
+        if let Ok(mut browser) = library_sync_browser.lock() {
+            if browser.loading {
+                return;
+            }
+            browser.start_sync();
+        }
+        if let Some(ui) = library_sync_ui.upgrade() {
+            apply_compiled_library_state(&ui, &library_sync_browser);
+        }
+        spawn_compiled_library_sync(
+            library_sync_ui.clone(),
+            Arc::clone(&library_sync_browser),
+            library_sync_host.clone(),
+        );
+    });
+    ui.global::<Actions>()
+        .on_library_query_changed(move |_query| {});
+    ui.global::<Actions>()
+        .on_library_filter_changed(move |_filter, _value| {});
+    let library_sort_ui = ui.as_weak();
+    let library_sort_browser = Arc::clone(&library_browser);
+    ui.global::<Actions>()
+        .on_library_sort_toggled(move |column, direction| {
+            let direction_id = if direction == DataTableSortDirection::Descending {
+                "descending"
+            } else {
+                "ascending"
+            };
+            if let Ok(mut browser) = library_sort_browser.lock() {
+                browser.set_sort(column.as_str(), direction_id);
+            }
+            if let Some(ui) = library_sort_ui.upgrade() {
+                apply_compiled_library_state(&ui, &library_sort_browser);
+            }
+        });
+    ui.global::<Actions>()
+        .on_library_page_changed(move |_page| {});
+    ui.global::<Actions>()
+        .on_library_row_selected(move |_id| {});
+
     let drag_ui = ui.as_weak();
     ui.global::<WindowActions>().on_start_window_drag(move || {
         if let Some(ui) = drag_ui.upgrade() {
@@ -749,6 +1019,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let snapshot = fetch_dashboard(&host);
     apply_compiled_snapshot(&ui, &snapshot);
     apply_compiled_sd_state(&ui, &sd_browser);
+    apply_compiled_library_state(&ui, &library_browser);
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     ui.run()?;
@@ -1159,6 +1430,27 @@ fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
 }
 
 #[cfg(feature = "compiled-ui")]
+fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) {
+    use slint::{ModelRc, VecModel};
+
+    let Ok(browser) = browser.lock() else {
+        return;
+    };
+    let state = ui.global::<LibraryState>();
+    state.set_status(browser.status.as_str().into());
+    state.set_warning(browser.warning.as_str().into());
+    state.set_last_error(browser.last_error.as_str().into());
+    state.set_loading(browser.loading);
+    state.set_sort_column(library_sort_column_id(browser.query.sort_column).into());
+    state.set_sort_direction(match browser.query.sort_direction {
+        library::LibrarySortDirection::Ascending => DataTableSortDirection::Ascending,
+        library::LibrarySortDirection::Descending => DataTableSortDirection::Descending,
+    });
+    state.set_result_summary(browser.result_summary().as_str().into());
+    state.set_rows(ModelRc::new(VecModel::from(Vec::<DataTableRow>::new())));
+}
+
+#[cfg(feature = "compiled-ui")]
 fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
     TreeViewRow {
         id: row.id.as_str().into(),
@@ -1181,6 +1473,25 @@ fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
         secondary_actions_badge: "".into(),
         loading_children_badge: row.loading_children_badge.as_str().into(),
     }
+}
+
+#[cfg(feature = "live-ui")]
+fn spawn_live_library_sync(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    browser: SharedLibraryBrowser,
+    host: String,
+) {
+    std::thread::spawn(move || {
+        let result = library::sync_library_catalog(&host);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_sync_result(result);
+            }
+            if let Some(instance) = instance.upgrade() {
+                apply_live_library_state(&instance, &browser);
+            }
+        });
+    });
 }
 
 #[cfg(feature = "live-ui")]
@@ -1364,6 +1675,25 @@ fn spawn_live_framebuffer_stream(
             }
         }
         unregister_framebuffer_stream(&stream_control, generation);
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_library_sync(
+    ui: slint::Weak<AppWindow>,
+    browser: SharedLibraryBrowser,
+    host: String,
+) {
+    std::thread::spawn(move || {
+        let result = library::sync_library_catalog(&host);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_sync_result(result);
+            }
+            if let Some(ui) = ui.upgrade() {
+                apply_compiled_library_state(&ui, &browser);
+            }
+        });
     });
 }
 
