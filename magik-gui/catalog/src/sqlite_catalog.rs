@@ -582,13 +582,24 @@ fn query_game_entries_with_timing(
     sql: &str,
     label: &str,
 ) -> Result<CatalogSqlQueryResult, String> {
+    query_game_entries_with_timing_and_params(conn, sql, [], label)
+}
+
+fn query_game_entries_with_timing_and_params<const N: usize>(
+    conn: &Connection,
+    sql: &str,
+    params: [&str; N],
+    label: &str,
+) -> Result<CatalogSqlQueryResult, String> {
     let now = library_db::unix_now_secs();
     let prepare_t = Instant::now();
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("prepare {label} query: {e}"))?;
     let prepare_us = prepare_t.elapsed().as_micros() as u64;
-    let mut rows = stmt.query([]).map_err(|e| format!("query {label}: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params_from_iter(params))
+        .map_err(|e| format!("query {label}: {e}"))?;
     let row_read_t = Instant::now();
     let mut first_row_us = 0;
     let mut row_hydrate_us = 0;
@@ -3686,6 +3697,24 @@ mod tests {
         assert_eq!(summary.catalog_stamp_lines, stamp.lines());
         assert_eq!(stored_stamp, stamp);
         assert_eq!(summary.total_game_count, saved.catalog.catalog.games.len());
+        assert_eq!(
+            summary.hot_games.len(),
+            saved.catalog.catalog.system_game_count("arcade")
+        );
+        assert!(
+            !summary.hot_games.is_empty(),
+            "warm summary must include Arcade hot rows"
+        );
+        assert_eq!(
+            summary.hot_games[0].title,
+            saved
+                .catalog
+                .catalog
+                .system_game_at("arcade", 0)
+                .expect("first arcade row")
+                .title
+                .as_ref()
+        );
         assert_eq!(summary.systems.len(), saved.catalog.catalog.systems.len());
         for (summary_system, sqlite_system) in summary.systems.iter().zip(&loaded.catalog.systems) {
             assert_eq!(summary_system.id, sqlite_system.id);

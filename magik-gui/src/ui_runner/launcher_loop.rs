@@ -9,13 +9,12 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_state::PadState;
 use crate::preview_worker;
-use mister_magik_catalog::catalog_stamp;
 use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 use std::collections::{BTreeSet, VecDeque};
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::Path;
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -25,6 +24,339 @@ const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+
+fn launcher_input_script_wait_frames() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES)
+            .min(600)
+    })
+}
+
+struct ArcadeEntryLatencyTrace {
+    writer: Option<std::io::BufWriter<std::fs::File>>,
+}
+
+impl ArcadeEntryLatencyTrace {
+    fn from_env() -> Self {
+        let writer = std::env::var("MISTER_ARCADE_ENTRY_TRACE")
+            .ok()
+            .and_then(|path| {
+                let file = std::fs::File::create(&path)
+                    .map_err(|e| crate::ui_errln!("arcade entry trace: create {path} failed: {e}"))
+                    .ok()?;
+                let mut writer = std::io::BufWriter::with_capacity(16 * 1024, file);
+                writer
+                    .write_all(
+                        b"event\telapsed_ms\tdelta_ms\tsince_input_enabled_ms\taccepted\tsystem\tselected\tframe\tprepare_us\tpreview_state\tasset_key\tdetail\n",
+                    )
+                    .map_err(|e| crate::ui_errln!("arcade entry trace: header write failed: {e}"))
+                    .ok()?;
+                crate::ui_logln!("arcade_entry_trace={path}");
+                Some(writer)
+            });
+        Self { writer }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        start: Instant,
+        event: &str,
+        at: Instant,
+        reference: Option<Instant>,
+        input_enabled_ms: u64,
+        accepted: bool,
+        system: &str,
+        selected: usize,
+        frame: Option<u64>,
+        prepare_us: Option<u128>,
+        preview_state: &str,
+        asset_key: &str,
+        detail: impl std::fmt::Display,
+    ) {
+        let elapsed_ms = at.saturating_duration_since(start).as_millis();
+        let delta_ms = reference
+            .map(|reference| at.saturating_duration_since(reference).as_millis() as i128)
+            .unwrap_or(-1);
+        let since_input_enabled_ms = (elapsed_ms as i128 - input_enabled_ms as i128).max(0);
+        let detail = detail.to_string();
+        print_startup_event(
+            start,
+            event,
+            format!(
+                "delta_ms={} since_input_enabled_ms={} accepted={} system={} selected={} frame={} prepare_us={} preview_state={} asset_key={} {}",
+                delta_ms,
+                since_input_enabled_ms,
+                u8::from(accepted),
+                system,
+                selected,
+                frame.map(|frame| frame.to_string()).unwrap_or_else(|| "-".to_string()),
+                prepare_us
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                preview_state,
+                asset_key,
+                detail
+            ),
+        );
+        if let Some(writer) = self.writer.as_mut() {
+            let _ = writeln!(
+                writer,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                event,
+                elapsed_ms,
+                delta_ms,
+                since_input_enabled_ms,
+                u8::from(accepted),
+                system,
+                selected,
+                frame
+                    .map(|frame| frame.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                prepare_us
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                preview_state,
+                asset_key,
+                detail.replace('\t', " ")
+            );
+            let _ = writer.flush();
+        }
+    }
+}
+
+struct ArcadeEntryLatencyTracker {
+    trace: ArcadeEntryLatencyTrace,
+    enter_input_at: Option<Instant>,
+    enter_presented: bool,
+    rows_ready: bool,
+    preview_exact: bool,
+    first_nav_input_at: Option<Instant>,
+    first_nav_presented: bool,
+}
+
+impl ArcadeEntryLatencyTracker {
+    fn from_env() -> Self {
+        Self {
+            trace: ArcadeEntryLatencyTrace::from_env(),
+            enter_input_at: None,
+            enter_presented: false,
+            rows_ready: false,
+            preview_exact: false,
+            first_nav_input_at: None,
+            first_nav_presented: false,
+        }
+    }
+
+    fn input_enabled_ms(lifecycle: &LauncherLifecycle) -> u64 {
+        lifecycle.startup_status().input_enabled_ms
+    }
+
+    fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
+        active_system(catalog, nav)
+            .map(|system| system.id.clone())
+            .unwrap_or_default()
+    }
+
+    fn selected_asset_key(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
+        active_system(catalog, nav)
+            .and_then(|system| nav.active_arcade_game_at(catalog, &system.id, nav.arcade.selected))
+            .map(|game| game.preview_asset_key.to_string())
+            .unwrap_or_default()
+    }
+
+    fn record_enter_input(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+    ) {
+        if self.enter_input_at.is_some() {
+            return;
+        }
+        self.enter_input_at = Some(at);
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        self.trace.record(
+            start,
+            "arcade_enter_input",
+            at,
+            None,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            None,
+            None,
+            "",
+            &asset_key,
+            "source=launcher_input",
+        );
+    }
+
+    fn record_first_nav_input(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+    ) {
+        if self.enter_input_at.is_none() || self.first_nav_input_at.is_some() {
+            return;
+        }
+        self.first_nav_input_at = Some(at);
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        self.trace.record(
+            start,
+            "arcade_first_nav_input",
+            at,
+            self.enter_input_at,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            None,
+            None,
+            "",
+            &asset_key,
+            "source=launcher_input",
+        );
+    }
+
+    fn record_rows_ready(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+    ) {
+        if self.enter_input_at.is_none() || self.rows_ready {
+            return;
+        }
+        self.rows_ready = true;
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        self.trace.record(
+            start,
+            "arcade_rows_ready",
+            at,
+            self.enter_input_at,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            None,
+            None,
+            "",
+            &asset_key,
+            format!("games={}", catalog.system_game_count(&system)),
+        );
+    }
+
+    fn record_preview_exact(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        preview: &PreviewState,
+    ) {
+        if self.enter_input_at.is_none() || self.preview_exact || !self.rows_ready {
+            return;
+        }
+        let preview_state = preview.trace_cache_state();
+        let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
+        if (selected_has_preview && preview_state != "exact")
+            || (!selected_has_preview && !matches!(preview_state, "exact" | "empty"))
+        {
+            return;
+        }
+        self.preview_exact = true;
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        self.trace.record(
+            start,
+            "arcade_preview_exact",
+            at,
+            self.enter_input_at,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            None,
+            None,
+            preview_state,
+            &asset_key,
+            "source=preview_state",
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_presented_frame(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        preview: &PreviewState,
+        frame: u64,
+        prepare_us: u128,
+        copied_rows: u32,
+    ) {
+        if self.enter_input_at.is_none() || copied_rows == 0 || nav.screen != Screen::Arcade {
+            return;
+        }
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        if !self.enter_presented {
+            self.enter_presented = true;
+            self.trace.record(
+                start,
+                "arcade_enter_presented",
+                at,
+                self.enter_input_at,
+                Self::input_enabled_ms(lifecycle),
+                true,
+                &system,
+                nav.arcade.selected,
+                Some(frame),
+                Some(prepare_us),
+                preview.trace_cache_state(),
+                &asset_key,
+                format!("copied_rows={copied_rows}"),
+            );
+        }
+        if self.first_nav_input_at.is_some() && !self.first_nav_presented {
+            self.first_nav_presented = true;
+            self.trace.record(
+                start,
+                "arcade_first_nav_presented",
+                at,
+                self.first_nav_input_at,
+                Self::input_enabled_ms(lifecycle),
+                true,
+                &system,
+                nav.arcade.selected,
+                Some(frame),
+                Some(prepare_us),
+                preview.trace_cache_state(),
+                &asset_key,
+                format!("copied_rows={copied_rows}"),
+            );
+        }
+    }
+}
 
 fn should_defer_arcade_overlay_bridge(
     dirty_opt: bool,
@@ -240,7 +572,7 @@ impl LauncherInputScriptDriver {
             buttons,
             button_idx: 0,
             frame_in_button: 0,
-            wait_frames: LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES,
+            wait_frames: launcher_input_script_wait_frames(),
         }
     }
 
@@ -422,7 +754,17 @@ fn catalog_from_summary(
             count: system.count,
         })
         .collect();
-    ArcadeCatalog::new(PathBuf::from(root), Vec::new(), systems)
+    let hot_games = summary
+        .hot_games
+        .iter()
+        .map(arcade_catalog::ArcadeGameEntry::from)
+        .collect();
+    ArcadeCatalog::new_with_deferred_text_indexes(
+        PathBuf::from(root),
+        hot_games,
+        systems,
+        Vec::new(),
+    )
 }
 
 fn read_catalog_summary_seed(
@@ -514,65 +856,6 @@ fn read_catalog_summary_seed(
                     library_db::catalog_load_counter_detail()
                 ),
             );
-            None
-        }
-    }
-}
-
-fn load_catalog_for_arcade_navigation_request(
-    root: &str,
-    sqlite_path: &Path,
-    stamp: &catalog_stamp::CatalogStamp,
-    start: Instant,
-) -> Option<(library_db::LibraryCatalogLoad, CatalogSource)> {
-    match library_db::load_arcade_catalog_from_navigation_projection(root, sqlite_path, stamp) {
-        Ok(Some(loaded)) => {
-            print_startup_event(
-                start,
-                "catalog_navigation_load",
-                format!("status=ready {}", catalog_load_timing_detail(&loaded)),
-            );
-            return Some((loaded, CatalogSource::NavigationProjection));
-        }
-        Ok(None) => {
-            print_startup_event(
-                start,
-                "catalog_navigation_load",
-                format!(
-                    "status=missing_or_stale {}",
-                    library_db::catalog_load_counter_detail()
-                ),
-            );
-        }
-        Err(e) => {
-            print_startup_event(
-                start,
-                "catalog_navigation_load_failed",
-                format!("{e} {}", library_db::catalog_load_counter_detail()),
-            );
-        }
-    }
-
-    library_db::record_catalog_ui_load();
-    match library_db::load_arcade_catalog_from_sqlite(root) {
-        Ok(loaded) if !loaded.catalog.games.is_empty() => {
-            print_startup_event(
-                start,
-                "catalog_navigation_sqlite_fallback",
-                catalog_load_timing_detail(&loaded),
-            );
-            Some((loaded, CatalogSource::FullSqlite))
-        }
-        Ok(loaded) => {
-            print_startup_event(
-                start,
-                "catalog_navigation_sqlite_fallback_empty",
-                catalog_load_timing_detail(&loaded),
-            );
-            None
-        }
-        Err(e) => {
-            print_startup_event(start, "catalog_navigation_sqlite_fallback_failed", e);
             None
         }
     }
@@ -755,7 +1038,6 @@ pub(super) fn run_launcher_loop(
     );
     let mut catalog = empty_arcade_catalog(&arcade_root);
     let mut catalog_ready = false;
-    let mut arcade_search_indexes_prewarmed_for: Option<usize> = None;
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = catalog_refresh_policy.force_requested();
     let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
@@ -773,10 +1055,6 @@ pub(super) fn run_launcher_loop(
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
-    let summary_seed_stamp = summary_seed.as_ref().map(|summary| {
-        catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines.clone())
-    });
-    let mut navigation_projection_attempted = false;
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
     if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
@@ -934,6 +1212,16 @@ pub(super) fn run_launcher_loop(
         }
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    apply_home_selected_from_env(&mut nav, &catalog, start);
+    if catalog_ready && nav.screen == Screen::Home {
+        if let Some(system) = active_system(&catalog, &nav) {
+            if system.id == "arcade" && catalog.system_game_count(&system.id) > 0 {
+                let games = active_system_game_view(&catalog, &nav);
+                let selected = nav.arcade.selected.min(games.len().saturating_sub(1));
+                let _ = prewarm_arcade_selected_preview(games, selected, &mut preview);
+            }
+        }
+    }
     let bridge_systems_t = Instant::now();
     let mut arcade_screen_pending =
         arcade_catalog_required_at_start && !arcade_navigation_ready(catalog_ready, &catalog);
@@ -1068,6 +1356,7 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
+    let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut route_reassert_count = 0u64;
@@ -1324,24 +1613,6 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = catalog_worker_trace_start {
             prepare_trace.catalog_worker_us = trace_start.elapsed().as_micros();
         }
-        if catalog_ready
-            && arcade_search_indexes_prewarmed_for != Some(catalog_version)
-            && frame_accounting.first_visible_copy_done()
-        {
-            let prewarm_t = Instant::now();
-            let built = catalog.ensure_text_indexes_ready();
-            arcade_search_indexes_prewarmed_for = Some(catalog_version);
-            runtime_status::event(
-                "arcade_search_index_prewarm",
-                &format!(
-                    "built={} games={} elapsed_us={}",
-                    u8::from(built),
-                    catalog.games.len(),
-                    prewarm_t.elapsed().as_micros()
-                ),
-            );
-        }
-
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
         scheduler.poll_media(&mut media_events);
@@ -1566,6 +1837,7 @@ pub(super) fn run_launcher_loop(
                 }
                 if !setup.is_active() {
                     let nav_before = LauncherBridgeKey::from_nav(&nav);
+                    let arcade_selected_before_input = nav.arcade.selected;
                     if transition_picker_enabled && nav.screen == Screen::Arcade {
                         let left = launcher_state.dpad_left && !transition_picker_prev_left;
                         let right = launcher_state.dpad_right && !transition_picker_prev_right;
@@ -1862,6 +2134,26 @@ pub(super) fn run_launcher_loop(
                         full_bridge_dirty = true;
                     }
                     if nav_before != nav_after {
+                        if nav_before.screen == Screen::Home && nav_after.screen == Screen::Arcade {
+                            arcade_entry_latency
+                                .record_enter_input(start, frame_now, &lifecycle, &catalog, &nav);
+                            if !active_system_games_loading(&catalog, &nav) {
+                                if let Some(system) = active_system(&catalog, &nav) {
+                                    if catalog.system_game_count(&system.id) > 0 {
+                                        arcade_entry_latency.record_rows_ready(
+                                            start, frame_now, &lifecycle, &catalog, &nav,
+                                        );
+                                    }
+                                }
+                            }
+                        } else if nav_before.screen == Screen::Arcade
+                            && nav_after.screen == Screen::Arcade
+                            && arcade_selected_before_input != nav.arcade.selected
+                        {
+                            arcade_entry_latency.record_first_nav_input(
+                                start, frame_now, &lifecycle, &catalog, &nav,
+                            );
+                        }
                         if !dirty_opt || nav_before.screen != nav_after.screen {
                             full_bridge_dirty = true;
                         } else {
@@ -1873,42 +2165,6 @@ pub(super) fn run_launcher_loop(
 
             if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
                 nav.screen = screen;
-            }
-
-            if nav.screen == Screen::Arcade
-                && !navigation_projection_attempted
-                && !arcade_navigation_ready(catalog_ready, &catalog)
-            {
-                navigation_projection_attempted = true;
-                if let Some(stamp) = summary_seed_stamp.as_ref() {
-                    if let Some((loaded, source)) = load_catalog_for_arcade_navigation_request(
-                        &arcade_root,
-                        &sqlite_path,
-                        stamp,
-                        start,
-                    ) {
-                        catalog = loaded.catalog;
-                        catalog_ready = true;
-                        catalog_session.note_cached_catalog_ready();
-                        media_session.request_catalog_seed();
-                        catalog_version = catalog_version.wrapping_add(1);
-                        apply_forced_arcade_selected(&mut nav, &catalog);
-                        apply_pending_launch_return_state(
-                            &mut nav,
-                            &catalog,
-                            &mut pending_launch_return_state,
-                        );
-                        lifecycle.handle(
-                            LauncherLifecycleInput::CatalogReady {
-                                source,
-                                validating: false,
-                            },
-                            &mut lifecycle_effects,
-                        );
-                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        full_bridge_dirty = true;
-                    }
-                }
             }
 
             if full_bridge_dirty {
@@ -2083,6 +2339,13 @@ pub(super) fn run_launcher_loop(
                     && !active_arcade_games.is_empty()
                     && preview_initial_lists_ready.insert(system.id.clone())
                 {
+                    arcade_entry_latency.record_rows_ready(
+                        start,
+                        Instant::now(),
+                        &lifecycle,
+                        &catalog,
+                        &nav,
+                    );
                     let selected = nav.arcade.selected.min(active_arcade_games.len() - 1);
                     if let Some(game) = active_arcade_games.get(selected) {
                         crate::ui_logln!(
@@ -2140,6 +2403,14 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = preview_apply_trace_start {
             prepare_trace.preview_apply_us = trace_start.elapsed().as_micros();
         }
+        arcade_entry_latency.record_preview_exact(
+            start,
+            Instant::now(),
+            &lifecycle,
+            &catalog,
+            &nav,
+            &preview,
+        );
         maybe_mark_return_preview_ready(
             &mut lifecycle,
             &mut lifecycle_effects,
@@ -2426,6 +2697,17 @@ pub(super) fn run_launcher_loop(
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         }
+        arcade_entry_latency.record_presented_frame(
+            start,
+            frame_t4,
+            &lifecycle,
+            &catalog,
+            &nav,
+            &preview,
+            frames,
+            prepare_us,
+            presentation.copied_rows,
+        );
         frame_accounting.finish_frame(
             LauncherPresentedFrame {
                 frames,
@@ -3260,6 +3542,20 @@ fn summary_seed_catalog_worker_request(
         .then_some(request)
 }
 
+fn summary_seed_catalog_worker_initial_cache(
+    request: CatalogWorkerRequest,
+    return_catalog_hydration_needed: bool,
+) -> CatalogWorkerInitialCache {
+    if request == CatalogWorkerRequest::ForceBuild
+        || return_catalog_hydration_needed
+        || request != CatalogWorkerRequest::LoadOnly
+    {
+        CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+    } else {
+        CatalogWorkerInitialCache::AlreadyLoadedReady
+    }
+}
+
 fn launcher_bench_initial_preview_ready(
     scenario: LauncherBenchScenario,
     preview_cache_state: &str,
@@ -3287,6 +3583,40 @@ fn apply_start_system_from_env(
     nav.arcade.reset();
     ui_frame_target::apply_forced_arcade_selected(nav, catalog);
     true
+}
+
+fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, start: Instant) {
+    let Ok(value) = std::env::var("MISTER_HOME_SELECTED_INDEX") else {
+        return;
+    };
+    let Ok(selected) = value.parse::<usize>() else {
+        print_startup_event(
+            start,
+            "launcher_home_selected_index_invalid",
+            format!("value={value}"),
+        );
+        return;
+    };
+    if nav.screen != Screen::Home || selected >= catalog.systems.len() {
+        print_startup_event(
+            start,
+            "launcher_home_selected_index_ignored",
+            format!(
+                "value={} screen={} systems={}",
+                selected,
+                screen_label(nav.screen),
+                catalog.systems.len()
+            ),
+        );
+        return;
+    }
+    nav.selected = selected;
+    keep_bench_home_visible(&mut nav.scroll_x, nav.selected, catalog.systems.len());
+    print_startup_event(
+        start,
+        "launcher_home_selected_index_applied",
+        format!("selected={selected}"),
+    );
 }
 
 #[cfg(test)]
@@ -3539,6 +3869,34 @@ mod tests {
     }
 
     #[test]
+    pub(super) fn summary_hot_arcade_rows_are_ready_for_arcade_navigation() {
+        let full_catalog = catalog_for_media_systems(&["arcade", "amiga"]);
+        let stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(vec![
+            "root\t/media/fat".to_string(),
+        ]);
+        let summary =
+            catalog_summary::CatalogSummaryProjection::from_catalog(&full_catalog, &stamp);
+        let catalog = catalog_from_summary("/media/fat/_Arcade", &summary);
+        let mut nav = LauncherNav::new();
+        nav.selected = catalog
+            .systems
+            .iter()
+            .position(|system| system.id == "arcade")
+            .expect("arcade system");
+
+        assert!(!active_system_games_loading(&catalog, &nav));
+        assert!(arcade_catalog_rows_ready(&catalog));
+        assert!(arcade_navigation_ready(true, &catalog));
+        assert_eq!(catalog.system_game_count("arcade"), 1);
+        assert_eq!(
+            catalog
+                .system_game_at("arcade", 0)
+                .map(|game| game.title.as_ref()),
+            Some("arcade game")
+        );
+    }
+
+    #[test]
     pub(super) fn full_catalog_is_ready_for_arcade_navigation() {
         let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
 
@@ -3558,37 +3916,6 @@ mod tests {
         assert!(return_to_launcher_env_is_set(Some("1")));
         assert!(return_to_launcher_env_is_set(Some("true")));
         assert!(return_to_launcher_env_is_set(Some("yes")));
-    }
-
-    #[test]
-    pub(super) fn arcade_navigation_request_prefers_navigation_projection() {
-        let dir = unique_temp_dir("navigation-request");
-        let db = dir.join("library.sqlite3");
-        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
-            "schema\ttest".to_string(),
-            "catalog-build\ttest".to_string(),
-        ]);
-        let catalog = catalog_for_media_systems(&["arcade", "neogeo"]);
-        library_db::write_catalog_navigation_projection_for_catalog(&db, &catalog, &stamp)
-            .expect("write navigation projection");
-        library_db::reset_catalog_load_counters();
-
-        let (loaded, source) = load_catalog_for_arcade_navigation_request(
-            "/media/fat/_Arcade",
-            &db,
-            &stamp,
-            Instant::now(),
-        )
-        .expect("projection-loaded catalog");
-
-        assert_eq!(source, CatalogSource::NavigationProjection);
-        assert_eq!(loaded.catalog.games.len(), catalog.games.len());
-        assert_eq!(loaded.catalog.systems, catalog.systems);
-        let counters = library_db::catalog_load_counters();
-        assert_eq!(counters.nav_projection_reads, 1);
-        assert_eq!(counters.sqlite_opens, 0);
-        assert_eq!(counters.ui_catalog_loads, 0);
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -3716,6 +4043,7 @@ mod tests {
                 count: 7,
                 supported_media: vec!["screenshots".to_string()],
             }],
+            hot_games: Vec::new(),
         };
         std::fs::write(
             &summary_path,
@@ -4224,6 +4552,22 @@ mod tests {
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),
             Some(CatalogWorkerRequest::ForceBuild)
+        );
+    }
+
+    #[test]
+    pub(super) fn summary_warm_validation_hydrates_navigation_in_worker() {
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
+            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::LoadOnly, true),
+            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
+            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
         );
     }
 }

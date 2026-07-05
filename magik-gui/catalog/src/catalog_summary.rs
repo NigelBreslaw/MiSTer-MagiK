@@ -1,17 +1,19 @@
 //! Compact catalog summary projection for warm launcher startup.
 
-use crate::arcade_catalog::ArcadeCatalog;
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::media_identity;
+use crate::preview_worker;
 use crate::sqlite_catalog;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSummaryProjection {
@@ -23,6 +25,7 @@ pub struct CatalogSummaryProjection {
     pub catalog_stamp_lines: Vec<String>,
     pub total_game_count: usize,
     pub systems: Vec<CatalogSummarySystem>,
+    pub hot_games: Vec<CatalogSummaryGame>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +34,19 @@ pub struct CatalogSummarySystem {
     pub title: String,
     pub count: usize,
     pub supported_media: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSummaryGame {
+    pub title: String,
+    pub launch_ref: String,
+    pub preview_asset_key: String,
+    pub has_preview: bool,
+    pub system_id: String,
+    pub year: Option<u16>,
+    pub manufacturer: String,
+    pub category: String,
+    pub is_new: bool,
 }
 
 pub fn summary_path_for_sqlite(sqlite_path: &Path) -> PathBuf {
@@ -100,6 +116,51 @@ impl CatalogSummaryProjection {
                     supported_media: supported_media_for_system(&system.id),
                 })
                 .collect(),
+            hot_games: catalog
+                .games
+                .iter()
+                .filter(|game| game.system_id.as_ref() == "arcade")
+                .map(CatalogSummaryGame::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<&ArcadeGameEntry> for CatalogSummaryGame {
+    fn from(game: &ArcadeGameEntry) -> Self {
+        Self {
+            title: game.title.to_string(),
+            launch_ref: game.mra_path.to_string(),
+            preview_asset_key: game.preview_asset_key.to_string(),
+            has_preview: game.has_preview,
+            system_id: game.system_id.to_string(),
+            year: game.year,
+            manufacturer: game.manufacturer.to_string(),
+            category: game.category.to_string(),
+            is_new: game.is_new,
+        }
+    }
+}
+
+impl From<&CatalogSummaryGame> for ArcadeGameEntry {
+    fn from(game: &CatalogSummaryGame) -> Self {
+        let system_id: Arc<str> = Arc::from(game.system_id.as_str());
+        let preview_archive_path: Arc<str> = if game.preview_asset_key.is_empty() {
+            Arc::from("")
+        } else {
+            Arc::from(preview_worker::preview_archive_path_for_system(&game.system_id))
+        };
+        Self {
+            title: Arc::from(game.title.as_str()),
+            mra_path: Arc::from(game.launch_ref.as_str()),
+            preview_archive_path,
+            preview_asset_key: Arc::from(game.preview_asset_key.as_str()),
+            has_preview: game.has_preview,
+            system_id,
+            year: game.year,
+            manufacturer: Arc::from(game.manufacturer.as_str()),
+            category: Arc::from(game.category.as_str()),
+            is_new: game.is_new,
         }
     }
 }
