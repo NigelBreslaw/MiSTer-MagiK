@@ -2,9 +2,13 @@ mod agent_client;
 mod app_state;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
+mod sd_card;
 
-use agent_client::fetch_dashboard;
+use agent_client::{fetch_dashboard, fetch_sd_directory};
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
+use sd_card::SdCardBrowser;
+#[cfg(feature = "compiled-ui")]
+use sd_card::SdTreeRow;
 #[cfg(feature = "live-ui")]
 use slint::ComponentHandle;
 use std::error::Error;
@@ -12,10 +16,11 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "live-ui")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "live-ui")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "live-ui")]
 use std::time::{Duration, SystemTime};
+
+type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
@@ -92,6 +97,7 @@ fn create_live_instance(
         .component("AppWindow")
         .ok_or("ui/main.slint must export AppWindow")?;
     let instance = definition.create()?;
+    let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -99,6 +105,117 @@ fn create_live_instance(
         if let Some(instance) = refresh_instance.upgrade() {
             let snapshot = fetch_dashboard(&refresh_host);
             apply_live_snapshot(&instance, &snapshot);
+        }
+        Value::Void
+    })?;
+
+    let select_instance = instance.as_weak();
+    instance.set_global_callback("Actions", "select-page", move |args| {
+        if let Some(instance) = select_instance.upgrade() {
+            if let Some(Value::String(page)) = args.first() {
+                let _ = instance.set_global_property(
+                    "AppState",
+                    "selected-page",
+                    Value::String(page.clone()),
+                );
+            }
+        }
+        Value::Void
+    })?;
+
+    let sd_toggle_instance = instance.as_weak();
+    let sd_toggle_host = host.to_string();
+    let sd_toggle_browser = Arc::clone(&sd_browser);
+    instance.set_global_callback("Actions", "sd-row-toggle", move |args| {
+        let Some(Value::String(path)) = args.first() else {
+            return Value::Void;
+        };
+        if let Some(fetch_path) = sd_toggle_browser
+            .lock()
+            .ok()
+            .and_then(|mut browser| browser.toggle_directory(path.as_str()))
+        {
+            let show_hidden = sd_toggle_browser
+                .lock()
+                .map(|browser| browser.show_hidden())
+                .unwrap_or(false);
+            spawn_live_sd_fetch(
+                sd_toggle_instance.clone(),
+                Arc::clone(&sd_toggle_browser),
+                sd_toggle_host.clone(),
+                fetch_path,
+                show_hidden,
+            );
+        }
+        if let Some(instance) = sd_toggle_instance.upgrade() {
+            apply_live_sd_state(&instance, &sd_toggle_browser);
+        }
+        Value::Void
+    })?;
+
+    let sd_current_instance = instance.as_weak();
+    let sd_current_browser = Arc::clone(&sd_browser);
+    instance.set_global_callback("Actions", "sd-row-current", move |args| {
+        if let Some(Value::String(path)) = args.first() {
+            if let Ok(mut browser) = sd_current_browser.lock() {
+                browser.select_path(path.as_str());
+            }
+            if let Some(instance) = sd_current_instance.upgrade() {
+                apply_live_sd_state(&instance, &sd_current_browser);
+            }
+        }
+        Value::Void
+    })?;
+
+    let sd_refresh_instance = instance.as_weak();
+    let sd_refresh_host = host.to_string();
+    let sd_refresh_browser = Arc::clone(&sd_browser);
+    instance.set_global_callback("Actions", "sd-refresh-folder", move |_| {
+        if let Some(fetch_path) = sd_refresh_browser
+            .lock()
+            .ok()
+            .and_then(|mut browser| browser.refresh_current_folder())
+        {
+            let show_hidden = sd_refresh_browser
+                .lock()
+                .map(|browser| browser.show_hidden())
+                .unwrap_or(false);
+            spawn_live_sd_fetch(
+                sd_refresh_instance.clone(),
+                Arc::clone(&sd_refresh_browser),
+                sd_refresh_host.clone(),
+                fetch_path,
+                show_hidden,
+            );
+        }
+        if let Some(instance) = sd_refresh_instance.upgrade() {
+            apply_live_sd_state(&instance, &sd_refresh_browser);
+        }
+        Value::Void
+    })?;
+
+    let sd_hidden_instance = instance.as_weak();
+    let sd_hidden_host = host.to_string();
+    let sd_hidden_browser = Arc::clone(&sd_browser);
+    instance.set_global_callback("Actions", "sd-show-hidden-changed", move |args| {
+        let Some(Value::Bool(show_hidden)) = args.first() else {
+            return Value::Void;
+        };
+        if let Some(fetch_path) = sd_hidden_browser
+            .lock()
+            .ok()
+            .and_then(|mut browser| browser.set_show_hidden(*show_hidden))
+        {
+            spawn_live_sd_fetch(
+                sd_hidden_instance.clone(),
+                Arc::clone(&sd_hidden_browser),
+                sd_hidden_host.clone(),
+                fetch_path,
+                *show_hidden,
+            );
+        }
+        if let Some(instance) = sd_hidden_instance.upgrade() {
+            apply_live_sd_state(&instance, &sd_hidden_browser);
         }
         Value::Void
     })?;
@@ -113,6 +230,7 @@ fn create_live_instance(
 
     let snapshot = fetch_dashboard(host);
     apply_live_snapshot(&instance, &snapshot);
+    apply_live_sd_state(&instance, &sd_browser);
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_live_instance(&instance);
     Ok(instance)
@@ -157,12 +275,104 @@ fn apply_live_snapshot(
     set(instance, "last-error", &snapshot.last_error);
 }
 
+#[cfg(feature = "live-ui")]
+fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser: &SharedSdBrowser) {
+    use slint::{Image, ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    let Ok(browser) = browser.lock() else {
+        return;
+    };
+
+    fn set(instance: &slint_interpreter::ComponentInstance, name: &str, value: Value) {
+        let _ = instance.set_global_property("SdCardState", name, value);
+    }
+
+    set(
+        instance,
+        "current-path",
+        Value::String(SharedString::from(browser.current_path())),
+    );
+    set(
+        instance,
+        "status",
+        Value::String(SharedString::from(browser.status())),
+    );
+    set(
+        instance,
+        "last-error",
+        Value::String(SharedString::from(browser.last_error())),
+    );
+    set(instance, "loading", Value::Bool(browser.loading()));
+    set(instance, "show-hidden", Value::Bool(browser.show_hidden()));
+
+    let rows = browser
+        .rows()
+        .iter()
+        .map(|row| {
+            Value::Struct(Struct::from_iter([
+                (
+                    "id".to_string(),
+                    Value::String(SharedString::from(row.id.as_str())),
+                ),
+                (
+                    "label".to_string(),
+                    Value::String(SharedString::from(row.label.as_str())),
+                ),
+                ("level".to_string(), Value::Number(f64::from(row.level))),
+                ("has-children".to_string(), Value::Bool(row.has_children)),
+                ("expanded".to_string(), Value::Bool(row.expanded)),
+                ("current".to_string(), Value::Bool(row.current)),
+                (
+                    "leading-is-directory".to_string(),
+                    Value::Bool(row.leading_is_directory),
+                ),
+                ("has-leading-visual".to_string(), Value::Bool(true)),
+                (
+                    "trailing".to_string(),
+                    Value::EnumerationValue(
+                        "TreeViewTrailingVisual".to_string(),
+                        "none".to_string(),
+                    ),
+                ),
+                ("has-leading-action".to_string(), Value::Bool(false)),
+                ("show-leading-action-icon".to_string(), Value::Bool(false)),
+                (
+                    "leading-action-icon".to_string(),
+                    Value::Image(Image::default()),
+                ),
+                (
+                    "leading-file-icon".to_string(),
+                    Value::Image(Image::default()),
+                ),
+                ("interactive".to_string(), Value::Bool(row.interactive)),
+                ("is-skeleton".to_string(), Value::Bool(row.is_skeleton)),
+                ("has-secondary-actions".to_string(), Value::Bool(false)),
+                (
+                    "secondary-actions-badge".to_string(),
+                    Value::String(SharedString::from("")),
+                ),
+                (
+                    "loading-children-badge".to_string(),
+                    Value::String(SharedString::from(row.loading_children_badge.as_str())),
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    set(
+        instance,
+        "rows",
+        Value::Model(ModelRc::new(VecModel::from(rows))),
+    );
+}
+
 #[cfg(feature = "compiled-ui")]
 fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     use slint::ComponentHandle;
 
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let ui = AppWindow::new()?;
+    let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -171,6 +381,99 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
             apply_compiled_snapshot(&ui, &snapshot);
         }
     });
+
+    let select_ui = ui.as_weak();
+    ui.global::<Actions>().on_select_page(move |page| {
+        if let Some(ui) = select_ui.upgrade() {
+            ui.global::<AppState>().set_selected_page(page);
+        }
+    });
+
+    let sd_toggle_ui = ui.as_weak();
+    let sd_toggle_host = host.clone();
+    let sd_toggle_browser = Arc::clone(&sd_browser);
+    ui.global::<Actions>().on_sd_row_toggle(move |path| {
+        if let Some(fetch_path) = sd_toggle_browser
+            .lock()
+            .ok()
+            .and_then(|mut browser| browser.toggle_directory(path.as_str()))
+        {
+            let show_hidden = sd_toggle_browser
+                .lock()
+                .map(|browser| browser.show_hidden())
+                .unwrap_or(false);
+            spawn_compiled_sd_fetch(
+                sd_toggle_ui.clone(),
+                Arc::clone(&sd_toggle_browser),
+                sd_toggle_host.clone(),
+                fetch_path,
+                show_hidden,
+            );
+        }
+        if let Some(ui) = sd_toggle_ui.upgrade() {
+            apply_compiled_sd_state(&ui, &sd_toggle_browser);
+        }
+    });
+
+    let sd_current_ui = ui.as_weak();
+    let sd_current_browser = Arc::clone(&sd_browser);
+    ui.global::<Actions>().on_sd_row_current(move |path| {
+        if let Ok(mut browser) = sd_current_browser.lock() {
+            browser.select_path(path.as_str());
+        }
+        if let Some(ui) = sd_current_ui.upgrade() {
+            apply_compiled_sd_state(&ui, &sd_current_browser);
+        }
+    });
+
+    let sd_refresh_ui = ui.as_weak();
+    let sd_refresh_host = host.clone();
+    let sd_refresh_browser = Arc::clone(&sd_browser);
+    ui.global::<Actions>().on_sd_refresh_folder(move || {
+        if let Some(fetch_path) = sd_refresh_browser
+            .lock()
+            .ok()
+            .and_then(|mut browser| browser.refresh_current_folder())
+        {
+            let show_hidden = sd_refresh_browser
+                .lock()
+                .map(|browser| browser.show_hidden())
+                .unwrap_or(false);
+            spawn_compiled_sd_fetch(
+                sd_refresh_ui.clone(),
+                Arc::clone(&sd_refresh_browser),
+                sd_refresh_host.clone(),
+                fetch_path,
+                show_hidden,
+            );
+        }
+        if let Some(ui) = sd_refresh_ui.upgrade() {
+            apply_compiled_sd_state(&ui, &sd_refresh_browser);
+        }
+    });
+
+    let sd_hidden_ui = ui.as_weak();
+    let sd_hidden_host = host.clone();
+    let sd_hidden_browser = Arc::clone(&sd_browser);
+    ui.global::<Actions>()
+        .on_sd_show_hidden_changed(move |show_hidden| {
+            if let Some(fetch_path) = sd_hidden_browser
+                .lock()
+                .ok()
+                .and_then(|mut browser| browser.set_show_hidden(show_hidden))
+            {
+                spawn_compiled_sd_fetch(
+                    sd_hidden_ui.clone(),
+                    Arc::clone(&sd_hidden_browser),
+                    sd_hidden_host.clone(),
+                    fetch_path,
+                    show_hidden,
+                );
+            }
+            if let Some(ui) = sd_hidden_ui.upgrade() {
+                apply_compiled_sd_state(&ui, &sd_hidden_browser);
+            }
+        });
 
     let drag_ui = ui.as_weak();
     ui.global::<WindowActions>().on_start_window_drag(move || {
@@ -181,6 +484,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
 
     let snapshot = fetch_dashboard(&host);
     apply_compiled_snapshot(&ui, &snapshot);
+    apply_compiled_sd_state(&ui, &sd_browser);
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     ui.run()?;
@@ -233,6 +537,94 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
     state.set_screen_summary(snapshot.screen_summary.as_str().into());
     state.set_input_summary(snapshot.input_summary.as_str().into());
     state.set_last_error(snapshot.last_error.as_str().into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
+    use slint::{ModelRc, VecModel};
+
+    let Ok(browser) = browser.lock() else {
+        return;
+    };
+    let state = ui.global::<SdCardState>();
+    state.set_current_path(browser.current_path().into());
+    state.set_status(browser.status().into());
+    state.set_last_error(browser.last_error().into());
+    state.set_loading(browser.loading());
+    state.set_show_hidden(browser.show_hidden());
+    state.set_rows(ModelRc::new(VecModel::from(
+        browser
+            .rows()
+            .iter()
+            .map(compiled_tree_row)
+            .collect::<Vec<_>>(),
+    )));
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
+    TreeViewRow {
+        id: row.id.as_str().into(),
+        label: row.label.as_str().into(),
+        level: row.level,
+        has_children: row.has_children,
+        expanded: row.expanded,
+        current: row.current,
+        leading_is_directory: row.leading_is_directory,
+        has_leading_visual: true,
+        trailing: TreeViewTrailingVisual::None,
+        has_leading_action: false,
+        show_leading_action_icon: false,
+        leading_action_icon: slint::Image::default(),
+        leading_file_icon: slint::Image::default(),
+        interactive: row.interactive,
+        is_skeleton: row.is_skeleton,
+        has_secondary_actions: false,
+        secondary_actions_badge: "".into(),
+        loading_children_badge: row.loading_children_badge.as_str().into(),
+    }
+}
+
+#[cfg(feature = "live-ui")]
+fn spawn_live_sd_fetch(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    browser: SharedSdBrowser,
+    host: String,
+    path: String,
+    show_hidden: bool,
+) {
+    std::thread::spawn(move || {
+        let result = fetch_sd_directory(&host, &path, show_hidden).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_listing_if_current_policy(&path, show_hidden, result);
+            }
+            if let Some(instance) = instance.upgrade() {
+                apply_live_sd_state(&instance, &browser);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_sd_fetch(
+    ui: slint::Weak<AppWindow>,
+    browser: SharedSdBrowser,
+    host: String,
+    path: String,
+    show_hidden: bool,
+) {
+    std::thread::spawn(move || {
+        let result = fetch_sd_directory(&host, &path, show_hidden).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_listing_if_current_policy(&path, show_hidden, result);
+            }
+            if let Some(ui) = ui.upgrade() {
+                apply_compiled_sd_state(&ui, &browser);
+            }
+        });
+    });
 }
 
 fn start_window_drag(window: &slint::Window) {
