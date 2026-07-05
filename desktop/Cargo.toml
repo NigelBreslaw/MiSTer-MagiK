@@ -12,6 +12,7 @@ all = "deny"
 
 [dependencies]
 lz4_flex = "0.13.1"
+mister-magik-framebuffer-stream = { path = "../framebuffer-stream" }
 png = "0.18.1"
 serde_json = "1"
 slint = { version = "~1.17", default-features = false, features = ["std", "backend-winit", "renderer-skia", "compat-1-2", "accessibility", "unstable-winit-030"] }

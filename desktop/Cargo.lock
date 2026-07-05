@@ -2743,6 +2743,7 @@ name = "mister-magik-desktop"
 version = "0.1.0"
 dependencies = [
  "lz4_flex",
+ "mister-magik-framebuffer-stream",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -2754,6 +2755,10 @@ dependencies = [
  "slint-interpreter",
  "spin_on",
 ]
+
+[[package]]
+name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
 
 [[package]]
 name = "moxcms"

@@ -77,8 +77,13 @@ dependencies = [
  "flate2",
  "libc",
  "lz4_flex",
+ "mister-magik-framebuffer-stream",
  "serde_json",
 ]
+
+[[package]]
+name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"
