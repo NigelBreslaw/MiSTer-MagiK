@@ -1,6 +1,7 @@
 mod agent_client;
 mod app_state;
 mod file_icons;
+mod library;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod sd_card;
