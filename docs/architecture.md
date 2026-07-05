@@ -59,6 +59,29 @@ Important policy:
   the app. Do not add framebuffer format selection back to rendering,
   diagnostics, experiments, or benchmarks.
 
+## Framebuffer Stream
+
+`framebuffer_stream_v1` is the desktop inspection stream for the launcher. It is
+producer-side by design: `mister-magik-fb` publishes frames from its cached
+RGB565 render target after successful presents, and the agent only proxies the
+binary stream to authenticated desktop clients. The stream must not poll or read
+`/dev/fb0` for steady-state frames.
+
+Wire policy:
+
+- The desktop authenticates with the normal agent JSON request, then the socket
+  switches to `mister-magik-framebuffer-stream-v1` binary messages.
+- Payload pixels are RGB565 little-endian and compressed with LZ4 block
+  size-prepended encoding.
+- Message kinds are `hello`, `keyframe`, `rect-delta`, `heartbeat`, `end`, and
+  `error`.
+- Frame messages carry sequence, producer timestamp, geometry, stride, dirty
+  rectangle, uncompressed byte count, and compressed byte count.
+- A new subscriber receives a full keyframe before any deltas. Geometry changes
+  also force a keyframe.
+- If the desktop detects a sequence gap or malformed delta, it must discard the
+  partial frame and require a fresh keyframe.
+
 Historical evidence:
 
 - `history/2026-5-2/framebuffer-experiments.md`
