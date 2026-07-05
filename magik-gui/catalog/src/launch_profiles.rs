@@ -335,7 +335,8 @@ pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    for plan in runtime_profile_plans_for_roots_with_cores(roots, &installed_cores) {
+    for plan in runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
+    {
         let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
             continue;
         };
@@ -434,17 +435,51 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
 
 pub(crate) fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
-    runtime_profile_plans_for_roots_with_cores(roots, &cores)
+    runtime_profile_plans_for_roots_with_cores(roots, &cores, &BTreeSet::new())
 }
 
 fn runtime_profile_plans_for_roots_with_cores(
     roots: &[String],
     cores: &[catalog_discovery::InstalledCore],
+    active_game_dirs: &BTreeSet<String>,
 ) -> Vec<RuntimeProfilePlan> {
-    catalog_discovery::top_level_game_dirs_for_roots(roots)
+    catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, active_game_dirs)
         .into_iter()
-        .map(|game_dir| runtime_profile_plan_for_game_dir(game_dir, cores))
+        .map(|game_dir| runtime_profile_plan_for_game_dir_header(game_dir, cores))
         .collect()
+}
+
+fn runtime_profile_plan_for_game_dir_header(
+    game_dir: catalog_discovery::GameDirHeader,
+    cores: &[catalog_discovery::InstalledCore],
+) -> RuntimeProfilePlan {
+    let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
+    let decision = match exact_or_alias_candidates.as_slice() {
+        [] => runtime_profile_plan_for_game_dir(catalog_discovery::game_dir_payload_facts_for_header(
+            game_dir.clone(),
+        ), cores)
+        .decision,
+        [candidate] => runtime_profile_decision_for_named_candidate(&game_dir, candidate),
+        _ => {
+            let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
+            if facts.has_payloadish_files() {
+                RuntimeProfileDecision::Ambiguous {
+                    core_ids: exact_or_alias_candidates
+                        .iter()
+                        .map(|candidate| candidate.core.core_id.clone())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                }
+            } else {
+                RuntimeProfileDecision::EmptyOrMediaOnly
+            }
+        }
+    };
+    RuntimeProfilePlan {
+        game_dir_name: game_dir.name,
+        decision,
+    }
 }
 
 fn runtime_profile_plan_for_game_dir(
@@ -475,6 +510,44 @@ fn runtime_profile_plan_for_game_dir(
     RuntimeProfilePlan {
         game_dir_name: game_dir.name,
         decision,
+    }
+}
+
+fn runtime_profile_decision_for_named_candidate(
+    game_dir: &catalog_discovery::GameDirHeader,
+    candidate: &RuntimeCoreCandidate<'_>,
+) -> RuntimeProfileDecision {
+    if let Some(extensions) =
+        runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
+    {
+        if catalog_discovery::game_dir_has_payload_candidate(&game_dir.path, &extensions) {
+            return RuntimeProfileDecision::Catalogable {
+                profile: Box::new(runtime_profile_for_extensions(
+                    game_dir,
+                    candidate.core,
+                    extensions,
+                )),
+            };
+        }
+        let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
+        if facts.has_payloadish_files() {
+            RuntimeProfileDecision::NoKnownPayloadExtension
+        } else {
+            RuntimeProfileDecision::EmptyOrMediaOnly
+        }
+    } else {
+        let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
+        runtime_profile_for_match(&facts, candidate)
+            .map(|profile| RuntimeProfileDecision::Catalogable {
+                profile: Box::new(profile),
+            })
+            .unwrap_or_else(|| {
+                if facts.has_payloadish_files() {
+                    RuntimeProfileDecision::NoKnownPayloadExtension
+                } else {
+                    RuntimeProfileDecision::EmptyOrMediaOnly
+                }
+            })
     }
 }
 
@@ -592,15 +665,26 @@ fn runtime_core_candidates<'a>(
     game_dir: &catalog_discovery::GameDirFact,
     cores: &'a [catalog_discovery::InstalledCore],
 ) -> Vec<RuntimeCoreCandidate<'a>> {
-    let exact = core_candidates_by_name(&game_dir.name, cores);
+    let exact = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
     if !exact.is_empty() {
         return exact;
     }
-    let aliases = core_candidates_by_game_dir_alias(&game_dir.name, cores);
+    unique_extension_core_candidates(game_dir, cores)
+}
+
+fn runtime_core_candidates_by_dir_name<'a>(
+    game_dir_name: &str,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<RuntimeCoreCandidate<'a>> {
+    let exact = core_candidates_by_name(game_dir_name, cores);
+    if !exact.is_empty() {
+        return exact;
+    }
+    let aliases = core_candidates_by_game_dir_alias(game_dir_name, cores);
     if !aliases.is_empty() {
         return aliases;
     }
-    if let Some(base) = sinden_base_name(&game_dir.name) {
+    if let Some(base) = sinden_base_name(game_dir_name) {
         let candidates = core_candidates_by_name(&base, cores)
             .into_iter()
             .map(|mut candidate| {
@@ -612,7 +696,7 @@ fn runtime_core_candidates<'a>(
             return candidates;
         }
     }
-    unique_extension_core_candidates(game_dir, cores)
+    Vec::new()
 }
 
 fn core_candidates_by_game_dir_alias<'a>(
@@ -718,6 +802,21 @@ fn runtime_profile_for_match(
         return None;
     }
 
+    Some(runtime_profile_for_extensions(
+        &catalog_discovery::GameDirHeader {
+            name: game_dir.name.clone(),
+            path: game_dir.path.clone(),
+        },
+        core,
+        extensions,
+    ))
+}
+
+fn runtime_profile_for_extensions(
+    game_dir: &catalog_discovery::GameDirHeader,
+    core: &catalog_discovery::InstalledCore,
+    extensions: Vec<String>,
+) -> LaunchProfile {
     let payload_rule = PayloadRule {
         extensions,
         mount: MountSpec::load_file(1),
@@ -727,7 +826,7 @@ fn runtime_profile_for_match(
         ),
     };
     let id = canonical_core_id(&core.core_id).to_ascii_lowercase();
-    Some(LaunchProfile {
+    LaunchProfile {
         id: format!("runtime-{id}"),
         system_id: id,
         category: category_for_installed_core_path(&core.path).to_string(),
@@ -742,7 +841,7 @@ fn runtime_profile_for_match(
         provenance: RuleProvenance::conf_str(
             "Runtime top-level games folder matched an installed core",
         ),
-    })
+    }
 }
 
 fn runtime_payload_extensions_for_core(core_id: &str) -> Option<Vec<String>> {

@@ -267,6 +267,16 @@ impl LibraryRamScanArtifact {
         build_catalog_from_scan(root, &self.scan)
     }
 
+    pub fn save_default_sqlite_with_catalog_projection(
+        self,
+        catalog: &ArcadeCatalog,
+        progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshSummary, String> {
+        let cfg = BenchConfig::production();
+        let artifact = self.complete_coverage_audit();
+        save_scan_artifact_to_sqlite_with_catalog_projection(&cfg, artifact, catalog, progress)
+    }
+
     pub fn complete_coverage_audit(mut self) -> LibraryScanArtifact {
         let audit_t = std::time::Instant::now();
         self.scan.audit_rows =
@@ -784,6 +794,36 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_projections(
         &artifact.scan,
         &artifact.stamp,
         root.as_ref(),
+        progress,
+    )?;
+    let import_us = import_t.elapsed().as_micros() as u64;
+    Ok(LibraryRefreshSummary {
+        skipped: false,
+        scan_us: artifact.stats.scan_us,
+        discover_us: artifact.stats.discover_us,
+        classify_us: artifact.stats.classify_us,
+        import_us,
+        bytes,
+        normal_files: artifact.stats.normal_files,
+        containers: artifact.stats.containers,
+        entries: artifact.stats.entries,
+        audit_rows: artifact.stats.audit_rows,
+        discoveries: artifact.stats.discoveries,
+    })
+}
+
+pub(crate) fn save_scan_artifact_to_sqlite_with_catalog_projection(
+    cfg: &BenchConfig,
+    artifact: LibraryScanArtifact,
+    catalog: &ArcadeCatalog,
+    progress: ProgressCallback<'_>,
+) -> Result<LibraryRefreshSummary, String> {
+    let import_t = std::time::Instant::now();
+    let bytes = sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+        &cfg.sqlite_path,
+        &artifact.scan,
+        &artifact.stamp,
+        catalog,
         progress,
     )?;
     let import_us = import_t.elapsed().as_micros() as u64;
