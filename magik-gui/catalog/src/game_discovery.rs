@@ -253,7 +253,9 @@ pub(crate) fn discovery_from_profile_file(
         }
     }
 
-    let raw_arcade_zip_setname = if matches!(profile.id.as_str(), "mame" | "hbmame") {
+    let payload_setname = if profile.system_id == "neogeo" {
+        media_metadata::parenthesized_setname(&source_path)
+    } else if matches!(profile.id.as_str(), "mame" | "hbmame") {
         file.path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -274,7 +276,7 @@ pub(crate) fn discovery_from_profile_file(
         manufacturer: None,
         genre: None,
         year: None,
-        setname: raw_arcade_zip_setname,
+        setname: payload_setname,
         parent: None,
         covered_payload_path: None,
         confidence: profile_confidence(rule),
@@ -651,6 +653,30 @@ mod tests {
         assert_eq!(discovery.platform_id, "neogeo");
         assert_eq!(discovery.setname.as_deref(), Some("mslug3"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn neogeo_payload_discovery_uses_filename_setname() {
+        let path = std::path::PathBuf::from(
+            "/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack/ World A-Z/3 Count Bout (3countb).neo",
+        );
+        let file = FoundFile {
+            path,
+            ext: "neo".to_string(),
+            size: 123,
+            mtime_secs: 0,
+        };
+
+        let profiles = launch_profiles::builtin_profiles();
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == "neogeo")
+            .expect("neogeo profile");
+        let payload_rule = &profile.payload_rules[0];
+        let discovery = discovery_from_profile_file(&file, profile, payload_rule, &profiles);
+
+        assert_eq!(discovery.platform_id, "neogeo");
+        assert_eq!(discovery.setname.as_deref(), Some("3countb"));
     }
 
     #[test]

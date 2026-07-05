@@ -155,6 +155,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(feature = "diagnostics")]
         "cpu-profile-smoke" => run_cpu_profile_smoke(),
         "library-refresh" => run_library_refresh(),
+        "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "reset-delete-database" => run_reset_delete_database(args),
@@ -289,6 +290,28 @@ fn run_library_refresh() {
         Err(e) => {
             drop(lock);
             crate::ui_errln!("library_refresh\tfailed\t{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_repair_catalog_projections() {
+    let started = std::time::Instant::now();
+    match library_db::rewrite_default_catalog_projections(arcade_catalog::DEFAULT_ARCADE_ROOT) {
+        Ok(summary) => crate::ui_logln!(
+            "catalog_projection_repair_tsv\tstatus=ok\telapsed_us={}\tload_us={}\trepair_us={}\tgames={}\tsummary_bytes={}\tnavigation_bytes={}",
+            started.elapsed().as_micros(),
+            summary.load_us,
+            summary.repair_us,
+            summary.games,
+            summary.summary_bytes,
+            summary.navigation_bytes
+        ),
+        Err(e) => {
+            crate::ui_errln!(
+                "catalog_projection_repair_tsv\tstatus=failed\telapsed_us={}\terror={e}",
+                started.elapsed().as_micros()
+            );
             std::process::exit(1);
         }
     }

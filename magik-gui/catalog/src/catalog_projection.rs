@@ -334,7 +334,10 @@ pub(crate) fn materialize_arcade_ui_projections(
                     WHEN system_id = 'neogeo' THEN ?2
                     ELSE ?1
                 END AS preview_archive_path,
-                COALESCE(NULLIF(family_id, ''), NULLIF(identity_id, ''), NULLIF(setname, ''), '') AS preview_key
+                CASE
+                    WHEN system_id = 'neogeo' THEN COALESCE(NULLIF(setname, ''), '')
+                    ELSE COALESCE(NULLIF(family_id, ''), NULLIF(identity_id, ''), NULLIF(setname, ''), '')
+                END AS preview_key
             FROM candidates
         ),
         resolved_with_preview AS (

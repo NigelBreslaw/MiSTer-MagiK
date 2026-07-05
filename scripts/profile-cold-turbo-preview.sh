@@ -7,6 +7,8 @@ MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/preview-turbo-profiles"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
+REMOTE_NAV="/media/fat/mister-magik/library.nav.lz4b"
+source "$HERE/scripts/preview-selection-lib.sh"
 
 label="cold-turbo-preview-$(date -u +%Y%m%dT%H%M%SZ)"
 secs="10"
@@ -15,10 +17,11 @@ skip_reboot="0"
 require_pass="0"
 skip_archive_warm="1"
 env_file=""
+self_test="0"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-cold-turbo-preview.sh [LABEL] [--secs N] [--systems CSV] [--skip-reboot] [--skip-archive-warm] [--require-pass]
+Usage: scripts/profile-cold-turbo-preview.sh [LABEL] [--secs N] [--systems CSV] [--skip-reboot] [--skip-archive-warm] [--require-pass] [--self-test]
 
 Runs the launcher cold/direct-to-system, starts the turbo-hold benchmark
 immediately after the first usable preview, and summarizes state-chart rows for
@@ -37,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --skip-reboot) skip_reboot="1"; shift ;;
     --skip-archive-warm) skip_archive_warm="1"; shift ;;
     --require-pass) require_pass="1"; shift ;;
+    --self-test) self_test="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
@@ -53,19 +57,56 @@ if [[ ! "$secs" =~ ^[0-9]+$ || "$secs" -lt 1 ]]; then
   exit 2
 fi
 
+run_self_test() {
+  preview_selection_self_test
+  echo "profile-cold-turbo-preview self-test ok"
+}
+
+if [[ "$self_test" == "1" ]]; then
+  run_self_test
+  exit 0
+fi
+
 mkdir -p "$OUT_DIR"
+
+reset_navigation_projection_for_benchmark() {
+  local report
+  report="$("$MISTER" run "
+path='$REMOTE_NAV'
+if [ -f \"\$path\" ]; then
+  bytes=\$(wc -c < \"\$path\" 2>/dev/null || echo 0)
+  rm -f \"\$path\"
+  state=removed
+else
+  bytes=0
+  state=missing
+fi
+sync
+printf 'artifact_reset_tsv\t%s\t%s\t%s\t%s\n' '$label' \"\$state\" \"\$path\" \"\$bytes\"
+")"
+  printf '%s\n' "$report" | tee "$OUT_DIR/${label}-artifact-reset.tsv"
+}
+
+repair_navigation_projection_for_benchmark() {
+  local report
+  report="$("$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections")"
+  printf '%s\n' "$report" | tee "$OUT_DIR/${label}-projection-repair.tsv"
+}
 
 write_env_for_system() {
   local system="$1"
+  local selected_index="$2"
   env_file="$OUT_DIR/${label}-${system}.launcher.env"
   {
     printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=%q\n' "$system"
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=turbo-hold\n'
     printf 'export MISTER_PREVIEW_TRACE=1\n'
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_RUN_LABEL=%q\n' "$label"
+    printf 'export MISTER_ARCADE_SELECTED_INDEX=%q\n' "$selected_index"
     printf 'export MISTER_PREVIEW_DECODED_CACHE_CAP=96\n'
     printf 'export MISTER_PREVIEW_TURBO_RUNWAY=1\n'
     if [[ "$skip_archive_warm" == "1" ]]; then
@@ -159,9 +200,16 @@ summarize_log() {
 
 IFS=',' read -r -a systems <<<"$systems_csv"
 all_pass="1"
+reset_navigation_projection_for_benchmark
+repair_navigation_projection_for_benchmark
 for system in "${systems[@]}"; do
   local_log="$OUT_DIR/${label}-${system}.log"
-  write_env_for_system "$system"
+  selected_index="$(preview_selection_index_for_system "$MISTER" "$system")" || {
+    echo "no preview-bearing row found for system=$system in launcher_catalog" >&2
+    exit 1
+  }
+  printf 'preview_turbo_start_tsv\tlabel=%s\tsystem=%s\tselected_index=%s\n' "$label" "$system" "$selected_index"
+  write_env_for_system "$system" "$selected_index"
   if [[ "$skip_reboot" == "1" ]]; then
     "$MISTER" run "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null
   else

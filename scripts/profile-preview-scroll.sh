@@ -14,7 +14,7 @@ source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--skip-preview-warm] [--replace-label]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--replace-label]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -25,6 +25,10 @@ Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
 non-empty CPU SVG artifact.
 --visual-captures captures fixed Arcade indices from the real launcher screen.
+--start-system sets MISTER_LAUNCHER_START_SYSTEM for direct system benchmarks.
+--selected-index starts Arcade on a specific zero-based row before tracing.
+--defer-start-system starts on Home and lets MISTER_LAUNCHER_START_SYSTEM enter
+the requested system after navigation rows hydrate.
 --skip-preview-warm skips launcher benchmark archive preloading so first-preview
 measurement can exercise the .idx + pread fast lane.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
@@ -47,6 +51,9 @@ cpu_profile="0"
 cpu_profile_remote_svg=""
 skip_preview_warm="${MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM:-0}"
 replace_label="0"
+selected_index=""
+start_system="arcade"
+defer_start_system="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -68,6 +75,17 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
+    --start-system)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--start-system needs a value" >&2; usage >&2; exit 2; fi
+      start_system="$2"
+      shift 2
+      ;;
+    --selected-index)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--selected-index needs a value" >&2; usage >&2; exit 2; fi
+      selected_index="$2"
+      shift 2
+      ;;
+    --defer-start-system) defer_start_system="1"; shift ;;
     --skip-preview-warm|--cold-preview-load) skip_preview_warm="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -105,6 +123,8 @@ if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scr
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
+if [[ -n "$selected_index" && ! "$selected_index" =~ ^[0-9]+$ ]]; then echo "--selected-index must be an integer" >&2; exit 2; fi
+if [[ ! "$start_system" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "--start-system must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 
 mkdir -p "$OUT_DIR"
 if [[ "$replace_label" == "1" ]]; then
@@ -285,9 +305,13 @@ write_launcher_env() {
   local selected_index="${3:-}"
   {
     printf 'export MISTER_CATALOG_REFRESH=default\n'
-    printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
-    printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
-    printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
+    if [[ "$defer_start_system" == "1" ]]; then
+      printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
+    else
+      printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+      printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
+    fi
+    printf 'export MISTER_LAUNCHER_START_SYSTEM=%q\n' "$start_system"
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$scenario_value"
     printf 'export MISTER_PREVIEW_TRACE=1\n'
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
@@ -325,11 +349,11 @@ run_case() {
   local local_cpu_svg="$OUT_DIR/${label}-${name}-cpu.svg"
   cpu_profile_remote_svg="/tmp/${label}-${name}-cpu.svg"
 
-  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs transition=fixed-fade cpu_profile=$cpu_profile"
+  echo "==> $name supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs start_system=$start_system selected_index=${selected_index:-default} defer_start_system=$defer_start_system transition=fixed-fade cpu_profile=$cpu_profile"
   if [[ "$cpu_profile" == "1" ]]; then
     "$MISTER" run "rm -f '$cpu_profile_remote_svg'" >/dev/null
   fi
-  write_launcher_env "$remote_scenario" "$remote_tsv"
+  write_launcher_env "$remote_scenario" "$remote_tsv" "$selected_index"
   restart_supervised_launcher "$remote_tsv"
   thread_sample_start "$label" "$name" "$OUT_DIR" $((secs + 10))
   sleep $((secs + 7))
