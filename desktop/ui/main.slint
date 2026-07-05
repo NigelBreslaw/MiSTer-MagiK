@@ -69,6 +69,26 @@ export struct DirtyRectOverlay {
     kind: string,
 }
 
+export struct ProfileFrameSegment {
+    phase: string,
+    us: int,
+    start-us: int,
+}
+
+export struct ProfileFrameBar {
+    frame: int,
+    wall-us: int,
+    over-budget: bool,
+    segments: [ProfileFrameSegment],
+}
+
+export struct ProfileHeatmapCell {
+    x: int,
+    y: int,
+    hits: int,
+    intensity: float,
+}
+
 export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <int> framebuffer-width: 0;
@@ -83,6 +103,17 @@ export global AnalyticsState {
     in-out property <bool> show-dirty-rects: true;
     in-out property <[DirtyRectOverlay]> dirty-rects: [];
     in-out property <string> dirty-rect-summary: "Dirty overlay idle.";
+    in-out property <string> profile-path: "";
+    in-out property <string> profile-status: "Load a frame-profile TSV to inspect frame budget artifacts.";
+    in-out property <string> profile-last-error: "";
+    in-out property <bool> profile-loading: false;
+    in-out property <bool> profile-has-data: false;
+    in-out property <string> profile-summary: "No profile loaded.";
+    in-out property <[ProfileFrameBar]> profile-bars: [];
+    in-out property <[ProfileHeatmapCell]> profile-heatmap: [];
+    in-out property <[DataTableRow]> profile-stats-rows: [];
+    in-out property <[DataTableRow]> profile-slow-rows: [];
+    in-out property <[DataTableRow]> profile-histogram-rows: [];
 }
 
 export global SdCardState {
@@ -169,6 +200,7 @@ export global Actions {
     callback capture-framebuffer();
     callback save-framebuffer-image();
     callback live-stream-changed(bool);
+    callback load-profile-artifact(string);
     callback sd-row-toggle(string);
     callback sd-row-current(string);
     callback sd-refresh-folder();
@@ -893,6 +925,241 @@ component SdCardPage {
     }
 }
 
+component ProfileBudgetChart {
+    in property <[ProfileFrameBar]> bars;
+    property <int> max-us: 33334;
+
+    Rectangle {
+        width: 100%;
+        height: 190px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-default;
+        clip: true;
+
+        if root.bars.length == 0: Text {
+            x: 12px;
+            y: 12px;
+            text: "No frame bars loaded.";
+            color: PrimerColors.fgColor-muted;
+            font-size: LayoutTokens.text-body-size-small;
+        }
+
+        Flickable {
+            width: parent.width;
+            height: parent.height;
+            viewport-width: self.width;
+            viewport-height: max(parent.height, root.bars.length * 22px + 16px);
+
+            content := VerticalLayout {
+                width: parent.width;
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 4px;
+
+                for bar in root.bars : HorizontalLayout {
+                    height: 18px;
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        width: 44px;
+                        text: bar.frame;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: 10px;
+                        horizontal-alignment: right;
+                    }
+
+                    chart-row := Rectangle {
+                        horizontal-stretch: 1;
+                        height: 12px;
+                        border-width: 1px;
+                        border-color: bar.over-budget ? #dc2626 : PrimerColors.borderColor-muted;
+                        background: PrimerColors.bgColor-inset;
+                        clip: true;
+
+                        Rectangle {
+                            x: parent.width * 16667 / root.max-us;
+                            width: 1px;
+                            background: #dc2626;
+                        }
+
+                        for segment in bar.segments : Rectangle {
+                            x: chart-row.width * segment.start-us / root.max-us;
+                            width: max(1px, chart-row.width * segment.us / root.max-us);
+                            height: parent.height;
+                            background: segment.phase == "prepare" ? #6b7280
+                                : segment.phase == "anim" ? #22c55e
+                                : segment.phase == "slint-render" ? #2563eb
+                                : segment.phase == "custom-draw" ? #a855f7
+                                : segment.phase == "vsync-wait" ? #f59e0b
+                                : segment.phase == "cached-present" ? #06b6d4
+                                : segment.phase == "arcade-list-present" ? #ef4444
+                                : segment.phase == "video-decode" ? #10b981
+                                : segment.phase == "video-scale" ? #84cc16
+                                : segment.phase == "video-recv" ? #64748b
+                                : segment.phase == "video-image" ? #6366f1
+                                : segment.phase == "video-blit" ? #0ea5e9
+                                : segment.phase == "audio-decode" ? #f97316
+                                : segment.phase == "audio-resample" ? #fb7185
+                                : segment.phase == "audio-write" ? #b45309
+                                : #94a3b8;
+                        }
+                    }
+
+                    Text {
+                        width: 64px;
+                        text: bar.wall-us + "us";
+                        color: bar.over-budget ? #dc2626 : PrimerColors.fgColor-muted;
+                        font-size: 10px;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ProfileHeatmap {
+    in property <[ProfileHeatmapCell]> cells;
+
+    Rectangle {
+        width: 100%;
+        height: 190px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-default;
+        clip: true;
+
+        heat := Rectangle {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            height: parent.height - 20px;
+            background: PrimerColors.bgColor-inset;
+            border-width: 1px;
+            border-color: PrimerColors.borderColor-muted;
+
+            for cell in root.cells : Rectangle {
+                x: heat.width * cell.x / 96;
+                y: heat.height * cell.y / 54;
+                width: max(1px, heat.width / 96);
+                height: max(1px, heat.height / 54);
+                background: cell.intensity > 0.66 ? #dc2626 : cell.intensity > 0.33 ? #f97316 : #22d3ee;
+            }
+        }
+
+        if root.cells.length == 0: Text {
+            x: 22px;
+            y: 20px;
+            text: "No presented rects in this profile.";
+            color: PrimerColors.fgColor-muted;
+            font-size: LayoutTokens.text-body-size-small;
+        }
+    }
+}
+
+component ProfileArtifactsPanel {
+    property <[DataTableColumn]> stats-columns: [
+        { header: "Metric", id: "metric", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: false },
+        { header: "Avg", id: "avg", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "p50", id: "p50", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "p95", id: "p95", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "p99", id: "p99", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "Max", id: "max", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+    ];
+    property <[DataTableColumn]> slow-columns: [
+        { header: "Frame", id: "frame", sortable: false, align: DataTableCellAlign.end, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "Wall", id: "wall", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 84px, width: 84px, monospace: true },
+        { header: "Dominant", id: "dominant", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: false },
+        { header: "Rect", id: "rect", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: true },
+    ];
+    property <[DataTableColumn]> histogram-columns: [
+        { header: "Bucket", id: "bucket", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: true },
+        { header: "Frames", id: "frames", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 80px, width: 80px, monospace: true },
+    ];
+
+    TableContainer {
+        title: "Profile Artifacts";
+        subtitle: AnalyticsState.profile-status;
+        primary-action-label: AnalyticsState.profile-loading ? "Loading..." : "Load TSV";
+        primary-action-variant: ButtonVariant.default;
+        primary-action => { Actions.load-profile-artifact(AnalyticsState.profile-path); }
+
+        VerticalLayout {
+            spacing: 12px;
+
+            PrimerTextInput {
+                width: 100%;
+                text: AnalyticsState.profile-path;
+                placeholder: "Path to MISTER_PROFILE_FILE TSV";
+                has-leading-visual: true;
+                leading-visual: Icons.file;
+                edited(value) => { AnalyticsState.profile-path = value; }
+            }
+
+            if AnalyticsState.profile-last-error != "": Banner {
+                title: "Profile load error";
+                description: AnalyticsState.profile-last-error;
+                variant: BannerVariant.critical;
+            }
+
+            Text {
+                text: AnalyticsState.profile-summary;
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    Text { text: "Frame budget"; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
+                    ProfileBudgetChart { bars: AnalyticsState.profile-bars; }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 8px;
+                    Text { text: "Dirty heatmap"; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
+                    ProfileHeatmap { cells: AnalyticsState.profile-heatmap; }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                DataTable {
+                    horizontal-stretch: 2;
+                    cell-padding: DataTableCellPadding.condensed;
+                    columns: stats-columns;
+                    rows: AnalyticsState.profile-stats-rows;
+                }
+
+                DataTable {
+                    horizontal-stretch: 1;
+                    cell-padding: DataTableCellPadding.condensed;
+                    columns: histogram-columns;
+                    rows: AnalyticsState.profile-histogram-rows;
+                }
+            }
+
+            DataTable {
+                width: 100%;
+                cell-padding: DataTableCellPadding.condensed;
+                columns: slow-columns;
+                rows: AnalyticsState.profile-slow-rows;
+            }
+        }
+    }
+}
+
 component AnalyticsPage {
     VerticalLayout {
         spacing: 16px;
@@ -1024,6 +1291,8 @@ component AnalyticsPage {
                     }
                 }
             }
+
+            ProfileArtifactsPanel { }
         }
     }
 }

@@ -683,6 +683,18 @@ fn create_live_instance(
         Value::Void
     })?;
 
+    let profile_instance = instance.as_weak();
+    instance.set_global_callback("Actions", "load-profile-artifact", move |args| {
+        let Some(Value::String(path)) = args.first() else {
+            return Value::Void;
+        };
+        if let Some(instance) = profile_instance.upgrade() {
+            set_live_profile_loading(&instance, path);
+        }
+        spawn_live_profile_load(profile_instance.clone(), path.to_string());
+        Value::Void
+    })?;
+
     let sd_toggle_instance = instance.as_weak();
     let sd_toggle_host = host.to_string();
     let sd_toggle_browser = Arc::clone(&sd_browser);
@@ -1486,6 +1498,15 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
             }
         });
 
+    let profile_ui = ui.as_weak();
+    ui.global::<Actions>()
+        .on_load_profile_artifact(move |path| {
+            if let Some(ui) = profile_ui.upgrade() {
+                set_compiled_profile_loading(&ui, path.as_str());
+            }
+            spawn_compiled_profile_load(profile_ui.clone(), path.to_string());
+        });
+
     let sd_toggle_ui = ui.as_weak();
     let sd_toggle_host = host.clone();
     let sd_toggle_browser = Arc::clone(&sd_browser);
@@ -2077,7 +2098,10 @@ fn push_recent_dirty_rect(
     }
 }
 
-fn dirty_rect_summary(frame: &agent_client::FramebufferStreamFrame, visible_count: usize) -> String {
+fn dirty_rect_summary(
+    frame: &agent_client::FramebufferStreamFrame,
+    visible_count: usize,
+) -> String {
     let kind = match frame.kind {
         mister_magik_framebuffer_stream::FrameKind::Keyframe => "keyframe",
         mister_magik_framebuffer_stream::FrameKind::RectDelta => "delta",
@@ -2177,6 +2201,409 @@ fn clear_compiled_dirty_rects(ui: &AppWindow) {
     let state = ui.global::<AnalyticsState>();
     state.set_dirty_rects(ModelRc::new(VecModel::<DirtyRectOverlay>::from(Vec::new())));
     state.set_dirty_rect_summary("Dirty overlay idle.".into());
+}
+
+#[derive(Clone, Debug)]
+struct ProfileArtifactView {
+    path: String,
+    summary: String,
+    bars: Vec<ProfileBarView>,
+    heatmap: Vec<ProfileHeatmapCellView>,
+    stats_rows: Vec<Vec<String>>,
+    slow_rows: Vec<Vec<String>>,
+    histogram_rows: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+struct ProfileBarView {
+    frame: i32,
+    wall_us: i32,
+    over_budget: bool,
+    segments: Vec<ProfileSegmentView>,
+}
+
+#[derive(Clone, Debug)]
+struct ProfileSegmentView {
+    phase: String,
+    us: i32,
+    start_us: i32,
+}
+
+#[derive(Clone, Debug)]
+struct ProfileHeatmapCellView {
+    x: i32,
+    y: i32,
+    hits: i32,
+    intensity: f32,
+}
+
+fn load_profile_artifact(path: &str) -> Result<ProfileArtifactView, String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err("Enter a frame-profile TSV path.".to_string());
+    }
+    let text = std::fs::read_to_string(path).map_err(|err| format!("read {path}: {err}"))?;
+    let profile = frame_profile::FrameProfile::parse_tsv(&text)?;
+    Ok(profile_artifact_view(path, &profile))
+}
+
+fn profile_artifact_view(path: &str, profile: &frame_profile::FrameProfile) -> ProfileArtifactView {
+    let slow_count = profile
+        .rows
+        .iter()
+        .filter(|row| row.wall_us >= frame_profile::FRAME_BUDGET_US)
+        .count();
+    let summary = format!(
+        "{} frames loaded from {path}; {} frames at or over 16.667ms.",
+        profile.rows.len(),
+        slow_count
+    );
+    let bars = profile
+        .frame_bars(120)
+        .into_iter()
+        .map(|bar| {
+            let mut start_us = 0_i32;
+            let segments = bar
+                .segments
+                .into_iter()
+                .map(|segment| {
+                    let us = clamp_u64_i32(segment.us);
+                    let view = ProfileSegmentView {
+                        phase: segment.label,
+                        us,
+                        start_us,
+                    };
+                    start_us = start_us.saturating_add(us);
+                    view
+                })
+                .collect();
+            ProfileBarView {
+                frame: clamp_u64_i32(bar.frame),
+                wall_us: clamp_u64_i32(bar.wall_us),
+                over_budget: bar.over_budget,
+                segments,
+            }
+        })
+        .collect();
+    let heatmap_cells = profile.heatmap(96, 54);
+    let max_hits = heatmap_cells
+        .iter()
+        .map(|cell| cell.hits)
+        .max()
+        .unwrap_or(1);
+    let heatmap = heatmap_cells
+        .into_iter()
+        .map(|cell| ProfileHeatmapCellView {
+            x: cell.x as i32,
+            y: cell.y as i32,
+            hits: clamp_u64_i32(cell.hits),
+            intensity: (cell.hits as f32 / max_hits as f32).clamp(0.0, 1.0),
+        })
+        .collect();
+    let stats_rows = profile
+        .phase_stats()
+        .into_iter()
+        .take(16)
+        .map(|stat| {
+            vec![
+                stat.label,
+                stat.avg.to_string(),
+                stat.p50.to_string(),
+                stat.p95.to_string(),
+                stat.p99.to_string(),
+                stat.max.to_string(),
+            ]
+        })
+        .collect();
+    let slow_rows = profile
+        .slow_frames(10, frame_profile::FRAME_BUDGET_US)
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.frame.to_string(),
+                format!("{}us", row.wall_us),
+                row.dominant,
+                row.rect
+                    .map(|rect| format!("{},{}..{},{}", rect.x0, rect.y0, rect.x1, rect.y1))
+                    .unwrap_or_else(|| "none".to_string()),
+            ]
+        })
+        .collect();
+    let histogram_rows = profile
+        .histogram("wall_us")
+        .into_iter()
+        .map(|bucket| vec![bucket.label, bucket.count.to_string()])
+        .collect();
+    ProfileArtifactView {
+        path: path.to_string(),
+        summary,
+        bars,
+        heatmap,
+        stats_rows,
+        slow_rows,
+        histogram_rows,
+    }
+}
+
+fn clamp_u64_i32(value: u64) -> i32 {
+    value.min(i32::MAX as u64) as i32
+}
+
+#[cfg(feature = "live-ui")]
+fn set_live_profile_loading(instance: &slint_interpreter::ComponentInstance, path: &str) {
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property("AnalyticsState", "profile-loading", Value::Bool(true));
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "profile-status",
+        Value::String(SharedString::from(format!("Loading {path}..."))),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "profile-last-error",
+        Value::String(SharedString::from("")),
+    );
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_profile_result(
+    instance: &slint_interpreter::ComponentInstance,
+    result: Result<ProfileArtifactView, String>,
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    let _ = instance.set_global_property("AnalyticsState", "profile-loading", Value::Bool(false));
+    match result {
+        Ok(view) => {
+            let bars = view
+                .bars
+                .iter()
+                .map(|bar| {
+                    let segments = bar
+                        .segments
+                        .iter()
+                        .map(|segment| {
+                            Value::Struct(Struct::from_iter([
+                                (
+                                    "phase".to_string(),
+                                    Value::String(SharedString::from(segment.phase.as_str())),
+                                ),
+                                ("us".to_string(), Value::Number(segment.us as f64)),
+                                (
+                                    "start-us".to_string(),
+                                    Value::Number(segment.start_us as f64),
+                                ),
+                            ]))
+                        })
+                        .collect::<Vec<_>>();
+                    Value::Struct(Struct::from_iter([
+                        ("frame".to_string(), Value::Number(bar.frame as f64)),
+                        ("wall-us".to_string(), Value::Number(bar.wall_us as f64)),
+                        ("over-budget".to_string(), Value::Bool(bar.over_budget)),
+                        (
+                            "segments".to_string(),
+                            Value::Model(ModelRc::new(VecModel::from(segments))),
+                        ),
+                    ]))
+                })
+                .collect::<Vec<_>>();
+            let heatmap = view
+                .heatmap
+                .iter()
+                .map(|cell| {
+                    Value::Struct(Struct::from_iter([
+                        ("x".to_string(), Value::Number(cell.x as f64)),
+                        ("y".to_string(), Value::Number(cell.y as f64)),
+                        ("hits".to_string(), Value::Number(cell.hits as f64)),
+                        (
+                            "intensity".to_string(),
+                            Value::Number(cell.intensity as f64),
+                        ),
+                    ]))
+                })
+                .collect::<Vec<_>>();
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-path",
+                Value::String(SharedString::from(view.path.as_str())),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-status",
+                Value::String(SharedString::from("Profile loaded.")),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-last-error",
+                Value::String(SharedString::from("")),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-has-data",
+                Value::Bool(true),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-summary",
+                Value::String(SharedString::from(view.summary.as_str())),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-bars",
+                Value::Model(ModelRc::new(VecModel::from(bars))),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-heatmap",
+                Value::Model(ModelRc::new(VecModel::from(heatmap))),
+            );
+            set_live_table_rows(instance, "profile-stats-rows", &view.stats_rows);
+            set_live_table_rows(instance, "profile-slow-rows", &view.slow_rows);
+            set_live_table_rows(instance, "profile-histogram-rows", &view.histogram_rows);
+        }
+        Err(err) => {
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-status",
+                Value::String(SharedString::from("Profile load failed.")),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "profile-last-error",
+                Value::String(SharedString::from(err)),
+            );
+        }
+    }
+}
+
+#[cfg(feature = "live-ui")]
+fn set_live_table_rows(
+    instance: &slint_interpreter::ComponentInstance,
+    property: &str,
+    rows: &[Vec<String>],
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    let values = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let cells = row
+                .iter()
+                .map(|cell| live_library_text_cell(cell))
+                .collect::<Vec<_>>();
+            Value::Struct(Struct::from_iter([
+                (
+                    "id".to_string(),
+                    Value::String(SharedString::from(format!("{property}-{index}").as_str())),
+                ),
+                (
+                    "cells".to_string(),
+                    Value::Model(ModelRc::new(VecModel::from(cells))),
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        property,
+        Value::Model(ModelRc::new(VecModel::from(values))),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn set_compiled_profile_loading(ui: &AppWindow, path: &str) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_profile_loading(true);
+    state.set_profile_status(format!("Loading {path}...").into());
+    state.set_profile_last_error("".into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_profile_result(ui: &AppWindow, result: Result<ProfileArtifactView, String>) {
+    use slint::{ModelRc, SharedString, VecModel};
+
+    let state = ui.global::<AnalyticsState>();
+    state.set_profile_loading(false);
+    match result {
+        Ok(view) => {
+            let bars = view
+                .bars
+                .iter()
+                .map(|bar| ProfileFrameBar {
+                    frame: bar.frame,
+                    wall_us: bar.wall_us,
+                    over_budget: bar.over_budget,
+                    segments: ModelRc::new(VecModel::from(
+                        bar.segments
+                            .iter()
+                            .map(|segment| ProfileFrameSegment {
+                                phase: SharedString::from(segment.phase.as_str()),
+                                us: segment.us,
+                                start_us: segment.start_us,
+                            })
+                            .collect::<Vec<_>>(),
+                    )),
+                })
+                .collect::<Vec<_>>();
+            let heatmap = view
+                .heatmap
+                .iter()
+                .map(|cell| ProfileHeatmapCell {
+                    x: cell.x,
+                    y: cell.y,
+                    hits: cell.hits,
+                    intensity: cell.intensity,
+                })
+                .collect::<Vec<_>>();
+            state.set_profile_path(view.path.as_str().into());
+            state.set_profile_status("Profile loaded.".into());
+            state.set_profile_last_error("".into());
+            state.set_profile_has_data(true);
+            state.set_profile_summary(view.summary.as_str().into());
+            state.set_profile_bars(ModelRc::new(VecModel::from(bars)));
+            state.set_profile_heatmap(ModelRc::new(VecModel::from(heatmap)));
+            state.set_profile_stats_rows(compiled_profile_table_rows(
+                "profile-stats",
+                &view.stats_rows,
+            ));
+            state.set_profile_slow_rows(compiled_profile_table_rows(
+                "profile-slow",
+                &view.slow_rows,
+            ));
+            state.set_profile_histogram_rows(compiled_profile_table_rows(
+                "profile-histogram",
+                &view.histogram_rows,
+            ));
+        }
+        Err(err) => {
+            state.set_profile_status("Profile load failed.".into());
+            state.set_profile_last_error(err.into());
+        }
+    }
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_profile_table_rows(prefix: &str, rows: &[Vec<String>]) -> slint::ModelRc<DataTableRow> {
+    use slint::{ModelRc, VecModel};
+
+    ModelRc::new(VecModel::from(
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| DataTableRow {
+                id: format!("{prefix}-{index}").into(),
+                cells: ModelRc::new(VecModel::from(
+                    row.iter()
+                        .map(|cell| compiled_library_text_cell(cell))
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>(),
+    ))
 }
 
 fn format_byte_size(bytes: u64) -> String {
@@ -2532,6 +2959,21 @@ fn spawn_live_save_framebuffer_capture(
 }
 
 #[cfg(feature = "live-ui")]
+fn spawn_live_profile_load(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    path: String,
+) {
+    std::thread::spawn(move || {
+        let result = load_profile_artifact(&path);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(instance) = instance.upgrade() {
+                apply_live_profile_result(&instance, result);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "live-ui")]
 fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
@@ -2741,6 +3183,18 @@ fn spawn_compiled_save_framebuffer_capture(
                         apply_compiled_save_status(&ui, "Framebuffer PNG save failed.", &err)
                     }
                 }
+            }
+        });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_profile_load(ui: slint::Weak<AppWindow>, path: String) {
+    std::thread::spawn(move || {
+        let result = load_profile_artifact(&path);
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                apply_compiled_profile_result(&ui, result);
             }
         });
     });
