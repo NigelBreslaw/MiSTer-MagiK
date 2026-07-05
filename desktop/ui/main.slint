@@ -365,21 +365,15 @@ component DebugPage {
 
 export component AppWindow inherits Window {
     title: "MiSTer MagiK";
-    no-frame: true;
-    resize-border-width: 8px;
-    background: transparent;
     preferred-width: 1100px;
     preferred-height: 760px;
     min-width: 760px;
     min-height: 520px;
     default-font-family: "Mona Sans";
     icon: Icons.palette;
-    private property <length> chrome-radius: 14px;
 
     Rectangle {
         background: PrimerColors.bgColor-default;
-        border-radius: root.chrome-radius;
-        clip: true;
 
         VerticalLayout {
             AppHeader {

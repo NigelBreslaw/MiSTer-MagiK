@@ -1,5 +1,7 @@
 mod agent_client;
 mod app_state;
+#[cfg(target_os = "macos")]
+mod macos_titlebar;
 
 use agent_client::fetch_dashboard;
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
@@ -22,6 +24,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if std::env::var_os("SLINT_BACKEND").is_none() {
         std::env::set_var("SLINT_BACKEND", "winit-skia");
     }
+    select_backend()?;
 
     #[cfg(feature = "live-ui")]
     {
@@ -37,6 +40,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         compile_error!("enable either live-ui or compiled-ui");
     }
+}
+
+fn select_backend() -> Result<(), slint::PlatformError> {
+    let selector = slint::BackendSelector::new();
+    #[cfg(target_os = "macos")]
+    let selector =
+        selector.with_winit_window_attributes_hook(macos_titlebar::apply_unified_titlebar);
+    selector.select()
 }
 
 #[cfg(feature = "live-ui")]
@@ -102,6 +113,8 @@ fn create_live_instance(
 
     let snapshot = fetch_dashboard(host);
     apply_live_snapshot(&instance, &snapshot);
+    #[cfg(target_os = "macos")]
+    setup_macos_titlebar_for_live_instance(&instance);
     Ok(instance)
 }
 
@@ -168,8 +181,36 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
 
     let snapshot = fetch_dashboard(&host);
     apply_compiled_snapshot(&ui, &snapshot);
+    #[cfg(target_os = "macos")]
+    setup_macos_titlebar_for_compiled_ui(&ui);
     ui.run()?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[cfg(feature = "live-ui")]
+fn setup_macos_titlebar_for_live_instance(instance: &slint_interpreter::ComponentInstance) {
+    let instance_weak = instance.as_weak();
+    slint::spawn_local(async move {
+        let Some(instance) = instance_weak.upgrade() else {
+            return;
+        };
+        let _ = macos_titlebar::setup_window(instance.window()).await;
+    })
+    .ok();
+}
+
+#[cfg(target_os = "macos")]
+#[cfg(feature = "compiled-ui")]
+fn setup_macos_titlebar_for_compiled_ui(ui: &AppWindow) {
+    let ui_weak = ui.as_weak();
+    slint::spawn_local(async move {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let _ = macos_titlebar::setup_window(ui.window()).await;
+    })
+    .ok();
 }
 
 #[cfg(feature = "compiled-ui")]
