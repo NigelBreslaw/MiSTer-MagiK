@@ -328,7 +328,6 @@ run_boot_prelude() {
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' 'a,down,down,down,down,down,down,down,down'
     printf 'export MISTER_ARCADE_ENTRY_TRACE=%q\n' "$remote_entry_tsv"
-    printf 'export MISTER_PREVIEW_TRACE=1\n'
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   "$MISTER" run "rm -f '$remote_entry_tsv' '$REMOTE_LOG'; sync" >/dev/null
@@ -409,7 +408,6 @@ echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=
   printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
-  printf 'export MISTER_PREVIEW_TRACE=1\n'
   printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
   printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
   if [[ "$selection_invert" == "off" ]]; then
