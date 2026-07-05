@@ -1,6 +1,7 @@
 mod agent_client;
 mod app_state;
 mod file_icons;
+mod frame_profile;
 mod library;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
