@@ -325,13 +325,17 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
 }
 
 pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
-    let installed = installed_core_ids_for_roots(roots);
+    let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+    let installed = installed_cores
+        .iter()
+        .map(|core| core.core_id.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
     let mut profiles = special_profiles();
     profiles.extend(generic_manifest_profiles().into_iter().filter(|profile| {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    for plan in runtime_profile_plans_for_roots(roots) {
+    for plan in runtime_profile_plans_for_roots_with_cores(roots, &installed_cores) {
         let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
             continue;
         };
@@ -430,9 +434,16 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
 
 pub(crate) fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
+    runtime_profile_plans_for_roots_with_cores(roots, &cores)
+}
+
+fn runtime_profile_plans_for_roots_with_cores(
+    roots: &[String],
+    cores: &[catalog_discovery::InstalledCore],
+) -> Vec<RuntimeProfilePlan> {
     catalog_discovery::top_level_game_dirs_for_roots(roots)
         .into_iter()
-        .map(|game_dir| runtime_profile_plan_for_game_dir(game_dir, &cores))
+        .map(|game_dir| runtime_profile_plan_for_game_dir(game_dir, cores))
         .collect()
 }
 
