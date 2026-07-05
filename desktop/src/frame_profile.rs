@@ -220,8 +220,20 @@ impl FrameProfile {
         if cols == 0 || rows == 0 {
             return Vec::new();
         }
-        let surface_w = self.rows.iter().map(|row| row.present_rect.map_or(0, |r| r.x1)).max().unwrap_or(0).max(1);
-        let surface_h = self.rows.iter().map(|row| row.present_rect.map_or(0, |r| r.y1)).max().unwrap_or(0).max(1);
+        let surface_w = self
+            .rows
+            .iter()
+            .map(|row| row.present_rect.map_or(0, |r| r.x1))
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        let surface_h = self
+            .rows
+            .iter()
+            .map(|row| row.present_rect.map_or(0, |r| r.y1))
+            .max()
+            .unwrap_or(0)
+            .max(1);
         let len = cols as usize * rows as usize;
         let mut grid = vec![0_u64; len];
         for rect in self.rows.iter().filter_map(|row| row.present_rect) {
@@ -258,7 +270,11 @@ fn parse_row(columns: &[&str], cells: &[&str]) -> Result<FrameProfileRow, String
     let values = columns
         .iter()
         .enumerate()
-        .filter_map(|(index, key)| cells.get(index).map(|value| ((*key).to_string(), int_value(value))))
+        .filter_map(|(index, key)| {
+            cells
+                .get(index)
+                .map(|value| ((*key).to_string(), int_value(value)))
+        })
         .collect::<HashMap<_, _>>();
     let frame = value_from(&values, "frame");
     let wall_us = value_from(&values, "wall_us");

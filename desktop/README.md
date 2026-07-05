@@ -53,6 +53,17 @@ The GUI uses the same token-protected line-delimited JSON protocol documented in
 long-running UI through a Unix shell wrapper. Device scripts and recovery work
 should still use `scripts/mister`.
 
+## Analytics
+
+The Analytics page can show the live framebuffer stream and a red 1px dirty-rect
+overlay for recent keyframes and rect deltas reported by the agent stream.
+One-shot PNG captures do not include dirty metadata, so they clear the overlay.
+
+The Profile Artifacts panel imports local `MISTER_PROFILE_FILE` TSV output and
+renders native frame-budget bars, dirty-region heatmaps, histogram/stat tables,
+and slow-frame rows. Importing a TSV is read-only and local-only; the desktop app
+does not run benchmark scripts or change MiSTer device state.
+
 ## Slint UI Workflow
 
 The default `live-ui` feature loads `ui/main.slint` at runtime via
