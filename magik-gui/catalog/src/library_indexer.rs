@@ -130,15 +130,25 @@ fn scan_library_with_progress_and_events(
     mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
+    let profiles_t = Instant::now();
+    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
+    library_db::report_library_scan_timing(
+        "active_profiles",
+        profiles_t.elapsed().as_micros() as u64,
+        format!("profiles={}", profiles.len()),
+    );
     let rx = match priority {
-        LibraryScanPriority::Background => {
-            catalog_scan::discover_files_pipelined(cfg.roots.clone())
-        }
+        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_profiles(
+            cfg.roots.clone(),
+            profiles.clone(),
+        ),
         LibraryScanPriority::Foreground => {
-            catalog_scan::discover_files_pipelined_foreground(cfg.roots.clone())
+            catalog_scan::discover_files_pipelined_foreground_with_profiles(
+                cfg.roots.clone(),
+                profiles.clone(),
+            )
         }
     };
-    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
     let mut discover_us = 0;
 
     let mut normal_files = Vec::new();

@@ -97,17 +97,30 @@ struct WalkTargetStats {
 }
 
 pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_role(roots, RuntimeThreadRole::LibraryWalker)
+    discover_files_pipelined_with_role(roots, None, RuntimeThreadRole::LibraryWalker)
 }
 
-pub(crate) fn discover_files_pipelined_foreground(
+pub(crate) fn discover_files_pipelined_with_profiles(
     roots: Vec<String>,
+    profiles: Vec<LaunchProfile>,
 ) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_role(roots, RuntimeThreadRole::LibraryWalkerForeground)
+    discover_files_pipelined_with_role(roots, Some(profiles), RuntimeThreadRole::LibraryWalker)
+}
+
+pub(crate) fn discover_files_pipelined_foreground_with_profiles(
+    roots: Vec<String>,
+    profiles: Vec<LaunchProfile>,
+) -> mpsc::Receiver<DiscoveryEvent> {
+    discover_files_pipelined_with_role(
+        roots,
+        Some(profiles),
+        RuntimeThreadRole::LibraryWalkerForeground,
+    )
 }
 
 fn discover_files_pipelined_with_role(
     roots: Vec<String>,
+    profiles: Option<Vec<LaunchProfile>>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
@@ -116,7 +129,7 @@ fn discover_files_pipelined_with_role(
         .spawn(move || {
             apply_runtime_thread_policy(role);
             let t = Instant::now();
-            let dirs = discover_files_streaming(&roots, &tx);
+            let dirs = discover_files_streaming(&roots, profiles, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,
@@ -126,12 +139,32 @@ fn discover_files_pipelined_with_role(
     rx
 }
 
-fn discover_files_streaming(roots: &[String], tx: &mpsc::SyncSender<DiscoveryEvent>) -> usize {
-    walk_index_candidates(roots, Some(tx))
+fn discover_files_streaming(
+    roots: &[String],
+    profiles: Option<Vec<LaunchProfile>>,
+    tx: &mpsc::SyncSender<DiscoveryEvent>,
+) -> usize {
+    walk_index_candidates(roots, profiles, Some(tx))
 }
 
-fn walk_index_candidates(roots: &[String], tx: Option<&mpsc::SyncSender<DiscoveryEvent>>) -> usize {
-    let profiles = launch_profiles::active_profiles_for_roots(roots);
+fn walk_index_candidates(
+    roots: &[String],
+    profiles: Option<Vec<LaunchProfile>>,
+    tx: Option<&mpsc::SyncSender<DiscoveryEvent>>,
+) -> usize {
+    let profiles = match profiles {
+        Some(profiles) => profiles,
+        None => {
+            let profiles_t = Instant::now();
+            let profiles = launch_profiles::active_profiles_for_roots(roots);
+            library_db::report_library_scan_timing(
+                "active_profiles",
+                profiles_t.elapsed().as_micros() as u64,
+                format!("profiles={}", profiles.len()),
+            );
+            profiles
+        }
+    };
     let candidate_exts = source_index_extensions(&profiles);
     let targets = scan_targets_for_roots(roots, &profiles);
     library_db::report_library_scan_timing(
