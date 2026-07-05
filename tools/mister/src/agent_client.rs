@@ -90,11 +90,13 @@ pub(crate) fn agent_binary_request(
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let response = parse_agent_response_line(line, start)?.response;
-    let raw_bytes = response
-        .pointer("/result/raw_bytes")
+    let payload_bytes = response
+        .pointer("/result/payload_bytes")
+        .or_else(|| response.pointer("/result/raw_bytes"))
         .and_then(Value::as_u64)
-        .ok_or("agent binary response missing result.raw_bytes")? as usize;
-    let mut payload = vec![0u8; raw_bytes];
+        .ok_or("agent binary response missing result payload byte count")?
+        as usize;
+    let mut payload = vec![0u8; payload_bytes];
     reader.read_exact(&mut payload)?;
     Ok(AgentBinaryResponse {
         response,
