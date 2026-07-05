@@ -5,9 +5,7 @@ mod file_icons;
 mod macos_titlebar;
 mod sd_card;
 
-use agent_client::{
-    fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory, FramebufferCaptureMode,
-};
+use agent_client::{fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory};
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
@@ -16,14 +14,17 @@ use sd_card::SdTreeRow;
 use slint::ComponentHandle;
 use std::error::Error;
 #[cfg(feature = "live-ui")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(feature = "live-ui")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "live-ui")]
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+use std::time::SystemTime;
 
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
+type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
@@ -101,6 +102,7 @@ fn create_live_instance(
         .ok_or("ui/main.slint must export AppWindow")?;
     let instance = definition.create()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
+    let framebuffer_capture = Arc::new(Mutex::new(None));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -128,23 +130,26 @@ fn create_live_instance(
 
     let capture_instance = instance.as_weak();
     let capture_host = host.to_string();
+    let capture_state = Arc::clone(&framebuffer_capture);
     instance.set_global_callback("Actions", "capture-framebuffer", move |_| {
-        let mode = capture_instance
-            .upgrade()
-            .and_then(|instance| {
-                instance
-                    .get_global_property("AnalyticsState", "capture-mode")
-                    .ok()
-            })
-            .and_then(|value| match value {
-                Value::String(mode) => Some(FramebufferCaptureMode::from_value(mode.as_str())),
-                _ => None,
-            })
-            .unwrap_or(FramebufferCaptureMode::Screenshot);
         if let Some(instance) = capture_instance.upgrade() {
-            set_live_analytics_loading(&instance, mode);
+            set_live_analytics_loading(&instance);
         }
-        spawn_live_framebuffer_capture(capture_instance.clone(), capture_host.clone(), mode);
+        spawn_live_framebuffer_capture(
+            capture_instance.clone(),
+            Arc::clone(&capture_state),
+            capture_host.clone(),
+        );
+        Value::Void
+    })?;
+
+    let save_instance = instance.as_weak();
+    let save_capture = Arc::clone(&framebuffer_capture);
+    instance.set_global_callback("Actions", "save-framebuffer-image", move |_| {
+        if let Some(instance) = save_instance.upgrade() {
+            apply_live_save_status(&instance, "Saving framebuffer PNG...", "");
+        }
+        spawn_live_save_framebuffer_capture(save_instance.clone(), Arc::clone(&save_capture));
         Value::Void
     })?;
 
@@ -402,6 +407,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let ui = AppWindow::new()?;
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
+    let framebuffer_capture = Arc::new(Mutex::new(None));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -420,19 +426,25 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
 
     let capture_ui = ui.as_weak();
     let capture_host = host.clone();
+    let capture_state = Arc::clone(&framebuffer_capture);
     ui.global::<Actions>().on_capture_framebuffer(move || {
-        let mode = capture_ui
-            .upgrade()
-            .map(|ui| {
-                FramebufferCaptureMode::from_value(
-                    ui.global::<AnalyticsState>().get_capture_mode().as_str(),
-                )
-            })
-            .unwrap_or(FramebufferCaptureMode::Screenshot);
         if let Some(ui) = capture_ui.upgrade() {
-            set_compiled_analytics_loading(&ui, mode);
+            set_compiled_analytics_loading(&ui);
         }
-        spawn_compiled_framebuffer_capture(capture_ui.clone(), capture_host.clone(), mode);
+        spawn_compiled_framebuffer_capture(
+            capture_ui.clone(),
+            Arc::clone(&capture_state),
+            capture_host.clone(),
+        );
+    });
+
+    let save_ui = ui.as_weak();
+    let save_capture = Arc::clone(&framebuffer_capture);
+    ui.global::<Actions>().on_save_framebuffer_image(move || {
+        if let Some(ui) = save_ui.upgrade() {
+            apply_compiled_save_status(&ui, "Saving framebuffer PNG...", "");
+        }
+        spawn_compiled_save_framebuffer_capture(save_ui.clone(), Arc::clone(&save_capture));
     });
 
     let sd_toggle_ui = ui.as_weak();
@@ -586,10 +598,7 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
 }
 
 #[cfg(feature = "live-ui")]
-fn set_live_analytics_loading(
-    instance: &slint_interpreter::ComponentInstance,
-    mode: FramebufferCaptureMode,
-) {
+fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
     use slint::SharedString;
     use slint_interpreter::Value;
 
@@ -597,7 +606,7 @@ fn set_live_analytics_loading(
     let _ = instance.set_global_property(
         "AnalyticsState",
         "status",
-        Value::String(SharedString::from(capture_loading_status(mode))),
+        Value::String(SharedString::from("Capturing framebuffer stream...")),
     );
     let _ = instance.set_global_property(
         "AnalyticsState",
@@ -624,6 +633,8 @@ fn apply_live_framebuffer_capture_result(
                 Value::Image(image),
             );
             let _ = instance.set_global_property("AnalyticsState", "has-image", Value::Bool(true));
+            let _ =
+                instance.set_global_property("AnalyticsState", "can-save-image", Value::Bool(true));
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "status",
@@ -651,10 +662,10 @@ fn apply_live_framebuffer_capture_result(
 }
 
 #[cfg(feature = "compiled-ui")]
-fn set_compiled_analytics_loading(ui: &AppWindow, mode: FramebufferCaptureMode) {
+fn set_compiled_analytics_loading(ui: &AppWindow) {
     let state = ui.global::<AnalyticsState>();
     state.set_loading(true);
-    state.set_status(capture_loading_status(mode).into());
+    state.set_status("Capturing framebuffer stream...".into());
     state.set_last_error("".into());
 }
 
@@ -669,6 +680,7 @@ fn apply_compiled_framebuffer_capture_result(
         Ok(capture) => {
             state.set_framebuffer_image(framebuffer_capture_image(&capture));
             state.set_has_image(true);
+            state.set_can_save_image(true);
             state.set_status(framebuffer_capture_status(&capture).into());
             state.set_last_error("".into());
         }
@@ -716,11 +728,107 @@ fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slin
     slint::Image::from_rgba8(pixels)
 }
 
-fn capture_loading_status(mode: FramebufferCaptureMode) -> &'static str {
-    match mode {
-        FramebufferCaptureMode::Screenshot => "Capturing framebuffer screenshot...",
-        FramebufferCaptureMode::Stream => "Capturing framebuffer stream...",
+fn framebuffer_capture_png_bytes(
+    capture: &agent_client::FramebufferCapture,
+) -> Result<Vec<u8>, String> {
+    if capture.rgba_pixels.is_empty() {
+        if !capture.png_path.as_os_str().is_empty() {
+            return std::fs::read(&capture.png_path).map_err(|err| {
+                format!("read framebuffer PNG {}: {err}", capture.png_path.display())
+            });
+        }
+        return Err("No framebuffer image is available to save.".to_string());
     }
+
+    let width = u32::try_from(capture.width).map_err(|_| "framebuffer width too large")?;
+    let height = u32::try_from(capture.height).map_err(|_| "framebuffer height too large")?;
+    if width == 0 || height == 0 {
+        return Err("No framebuffer image is available to save.".to_string());
+    }
+    let expected_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "framebuffer image dimensions are too large".to_string())?;
+    if capture.rgba_pixels.len() != expected_len {
+        return Err(format!(
+            "framebuffer RGBA size mismatch expected={expected_len} actual={}",
+            capture.rgba_pixels.len()
+        ));
+    }
+
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|err| format!("write PNG header: {err}"))?;
+        writer
+            .write_image_data(&capture.rgba_pixels)
+            .map_err(|err| format!("write PNG pixels: {err}"))?;
+        writer
+            .finish()
+            .map_err(|err| format!("finish PNG: {err}"))?;
+    }
+    Ok(png_bytes)
+}
+
+fn save_framebuffer_capture_png(
+    capture: &agent_client::FramebufferCapture,
+) -> Result<PathBuf, String> {
+    let png_bytes = framebuffer_capture_png_bytes(capture)?;
+    let desktop = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Desktop"))
+        .ok_or_else(|| "HOME is not set; cannot find the Desktop folder.".to_string())?;
+    if !desktop.is_dir() {
+        return Err(format!(
+            "Desktop folder does not exist: {}",
+            desktop.display()
+        ));
+    }
+    let millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|err| format!("system clock before Unix epoch: {err}"))?
+        .as_millis();
+    let path = desktop.join(format!("mister-magik-framebuffer-{millis}.png"));
+    std::fs::write(&path, png_bytes)
+        .map_err(|err| format!("write framebuffer PNG {}: {err}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_save_status(
+    instance: &slint_interpreter::ComponentInstance,
+    status: &str,
+    last_error: &str,
+) {
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "status",
+        Value::String(SharedString::from(status)),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "last-error",
+        Value::String(SharedString::from(last_error)),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_save_status(ui: &AppWindow, status: &str, last_error: &str) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_status(status.into());
+    state.set_last_error(last_error.into());
 }
 
 fn format_byte_size(bytes: u64) -> String {
@@ -806,14 +914,49 @@ fn spawn_live_sd_fetch(
 #[cfg(feature = "live-ui")]
 fn spawn_live_framebuffer_capture(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    capture_state: SharedFramebufferCapture,
     host: String,
-    mode: FramebufferCaptureMode,
 ) {
     std::thread::spawn(move || {
-        let result = fetch_framebuffer_capture(&host, mode).map_err(|err| err.to_string());
+        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let capture = result.as_ref().ok().cloned();
         let _ = slint::invoke_from_event_loop(move || {
+            if let Some(capture) = capture {
+                if let Ok(mut state) = capture_state.lock() {
+                    *state = Some(capture);
+                }
+            }
             if let Some(instance) = instance.upgrade() {
                 apply_live_framebuffer_capture_result(&instance, result);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "live-ui")]
+fn spawn_live_save_framebuffer_capture(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    capture_state: SharedFramebufferCapture,
+) {
+    std::thread::spawn(move || {
+        let result = capture_state
+            .lock()
+            .ok()
+            .and_then(|state| state.clone())
+            .ok_or_else(|| "Capture a framebuffer before saving.".to_string())
+            .and_then(|capture| save_framebuffer_capture_png(&capture));
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(instance) = instance.upgrade() {
+                match result {
+                    Ok(path) => apply_live_save_status(
+                        &instance,
+                        &format!("Saved framebuffer PNG to {}.", path.display()),
+                        "",
+                    ),
+                    Err(err) => {
+                        apply_live_save_status(&instance, "Framebuffer PNG save failed.", &err)
+                    }
+                }
             }
         });
     });
@@ -843,14 +986,49 @@ fn spawn_compiled_sd_fetch(
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_framebuffer_capture(
     ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
     host: String,
-    mode: FramebufferCaptureMode,
 ) {
     std::thread::spawn(move || {
-        let result = fetch_framebuffer_capture(&host, mode).map_err(|err| err.to_string());
+        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let capture = result.as_ref().ok().cloned();
         let _ = slint::invoke_from_event_loop(move || {
+            if let Some(capture) = capture {
+                if let Ok(mut state) = capture_state.lock() {
+                    *state = Some(capture);
+                }
+            }
             if let Some(ui) = ui.upgrade() {
                 apply_compiled_framebuffer_capture_result(&ui, result);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_save_framebuffer_capture(
+    ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
+) {
+    std::thread::spawn(move || {
+        let result = capture_state
+            .lock()
+            .ok()
+            .and_then(|state| state.clone())
+            .ok_or_else(|| "Capture a framebuffer before saving.".to_string())
+            .and_then(|capture| save_framebuffer_capture_png(&capture));
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                match result {
+                    Ok(path) => apply_compiled_save_status(
+                        &ui,
+                        &format!("Saved framebuffer PNG to {}.", path.display()),
+                        "",
+                    ),
+                    Err(err) => {
+                        apply_compiled_save_status(&ui, "Framebuffer PNG save failed.", &err)
+                    }
+                }
             }
         });
     });
@@ -964,5 +1142,29 @@ mod tests {
             framebuffer_capture_status(&capture),
             "Captured 960x540 16bpp framebuffer (10 KB payload; 1012 KB raw; lz4-block-size-prepended)."
         );
+    }
+
+    #[test]
+    fn framebuffer_capture_png_bytes_encodes_rgba_pixels() {
+        let capture = agent_client::FramebufferCapture {
+            png_path: std::path::PathBuf::new(),
+            rgba_pixels: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+            width: 2,
+            height: 2,
+            bpp: 16,
+            raw_bytes: 8,
+            payload_bytes: 8,
+            encoding: "lz4-block-size-prepended".to_string(),
+            png_bytes: 0,
+            png_hex_bytes: 0,
+            timing: agent_client::FramebufferCaptureTiming::default(),
+        };
+
+        let png_bytes =
+            framebuffer_capture_png_bytes(&capture).expect("RGBA pixels should encode as PNG");
+
+        assert!(png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 }
