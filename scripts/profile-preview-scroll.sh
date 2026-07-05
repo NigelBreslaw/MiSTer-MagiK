@@ -412,21 +412,20 @@ capture_visuals() {
   local visual_dir="$OUT_DIR/${label}-visuals"
   mkdir -p "$visual_dir"
   local indices=(0 7 14 21 28 35 42 49)
-  local i idx idx_pad snap_dir png_out
+  local i idx idx_pad png_out json_out
   for ((i = 0; i < count && i < ${#indices[@]}; i++)); do
     idx="${indices[$i]}"
     idx_pad="$(printf "%03d" "$idx")"
-    snap_dir="$visual_dir/idx${idx_pad}.snapshot"
     png_out="$visual_dir/idx${idx_pad}.png"
+    json_out="$visual_dir/idx${idx_pad}.framebuffer.json"
     echo "==> visual selected_index=$idx"
     write_launcher_env "idle" "" "$idx"
     restart_supervised_launcher "/tmp/${label}-visual-${idx_pad}.tsv"
     sleep 8
-    "$MISTER" snapshot "$snap_dir" >/dev/null
-    cp "$snap_dir/fb0.png" "$png_out"
+    "$MISTER" agent framebuffer-capture "$png_out" --json "$json_out" >/dev/null
     "$MISTER" get "$REMOTE_LOG" "$visual_dir/idx${idx_pad}.log" >/dev/null || true
     echo "wrote $png_out"
-    emit_artifact_row "visual-idx${idx_pad}" "$png_out" "$snap_dir/fb0.png"
+    emit_artifact_row "visual-idx${idx_pad}" "$png_out" "agent framebuffer_capture"
     IFS=$'\t' read -r png_w png_h png_nonblank <<<"$(png_stats "$png_out")"
     if [[ "$png_nonblank" != "true" ]]; then
       emit_validity_row "0" "blank_visual_capture" "path=$png_out width=$png_w height=$png_h"

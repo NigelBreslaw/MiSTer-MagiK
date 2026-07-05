@@ -2,8 +2,8 @@
 # Audit MagiK settled idle CPU and memory on the MiSTer.
 #
 # Uses only scripts/mister device entrypoints. The script restarts the
-# supervised launcher, samples /proc on-device, captures fb0 snapshots, and
-# clears launcher.env before exiting.
+# supervised launcher, samples /proc on-device, captures framebuffer PNGs via
+# the MagiK agent, and clears launcher.env before exiting.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -89,7 +89,10 @@ sed -n '1p' /tmp/mister-magik/status.json 2>/dev/null || true
 
 capture_snapshot() {
   local label="$1"
-  "$MISTER" snapshot "$OUT_DIR/$label.snapshot" >"$OUT_DIR/$label-snapshot.out"
+  local dir="$OUT_DIR/$label.snapshot"
+  mkdir -p "$dir"
+  "$MISTER" status --json >"$dir/status.json" 2>/dev/null || true
+  "$MISTER" agent framebuffer-capture "$dir/fb0.png" --json "$dir/framebuffer.json" >"$OUT_DIR/$label-snapshot.out"
 }
 
 cpu_value() {

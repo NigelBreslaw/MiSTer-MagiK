@@ -599,72 +599,19 @@ if [[ "$REPLACE_LABEL" -eq 1 ]]; then
   mv "$tmp_tsv" "$TSV"
 fi
 
-read_fb_geometry_remote() {
-  local out virtual_size bpp stride width height bytes_per_pixel packed_stride bytes
-  out="$(mister run 'virtual_size="$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || true)"; bpp="$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null || true)"; stride="$(cat /sys/class/graphics/fb0/stride 2>/dev/null || true)"; printf "%s\t%s\t%s\n" "$virtual_size" "$bpp" "$stride"')" || return 1
-  IFS=$'\t' read -r virtual_size bpp stride <<<"$(printf '%s\n' "$out" | tail -1)"
-  if [[ ! "$virtual_size" =~ ^([0-9]+),([0-9]+)$ ]]; then
-    echo "invalid fb0 virtual_size: ${virtual_size:-<empty>}" >&2
-    return 1
-  fi
-  width="${BASH_REMATCH[1]}"
-  height="${BASH_REMATCH[2]}"
-  if [[ ! "$bpp" =~ ^(16|32)$ ]]; then
-    echo "invalid fb0 bits_per_pixel: ${bpp:-<empty>}" >&2
-    return 1
-  fi
-  bytes_per_pixel=$((bpp / 8))
-  packed_stride=$((width * bytes_per_pixel))
-  if [[ -z "$stride" ]]; then
-    stride="$packed_stride"
-  fi
-  if [[ ! "$stride" =~ ^[0-9]+$ || "$stride" -lt "$packed_stride" ]]; then
-    echo "invalid fb0 stride: ${stride:-<empty>} (packed row is $packed_stride)" >&2
-    return 1
-  fi
-  bytes=$((stride * height))
-  echo "$width $height $bpp $stride $bytes"
-}
-
-capture_fb_remote() {
-  local remote_raw="$1" expected_bytes="$2"
-  local out got_bytes
-  out="$(mister run "dd if=/dev/fb0 of=$remote_raw bs=$expected_bytes count=1 2>/dev/null && wc -c < $remote_raw" 2>/dev/null)" || return 1
-  got_bytes="$(printf '%s\n' "$out" | tail -1 | tr -d ' ')"
-  [[ "$got_bytes" == "$expected_bytes" ]]
-}
-
 print_remote_status_summary() {
   echo "    remote status:" >&2
   mister status >&2 || true
 }
 
 preflight_fb_capture() {
-  local geometry width height bpp stride bytes raw png remote_raw
-  echo "==> Preflight framebuffer capture"
-  geometry="$(read_fb_geometry_remote)" || {
-    echo "Framebuffer capture preflight failed while reading geometry" >&2
-    print_remote_status_summary
-    return 1
-  }
-  read -r width height bpp stride bytes <<<"$geometry"
-  echo "    fb0=${width}x${height} bpp=$bpp stride=$stride bytes=$bytes"
+  local png json
+  echo "==> Preflight framebuffer capture via agent"
   mkdir -p "$HERE/build"
-  remote_raw="/tmp/bench-fb-preflight.raw"
-  raw="$HERE/build/bench-fb-preflight.raw"
   png="$HERE/build/bench-fb-preflight.png"
-  if ! capture_fb_remote "$remote_raw" "$bytes"; then
-    echo "Framebuffer capture preflight failed while reading /dev/fb0" >&2
-    print_remote_status_summary
-    return 1
-  fi
-  if ! mister get "$remote_raw" "$raw" >/dev/null 2>&1; then
-    echo "Framebuffer capture preflight failed while fetching $remote_raw" >&2
-    print_remote_status_summary
-    return 1
-  fi
-  if ! mister raw-to-png "$raw" "$width" "$height" "$png" --stride "$stride" --bpp "$bpp" >/dev/null 2>&1; then
-    echo "Framebuffer capture preflight failed while converting RGB${bpp} raw capture" >&2
+  json="$HERE/build/bench-fb-preflight.json"
+  if ! mister agent framebuffer-capture "$png" --json "$json" >/dev/null 2>&1; then
+    echo "Framebuffer capture preflight failed through the MagiK agent" >&2
     print_remote_status_summary
     return 1
   fi
@@ -682,9 +629,6 @@ run_scene_on_device() {
   local ui_log ui_full
   ui_log="$(mktemp)"
   ui_full="$(mktemp)"
-  # Snapshot /dev/fb0 while the UI process is still running.
-  # Post-exit capture only sees fbcon "Welcome / login:" — not the bench scene.
-  local capture_at=$((secs > 4 ? secs - 2 : 2))
 
   mister run "
 set -e
@@ -701,47 +645,12 @@ CPU_SUM=0
 CPU_MAX=0
 CPU_N=0
 RSS=0
-FB_CAPTURED=0
-FB_WIDTH=0
-FB_HEIGHT=0
-FB_BPP=0
-FB_STRIDE=0
-FB_BYTES_EXPECTED=0
 TICK=\$(getconf CLK_TCK 2>/dev/null || echo 100)
 jiffies() { awk '{print \$14+\$15}' /proc/\$1/stat 2>/dev/null || echo 0; }
 rss_pages() { awk '{print \$24}' /proc/\$1/stat 2>/dev/null || echo 0; }
-read_fb_geometry() {
-  local virtual_size bytes_per_pixel packed_stride
-  virtual_size=\$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || true)
-  FB_BPP=\$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null || true)
-  FB_STRIDE=\$(cat /sys/class/graphics/fb0/stride 2>/dev/null || true)
-  case \"\$virtual_size\" in
-    *,*) FB_WIDTH=\${virtual_size%,*}; FB_HEIGHT=\${virtual_size#*,} ;;
-    *) FB_WIDTH=0; FB_HEIGHT=0 ;;
-  esac
-  case \"\$FB_WIDTH\" in ''|*[!0-9]*) return 1 ;; esac
-  case \"\$FB_HEIGHT\" in ''|*[!0-9]*) return 1 ;; esac
-  case \"\$FB_BPP\" in 16|32) ;; *) return 1 ;; esac
-  bytes_per_pixel=\$((FB_BPP / 8))
-  packed_stride=\$((FB_WIDTH * bytes_per_pixel))
-  if [ -z \"\$FB_STRIDE\" ]; then
-    FB_STRIDE=\$packed_stride
-  fi
-  case \"\$FB_STRIDE\" in ''|*[!0-9]*) return 1 ;; esac
-  if [ \"\$FB_STRIDE\" -lt \"\$packed_stride\" ]; then
-    return 1
-  fi
-  FB_BYTES_EXPECTED=\$((FB_STRIDE * FB_HEIGHT))
-}
 i=0
 while [ \$i -lt $secs ]; do
   if kill -0 \$UI_PID 2>/dev/null; then
-    if [ \$FB_CAPTURED -eq 0 ] && [ \$i -ge $capture_at ]; then
-      if read_fb_geometry && dd if=/dev/fb0 of=/tmp/bench-fb.raw bs=\$FB_BYTES_EXPECTED count=1 2>/dev/null; then
-        FB_BYTES=\$(wc -c < /tmp/bench-fb.raw 2>/dev/null || echo 0)
-        [ \"\$FB_BYTES\" -eq \"\$FB_BYTES_EXPECTED\" ] 2>/dev/null && FB_CAPTURED=1
-      fi
-    fi
     t1=\$(jiffies \$UI_PID)
     sleep 1
     t2=\$(jiffies \$UI_PID)
@@ -759,9 +668,7 @@ done
 UI_RC=0
 wait \$UI_PID || UI_RC=\$?
 echo ___BENCH_FB_CAPTURED___
-echo \$FB_CAPTURED
-echo ___BENCH_FB_GEOMETRY___
-echo \$FB_WIDTH \$FB_HEIGHT \$FB_BPP \$FB_STRIDE \$FB_BYTES_EXPECTED
+echo agent
 echo ___BENCH_SCENE___
 echo $scene
 echo ___BENCH_CPU_MEAN___
@@ -847,22 +754,15 @@ cat /tmp/bench-ui.log
 
   echo "    [$scene] slint-render=${render_us:-?}us fb-present=${copy_us:-?}us rows=${rows_avg:-?} cpu_mean=${cpu_mean:-?}%"
 
-  local fb_captured fb_geometry capture_w capture_h capture_bpp capture_stride capture_bytes png_out="$BENCH_DIR/${LABEL}-${scene}-fb.png"
-  fb_captured="$(sed -n '/___BENCH_FB_CAPTURED___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
-  fb_geometry="$(sed -n '/___BENCH_FB_GEOMETRY___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
-  read -r capture_w capture_h capture_bpp capture_stride capture_bytes <<<"$fb_geometry"
-  echo "==> Capture $png_out (mid-run snapshot at ~${capture_at}s)"
-  mkdir -p "$HERE/build"
-  local raw="$HERE/build/bench-fb.raw"
-  if [[ "$fb_captured" == "1" && "$capture_w" =~ ^[0-9]+$ && "$capture_h" =~ ^[0-9]+$ && "$capture_bpp" =~ ^(16|32)$ && "$capture_stride" =~ ^[0-9]+$ ]] \
-    && mister get /tmp/bench-fb.raw "$raw" >/dev/null 2>&1 \
-    && mister raw-to-png "$raw" "$capture_w" "$capture_h" "$png_out" --stride "$capture_stride" --bpp "$capture_bpp" >/dev/null 2>&1; then
+  local png_out="$BENCH_DIR/${LABEL}-${scene}-fb.png"
+  echo "==> Capture $png_out via agent"
+  if mister agent framebuffer-capture "$png_out" --json "${png_out%.png}.json" >/dev/null 2>&1; then
     capture_ok="yes"
   else
     capture_ok="no"
     notes="${notes:+$notes; }capture-fail"
     scene_failures="${scene_failures:+$scene_failures,}capture-fail"
-    echo "    capture failed (fb_captured=${fb_captured:-?}, fb0=${capture_w:-?}x${capture_h:-?}, bpp=${capture_bpp:-?}, stride=${capture_stride:-?}, bytes=${capture_bytes:-?})" >&2
+    echo "    agent framebuffer capture failed" >&2
   fi
 
   if [[ "$timing_ok" == "yes" && "$capture_ok" == "yes" ]]; then

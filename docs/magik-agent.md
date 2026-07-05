@@ -57,6 +57,7 @@ scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
+scripts/mister agent framebuffer-capture build/fb0.png --json build/fb0.json
 scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 scripts/mister agent magik status
 scripts/mister agent magik restart-launcher
@@ -75,6 +76,13 @@ scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
 
 `logs` returns the in-memory ring buffer over the TCP agent protocol. The ring
 keeps the newest 512 lines and reports how many older lines were dropped.
+
+`framebuffer-capture` asks the MiSTer-side agent to read the current
+framebuffer, convert the raw pixels to PNG on the ARM device, and return the PNG
+plus metadata over the authenticated TCP protocol. The host wrapper writes the
+PNG to `OUT.png`; `--json OUT.json` records dimensions, stride, bpp, raw bytes,
+PNG bytes, request timing, and per-stage capture/encode timings. This is the
+canonical framebuffer PNG capture path for scripts, docs, and agents.
 
 `timeline` returns structured boot events. The expected event names are:
 

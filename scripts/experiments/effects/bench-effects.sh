@@ -117,25 +117,11 @@ append_row() {
     "$cpu_mean" "$cpu_max" "$rss_kb" "$visual_ok" "$notes" >>"$TSV"
 }
 
-capture_size_from_log() {
-  local ui_log="$1"
-  local size
-  size="$(sed -n 's/^slint-scale=.* fb=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
-  if [[ -z "$size" ]]; then
-    size="$(sed -n 's/^display-config: .*fb0=\([0-9][0-9]*\)x\([0-9][0-9]*\).*/\1 \2/p' "$ui_log" | head -1)"
-  fi
-  if [[ -z "$size" ]]; then
-    size="1920 1080"
-  fi
-  echo "$size"
-}
-
 run_one() {
   local effect="$1" mode="$2" size="$3"
-  local ui_log ui_full capture_at raw png
+  local ui_log ui_full png
   ui_log="$(mktemp)"
   ui_full="$(mktemp)"
-  capture_at=$((SCENE_SECS > 4 ? SCENE_SECS - 2 : 2))
 
   mister run "
 set -e
@@ -147,16 +133,12 @@ CPU_SUM=0
 CPU_MAX=0
 CPU_N=0
 RSS=0
-FB_CAPTURED=0
 TICK=\$(getconf CLK_TCK 2>/dev/null || echo 100)
 jiffies() { awk '{print \$14+\$15}' /proc/\$1/stat 2>/dev/null || echo 0; }
 rss_pages() { awk '{print \$24}' /proc/\$1/stat 2>/dev/null || echo 0; }
 i=0
 while [ \$i -lt $SCENE_SECS ]; do
   if kill -0 \$UI_PID 2>/dev/null; then
-    if [ \$FB_CAPTURED -eq 0 ] && [ \$i -ge $capture_at ]; then
-      dd if=/dev/fb0 of=/tmp/effect-bench-fb.raw bs=1M count=32 2>/dev/null && FB_CAPTURED=1
-    fi
     t1=\$(jiffies \$UI_PID)
     sleep 1
     t2=\$(jiffies \$UI_PID)
@@ -174,7 +156,7 @@ done
 wait \$UI_PID
 UI_RC=\$?
 echo ___BENCH_FB_CAPTURED___
-echo \$FB_CAPTURED
+echo agent
 echo ___BENCH_CPU_MEAN___
 if [ \$CPU_N -gt 0 ]; then echo \$((CPU_SUM / CPU_N)); else echo 0; fi
 echo ___BENCH_CPU_MAX___
@@ -194,13 +176,12 @@ cat /tmp/effect-bench-ui.log
   fi
   cp "$ui_log" "$BENCH_DIR/${LABEL}-${effect}-${mode}-${size}-ui.log" 2>/dev/null || true
 
-  local result cpu_mean cpu_max rss_kb ui_rc fb_captured visual_ok notes
+  local result cpu_mean cpu_max rss_kb ui_rc visual_ok notes
   result="$(awk -F '\t' '$1 == "effect_bench_result" {print; exit}' "$ui_log")"
   cpu_mean="$(sed -n '/___BENCH_CPU_MEAN___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   cpu_max="$(sed -n '/___BENCH_CPU_MAX___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   rss_kb="$(sed -n '/___BENCH_RSS___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   ui_rc="$(sed -n '/___BENCH_UI_RC___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
-  fb_captured="$(sed -n '/___BENCH_FB_CAPTURED___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   if [[ -n "$rss_kb" && "$rss_kb" =~ ^[0-9]+$ && "$rss_kb" -lt 100000 ]]; then
     rss_kb=$((rss_kb * 4))
   fi
@@ -212,12 +193,8 @@ cat /tmp/effect-bench-ui.log
     notes="${notes:+$notes; }ui-rc=${ui_rc:-?}"
   fi
 
-  raw="$HERE/build/effect-bench-fb.raw"
   png="$BENCH_DIR/${LABEL}-${effect}-${mode}-${size}-fb.png"
-  mkdir -p "$HERE/build"
-  read -r capture_w capture_h < <(capture_size_from_log "$ui_log")
-  if [[ "$fb_captured" == "1" ]] && mister get /tmp/effect-bench-fb.raw "$raw" >/dev/null 2>&1 \
-    && mister raw-to-png "$raw" "$capture_w" "$capture_h" "$png" >/dev/null 2>&1; then
+  if mister agent framebuffer-capture "$png" --json "${png%.png}.json" >/dev/null 2>&1; then
     :
   else
     visual_ok=no

@@ -156,7 +156,9 @@ For visual evidence, use `scripts/capture-tear-pattern-video.sh` or
 probe files record the requested capture mode and the encoded video geometry,
 because USB capture devices can advertise one mode and write another.
 
-Debugging tip: framebuffer dumps are useful only while the UI is running. After
+Debugging tip: capture framebuffer PNGs through the MagiK agent with
+`scripts/mister agent framebuffer-capture OUT.png --json OUT.json` or the
+desktop Analytics view. Captures are useful only while the UI is running; after
 exit, fbcon can redraw the login console into `/dev/fb0`.
 
 ## Process And Input Gotchas

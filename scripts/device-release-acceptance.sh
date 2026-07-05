@@ -1116,7 +1116,9 @@ collect_boot_network_logs() {
 collect_artifacts() {
   status_json "final" || true
   doctor_json "final" || true
-  "$MISTER" snapshot "$OUT/snapshot-final" >"$OUT/snapshot-final.out" 2>"$OUT/snapshot-final.err" || true
+  mkdir -p "$OUT/snapshot-final"
+  "$MISTER" status --json >"$OUT/snapshot-final/status.json" 2>/dev/null || true
+  "$MISTER" agent framebuffer-capture "$OUT/snapshot-final/fb0.png" --json "$OUT/snapshot-final/framebuffer.json" >"$OUT/snapshot-final.out" 2>"$OUT/snapshot-final.err" || true
   remote_get_optional "/tmp/mister-magik/status.json" "slint-status.json"
   remote_get_optional "/tmp/mister-magik/main-status.json" "main-status.json"
   remote_get_optional "/tmp/mister-magik/events.jsonl" "events.jsonl"
