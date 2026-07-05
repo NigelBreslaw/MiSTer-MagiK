@@ -219,6 +219,7 @@ mod linux {
         RTF_GATEWAY, RTF_UP, SIOCADDRT, SIOCGIFFLAGS, SIOCSIFADDR, SIOCSIFFLAGS, SIOCSIFNETMASK,
         SOCK_DGRAM, SOCK_RAW,
     };
+    use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
     use serde_json::{json, Value};
     use std::collections::VecDeque;
     use std::ffi::CString;
@@ -229,6 +230,7 @@ mod linux {
     use std::os::fd::RawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -238,11 +240,13 @@ mod linux {
     const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
     const AGENT_PORT: u16 = 7498;
+    const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
     // Temporary while the host/device file-transfer auth flow is being reworked.
     const CONTROL_AUTH_DISABLED: bool = true;
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
+    static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
     const CRASH_DIR: &str = "/media/fat/mister-magik/crashes";
@@ -565,6 +569,9 @@ mod linux {
         let response = match read_result {
             Ok(0) => response(None, false, None, Some("empty request")),
             Ok(_) => {
+                if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
+                    return;
+                }
                 if maybe_handle_framebuffer_raw_stream(&line, &token, boot_id, started, &mut stream)
                 {
                     return;
@@ -574,6 +581,88 @@ mod linux {
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
         let _ = writeln!(stream, "{response}");
+    }
+
+    struct ActiveFramebufferStream;
+
+    impl ActiveFramebufferStream {
+        fn claim() -> Option<Self> {
+            FRAMEBUFFER_STREAM_ACTIVE
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .ok()
+                .map(|_| Self)
+        }
+    }
+
+    impl Drop for ActiveFramebufferStream {
+        fn drop(&mut self) {
+            FRAMEBUFFER_STREAM_ACTIVE.store(false, Ordering::SeqCst);
+        }
+    }
+
+    fn maybe_handle_framebuffer_stream_v1(
+        line: &str,
+        token: &str,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("cmd").and_then(Value::as_str) != Some("framebuffer_stream_v1") {
+            return false;
+        }
+        let id = parsed.get("id").cloned();
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            let _ = writeln!(stream, "{}", response(id, false, None, Some("unauthorized")));
+            return true;
+        }
+        let Some(_guard) = ActiveFramebufferStream::claim() else {
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(
+                    id,
+                    false,
+                    None,
+                    Some("framebuffer stream already has a desktop consumer")
+                )
+            );
+            return true;
+        };
+        let mut producer = match TcpStream::connect(("127.0.0.1", FRAMEBUFFER_PRODUCER_PORT)) {
+            Ok(producer) => producer,
+            Err(err) => {
+                let _ = writeln!(
+                    stream,
+                    "{}",
+                    response(
+                        id,
+                        false,
+                        None,
+                        Some(&format!("producer stream unavailable: {err}"))
+                    )
+                );
+                return true;
+            }
+        };
+        let _ = producer.set_nodelay(true);
+        let _ = stream.set_nodelay(true);
+        append_log_line("framebuffer_stream_v1_start".to_string());
+        let result = json!({
+            "schema": FRAMEBUFFER_STREAM_SCHEMA,
+            "producer": "127.0.0.1",
+            "producer_port": FRAMEBUFFER_PRODUCER_PORT,
+            "encoding": "lz4-block-size-prepended",
+            "format": "rgb565-le",
+        });
+        let _ = writeln!(stream, "{}", response(id, true, Some(result), None));
+        match io::copy(&mut producer, stream) {
+            Ok(bytes) => append_log_line(format!("framebuffer_stream_v1_end bytes={bytes}")),
+            Err(err) => append_log_line(format!("framebuffer_stream_v1_error err={err}")),
+        }
+        true
     }
 
     fn maybe_handle_framebuffer_raw_stream(
