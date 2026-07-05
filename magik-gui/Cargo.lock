@@ -2602,6 +2602,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "mister-magik-catalog",
+ "mister-magik-framebuffer-stream",
  "mister-magik-ui",
  "pprof",
  "quick-xml 0.41.0",
@@ -2610,6 +2611,10 @@ dependencies = [
  "slint",
  "swash",
 ]
+
+[[package]]
+name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
 
 [[package]]
 name = "mister-magik-ui"

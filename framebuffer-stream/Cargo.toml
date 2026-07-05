@@ -1,0 +1,13 @@
+[package]
+name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
+edition = "2021"
+description = "Binary framebuffer stream protocol shared by MiSTer MagiK producer, agent, and desktop."
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
