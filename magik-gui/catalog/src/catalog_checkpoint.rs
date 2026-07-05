@@ -5,13 +5,14 @@
 //! without walking every game payload.
 
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
+use crate::catalog_discovery;
 use crate::catalog_scan::should_ignore_path;
 use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
     self, core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 const CHECKPOINT_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -132,6 +133,26 @@ pub(crate) fn compute_catalog_discovery_checkpoint(
     hbmame_sqlite_path: &Path,
     audit_rows: &[CatalogAuditRow],
 ) -> CatalogDiscoveryCheckpoint {
+    let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+    let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(roots);
+    compute_catalog_discovery_checkpoint_from_facts(
+        roots,
+        mame_sqlite_path,
+        hbmame_sqlite_path,
+        audit_rows,
+        &installed_cores,
+        &game_dirs,
+    )
+}
+
+pub(crate) fn compute_catalog_discovery_checkpoint_from_facts(
+    roots: &[String],
+    mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
+    audit_rows: &[CatalogAuditRow],
+    installed_cores: &[catalog_discovery::InstalledCore],
+    game_dirs: &[catalog_discovery::GameDirFact],
+) -> CatalogDiscoveryCheckpoint {
     let started = Instant::now();
     let mut lines = vec![
         format!("schema\t{SCHEMA_VERSION}"),
@@ -156,7 +177,7 @@ pub(crate) fn compute_catalog_discovery_checkpoint(
     );
 
     let core_t = Instant::now();
-    append_core_summaries(&mut lines, roots);
+    append_core_summaries(&mut lines, roots, installed_cores);
     report_checkpoint_timing(
         "cores",
         core_t.elapsed().as_micros() as u64,
@@ -164,7 +185,7 @@ pub(crate) fn compute_catalog_discovery_checkpoint(
     );
 
     let game_dir_t = Instant::now();
-    append_game_dir_summaries(&mut lines, roots);
+    append_game_dir_summaries(&mut lines, roots, game_dirs);
     report_checkpoint_timing(
         "game_dirs",
         game_dir_t.elapsed().as_micros() as u64,
@@ -217,96 +238,66 @@ pub(crate) fn report_drift_summary(summary: &CatalogDriftSummary) {
     );
 }
 
-fn append_core_summaries(lines: &mut Vec<String>, roots: &[String]) {
-    let search_roots = core_search_roots(roots);
+fn append_core_summaries(
+    lines: &mut Vec<String>,
+    roots: &[String],
+    installed_cores: &[catalog_discovery::InstalledCore],
+) {
+    let search_roots = catalog_discovery::core_search_roots(roots);
     lines.push(format!("core-search-roots\t{}", search_roots.len()));
-    let mut core_count = 0usize;
     for (idx, search_root) in search_roots.iter().enumerate() {
         append_path_signature(lines, "core-search-root", idx, search_root);
-        if !search_root.is_dir() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(search_root)
-            .follow_links(false)
-            .max_depth(3)
-            .into_iter()
-            .filter_entry(|entry| !should_ignore_path(entry.path()))
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if stem.eq_ignore_ascii_case("menu") {
-                continue;
-            }
-            let core_id = canonical_core_id(stem);
-            let status = if is_known_core(&core_id) {
-                "known"
-            } else {
-                "unknown"
-            };
-            append_installed_core_signature(lines, core_count, status, &core_id, path);
-            core_count += 1;
-        }
     }
-    lines.push(format!("installed-cores\t{core_count}"));
+    let checkpoint_cores = installed_cores
+        .iter()
+        .filter(|core| !should_ignore_path(&core.path))
+        .collect::<Vec<_>>();
+    for (idx, core) in checkpoint_cores.iter().enumerate() {
+        let status = if is_known_core(&core.core_id) {
+            "known"
+        } else {
+            "unknown"
+        };
+        append_installed_core_signature(lines, idx, status, &core.core_id, &core.path);
+    }
+    lines.push(format!("installed-cores\t{}", checkpoint_cores.len()));
 }
 
-fn append_game_dir_summaries(lines: &mut Vec<String>, roots: &[String]) {
-    let game_roots = game_roots(roots);
+fn append_game_dir_summaries(
+    lines: &mut Vec<String>,
+    roots: &[String],
+    game_dirs: &[catalog_discovery::GameDirFact],
+) {
+    let game_roots = catalog_discovery::game_roots(roots);
     lines.push(format!("game-roots\t{}", game_roots.len()));
-    let mut dir_count = 0usize;
     for (root_idx, game_root) in game_roots.iter().enumerate() {
         append_path_signature(lines, "game-root", root_idx, game_root);
-        let Ok(read_dir) = std::fs::read_dir(game_root) else {
-            continue;
-        };
-        let mut dirs = Vec::new();
-        for entry in read_dir.filter_map(Result::ok) {
-            let path = entry.path();
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            if !metadata.is_dir() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if should_ignore_game_dir(name) {
-                continue;
-            }
-            dirs.push((name.to_string(), path));
-        }
-        dirs.sort_by_key(|entry| entry.0.to_ascii_lowercase());
-        for (name, path) in dirs {
-            let status = if launch_profiles::generic_manifest_profile_for_game_dir(&name).is_some()
-                || launch_profiles::builtin_profiles().iter().any(|profile| {
-                    profile
-                        .game_dirs
-                        .iter()
-                        .any(|dir| dir.eq_ignore_ascii_case(&name))
-                }) {
-                "known"
-            } else {
-                "unknown"
-            };
-            let payloadish = game_dir_has_payloadish_files(&path);
-            lines.push(format!(
-                "game-dir\t{dir_count}\t{}\t{}\t{}\t{}",
-                path.display(),
-                name,
-                status,
-                if payloadish { "payloadish" } else { "empty" }
-            ));
-            dir_count += 1;
-        }
     }
-    lines.push(format!("game-dirs\t{dir_count}"));
+    for (idx, dir) in game_dirs.iter().enumerate() {
+        let status = if launch_profiles::generic_manifest_profile_for_game_dir(&dir.name).is_some()
+            || launch_profiles::builtin_profiles().iter().any(|profile| {
+                profile
+                    .game_dirs
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&dir.name))
+            }) {
+            "known"
+        } else {
+            "unknown"
+        };
+        lines.push(format!(
+            "game-dir\t{idx}\t{}\t{}\t{}\t{}",
+            dir.path.display(),
+            dir.name,
+            status,
+            if dir.has_payloadish_files() {
+                "payloadish"
+            } else {
+                "empty"
+            }
+        ));
+    }
+    lines.push(format!("game-dirs\t{}", game_dirs.len()));
 }
 
 fn append_audit_summary(lines: &mut Vec<String>, audit_rows: &[CatalogAuditRow]) {
@@ -381,117 +372,11 @@ fn append_named_file_signature(lines: &mut Vec<String>, name: &str, path: &Path)
     }
 }
 
-fn core_search_roots(roots: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        let root = Path::new(root);
-        let candidates = if path_name_eq(root, "games") {
-            let base = root.parent().unwrap_or(root);
-            vec![
-                base.join("_Console"),
-                base.join("_Computer"),
-                base.join("_Arcade/cores"),
-                base.join("_LLAPI"),
-            ]
-        } else if path_name_eq(root, "_Arcade") {
-            vec![root.join("cores")]
-        } else if path_name_eq(root, "_Console")
-            || path_name_eq(root, "_Computer")
-            || path_name_eq(root, "_LLAPI")
-        {
-            vec![root.to_path_buf()]
-        } else {
-            vec![
-                root.join("_Console"),
-                root.join("_Computer"),
-                root.join("_Arcade/cores"),
-                root.join("_LLAPI"),
-            ]
-        };
-        for candidate in candidates {
-            let key = candidate.display().to_string().to_ascii_lowercase();
-            if seen.insert(key) {
-                out.push(candidate);
-            }
-        }
-    }
-    out
-}
-
-fn game_roots(roots: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in roots {
-        let path = Path::new(root);
-        let games = if path_name_eq(path, "games") {
-            path.to_path_buf()
-        } else {
-            path.join("games")
-        };
-        let key = games.display().to_string().to_ascii_lowercase();
-        if seen.insert(key) {
-            out.push(games);
-        }
-    }
-    out
-}
-
-fn game_dir_has_payloadish_files(path: &Path) -> bool {
-    for entry in walkdir::WalkDir::new(path)
-        .follow_links(false)
-        .max_depth(2)
-        .into_iter()
-        .filter_entry(|entry| !should_ignore_path(entry.path()))
-        .filter_map(Result::ok)
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        return true;
-    }
-    false
-}
-
 fn is_known_core(core_id: &str) -> bool {
     launch_profiles::generic_manifest_profile_for_core(core_id).is_some()
         || launch_profiles::builtin_profiles()
             .iter()
             .any(|profile| profile.core_name.eq_ignore_ascii_case(core_id))
-}
-
-fn canonical_core_id(stem: &str) -> String {
-    let mut core = stem;
-    if let Some((prefix, suffix)) = stem.rsplit_once('_') {
-        if suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_digit()) {
-            core = prefix;
-        }
-    }
-    core.to_string()
-}
-
-fn should_ignore_game_dir(name: &str) -> bool {
-    (name.len() > 1 && name.starts_with('.'))
-        || name.eq_ignore_ascii_case("palettes")
-        || name.eq_ignore_ascii_case("images")
-        || name.eq_ignore_ascii_case("manuals")
-        || name.eq_ignore_ascii_case("screenshot")
-        || name.eq_ignore_ascii_case("screenshots")
-        || name.eq_ignore_ascii_case("screenshot-magik")
-        || name.eq_ignore_ascii_case("_organized")
-        || name.eq_ignore_ascii_case("boxart")
-}
-
-fn path_name_eq(path: &Path, expected: &str) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
-}
-
-fn path_ext_eq(path: &Path, expected: &str) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
 fn mtime_nanos(meta: &std::fs::Metadata) -> i64 {

@@ -8,6 +8,7 @@ use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
     DEFAULT_SQLITE_BUILD_DIR, SCHEMA_VERSION,
 };
+use crate::catalog_discovery;
 use crate::catalog_load_metrics;
 use crate::catalog_navigation;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
@@ -865,20 +866,29 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let stored_checkpoint = catalog_store::read_catalog_discovery_checkpoint(&conn)?;
     let checkpoint_read_us = checkpoint_read_t.elapsed().as_micros() as u64;
     let compute_t = Instant::now();
-    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
+    let installed_cores = catalog_discovery::installed_cores_for_roots(&cfg.roots);
+    let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(&cfg.roots);
+    let profiles =
+        launch_profiles::active_profiles_for_roots_with_facts(&installed_cores, &game_dirs);
     let audit_t = Instant::now();
-    let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+    let audit_rows = core_audit::audit_catalog_coverage_from_facts(
+        &profiles,
+        &installed_cores,
+        &game_dirs,
+    );
     catalog_checkpoint::report_checkpoint_timing(
         "coverage_audit",
         audit_t.elapsed().as_micros() as u64,
         format!("rows={}", audit_rows.len()),
     );
     let current = catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
-    let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint(
+    let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
         &cfg.roots,
         &default_mame_sqlite_path(),
         &default_hbmame_sqlite_path(),
         &audit_rows,
+        &installed_cores,
+        &game_dirs,
     );
     let current_fingerprint = current.fingerprint_hex();
     let current_lines = current.lines().len();
