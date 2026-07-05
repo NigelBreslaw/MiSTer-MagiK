@@ -175,6 +175,20 @@ mod tests {
     }
 
     #[test]
+    fn connection_outcome_labels_match_ui_copy() {
+        assert_eq!(ConnectionOutcome::Ready.label(), "Agent ready");
+        assert_eq!(
+            ConnectionOutcome::Unauthenticated.label(),
+            "Agent unauthenticated"
+        );
+        assert_eq!(ConnectionOutcome::Unreachable.label(), "MiSTer unreachable");
+        assert_eq!(
+            ConnectionOutcome::ProtocolError.label(),
+            "Unexpected agent response"
+        );
+    }
+
+    #[test]
     fn process_summary_ignores_malformed_pid_values() {
         let mixed = json!({"processes": {"MiSTer_MagiK": [12, "bad", null]}});
         let malformed = json!({"processes": {"MiSTer_MagiK": ["bad"]}});

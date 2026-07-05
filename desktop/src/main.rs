@@ -278,8 +278,8 @@ fn apply_live_snapshot(
 
 #[cfg(feature = "live-ui")]
 fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser: &SharedSdBrowser) {
-    use slint::{Image, ModelRc, SharedString, VecModel};
-    use slint_interpreter::{Struct, Value};
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::Value;
 
     let Ok(browser) = browser.lock() else {
         return;
@@ -310,59 +310,65 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
     let rows = browser
         .rows()
         .iter()
-        .map(|row| {
-            Value::Struct(Struct::from_iter([
-                (
-                    "id".to_string(),
-                    Value::String(SharedString::from(row.id.as_str())),
-                ),
-                (
-                    "label".to_string(),
-                    Value::String(SharedString::from(row.label.as_str())),
-                ),
-                ("level".to_string(), Value::Number(f64::from(row.level))),
-                ("has-children".to_string(), Value::Bool(row.has_children)),
-                ("expanded".to_string(), Value::Bool(row.expanded)),
-                ("current".to_string(), Value::Bool(row.current)),
-                ("leading-is-directory".to_string(), Value::Bool(false)),
-                ("has-leading-visual".to_string(), Value::Bool(true)),
-                ("preserve-leading-icon-color".to_string(), Value::Bool(true)),
-                (
-                    "trailing".to_string(),
-                    Value::EnumerationValue(
-                        "TreeViewTrailingVisual".to_string(),
-                        "none".to_string(),
-                    ),
-                ),
-                ("has-leading-action".to_string(), Value::Bool(false)),
-                ("show-leading-action-icon".to_string(), Value::Bool(false)),
-                (
-                    "leading-action-icon".to_string(),
-                    Value::Image(Image::default()),
-                ),
-                (
-                    "leading-file-icon".to_string(),
-                    Value::Image(file_icons::material_icon(row.icon_key.as_str())),
-                ),
-                ("interactive".to_string(), Value::Bool(row.interactive)),
-                ("is-skeleton".to_string(), Value::Bool(row.is_skeleton)),
-                ("has-secondary-actions".to_string(), Value::Bool(false)),
-                (
-                    "secondary-actions-badge".to_string(),
-                    Value::String(SharedString::from("")),
-                ),
-                (
-                    "loading-children-badge".to_string(),
-                    Value::String(SharedString::from(row.loading_children_badge.as_str())),
-                ),
-            ]))
-        })
+        .map(|row| Value::Struct(live_tree_row_struct(row)))
         .collect::<Vec<_>>();
     set(
         instance,
         "rows",
         Value::Model(ModelRc::new(VecModel::from(rows))),
     );
+}
+
+#[cfg(feature = "live-ui")]
+fn live_tree_row_struct(row: &sd_card::SdTreeRow) -> slint_interpreter::Struct {
+    use slint::{Image, SharedString};
+    use slint_interpreter::{Struct, Value};
+
+    Struct::from_iter([
+        (
+            "id".to_string(),
+            Value::String(SharedString::from(row.id.as_str())),
+        ),
+        (
+            "label".to_string(),
+            Value::String(SharedString::from(row.label.as_str())),
+        ),
+        ("level".to_string(), Value::Number(f64::from(row.level))),
+        ("has-children".to_string(), Value::Bool(row.has_children)),
+        ("expanded".to_string(), Value::Bool(row.expanded)),
+        ("current".to_string(), Value::Bool(row.current)),
+        (
+            "leading-is-directory".to_string(),
+            Value::Bool(row.leading_is_directory),
+        ),
+        ("has-leading-visual".to_string(), Value::Bool(true)),
+        ("preserve-leading-icon-color".to_string(), Value::Bool(true)),
+        (
+            "trailing".to_string(),
+            Value::EnumerationValue("TreeViewTrailingVisual".to_string(), "none".to_string()),
+        ),
+        ("has-leading-action".to_string(), Value::Bool(false)),
+        ("show-leading-action-icon".to_string(), Value::Bool(false)),
+        (
+            "leading-action-icon".to_string(),
+            Value::Image(Image::default()),
+        ),
+        (
+            "leading-file-icon".to_string(),
+            Value::Image(file_icons::material_icon(row.icon_key.as_str())),
+        ),
+        ("interactive".to_string(), Value::Bool(row.interactive)),
+        ("is-skeleton".to_string(), Value::Bool(row.is_skeleton)),
+        ("has-secondary-actions".to_string(), Value::Bool(false)),
+        (
+            "secondary-actions-badge".to_string(),
+            Value::String(SharedString::from("")),
+        ),
+        (
+            "loading-children-badge".to_string(),
+            Value::String(SharedString::from(row.loading_children_badge.as_str())),
+        ),
+    ])
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -569,7 +575,7 @@ fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
         has_children: row.has_children,
         expanded: row.expanded,
         current: row.current,
-        leading_is_directory: false,
+        leading_is_directory: row.leading_is_directory,
         has_leading_visual: true,
         preserve_leading_icon_color: true,
         trailing: TreeViewTrailingVisual::None,
@@ -657,4 +663,54 @@ fn modified_time(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn directory_row() -> sd_card::SdTreeRow {
+        sd_card::SdTreeRow {
+            id: "/games".to_string(),
+            label: "games".to_string(),
+            icon_key: "folder-base".to_string(),
+            level: 2,
+            has_children: true,
+            expanded: true,
+            current: false,
+            leading_is_directory: true,
+            interactive: true,
+            is_skeleton: false,
+            loading_children_badge: "loading".to_string(),
+        }
+    }
+
+    #[cfg(feature = "live-ui")]
+    #[test]
+    fn live_tree_row_struct_preserves_directory_flags() {
+        let value = live_tree_row_struct(&directory_row());
+
+        assert!(matches!(
+            value.get_field("leading-is-directory"),
+            Some(slint_interpreter::Value::Bool(true))
+        ));
+        assert!(matches!(
+            value.get_field("has-children"),
+            Some(slint_interpreter::Value::Bool(true))
+        ));
+        assert!(matches!(
+            value.get_field("loading-children-badge"),
+            Some(slint_interpreter::Value::String(text)) if text.as_str() == "loading"
+        ));
+    }
+
+    #[cfg(feature = "compiled-ui")]
+    #[test]
+    fn compiled_tree_row_preserves_directory_flags() {
+        let value = compiled_tree_row(&directory_row());
+
+        assert!(value.leading_is_directory);
+        assert!(value.has_children);
+        assert_eq!(value.loading_children_badge.as_str(), "loading");
+    }
 }

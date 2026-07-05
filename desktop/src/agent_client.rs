@@ -537,4 +537,85 @@ mod tests {
             .expect_err("schema mismatch should fail");
         assert!(matches!(err, AgentError::Protocol(message) if message.contains("schema")));
     }
+
+    #[test]
+    fn parse_sd_directory_reports_missing_container_fields() {
+        let missing_path = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "entries": []
+        }))
+        .expect_err("missing path should fail");
+        assert!(
+            matches!(missing_path, AgentError::Protocol(message) if message == "missing sd_list_dir path")
+        );
+
+        let missing_entries = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/"
+        }))
+        .expect_err("missing entries should fail");
+        assert!(
+            matches!(missing_entries, AgentError::Protocol(message) if message == "missing sd_list_dir entries")
+        );
+    }
+
+    #[test]
+    fn parse_sd_directory_reports_entry_shape_errors() {
+        let missing_name = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/",
+            "entries": [{"path": "/bad", "kind": "file"}]
+        }))
+        .expect_err("missing entry name should fail");
+        assert!(
+            matches!(missing_name, AgentError::Protocol(message) if message == "missing sd entry name")
+        );
+
+        let missing_path = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/",
+            "entries": [{"name": "bad", "kind": "file"}]
+        }))
+        .expect_err("missing entry path should fail");
+        assert!(
+            matches!(missing_path, AgentError::Protocol(message) if message == "missing sd entry path")
+        );
+
+        let missing_kind = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/",
+            "entries": [{"name": "bad", "path": "/bad"}]
+        }))
+        .expect_err("missing entry kind should fail");
+        assert!(
+            matches!(missing_kind, AgentError::Protocol(message) if message == "missing sd entry kind")
+        );
+
+        let unsupported_kind = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/",
+            "entries": [{"name": "bad", "path": "/bad", "kind": "symlink"}]
+        }))
+        .expect_err("unsupported entry kind should fail");
+        assert!(
+            matches!(unsupported_kind, AgentError::Protocol(message) if message == "unsupported sd entry kind: symlink")
+        );
+    }
+
+    #[test]
+    fn agent_error_display_matches_user_facing_message() {
+        assert_eq!(
+            AgentError::Unreachable("network down".to_string()).to_string(),
+            "network down"
+        );
+        assert_eq!(AgentError::Unauthorized.to_string(), "unauthorized");
+        assert_eq!(
+            AgentError::Protocol("bad json".to_string()).to_string(),
+            "bad json"
+        );
+        assert_eq!(
+            AgentError::Command("bad command".to_string()).to_string(),
+            "bad command"
+        );
+    }
 }
