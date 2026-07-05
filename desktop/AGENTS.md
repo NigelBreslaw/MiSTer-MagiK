@@ -6,8 +6,8 @@ Desktop-specific notes for agents working in this folder. The root
 ## Current Shape
 
 - This is the macOS desktop companion for MiSTer MagiK.
-- The UI is Slint 1.17 and uses the live sibling Primer package at:
-  `../../github-app/packages/primer-slint`.
+- The UI is Slint 1.17 and uses the vendored Primer package at:
+  `desktop/vendor/github-app/packages/primer-slint`.
 - The main UI file is `ui/main.slint`.
 - Rust owns data fetching, cache state, and Slint global updates in `src/main.rs`.
 - SD Card browser state lives in `src/sd_card.rs`.
@@ -15,8 +15,8 @@ Desktop-specific notes for agents working in this folder. The root
   path, which proxies producer-side RGB565 frames from `mister-magik-fb`.
   Manual capture/save still uses the agent framebuffer capture API for one-shot
   PNGs. Do not add raw `/dev/fb0` dump or host-side raw-to-PNG flows.
-- Material file icons are loaded at runtime from a git submodule:
-  `desktop/vendor/material-icon-theme`.
+- Primer Slint and Material file icons are loaded from git submodules under
+  `desktop/vendor/`.
 
 ## Slint And MCP
 
@@ -33,10 +33,12 @@ Desktop-specific notes for agents working in this folder. The root
 
 ## Primer Dependency
 
-- Do not vendor Primer Slint into this repo. Import it from the sibling
-  `github-app` checkout.
+- Primer Slint is a git submodule:
+  `desktop/vendor/github-app`.
+- After cloning this repo, initialize Primer with:
+  `git submodule update --init desktop/vendor/github-app`.
 - If a desktop change exposes a reusable Primer component gap, fix it in
-  `/Users/nigelb/slint/github-app/packages/primer-slint`.
+  `desktop/vendor/github-app/packages/primer-slint`.
 - `TreeViewRow` is an explicit Slint struct. If adding a field, update every
   struct literal in the Primer gallery too, not just the desktop app.
 
@@ -64,7 +66,7 @@ cargo check --manifest-path desktop/Cargo.toml --no-default-features --features 
 cargo check --manifest-path desktop/Cargo.toml --features slint/mcp,live-ui
 ```
 
-If you change the sibling Primer package, also run the relevant check there,
+If you change the vendored Primer package, also run the relevant check there,
 usually:
 
 ```bash
