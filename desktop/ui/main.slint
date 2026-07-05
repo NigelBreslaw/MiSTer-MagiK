@@ -16,11 +16,7 @@ import {
     LabelVariant,
     NavList,
     NavListItem,
-    PageHeader,
     PrimerTreeView,
-    StateLabel,
-    StateLabelSize,
-    StateLabelStatus,
     TableContainer,
     ToggleSwitch,
     ToggleSwitchSize,
@@ -231,27 +227,35 @@ component Sidebar {
     }
 }
 
-component DebugStatusStrip {
+component ViewTitle {
+    in property <string> title;
+    in property <string> subtitle;
+
+    width: 100%;
+    height: 72px;
+
     HorizontalLayout {
-        spacing: LayoutTokens.base-size-8;
+        padding-left: 24px;
+        padding-right: 24px;
         cross-axis-alignment: center;
 
-        StateLabel {
-            text: DeviceState.connection-state;
-            size: StateLabelSize.small;
-            status: DeviceState.last-error != "" ? StateLabelStatus.AlertOpened : StateLabelStatus.Open;
-        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
 
-        StateLabel {
-            text: DeviceState.launcher-process;
-            size: StateLabelSize.small;
-            status: DeviceState.launcher-process == "not running" ? StateLabelStatus.Unavailable : StateLabelStatus.Open;
-        }
+            Text {
+                text: root.title;
+                color: PrimerColors.fgColor-default;
+                font-size: 20px;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+            }
 
-        StateLabel {
-            text: DeviceState.slint-status-freshness;
-            size: StateLabelSize.small;
-            status: DeviceState.slint-status-freshness == "current" ? StateLabelStatus.Open : StateLabelStatus.AlertOpened;
+            Text {
+                text: root.subtitle;
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                overflow: elide;
+            }
         }
     }
 }
@@ -303,217 +307,156 @@ component DebugPage {
     ];
 
     VerticalLayout {
-        padding: 24px;
         spacing: 16px;
         alignment: start;
 
-        PageHeader {
-            HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding-left: LayoutTokens.stack-padding-normal;
-                padding-right: LayoutTokens.stack-padding-normal;
-                spacing: LayoutTokens.stack-padding-normal;
-                alignment: space-between;
-                cross-axis-alignment: center;
+        ViewTitle {
+            title: "Debug";
+            subtitle: "Read-only device, runtime, catalog, and input telemetry.";
+        }
 
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 4px;
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 24px;
+            spacing: 16px;
+            alignment: start;
 
-                    Text {
-                        text: "Debug";
-                        color: PrimerColors.fgColor-default;
-                        font-size: 20px;
-                        font-weight: LayoutTokens.base-text-weight-semibold;
-                    }
+            if DeviceState.last-error != "": Banner {
+                title: "Connection error";
+                description: DeviceState.last-error;
+                variant: BannerVariant.critical;
+            }
 
-                    Text {
-                        text: "Read-only device, runtime, catalog, and input telemetry.";
-                        color: PrimerColors.fgColor-muted;
-                        font-size: LayoutTokens.text-body-size-small;
-                        overflow: elide;
-                    }
+            TableContainer {
+                title: "Connection";
+                subtitle: "Agent reachability and token source.";
+                primary-action-label: "Refresh";
+                primary-action-variant: ButtonVariant.default;
+                primary-action => { Actions.refresh-status(); }
+
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: connection-rows;
                 }
-
-                DebugStatusStrip { }
             }
-        }
 
-        if DeviceState.last-error != "": Banner {
-            title: "Connection error";
-            description: DeviceState.last-error;
-            variant: BannerVariant.critical;
-        }
+            TableContainer {
+                title: "Device";
+                subtitle: "Agent build, uptime, and network identity.";
 
-        TableContainer {
-            title: "Connection";
-            subtitle: "Agent reachability and token source.";
-            primary-action-label: "Refresh";
-            primary-action-variant: ButtonVariant.default;
-            primary-action => { Actions.refresh-status(); }
-
-            DataTable {
-                width: 100%;
-                cell-padding: DataTableCellPadding.normal;
-                columns: detail-columns;
-                rows: connection-rows;
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: device-rows;
+                }
             }
-        }
 
-        TableContainer {
-            title: "Device";
-            subtitle: "Agent build, uptime, and network identity.";
+            TableContainer {
+                title: "Runtime";
+                subtitle: "Main, launcher, and Slint status ownership.";
 
-            DataTable {
-                width: 100%;
-                cell-padding: DataTableCellPadding.normal;
-                columns: detail-columns;
-                rows: device-rows;
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: runtime-columns;
+                    rows: runtime-rows;
+                }
             }
-        }
 
-        TableContainer {
-            title: "Runtime";
-            subtitle: "Main, launcher, and Slint status ownership.";
+            TableContainer {
+                title: "Library and input";
+                subtitle: "Catalog, visible scene, and controller summary.";
 
-            DataTable {
-                width: 100%;
-                cell-padding: DataTableCellPadding.normal;
-                columns: runtime-columns;
-                rows: runtime-rows;
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: library-rows;
+                }
             }
-        }
-
-        TableContainer {
-            title: "Library and input";
-            subtitle: "Catalog, visible scene, and controller summary.";
-
-            DataTable {
-                width: 100%;
-                cell-padding: DataTableCellPadding.normal;
-                columns: detail-columns;
-                rows: library-rows;
-            }
-        }
-    }
-}
-
-component SdCardStatusStrip {
-    HorizontalLayout {
-        spacing: LayoutTokens.base-size-8;
-        cross-axis-alignment: center;
-
-        StateLabel {
-            text: SdCardState.loading ? "Loading" : "Cached session";
-            size: StateLabelSize.small;
-            status: SdCardState.last-error != "" ? StateLabelStatus.AlertOpened : StateLabelStatus.Open;
-        }
-
-        StateLabel {
-            text: SdCardState.current-path;
-            size: StateLabelSize.small;
-            status: StateLabelStatus.Open;
         }
     }
 }
 
 component SdCardPage {
     VerticalLayout {
-        padding: 24px;
         spacing: 16px;
         alignment: start;
 
-        PageHeader {
+        ViewTitle {
+            title: "SD Card";
+            subtitle: SdCardState.status;
+        }
+
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 24px;
+            spacing: 16px;
+            alignment: start;
+
+            if SdCardState.last-error != "": Banner {
+                title: "SD Card browse error";
+                description: SdCardState.last-error;
+                variant: BannerVariant.critical;
+            }
+
             HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding-left: LayoutTokens.stack-padding-normal;
-                padding-right: LayoutTokens.stack-padding-normal;
-                spacing: LayoutTokens.stack-padding-normal;
-                alignment: space-between;
+                width: 100%;
+                spacing: LayoutTokens.base-size-8;
+                alignment: end;
                 cross-axis-alignment: center;
 
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 4px;
-
-                    Text {
-                        text: "SD Card";
-                        color: PrimerColors.fgColor-default;
-                        font-size: 20px;
-                        font-weight: LayoutTokens.base-text-weight-semibold;
-                    }
-
-                    Text {
-                        text: SdCardState.status;
-                        color: PrimerColors.fgColor-muted;
-                        font-size: LayoutTokens.text-body-size-small;
-                        overflow: elide;
-                    }
+                Text {
+                    text: "Hidden files";
+                    color: PrimerColors.fgColor-muted;
+                    font-size: LayoutTokens.text-body-size-small;
+                    vertical-alignment: center;
                 }
 
-                SdCardStatusStrip { }
-            }
-        }
-
-        if SdCardState.last-error != "": Banner {
-            title: "SD Card browse error";
-            description: SdCardState.last-error;
-            variant: BannerVariant.critical;
-        }
-
-        HorizontalLayout {
-            width: 100%;
-            spacing: LayoutTokens.base-size-8;
-            alignment: end;
-            cross-axis-alignment: center;
-
-            Text {
-                text: "Hidden files";
-                color: PrimerColors.fgColor-muted;
-                font-size: LayoutTokens.text-body-size-small;
-                vertical-alignment: center;
+                ToggleSwitch {
+                    checked: SdCardState.show-hidden;
+                    size: ToggleSwitchSize.small;
+                    status-label-position: ToggleSwitchStatusLabelPosition.end;
+                    button-label-on: "On";
+                    button-label-off: "Off";
+                    changed(show) => { Actions.sd-show-hidden-changed(show); }
+                }
             }
 
-            ToggleSwitch {
-                checked: SdCardState.show-hidden;
-                size: ToggleSwitchSize.small;
-                status-label-position: ToggleSwitchStatusLabelPosition.end;
-                button-label-on: "On";
-                button-label-off: "Off";
-                changed(show) => { Actions.sd-show-hidden-changed(show); }
-            }
-        }
-
-        TableContainer {
-            vertical-stretch: 1;
-            title: "/media/fat";
-            subtitle: "Browse-only session cache. Visited folders are reused until refreshed.";
-            primary-action-label: "Refresh folder";
-            primary-action-variant: ButtonVariant.default;
-            primary-action => { Actions.sd-refresh-folder(); }
-
-            Rectangle {
-                width: 100%;
+            TableContainer {
                 vertical-stretch: 1;
-                min-height: 360px;
-                border-width: 1px;
-                border-color: PrimerColors.borderColor-default;
-                border-radius: LayoutTokens.borderRadius-medium;
-                background: PrimerColors.bgColor-default;
+                title: "/media/fat";
+                subtitle: "Browse-only session cache. Visited folders are reused until refreshed.";
+                primary-action-label: "Refresh folder";
+                primary-action-variant: ButtonVariant.default;
+                primary-action => { Actions.sd-refresh-folder(); }
 
-                PrimerTreeView {
-                    x: LayoutTokens.base-size-8;
-                    y: LayoutTokens.base-size-8;
-                    width: parent.width - 2 * LayoutTokens.base-size-8;
-                    height: parent.height - 2 * LayoutTokens.base-size-8;
-                    rows: SdCardState.rows;
-                    virtualized: true;
-                    suppress-current-for-directories: true;
-                    accessible-name: "SD Card files";
-                    row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
-                    row-current-requested(id) => { Actions.sd-row-current(id); }
+                Rectangle {
+                    width: 100%;
+                    vertical-stretch: 1;
+                    min-height: 360px;
+                    border-width: 1px;
+                    border-color: PrimerColors.borderColor-default;
+                    border-radius: LayoutTokens.borderRadius-medium;
+                    background: PrimerColors.bgColor-default;
+
+                    PrimerTreeView {
+                        x: LayoutTokens.base-size-8;
+                        y: LayoutTokens.base-size-8;
+                        width: parent.width - 2 * LayoutTokens.base-size-8;
+                        height: parent.height - 2 * LayoutTokens.base-size-8;
+                        rows: SdCardState.rows;
+                        virtualized: true;
+                        suppress-current-for-directories: true;
+                        accessible-name: "SD Card files";
+                        row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
+                        row-current-requested(id) => { Actions.sd-row-current(id); }
+                    }
                 }
             }
         }
