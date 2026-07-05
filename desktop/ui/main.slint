@@ -17,6 +17,8 @@ import {
     LabelVariant,
     NavList,
     NavListItem,
+    IconButton,
+    IconButtonVariant,
     Pagination,
     PrimerTreeView,
     PrimerTextInput,
@@ -25,6 +27,8 @@ import {
     SegmentedControlSize,
     Select,
     SelectOption,
+    SheetOverlay,
+    SheetSide,
     Size,
     Spinner,
     TableContainer,
@@ -34,7 +38,7 @@ import {
     TreeViewRow,
     TreeViewTrailingVisual,
 } from "../vendor/github-app/packages/primer-slint/primer.slint";
-import { LayoutTokens, PrimerColors } from "../vendor/github-app/packages/primer-slint/tokens.slint";
+import { AppWindow as PrimerAppWindow, LayoutTokens, PrimerColors } from "../vendor/github-app/packages/primer-slint/tokens.slint";
 
 import "../vendor/github-app/packages/primer-slint/assets/fonts/MonaSans-VariableFont.ttf";
 import "../vendor/github-app/packages/primer-slint/assets/fonts/MonaSans-Italic-VariableFont.ttf";
@@ -225,11 +229,18 @@ component AppHeader {
     in property <length> safe-right: 0px;
     in property <length> safe-top: 0px;
     callback start-window-drag;
+    callback open-navigation;
 
-    height: max(64px, safe-top + 56px);
+    height: safe-top + 50px;
 
     Rectangle {
-        background: #24292f;
+        background: PrimerColors.bgColor-inset;
+
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: PrimerColors.borderColor-default;
+        }
 
         TouchArea {
             x: 0;
@@ -247,18 +258,17 @@ component AppHeader {
             y: safe-top;
             width: parent.width;
             height: parent.height - safe-top;
-            padding-left: max(16px, safe-left + 16px);
+            padding-left: safe-left + 84px;
             padding-right: max(16px, safe-right + 16px);
-            spacing: 12px;
-            alignment: center;
+            spacing: 16px;
+            alignment: space-between;
             cross-axis-alignment: center;
 
-            Text {
-                text: "MiSTer MagiK";
-                color: #ffffff;
-                font-size: LayoutTokens.text-body-size-medium;
-                font-weight: LayoutTokens.base-text-weight-semibold;
-                vertical-alignment: center;
+            IconButton {
+                size: Size.medium;
+                variant: IconButtonVariant.default;
+                icon-source: @image-url("icons/hamburger.svg");
+                clicked => { root.open-navigation(); }
             }
 
             Rectangle {
@@ -266,9 +276,9 @@ component AppHeader {
                 height: 32px;
                 max-width: 420px;
                 border-width: 1px;
-                border-color: #57606a;
+                border-color: PrimerColors.borderColor-default;
                 border-radius: LayoutTokens.borderRadius-medium;
-                background: #24292f;
+                background: PrimerColors.bgColor-default;
 
                 HorizontalLayout {
                     padding-left: 8px;
@@ -280,13 +290,13 @@ component AppHeader {
                         width: LayoutTokens.iconButton-icon-size-medium;
                         height: LayoutTokens.iconButton-icon-size-medium;
                         source: Icons.search;
-                        colorize: #8c959f;
+                        colorize: PrimerColors.fgColor-muted;
                     }
 
                     Text {
                         horizontal-stretch: 1;
                         text: "Host " + DeviceState.host + " · " + DeviceState.connection-state;
-                        color: #c9d1d9;
+                        color: PrimerColors.fgColor-muted;
                         font-size: LayoutTokens.text-body-size-small;
                         overflow: elide;
                         vertical-alignment: center;
@@ -298,68 +308,85 @@ component AppHeader {
     }
 }
 
-component Sidebar {
-    width: 240px;
-    vertical-stretch: 1;
+component DrawerPageList {
+    callback page-selected(string);
 
-    Rectangle {
-        background: PrimerColors.bgColor-inset;
+    NavList {
+        width: 100%;
+        aria-label: "MiSTer MagiK pages";
 
-        Rectangle {
-            x: parent.width - 1px;
-            width: 1px;
-            background: PrimerColors.borderColor-default;
+        NavListItem {
+            label: "Debug";
+            active: AppState.selected-page == "debug";
+            has-leading-visual: true;
+            leading-icon: Icons.issue_opened;
+            clicked => { root.page-selected("debug"); }
         }
 
-        VerticalLayout {
-            padding-top: LayoutTokens.stack-padding-normal;
-            padding-left: LayoutTokens.base-size-8;
-            padding-right: LayoutTokens.base-size-8;
-            spacing: LayoutTokens.base-size-16;
-            alignment: start;
+        NavListItem {
+            label: "SD Card";
+            active: AppState.selected-page == "sd-card";
+            has-leading-visual: true;
+            leading-icon: Icons.file_directory_fill;
+            clicked => { root.page-selected("sd-card"); }
+        }
+
+        NavListItem {
+            label: "Library";
+            active: AppState.selected-page == "library";
+            has-leading-visual: true;
+            leading-icon: Icons.table;
+            clicked => { root.page-selected("library"); }
+        }
+
+        NavListItem {
+            label: "Analytics";
+            active: AppState.selected-page == "analytics";
+            has-leading-visual: true;
+            leading-icon: Icons.eye;
+            clicked => { root.page-selected("analytics"); }
+        }
+    }
+}
+
+component NavigationDrawer inherits SheetOverlay {
+    side: SheetSide.left;
+    default-panel-width: 320px;
+    allow-dismiss: true;
+
+    VerticalLayout {
+        padding-top: 24px;
+        padding-left: 24px;
+        padding-right: 16px;
+        padding-bottom: 16px;
+        spacing: 24px;
+
+        HorizontalLayout {
+            height: 40px;
+            spacing: 12px;
+            cross-axis-alignment: center;
 
             Text {
-                text: "Navigation";
-                color: PrimerColors.fgColor-muted;
-                font-size: LayoutTokens.text-body-size-small;
+                horizontal-stretch: 1;
+                text: "MiSTer MagiK";
+                color: PrimerColors.fgColor-default;
+                font-size: LayoutTokens.text-body-size-large;
                 font-weight: LayoutTokens.base-text-weight-semibold;
+                vertical-alignment: center;
             }
 
-            NavList {
-                width: 100%;
-                aria-label: "MiSTer MagiK pages";
+            IconButton {
+                size: Size.large;
+                variant: IconButtonVariant.default;
+                icon-source: Icons.x;
+                clicked => { root.close(); }
+            }
+        }
 
-                NavListItem {
-                    label: "Debug";
-                    active: AppState.selected-page == "debug";
-                    has-leading-visual: true;
-                    leading-icon: Icons.issue_opened;
-                    clicked => { Actions.select-page("debug"); }
-                }
-
-                NavListItem {
-                    label: "SD Card";
-                    active: AppState.selected-page == "sd-card";
-                    has-leading-visual: true;
-                    leading-icon: Icons.file_directory_fill;
-                    clicked => { Actions.select-page("sd-card"); }
-                }
-
-                NavListItem {
-                    label: "Library";
-                    active: AppState.selected-page == "library";
-                    has-leading-visual: true;
-                    leading-icon: Icons.table;
-                    clicked => { Actions.select-page("library"); }
-                }
-
-                NavListItem {
-                    label: "Analytics";
-                    active: AppState.selected-page == "analytics";
-                    has-leading-visual: true;
-                    leading-icon: Icons.eye;
-                    clicked => { Actions.select-page("analytics"); }
-                }
+        DrawerPageList {
+            page-selected(page) => {
+                Actions.select-page(page);
+                root.close();
             }
         }
     }
@@ -1357,6 +1384,17 @@ component AnalyticsPage {
 }
 
 export component AppWindow inherits Window {
+    changed width => {
+        PrimerAppWindow.window-width = root.width;
+    }
+    changed height => {
+        PrimerAppWindow.window-height = root.height;
+    }
+    init => {
+        PrimerAppWindow.window-width = root.width;
+        PrimerAppWindow.window-height = root.height;
+    }
+
     title: "MiSTer MagiK";
     preferred-width: 1100px;
     preferred-height: 760px;
@@ -1373,12 +1411,11 @@ export component AppWindow inherits Window {
                 safe-right: root.safe-area-insets.right;
                 safe-top: root.safe-area-insets.top;
                 start-window-drag => { WindowActions.start-window-drag(); }
+                open-navigation => { navigation-drawer.show(); }
             }
 
             HorizontalLayout {
                 vertical-stretch: 1;
-
-                Sidebar { }
 
                 Rectangle {
                     horizontal-stretch: 1;
@@ -1418,4 +1455,6 @@ export component AppWindow inherits Window {
             }
         }
     }
+
+    navigation-drawer := NavigationDrawer { }
 }
