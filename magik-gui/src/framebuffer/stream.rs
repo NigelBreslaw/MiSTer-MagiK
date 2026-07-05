@@ -3,6 +3,7 @@ use mister_magik_framebuffer_stream::{
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::io;
+use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender, TrySendError};
@@ -76,7 +77,7 @@ pub fn start() {
     let _ = worker_tx();
     let _ = LISTENER_STARTED.get_or_init(|| {
         thread::spawn(move || {
-            let listener = match TcpListener::bind(("127.0.0.1", PRODUCER_STREAM_PORT)) {
+            let listener = match bind_listener() {
                 Ok(listener) => listener,
                 Err(err) => {
                     crate::ui_errln!("framebuffer stream producer bind failed: {err}");
@@ -94,6 +95,21 @@ pub fn start() {
             }
         });
     });
+}
+
+fn bind_listener() -> io::Result<TcpListener> {
+    let mut last_error = None;
+    for _ in 0..20 {
+        match TcpListener::bind(("127.0.0.1", PRODUCER_STREAM_PORT)) {
+            Ok(listener) => return Ok(listener),
+            Err(err) if err.kind() == ErrorKind::AddrInUse => {
+                last_error = Some(err);
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| ErrorKind::AddrInUse.into()))
 }
 
 pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
