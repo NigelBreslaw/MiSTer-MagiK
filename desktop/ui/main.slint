@@ -1,4 +1,34 @@
-import { Button, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
+import {
+    Banner,
+    BannerVariant,
+    Button,
+    ButtonVariant,
+    DataTable,
+    DataTableCell,
+    DataTableCellAlign,
+    DataTableCellKind,
+    DataTableCellPadding,
+    DataTableColumn,
+    DataTableIconTint,
+    DataTableRow,
+    DataTableSortDirection,
+    Icons,
+    LabelSize,
+    LabelVariant,
+    NavList,
+    NavListItem,
+    PageHeader,
+    Size,
+    StateLabel,
+    StateLabelSize,
+    StateLabelStatus,
+    TableContainer,
+} from "../../../github-app/packages/primer-slint/primer.slint";
+import { LayoutTokens, PrimerColors } from "../../../github-app/packages/primer-slint/tokens.slint";
+
+import "../../../github-app/packages/primer-slint/assets/fonts/MonaSans-VariableFont.ttf";
+import "../../../github-app/packages/primer-slint/assets/fonts/MonaSans-Italic-VariableFont.ttf";
+import "../../../github-app/packages/primer-slint/assets/fonts/VeraMono.ttf";
 
 export global DeviceState {
     in-out property <string> host: "192.168.1.117";
@@ -28,63 +58,399 @@ export global WindowActions {
     callback start-window-drag();
 }
 
-component Metric inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    background: #f6f7f9;
-    border-color: #dde1e7;
-    border-width: 1px;
-    border-radius: 8px;
-    min-height: 70px;
+global AppNavigation {
+    in-out property <string> selected-page: "debug";
+}
 
-    VerticalBox {
-        padding: 12px;
-        spacing: 4px;
-        Text {
-            text: root.label;
-            color: #667085;
-            font-size: 12px;
-            overflow: elide;
+component AppHeader {
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    in property <length> safe-top: 0px;
+    callback refresh;
+    callback start-window-drag;
+
+    height: max(64px, safe-top + 56px);
+
+    Rectangle {
+        background: #24292f;
+
+        TouchArea {
+            x: safe-left + 184px;
+            y: 0;
+            width: max(0px, parent.width - self.x - safe-right - 236px);
+            height: parent.height;
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.start-window-drag();
+                }
+            }
         }
-        Text {
-            text: root.value;
-            color: #111827;
-            font-size: 16px;
-            font-weight: 600;
-            wrap: word-wrap;
+
+        HorizontalLayout {
+            y: safe-top;
+            width: parent.width;
+            height: parent.height - safe-top;
+            padding-left: max(16px, safe-left + 16px);
+            padding-right: max(16px, safe-right + 16px);
+            spacing: 12px;
+            alignment: center;
+            cross-axis-alignment: center;
+
+            Image {
+                width: 24px;
+                height: 24px;
+                source: Icons.palette;
+                colorize: #ffffff;
+            }
+
+            Text {
+                text: "MiSTer MagiK";
+                color: #ffffff;
+                font-size: LayoutTokens.text-body-size-medium;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 32px;
+                max-width: 420px;
+                border-width: 1px;
+                border-color: #57606a;
+                border-radius: LayoutTokens.borderRadius-medium;
+                background: #24292f;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        width: LayoutTokens.iconButton-icon-size-medium;
+                        height: LayoutTokens.iconButton-icon-size-medium;
+                        source: Icons.search;
+                        colorize: #8c959f;
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Host " + DeviceState.host + " · " + DeviceState.connection-state;
+                        color: #c9d1d9;
+                        font-size: LayoutTokens.text-body-size-small;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Button {
+                label: "Refresh";
+                size: Size.small;
+                has-leading-icon: true;
+                leading-icon: Icons.arrow_down;
+                clicked => {
+                    root.refresh();
+                }
+            }
         }
     }
 }
 
-component Section inherits Rectangle {
-    in property <string> title;
-    in property <string> first-label;
-    in property <string> first-value;
-    in property <string> second-label;
-    in property <string> second-value;
-    in property <string> third-label;
-    in property <string> third-value;
+component Sidebar {
+    width: 240px;
+    vertical-stretch: 1;
 
-    background: #ffffff;
-    border-color: #d7dce3;
-    border-width: 1px;
-    border-radius: 8px;
-    min-height: 168px;
+    Rectangle {
+        background: PrimerColors.bgColor-inset;
 
-    VerticalBox {
-        padding: 14px;
-        spacing: 10px;
-        Text {
-            text: root.title;
-            color: #111827;
-            font-size: 15px;
-            font-weight: 700;
+        Rectangle {
+            x: parent.width - 1px;
+            width: 1px;
+            background: PrimerColors.borderColor-default;
         }
-        HorizontalBox {
-            spacing: 10px;
-            Metric { label: root.first-label; value: root.first-value; }
-            Metric { label: root.second-label; value: root.second-value; }
-            Metric { label: root.third-label; value: root.third-value; }
+
+        VerticalLayout {
+            padding-top: LayoutTokens.stack-padding-normal;
+            padding-left: LayoutTokens.base-size-8;
+            padding-right: LayoutTokens.base-size-8;
+            spacing: LayoutTokens.base-size-16;
+            alignment: start;
+
+            Text {
+                text: "Navigation";
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+            }
+
+            NavList {
+                width: 100%;
+                aria-label: "MiSTer MagiK pages";
+
+                NavListItem {
+                    label: "Overview";
+                    active: AppNavigation.selected-page == "overview";
+                    has-leading-visual: true;
+                    leading-icon: Icons.repo;
+                    clicked => { AppNavigation.selected-page = "overview"; }
+                }
+
+                NavListItem {
+                    label: "Library";
+                    active: AppNavigation.selected-page == "library";
+                    has-leading-visual: true;
+                    leading-icon: Icons.table;
+                    clicked => { AppNavigation.selected-page = "library"; }
+                }
+
+                NavListItem {
+                    label: "Device";
+                    active: AppNavigation.selected-page == "device";
+                    has-leading-visual: true;
+                    leading-icon: Icons.shield;
+                    clicked => { AppNavigation.selected-page = "device"; }
+                }
+
+                NavListItem {
+                    label: "Settings";
+                    active: AppNavigation.selected-page == "settings";
+                    has-leading-visual: true;
+                    leading-icon: Icons.gear_24;
+                    clicked => { AppNavigation.selected-page = "settings"; }
+                }
+
+                NavListItem {
+                    label: "Debug";
+                    active: AppNavigation.selected-page == "debug";
+                    has-leading-visual: true;
+                    leading-icon: Icons.issue_opened;
+                    clicked => { AppNavigation.selected-page = "debug"; }
+                }
+            }
+        }
+    }
+}
+
+component PlaceholderPage {
+    in property <string> title;
+    in property <string> description;
+    in property <image> icon: Icons.info;
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        alignment: start;
+
+        PageHeader {
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: LayoutTokens.stack-padding-normal;
+                padding-right: LayoutTokens.stack-padding-normal;
+                spacing: LayoutTokens.base-size-12;
+                cross-axis-alignment: center;
+
+                Image {
+                    width: 20px;
+                    height: 20px;
+                    source: root.icon;
+                    colorize: PrimerColors.fgColor-muted;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+
+                    Text {
+                        text: root.title;
+                        color: PrimerColors.fgColor-default;
+                        font-size: 20px;
+                        font-weight: LayoutTokens.base-text-weight-semibold;
+                    }
+
+                    Text {
+                        text: root.description;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        Banner {
+            title: "Placeholder";
+            description: "This page is wired into the Primer navigation shell and will get real content in a later pass.";
+            variant: BannerVariant.info;
+        }
+    }
+}
+
+component DebugStatusStrip {
+    HorizontalLayout {
+        spacing: LayoutTokens.base-size-8;
+        cross-axis-alignment: center;
+
+        StateLabel {
+            text: DeviceState.connection-state;
+            size: StateLabelSize.small;
+            status: DeviceState.last-error != "" ? StateLabelStatus.AlertOpened : StateLabelStatus.Open;
+        }
+
+        StateLabel {
+            text: DeviceState.launcher-process;
+            size: StateLabelSize.small;
+            status: DeviceState.launcher-process == "not running" ? StateLabelStatus.Unavailable : StateLabelStatus.Open;
+        }
+
+        StateLabel {
+            text: DeviceState.slint-status-freshness;
+            size: StateLabelSize.small;
+            status: DeviceState.slint-status-freshness == "current" ? StateLabelStatus.Open : StateLabelStatus.AlertOpened;
+        }
+    }
+}
+
+component DebugPage {
+    property <DataTableCell> empty-cell: {
+        kind: DataTableCellKind.text,
+        text: "",
+        label-variant: LabelVariant.default,
+        label-size: LabelSize.small,
+        icon: Icons.dot_fill,
+        icon-tint: DataTableIconTint.default
+    };
+
+    property <[DataTableColumn]> detail-columns: [
+        { header: "Area", id: "area", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.iconText, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: false },
+        { header: "Field", id: "field", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: false },
+        { header: "Value", id: "value", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 2, min-width: 220px, width: 0px, monospace: true },
+    ];
+
+    property <[DataTableColumn]> runtime-columns: [
+        { header: "Process", id: "process", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.iconText, horizontal-stretch: 1, min-width: 160px, width: 0px, monospace: false },
+        { header: "State", id: "state", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 2, min-width: 260px, width: 0px, monospace: true },
+        { header: "Owner", id: "owner", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 160px, width: 0px, monospace: true },
+    ];
+
+    property <[DataTableRow]> connection-rows: [
+        { id: "host", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Host", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.host, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "agent", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-status, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "token", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.shield_check, icon-tint: DataTableIconTint.success }, { kind: DataTableCellKind.text, text: "Token", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.token-source, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> device-rows: [
+        { id: "version", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.repo, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent version", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-version, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "uptime", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.history, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent uptime", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-uptime, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "network", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Network", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.network-summary + "; mac " + DeviceState.mac-address, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> runtime-rows: [
+        { id: "main", cells: [{ kind: DataTableCellKind.iconText, text: "Main", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.repo, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.main-process, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.visible-owner, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "launcher", cells: [{ kind: DataTableCellKind.iconText, text: "Launcher", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.layout_grid, icon-tint: DataTableIconTint.done }, { kind: DataTableCellKind.text, text: DeviceState.launcher-process, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.launcher-state, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "slint-status", cells: [{ kind: DataTableCellKind.iconText, text: "Slint status", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.palette, icon-tint: DataTableIconTint.success }, { kind: DataTableCellKind.text, text: DeviceState.slint-status-freshness, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "owner " + DeviceState.visible-owner, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> library-rows: [
+        { id: "catalog", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.table, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Catalog", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.catalog-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "screen", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Screen", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.screen-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "input", cells: [{ kind: DataTableCellKind.iconText, text: "Input", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.checkbox, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Controller", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.input-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        alignment: start;
+
+        PageHeader {
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: LayoutTokens.stack-padding-normal;
+                padding-right: LayoutTokens.stack-padding-normal;
+                spacing: LayoutTokens.stack-padding-normal;
+                alignment: space-between;
+                cross-axis-alignment: center;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+
+                    Text {
+                        text: "Debug";
+                        color: PrimerColors.fgColor-default;
+                        font-size: 20px;
+                        font-weight: LayoutTokens.base-text-weight-semibold;
+                    }
+
+                    Text {
+                        text: "Read-only device, runtime, catalog, and input telemetry.";
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                        overflow: elide;
+                    }
+                }
+
+                DebugStatusStrip { }
+            }
+        }
+
+        if DeviceState.last-error != "": Banner {
+            title: "Connection error";
+            description: DeviceState.last-error;
+            variant: BannerVariant.critical;
+        }
+
+        TableContainer {
+            title: "Connection";
+            subtitle: "Agent reachability and token source.";
+            primary-action-label: "Refresh";
+            primary-action-variant: ButtonVariant.default;
+            primary-action => { Actions.refresh-status(); }
+
+            DataTable {
+                width: 100%;
+                cell-padding: DataTableCellPadding.normal;
+                columns: detail-columns;
+                rows: connection-rows;
+            }
+        }
+
+        TableContainer {
+            title: "Device";
+            subtitle: "Agent build, uptime, and network identity.";
+
+            DataTable {
+                width: 100%;
+                cell-padding: DataTableCellPadding.normal;
+                columns: detail-columns;
+                rows: device-rows;
+            }
+        }
+
+        TableContainer {
+            title: "Runtime";
+            subtitle: "Main, launcher, and Slint status ownership.";
+
+            DataTable {
+                width: 100%;
+                cell-padding: DataTableCellPadding.normal;
+                columns: runtime-columns;
+                rows: runtime-rows;
+            }
+        }
+
+        TableContainer {
+            title: "Library and input";
+            subtitle: "Catalog, visible scene, and controller summary.";
+
+            DataTable {
+                width: 100%;
+                cell-padding: DataTableCellPadding.normal;
+                columns: detail-columns;
+                rows: library-rows;
+            }
         }
     }
 }
@@ -94,138 +460,75 @@ export component AppWindow inherits Window {
     no-frame: true;
     resize-border-width: 8px;
     background: transparent;
-    preferred-width: 980px;
-    preferred-height: 680px;
+    preferred-width: 1100px;
+    preferred-height: 760px;
     min-width: 760px;
     min-height: 520px;
-    private property <length> chrome-left: max(24px, root.safe-area-insets.left + 16px);
-    private property <length> chrome-right: max(28px, root.safe-area-insets.right + 28px);
-    private property <length> chrome-top: max(16px, root.safe-area-insets.top + 8px);
-    private property <length> chrome-height: max(76px, root.safe-area-insets.top + 60px);
+    default-font-family: "Mona Sans";
+    icon: Icons.palette;
+    private property <length> chrome-radius: 14px;
 
     Rectangle {
-        x: 0;
-        y: 0;
-        width: parent.width;
-        height: parent.height;
-        background: #edf0f4;
-        border-radius: 14px;
+        background: PrimerColors.bgColor-default;
+        border-radius: root.chrome-radius;
         clip: true;
 
-        Rectangle {
-            x: 0;
-            y: 0;
-            width: parent.width;
-            height: root.chrome-height;
-            background: #101820;
-
-            TouchArea {
-                x: root.chrome-left + 180px;
-                y: 0;
-                width: parent.width - self.x - root.chrome-right - 132px;
-                height: parent.height;
-                pointer-event(event) => {
-                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                        WindowActions.start-window-drag();
-                    }
-                }
+        VerticalLayout {
+            AppHeader {
+                safe-left: root.safe-area-insets.left;
+                safe-right: root.safe-area-insets.right;
+                safe-top: root.safe-area-insets.top;
+                refresh => { Actions.refresh-status(); }
+                start-window-drag => { WindowActions.start-window-drag(); }
             }
 
-            Text {
-                x: root.chrome-left;
-                y: root.chrome-top;
-                text: "MiSTer MagiK";
-                color: #ffffff;
-                font-size: 22px;
-                font-weight: 800;
-            }
+            HorizontalLayout {
+                vertical-stretch: 1;
 
-            Text {
-                x: root.chrome-left;
-                y: root.chrome-top + 29px;
-                text: DeviceState.connection-state;
-                color: #b8c7d9;
-                font-size: 13px;
-                overflow: elide;
-                width: parent.width - self.x - 180px;
-            }
+                Sidebar { }
 
-            Button {
-                x: parent.width - root.chrome-right - 104px;
-                y: root.chrome-top + 6px;
-                width: 104px;
-                height: 32px;
-                text: "Refresh";
-                clicked => { Actions.refresh-status(); }
-            }
-        }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    background: PrimerColors.bgColor-default;
 
-        ScrollView {
-            x: root.chrome-left;
-            y: root.chrome-height + 22px;
-            width: parent.width - self.x - root.chrome-right;
-            height: parent.height - self.y - 22px;
-            viewport-width: self.width;
-            viewport-height: 760px;
+                    Flickable {
+                        width: parent.width;
+                        height: parent.height;
+                        viewport-width: self.width;
+                        viewport-height: content.preferred-height;
 
-            content := VerticalBox {
-                width: parent.width;
-                spacing: 14px;
+                        content := VerticalLayout {
+                            width: parent.width;
+                            min-height: parent.height;
+                            alignment: start;
 
-                Section {
-                    title: "Connection";
-                    first-label: "Host";
-                    first-value: DeviceState.host;
-                    second-label: "Agent";
-                    second-value: DeviceState.agent-status;
-                    third-label: "Token";
-                    third-value: DeviceState.token-source;
-                }
+                            if AppNavigation.selected-page == "overview": PlaceholderPage {
+                                title: "Overview";
+                                description: "High-level MiSTer MagiK dashboard summary.";
+                                icon: Icons.repo;
+                            }
 
-                Section {
-                    title: "Device";
-                    first-label: "Agent version";
-                    first-value: DeviceState.agent-version;
-                    second-label: "Agent uptime";
-                    second-value: DeviceState.agent-uptime;
-                    third-label: "Network";
-                    third-value: DeviceState.network-summary + "; mac " + DeviceState.mac-address;
-                }
+                            if AppNavigation.selected-page == "library": PlaceholderPage {
+                                title: "Library";
+                                description: "Catalog, systems, and preview health.";
+                                icon: Icons.table;
+                            }
 
-                Section {
-                    title: "Runtime";
-                    first-label: "Main";
-                    first-value: DeviceState.main-process;
-                    second-label: "Launcher";
-                    second-value: DeviceState.launcher-process;
-                    third-label: "Status";
-                    third-value: "owner " + DeviceState.visible-owner + "; " + DeviceState.slint-status-freshness;
-                }
+                            if AppNavigation.selected-page == "device": PlaceholderPage {
+                                title: "Device";
+                                description: "MiSTer host, agent, network, and runtime state.";
+                                icon: Icons.shield;
+                            }
 
-                Section {
-                    title: "Library And Input";
-                    first-label: "Catalog";
-                    first-value: DeviceState.catalog-summary;
-                    second-label: "Screen";
-                    second-value: DeviceState.screen-summary;
-                    third-label: "Controller";
-                    third-value: DeviceState.input-summary;
-                }
+                            if AppNavigation.selected-page == "settings": PlaceholderPage {
+                                title: "Settings";
+                                description: "Desktop app preferences and connection settings.";
+                                icon: Icons.gear_24;
+                            }
 
-                if DeviceState.last-error != "" : Rectangle {
-                    background: #fff4ed;
-                    border-color: #fed7aa;
-                    border-width: 1px;
-                    border-radius: 8px;
-                    min-height: 48px;
-                    Text {
-                        x: 12px;
-                        y: 12px;
-                        width: parent.width - 24px;
-                        text: DeviceState.last-error;
-                        color: #9a3412;
-                        font-size: 13px;
-                        wrap: word-wrap;
+                            if AppNavigation.selected-page == "debug": DebugPage { }
+                        }
                     }
                 }
             }
