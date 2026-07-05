@@ -519,11 +519,16 @@ snapshot_taken=0
 run_done=0
 run_failed=0
 completion_reason="incomplete"
+capture_framebuffer_snapshot() {
+  rm -rf "$snapshot_dir"
+  mkdir -p "$snapshot_dir"
+  "$MISTER" status --json >"$snapshot_dir/status.json" 2>/dev/null || true
+  "$MISTER" agent framebuffer-capture "$snapshot_dir/fb0.png" --json "$snapshot_dir/framebuffer.json" >/dev/null 2>&1
+}
 while (( SECONDS < deadline )); do
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
   if [[ "$snapshot_taken" -eq 0 ]] && grep -q $'^startup_timing\tscreenshot_media_progress\t.*phase=download' "$local_log" 2>/dev/null; then
-    rm -rf "$snapshot_dir"
-    if "$MISTER" snapshot "$snapshot_dir" >/dev/null 2>&1; then
+    if capture_framebuffer_snapshot; then
       snapshot_taken=1
     else
       snapshot_taken=2
@@ -552,16 +557,15 @@ done
 thread_sample_stop
 thread_sample_collect
 if [[ "$snapshot_taken" -eq 0 ]]; then
-  rm -rf "$snapshot_dir"
-  "$MISTER" snapshot "$snapshot_dir" >/dev/null 2>&1 || snapshot_taken=2
+  capture_framebuffer_snapshot || snapshot_taken=2
 fi
 
 {
   emit_run_context_row
   emit_artifact_row "log" "$local_log" "$REMOTE_LOG"
   emit_artifact_row "status" "$local_status" "scripts/mister status"
-  emit_artifact_row "snapshot-status" "$snapshot_dir/status.json" "scripts/mister snapshot"
-  emit_artifact_row "snapshot-png" "$snapshot_dir/fb0.png" "scripts/mister snapshot"
+  emit_artifact_row "snapshot-status" "$snapshot_dir/status.json" "scripts/mister status --json"
+  emit_artifact_row "snapshot-png" "$snapshot_dir/fb0.png" "agent framebuffer_capture"
   thread_sample_emit_artifacts
   summarize_media_log "$local_log" "$label" "$commit" "$systems_csv"
   if [[ "$run_done" -eq 1 ]]; then

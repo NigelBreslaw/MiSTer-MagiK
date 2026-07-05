@@ -447,7 +447,10 @@ mister-magik-fb ui <scene> <secs>
 `scripts/bench-toolchain.sh` appends formal results to
 `history/toolchain-bench/results.tsv`. The TSV keeps the legacy `visual_ok`
 column as a combined pass bit and also records `timing_ok` and `capture_ok` so
-render/timing failures are distinguishable from framebuffer capture failures.
+render/timing failures are distinguishable from agent framebuffer capture
+failures. Use `scripts/mister agent framebuffer-capture OUT.png --json
+OUT.json` for ad hoc framebuffer PNGs; do not add raw `/dev/fb0` dump or
+host-side raw-to-PNG capture paths.
 Build profiles and toolchain details live in `magik-gui/BUILD.md`.
 
 Bench scene documentation lives in `magik-gui/ui/bench/README.md`.

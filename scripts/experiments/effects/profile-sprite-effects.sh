@@ -146,7 +146,7 @@ if [[ "$visual_captures" != "0" ]]; then
   mkdir -p "$visual_dir"
   for ((i = 0; i < visual_captures; i++)); do
     png_out="$visual_dir/capture-${i}.png"
-    snap_dir="$visual_dir/capture-${i}.snapshot"
+    json_out="$visual_dir/capture-${i}.framebuffer.json"
     "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -155,8 +155,7 @@ MISTER_PREVIEW_FORMAT='$preview_format' MISTER_SPRITE_EFFECTS='$mode' MISTER_SPR
 echo \$! >/tmp/${label}-visual-${i}.pid
 " >/dev/null
     sleep $((8 + i * segment_secs))
-    "$MISTER" snapshot "$snap_dir" >/dev/null
-    cp "$snap_dir/fb0.png" "$png_out"
+    "$MISTER" agent framebuffer-capture "$png_out" --json "$json_out" >/dev/null
     "$MISTER" run "kill -9 \$(cat /tmp/${label}-visual-${i}.pid 2>/dev/null) 2>/dev/null || true; rm -f /tmp/${label}-visual-${i}.pid" >/dev/null || true
     echo "wrote $png_out"
   done

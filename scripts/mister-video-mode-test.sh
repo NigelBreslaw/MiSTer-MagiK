@@ -313,20 +313,9 @@ extract_fb_size_from_log() {
 
 capture_current_fb_png() {
   local dir="$1"
-  local log="$2"
-  local raw="$dir/fb0.raw"
   local png="$dir/fb0.png"
-  local size w h
-  size="$(extract_fb_size_from_log "$log")"
-  if [[ -z "$size" ]]; then
-    echo "capture warning: could not detect fb size from $log" >&2
-    return 1
-  fi
-  read -r w h <<<"$size"
-  echo "==> Capturing framebuffer PNG ${w}x${h}"
-  mister run "dd if=/dev/fb0 of=/tmp/mister-mode-sweep-fb.raw bs=1M count=32 2>/dev/null || true; wc -c /tmp/mister-mode-sweep-fb.raw"
-  mister get /tmp/mister-mode-sweep-fb.raw "$raw"
-  mister raw-to-png "$raw" "$w" "$h" "$png"
+  echo "==> Capturing framebuffer PNG via agent"
+  mister agent framebuffer-capture "$png" --json "$dir/framebuffer.json"
   echo "$png" >"$dir/fb0.png.path"
 }
 
