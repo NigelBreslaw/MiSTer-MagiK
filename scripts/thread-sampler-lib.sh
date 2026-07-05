@@ -9,6 +9,8 @@ thread_sample_remote_log=""
 thread_sample_local_log=""
 thread_sample_remote_script=""
 thread_sample_local_script=""
+thread_sample_label=""
+thread_sample_case=""
 
 thread_sample_shell_quote() {
   printf "'%s'" "${1//\'/\'\\\'\'}"
@@ -135,6 +137,8 @@ thread_sample_start() {
   fi
 
   mkdir -p "$out_dir"
+  thread_sample_label="$label"
+  thread_sample_case="$case_name"
   thread_sample_remote_tsv="/tmp/${label}-${case_name}-thread-sample.tsv"
   thread_sample_local_tsv="$out_dir/${label}-${case_name}-thread-sample.tsv"
   thread_sample_remote_log="/tmp/${label}-${case_name}-thread-sample.log"
@@ -197,8 +201,102 @@ thread_sample_emit_artifacts() {
   fi
 }
 
+thread_sample_emit_summary() {
+  if [[ "$thread_sample_enabled" != "1" || -z "$thread_sample_local_tsv" || ! -s "$thread_sample_local_tsv" ]]; then
+    return 0
+  fi
+  local summary_label="${1:-$thread_sample_label}"
+  local summary_case="${2:-$thread_sample_case}"
+  local path="${3:-$thread_sample_local_tsv}"
+  awk -F '\t' -v label="$summary_label" -v case_name="$summary_case" '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      next
+    }
+    $1 == "thread_sample_tsv" && $2 != "sample" {
+      tid = $(col["tid"])
+      name = $(col["thread_name"])
+      processor = $(col["processor"])
+      key = tid SUBSEP name
+      cpu = ($(col["utime_delta_jiffies"]) + 0) + ($(col["stime_delta_jiffies"]) + 0)
+      threads[key] = 1
+      thread_samples[key]++
+      thread_utime[key] += $(col["utime_delta_jiffies"]) + 0
+      thread_stime[key] += $(col["stime_delta_jiffies"]) + 0
+      thread_cpu[key] += cpu
+      thread_voluntary[key] += $(col["voluntary_delta"]) + 0
+      thread_nonvoluntary[key] += $(col["nonvoluntary_delta"]) + 0
+      thread_vmrss[key] = $(col["vmrss_kb"]) + 0
+      thread_vmhwm[key] = $(col["vmhwm_kb"]) + 0
+      core_key = key SUBSEP processor
+      thread_core_samples[core_key]++
+      core_samples[processor]++
+      core_cpu[processor] += cpu
+      total_samples++
+      total_cpu += cpu
+    }
+    END {
+      for (key in threads) {
+        split(key, parts, SUBSEP)
+        tid = parts[1]
+        name = parts[2]
+        dominant_core = "unknown"
+        dominant_samples = -1
+        for (core in core_samples) {
+          core_key = key SUBSEP core
+          count = thread_core_samples[core_key] + 0
+          if (count > dominant_samples) {
+            dominant_samples = count
+            dominant_core = core
+          }
+        }
+        printf "thread_cpu_delta_tsv\tlabel=%s\tcase=%s\ttid=%s\tthread_name=%s\tsamples=%d\tutime_delta_jiffies=%d\tstime_delta_jiffies=%d\tcpu_delta_jiffies=%d\tvoluntary_delta=%d\tnonvoluntary_delta=%d\tdominant_core=%s\tdominant_core_samples=%d\tvmrss_kb=%d\tvmhwm_kb=%d\n",
+          label, case_name, tid, name, thread_samples[key] + 0,
+          thread_utime[key] + 0, thread_stime[key] + 0, thread_cpu[key] + 0,
+          thread_voluntary[key] + 0, thread_nonvoluntary[key] + 0,
+          dominant_core, dominant_samples + 0, thread_vmrss[key] + 0, thread_vmhwm[key] + 0
+      }
+      for (core in core_samples) {
+        printf "core_residency_tsv\tlabel=%s\tcase=%s\tprocessor=%s\tsamples=%d\tcpu_delta_jiffies=%d\n",
+          label, case_name, core, core_samples[core] + 0, core_cpu[core] + 0
+      }
+      printf "thread_sample_summary_tsv\tlabel=%s\tcase=%s\tthreads=%d\tsamples=%d\tcpu_delta_jiffies=%d\n",
+        label, case_name, length(threads), total_samples + 0, total_cpu + 0
+    }
+  ' "$path"
+}
+
 thread_sample_finish() {
   thread_sample_stop
   thread_sample_collect
   thread_sample_emit_artifacts
+  thread_sample_emit_summary
 }
+
+thread_sample_self_test() {
+  local tmp
+  tmp="$(mktemp -d)"
+  local tsv="$tmp/thread-sample.tsv"
+  cat >"$tsv" <<'EOF'
+thread_sample_tsv	sample	ts_unix	pid	tid	thread_name	state	processor	utime_jiffies	stime_jiffies	utime_delta_jiffies	stime_delta_jiffies	voluntary_ctxt_switches	nonvoluntary_ctxt_switches	voluntary_delta	nonvoluntary_delta	vmrss_kb	vmhwm_kb	sched_exec_runtime_ms	sched_nr_switches	sched_wait_sum_ms
+thread_sample_tsv	0	1	10	10	mister-magik-fb	R	0	100	20	0	0	1	1	0	0	1000	2000	0	0	0
+thread_sample_tsv	1	2	10	10	mister-magik-fb	R	1	105	22	5	2	3	2	2	1	1100	2100	0	0	0
+thread_sample_tsv	1	2	10	11	mister-vsync	S	1	1	4	1	4	6	9	3	2	1100	2100	0	0	0
+EOF
+  thread_sample_enabled=1
+  thread_sample_local_tsv="$tsv"
+  local out
+  out="$(thread_sample_emit_summary selftest arcade "$tsv")"
+  rm -rf "$tmp"
+  grep -q $'thread_cpu_delta_tsv\tlabel=selftest\tcase=arcade' <<<"$out" || return 1
+  grep -q $'core_residency_tsv\tlabel=selftest\tcase=arcade\tprocessor=1' <<<"$out" || return 1
+  grep -q $'thread_sample_summary_tsv\tlabel=selftest\tcase=arcade\tthreads=2' <<<"$out" || return 1
+  echo "thread-sampler-lib self-test ok"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-}" in
+    --self-test) thread_sample_self_test ;;
+    *) echo "usage: $0 --self-test" >&2; exit 2 ;;
+  esac
+fi

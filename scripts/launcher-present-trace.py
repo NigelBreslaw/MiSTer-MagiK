@@ -32,6 +32,8 @@ REQUIRED_COLUMNS = {
 METRICS = [
     "rows",
     "direct_preview_rows",
+    "present_bytes",
+    "wasted_present_bytes",
     "fb_present_us",
     "cached_present_us",
     "direct_preview_present_us",
@@ -96,7 +98,7 @@ def metric_stats(rows: list[dict[str, str]], metric: str) -> MetricStats:
     )
 
 
-def read_trace(path: Path, *, ignore_frames_through: int) -> TraceData:
+def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 960) -> TraceData:
     with path.open(newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         columns = set(reader.fieldnames or [])
@@ -111,6 +113,12 @@ def read_trace(path: Path, *, ignore_frames_through: int) -> TraceData:
                 row["arcade_list_present_us"] = row["overlay_present_us"]
             row.setdefault("direct_preview_present_us", "0")
             row.setdefault("direct_preview_rows", "0")
+            if "present_bytes" not in row or not row.get("present_bytes"):
+                row["present_bytes"] = str(int_field(row, "rows") * present_width * 2)
+            if "wasted_present_bytes" not in row or not row.get("wasted_present_bytes"):
+                dirty_rows = max(0, int_field(row, "dirty_y1") - int_field(row, "dirty_y0"))
+                dirty_bytes = dirty_rows * present_width * 2
+                row["wasted_present_bytes"] = str(max(0, int_field(row, "present_bytes") - dirty_bytes))
             if int_field(row, "frame") > ignore_frames_through:
                 rows.append(row)
     if not rows:
@@ -353,6 +361,8 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
         "group": "scroll:-12",
         "rows": 704,
         "direct_preview_rows": 0,
+        "present_bytes": 704 * 960 * 2,
+        "wasted_present_bytes": 0,
         "fb_present_us": 900,
         "cached_present_us": 400,
         "direct_preview_present_us": 0,
@@ -369,6 +379,8 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                 "arcade_update",
                 "rows",
                 "direct_preview_rows",
+                "present_bytes",
+                "wasted_present_bytes",
                 "fb_present_us",
                 "cached_present_us",
                 "direct_preview_present_us",
@@ -384,6 +396,8 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                     defaults["group"],
                     defaults["rows"],
                     defaults["direct_preview_rows"],
+                    defaults["present_bytes"],
+                    defaults["wasted_present_bytes"],
                     defaults["fb_present_us"],
                     defaults["cached_present_us"],
                     defaults["direct_preview_present_us"],
@@ -456,6 +470,7 @@ def main() -> int:
     summarize.add_argument("--min-frames", type=int, default=120)
     summarize.add_argument("--include-all-groups", action="store_true")
     summarize.add_argument("--ignore-frames-through", type=int, default=30)
+    summarize.add_argument("--present-width", type=int, default=960)
 
     compare = subparsers.add_parser("compare")
     compare.add_argument("before", type=Path)
@@ -465,6 +480,7 @@ def main() -> int:
     compare.add_argument("--max-present-regression-pct", type=float, default=5.0)
     compare.add_argument("--max-rows-regression", type=int, default=1)
     compare.add_argument("--ignore-frames-through", type=int, default=30)
+    compare.add_argument("--present-width", type=int, default=960)
 
     args = parser.parse_args()
     if args.self_test:
@@ -474,15 +490,27 @@ def main() -> int:
 
     try:
         if args.command == "summarize":
-            trace = read_trace(args.trace, ignore_frames_through=args.ignore_frames_through)
+            trace = read_trace(
+                args.trace,
+                ignore_frames_through=args.ignore_frames_through,
+                present_width=args.present_width,
+            )
             return print_summary_rows(
                 trace,
                 case=args.case,
                 min_frames=args.min_frames,
                 include_all=args.include_all_groups,
             )
-        before = read_trace(args.before, ignore_frames_through=args.ignore_frames_through)
-        after = read_trace(args.after, ignore_frames_through=args.ignore_frames_through)
+        before = read_trace(
+            args.before,
+            ignore_frames_through=args.ignore_frames_through,
+            present_width=args.present_width,
+        )
+        after = read_trace(
+            args.after,
+            ignore_frames_through=args.ignore_frames_through,
+            present_width=args.present_width,
+        )
         return compare_traces(
             before,
             after,

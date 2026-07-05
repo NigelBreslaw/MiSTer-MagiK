@@ -32,6 +32,8 @@ PHASES = [
     "cached_present_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
+    "present_bytes",
+    "wasted_present_bytes",
     "wall_us",
     "rows",
 ]
@@ -129,6 +131,8 @@ def main() -> int:
             "cached_present_us",
             "direct_preview_present_us",
             "arcade_list_present_us",
+            "present_bytes",
+            "wasted_present_bytes",
             "wall_us",
         ]
         print("\t".join(f"{field}={row[field]}" for field in fields if field in row))
