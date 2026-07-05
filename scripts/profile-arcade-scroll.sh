@@ -11,15 +11,18 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--stream-consumer none|desktop-bench|null-drain]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
 
 Runs the Main-supervised launcher on the real Arcade screen with
-MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE,
-pulls the raw TSV/log, then prints frame timing summaries.
+MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE. By default it
+first reboots to Home, presses A on the Arcade tile, requires instant list,
+preview, and first navigation readiness, then runs the 30s scroll trace.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
+--skip-boot-prelude keeps the old direct-to-Arcade benchmark setup.
+--self-test runs only the host parser checks for the boot prelude gate.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
 --selection-invert on|off toggles selected-row inversion for A/B cost runs.
@@ -42,6 +45,11 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
+entry_open_gate_ms="${MISTER_ARCADE_ENTRY_OPEN_GATE_MS:-350}"
+entry_gate_ms="${MISTER_ARCADE_ENTRY_GATE_MS:-50}"
+home_selected_index="${MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX:-7}"
+self_test="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -49,6 +57,18 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --skip-boot-prelude|--direct-start-arcade) boot_prelude="0"; shift ;;
+    --entry-open-gate-ms)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--entry-open-gate-ms needs a value" >&2; usage >&2; exit 2; fi
+      entry_open_gate_ms="$2"
+      shift 2
+      ;;
+    --entry-gate-ms)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--entry-gate-ms needs a value" >&2; usage >&2; exit 2; fi
+      entry_gate_ms="$2"
+      shift 2
+      ;;
+    --self-test) self_test="1"; shift ;;
     --secs)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--secs needs a value" >&2; usage >&2; exit 2; fi
       secs="$2"
@@ -106,6 +126,9 @@ fi
 
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer number of seconds" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
+if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
+if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
+if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
@@ -141,6 +164,9 @@ local_log="$OUT_DIR/${label}-arcade-scroll.log"
 local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
 local_stream_tsv="$OUT_DIR/${label}-framebuffer-stream.tsv"
 local_stream_log="$OUT_DIR/${label}-framebuffer-stream.log"
+remote_entry_tsv="/tmp/${label}-arcade-entry.tsv"
+local_entry_tsv="$OUT_DIR/${label}-arcade-entry.tsv"
+local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
 stream_pid=""
 stream_frames=$((secs * 20))
@@ -169,6 +195,157 @@ print(
 )
 raise SystemExit(0 if count == 0 else 11)
 PY
+}
+
+gate_arcade_entry_trace() {
+  local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5"
+  python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" <<'PY'
+import csv
+import re
+import sys
+
+name, trace_path, log_path, open_threshold_s, interactive_threshold_s = sys.argv[1:6]
+open_threshold = int(open_threshold_s)
+interactive_threshold = int(interactive_threshold_s)
+required = [
+    "arcade_enter_input",
+    "arcade_enter_presented",
+    "arcade_rows_ready",
+    "arcade_preview_exact",
+    "arcade_first_nav_input",
+    "arcade_first_nav_presented",
+]
+rows = {}
+try:
+    with open(trace_path, encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            rows.setdefault(row.get("event", ""), row)
+except FileNotFoundError:
+    print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_trace\tdetail={trace_path}")
+    sys.exit(9)
+
+missing = [event for event in required if event not in rows]
+if missing:
+    print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_event\tdetail={','.join(missing)}")
+    sys.exit(9)
+
+failures = []
+input_delay = int(rows["arcade_enter_input"]["since_input_enabled_ms"])
+if input_delay > open_threshold:
+    failures.append(f"arcade_enter_input_since_input_enabled_ms={input_delay}")
+open_delta = int(rows["arcade_enter_presented"]["delta_ms"])
+if open_delta > open_threshold:
+    failures.append(f"arcade_enter_presented_delta_ms={open_delta}")
+open_prepare = rows["arcade_enter_presented"]["prepare_us"]
+if open_prepare != "-" and int(open_prepare) > open_threshold * 1000:
+    failures.append(f"arcade_enter_presented_prepare_us={open_prepare}")
+for event in ("arcade_rows_ready", "arcade_preview_exact", "arcade_first_nav_presented"):
+    delta = int(rows[event]["delta_ms"])
+    if delta > interactive_threshold:
+        failures.append(f"{event}_delta_ms={delta}")
+prepare = rows["arcade_first_nav_presented"]["prepare_us"]
+if prepare != "-" and int(prepare) > interactive_threshold * 1000:
+    failures.append(f"arcade_first_nav_presented_prepare_us={prepare}")
+
+try:
+    log_text = open(log_path, encoding="utf-8", errors="replace").read()
+except FileNotFoundError:
+    log_text = ""
+if re.search(r"startup_timing\tcatalog_navigation_load\t", log_text):
+    failures.append("forbidden_catalog_navigation_load")
+if re.search(r"startup_timing\tcatalog_system_navigation_load\t", log_text):
+    failures.append("forbidden_catalog_system_navigation_load")
+if re.search(r"startup_timing\tarcade_search_index_prewarm\t[^\n]*built=1", log_text):
+    failures.append("forbidden_arcade_search_index_prewarm")
+
+summary = " ".join(
+    f"{event}_delta_ms={rows[event]['delta_ms']}"
+    for event in required
+)
+summary += f" arcade_enter_input_since_input_enabled_ms={input_delay}"
+summary += f" open_gate_ms={open_threshold} interactive_gate_ms={interactive_threshold}"
+if failures:
+    print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=gate_failed\tdetail={';'.join(failures)} {summary}")
+    sys.exit(9)
+print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=1\tinvalid_reason=ok\tdetail={summary}")
+PY
+}
+
+run_arcade_entry_self_test() {
+  local tmpdir
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/arcade-entry-gate-self.XXXXXX")"
+  trap 'rm -rf "${tmpdir:-}"' EXIT
+  cat >"$tmpdir/good.tsv" <<'EOF'
+event	elapsed_ms	delta_ms	since_input_enabled_ms	accepted	system	selected	frame	prepare_us	preview_state	asset_key	detail
+arcade_enter_input	120	-1	8	1	arcade	0	-	-		1941	source=launcher_input
+arcade_enter_presented	138	18	26	1	arcade	0	4	12000	placeholder	1941	copied_rows=540
+arcade_rows_ready	139	19	27	1	arcade	0	-	-		1941	games=895
+arcade_preview_exact	145	25	33	1	arcade	0	-	-	exact	1941	source=preview_state
+arcade_first_nav_input	150	30	38	1	arcade	1	-	-		1942	source=launcher_input
+arcade_first_nav_presented	166	16	54	1	arcade	1	5	13000	exact	1942	copied_rows=540
+EOF
+  : >"$tmpdir/good.log"
+  gate_arcade_entry_trace self-good "$tmpdir/good.tsv" "$tmpdir/good.log" 350 50 >/dev/null
+  cp "$tmpdir/good.tsv" "$tmpdir/slow.tsv"
+  sed -i.bak $'s/arcade_rows_ready\t139\t19/arcade_rows_ready\t190\t70/' "$tmpdir/slow.tsv"
+  if gate_arcade_entry_trace self-slow "$tmpdir/slow.tsv" "$tmpdir/good.log" 350 50 >/dev/null 2>&1; then
+    echo "self-test expected latency failure" >&2
+    exit 1
+  fi
+  cp "$tmpdir/good.tsv" "$tmpdir/slow-open.tsv"
+  sed -i.bak $'s/arcade_enter_presented\t138\t18/arcade_enter_presented\t520\t400/' "$tmpdir/slow-open.tsv"
+  if gate_arcade_entry_trace self-slow-open "$tmpdir/slow-open.tsv" "$tmpdir/good.log" 350 50 >/dev/null 2>&1; then
+    echo "self-test expected open latency failure" >&2
+    exit 1
+  fi
+  grep -v '^arcade_preview_exact' "$tmpdir/good.tsv" >"$tmpdir/missing.tsv"
+  if gate_arcade_entry_trace self-missing "$tmpdir/missing.tsv" "$tmpdir/good.log" 350 50 >/dev/null 2>&1; then
+    echo "self-test expected missing screenshot failure" >&2
+    exit 1
+  fi
+  printf 'startup_timing\tcatalog_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
+  if gate_arcade_entry_trace self-forbidden "$tmpdir/good.tsv" "$tmpdir/forbidden.log" 350 50 >/dev/null 2>&1; then
+    echo "self-test expected forbidden event failure" >&2
+    exit 1
+  fi
+  printf 'startup_timing\tcatalog_system_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
+  if gate_arcade_entry_trace self-forbidden-system "$tmpdir/good.tsv" "$tmpdir/forbidden.log" 350 50 >/dev/null 2>&1; then
+    echo "self-test expected forbidden system event failure" >&2
+    exit 1
+  fi
+  echo "profile-arcade-scroll self-test ok"
+}
+
+run_boot_prelude() {
+  echo "==> Boot prelude: Home -> Arcade entry open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
+  echo "==> Refresh warm catalog projections before measured reboot"
+  "$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections" >/dev/null
+  {
+    printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
+    printf 'export MISTER_HOME_SELECTED_INDEX=%q\n' "$home_selected_index"
+    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
+    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' 'a,down,down,down,down,down,down,down,down'
+    printf 'export MISTER_ARCADE_ENTRY_TRACE=%q\n' "$remote_entry_tsv"
+    printf 'export MISTER_PREVIEW_TRACE=1\n'
+  } >"$env_file"
+  "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+  "$MISTER" run "rm -f '$remote_entry_tsv' '$REMOTE_LOG'; sync" >/dev/null
+  "$MISTER" reboot-wait
+  local waited=0
+  while [[ "$waited" -le 45 ]]; do
+    if "$MISTER" run "test -s '$remote_entry_tsv' && grep -q '^arcade_first_nav_presented	' '$remote_entry_tsv' && grep -q '^arcade_preview_exact	' '$remote_entry_tsv'" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  "$MISTER" get "$remote_entry_tsv" "$local_entry_tsv" >/dev/null || true
+  "$MISTER" get "$REMOTE_LOG" "$local_entry_log" >/dev/null || true
+  echo "wrote $local_entry_tsv"
+  echo "wrote $local_entry_log"
+  gate_arcade_entry_trace "$label" "$local_entry_tsv" "$local_entry_log" "$entry_open_gate_ms" "$entry_gate_ms"
 }
 
 start_stream_consumer() {
@@ -209,10 +386,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ "$self_test" == "1" ]]; then
+  run_arcade_entry_self_test
+  exit 0
+fi
+
 case "$deploy" in
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
   skip) : ;;
 esac
+
+if [[ "$boot_prelude" != "0" ]]; then
+  run_boot_prelude
+fi
 
 echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us stream_consumer=$stream_consumer"
 {
