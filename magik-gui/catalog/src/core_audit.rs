@@ -26,19 +26,29 @@ pub(crate) fn audit_catalog_coverage(
     roots: &[String],
     profiles: &[LaunchProfile],
 ) -> Vec<CatalogAuditRow> {
+    let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+    let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(roots);
+    audit_catalog_coverage_from_facts(profiles, &installed_cores, &game_dirs)
+}
+
+pub(crate) fn audit_catalog_coverage_from_facts(
+    profiles: &[LaunchProfile],
+    installed_cores: &[catalog_discovery::InstalledCore],
+    game_dirs: &[catalog_discovery::GameDirFact],
+) -> Vec<CatalogAuditRow> {
     let mut rows = BTreeMap::<String, CatalogAuditRow>::new();
-    audit_installed_cores(roots, profiles, &mut rows);
-    audit_game_directories(roots, profiles, &mut rows);
+    audit_installed_cores(installed_cores, profiles, &mut rows);
+    audit_game_directories(game_dirs, installed_cores, profiles, &mut rows);
     rows.into_values().collect()
 }
 
 fn audit_installed_cores(
-    roots: &[String],
+    installed_cores: &[catalog_discovery::InstalledCore],
     profiles: &[LaunchProfile],
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
-    for core in catalog_discovery::installed_cores_for_roots(roots) {
-        let core_id = core.core_id;
+    for core in installed_cores {
+        let core_id = core.core_id.clone();
         let game_dir = main_default_game_dir_for_core(&core_id);
         let profile = profile_for_core_or_dir(profiles, &core_id, &game_dir);
         let row = match profile {
@@ -63,16 +73,21 @@ fn audit_installed_cores(
 }
 
 fn audit_game_directories(
-    roots: &[String],
+    game_dirs: &[catalog_discovery::GameDirFact],
+    installed_cores: &[catalog_discovery::InstalledCore],
     profiles: &[LaunchProfile],
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
     let cataloged_dirs = cataloged_game_dirs(profiles);
-    let runtime_plans = launch_profiles::runtime_profile_plans_for_roots(roots)
+    let runtime_plans = launch_profiles::runtime_profile_plans_for_game_dirs_with_cores(
+        game_dirs,
+        installed_cores,
+        &BTreeSet::new(),
+    )
         .into_iter()
         .map(|plan| (plan.game_dir_name.to_ascii_lowercase(), plan.decision))
         .collect::<BTreeMap<_, _>>();
-    for fact in catalog_discovery::top_level_game_dirs_for_roots(roots) {
+    for fact in game_dirs {
         let name = fact.name.as_str();
         let path = &fact.path;
         let key = name.to_ascii_lowercase();
@@ -89,7 +104,9 @@ fn audit_game_directories(
                     );
                 }
             }
-            audit_non_indexed_zips_in_cataloged_dir(path, name, profiles, rows);
+            if fact.has_zip_files {
+                audit_non_indexed_zips_in_cataloged_dir(path, name, profiles, rows);
+            }
             continue;
         }
         if let Some(profile) = launch_profiles::generic_manifest_profile_for_game_dir(name) {
@@ -109,7 +126,7 @@ fn audit_game_directories(
             continue;
         }
         if let Some(decision) = runtime_plans.get(&key) {
-            insert_audit_row(rows, audit_row_for_runtime_decision(&fact, decision));
+            insert_audit_row(rows, audit_row_for_runtime_decision(fact, decision));
             continue;
         }
         insert_audit_row(

@@ -1,0 +1,61 @@
+label	commit	scenario	event	ms	notes
+ITEM11-BEFORE-20260705	950a9652	initial-create	library_changed_detected		-
+ITEM11-BEFORE-20260705	950a9652	initial-create	library_ready	33506	-
+ITEM11-BEFORE-20260705	950a9652	initial-create	library_db_saved	85774	-
+ITEM11-BEFORE-20260705	950a9652	initial-create	catalog_stamp_check		-
+ITEM11-BEFORE-20260705	950a9652	initial-create	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1409452 lines=1525
+ITEM11-BEFORE-20260705	950a9652	warm-unchanged	library_changed_detected		-
+ITEM11-BEFORE-20260705	950a9652	warm-unchanged	library_ready		-
+ITEM11-BEFORE-20260705	950a9652	warm-unchanged	library_db_saved		-
+ITEM11-BEFORE-20260705	950a9652	warm-unchanged	catalog_stamp_check	16887	-
+ITEM11-BEFORE-20260705	950a9652	warm-unchanged	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1246510 lines=1525
+ITEM11-BEFORE-20260705	950a9652	known-core-immediate-rebuild	library_changed_detected	13117	-
+ITEM11-BEFORE-20260705	950a9652	known-core-immediate-rebuild	library_ready	62301	-
+ITEM11-BEFORE-20260705	950a9652	known-core-immediate-rebuild	library_db_saved	128719	-
+ITEM11-BEFORE-20260705	950a9652	known-core-immediate-rebuild	catalog_stamp_check	13116	-
+ITEM11-BEFORE-20260705	950a9652	known-core-immediate-rebuild	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1266826 lines=1526
+ITEM11-BEFORE-20260705	950a9652	unknown-core-continue	library_changed_detected	38356	-
+ITEM11-BEFORE-20260705	950a9652	unknown-core-continue	library_ready		-
+ITEM11-BEFORE-20260705	950a9652	unknown-core-continue	library_db_saved		-
+ITEM11-BEFORE-20260705	950a9652	unknown-core-continue	catalog_stamp_check	38355	-
+ITEM11-BEFORE-20260705	950a9652	unknown-core-continue	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1116031 lines=1528
+ITEM11-BEFORE-20260705	950a9652	marker-rebuild	library_changed_detected		-
+ITEM11-BEFORE-20260705	950a9652	marker-rebuild	library_ready	1905	-
+ITEM11-BEFORE-20260705	950a9652	marker-rebuild	library_db_saved	121008	-
+ITEM11-BEFORE-20260705	950a9652	marker-rebuild	catalog_stamp_check		-
+ITEM11-BEFORE-20260705	950a9652	marker-rebuild	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1510308 lines=1528
+ITEM11-BEFORE-20260705	950a9652	new-system-dir-continue	library_changed_detected	13664	-
+ITEM11-BEFORE-20260705	950a9652	new-system-dir-continue	library_ready		-
+ITEM11-BEFORE-20260705	950a9652	new-system-dir-continue	library_db_saved		-
+ITEM11-BEFORE-20260705	950a9652	new-system-dir-continue	catalog_stamp_check	13663	-
+ITEM11-BEFORE-20260705	950a9652	new-system-dir-continue	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 1218208 lines=1529
+ITEM11-AFTER-20260705	950a9652	initial-create	library_changed_detected		-
+ITEM11-AFTER-20260705	950a9652	initial-create	library_ready	30955	-
+ITEM11-AFTER-20260705	950a9652	initial-create	library_db_saved	85323	-
+ITEM11-AFTER-20260705	950a9652	initial-create	catalog_stamp_check		-
+ITEM11-AFTER-20260705	950a9652	initial-create	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 318655 lines=1525
+ITEM11-AFTER-20260705	950a9652	warm-unchanged	library_changed_detected		-
+ITEM11-AFTER-20260705	950a9652	warm-unchanged	library_ready		-
+ITEM11-AFTER-20260705	950a9652	warm-unchanged	library_db_saved		-
+ITEM11-AFTER-20260705	950a9652	warm-unchanged	catalog_stamp_check	6378	-
+ITEM11-AFTER-20260705	950a9652	warm-unchanged	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 278368 lines=1525
+ITEM11-AFTER-20260705	950a9652	known-core-immediate-rebuild	library_changed_detected	6240	-
+ITEM11-AFTER-20260705	950a9652	known-core-immediate-rebuild	library_ready	47799	-
+ITEM11-AFTER-20260705	950a9652	known-core-immediate-rebuild	library_db_saved	120249	-
+ITEM11-AFTER-20260705	950a9652	known-core-immediate-rebuild	catalog_stamp_check	6239	-
+ITEM11-AFTER-20260705	950a9652	known-core-immediate-rebuild	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 275953 lines=1526
+ITEM11-AFTER-20260705	950a9652	unknown-core-continue	library_changed_detected	6368	-
+ITEM11-AFTER-20260705	950a9652	unknown-core-continue	library_ready		-
+ITEM11-AFTER-20260705	950a9652	unknown-core-continue	library_db_saved		-
+ITEM11-AFTER-20260705	950a9652	unknown-core-continue	catalog_stamp_check	6367	-
+ITEM11-AFTER-20260705	950a9652	unknown-core-continue	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 240256 lines=1528
+ITEM11-AFTER-20260705	950a9652	marker-rebuild	library_changed_detected		-
+ITEM11-AFTER-20260705	950a9652	marker-rebuild	library_ready	1807	-
+ITEM11-AFTER-20260705	950a9652	marker-rebuild	library_db_saved	157992	-
+ITEM11-AFTER-20260705	950a9652	marker-rebuild	catalog_stamp_check		-
+ITEM11-AFTER-20260705	950a9652	marker-rebuild	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 770789 lines=1528
+ITEM11-AFTER-20260705	950a9652	new-system-dir-continue	library_changed_detected	19376	-
+ITEM11-AFTER-20260705	950a9652	new-system-dir-continue	library_ready		-
+ITEM11-AFTER-20260705	950a9652	new-system-dir-continue	library_db_saved		-
+ITEM11-AFTER-20260705	950a9652	new-system-dir-continue	catalog_stamp_check	19375	-
+ITEM11-AFTER-20260705	950a9652	new-system-dir-continue	checkpoint_compute	-	catalog_checkpoint_tsv compute_total 378744 lines=1529
