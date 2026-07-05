@@ -37,6 +37,10 @@ fn preview_trace_enabled() -> bool {
     })
 }
 
+fn preview_startup_trace_enabled() -> bool {
+    preview_trace_enabled()
+}
+
 fn preview_loading_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -772,6 +776,9 @@ fn trace_preview_coverage_sample(
     candidate: Option<&PreviewCandidate<'_>>,
     turbo_active: bool,
 ) {
+    if !preview_startup_trace_enabled() {
+        return;
+    }
     let candidate_key = candidate.map(|candidate| candidate.preview_key.as_str());
     let cache_state = preview_cache_state_for_candidate(preview, candidate_key);
     let has_candidate = candidate.is_some();
@@ -987,14 +994,16 @@ pub(crate) fn request_arcade_preview_window(
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
     let Some(candidate) = candidate else {
-        crate::ui_errln!(
-            "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=0\tasset_key=\tcandidate_index=\tselected_has_preview={}",
-            preview.trace_elapsed_ms(),
-            selected_game.system_id,
-            selected,
-            selected_game.title,
-            if selected_has_preview { 1 } else { 0 }
-        );
+        if preview_startup_trace_enabled() {
+            crate::ui_errln!(
+                "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=0\tasset_key=\tcandidate_index=\tselected_has_preview={}",
+                preview.trace_elapsed_ms(),
+                selected_game.system_id,
+                selected,
+                selected_game.title,
+                if selected_has_preview { 1 } else { 0 }
+            );
+        }
         preview.select_empty_preview();
         bridge.set_arcade_preview_placeholder_visible(true);
         clear_preview_image_bridge(bridge);
@@ -1006,16 +1015,18 @@ pub(crate) fn request_arcade_preview_window(
 
     let candidate_game = candidate.game;
     bridge.set_arcade_preview_title(candidate_game.title.as_ref().into());
-    crate::ui_errln!(
-        "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tcandidate_index={}\tselected_has_preview={}",
-        preview.trace_elapsed_ms(),
-        candidate_game.system_id,
-        selected,
-        candidate_game.title,
-        candidate_game.preview_asset_key,
-        candidate.index,
-        if selected_has_preview { 1 } else { 0 }
-    );
+    if preview_startup_trace_enabled() {
+        crate::ui_errln!(
+            "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tcandidate_index={}\tselected_has_preview={}",
+            preview.trace_elapsed_ms(),
+            candidate_game.system_id,
+            selected,
+            candidate_game.title,
+            candidate_game.preview_asset_key,
+            candidate.index,
+            if selected_has_preview { 1 } else { 0 }
+        );
+    }
     let preview_key = candidate.preview_key.clone();
     preview.selected_preview_key = Some(preview_key.clone());
     if preview.cache.contains_failed(&preview_key) {
@@ -1047,14 +1058,16 @@ pub(crate) fn request_arcade_preview_window(
                 candidate_game.preview_asset_key
             );
         }
-        crate::ui_errln!(
-            "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source=decoded_cache\ttotal_us=0\tread_us=0\tdecode_us=0\tage_us=0",
-            preview.trace_elapsed_ms(),
-            candidate_game.system_id,
-            selected,
-            candidate_game.title,
-            candidate_game.preview_asset_key
-        );
+        if preview_startup_trace_enabled() {
+            crate::ui_errln!(
+                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source=decoded_cache\ttotal_us=0\tread_us=0\tdecode_us=0\tage_us=0",
+                preview.trace_elapsed_ms(),
+                candidate_game.system_id,
+                selected,
+                candidate_game.title,
+                candidate_game.preview_asset_key
+            );
+        }
         preview.begin_raw_transition_to(&preview_key);
         preview.visible_preview_key = preview_key;
         preview.raw_dirty = true;
@@ -1070,14 +1083,16 @@ pub(crate) fn request_arcade_preview_window(
         return true;
     }
     let requested_at_ms = preview.trace_elapsed_ms();
-    crate::ui_errln!(
-        "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0",
-        requested_at_ms,
-        candidate_game.system_id,
-        selected,
-        candidate_game.title,
-        candidate_game.preview_asset_key
-    );
+    if preview_startup_trace_enabled() {
+        crate::ui_errln!(
+            "startup_timing\tpreview_selected_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0",
+            requested_at_ms,
+            candidate_game.system_id,
+            selected,
+            candidate_game.title,
+            candidate_game.preview_asset_key
+        );
+    }
     match preview.worker.load_asset_pixels_timed(
         candidate_game.preview_archive_path.as_ref(),
         candidate_game.preview_asset_key.as_ref(),
@@ -1090,20 +1105,22 @@ pub(crate) fn request_arcade_preview_window(
             let decode_us = loaded.decode_us;
             let raw565_parse_us = loaded.raw565_parse_us;
             let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
-            crate::ui_errln!(
-                "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
-                completed_at_ms,
-                candidate_game.system_id,
-                candidate_game.title,
-                candidate_game.preview_asset_key,
-                load_source.label(),
-                total_us,
-                read_us,
-                decode_us,
-                raw565_parse_us,
-                age_us
-            );
-            if load_source == PreviewLoadSource::IndexPread {
+            if preview_startup_trace_enabled() {
+                crate::ui_errln!(
+                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
+                    completed_at_ms,
+                    candidate_game.system_id,
+                    candidate_game.title,
+                    candidate_game.preview_asset_key,
+                    load_source.label(),
+                    total_us,
+                    read_us,
+                    decode_us,
+                    raw565_parse_us,
+                    age_us
+                );
+            }
+            if preview_startup_trace_enabled() && load_source == PreviewLoadSource::IndexPread {
                 crate::ui_errln!(
                     "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\tread_us={}",
                     completed_at_ms,
@@ -1129,19 +1146,21 @@ pub(crate) fn request_arcade_preview_window(
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &loaded_image);
-            crate::ui_errln!(
-                "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
-                preview.trace_elapsed_ms(),
-                candidate_game.system_id,
-                selected,
-                candidate_game.title,
-                candidate_game.preview_asset_key,
-                load_source.label(),
-                total_us,
-                read_us,
-                decode_us,
-                age_us
-            );
+            if preview_startup_trace_enabled() {
+                crate::ui_errln!(
+                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
+                    preview.trace_elapsed_ms(),
+                    candidate_game.system_id,
+                    selected,
+                    candidate_game.title,
+                    candidate_game.preview_asset_key,
+                    load_source.label(),
+                    total_us,
+                    read_us,
+                    decode_us,
+                    age_us
+                );
+            }
             request_preview_prefetches(games, selected, preview, turbo_runway_active);
             trace_preview_coverage_sample(
                 preview,
@@ -1601,7 +1620,7 @@ pub(crate) fn apply_ready_preview(
                     result.preview_asset_key
                 );
             }
-            if is_selected_result {
+            if preview_startup_trace_enabled() && is_selected_result {
                 if result.load_source == PreviewLoadSource::IndexPread {
                     crate::ui_errln!(
                         "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\tread_us={}",
@@ -1657,19 +1676,21 @@ pub(crate) fn apply_ready_preview(
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
-                crate::ui_errln!(
-                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
-                    preview.trace_elapsed_ms(),
-                    result_system_id,
-                    result_title,
-                    result.preview_asset_key,
-                    result.generation,
-                    result.load_source.label(),
-                    result.total_us,
-                    result.read_us,
-                    result.decode_us,
-                    result.request_age_us
-                );
+                if preview_startup_trace_enabled() {
+                    crate::ui_errln!(
+                        "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
+                        preview.trace_elapsed_ms(),
+                        result_system_id,
+                        result_title,
+                        result.preview_asset_key,
+                        result.generation,
+                        result.load_source.label(),
+                        result.total_us,
+                        result.read_us,
+                        result.decode_us,
+                        result.request_age_us
+                    );
+                }
                 dirty = true;
             }
         } else {
