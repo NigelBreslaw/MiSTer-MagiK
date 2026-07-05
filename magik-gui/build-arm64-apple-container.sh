@@ -7,6 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 . "$PWD/scripts/apple-container-resources.sh"
 
+REPO_ROOT="$(cd "$PWD/.." && pwd)"
 IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 TARGET_DIR="${MISTER_APPLE_CONTAINER_TARGET_DIR:-/private/tmp/mister-magik-apple-container-target}"
 MIRROR_TARGET_DIR="${MISTER_APPLE_CONTAINER_MIRROR_TARGET_DIR:-$PWD/target}"
@@ -218,14 +219,14 @@ if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
     "$PWD/scripts/build-minimal-ffmpeg.sh"
   fi
   EXTRA_ENVS+=(
-    --env FFMPEG_DIR=/project/target/ffmpeg-minimal/armv7/dist
-    --env PKG_CONFIG_PATH=/project/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
+    --env FFMPEG_DIR=/project/magik-gui/target/ffmpeg-minimal/armv7/dist
+    --env PKG_CONFIG_PATH=/project/magik-gui/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
     --env PKG_CONFIG_ALLOW_CROSS=1
-    --env CFLAGS=-I/project/target/ffmpeg-minimal/armv7/dist/include
-    --env HOST_CFLAGS=-I/project/target/ffmpeg-minimal/armv7/dist/include
-    --env CFLAGS_aarch64_unknown_linux_gnu=-I/project/target/ffmpeg-minimal/armv7/dist/include
+    --env CFLAGS=-I/project/magik-gui/target/ffmpeg-minimal/armv7/dist/include
+    --env HOST_CFLAGS=-I/project/magik-gui/target/ffmpeg-minimal/armv7/dist/include
+    --env CFLAGS_aarch64_unknown_linux_gnu=-I/project/magik-gui/target/ffmpeg-minimal/armv7/dist/include
   )
-  echo "==> using minimal FFmpeg: /project/target/ffmpeg-minimal/armv7/dist"
+  echo "==> using minimal FFmpeg: /project/magik-gui/target/ffmpeg-minimal/armv7/dist"
 fi
 
 HOST_RUSTFLAGS="${RUSTFLAGS:-}"
@@ -255,9 +256,9 @@ container run --arch arm64 --rm \
   "${EXTRA_ENVS[@]}" \
   --volume "$CARGO_CACHE:/cargo" \
   --volume "$RUST_TOOLCHAIN:/rust:ro" \
-  --volume "$PWD:/project" \
+  --volume "$REPO_ROOT:/project" \
   --volume "$TARGET_DIR:/target" \
-  --workdir /project \
+  --workdir /project/magik-gui \
   "$IMAGE" \
   sh -lc 'PATH=/rust/bin:$PATH cargo "$@"' sh "${BUILD_ARGS[@]}"
 
