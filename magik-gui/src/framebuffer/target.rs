@@ -1,5 +1,7 @@
 use crate::framebuffer::format::production_label;
 use crate::framebuffer::mapped::MappedRgb565Framebuffer;
+use crate::framebuffer::stream;
+use mister_magik_framebuffer_stream::{FrameGeometry, FrameRect};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
@@ -303,6 +305,23 @@ impl FramebufferTargetGeometry {
             y1: self.render_h,
         }
     }
+
+    fn stream_geometry(self) -> FrameGeometry {
+        FrameGeometry {
+            width: self.render_w as u32,
+            height: self.render_h as u32,
+            stride_pixels: self.render_w as u32,
+        }
+    }
+}
+
+fn stream_rect(rect: DirtyRect) -> FrameRect {
+    FrameRect {
+        x: rect.x0 as u32,
+        y: rect.y0 as u32,
+        width: (rect.x1 - rect.x0) as u32,
+        height: (rect.y1 - rect.y0) as u32,
+    }
 }
 
 #[cold]
@@ -413,6 +432,7 @@ impl UiFrameTarget {
         rect: DirtyRect,
     ) -> u32 {
         copy_cached_rect_565(disp, geometry, &self.cached, rect);
+        stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(rect), &self.cached);
         rect.rows()
     }
 
@@ -427,7 +447,23 @@ impl UiFrameTarget {
     ) {
         if let Err(e) = disp.present_rect_565(x, y, w, h, src) {
             log_present_error("dense rect", &e);
+            return;
         }
+        let geometry = FrameGeometry {
+            width: disp.width() as u32,
+            height: disp.height() as u32,
+            stride_pixels: disp.width() as u32,
+        };
+        stream::publish_dense_rect(
+            geometry,
+            FrameRect {
+                x: x as u32,
+                y: y as u32,
+                width: w as u32,
+                height: h as u32,
+            },
+            src,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -445,7 +481,26 @@ impl UiFrameTarget {
     ) {
         if let Err(e) = disp.present_rect_565_strided(x, y, w, h, src, src_stride, src_x, src_y) {
             log_present_error("strided rect", &e);
+            return;
         }
+        let geometry = FrameGeometry {
+            width: disp.width() as u32,
+            height: disp.height() as u32,
+            stride_pixels: disp.width() as u32,
+        };
+        stream::publish_strided_rect(
+            geometry,
+            FrameRect {
+                x: x as u32,
+                y: y as u32,
+                width: w as u32,
+                height: h as u32,
+            },
+            src,
+            src_stride,
+            src_x,
+            src_y,
+        );
     }
 
     pub fn direct_preview_565_rect_mut(&mut self, rect: DirtyRect) -> (&mut [Rgb565Pixel], usize) {
@@ -480,7 +535,20 @@ impl UiFrameTarget {
             rect.y0 - backing_rect.y0,
         ) {
             log_present_error("direct preview rect", &e);
+            return 0;
         }
+        stream::publish_strided_rect(
+            FrameGeometry {
+                width: disp.width() as u32,
+                height: disp.height() as u32,
+                stride_pixels: disp.width() as u32,
+            },
+            stream_rect(rect),
+            &self.direct_preview,
+            backing_rect.width(),
+            rect.x0 - backing_rect.x0,
+            rect.y0 - backing_rect.y0,
+        );
         rect.rows()
     }
 
@@ -491,6 +559,17 @@ impl UiFrameTarget {
         y1: usize,
     ) -> u32 {
         copy_cached_rows_565(disp, &self.cached, y0, y1);
+        let geometry = FramebufferTargetGeometry::new(disp.width(), disp.height());
+        stream::publish_cached_rect(
+            geometry.stream_geometry(),
+            stream_rect(DirtyRect {
+                x0: 0,
+                y0,
+                x1: disp.width(),
+                y1,
+            }),
+            &self.cached,
+        );
         y1.saturating_sub(y0) as u32
     }
 
