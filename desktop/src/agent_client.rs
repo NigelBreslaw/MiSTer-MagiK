@@ -61,6 +61,18 @@ pub struct FramebufferCapture {
     pub timing: FramebufferCaptureTiming,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FramebufferStreamFrame {
+    pub capture: FramebufferCapture,
+    pub kind: FrameKind,
+    pub sequence: u64,
+    pub timestamp_us: u64,
+    pub geometry: FrameGeometry,
+    pub rect: FrameRect,
+    pub raw_bytes: u64,
+    pub payload_bytes: u64,
+}
+
 #[derive(Debug)]
 pub struct FramebufferStreamDrainStats {
     pub latencies: Vec<Duration>,
@@ -469,14 +481,18 @@ impl FramebufferStream {
     }
 
     pub fn next_capture(&mut self) -> Result<FramebufferCapture, AgentError> {
+        self.next_frame().map(|frame| frame.capture)
+    }
+
+    pub fn next_frame(&mut self) -> Result<FramebufferStreamFrame, AgentError> {
         loop {
             let (header, payload) = read_frame(&mut self.reader).map_err(|err| {
                 AgentError::Unreachable(format!("read framebuffer stream: {err}"))
             })?;
             match header.kind {
                 FrameKind::Keyframe | FrameKind::RectDelta => {
-                    if let Some(capture) = self.state.apply_frame(header, &payload)? {
-                        return Ok(capture);
+                    if let Some(frame) = self.state.apply_frame(header, &payload)? {
+                        return Ok(frame);
                     }
                 }
                 FrameKind::Heartbeat => continue,
@@ -511,7 +527,7 @@ impl FramebufferStreamState {
         &mut self,
         header: FrameHeader,
         payload: &[u8],
-    ) -> Result<Option<FramebufferCapture>, AgentError> {
+    ) -> Result<Option<FramebufferStreamFrame>, AgentError> {
         if header.flags & FLAG_LZ4_SIZE_PREPENDED == 0 {
             return Err(AgentError::Protocol(
                 "framebuffer stream frame is not LZ4 encoded".to_string(),
@@ -572,7 +588,7 @@ impl FramebufferStreamState {
             stride_bytes,
             16,
         )?;
-        Ok(Some(FramebufferCapture {
+        let capture = FramebufferCapture {
             png_path: PathBuf::new(),
             rgba_pixels,
             raw_pixels: Vec::new(),
@@ -586,6 +602,16 @@ impl FramebufferStreamState {
             png_bytes: 0,
             png_hex_bytes: 0,
             timing: FramebufferCaptureTiming::default(),
+        };
+        Ok(Some(FramebufferStreamFrame {
+            capture,
+            kind: header.kind,
+            sequence: header.sequence,
+            timestamp_us: header.timestamp_us,
+            geometry: header.geometry,
+            rect: header.rect,
+            raw_bytes: header.raw_bytes as u64,
+            payload_bytes: header.payload_bytes as u64,
         }))
     }
 
@@ -1552,13 +1578,18 @@ mod tests {
             &keyframe,
         );
 
-        let capture = stream
+        let frame = stream
             .apply_frame(header, &payload)
             .expect("keyframe should apply")
             .expect("keyframe should produce capture");
 
-        assert_eq!(capture.width, 3);
-        assert_eq!(capture.height, 2);
+        assert_eq!(frame.capture.width, 3);
+        assert_eq!(frame.capture.height, 2);
+        assert_eq!(frame.kind, FrameKind::Keyframe);
+        assert_eq!(frame.sequence, 1);
+        assert_eq!(frame.timestamp_us, 123);
+        assert_eq!(frame.geometry, geometry);
+        assert_eq!(frame.rect, FrameRect::full(geometry));
         assert_eq!(stream.rgb565, keyframe);
         assert_eq!(stream.expected_sequence, Some(2));
 
@@ -1572,11 +1603,17 @@ mod tests {
         let (header, payload) =
             encoded_stream_frame(FrameKind::RectDelta, 2, geometry, rect, &delta);
 
-        stream
+        let frame = stream
             .apply_frame(header, &payload)
             .expect("delta should apply")
             .expect("delta should produce capture");
 
+        assert_eq!(frame.kind, FrameKind::RectDelta);
+        assert_eq!(frame.sequence, 2);
+        assert_eq!(frame.geometry, geometry);
+        assert_eq!(frame.rect, rect);
+        assert_eq!(frame.raw_bytes, delta.len() as u64);
+        assert_eq!(frame.payload_bytes, payload.len() as u64);
         assert_eq!(
             stream.rgb565,
             vec![0, 1, 0xaa, 0xbb, 4, 5, 6, 7, 0xcc, 0xdd, 10, 11]
@@ -1619,12 +1656,15 @@ mod tests {
         };
         let (header, payload) =
             encoded_stream_frame(FrameKind::RectDelta, 42, geometry, rect, &[8, 9, 10, 11]);
-        let capture = stream
+        let frame = stream
             .apply_frame(header, &payload)
             .expect("seeded delta should apply")
             .expect("seeded delta should produce capture");
 
-        assert_eq!(capture.width, 2);
+        assert_eq!(frame.capture.width, 2);
+        assert_eq!(frame.kind, FrameKind::RectDelta);
+        assert_eq!(frame.sequence, 42);
+        assert_eq!(frame.rect, rect);
         assert_eq!(stream.rgb565, vec![0, 1, 8, 9, 4, 5, 10, 11]);
         assert_eq!(stream.expected_sequence, Some(43));
     }
@@ -1722,11 +1762,14 @@ mod tests {
             FrameRect::full(geometry),
             &[8, 9, 10, 11],
         );
-        let capture = stream
+        let frame = stream
             .apply_frame(header, &payload)
             .expect("recovery keyframe should apply")
             .expect("recovery keyframe should produce capture");
-        assert_eq!(capture.width, 2);
+        assert_eq!(frame.capture.width, 2);
+        assert_eq!(frame.kind, FrameKind::Keyframe);
+        assert_eq!(frame.sequence, 14);
+        assert_eq!(frame.rect, FrameRect::full(geometry));
         assert!(!stream.awaiting_keyframe);
         assert_eq!(stream.expected_sequence, Some(15));
     }
@@ -1763,13 +1806,16 @@ mod tests {
             FrameRect::full(second),
             &[4, 5, 6, 7],
         );
-        let capture = stream
+        let frame = stream
             .apply_frame(header, &payload)
             .expect("geometry keyframe should apply")
             .expect("geometry keyframe should produce capture");
 
-        assert_eq!(capture.width, 1);
-        assert_eq!(capture.height, 2);
+        assert_eq!(frame.capture.width, 1);
+        assert_eq!(frame.capture.height, 2);
+        assert_eq!(frame.kind, FrameKind::Keyframe);
+        assert_eq!(frame.geometry, second);
+        assert_eq!(frame.rect, FrameRect::full(second));
         assert_eq!(stream.rgb565, vec![4, 5, 6, 7]);
         assert_eq!(stream.expected_sequence, Some(21));
     }
