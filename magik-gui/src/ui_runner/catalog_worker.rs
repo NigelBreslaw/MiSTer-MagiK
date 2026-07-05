@@ -214,6 +214,7 @@ pub(super) fn start_library_catalog_worker(
                     let catalog = ram_artifact.catalog(&root);
                     let load_us = catalog_t.elapsed().as_micros() as u64;
                     let catalog_len = catalog.len();
+                    let projection_catalog = catalog.clone();
                     let _ = tx.send(CatalogWorkerMessage::Ready {
                         catalog,
                         summary: None,
@@ -229,8 +230,10 @@ pub(super) fn start_library_catalog_worker(
                         &tx,
                         library_db::CatalogProgress::saving_before_opening_launcher(),
                     );
-                    let artifact = ram_artifact.complete_coverage_audit();
-                    match artifact.save_default_sqlite_with_projections(&root, Some(&mut progress)) {
+                    match ram_artifact.save_default_sqlite_with_catalog_projection(
+                        &projection_catalog,
+                        Some(&mut progress),
+                    ) {
                         Ok(summary) => {
                             let _ = tx.send(CatalogWorkerMessage::Persisted {
                                 summary: summary.clone(),

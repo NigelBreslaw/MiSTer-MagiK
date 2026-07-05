@@ -26,6 +26,12 @@ impl GameDirFact {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GameDirHeader {
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+}
+
 pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
@@ -64,6 +70,33 @@ pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> 
 }
 
 pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact> {
+    top_level_game_dirs_for_roots_excluding(roots, &BTreeSet::new())
+}
+
+pub(crate) fn top_level_game_dirs_for_roots_excluding(
+    roots: &[String],
+    excluded_names: &BTreeSet<String>,
+) -> Vec<GameDirFact> {
+    top_level_game_dir_headers_for_roots_excluding(roots, excluded_names)
+        .into_iter()
+        .map(|header| {
+            let (has_payload_files, has_zip_files, payload_extensions) =
+                game_dir_payload_facts(&header.path);
+            GameDirFact {
+                name: header.name,
+                path: header.path,
+                has_payload_files,
+                has_zip_files,
+                payload_extensions,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
+    roots: &[String],
+    excluded_names: &BTreeSet<String>,
+) -> Vec<GameDirHeader> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for game_root in game_roots(roots) {
@@ -85,16 +118,14 @@ pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact
             if should_ignore_game_dir(name) {
                 continue;
             }
+            if excluded_names.contains(&name.to_ascii_lowercase()) {
+                continue;
+            }
             let key = path.display().to_string().to_ascii_lowercase();
             if seen.insert(key) {
-                let (has_payload_files, has_zip_files, payload_extensions) =
-                    game_dir_payload_facts(&path);
-                entries.push(GameDirFact {
+                entries.push(GameDirHeader {
                     name: name.to_string(),
                     path,
-                    has_payload_files,
-                    has_zip_files,
-                    payload_extensions,
                 });
             }
         }
@@ -102,6 +133,40 @@ pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact
         out.extend(entries);
     }
     out
+}
+
+pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String]) -> bool {
+    for entry in walkdir::WalkDir::new(path)
+        .follow_links(false)
+        .max_depth(2)
+        .into_iter()
+        .filter_entry(|entry| !should_ignore_path(entry.path()))
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let p = entry.path();
+        if path_ext_eq(p, "zip")
+            || p.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| contains_ignore_ascii_case(extensions, ext))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDirFact {
+    let (has_payload_files, has_zip_files, payload_extensions) = game_dir_payload_facts(&header.path);
+    GameDirFact {
+        name: header.name,
+        path: header.path,
+        has_payload_files,
+        has_zip_files,
+        payload_extensions,
+    }
 }
 
 pub(crate) fn game_roots(roots: &[String]) -> Vec<PathBuf> {
@@ -213,6 +278,10 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
+}
+
+fn contains_ignore_ascii_case(values: &[String], needle: &str) -> bool {
+    values.iter().any(|value| value.eq_ignore_ascii_case(needle))
 }
 
 fn should_ignore_hidden_path(path: &Path) -> bool {

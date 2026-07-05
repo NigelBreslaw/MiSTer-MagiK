@@ -1072,6 +1072,43 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
     Ok(bytes)
 }
 
+pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+    path: &Path,
+    scan: &LibraryScan,
+    stamp: &catalog_stamp::CatalogStamp,
+    catalog: &ArcadeCatalog,
+    progress: ProgressCallback<'_>,
+) -> Result<u64, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
+    }
+
+    let discovery_history = DiscoveryHistory::load(path);
+    let bytes = {
+        let mut writer =
+            |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
+                let software_hash_cache = SoftwareHashCache::load(path);
+                write_sqlite_scan_without_catalog_rebuild(
+                    build_path,
+                    scan,
+                    reborrow_progress(progress),
+                    software_hash_cache,
+                    discovery_history.clone(),
+                    Some(stamp),
+                )
+            };
+        save_sqlite_scan_with_progress_using_writer(
+            path,
+            scan,
+            progress,
+            sqlite_build_temp_plan(path),
+            &mut writer,
+        )?
+    };
+    repair_catalog_projections_for_catalog(path, catalog, stamp)?;
+    Ok(bytes)
+}
+
 struct CatalogProjectionPair {
     summary: catalog_summary::CatalogSummaryProjection,
     navigation: catalog_navigation::CatalogNavigationProjection,
