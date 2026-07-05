@@ -132,6 +132,12 @@ impl LibraryBrowser {
         }
     }
 
+    fn selected_game(&self) -> Option<&library::LibraryGame> {
+        self.catalog
+            .as_ref()
+            .and_then(|catalog| library::selected_game(catalog, &self.selected_game_id))
+    }
+
     fn current_view(&self) -> Option<library::LibraryView> {
         self.catalog
             .as_ref()
@@ -160,7 +166,6 @@ impl LibraryBrowser {
     fn result_summary(&self) -> String {
         match (&self.catalog, self.current_view()) {
             (Some(catalog), Some(view)) => {
-                let _selected = library::selected_game(catalog, &self.selected_game_id);
                 format!(
                     "{} of {} games in the local library snapshot.",
                     view.total_count,
@@ -177,6 +182,22 @@ struct LibrarySelectOptionItem {
     value: String,
     label: String,
     enabled: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LibraryDetailSections {
+    overview: Vec<LibraryDetailRow>,
+    system: Vec<LibraryDetailRow>,
+    media: Vec<LibraryDetailRow>,
+    launch: Vec<LibraryDetailRow>,
+    identity: Vec<LibraryDetailRow>,
+    paths: Vec<LibraryDetailRow>,
+}
+
+#[derive(Clone, Debug)]
+struct LibraryDetailRow {
+    field: String,
+    value: String,
 }
 
 fn library_sort_column(column_id: &str) -> Option<library::LibrarySortColumn> {
@@ -243,6 +264,96 @@ fn library_preview_label(has_preview: bool) -> &'static str {
         "Preview"
     } else {
         "Missing"
+    }
+}
+
+fn library_detail_sections(game: Option<&library::LibraryGame>) -> LibraryDetailSections {
+    let Some(game) = game else {
+        return LibraryDetailSections::default();
+    };
+    let mut sections = LibraryDetailSections::default();
+    push_detail(&mut sections.overview, "Title", &game.title);
+    push_detail(&mut sections.overview, "Category", &game.category);
+    push_detail(&mut sections.overview, "Manufacturer", &game.manufacturer);
+    push_detail(&mut sections.overview, "Year", &game.year);
+    push_detail(&mut sections.overview, "Region", &game.region);
+    push_detail(
+        &mut sections.overview,
+        "Region confidence",
+        &game.region_confidence,
+    );
+    push_detail(&mut sections.overview, "Confidence", &game.confidence);
+    push_detail(
+        &mut sections.overview,
+        "Discovered",
+        &library_discovered_label(&game.discovered_at_unix),
+    );
+
+    push_detail(&mut sections.system, "System", &game.system_title);
+    push_detail(&mut sections.system, "System ID", &game.system_id);
+    push_detail(&mut sections.system, "Core ID", &game.core_id);
+    push_detail(&mut sections.system, "Hardware ID", &game.hardware_id);
+
+    push_detail(
+        &mut sections.media,
+        "Preview",
+        if game.has_preview {
+            "Available"
+        } else {
+            "Missing"
+        },
+    );
+    push_detail(&mut sections.media, "Preview key", &game.preview_asset_key);
+
+    push_detail(&mut sections.launch, "Launch kind", &game.launch_kind);
+    push_detail(&mut sections.launch, "Launch ref", &game.launch_ref);
+    push_detail(
+        &mut sections.launch,
+        "Launch ID",
+        &game.launch_id.to_string(),
+    );
+
+    push_detail(&mut sections.identity, "Setname", &game.setname);
+    push_detail(&mut sections.identity, "Parent", &game.parent);
+    for (index, identity) in game.identities.iter().enumerate() {
+        let mut parts = Vec::new();
+        push_part(&mut parts, &identity.identity_id);
+        push_part(&mut parts, &identity.metadata_title);
+        push_part(&mut parts, &identity.family_id);
+        push_part(&mut parts, &identity.year);
+        push_part(&mut parts, &identity.manufacturer);
+        push_part(&mut parts, &identity.category);
+        push_part(&mut parts, &identity.source);
+        if !parts.is_empty() {
+            let label = if identity.namespace.is_empty() {
+                format!("Identity {}", index + 1)
+            } else {
+                identity.namespace.clone()
+            };
+            push_detail(&mut sections.identity, &label, &parts.join(" / "));
+        }
+    }
+
+    push_detail(&mut sections.paths, "Source path", &game.source_path);
+    push_detail(&mut sections.paths, "Payload path", &game.payload_path);
+    sections
+}
+
+fn push_detail(rows: &mut Vec<LibraryDetailRow>, field: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() || value == "-" {
+        return;
+    }
+    rows.push(LibraryDetailRow {
+        field: field.to_string(),
+        value: value.to_string(),
+    });
+}
+
+fn push_part(parts: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        parts.push(value.to_string());
     }
 }
 
@@ -950,6 +1061,38 @@ fn apply_live_library_state(
         "selected-game-id",
         Value::String(SharedString::from(browser.selected_game_id.as_str())),
     );
+    if let Some(game) = browser.selected_game() {
+        set(
+            instance,
+            "detail-title",
+            Value::String(SharedString::from(game.title.as_str())),
+        );
+        set(
+            instance,
+            "detail-subtitle",
+            Value::String(SharedString::from(
+                format!("{} · {}", game.system_title, game.id).as_str(),
+            )),
+        );
+    } else {
+        set(
+            instance,
+            "detail-title",
+            Value::String(SharedString::from("No game selected")),
+        );
+        set(
+            instance,
+            "detail-subtitle",
+            Value::String(SharedString::from("Select a row to inspect catalog facts.")),
+        );
+    }
+    let detail_sections = library_detail_sections(browser.selected_game());
+    set_live_library_detail_rows(instance, "detail-overview-rows", &detail_sections.overview);
+    set_live_library_detail_rows(instance, "detail-system-rows", &detail_sections.system);
+    set_live_library_detail_rows(instance, "detail-media-rows", &detail_sections.media);
+    set_live_library_detail_rows(instance, "detail-launch-rows", &detail_sections.launch);
+    set_live_library_detail_rows(instance, "detail-identity-rows", &detail_sections.identity);
+    set_live_library_detail_rows(instance, "detail-path-rows", &detail_sections.paths);
     set(
         instance,
         "rows",
@@ -1031,6 +1174,50 @@ fn apply_live_library_state(
         "confidence-index",
         Value::Number(library_option_index(&confidence_options, &browser.query.confidence) as f64),
     );
+}
+
+#[cfg(feature = "live-ui")]
+fn set_live_library_detail_rows(
+    instance: &slint_interpreter::ComponentInstance,
+    name: &str,
+    rows: &[LibraryDetailRow],
+) {
+    use slint::{ModelRc, VecModel};
+    use slint_interpreter::Value;
+
+    let values = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| live_library_detail_row_struct(index, row))
+        .collect::<Vec<_>>();
+    let _ = instance.set_global_property(
+        "LibraryState",
+        name,
+        Value::Model(ModelRc::new(VecModel::from(values))),
+    );
+}
+
+#[cfg(feature = "live-ui")]
+fn live_library_detail_row_struct(
+    index: usize,
+    row: &LibraryDetailRow,
+) -> slint_interpreter::Value {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    Value::Struct(Struct::from_iter([
+        (
+            "id".to_string(),
+            Value::String(SharedString::from(format!("detail-{index}").as_str())),
+        ),
+        (
+            "cells".to_string(),
+            Value::Model(ModelRc::new(VecModel::from(vec![
+                live_library_text_cell(&row.field),
+                live_library_text_cell(&row.value),
+            ]))),
+        ),
+    ]))
 }
 
 #[cfg(feature = "live-ui")]
@@ -1896,6 +2083,20 @@ fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) 
     state.set_page(i32::try_from(view.page).unwrap_or(1));
     state.set_page_count(i32::try_from(view.page_count).unwrap_or(1));
     state.set_selected_game_id(browser.selected_game_id.as_str().into());
+    if let Some(game) = browser.selected_game() {
+        state.set_detail_title(game.title.as_str().into());
+        state.set_detail_subtitle(format!("{} · {}", game.system_title, game.id).into());
+    } else {
+        state.set_detail_title("No game selected".into());
+        state.set_detail_subtitle("Select a row to inspect catalog facts.".into());
+    }
+    let detail_sections = library_detail_sections(browser.selected_game());
+    state.set_detail_overview_rows(compiled_library_detail_rows(&detail_sections.overview));
+    state.set_detail_system_rows(compiled_library_detail_rows(&detail_sections.system));
+    state.set_detail_media_rows(compiled_library_detail_rows(&detail_sections.media));
+    state.set_detail_launch_rows(compiled_library_detail_rows(&detail_sections.launch));
+    state.set_detail_identity_rows(compiled_library_detail_rows(&detail_sections.identity));
+    state.set_detail_path_rows(compiled_library_detail_rows(&detail_sections.paths));
     state.set_rows(ModelRc::new(VecModel::from(
         view.rows
             .iter()
@@ -1955,6 +2156,24 @@ fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) 
         &confidence_options,
         &browser.query.confidence,
     ));
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_library_detail_rows(rows: &[LibraryDetailRow]) -> slint::ModelRc<DataTableRow> {
+    use slint::{ModelRc, VecModel};
+
+    ModelRc::new(VecModel::from(
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| DataTableRow {
+                id: format!("detail-{index}").into(),
+                cells: ModelRc::new(VecModel::from(vec![
+                    compiled_library_text_cell(&row.field),
+                    compiled_library_text_cell(&row.value),
+                ])),
+            })
+            .collect::<Vec<_>>(),
+    ))
 }
 
 #[cfg(feature = "compiled-ui")]
