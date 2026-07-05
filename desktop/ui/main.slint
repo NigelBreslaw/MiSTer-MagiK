@@ -58,10 +58,6 @@ export global WindowActions {
     callback start-window-drag();
 }
 
-global AppNavigation {
-    in-out property <string> selected-page: "debug";
-}
-
 component AppHeader {
     in property <length> safe-left: 0px;
     in property <length> safe-right: 0px;
@@ -189,100 +185,12 @@ component Sidebar {
                 aria-label: "MiSTer MagiK pages";
 
                 NavListItem {
-                    label: "Overview";
-                    active: AppNavigation.selected-page == "overview";
-                    has-leading-visual: true;
-                    leading-icon: Icons.repo;
-                    clicked => { AppNavigation.selected-page = "overview"; }
-                }
-
-                NavListItem {
-                    label: "Library";
-                    active: AppNavigation.selected-page == "library";
-                    has-leading-visual: true;
-                    leading-icon: Icons.table;
-                    clicked => { AppNavigation.selected-page = "library"; }
-                }
-
-                NavListItem {
-                    label: "Device";
-                    active: AppNavigation.selected-page == "device";
-                    has-leading-visual: true;
-                    leading-icon: Icons.shield;
-                    clicked => { AppNavigation.selected-page = "device"; }
-                }
-
-                NavListItem {
-                    label: "Settings";
-                    active: AppNavigation.selected-page == "settings";
-                    has-leading-visual: true;
-                    leading-icon: Icons.gear_24;
-                    clicked => { AppNavigation.selected-page = "settings"; }
-                }
-
-                NavListItem {
                     label: "Debug";
-                    active: AppNavigation.selected-page == "debug";
+                    active: true;
                     has-leading-visual: true;
                     leading-icon: Icons.issue_opened;
-                    clicked => { AppNavigation.selected-page = "debug"; }
                 }
             }
-        }
-    }
-}
-
-component PlaceholderPage {
-    in property <string> title;
-    in property <string> description;
-    in property <image> icon: Icons.info;
-
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
-        alignment: start;
-
-        PageHeader {
-            HorizontalLayout {
-                width: parent.width;
-                height: parent.height;
-                padding-left: LayoutTokens.stack-padding-normal;
-                padding-right: LayoutTokens.stack-padding-normal;
-                spacing: LayoutTokens.base-size-12;
-                cross-axis-alignment: center;
-
-                Image {
-                    width: 20px;
-                    height: 20px;
-                    source: root.icon;
-                    colorize: PrimerColors.fgColor-muted;
-                }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-
-                    Text {
-                        text: root.title;
-                        color: PrimerColors.fgColor-default;
-                        font-size: 20px;
-                        font-weight: LayoutTokens.base-text-weight-semibold;
-                    }
-
-                    Text {
-                        text: root.description;
-                        color: PrimerColors.fgColor-muted;
-                        font-size: LayoutTokens.text-body-size-small;
-                        overflow: elide;
-                    }
-                }
-            }
-        }
-
-        Banner {
-            title: "Placeholder";
-            description: "This page is wired into the Primer navigation shell and will get real content in a later pass.";
-            variant: BannerVariant.info;
         }
     }
 }
@@ -503,31 +411,7 @@ export component AppWindow inherits Window {
                             min-height: parent.height;
                             alignment: start;
 
-                            if AppNavigation.selected-page == "overview": PlaceholderPage {
-                                title: "Overview";
-                                description: "High-level MiSTer MagiK dashboard summary.";
-                                icon: Icons.repo;
-                            }
-
-                            if AppNavigation.selected-page == "library": PlaceholderPage {
-                                title: "Library";
-                                description: "Catalog, systems, and preview health.";
-                                icon: Icons.table;
-                            }
-
-                            if AppNavigation.selected-page == "device": PlaceholderPage {
-                                title: "Device";
-                                description: "MiSTer host, agent, network, and runtime state.";
-                                icon: Icons.shield;
-                            }
-
-                            if AppNavigation.selected-page == "settings": PlaceholderPage {
-                                title: "Settings";
-                                description: "Desktop app preferences and connection settings.";
-                                icon: Icons.gear_24;
-                            }
-
-                            if AppNavigation.selected-page == "debug": DebugPage { }
+                            DebugPage { }
                         }
                     }
                 }
