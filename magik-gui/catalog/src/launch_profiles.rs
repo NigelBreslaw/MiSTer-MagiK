@@ -336,7 +336,8 @@ pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    for plan in runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
+    for plan in
+        runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
     {
         let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
             continue;
@@ -376,19 +377,23 @@ fn activate_runtime_profile(
 }
 
 pub fn generic_manifest_profile_for_game_dir(game_dir: &str) -> Option<LaunchProfile> {
-    generic_manifest_profiles().into_iter().find(|profile| {
-        profile
-            .game_dirs
-            .iter()
-            .any(|dir| dir.eq_ignore_ascii_case(game_dir))
-    })
+    generic_manifest_profiles_cached()
+        .iter()
+        .find(|profile| {
+            profile
+                .game_dirs
+                .iter()
+                .any(|dir| dir.eq_ignore_ascii_case(game_dir))
+        })
+        .cloned()
 }
 
 pub fn generic_manifest_profile_for_core(core_id: &str) -> Option<LaunchProfile> {
     let normalized = canonical_core_id(core_id);
-    generic_manifest_profiles()
-        .into_iter()
+    generic_manifest_profiles_cached()
+        .iter()
         .find(|profile| profile.core_name.eq_ignore_ascii_case(&normalized))
+        .cloned()
 }
 
 pub(crate) fn profile_for_launch_target_id<'a>(
@@ -456,10 +461,13 @@ fn runtime_profile_plan_for_game_dir_header(
 ) -> RuntimeProfilePlan {
     let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
     let decision = match exact_or_alias_candidates.as_slice() {
-        [] => runtime_profile_plan_for_game_dir(catalog_discovery::game_dir_payload_facts_for_header(
-            game_dir.clone(),
-        ), cores)
-        .decision,
+        [] => {
+            runtime_profile_plan_for_game_dir(
+                catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone()),
+                cores,
+            )
+            .decision
+        }
         [candidate] => runtime_profile_decision_for_named_candidate(&game_dir, candidate),
         _ => {
             let facts = catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone());
@@ -1106,6 +1114,10 @@ fn special_profiles() -> Vec<LaunchProfile> {
 }
 
 fn generic_manifest_profiles() -> Vec<LaunchProfile> {
+    generic_manifest_profiles_cached().to_vec()
+}
+
+fn generic_manifest_profiles_cached() -> &'static [LaunchProfile] {
     static PROFILES: OnceLock<Vec<LaunchProfile>> = OnceLock::new();
     PROFILES
         .get_or_init(|| {
@@ -1116,7 +1128,7 @@ fn generic_manifest_profiles() -> Vec<LaunchProfile> {
                 .map(generic_manifest_profile)
                 .collect()
         })
-        .clone()
+        .as_slice()
 }
 
 fn parse_core_launch_manifest() -> Result<CoreLaunchManifest, String> {
