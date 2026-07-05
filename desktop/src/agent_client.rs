@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 const AGENT_PORT: u16 = 7498;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenSource {
@@ -376,7 +377,7 @@ impl AgentClient {
         let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         stream
-            .set_read_timeout(Some(REQUEST_TIMEOUT))
+            .set_read_timeout(Some(BINARY_REQUEST_TIMEOUT))
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         stream
             .set_write_timeout(Some(REQUEST_TIMEOUT))
