@@ -91,6 +91,14 @@ local_trace="$HERE/build/launch-handoff/${LABEL}.tsv"
 local_log="$HERE/build/launch-handoff/${LABEL}.log"
 env_file="$(mktemp)"
 
+count_trace_samples() {
+  local path="$1"
+  awk -F '\t' -v label="$LABEL" '
+    $1 == "launch_handoff_sample" && $2 == label { count++ }
+    END { print count + 0 }
+  ' "$path" 2>/dev/null || echo 0
+}
+
 cleanup() {
   rm -f "$env_file"
   "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
@@ -113,8 +121,18 @@ echo "== launch handoff profile label=$LABEL mode=$MODE iterations=$ITERATIONS d
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "rm -f '$REMOTE_LOG' '$remote_trace'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
 
-sleep_secs=$((8 + ITERATIONS * (DELAY_MS / 1000 + 2)))
-sleep "$sleep_secs"
+wait_timeout_secs=$((30 + ITERATIONS * (((DELAY_MS + 999) / 1000) + 4)))
+deadline=$((SECONDS + wait_timeout_secs))
+sample_count=0
+while (( SECONDS < deadline )); do
+  if "$MISTER" get "$remote_trace" "$local_trace" >/dev/null 2>&1; then
+    sample_count="$(count_trace_samples "$local_trace")"
+    if (( sample_count >= ITERATIONS )); then
+      break
+    fi
+  fi
+  sleep 1
+done
 
 if ! "$MISTER" get "$remote_trace" "$local_trace" >/dev/null; then
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
@@ -122,6 +140,11 @@ if ! "$MISTER" get "$remote_trace" "$local_trace" >/dev/null; then
   exit 1
 fi
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
+sample_count="$(count_trace_samples "$local_trace")"
+if (( sample_count < ITERATIONS )); then
+  echo "launch handoff benchmark emitted $sample_count of $ITERATIONS requested samples within ${wait_timeout_secs}s; see $local_log" >&2
+  exit 1
+fi
 echo "wrote $local_trace"
 echo "wrote $local_log"
 
