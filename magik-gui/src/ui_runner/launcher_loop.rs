@@ -3281,6 +3281,7 @@ fn apply_start_system_from_env(
     nav.arcade_filter.drawer_open = false;
     nav.arcade_filter.level = launcher::ArcadeFilterLevel::Top;
     nav.arcade.reset();
+    ui_frame_target::apply_forced_arcade_selected(nav, catalog);
     true
 }
 
@@ -3353,6 +3354,45 @@ mod tests {
         assert_eq!(nav.selected, 1);
         assert_eq!(nav.arcade.selected, 0);
         assert_eq!(nav.arcade_filter.active, arcade_catalog::ArcadeFilter::All);
+    }
+
+    #[test]
+    fn start_system_env_preserves_forced_arcade_selected_index() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Arcade Game")
+                    .path("/media/fat/_Arcade/arcade.mra")
+                    .system_id("arcade")
+                    .build(),
+                arcade_game("Neo Geo First")
+                    .path("/media/fat/_Arcade/neogeo-first.mra")
+                    .system_id("neogeo")
+                    .build(),
+                arcade_game("Neo Geo Second")
+                    .path("/media/fat/_Arcade/neogeo-second.mra")
+                    .system_id("neogeo")
+                    .build(),
+                arcade_game("Saturn Game")
+                    .path("/media/fat/_Arcade/saturn.mra")
+                    .system_id("saturn")
+                    .build(),
+            ],
+            vec![
+                arcade_system("arcade", 1),
+                arcade_system("neogeo", 2),
+                arcade_system("saturn", 1),
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        std::env::set_var("MISTER_ARCADE_SELECTED_INDEX", "1");
+
+        let applied = apply_start_system_from_env(&mut nav, &catalog, "neogeo");
+
+        std::env::remove_var("MISTER_ARCADE_SELECTED_INDEX");
+        assert!(applied);
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.arcade.selected, 1);
     }
 
     #[test]

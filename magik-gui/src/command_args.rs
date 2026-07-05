@@ -49,6 +49,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
+    CommandSpec::new("repair-catalog-projections", CommandKind::PreFpga),
     CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
     CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-database", CommandKind::PreFpga),

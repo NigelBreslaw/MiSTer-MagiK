@@ -4,16 +4,19 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
+MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/preview-selection-lib.sh"
 
 secs="8"
 label="first-preview-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="--skip-build"
 self_test="0"
 replace_label=()
+selected_index="${MISTER_FIRST_PREVIEW_SELECTED_INDEX:-}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-preview.sh [LABEL] [--secs N] [--skip-build|--deploy-device|--replace-label|--self-test]
+Usage: scripts/profile-first-preview.sh [LABEL] [--secs N] [--skip-build|--deploy-device|--replace-label|--selected-index N|--self-test]
 
 Runs the supervised launcher Arcade preview trace with
 MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1, then summarizes the first selected
@@ -40,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       replace_label=(--replace-label)
       shift
       ;;
+    --selected-index)
+      selected_index="${2:?--selected-index needs a value}"
+      shift 2
+      ;;
     --self-test)
       self_test="1"
       shift
@@ -64,6 +71,7 @@ if [[ "${#positionals[@]}" -ge 1 ]]; then label="${positionals[0]}"; fi
 if [[ "${#positionals[@]}" -gt 1 ]]; then usage >&2; exit 2; fi
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
+if [[ -n "$selected_index" && ! "$selected_index" =~ ^[0-9]+$ ]]; then echo "--selected-index must be an integer" >&2; exit 2; fi
 
 summarize_first_preview_log() {
   local summary_label="$1" log_path="$2"
@@ -158,6 +166,8 @@ EOF
     | grep -q $'decoded_seen=0\tapply_seen=1' \
     || { echo "self-test decoded-cache apply failed" >&2; return 1; }
 
+  preview_selection_self_test
+
   echo "profile-first-preview self-test ok"
 }
 
@@ -167,14 +177,30 @@ if [[ "$self_test" == "1" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
+if [[ -z "$selected_index" ]]; then
+  selected_index="$(preview_selection_index_for_system "$MISTER" arcade)" || {
+    echo "no preview-bearing arcade row found in launcher_catalog" >&2
+    exit 1
+  }
+fi
+echo "==> first-preview selected_index=$selected_index system=arcade"
+set +e
 "$HERE/scripts/profile-preview-scroll.sh" \
   "$secs" \
   preview-idle \
   "$label" \
   "$deploy" \
   "${replace_label[@]}" \
+  --start-system arcade \
+  --selected-index "$selected_index" \
+  --defer-start-system \
   --skip-preview-warm \
   --visual-captures 0
+profile_status=$?
+set -e
+if [[ "$profile_status" -ne 0 && "$profile_status" -ne 12 ]]; then
+  exit "$profile_status"
+fi
 
 log="$OUT_DIR/${label}-arcade.log"
 if [[ ! -f "$log" ]]; then
@@ -182,4 +208,9 @@ if [[ ! -f "$log" ]]; then
   exit 1
 fi
 
-summarize_first_preview_log "$label" "$log"
+summary="$(summarize_first_preview_log "$label" "$log")"
+printf '%s\n' "$summary"
+if [[ "$summary" != *$'\tapply_seen=1'* ]]; then
+  echo "first selected preview was not applied; see $log" >&2
+  exit 1
+fi

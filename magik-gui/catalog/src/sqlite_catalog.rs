@@ -665,6 +665,14 @@ pub(crate) fn repair_catalog_projections_for_catalog(
     if catalog_projection_pair_current(sqlite_path, stamp).unwrap_or(false) {
         return Ok(());
     }
+    rewrite_catalog_projections_for_catalog(sqlite_path, catalog, stamp)
+}
+
+pub(crate) fn rewrite_catalog_projections_for_catalog(
+    sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<(), String> {
     let summary = catalog_summary::CatalogSummaryProjection::from_catalog(catalog, stamp);
     let navigation = catalog_navigation::CatalogNavigationProjection::from_catalog(catalog, stamp);
     remove_catalog_projection_files(sqlite_path)?;

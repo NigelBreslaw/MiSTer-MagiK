@@ -480,6 +480,48 @@ pub fn repair_catalog_projections_for_catalog(
     sqlite_catalog::repair_catalog_projections_for_catalog(sqlite_path, catalog, stamp)
 }
 
+#[derive(Clone, Debug)]
+pub struct CatalogProjectionRewriteSummary {
+    pub games: usize,
+    pub load_us: u64,
+    pub repair_us: u64,
+    pub summary_bytes: u64,
+    pub navigation_bytes: u64,
+}
+
+pub fn rewrite_default_catalog_projections(
+    root: impl AsRef<Path>,
+) -> Result<CatalogProjectionRewriteSummary, String> {
+    let sqlite_path = default_sqlite_path();
+    let loaded = load_arcade_catalog_from_sqlite(root)?;
+    let stamp = loaded
+        .stamp
+        .as_ref()
+        .ok_or_else(|| "sqlite catalog has no stamp".to_string())?;
+    let repair_t = std::time::Instant::now();
+    sqlite_catalog::rewrite_catalog_projections_for_catalog(
+        &sqlite_path,
+        &loaded.catalog,
+        stamp,
+    )?;
+    let repair_us = repair_t.elapsed().as_micros() as u64;
+    let summary_bytes = std::fs::metadata(crate::catalog_summary::summary_path_for_sqlite(
+        &sqlite_path,
+    ))
+    .map(|metadata| metadata.len())
+    .unwrap_or(0);
+    let navigation_bytes = std::fs::metadata(navigation_path_for_sqlite(&sqlite_path))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    Ok(CatalogProjectionRewriteSummary {
+        games: loaded.catalog.len(),
+        load_us: loaded.us,
+        repair_us,
+        summary_bytes,
+        navigation_bytes,
+    })
+}
+
 pub fn catalog_projection_pair_current(
     sqlite_path: &Path,
     stamp: &catalog_stamp::CatalogStamp,
@@ -965,7 +1007,10 @@ impl CatalogProjectionBuildContext<'_> {
                     discovery,
                     self.arcade_metadata,
                 );
-            let preview_key = if family_id.is_empty() {
+            let setname = discovery.setname.clone().unwrap_or_default();
+            let preview_key = if system_id == "neogeo" {
+                setname.clone()
+            } else if family_id.is_empty() {
                 identity_id.clone()
             } else {
                 family_id.clone()
@@ -980,7 +1025,11 @@ impl CatalogProjectionBuildContext<'_> {
             };
             (
                 preview,
-                identity_id,
+                if system_id == "neogeo" {
+                    setname
+                } else {
+                    identity_id
+                },
                 family_id,
                 Some(arcade_family_key),
                 metadata,
@@ -1738,6 +1787,18 @@ mod tests {
         neogeo_clone.hardware_id = "neogeo".to_string();
         neogeo_clone.setname = Some("mslugh".to_string());
 
+        let mut neogeo_without_setname = mgl(
+            "/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack/Homebrew/Demos/Bad Apple Demo.neo",
+            "/media/fat/games/NEOGEO/Neo Geo Mister FGPA Ultra Pack/Homebrew/Demos/Bad Apple Demo.neo",
+        );
+        neogeo_without_setname.title = "Bad Apple Demo".to_string();
+        neogeo_without_setname.category = "Arcade".to_string();
+        neogeo_without_setname.platform_id = "neogeo".to_string();
+        neogeo_without_setname.core_id = "NeoGeo".to_string();
+        neogeo_without_setname.hardware_id = "neogeo".to_string();
+        neogeo_without_setname.source_kind = DiscoverySourceKind::PayloadFile;
+        neogeo_without_setname.setname = None;
+
         let archive_launch_ref =
             "/media/fat/games/NES/Collection.zip/Collection/Legend of Zelda.nes";
         let archive_entry = GameDiscovery {
@@ -1784,6 +1845,7 @@ mod tests {
             dos_launcher,
             neogeo_parent,
             neogeo_clone,
+            neogeo_without_setname,
             archive_entry,
             amigavision_game,
         ]);
@@ -1806,7 +1868,20 @@ mod tests {
             catalog_game_snapshots(&sqlite_catalog.catalog)
         );
         assert_eq!(ram_catalog.system_game_count("arcade"), 1);
-        assert_eq!(ram_catalog.system_game_count("neogeo"), 1);
+        assert_eq!(ram_catalog.system_game_count("neogeo"), 2);
+        let neogeo_game = ram_catalog
+            .games
+            .iter()
+            .find(|game| game.title.as_ref() == "Metal Slug")
+            .expect("neogeo game");
+        assert_eq!(neogeo_game.preview_asset_key.as_ref(), "mslug");
+        let neogeo_without_preview = ram_catalog
+            .games
+            .iter()
+            .find(|game| game.title.as_ref() == "Bad Apple Demo")
+            .expect("neogeo game without setname");
+        assert!(!neogeo_without_preview.has_preview);
+        assert_eq!(neogeo_without_preview.preview_asset_key.as_ref(), "");
         assert!(ram_catalog
             .games
             .iter()
