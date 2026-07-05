@@ -17,8 +17,17 @@ The script runs the app with:
 
 - `SLINT_BACKEND=winit-skia` for Skia rendering.
 - `SLINT_EMIT_DEBUG_INFO=1` for useful Slint debug metadata.
-- `SLINT_MCP_PORT=9315` for the embedded Slint MCP server.
-- Cargo features `slint/mcp,live-ui`.
+- Cargo feature `live-ui`.
+
+Enable the embedded Slint MCP server only when needed:
+
+```bash
+MISTER_DESKTOP_MCP=1 scripts/dev-live.sh
+```
+
+That adds Cargo features `slint/mcp,live-ui` and sets `SLINT_MCP_PORT=9315`.
+Slint 1.17's MCP feature currently pulls in the testing backend and software
+renderer, so the default live loop keeps MCP off for faster Skia-only builds.
 
 The default MiSTer host is `192.168.1.117`. Override it for development with:
 
@@ -58,8 +67,8 @@ slint-viewer --auto-reload ui/main.slint
 slint-viewer --screenshot /private/tmp/mister-magik-desktop.png ui/main.slint
 ```
 
-The running app exposes Slint MCP at `http://127.0.0.1:9315/mcp`; see
-`.mcp.json` for the local server definition.
+When started with `MISTER_DESKTOP_MCP=1`, the running app exposes Slint MCP at
+`http://127.0.0.1:9315/mcp`; see `.mcp.json` for the local server definition.
 
 ## Verification
 
@@ -75,5 +84,5 @@ scripts/check-ui.sh
 The `compiled-ui` feature keeps a build-time Slint path available for future
 packaging, but V1 defaults to runtime-loaded UI for iteration speed.
 
-For MCP smoke testing, run the app with `scripts/dev-live.sh` in one terminal and
-then run `scripts/mcp-smoke.sh` in another.
+For MCP smoke testing, run the app with `MISTER_DESKTOP_MCP=1 scripts/dev-live.sh`
+in one terminal and then run `scripts/mcp-smoke.sh` in another.
