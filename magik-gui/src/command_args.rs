@@ -58,9 +58,9 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-save", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new("library-sql", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -219,11 +219,11 @@ mod tests {
             "media-bench-download",
             "media-bench-save",
             "launch-prep-bench",
+            "preview-pack-bench",
+            "preview-index-refresh-bench",
         ] {
             assert!(is_known_command(command), "{command}");
         }
-        assert!(!is_known_command("preview-pack-bench"));
-        assert!(!is_known_command("preview-index-refresh-bench"));
         assert!(!is_known_command("audio-tone"));
     }
 
