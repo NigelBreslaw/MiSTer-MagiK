@@ -564,10 +564,51 @@ mod linux {
         let read_result = reader.read_line(&mut line);
         let response = match read_result {
             Ok(0) => response(None, false, None, Some("empty request")),
-            Ok(_) => handle_control_line(&line, &token, boot_id, started, &mut reader),
+            Ok(_) => {
+                if maybe_handle_framebuffer_raw_stream(&line, &token, boot_id, started, &mut stream)
+                {
+                    return;
+                }
+                handle_control_line(&line, &token, boot_id, started, &mut reader)
+            }
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
         let _ = writeln!(stream, "{response}");
+    }
+
+    fn maybe_handle_framebuffer_raw_stream(
+        line: &str,
+        token: &str,
+        boot_id: u64,
+        started: Instant,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let request_received = Instant::now();
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("cmd").and_then(Value::as_str) != Some("framebuffer_capture_raw_stream") {
+            return false;
+        }
+        let id = parsed.get("id").cloned();
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            let _ = writeln!(stream, "{}", response(id, false, None, Some("unauthorized")));
+            return true;
+        }
+        timeline_record_once("first_command", "cmd=framebuffer_capture_raw_stream".to_string());
+        match framebuffer_capture_raw(request_received, started, boot_id) {
+            Ok(capture) => {
+                let response = response(id, true, Some(capture.result), None);
+                let _ = writeln!(stream, "{response}");
+                let _ = stream.write_all(&capture.raw);
+            }
+            Err(err) => {
+                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+            }
+        }
+        true
     }
 
     fn handle_control_line<R: Read>(
@@ -758,6 +799,11 @@ mod linux {
         timing: PngEncodeTiming,
     }
 
+    struct RawFramebufferCapture {
+        result: Value,
+        raw: Vec<u8>,
+    }
+
     fn framebuffer_capture(request_received: Instant, started: Instant) -> Result<Value, String> {
         let start = Instant::now();
         let request_received_uptime_ms =
@@ -805,6 +851,49 @@ mod linux {
                 "total_us": total_us,
             },
         }))
+    }
+
+    fn framebuffer_capture_raw(
+        request_received: Instant,
+        started: Instant,
+        boot_id: u64,
+    ) -> Result<RawFramebufferCapture, String> {
+        let start = Instant::now();
+        let request_received_uptime_ms =
+            request_received.duration_since(started).as_millis() as u64;
+        let dispatch_us = elapsed_us(request_received);
+        let geometry_t = Instant::now();
+        let geometry = framebuffer_geometry()?;
+        let geometry_us = elapsed_us(geometry_t);
+        let expected = geometry.bytes()?;
+        let mut raw = vec![0u8; expected];
+        let read_t = Instant::now();
+        let mut fb0 = File::open("/dev/fb0").map_err(|err| format!("open /dev/fb0: {err}"))?;
+        fb0.read_exact(&mut raw)
+            .map_err(|err| format!("read /dev/fb0: {err}"))?;
+        let raw_read_us = elapsed_us(read_t);
+        let total_us = elapsed_us(start);
+        Ok(RawFramebufferCapture {
+            result: json!({
+                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "boot_id": boot_id,
+                "width": geometry.width,
+                "height": geometry.height,
+                "stride": geometry.stride,
+                "bpp": geometry.bpp,
+                "format": if geometry.bpp == 16 { "rgb565-le" } else { "bgrx8888" },
+                "raw_bytes": raw.len(),
+                "elapsed_ms": total_us / 1000,
+                "timings": {
+                    "request_received_uptime_ms": request_received_uptime_ms,
+                    "dispatch_us": dispatch_us,
+                    "geometry_us": geometry_us,
+                    "raw_read_us": raw_read_us,
+                    "total_us": total_us,
+                },
+            }),
+            raw,
+        })
     }
 
     fn framebuffer_geometry() -> Result<FramebufferGeometry, String> {

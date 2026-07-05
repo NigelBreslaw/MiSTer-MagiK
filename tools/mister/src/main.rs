@@ -18,7 +18,8 @@ mod media;
 mod remote;
 
 use agent_client::{
-    agent_request, agent_stream_request, agent_token, verify_agent_deploy_result, AGENT_PORT,
+    agent_binary_request, agent_request, agent_stream_request, agent_token,
+    verify_agent_deploy_result, AGENT_PORT,
 };
 use remote::{
     connect, connect_timed, exec, get, host, host_wait_diagnostics, port_open, put, put_bytes,
@@ -1514,6 +1515,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "framebuffer-capture" => {
             agent_framebuffer_capture(&args[1..])?;
         }
+        "framebuffer-capture-raw" => {
+            agent_framebuffer_capture_raw(&args[1..])?;
+        }
         "deploy-magik-bin" => {
             agent_deploy_magik_bin(&args[1..])?;
         }
@@ -1534,7 +1538,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|framebuffer-capture-raw|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -1617,6 +1621,78 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
+    let mut output = None;
+    let mut json_output = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--json" => {
+                idx += 1;
+                let path = args
+                    .get(idx)
+                    .ok_or("agent framebuffer-capture-raw --json needs OUT.json")?;
+                json_output = Some(PathBuf::from(path));
+            }
+            "-h" | "--help" => {
+                println!(
+                    "usage: scripts/mister agent framebuffer-capture-raw OUT.raw [--json OUT.json]"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown framebuffer-capture-raw option: {other}").into());
+            }
+            path => {
+                if output.is_some() {
+                    return Err("agent framebuffer-capture-raw takes one OUT.raw path".into());
+                }
+                output = Some(PathBuf::from(path));
+            }
+        }
+        idx += 1;
+    }
+    let output = output.ok_or("agent framebuffer-capture-raw needs OUT.raw")?;
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let reply =
+        agent_binary_request("framebuffer_capture_raw_stream", json!({}), Duration::from_secs(10))?;
+    fs::write(&output, &reply.payload)?;
+    let result = reply
+        .response
+        .get("result")
+        .ok_or("agent framebuffer_capture_raw_stream response missing result")?;
+    let metadata = framebuffer_capture_raw_metadata(result, reply.elapsed_ms, &output);
+    if let Some(path) = json_output {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, serde_json::to_vec_pretty(&metadata)?)?;
+    }
+
+    let width = result.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
+    let bpp = result.get("bpp").and_then(Value::as_u64).unwrap_or(0);
+    println!(
+        "framebuffer_capture_raw: {} ({}x{} {}bpp, {}, {}ms)",
+        output.display(),
+        width,
+        height,
+        bpp,
+        format_bytes_nearest_kb(reply.payload.len() as u64),
+        reply.elapsed_ms
+    );
+    Ok(())
+}
+
 fn framebuffer_capture_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
     let mut metadata = result.clone();
     if let Value::Object(ref mut object) = metadata {
@@ -1625,6 +1701,22 @@ fn framebuffer_capture_metadata(result: &Value, request_ms: u128, output: &Path)
         object.insert("request_ms".to_string(), Value::from(request_ms as u64));
         object.insert(
             "png_path".to_string(),
+            Value::String(output.display().to_string()),
+        );
+    }
+    metadata
+}
+
+fn framebuffer_capture_raw_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
+    let mut metadata = result.clone();
+    if let Value::Object(ref mut object) = metadata {
+        object.insert(
+            "transport".to_string(),
+            Value::String("agent-raw-stream".to_string()),
+        );
+        object.insert("request_ms".to_string(), Value::from(request_ms as u64));
+        object.insert(
+            "raw_path".to_string(),
             Value::String(output.display().to_string()),
         );
     }

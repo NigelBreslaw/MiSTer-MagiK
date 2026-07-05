@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,12 @@ const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
 
 pub(crate) struct AgentResponse {
     pub(crate) response: Value,
+    pub(crate) elapsed_ms: u128,
+}
+
+pub(crate) struct AgentBinaryResponse {
+    pub(crate) response: Value,
+    pub(crate) payload: Vec<u8>,
     pub(crate) elapsed_ms: u128,
 }
 
@@ -55,6 +61,46 @@ pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
+}
+
+pub(crate) fn agent_binary_request(
+    cmd: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<AgentBinaryResponse> {
+    let token = agent_token()?;
+    let addr = format!("{}:{AGENT_PORT}", host())
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = json!({
+        "token": token,
+        "id": 1,
+        "cmd": cmd,
+        "args": args,
+    });
+    let start = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let response = parse_agent_response_line(line, start)?.response;
+    let raw_bytes = response
+        .pointer("/result/raw_bytes")
+        .and_then(Value::as_u64)
+        .ok_or("agent binary response missing result.raw_bytes")? as usize;
+    let mut payload = vec![0u8; raw_bytes];
+    reader.read_exact(&mut payload)?;
+    Ok(AgentBinaryResponse {
+        response,
+        payload,
+        elapsed_ms: start.elapsed().as_millis(),
+    })
 }
 
 pub(crate) fn agent_stream_request(
