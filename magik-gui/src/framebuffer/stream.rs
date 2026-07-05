@@ -18,6 +18,8 @@ struct ProducerState {
     subscriber: Option<TcpStream>,
     sequence: u64,
     needs_keyframe: bool,
+    latest_geometry: Option<FrameGeometry>,
+    latest_pixels: Vec<Rgb565Pixel>,
 }
 
 impl ProducerState {
@@ -26,7 +28,34 @@ impl ProducerState {
             subscriber: None,
             sequence: 0,
             needs_keyframe: true,
+            latest_geometry: None,
+            latest_pixels: Vec::new(),
         }
+    }
+
+    fn remember_rect(
+        &mut self,
+        geometry: FrameGeometry,
+        rect: FrameRect,
+        pixels: &[Rgb565Pixel],
+        src_stride: usize,
+        src_x: usize,
+        src_y: usize,
+    ) {
+        let Some(rect_pixels) = collect_strided_rect(pixels, src_stride, src_x, src_y, rect) else {
+            return;
+        };
+        let len = geometry
+            .stride_pixels
+            .checked_mul(geometry.height)
+            .map(|pixels| pixels as usize)
+            .unwrap_or(0);
+        if self.latest_geometry != Some(geometry) || self.latest_pixels.len() != len {
+            self.latest_pixels.clear();
+            self.latest_pixels.resize(len, Rgb565Pixel(0));
+            self.latest_geometry = Some(geometry);
+        }
+        copy_rect_into_latest(&mut self.latest_pixels, geometry, rect, &rect_pixels);
     }
 }
 
@@ -59,26 +88,30 @@ pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[R
     let Ok(mut state) = state().lock() else {
         return;
     };
+    state.remember_rect(
+        geometry,
+        rect,
+        pixels,
+        geometry.stride_pixels as usize,
+        rect.x as usize,
+        rect.y as usize,
+    );
     if state.subscriber.is_none() {
         return;
     }
-    let rect = if state.needs_keyframe {
-        FrameRect::full(geometry)
-    } else {
-        rect
-    };
-    let kind = if state.needs_keyframe {
-        FrameKind::Keyframe
-    } else {
-        FrameKind::RectDelta
-    };
+    if state.needs_keyframe {
+        publish_latest_keyframe_locked(&mut state);
+        return;
+    }
     publish_rect_locked(
         &mut state,
         geometry,
         rect,
-        kind,
+        FrameKind::RectDelta,
         pixels,
         geometry.stride_pixels as usize,
+        rect.x as usize,
+        rect.y as usize,
     );
 }
 
@@ -86,7 +119,12 @@ pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rg
     let Ok(mut state) = state().lock() else {
         return;
     };
-    if state.subscriber.is_none() || state.needs_keyframe {
+    state.remember_rect(geometry, rect, pixels, rect.width as usize, 0, 0);
+    if state.subscriber.is_none() {
+        return;
+    }
+    if state.needs_keyframe {
+        publish_latest_keyframe_locked(&mut state);
         return;
     }
     publish_rect_locked(
@@ -96,6 +134,8 @@ pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rg
         FrameKind::RectDelta,
         pixels,
         rect.width as usize,
+        0,
+        0,
     );
 }
 
@@ -110,10 +150,12 @@ pub fn publish_strided_rect(
     let Ok(mut state) = state().lock() else {
         return;
     };
-    if state.subscriber.is_none() || state.needs_keyframe {
+    state.remember_rect(geometry, rect, pixels, src_stride, src_x, src_y);
+    if state.subscriber.is_none() {
         return;
     }
-    let Some(rect_pixels) = collect_strided_rect(pixels, src_stride, src_x, src_y, rect) else {
+    if state.needs_keyframe {
+        publish_latest_keyframe_locked(&mut state);
         return;
     };
     publish_rect_locked(
@@ -121,8 +163,10 @@ pub fn publish_strided_rect(
         geometry,
         rect,
         FrameKind::RectDelta,
-        &rect_pixels,
-        rect.width as usize,
+        pixels,
+        src_stride,
+        src_x,
+        src_y,
     );
 }
 
@@ -132,8 +176,26 @@ fn install_subscriber(stream: TcpStream) {
     if let Ok(mut state) = state().lock() {
         state.subscriber = Some(stream);
         state.needs_keyframe = true;
+        publish_latest_keyframe_locked(&mut state);
         crate::ui_logln!("framebuffer stream producer subscriber connected");
     }
+}
+
+fn publish_latest_keyframe_locked(state: &mut ProducerState) {
+    let Some(geometry) = state.latest_geometry else {
+        return;
+    };
+    let pixels = state.latest_pixels.clone();
+    publish_rect_locked(
+        state,
+        geometry,
+        FrameRect::full(geometry),
+        FrameKind::Keyframe,
+        &pixels,
+        geometry.stride_pixels as usize,
+        0,
+        0,
+    );
 }
 
 fn publish_rect_locked(
@@ -143,8 +205,10 @@ fn publish_rect_locked(
     kind: FrameKind,
     pixels: &[Rgb565Pixel],
     stride_pixels: usize,
+    src_x: usize,
+    src_y: usize,
 ) {
-    let raw = rgb565_rect_bytes(pixels, rect, stride_pixels);
+    let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, src_x, src_y);
     if raw.is_empty() {
         return;
     }
@@ -210,12 +274,45 @@ fn collect_strided_rect(
     Some(out)
 }
 
-fn rgb565_rect_bytes(pixels: &[Rgb565Pixel], rect: FrameRect, stride_pixels: usize) -> Vec<u8> {
+fn copy_rect_into_latest(
+    latest: &mut [Rgb565Pixel],
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    rect_pixels: &[Rgb565Pixel],
+) {
+    let width = rect.width as usize;
+    let height = rect.height as usize;
+    let stride = geometry.stride_pixels as usize;
+    for row in 0..height {
+        let src = row.saturating_mul(width);
+        let dst = (rect.y as usize + row)
+            .saturating_mul(stride)
+            .saturating_add(rect.x as usize);
+        let Some(src_row) = rect_pixels.get(src..src.saturating_add(width)) else {
+            return;
+        };
+        let Some(dst_row) = latest.get_mut(dst..dst.saturating_add(width)) else {
+            return;
+        };
+        dst_row.copy_from_slice(src_row);
+    }
+}
+
+fn rgb565_rect_bytes(
+    pixels: &[Rgb565Pixel],
+    rect: FrameRect,
+    stride_pixels: usize,
+    src_x: usize,
+    src_y: usize,
+) -> Vec<u8> {
     let width = rect.width as usize;
     let height = rect.height as usize;
     let mut out = Vec::with_capacity(width.saturating_mul(height).saturating_mul(2));
     for row in 0..height {
-        let start = row.saturating_mul(stride_pixels);
+        let start = src_y
+            .saturating_add(row)
+            .saturating_mul(stride_pixels)
+            .saturating_add(src_x);
         let end = start.saturating_add(width);
         let Some(row_pixels) = pixels.get(start..end) else {
             return Vec::new();
@@ -265,8 +362,85 @@ mod tests {
         };
 
         assert_eq!(
-            rgb565_rect_bytes(&pixels, rect, 2),
+            rgb565_rect_bytes(&pixels, rect, 2, 0, 0),
             vec![0x34, 0x12, 0xcd, 0xab]
+        );
+    }
+
+    #[test]
+    fn rgb565_rect_bytes_use_source_offset() {
+        let pixels = (0..12).map(Rgb565Pixel).collect::<Vec<_>>();
+        let rect = FrameRect {
+            x: 1,
+            y: 2,
+            width: 2,
+            height: 2,
+        };
+
+        assert_eq!(
+            rgb565_rect_bytes(&pixels, rect, 4, 1, 1),
+            vec![5, 0, 6, 0, 9, 0, 10, 0]
+        );
+    }
+
+    #[test]
+    fn producer_state_remembers_dirty_rects_for_keyframe() {
+        let geometry = FrameGeometry {
+            width: 4,
+            height: 3,
+            stride_pixels: 4,
+        };
+        let mut state = ProducerState::new();
+        let full = (0..12).map(Rgb565Pixel).collect::<Vec<_>>();
+        state.remember_rect(
+            geometry,
+            FrameRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 3,
+            },
+            &full,
+            4,
+            0,
+            0,
+        );
+        let patch = [
+            Rgb565Pixel(100),
+            Rgb565Pixel(101),
+            Rgb565Pixel(102),
+            Rgb565Pixel(103),
+        ];
+        state.remember_rect(
+            geometry,
+            FrameRect {
+                x: 1,
+                y: 1,
+                width: 2,
+                height: 2,
+            },
+            &patch,
+            2,
+            0,
+            0,
+        );
+
+        assert_eq!(
+            state.latest_pixels,
+            vec![
+                Rgb565Pixel(0),
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(100),
+                Rgb565Pixel(101),
+                Rgb565Pixel(7),
+                Rgb565Pixel(8),
+                Rgb565Pixel(102),
+                Rgb565Pixel(103),
+                Rgb565Pixel(11),
+            ]
         );
     }
 }
