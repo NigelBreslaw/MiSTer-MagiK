@@ -13,6 +13,7 @@ pub enum RuntimeThreadRole {
     MediaWorker,
     MediaDownload,
     MediaIndex,
+    FramebufferStream,
     VideoDecode,
     VideoAudio,
 }
@@ -29,6 +30,7 @@ impl RuntimeThreadRole {
             Self::MediaWorker => "media-worker",
             Self::MediaDownload => "media-download",
             Self::MediaIndex => "media-index",
+            Self::FramebufferStream => "framebuffer-stream",
             Self::VideoDecode => "video-decode",
             Self::VideoAudio => "video-audio",
         }
@@ -46,6 +48,7 @@ impl RuntimeThreadRole {
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
+            Self::FramebufferStream => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::Any),
             Self::VideoDecode | Self::VideoAudio => {
                 RuntimeThreadPolicy::new(5, ThreadAffinity::Any)
@@ -228,6 +231,7 @@ mod tests {
             RuntimeThreadRole::LibraryWalker,
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
+            RuntimeThreadRole::FramebufferStream,
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
             assert!(role.default_policy().nice >= 5);

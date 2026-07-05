@@ -6,8 +6,8 @@ mod macos_titlebar;
 mod sd_card;
 
 use agent_client::{
-    connect_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
-    FramebufferStreamControl,
+    connect_framebuffer_stream, drain_framebuffer_stream, fetch_dashboard,
+    fetch_framebuffer_capture, fetch_sd_directory, FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -34,8 +34,8 @@ type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamCo
 slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if let Some(frames) = framebuffer_stream_bench_frames()? {
-        run_framebuffer_stream_bench(frames)?;
+    if let Some((mode, frames)) = framebuffer_stream_bench_args()? {
+        run_framebuffer_stream_bench(mode, frames)?;
         return Ok(());
     }
 
@@ -60,48 +60,77 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn framebuffer_stream_bench_frames() -> Result<Option<u64>, Box<dyn Error>> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FramebufferBenchMode {
+    Poll,
+    Stream,
+    Drain,
+}
+
+impl FramebufferBenchMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Poll => "poll",
+            Self::Stream => "stream",
+            Self::Drain => "drain",
+        }
+    }
+}
+
+fn framebuffer_stream_bench_args() -> Result<Option<(FramebufferBenchMode, u64)>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let Some(first) = args.first() else {
         return Ok(None);
     };
-    if first != "--framebuffer-stream-bench" && first != "--framebuffer-poll-bench" {
-        return Ok(None);
-    }
+    let mode = match first.as_str() {
+        "--framebuffer-stream-bench" => FramebufferBenchMode::Stream,
+        "--framebuffer-poll-bench" => FramebufferBenchMode::Poll,
+        "--framebuffer-stream-drain-bench" => FramebufferBenchMode::Drain,
+        _ => return Ok(None),
+    };
     let frames = match args.get(1) {
         Some(value) => value.parse::<u64>()?,
         None => 120,
     };
-    Ok(Some(frames.max(1)))
+    Ok(Some((mode, frames.max(1))))
 }
 
-fn run_framebuffer_stream_bench(frames: u64) -> Result<(), Box<dyn Error>> {
-    let stream_mode = std::env::args()
-        .nth(1)
-        .is_some_and(|arg| arg == "--framebuffer-stream-bench");
+fn run_framebuffer_stream_bench(
+    mode: FramebufferBenchMode,
+    frames: u64,
+) -> Result<(), Box<dyn Error>> {
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let started = Instant::now();
     let mut latencies = Vec::with_capacity(frames as usize);
     let mut payload_bytes = 0_u64;
     let mut raw_bytes = 0_u64;
-    if stream_mode {
-        let mut stream = connect_framebuffer_stream(&host)?;
-        for _ in 0..frames {
-            let frame_started = Instant::now();
-            let capture = stream.next_capture()?;
-            let _image = framebuffer_capture_image(&capture);
-            latencies.push(frame_started.elapsed());
-            payload_bytes += capture.payload_bytes;
-            raw_bytes += capture.raw_bytes;
+    match mode {
+        FramebufferBenchMode::Stream => {
+            let mut stream = connect_framebuffer_stream(&host)?;
+            for _ in 0..frames {
+                let frame_started = Instant::now();
+                let capture = stream.next_capture()?;
+                let _image = framebuffer_capture_image(&capture);
+                latencies.push(frame_started.elapsed());
+                payload_bytes += capture.payload_bytes;
+                raw_bytes += capture.raw_bytes;
+            }
         }
-    } else {
-        for _ in 0..frames {
-            let frame_started = Instant::now();
-            let capture = fetch_framebuffer_capture(&host)?;
-            let _image = framebuffer_capture_image(&capture);
-            latencies.push(frame_started.elapsed());
-            payload_bytes += capture.payload_bytes;
-            raw_bytes += capture.raw_bytes;
+        FramebufferBenchMode::Drain => {
+            let stats = drain_framebuffer_stream(&host, frames)?;
+            latencies = stats.latencies;
+            payload_bytes = stats.payload_bytes;
+            raw_bytes = stats.raw_bytes;
+        }
+        FramebufferBenchMode::Poll => {
+            for _ in 0..frames {
+                let frame_started = Instant::now();
+                let capture = fetch_framebuffer_capture(&host)?;
+                let _image = framebuffer_capture_image(&capture);
+                latencies.push(frame_started.elapsed());
+                payload_bytes += capture.payload_bytes;
+                raw_bytes += capture.raw_bytes;
+            }
         }
     }
     latencies.sort();
@@ -113,7 +142,7 @@ fn run_framebuffer_stream_bench(frames: u64) -> Result<(), Box<dyn Error>> {
     let raw_avg = raw_bytes / frames;
     println!(
         "framebuffer_stream_bench_tsv\tmode={}\tframes={frames}\tfps={fps:.2}\telapsed_ms={:.0}\tp50_ms={p50:.1}\tp95_ms={p95:.1}\tavg_payload_bytes={payload_avg}\tavg_raw_bytes={raw_avg}",
-        if stream_mode { "stream" } else { "poll" },
+        mode.label(),
         elapsed.as_secs_f64() * 1000.0
     );
     Ok(())
