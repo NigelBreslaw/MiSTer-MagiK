@@ -17,6 +17,8 @@ import {
     NavList,
     NavListItem,
     PrimerTreeView,
+    Select,
+    SelectOption,
     TableContainer,
     ToggleSwitch,
     ToggleSwitchSize,
@@ -60,6 +62,7 @@ export global AnalyticsState {
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
     in-out property <bool> has-image: false;
+    in-out property <string> capture-mode: "screenshot";
 }
 
 export global SdCardState {
@@ -97,6 +100,7 @@ export global Actions {
     callback refresh-status();
     callback select-page(string);
     callback capture-framebuffer();
+    callback capture-mode-changed(string);
     callback sd-row-toggle(string);
     callback sd-row-current(string);
     callback sd-refresh-folder();
@@ -506,10 +510,25 @@ component AnalyticsPage {
             TableContainer {
                 vertical-stretch: 1;
                 title: "Framebuffer";
-                subtitle: "Current /dev/fb0 image from the MiSTer agent.";
+                subtitle: AnalyticsState.capture-mode == "stream" ? "Live stream frame from the MiSTer agent." : "Current /dev/fb0 screenshot from the MiSTer agent.";
                 primary-action-label: AnalyticsState.loading ? "Capturing..." : "Capture framebuffer";
                 primary-action-variant: ButtonVariant.default;
                 primary-action => { Actions.capture-framebuffer(); }
+
+                Select {
+                    width: 220px;
+                    label-text: "Mode";
+                    selected-index: AnalyticsState.capture-mode == "stream" ? 1 : 0;
+                    selected-value: AnalyticsState.capture-mode;
+                    options: [
+                        { value: "screenshot", label: "Screenshot", enabled: true },
+                        { value: "stream", label: "Stream", enabled: true },
+                    ];
+                    selected-changed(index) => {
+                        AnalyticsState.capture-mode = index == 1 ? "stream" : "screenshot";
+                        Actions.capture-mode-changed(AnalyticsState.capture-mode);
+                    }
+                }
 
                 Rectangle {
                     width: 100%;

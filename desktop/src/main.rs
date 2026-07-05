@@ -5,7 +5,9 @@ mod file_icons;
 mod macos_titlebar;
 mod sd_card;
 
-use agent_client::{fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory};
+use agent_client::{
+    fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory, FramebufferCaptureMode,
+};
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
@@ -127,10 +129,22 @@ fn create_live_instance(
     let capture_instance = instance.as_weak();
     let capture_host = host.to_string();
     instance.set_global_callback("Actions", "capture-framebuffer", move |_| {
+        let mode = capture_instance
+            .upgrade()
+            .and_then(|instance| {
+                instance
+                    .get_global_property("AnalyticsState", "capture-mode")
+                    .ok()
+            })
+            .and_then(|value| match value {
+                Value::String(mode) => Some(FramebufferCaptureMode::from_value(mode.as_str())),
+                _ => None,
+            })
+            .unwrap_or(FramebufferCaptureMode::Screenshot);
         if let Some(instance) = capture_instance.upgrade() {
-            set_live_analytics_loading(&instance);
+            set_live_analytics_loading(&instance, mode);
         }
-        spawn_live_framebuffer_capture(capture_instance.clone(), capture_host.clone());
+        spawn_live_framebuffer_capture(capture_instance.clone(), capture_host.clone(), mode);
         Value::Void
     })?;
 
@@ -407,10 +421,18 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let capture_ui = ui.as_weak();
     let capture_host = host.clone();
     ui.global::<Actions>().on_capture_framebuffer(move || {
+        let mode = capture_ui
+            .upgrade()
+            .map(|ui| {
+                FramebufferCaptureMode::from_value(
+                    ui.global::<AnalyticsState>().get_capture_mode().as_str(),
+                )
+            })
+            .unwrap_or(FramebufferCaptureMode::Screenshot);
         if let Some(ui) = capture_ui.upgrade() {
-            set_compiled_analytics_loading(&ui);
+            set_compiled_analytics_loading(&ui, mode);
         }
-        spawn_compiled_framebuffer_capture(capture_ui.clone(), capture_host.clone());
+        spawn_compiled_framebuffer_capture(capture_ui.clone(), capture_host.clone(), mode);
     });
 
     let sd_toggle_ui = ui.as_weak();
@@ -564,7 +586,10 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
 }
 
 #[cfg(feature = "live-ui")]
-fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
+fn set_live_analytics_loading(
+    instance: &slint_interpreter::ComponentInstance,
+    mode: FramebufferCaptureMode,
+) {
     use slint::SharedString;
     use slint_interpreter::Value;
 
@@ -572,7 +597,7 @@ fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
     let _ = instance.set_global_property(
         "AnalyticsState",
         "status",
-        Value::String(SharedString::from("Capturing /dev/fb0...")),
+        Value::String(SharedString::from(capture_loading_status(mode))),
     );
     let _ = instance.set_global_property(
         "AnalyticsState",
@@ -626,10 +651,10 @@ fn apply_live_framebuffer_capture_result(
 }
 
 #[cfg(feature = "compiled-ui")]
-fn set_compiled_analytics_loading(ui: &AppWindow) {
+fn set_compiled_analytics_loading(ui: &AppWindow, mode: FramebufferCaptureMode) {
     let state = ui.global::<AnalyticsState>();
     state.set_loading(true);
-    state.set_status("Capturing /dev/fb0...".into());
+    state.set_status(capture_loading_status(mode).into());
     state.set_last_error("".into());
 }
 
@@ -667,6 +692,9 @@ fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> Str
 }
 
 fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slint::Image {
+    if capture.rgba_pixels.is_empty() && !capture.png_path.as_os_str().is_empty() {
+        return slint::Image::load_from_path(&capture.png_path).unwrap_or_default();
+    }
     let width = u32::try_from(capture.width).unwrap_or(0);
     let height = u32::try_from(capture.height).unwrap_or(0);
     if width == 0 || height == 0 {
@@ -686,6 +714,13 @@ fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slin
         };
     }
     slint::Image::from_rgba8(pixels)
+}
+
+fn capture_loading_status(mode: FramebufferCaptureMode) -> &'static str {
+    match mode {
+        FramebufferCaptureMode::Screenshot => "Capturing framebuffer screenshot...",
+        FramebufferCaptureMode::Stream => "Capturing framebuffer stream...",
+    }
 }
 
 fn format_byte_size(bytes: u64) -> String {
@@ -772,9 +807,10 @@ fn spawn_live_sd_fetch(
 fn spawn_live_framebuffer_capture(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     host: String,
+    mode: FramebufferCaptureMode,
 ) {
     std::thread::spawn(move || {
-        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let result = fetch_framebuffer_capture(&host, mode).map_err(|err| err.to_string());
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(instance) = instance.upgrade() {
                 apply_live_framebuffer_capture_result(&instance, result);
@@ -805,9 +841,13 @@ fn spawn_compiled_sd_fetch(
 }
 
 #[cfg(feature = "compiled-ui")]
-fn spawn_compiled_framebuffer_capture(ui: slint::Weak<AppWindow>, host: String) {
+fn spawn_compiled_framebuffer_capture(
+    ui: slint::Weak<AppWindow>,
+    host: String,
+    mode: FramebufferCaptureMode,
+) {
     std::thread::spawn(move || {
-        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let result = fetch_framebuffer_capture(&host, mode).map_err(|err| err.to_string());
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui.upgrade() {
                 apply_compiled_framebuffer_capture_result(&ui, result);
