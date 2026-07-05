@@ -205,12 +205,15 @@ Effect-scene and mega-transition work is experimental only; see
   path / fifo handoff (`load_core` or `mister_magik_launch`) so HDMI survives.
 - Do not SIGSTOP MiSTer for the launcher. A stopped Main can keep evdev grabs
   and the menu OSD over the framebuffer.
-- Capture framebuffer PNGs through the MagiK agent only: use the desktop
-  Analytics view or `scripts/mister agent framebuffer-capture OUT.png --json
-  OUT.json`. Do not add raw `/dev/fb0` dump or host-side raw-to-PNG paths.
-  Agent captures still are not proof of HDMI output because `/dev/fb0` can
-  contain Slint while the FPGA is scanning another buffer; confirm route/status
-  or HDMI when visibility matters.
+- Use the desktop Analytics live stream for continuous framebuffer inspection;
+  it consumes producer-side `framebuffer_stream_v1` frames from
+  `mister-magik-fb` through the MagiK agent. Capture still PNGs through the
+  MagiK agent only with
+  `scripts/mister agent framebuffer-capture OUT.png --json OUT.json`; do not
+  add raw `/dev/fb0` dump or host-side raw-to-PNG paths. Agent captures still
+  are not proof of HDMI output because `/dev/fb0` can contain Slint while the
+  FPGA is scanning another buffer; confirm route/status or HDMI when visibility
+  matters.
 - Do not use row-by-row selected-index jumps for arcade performance conclusions.
   Use velocity scenarios from `docs/benchmarking.md`.
 - Use RGB565 for launcher/arcade performance conclusions. The app render

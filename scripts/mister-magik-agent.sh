@@ -75,14 +75,35 @@ if [ -f '$FASTNET_SCRIPT' ] && [ ! -f '$FASTNET_DISABLED' ]; then
 fi
 cat >'$REMOTE_SCRIPT' <<'EOS'
 #!/bin/sh
+stop_agent() {
+  pids="$(pidof mister-magik-agent 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  kill $pids 2>/dev/null || true
+  i=0
+  while [ "$i" -lt 20 ]; do
+    sleep 0.1
+    if ! pidof mister-magik-agent >/dev/null 2>&1; then
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  kill -9 $(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true
+}
 case \"\$1\" in
   start)
     /media/fat/mister-magik/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
     ;;
   stop)
+    stop_agent
+    ;;
+  restart)
+    stop_agent
+    /media/fat/mister-magik/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
     ;;
   *)
-    echo \"Usage: \$0 {start|stop}\"
+    echo \"Usage: \$0 {start|stop|restart}\"
     exit 1
     ;;
 esac
@@ -90,11 +111,13 @@ exit 0
 EOS
 chmod 755 '$REMOTE_SCRIPT'
 echo installed >'$MARKER'
+'$REMOTE_SCRIPT' restart
 sync
 mount -o remount,ro / || true
 echo magik_agent=installed
 if [ -s '$REMOTE_TOKEN' ]; then echo agent_token=installed; fi
 ls -l '$REMOTE_SCRIPT' '$REMOTE_BIN'
+echo magik_agent_pid=\$(pidof mister-magik-agent 2>/dev/null || true)
 "
   "$MISTER" get "$REMOTE_TOKEN" "$LOCAL_TOKEN" >/dev/null 2>&1 || true
 }
@@ -103,6 +126,7 @@ remove_agent() {
   "$MISTER" run "
 set -eu
 mount -o remount,rw /
+if [ -x '$REMOTE_SCRIPT' ]; then '$REMOTE_SCRIPT' stop || true; else kill \$(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true; fi
 rm -f '$REMOTE_SCRIPT'
 if [ -f '$FASTNET_DISABLED' ]; then
   mv '$FASTNET_DISABLED' '$FASTNET_SCRIPT'
@@ -136,6 +160,7 @@ if [ -s '$REMOTE_TOKEN' ]; then
 else
   echo agent_token=missing
 fi
+echo magik_agent_pid=\$(pidof mister-magik-agent 2>/dev/null || true)
 "
 }
 

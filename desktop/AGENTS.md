@@ -11,9 +11,10 @@ Desktop-specific notes for agents working in this folder. The root
 - The main UI file is `ui/main.slint`.
 - Rust owns data fetching, cache state, and Slint global updates in `src/main.rs`.
 - SD Card browser state lives in `src/sd_card.rs`.
-- The Analytics view captures framebuffer PNGs through the MagiK agent
-  `framebuffer_capture` command. Keep desktop capture paths on that agent API;
-  do not add raw `/dev/fb0` dump or host-side raw-to-PNG flows.
+- The Analytics live toggle consumes the MagiK agent `framebuffer_stream_v1`
+  path, which proxies producer-side RGB565 frames from `mister-magik-fb`.
+  Manual capture/save still uses the agent framebuffer capture API for one-shot
+  PNGs. Do not add raw `/dev/fb0` dump or host-side raw-to-PNG flows.
 - Material file icons are loaded at runtime from a git submodule:
   `desktop/vendor/material-icon-theme`.
 

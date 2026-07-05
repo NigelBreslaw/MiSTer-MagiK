@@ -77,12 +77,21 @@ scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
 `logs` returns the in-memory ring buffer over the TCP agent protocol. The ring
 keeps the newest 512 lines and reports how many older lines were dropped.
 
-`framebuffer-capture` asks the MiSTer-side agent to read the current
-framebuffer, convert the raw pixels to PNG on the ARM device, and return the PNG
-plus metadata over the authenticated TCP protocol. The host wrapper writes the
-PNG to `OUT.png`; `--json OUT.json` records dimensions, stride, bpp, raw bytes,
-PNG bytes, request timing, and per-stage capture/encode timings. This is the
-canonical framebuffer PNG capture path for scripts, docs, and agents.
+`framebuffer_stream_v1` is the desktop live-inspection path. The desktop sends
+one authenticated JSON request on TCP `7498`, then the agent replies with a JSON
+`ok` line and switches the same connection to the binary
+`mister-magik-framebuffer-stream-v1` protocol. The agent proxies producer frames
+from `mister-magik-fb` on local port `127.0.0.1:7499`; it does not poll or read
+`/dev/fb0`. Frames are RGB565 little-endian keyframes or dirty rect deltas, LZ4
+compressed per message, with heartbeat frames while idle.
+
+`framebuffer-capture` is the one-shot still-image path. It asks the MiSTer-side
+agent to read the current framebuffer, convert the raw pixels to PNG on the ARM
+device, and return the PNG plus metadata over the authenticated TCP protocol.
+The host wrapper writes the PNG to `OUT.png`; `--json OUT.json` records
+dimensions, stride, bpp, raw bytes, PNG bytes, request timing, and per-stage
+capture/encode timings. Use it for evidence snapshots and benchmark artifacts,
+not for desktop live streaming.
 
 `timeline` returns structured boot events. The expected event names are:
 
