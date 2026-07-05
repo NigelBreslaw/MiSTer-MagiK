@@ -251,6 +251,8 @@ pub fn run_ui(f: &mut Fpga) {
     crate::ui_logln!("ui scene={scene} secs={secs}");
     crate::ui_logln!("ui_render_mode=cached");
 
+    mister_magik_fb::framebuffer::stream::start();
+
     let _vt = VtGraphicsGuard::enter_or_warn();
     let UiBootFramebufferSession {
         ui,
