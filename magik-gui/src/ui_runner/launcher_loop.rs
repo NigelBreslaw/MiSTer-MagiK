@@ -346,6 +346,31 @@ impl LauncherIdleInput {
             && !self.composition_forces_full_present
             && !self.composition_clears_direct_layers
     }
+
+    fn can_skip_slint_base_for_arcade_overlay(self) -> bool {
+        self.first_visible_copy_done
+            && !self.launching
+            && !self.setup_active
+            && self.startup_input_enabled
+            && !self.route_forces_full_present
+            && !self.bridge_dirty
+            && !self.catalog_messages_active
+            && !self.media_message_seen
+            && !self.catalog_scan_visible
+            && !self.catalog_background_scan_visible
+            && !self.catalog_scan_redraw_due
+            && !self.catalog_games_found_detail_changed
+            && !self.slint_animation_active
+            && !self.home_pan_present_active
+            && !self.arcade_filter_scroll_active
+            && !self.arcade_search_active
+            && !self.preview_scheduled_this_loop
+            && !self.composition_forces_full_present
+            && !self.composition_clears_direct_layers
+            && (self.arcade_visual_changed_this_loop
+                || self.arcade_scroll_active
+                || self.preview_dirty)
+    }
 }
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
@@ -2292,11 +2317,20 @@ pub(super) fn run_launcher_loop(
         update_slint_animations(animation_clock);
         let mut layer_target = LayerTarget::new(target, disp, ui);
         let frame_t1 = Instant::now();
-        let this_rect = expand_home_pan_dirty_rect(
-            layer_target.render_slint_base(&window),
-            ui,
-            home_pan_present_active,
-        );
+        let skip_slint_base_render = !full_frame_present
+            && composition_decision.state == UiCompositionState::MixedArcade
+            && composition_decision.allow_arcade_list_blit
+            && composition_decision.allow_preview_blit
+            && idle_input.can_skip_slint_base_for_arcade_overlay();
+        let this_rect = if skip_slint_base_render {
+            None
+        } else {
+            expand_home_pan_dirty_rect(
+                layer_target.render_slint_base(&window),
+                ui,
+                home_pan_present_active,
+            )
+        };
         launcher_redraw_pending = false;
         let frame_t2 = Instant::now();
         let custom_draw_start = Instant::now();
@@ -4081,6 +4115,50 @@ mod tests {
             ..base
         }
         .can_sleep());
+    }
+
+    #[test]
+    pub(super) fn arcade_overlay_skip_allows_direct_motion_without_sleeping() {
+        let input = LauncherIdleInput {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            arcade_scroll_active: true,
+            ..LauncherIdleInput::default()
+        };
+
+        assert!(!input.can_sleep());
+        assert!(input.can_skip_slint_base_for_arcade_overlay());
+    }
+
+    #[test]
+    pub(super) fn arcade_overlay_skip_rejects_ui_state_changes() {
+        let base = LauncherIdleInput {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            arcade_scroll_active: true,
+            ..LauncherIdleInput::default()
+        };
+
+        assert!(!LauncherIdleInput {
+            bridge_dirty: true,
+            ..base
+        }
+        .can_skip_slint_base_for_arcade_overlay());
+        assert!(!LauncherIdleInput {
+            slint_animation_active: true,
+            ..base
+        }
+        .can_skip_slint_base_for_arcade_overlay());
+        assert!(!LauncherIdleInput {
+            preview_scheduled_this_loop: true,
+            ..base
+        }
+        .can_skip_slint_base_for_arcade_overlay());
+        assert!(!LauncherIdleInput {
+            composition_forces_full_present: true,
+            ..base
+        }
+        .can_skip_slint_base_for_arcade_overlay());
     }
 
     #[test]
