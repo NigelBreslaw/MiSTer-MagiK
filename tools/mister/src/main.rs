@@ -1518,6 +1518,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "framebuffer-capture-raw" => {
             agent_framebuffer_capture_raw(&args[1..])?;
         }
+        "framebuffer-capture-lz4" => {
+            agent_framebuffer_capture_lz4(&args[1..])?;
+        }
         "deploy-magik-bin" => {
             agent_deploy_magik_bin(&args[1..])?;
         }
@@ -1538,7 +1541,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|framebuffer-capture-raw|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -1622,8 +1625,21 @@ fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
 }
 
 fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
+    agent_framebuffer_capture_binary(args, "raw")
+}
+
+fn agent_framebuffer_capture_lz4(args: &[String]) -> Result<()> {
+    agent_framebuffer_capture_binary(args, "lz4")
+}
+
+fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<()> {
     let mut output = None;
     let mut json_output = None;
+    let command_name = if encoding == "lz4" {
+        "framebuffer-capture-lz4"
+    } else {
+        "framebuffer-capture-raw"
+    };
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
@@ -1631,28 +1647,26 @@ fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
                 idx += 1;
                 let path = args
                     .get(idx)
-                    .ok_or("agent framebuffer-capture-raw --json needs OUT.json")?;
+                    .ok_or_else(|| format!("agent {command_name} --json needs OUT.json"))?;
                 json_output = Some(PathBuf::from(path));
             }
             "-h" | "--help" => {
-                println!(
-                    "usage: scripts/mister agent framebuffer-capture-raw OUT.raw [--json OUT.json]"
-                );
+                println!("usage: scripts/mister agent {command_name} OUT.raw [--json OUT.json]");
                 return Ok(());
             }
             other if other.starts_with('-') => {
-                return Err(format!("unknown framebuffer-capture-raw option: {other}").into());
+                return Err(format!("unknown {command_name} option: {other}").into());
             }
             path => {
                 if output.is_some() {
-                    return Err("agent framebuffer-capture-raw takes one OUT.raw path".into());
+                    return Err(format!("agent {command_name} takes one OUT.raw path").into());
                 }
                 output = Some(PathBuf::from(path));
             }
         }
         idx += 1;
     }
-    let output = output.ok_or("agent framebuffer-capture-raw needs OUT.raw")?;
+    let output = output.ok_or_else(|| format!("agent {command_name} needs OUT.raw"))?;
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -1660,13 +1674,33 @@ fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    let reply =
-        agent_binary_request("framebuffer_capture_raw_stream", json!({}), Duration::from_secs(10))?;
-    fs::write(&output, &reply.payload)?;
+    let agent_command = if encoding == "lz4" {
+        "framebuffer_capture_lz4_stream"
+    } else {
+        "framebuffer_capture_raw_stream"
+    };
+    let reply = agent_binary_request(agent_command, json!({}), Duration::from_secs(10))?;
     let result = reply
         .response
         .get("result")
-        .ok_or("agent framebuffer_capture_raw_stream response missing result")?;
+        .ok_or("agent framebuffer binary response missing result")?;
+    let raw = if encoding == "lz4" {
+        lz4_flex::decompress_size_prepended(&reply.payload)?
+    } else {
+        reply.payload.clone()
+    };
+    let expected_raw = result
+        .get("raw_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(raw.len() as u64) as usize;
+    if raw.len() != expected_raw {
+        return Err(format!(
+            "decoded framebuffer size mismatch expected={expected_raw} actual={}",
+            raw.len()
+        )
+        .into());
+    }
+    fs::write(&output, &raw)?;
     let metadata = framebuffer_capture_raw_metadata(result, reply.elapsed_ms, &output);
     if let Some(path) = json_output {
         if let Some(parent) = path
@@ -1682,12 +1716,13 @@ fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
     let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
     let bpp = result.get("bpp").and_then(Value::as_u64).unwrap_or(0);
     println!(
-        "framebuffer_capture_raw: {} ({}x{} {}bpp, {}, {}ms)",
+        "framebuffer_capture_{encoding}: {} ({}x{} {}bpp, {} payload, {} raw, {}ms)",
         output.display(),
         width,
         height,
         bpp,
         format_bytes_nearest_kb(reply.payload.len() as u64),
+        format_bytes_nearest_kb(raw.len() as u64),
         reply.elapsed_ms
     );
     Ok(())

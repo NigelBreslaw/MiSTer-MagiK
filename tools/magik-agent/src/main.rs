@@ -588,21 +588,24 @@ mod linux {
             Ok(value) => value,
             Err(_) => return false,
         };
-        if parsed.get("cmd").and_then(Value::as_str) != Some("framebuffer_capture_raw_stream") {
-            return false;
-        }
+        let cmd = parsed.get("cmd").and_then(Value::as_str);
+        let lz4 = match cmd {
+            Some("framebuffer_capture_raw_stream") => false,
+            Some("framebuffer_capture_lz4_stream") => true,
+            _ => return false,
+        };
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
             let _ = writeln!(stream, "{}", response(id, false, None, Some("unauthorized")));
             return true;
         }
-        timeline_record_once("first_command", "cmd=framebuffer_capture_raw_stream".to_string());
-        match framebuffer_capture_raw(request_received, started, boot_id) {
+        timeline_record_once("first_command", format!("cmd={}", cmd.unwrap_or("")));
+        match framebuffer_capture_raw(request_received, started, boot_id, lz4) {
             Ok(capture) => {
                 let response = response(id, true, Some(capture.result), None);
                 let _ = writeln!(stream, "{response}");
-                let _ = stream.write_all(&capture.raw);
+                let _ = stream.write_all(&capture.payload);
             }
             Err(err) => {
                 let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
@@ -801,7 +804,7 @@ mod linux {
 
     struct RawFramebufferCapture {
         result: Value,
-        raw: Vec<u8>,
+        payload: Vec<u8>,
     }
 
     fn framebuffer_capture(request_received: Instant, started: Instant) -> Result<Value, String> {
@@ -857,6 +860,7 @@ mod linux {
         request_received: Instant,
         started: Instant,
         boot_id: u64,
+        lz4: bool,
     ) -> Result<RawFramebufferCapture, String> {
         let start = Instant::now();
         let request_received_uptime_ms =
@@ -872,6 +876,13 @@ mod linux {
         fb0.read_exact(&mut raw)
             .map_err(|err| format!("read /dev/fb0: {err}"))?;
         let raw_read_us = elapsed_us(read_t);
+        let lz4_t = Instant::now();
+        let payload = if lz4 {
+            lz4_flex::compress_prepend_size(&raw)
+        } else {
+            raw.clone()
+        };
+        let lz4_encode_us = if lz4 { elapsed_us(lz4_t) } else { 0 };
         let total_us = elapsed_us(start);
         Ok(RawFramebufferCapture {
             result: json!({
@@ -882,17 +893,20 @@ mod linux {
                 "stride": geometry.stride,
                 "bpp": geometry.bpp,
                 "format": if geometry.bpp == 16 { "rgb565-le" } else { "bgrx8888" },
+                "encoding": if lz4 { "lz4-block-size-prepended" } else { "raw" },
                 "raw_bytes": raw.len(),
+                "payload_bytes": payload.len(),
                 "elapsed_ms": total_us / 1000,
                 "timings": {
                     "request_received_uptime_ms": request_received_uptime_ms,
                     "dispatch_us": dispatch_us,
                     "geometry_us": geometry_us,
                     "raw_read_us": raw_read_us,
+                    "lz4_encode_us": lz4_encode_us,
                     "total_us": total_us,
                 },
             }),
-            raw,
+            payload,
         })
     }
 
