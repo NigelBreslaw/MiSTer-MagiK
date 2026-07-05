@@ -613,6 +613,64 @@ mod tests {
     }
 
     #[test]
+    fn toggling_hidden_to_current_value_is_a_noop_fetch() {
+        let mut browser = SdCardBrowser::new();
+
+        assert_eq!(browser.set_show_hidden(false), None);
+        assert!(!browser.show_hidden());
+        assert_eq!(browser.rows().len(), 1);
+    }
+
+    #[test]
+    fn selecting_file_updates_current_path_without_fetching() {
+        let mut browser = SdCardBrowser::new();
+        assert_eq!(
+            browser.toggle_directory(ROOT_PATH).as_deref(),
+            Some(ROOT_PATH)
+        );
+        browser.apply_listing(
+            ROOT_PATH,
+            Ok(SdDirectoryListing {
+                path: ROOT_PATH.to_string(),
+                entries: vec![file("MiSTer.ini", "/MiSTer.ini")],
+                elapsed_ms: 1,
+            }),
+        );
+
+        browser.select_path("/MiSTer.ini");
+
+        assert_eq!(browser.current_path(), "/MiSTer.ini");
+        assert_eq!(browser.status(), "Selected /MiSTer.ini");
+        assert!(!browser.loading());
+        assert!(browser
+            .rows()
+            .iter()
+            .any(|row| row.id == "/MiSTer.ini" && row.current));
+    }
+
+    #[test]
+    fn refreshing_selected_file_fetches_parent_folder() {
+        let mut browser = SdCardBrowser::new();
+        browser.select_path("/games/NES/game.nes");
+
+        assert_eq!(
+            browser.refresh_current_folder().as_deref(),
+            Some("/games/NES")
+        );
+        assert_eq!(browser.current_path(), "/games/NES");
+        assert!(browser.loading());
+    }
+
+    #[test]
+    fn refreshing_folder_already_loading_does_not_queue_duplicate_fetch() {
+        let mut browser = SdCardBrowser::new();
+
+        assert_eq!(browser.refresh_current_folder().as_deref(), Some(ROOT_PATH));
+        assert_eq!(browser.refresh_current_folder(), None);
+        assert!(browser.loading());
+    }
+
+    #[test]
     fn ui_paths_normalize_duplicate_slashes_and_dots() {
         assert_eq!(normalize_ui_path(""), ROOT_PATH);
         assert_eq!(normalize_ui_path("///games//NES/./"), "/games/NES");
@@ -620,6 +678,8 @@ mod tests {
 
     #[test]
     fn material_icon_keys_cover_sd_card_file_types() {
+        assert_eq!(material_icon_key_for_file_name("LICENSE"), "license");
+        assert_eq!(material_icon_key_for_file_name("Cargo.lock"), "lock");
         assert_eq!(material_icon_key_for_file_name("MiSTer.ini"), "settings");
         assert_eq!(material_icon_key_for_file_name("menu.rbf"), "flash");
         assert_eq!(material_icon_key_for_file_name("game.mra"), "console");
@@ -627,5 +687,25 @@ mod tests {
         assert_eq!(material_icon_key_for_file_name("archive.7z"), "zip");
         assert_eq!(material_icon_key_for_file_name("save.srm"), "database");
         assert_eq!(material_icon_key_for_file_name("README.md"), "readme");
+        assert_eq!(material_icon_key_for_file_name("image.webp"), "image");
+        assert_eq!(material_icon_key_for_file_name("song.flac"), "audio");
+        assert_eq!(material_icon_key_for_file_name("movie.mkv"), "video");
+        assert_eq!(
+            material_icon_key_for_file_name("notes.markdown"),
+            "markdown"
+        );
+        assert_eq!(material_icon_key_for_file_name("config.yaml"), "yaml");
+        assert_eq!(material_icon_key_for_file_name("script.ps1"), "powershell");
+        assert_eq!(material_icon_key_for_file_name("source.cpp"), "cpp");
+        assert_eq!(material_icon_key_for_file_name("module.py"), "python");
+        assert_eq!(material_icon_key_for_file_name("font.woff2"), "font");
+        assert_eq!(material_icon_key_for_file_name("unknown.xyz"), "document");
+    }
+
+    #[test]
+    fn parent_paths_normalize_to_existing_ui_roots() {
+        assert_eq!(parent_path(ROOT_PATH), ROOT_PATH);
+        assert_eq!(parent_path("/MiSTer.ini"), ROOT_PATH);
+        assert_eq!(parent_path("//games/NES/./game.nes"), "/games/NES");
     }
 }

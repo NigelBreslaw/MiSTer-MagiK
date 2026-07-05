@@ -75,12 +75,61 @@ fn material_icon_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_icon_cache() {
+        ICON_CACHE.with_borrow_mut(HashMap::clear);
+    }
 
     #[test]
     fn icon_key_rejects_path_like_values() {
         assert_eq!(sanitize_icon_key("json"), "json");
+        assert_eq!(sanitize_icon_key(" json "), "json");
         assert_eq!(sanitize_icon_key("../json"), FALLBACK_ICON);
         assert_eq!(sanitize_icon_key("foo/bar"), FALLBACK_ICON);
+        assert_eq!(sanitize_icon_key(r"foo\bar"), FALLBACK_ICON);
         assert_eq!(sanitize_icon_key(""), FALLBACK_ICON);
+    }
+
+    #[test]
+    fn material_icon_dir_prefers_env_when_it_contains_fallback_icon() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_icon_cache();
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-icon-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("document.svg"), "<svg/>").unwrap();
+
+        std::env::set_var(ICON_ENV, &root);
+        assert_eq!(material_icon_dir(), root);
+
+        std::env::remove_var(ICON_ENV);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn material_icon_falls_back_to_document_for_missing_or_unsafe_keys() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_icon_cache();
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-icon-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("document.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#,
+        )
+        .unwrap();
+
+        std::env::set_var(ICON_ENV, &root);
+        assert!(material_icon("missing").to_rgba8().is_some());
+        assert!(material_icon("../missing").to_rgba8().is_some());
+
+        std::env::remove_var(ICON_ENV);
+        clear_icon_cache();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
