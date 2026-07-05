@@ -941,7 +941,9 @@ pub(crate) fn parse_library_database_snapshot_lz4(
     let payload_bytes = value
         .pointer("/payload_bytes")
         .and_then(Value::as_u64)
-        .ok_or_else(|| AgentError::Protocol("missing library snapshot payload_bytes".to_string()))?;
+        .ok_or_else(|| {
+            AgentError::Protocol("missing library snapshot payload_bytes".to_string())
+        })?;
     if payload.len() as u64 != payload_bytes {
         return Err(AgentError::Protocol(format!(
             "library snapshot payload size mismatch expected={payload_bytes} actual={}",
@@ -1484,7 +1486,10 @@ mod tests {
         )
         .expect("library snapshot should parse");
 
-        assert_eq!(snapshot.remote_path, "/media/fat/mister-magik/library.sqlite3");
+        assert_eq!(
+            snapshot.remote_path,
+            "/media/fat/mister-magik/library.sqlite3"
+        );
         assert_eq!(snapshot.bytes, bytes);
         assert_eq!(snapshot.raw_bytes, bytes.len() as u64);
         assert_eq!(snapshot.payload_bytes, payload.len() as u64);
@@ -1508,7 +1513,9 @@ mod tests {
             &payload,
         )
         .expect_err("checksum mismatch should fail");
-        assert!(matches!(bad_checksum, AgentError::Protocol(message) if message.contains("checksum")));
+        assert!(
+            matches!(bad_checksum, AgentError::Protocol(message) if message.contains("checksum"))
+        );
 
         let bad_path = parse_library_database_snapshot_lz4(
             &json!({
@@ -1522,7 +1529,9 @@ mod tests {
             &payload,
         )
         .expect_err("path mismatch should fail");
-        assert!(matches!(bad_path, AgentError::Protocol(message) if message.contains("allowlisted")));
+        assert!(
+            matches!(bad_path, AgentError::Protocol(message) if message.contains("allowlisted"))
+        );
     }
 
     #[test]

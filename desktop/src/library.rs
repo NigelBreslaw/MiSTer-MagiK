@@ -142,7 +142,10 @@ pub fn sync_library_catalog(host: &str) -> Result<LibrarySyncResult, String> {
         Err(err) if cache_path.is_file() => {
             let catalog = load_library_catalog(&cache_path)?;
             Ok(LibrarySyncResult {
-                status: format!("Using cached Library copy with {} games.", catalog.games.len()),
+                status: format!(
+                    "Using cached Library copy with {} games.",
+                    catalog.games.len()
+                ),
                 warning: format!("Live sync failed: {err}"),
                 catalog,
             })
@@ -385,7 +388,10 @@ fn load_identities(conn: &Connection) -> Result<HashMap<String, Vec<LibraryIdent
     let mut by_game = HashMap::new();
     for row in rows {
         let (game_id, identity) = row.map_err(|err| format!("read identity row: {err}"))?;
-        by_game.entry(game_id).or_insert_with(Vec::new).push(identity);
+        by_game
+            .entry(game_id)
+            .or_insert_with(Vec::new)
+            .push(identity);
     }
     Ok(by_game)
 }
@@ -492,9 +498,8 @@ mod tests {
 
     #[test]
     fn public_sync_entrypoint_is_referenced_for_intermediate_commit() {
-        type SnapshotFn = fn(
-            &str,
-        ) -> Result<agent_client::LibraryDatabaseSnapshot, agent_client::AgentError>;
+        type SnapshotFn =
+            fn(&str) -> Result<agent_client::LibraryDatabaseSnapshot, agent_client::AgentError>;
         let _sync: fn(&str) -> Result<LibrarySyncResult, String> = sync_library_catalog;
         let _snapshot: SnapshotFn = agent_client::fetch_library_database_snapshot;
         let _columns = [
@@ -527,7 +532,10 @@ mod tests {
         let catalog = load_library_catalog(&db).unwrap();
 
         assert_eq!(catalog.games.len(), 3);
-        assert_eq!(catalog.systems, vec!["Arcade", "Nintendo Entertainment System"]);
+        assert_eq!(
+            catalog.systems,
+            vec!["Arcade", "Nintendo Entertainment System"]
+        );
         assert_eq!(catalog.categories, vec!["Platform", "Shooter"]);
         assert_eq!(catalog.manufacturers, vec!["Capcom", "Nintendo"]);
         assert_eq!(catalog.regions, vec!["Japan", "USA"]);
