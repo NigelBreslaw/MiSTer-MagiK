@@ -895,6 +895,27 @@ pub(crate) fn for_each_arcade_list_present_segment(
     );
 }
 
+pub(crate) fn arcade_list_present_pixels(
+    update: &ArcadeListUpdate,
+    redraw_selection_frame: bool,
+) -> usize {
+    let rect = match update {
+        ArcadeListUpdate::Full(rect) => *rect,
+        ArcadeListUpdate::Scroll { rect, .. } => *rect,
+    };
+    let mut pixels = 0usize;
+    for_each_arcade_list_present_segment(rect.y0, rect.rows() as usize, |_, _, _, w, h| {
+        pixels += w * h;
+    });
+    if redraw_selection_frame {
+        let selection_h = ARCADE_ROW_HEIGHT as usize;
+        let horizontal = ARCADE_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2;
+        let vertical = ARCADE_SELECTION_FRAME_THICKNESS * selection_h * 2;
+        pixels += horizontal + vertical;
+    }
+    pixels
+}
+
 fn emit_row_overlap(
     viewport: Range<usize>,
     band: Range<usize>,
@@ -1409,8 +1430,37 @@ mod tests {
             + (ARCADE_ROW_HEIGHT as usize - ARCADE_SELECTION_FRAME_THICKNESS * 2)
                 * ARCADE_SELECTION_FRAME_THICKNESS
                 * 2;
+        let frame_present_px = ARCADE_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2
+            + ARCADE_ROW_HEIGHT as usize * ARCADE_SELECTION_FRAME_THICKNESS * 2;
 
         assert_eq!(skipped_px, frame_px);
+        assert_eq!(
+            arcade_list_present_pixels(
+                &ArcadeListUpdate::Full(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: ARCADE_LIST_W,
+                    y1: ARCADE_LIST_H,
+                }),
+                true
+            ),
+            copied_px + frame_present_px
+        );
+        assert_eq!(
+            arcade_list_present_pixels(
+                &ArcadeListUpdate::Scroll {
+                    delta_y: 12,
+                    rect: DirtyRect {
+                        x0: 0,
+                        y0: 0,
+                        x1: ARCADE_LIST_W,
+                        y1: ARCADE_LIST_H,
+                    },
+                },
+                false
+            ),
+            copied_px
+        );
     }
 
     #[test]

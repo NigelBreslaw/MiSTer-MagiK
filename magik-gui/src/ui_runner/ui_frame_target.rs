@@ -36,6 +36,12 @@ fn preview_direct_present_enabled_value(value: Option<&str>) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PresentCopyStats {
+    pub(super) rows: u32,
+    pub(super) bytes: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CatalogRefreshPolicy {
     Default,
@@ -304,11 +310,15 @@ pub(super) fn copy_arcade_list_update(
     disp: &mut MappedRgb565Framebuffer,
     renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,
-) -> u32 {
+) -> PresentCopyStats {
     match update {
         ArcadeListUpdate::Full(rect) => {
             renderer.copy_layer_to_target(target, disp, true);
-            rect.rows()
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, true)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
         }
         ArcadeListUpdate::Scroll { rect, .. } => {
             // `Scroll` means the renderer reused its cached RAM surface. A
@@ -316,7 +326,11 @@ pub(super) fn copy_arcade_list_update(
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
             renderer.copy_layer_to_target(target, disp, false);
-            rect.rows()
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, false)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
         }
     }
 }

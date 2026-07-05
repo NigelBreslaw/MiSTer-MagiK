@@ -68,7 +68,7 @@ impl<'a> LayerTarget<'a> {
         &mut self,
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
-    ) -> u32 {
+    ) -> PresentCopyStats {
         copy_arcade_list_update(self.target, self.disp, renderer, update)
     }
 }
@@ -85,6 +85,8 @@ pub(super) struct LauncherPresentRequest<'a, 'b> {
 pub(super) struct LauncherPresentResult {
     pub(super) copied_rows: u32,
     pub(super) direct_preview_rows: u32,
+    pub(super) present_bytes: usize,
+    pub(super) wasted_present_bytes: usize,
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
@@ -96,6 +98,12 @@ pub(super) struct LauncherCompositor;
 impl LauncherCompositor {
     pub(super) fn present(request: LauncherPresentRequest<'_, '_>) -> LauncherPresentResult {
         let arcade_update_label = ArcadeUpdateTrace::from_update(request.arcade_list_rect.as_ref());
+        let full_rect = request.layer_target.full_rect();
+        let cached_base_rect = if request.full_frame_present {
+            Some(full_rect)
+        } else {
+            request.slint_dirty
+        };
         let arcade_overlay_rect = request
             .arcade_list_rect
             .as_ref()
@@ -103,7 +111,7 @@ impl LauncherCompositor {
         let raw_preview_cached_rect = request.raw_preview.and_then(RawPreviewPresent::cached_rect);
         let raw_preview_direct_rect = request.raw_preview.and_then(RawPreviewPresent::direct_rect);
         let cached_present_rects = Self::cached_present_plan(
-            request.layer_target.full_rect(),
+            full_rect,
             request.full_frame_present,
             request.slint_dirty,
             raw_preview_cached_rect,
@@ -112,10 +120,19 @@ impl LauncherCompositor {
         );
 
         let mut copied_rows = 0u32;
+        let mut present_bytes = 0usize;
+        let mut wasted_present_bytes = 0usize;
         let mut cached_present_us = 0u128;
         for rect in cached_present_rects.iter() {
             let copy_start = Instant::now();
             copied_rows += request.layer_target.present_cached_rect(rect);
+            let bytes = present_bytes_for_rect(rect);
+            present_bytes += bytes;
+            wasted_present_bytes += bytes.saturating_sub(covered_cached_bytes(
+                rect,
+                cached_base_rect,
+                raw_preview_cached_rect,
+            ));
             cached_present_us += copy_start.elapsed().as_micros();
         }
 
@@ -126,20 +143,25 @@ impl LauncherCompositor {
             direct_preview_rows = request.layer_target.present_direct_preview_rect(rect);
             direct_preview_present_us = copy_start.elapsed().as_micros();
             copied_rows += direct_preview_rows;
+            present_bytes += present_bytes_for_rect(rect);
         }
 
         let mut arcade_list_present_us = 0u128;
         if let Some(update) = request.arcade_list_rect {
             let copy_start = Instant::now();
-            copied_rows += request
+            let stats = request
                 .layer_target
                 .present_arcade_list_update(request.arcade_list_renderer, update);
+            copied_rows += stats.rows;
+            present_bytes += stats.bytes;
             arcade_list_present_us = copy_start.elapsed().as_micros();
         }
 
         LauncherPresentResult {
             copied_rows,
             direct_preview_rows,
+            present_bytes,
+            wasted_present_bytes,
             cached_present_us,
             direct_preview_present_us,
             arcade_list_present_us,
@@ -167,6 +189,34 @@ impl LauncherCompositor {
         direct_overlays.push_if_some(arcade_overlay_rect);
         build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays)
     }
+}
+
+fn present_bytes_for_rect(rect: DirtyRect) -> usize {
+    rect.width()
+        .saturating_mul(rect.rows() as usize)
+        .saturating_mul(mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL)
+}
+
+fn covered_cached_bytes(
+    rect: DirtyRect,
+    base_rect: Option<DirtyRect>,
+    raw_preview_rect: Option<DirtyRect>,
+) -> usize {
+    let base = base_rect
+        .and_then(|base| rect.intersection(base))
+        .map(present_bytes_for_rect)
+        .unwrap_or_default();
+    let preview = raw_preview_rect
+        .and_then(|preview| rect.intersection(preview))
+        .map(present_bytes_for_rect)
+        .unwrap_or_default();
+    let overlap = base_rect
+        .zip(raw_preview_rect)
+        .and_then(|(base, preview)| base.intersection(preview))
+        .and_then(|overlap| rect.intersection(overlap))
+        .map(present_bytes_for_rect)
+        .unwrap_or_default();
+    base + preview - overlap
 }
 
 #[cfg(test)]

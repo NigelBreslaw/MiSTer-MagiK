@@ -2412,6 +2412,8 @@ pub(super) fn run_launcher_loop(
                 LauncherPresentResult {
                     copied_rows: 0,
                     direct_preview_rows: 0,
+                    present_bytes: 0,
+                    wasted_present_bytes: 0,
                     cached_present_us: 0,
                     direct_preview_present_us: 0,
                     arcade_list_present_us: 0,
@@ -2444,6 +2446,8 @@ pub(super) fn run_launcher_loop(
                 dirty_rect: this_rect,
                 copied_rows: presentation.copied_rows,
                 direct_preview_rows: presentation.direct_preview_rows,
+                present_bytes: presentation.present_bytes,
+                wasted_present_bytes: presentation.wasted_present_bytes,
                 cached_present_us: presentation.cached_present_us,
                 direct_preview_present_us: presentation.direct_preview_present_us,
                 arcade_list_present_us: presentation.arcade_list_present_us,

@@ -127,6 +127,10 @@ local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
 local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
+present_width="960"
+if [[ "$ui_fb_size" == "1280x720" ]]; then
+  present_width="1280"
+fi
 
 check_composition_recovery_gate() {
   local status_json="$1"
@@ -202,4 +206,4 @@ fi
 echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
 echo
-"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll
+"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width"

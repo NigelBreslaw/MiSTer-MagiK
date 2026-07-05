@@ -59,6 +59,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) dirty_rect: Option<DirtyRect>,
     pub(super) copied_rows: u32,
     pub(super) direct_preview_rows: u32,
+    pub(super) present_bytes: usize,
+    pub(super) wasted_present_bytes: usize,
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
@@ -110,6 +112,8 @@ struct PreviewScrollTraceRow {
     arcade_update: ArcadeUpdateTrace,
     copied_rows: u32,
     direct_preview_rows: u32,
+    present_bytes: usize,
+    wasted_present_bytes: usize,
     prepare_us: u128,
     catalog_worker_us: u128,
     catalog_message_count: u32,
@@ -167,7 +171,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -179,6 +183,8 @@ impl PreviewScrollTrace {
                 row.arcade_update,
                 row.copied_rows,
                 row.direct_preview_rows,
+                row.present_bytes,
+                row.wasted_present_bytes,
                 row.prepare_us,
                 row.catalog_worker_us,
                 row.catalog_message_count,
@@ -533,6 +539,8 @@ impl LauncherFrameAccounting {
             arcade_update: frame.arcade_update_label,
             copied_rows: frame.copied_rows,
             direct_preview_rows: frame.direct_preview_rows,
+            present_bytes: frame.present_bytes,
+            wasted_present_bytes: frame.wasted_present_bytes,
             prepare_us: frame.prepare_us,
             catalog_worker_us: frame.prepare_trace.catalog_worker_us,
             catalog_message_count: frame.prepare_trace.catalog_message_count,
@@ -896,7 +904,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
