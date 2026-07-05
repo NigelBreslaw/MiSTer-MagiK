@@ -7,6 +7,7 @@ mod sd_card;
 
 use agent_client::{
     connect_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
+    FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -27,6 +28,7 @@ use std::time::{Duration, Instant, SystemTime};
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
+type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
@@ -178,6 +180,7 @@ fn create_live_instance(
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
+    let live_stream_control = Arc::new(Mutex::new(None));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -232,11 +235,13 @@ fn create_live_instance(
     let stream_host = host.to_string();
     let stream_capture = Arc::clone(&framebuffer_capture);
     let stream_generation = Arc::clone(&live_stream_generation);
+    let stream_control = Arc::clone(&live_stream_control);
     instance.set_global_callback("Actions", "live-stream-changed", move |args| {
         let Some(Value::Bool(enabled)) = args.first() else {
             return Value::Void;
         };
         let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        cancel_framebuffer_stream(&stream_control);
         if let Some(instance) = stream_instance.upgrade() {
             apply_live_stream_summary(
                 &instance,
@@ -252,6 +257,7 @@ fn create_live_instance(
                 stream_instance.clone(),
                 Arc::clone(&stream_capture),
                 Arc::clone(&stream_generation),
+                Arc::clone(&stream_control),
                 stream_host.clone(),
                 generation,
             );
@@ -515,6 +521,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
+    let live_stream_control = Arc::new(Mutex::new(None));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -558,9 +565,11 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let stream_host = host.clone();
     let stream_capture = Arc::clone(&framebuffer_capture);
     let stream_generation = Arc::clone(&live_stream_generation);
+    let stream_control = Arc::clone(&live_stream_control);
     ui.global::<Actions>()
         .on_live_stream_changed(move |enabled| {
             let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            cancel_framebuffer_stream(&stream_control);
             if let Some(ui) = stream_ui.upgrade() {
                 apply_compiled_stream_summary(
                     &ui,
@@ -576,6 +585,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                     stream_ui.clone(),
                     Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
+                    Arc::clone(&stream_control),
                     stream_host.clone(),
                     generation,
                 );
@@ -1010,6 +1020,37 @@ fn apply_compiled_stream_disconnected(ui: &AppWindow, err: &str) {
     state.set_last_error(err.into());
 }
 
+fn cancel_framebuffer_stream(stream_control: &SharedFramebufferStreamControl) {
+    if let Ok(mut active) = stream_control.lock() {
+        if let Some((_, control)) = active.take() {
+            control.shutdown();
+        }
+    }
+}
+
+fn register_framebuffer_stream(
+    stream_control: &SharedFramebufferStreamControl,
+    generation: u64,
+    control: FramebufferStreamControl,
+) {
+    if let Ok(mut active) = stream_control.lock() {
+        if let Some((_, old_control)) = active.replace((generation, control)) {
+            old_control.shutdown();
+        }
+    }
+}
+
+fn unregister_framebuffer_stream(stream_control: &SharedFramebufferStreamControl, generation: u64) {
+    if let Ok(mut active) = stream_control.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|(active_generation, _)| *active_generation == generation)
+        {
+            active.take();
+        }
+    }
+}
+
 fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Duration) -> String {
     let fps = if elapsed.is_zero() {
         0.0
@@ -1158,6 +1199,7 @@ fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
+    stream_control: SharedFramebufferStreamControl,
     host: String,
     generation: u64,
 ) {
@@ -1180,6 +1222,27 @@ fn spawn_live_framebuffer_stream(
                 return;
             }
         };
+        let control = match stream.control() {
+            Ok(control) => control,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(instance) = instance.upgrade() {
+                        apply_live_stream_disconnected(&instance, &err);
+                    }
+                });
+                return;
+            }
+        };
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            control.shutdown();
+            return;
+        }
+        register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
             let result = stream.next_capture().map_err(|err| err.to_string());
@@ -1222,6 +1285,7 @@ fn spawn_live_framebuffer_stream(
                 break;
             }
         }
+        unregister_framebuffer_stream(&stream_control, generation);
     });
 }
 
@@ -1302,6 +1366,7 @@ fn spawn_compiled_framebuffer_stream(
     ui: slint::Weak<AppWindow>,
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
+    stream_control: SharedFramebufferStreamControl,
     host: String,
     generation: u64,
 ) {
@@ -1324,6 +1389,27 @@ fn spawn_compiled_framebuffer_stream(
                 return;
             }
         };
+        let control = match stream.control() {
+            Ok(control) => control,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(ui) = ui.upgrade() {
+                        apply_compiled_stream_disconnected(&ui, &err);
+                    }
+                });
+                return;
+            }
+        };
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            control.shutdown();
+            return;
+        }
+        register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
             let result = stream.next_capture().map_err(|err| err.to_string());
@@ -1366,6 +1452,7 @@ fn spawn_compiled_framebuffer_stream(
                 break;
             }
         }
+        unregister_framebuffer_stream(&stream_control, generation);
     });
 }
 

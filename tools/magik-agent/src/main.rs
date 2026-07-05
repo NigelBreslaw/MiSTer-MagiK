@@ -226,7 +226,7 @@ mod linux {
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, BufRead, BufReader, Read, Write};
     use std::mem;
-    use std::net::{Ipv4Addr, TcpListener, TcpStream};
+    use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
     use std::os::fd::RawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -649,6 +649,17 @@ mod linux {
         };
         let _ = producer.set_nodelay(true);
         let _ = stream.set_nodelay(true);
+        let producer_shutdown = producer.try_clone().ok();
+        let desktop_reader = stream.try_clone().ok();
+        if let (Some(producer_shutdown), Some(mut desktop_reader)) =
+            (producer_shutdown, desktop_reader)
+        {
+            thread::spawn(move || {
+                let mut byte = [0_u8; 1];
+                let _ = desktop_reader.read(&mut byte);
+                let _ = producer_shutdown.shutdown(Shutdown::Both);
+            });
+        }
         append_log_line("framebuffer_stream_v1_start".to_string());
         let result = json!({
             "schema": FRAMEBUFFER_STREAM_SCHEMA,
