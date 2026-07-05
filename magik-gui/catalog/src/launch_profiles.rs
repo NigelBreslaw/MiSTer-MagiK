@@ -9,6 +9,7 @@ use crate::catalog_discovery;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub const PROFILE_SET_VERSION: u32 = 6;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
@@ -1105,12 +1106,17 @@ fn special_profiles() -> Vec<LaunchProfile> {
 }
 
 fn generic_manifest_profiles() -> Vec<LaunchProfile> {
-    parse_core_launch_manifest()
-        .expect("parse core launch manifest")
-        .profiles
-        .into_iter()
-        .map(generic_manifest_profile)
-        .collect()
+    static PROFILES: OnceLock<Vec<LaunchProfile>> = OnceLock::new();
+    PROFILES
+        .get_or_init(|| {
+            parse_core_launch_manifest()
+                .expect("parse core launch manifest")
+                .profiles
+                .into_iter()
+                .map(generic_manifest_profile)
+                .collect()
+        })
+        .clone()
 }
 
 fn parse_core_launch_manifest() -> Result<CoreLaunchManifest, String> {
