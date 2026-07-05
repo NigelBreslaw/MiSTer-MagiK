@@ -82,6 +82,16 @@ pub struct FramebufferCaptureTiming {
     pub total_us: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibraryDatabaseSnapshot {
+    pub remote_path: String,
+    pub bytes: Vec<u8>,
+    pub raw_bytes: u64,
+    pub payload_bytes: u64,
+    pub checksum: String,
+    pub mtime_unix_ms: u64,
+}
+
 pub struct FramebufferStream {
     reader: BufReader<TcpStream>,
     control: FramebufferStreamControl,
@@ -203,6 +213,14 @@ pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, Agent
     let client = AgentClient::new(host.to_string(), token);
     let (value, payload) = client.request_binary("framebuffer_capture_lz4_stream", json!({}))?;
     parse_framebuffer_capture_lz4(&value, &payload)
+}
+
+pub fn fetch_library_database_snapshot(host: &str) -> Result<LibraryDatabaseSnapshot, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let (value, payload) =
+        client.request_binary("library_database_snapshot_lz4_stream", json!({}))?;
+    parse_library_database_snapshot_lz4(&value, &payload)
 }
 
 pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
@@ -893,6 +911,75 @@ fn parse_framebuffer_capture_lz4(
     })
 }
 
+pub(crate) fn parse_library_database_snapshot_lz4(
+    value: &Value,
+    payload: &[u8],
+) -> Result<LibraryDatabaseSnapshot, AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-library-db-snapshot-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected library database snapshot schema".to_string(),
+        ));
+    }
+    let remote_path = string_at(value, "/remote_path")
+        .ok_or_else(|| AgentError::Protocol("missing library snapshot remote_path".to_string()))?
+        .to_string();
+    if remote_path != "/media/fat/mister-magik/library.sqlite3" {
+        return Err(AgentError::Protocol(
+            "library snapshot remote_path is not allowlisted".to_string(),
+        ));
+    }
+    let encoding = string_at(value, "/encoding").unwrap_or("");
+    if encoding != "lz4-block" {
+        return Err(AgentError::Protocol(format!(
+            "unsupported library snapshot encoding: {encoding}"
+        )));
+    }
+    let raw_bytes = value
+        .pointer("/raw_bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| AgentError::Protocol("missing library snapshot raw_bytes".to_string()))?;
+    let payload_bytes = value
+        .pointer("/payload_bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| AgentError::Protocol("missing library snapshot payload_bytes".to_string()))?;
+    if payload.len() as u64 != payload_bytes {
+        return Err(AgentError::Protocol(format!(
+            "library snapshot payload size mismatch expected={payload_bytes} actual={}",
+            payload.len()
+        )));
+    }
+    let checksum = string_at(value, "/checksum")
+        .ok_or_else(|| AgentError::Protocol("missing library snapshot checksum".to_string()))?
+        .to_string();
+    let raw_len = usize::try_from(raw_bytes)
+        .map_err(|_| AgentError::Protocol("library snapshot is too large".to_string()))?;
+    let bytes = lz4_flex::block::decompress(payload, raw_len)
+        .map_err(|err| AgentError::Protocol(format!("decompress library snapshot LZ4: {err}")))?;
+    if bytes.len() as u64 != raw_bytes {
+        return Err(AgentError::Protocol(format!(
+            "decoded library snapshot size mismatch expected={raw_bytes} actual={}",
+            bytes.len()
+        )));
+    }
+    let actual_checksum = fnv64_hex(&bytes);
+    if actual_checksum != checksum {
+        return Err(AgentError::Protocol(format!(
+            "library snapshot checksum mismatch expected={checksum} actual={actual_checksum}"
+        )));
+    }
+    Ok(LibraryDatabaseSnapshot {
+        remote_path,
+        bytes,
+        raw_bytes,
+        payload_bytes,
+        checksum,
+        mtime_unix_ms: value
+            .pointer("/mtime_unix_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
+}
+
 fn framebuffer_raw_to_rgba(
     raw: &[u8],
     width: u64,
@@ -1022,6 +1109,15 @@ fn hex_value(byte: u8) -> Result<u8, String> {
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(format!("invalid hex byte: {byte}")),
     }
+}
+
+pub(crate) fn fnv64_hex(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
@@ -1368,6 +1464,65 @@ mod tests {
         assert_eq!(capture.timing.raw_read_us, 10);
         assert_eq!(capture.timing.lz4_encode_us, 20);
         assert_eq!(capture.timing.total_us, 30);
+    }
+
+    #[test]
+    fn parse_library_snapshot_lz4_verifies_payload() {
+        let bytes = b"sqlite bytes";
+        let payload = lz4_flex::block::compress(bytes);
+        let snapshot = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "raw_bytes": bytes.len(),
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": fnv64_hex(bytes),
+                "mtime_unix_ms": 1234
+            }),
+            &payload,
+        )
+        .expect("library snapshot should parse");
+
+        assert_eq!(snapshot.remote_path, "/media/fat/mister-magik/library.sqlite3");
+        assert_eq!(snapshot.bytes, bytes);
+        assert_eq!(snapshot.raw_bytes, bytes.len() as u64);
+        assert_eq!(snapshot.payload_bytes, payload.len() as u64);
+        assert_eq!(snapshot.checksum, fnv64_hex(bytes));
+        assert_eq!(snapshot.mtime_unix_ms, 1234);
+    }
+
+    #[test]
+    fn parse_library_snapshot_rejects_bad_checksum_and_path() {
+        let bytes = b"sqlite bytes";
+        let payload = lz4_flex::block::compress(bytes);
+        let bad_checksum = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "raw_bytes": bytes.len(),
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": "0000000000000000"
+            }),
+            &payload,
+        )
+        .expect_err("checksum mismatch should fail");
+        assert!(matches!(bad_checksum, AgentError::Protocol(message) if message.contains("checksum")));
+
+        let bad_path = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/tmp/library.sqlite3",
+                "raw_bytes": bytes.len(),
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": fnv64_hex(bytes)
+            }),
+            &payload,
+        )
+        .expect_err("path mismatch should fail");
+        assert!(matches!(bad_path, AgentError::Protocol(message) if message.contains("allowlisted")));
     }
 
     #[test]
