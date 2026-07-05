@@ -5,7 +5,7 @@ mod file_icons;
 mod macos_titlebar;
 mod sd_card;
 
-use agent_client::{fetch_dashboard, fetch_sd_directory};
+use agent_client::{fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory};
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
@@ -121,6 +121,16 @@ fn create_live_instance(
                 );
             }
         }
+        Value::Void
+    })?;
+
+    let capture_instance = instance.as_weak();
+    let capture_host = host.to_string();
+    instance.set_global_callback("Actions", "capture-framebuffer", move |_| {
+        if let Some(instance) = capture_instance.upgrade() {
+            set_live_analytics_loading(&instance);
+        }
+        spawn_live_framebuffer_capture(capture_instance.clone(), capture_host.clone());
         Value::Void
     })?;
 
@@ -394,6 +404,15 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
         }
     });
 
+    let capture_ui = ui.as_weak();
+    let capture_host = host.clone();
+    ui.global::<Actions>().on_capture_framebuffer(move || {
+        if let Some(ui) = capture_ui.upgrade() {
+            set_compiled_analytics_loading(&ui);
+        }
+        spawn_compiled_framebuffer_capture(capture_ui.clone(), capture_host.clone());
+    });
+
     let sd_toggle_ui = ui.as_weak();
     let sd_toggle_host = host.clone();
     let sd_toggle_browser = Arc::clone(&sd_browser);
@@ -544,6 +563,179 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
     state.set_last_error(snapshot.last_error.as_str().into());
 }
 
+#[cfg(feature = "live-ui")]
+fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(true));
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "status",
+        Value::String(SharedString::from("Capturing /dev/fb0...")),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "last-error",
+        Value::String(SharedString::from("")),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "details",
+        Value::String(SharedString::from("Waiting for MiSTer timing stats...")),
+    );
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_framebuffer_capture_result(
+    instance: &slint_interpreter::ComponentInstance,
+    result: Result<agent_client::FramebufferCapture, String>,
+) {
+    use slint::{Image, SharedString};
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(false));
+    match result {
+        Ok(capture) => {
+            let image = Image::load_from_path(&capture.png_path).unwrap_or_default();
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "framebuffer-image",
+                Value::Image(image),
+            );
+            let _ = instance.set_global_property("AnalyticsState", "has-image", Value::Bool(true));
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "status",
+                Value::String(SharedString::from(framebuffer_capture_status(&capture))),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "details",
+                Value::String(SharedString::from(framebuffer_capture_details(&capture))),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "last-error",
+                Value::String(SharedString::from("")),
+            );
+        }
+        Err(err) => {
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "status",
+                Value::String(SharedString::from("Framebuffer capture failed.")),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "details",
+                Value::String(SharedString::from("")),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "last-error",
+                Value::String(SharedString::from(err)),
+            );
+        }
+    }
+}
+
+#[cfg(feature = "compiled-ui")]
+fn set_compiled_analytics_loading(ui: &AppWindow) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_loading(true);
+    state.set_status("Capturing /dev/fb0...".into());
+    state.set_details("Waiting for MiSTer timing stats...".into());
+    state.set_last_error("".into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_framebuffer_capture_result(
+    ui: &AppWindow,
+    result: Result<agent_client::FramebufferCapture, String>,
+) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_loading(false);
+    match result {
+        Ok(capture) => {
+            let image = slint::Image::load_from_path(&capture.png_path).unwrap_or_default();
+            state.set_framebuffer_image(image);
+            state.set_has_image(true);
+            state.set_status(framebuffer_capture_status(&capture).into());
+            state.set_details(framebuffer_capture_details(&capture).into());
+            state.set_last_error("".into());
+        }
+        Err(err) => {
+            state.set_status("Framebuffer capture failed.".into());
+            state.set_details("".into());
+            state.set_last_error(err.into());
+        }
+    }
+}
+
+fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> String {
+    format!(
+        "Captured {}x{} {}bpp framebuffer ({} raw; {} PNG).",
+        capture.width,
+        capture.height,
+        capture.bpp,
+        format_byte_size(capture.raw_bytes),
+        format_byte_size(capture.png_bytes)
+    )
+}
+
+fn framebuffer_capture_details(capture: &agent_client::FramebufferCapture) -> String {
+    let timing = &capture.timing;
+    format!(
+        "bytes: raw={} rgba={} png={} hex={}\n\
+         timing: dispatch={} geometry={} read={} rgba={} zlib={} wrap={} png_total={} hex={} total={}\n\
+         request_uptime={}ms",
+        format_byte_size(capture.raw_bytes),
+        format_byte_size(rgba_bytes(capture)),
+        format_byte_size(capture.png_bytes),
+        format_byte_size(capture.png_hex_bytes),
+        format_us(timing.dispatch_us),
+        format_us(timing.geometry_us),
+        format_us(timing.raw_read_us),
+        format_us(timing.rgba_convert_us),
+        format_us(timing.zlib_encode_us),
+        format_us(timing.png_wrap_us),
+        format_us(timing.png_total_us),
+        format_us(timing.hex_encode_us),
+        format_us(timing.total_us),
+        timing.request_received_uptime_ms,
+    )
+}
+
+fn rgba_bytes(capture: &agent_client::FramebufferCapture) -> u64 {
+    capture
+        .width
+        .checked_mul(4)
+        .and_then(|row| row.checked_add(1))
+        .and_then(|row| row.checked_mul(capture.height))
+        .unwrap_or(0)
+}
+
+fn format_byte_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / MB)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_us(us: u64) -> String {
+    if us >= 1000 {
+        format!("{:.2}ms", us as f64 / 1000.0)
+    } else {
+        format!("{us}us")
+    }
+}
+
 #[cfg(feature = "compiled-ui")]
 fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
     use slint::{ModelRc, VecModel};
@@ -612,6 +804,21 @@ fn spawn_live_sd_fetch(
     });
 }
 
+#[cfg(feature = "live-ui")]
+fn spawn_live_framebuffer_capture(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    host: String,
+) {
+    std::thread::spawn(move || {
+        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(instance) = instance.upgrade() {
+                apply_live_framebuffer_capture_result(&instance, result);
+            }
+        });
+    });
+}
+
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_sd_fetch(
     ui: slint::Weak<AppWindow>,
@@ -628,6 +835,18 @@ fn spawn_compiled_sd_fetch(
             }
             if let Some(ui) = ui.upgrade() {
                 apply_compiled_sd_state(&ui, &browser);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_framebuffer_capture(ui: slint::Weak<AppWindow>, host: String) {
+    std::thread::spawn(move || {
+        let result = fetch_framebuffer_capture(&host).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui.upgrade() {
+                apply_compiled_framebuffer_capture_result(&ui, result);
             }
         });
     });
@@ -712,5 +931,56 @@ mod tests {
         assert!(value.leading_is_directory);
         assert!(value.has_children);
         assert_eq!(value.loading_children_badge.as_str(), "loading");
+    }
+
+    #[test]
+    fn byte_size_labels_use_kb_and_mb() {
+        assert_eq!(format_byte_size(512), "512 B");
+        assert_eq!(format_byte_size(1536), "1.5 KB");
+        assert_eq!(format_byte_size(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn framebuffer_capture_status_includes_raw_and_png_sizes() {
+        let capture = agent_client::FramebufferCapture {
+            png_path: std::path::PathBuf::from("/tmp/fb.png"),
+            width: 960,
+            height: 540,
+            bpp: 16,
+            raw_bytes: 1_036_800,
+            png_bytes: 2_074_363,
+            png_hex_bytes: 4_148_726,
+            timing: agent_client::FramebufferCaptureTiming::default(),
+        };
+
+        assert_eq!(
+            framebuffer_capture_status(&capture),
+            "Captured 960x540 16bpp framebuffer (1012.5 KB raw; 2.0 MB PNG)."
+        );
+    }
+
+    #[test]
+    fn framebuffer_capture_details_include_stage_timings() {
+        let capture = agent_client::FramebufferCapture {
+            png_path: std::path::PathBuf::from("/tmp/fb.png"),
+            width: 960,
+            height: 540,
+            bpp: 16,
+            raw_bytes: 1_036_800,
+            png_bytes: 64 * 1024,
+            png_hex_bytes: 128 * 1024,
+            timing: agent_client::FramebufferCaptureTiming {
+                raw_read_us: 1200,
+                zlib_encode_us: 34_567,
+                total_us: 45_678,
+                ..Default::default()
+            },
+        };
+
+        let details = framebuffer_capture_details(&capture);
+        assert!(details.contains("rgba=2.0 MB"));
+        assert!(details.contains("read=1.20ms"));
+        assert!(details.contains("zlib=34.57ms"));
+        assert!(details.contains("total=45.68ms"));
     }
 }

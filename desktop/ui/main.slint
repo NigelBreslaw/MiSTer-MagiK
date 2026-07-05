@@ -54,6 +54,15 @@ export global AppState {
     in-out property <string> selected-page: "debug";
 }
 
+export global AnalyticsState {
+    in-out property <image> framebuffer-image;
+    in-out property <string> status: "Ready to capture /dev/fb0.";
+    in-out property <string> details: "";
+    in-out property <string> last-error: "";
+    in-out property <bool> loading: false;
+    in-out property <bool> has-image: false;
+}
+
 export global SdCardState {
     in-out property <string> current-path: "/";
     in-out property <string> status: "Ready to browse /media/fat.";
@@ -88,6 +97,7 @@ export global SdCardState {
 export global Actions {
     callback refresh-status();
     callback select-page(string);
+    callback capture-framebuffer();
     callback sd-row-toggle(string);
     callback sd-row-current(string);
     callback sd-refresh-folder();
@@ -221,6 +231,14 @@ component Sidebar {
                     has-leading-visual: true;
                     leading-icon: Icons.file_directory_fill;
                     clicked => { Actions.select-page("sd-card"); }
+                }
+
+                NavListItem {
+                    label: "Analytics";
+                    active: AppState.selected-page == "analytics";
+                    has-leading-visual: true;
+                    leading-icon: Icons.eye;
+                    clicked => { Actions.select-page("analytics"); }
                 }
             }
         }
@@ -463,6 +481,88 @@ component SdCardPage {
     }
 }
 
+component AnalyticsPage {
+    VerticalLayout {
+        spacing: 16px;
+        alignment: start;
+
+        ViewTitle {
+            title: "Analytics";
+            subtitle: AnalyticsState.status;
+        }
+
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 24px;
+            spacing: 16px;
+            alignment: start;
+
+            if AnalyticsState.last-error != "": Banner {
+                title: "Framebuffer capture error";
+                description: AnalyticsState.last-error;
+                variant: BannerVariant.critical;
+            }
+
+            if AnalyticsState.details != "": Rectangle {
+                width: 100%;
+                min-height: 104px;
+                border-width: 1px;
+                border-color: PrimerColors.borderColor-default;
+                border-radius: LayoutTokens.borderRadius-medium;
+                background: PrimerColors.bgColor-inset;
+
+                Text {
+                    x: 12px;
+                    y: 10px;
+                    width: parent.width - 24px;
+                    text: AnalyticsState.details;
+                    color: PrimerColors.fgColor-muted;
+                    font-family: "Vera Mono";
+                    font-size: LayoutTokens.text-body-size-small;
+                    wrap: word-wrap;
+                }
+            }
+
+            TableContainer {
+                vertical-stretch: 1;
+                title: "Framebuffer";
+                subtitle: "Current /dev/fb0 image from the MiSTer agent.";
+                primary-action-label: AnalyticsState.loading ? "Capturing..." : "Capture framebuffer";
+                primary-action-variant: ButtonVariant.default;
+                primary-action => { Actions.capture-framebuffer(); }
+
+                Rectangle {
+                    width: 100%;
+                    vertical-stretch: 1;
+                    min-height: 420px;
+                    border-width: 1px;
+                    border-color: PrimerColors.borderColor-default;
+                    border-radius: LayoutTokens.borderRadius-medium;
+                    background: #0d1117;
+                    clip: true;
+
+                    if AnalyticsState.has-image: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: AnalyticsState.framebuffer-image;
+                        image-fit: contain;
+                    }
+
+                    if !AnalyticsState.has-image: Text {
+                        x: 24px;
+                        y: 24px;
+                        width: parent.width - 48px;
+                        text: AnalyticsState.loading ? "Capturing framebuffer..." : "No framebuffer capture yet.";
+                        color: #8c959f;
+                        font-size: LayoutTokens.text-body-size-small;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "MiSTer MagiK";
     preferred-width: 1100px;
@@ -508,6 +608,11 @@ export component AppWindow inherits Window {
                     }
 
                     if AppState.selected-page == "sd-card": SdCardPage {
+                        width: parent.width;
+                        height: parent.height;
+                    }
+
+                    if AppState.selected-page == "analytics": AnalyticsPage {
                         width: parent.width;
                         height: parent.height;
                     }

@@ -39,6 +39,32 @@ pub enum AgentError {
     Command(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FramebufferCapture {
+    pub png_path: PathBuf,
+    pub width: u64,
+    pub height: u64,
+    pub bpp: u64,
+    pub raw_bytes: u64,
+    pub png_bytes: u64,
+    pub png_hex_bytes: u64,
+    pub timing: FramebufferCaptureTiming,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FramebufferCaptureTiming {
+    pub request_received_uptime_ms: u64,
+    pub dispatch_us: u64,
+    pub geometry_us: u64,
+    pub raw_read_us: u64,
+    pub rgba_convert_us: u64,
+    pub zlib_encode_us: u64,
+    pub png_wrap_us: u64,
+    pub png_total_us: u64,
+    pub hex_encode_us: u64,
+    pub total_us: u64,
+}
+
 pub fn read_token() -> (String, TokenSource) {
     if let Ok(token) = env::var("MISTER_AGENT_TOKEN") {
         let token = token.trim().to_string();
@@ -125,6 +151,13 @@ pub fn fetch_sd_directory(
         json!({ "path": path, "show_hidden": show_hidden }),
     )?;
     parse_sd_directory(&value)
+}
+
+pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let value = client.request("framebuffer_capture", json!({}))?;
+    parse_framebuffer_capture(&value)
 }
 
 struct AgentClient {
@@ -264,6 +297,98 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
         entries,
         elapsed_ms,
     })
+}
+
+fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-framebuffer-capture-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected framebuffer_capture response schema".to_string(),
+        ));
+    }
+    let png_hex = string_at(value, "/png_hex")
+        .ok_or_else(|| AgentError::Protocol("missing framebuffer png_hex".to_string()))?;
+    let png = decode_hex(png_hex).map_err(AgentError::Protocol)?;
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err(AgentError::Protocol(
+            "framebuffer capture did not return a PNG".to_string(),
+        ));
+    }
+    let png_path = local_framebuffer_capture_path();
+    fs::write(&png_path, &png)
+        .map_err(|err| AgentError::Unreachable(format!("write framebuffer PNG: {err}")))?;
+    Ok(FramebufferCapture {
+        png_path,
+        width: value.pointer("/width").and_then(Value::as_u64).unwrap_or(0),
+        height: value
+            .pointer("/height")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        bpp: value.pointer("/bpp").and_then(Value::as_u64).unwrap_or(0),
+        raw_bytes: value
+            .pointer("/raw_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        png_bytes: png.len() as u64,
+        png_hex_bytes: value
+            .pointer("/png_hex_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or((png.len() * 2) as u64),
+        timing: parse_framebuffer_capture_timing(value),
+    })
+}
+
+fn parse_framebuffer_capture_timing(value: &Value) -> FramebufferCaptureTiming {
+    fn field(value: &Value, name: &str) -> u64 {
+        value
+            .pointer(&format!("/timings/{name}"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    }
+
+    FramebufferCaptureTiming {
+        request_received_uptime_ms: field(value, "request_received_uptime_ms"),
+        dispatch_us: field(value, "dispatch_us"),
+        geometry_us: field(value, "geometry_us"),
+        raw_read_us: field(value, "raw_read_us"),
+        rgba_convert_us: field(value, "rgba_convert_us"),
+        zlib_encode_us: field(value, "zlib_encode_us"),
+        png_wrap_us: field(value, "png_wrap_us"),
+        png_total_us: field(value, "png_total_us"),
+        hex_encode_us: field(value, "hex_encode_us"),
+        total_us: field(value, "total_us"),
+    }
+}
+
+fn local_framebuffer_capture_path() -> PathBuf {
+    env::temp_dir().join(format!(
+        "mister-magik-framebuffer-{}.png",
+        std::process::id()
+    ))
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err("hex payload has odd length".to_string());
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let raw = hex.as_bytes();
+    let mut i = 0;
+    while i < raw.len() {
+        let hi = hex_value(raw[i])?;
+        let lo = hex_value(raw[i + 1])?;
+        bytes.push((hi << 4) | lo);
+        i += 2;
+    }
+    Ok(bytes)
+}
+
+fn hex_value(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("invalid hex byte: {byte}")),
+    }
 }
 
 fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
@@ -536,6 +661,55 @@ mod tests {
         let err = parse_sd_directory(&json!({"schema": "wrong"}))
             .expect_err("schema mismatch should fail");
         assert!(matches!(err, AgentError::Protocol(message) if message.contains("schema")));
+    }
+
+    #[test]
+    fn parse_framebuffer_capture_writes_png_file() {
+        let capture = parse_framebuffer_capture(&json!({
+            "schema": "mister-magik-framebuffer-capture-v1",
+            "width": 2,
+            "height": 1,
+            "bpp": 16,
+            "raw_bytes": 4,
+            "png_hex_bytes": 24,
+            "timings": {
+                "raw_read_us": 10,
+                "zlib_encode_us": 20,
+                "total_us": 30
+            },
+            "png_hex": "89504e470d0a1a0a00000000"
+        }))
+        .expect("framebuffer capture should parse");
+
+        assert_eq!(capture.width, 2);
+        assert_eq!(capture.height, 1);
+        assert_eq!(capture.bpp, 16);
+        assert_eq!(capture.raw_bytes, 4);
+        assert_eq!(capture.png_bytes, 12);
+        assert_eq!(capture.png_hex_bytes, 24);
+        assert_eq!(capture.timing.raw_read_us, 10);
+        assert_eq!(capture.timing.zlib_encode_us, 20);
+        assert_eq!(capture.timing.total_us, 30);
+        assert!(fs::read(&capture.png_path)
+            .expect("capture PNG should be written")
+            .starts_with(b"\x89PNG\r\n\x1a\n"));
+        let _ = fs::remove_file(capture.png_path);
+    }
+
+    #[test]
+    fn parse_framebuffer_capture_rejects_bad_shape() {
+        let schema = parse_framebuffer_capture(&json!({"schema": "wrong"}))
+            .expect_err("schema mismatch should fail");
+        assert!(matches!(schema, AgentError::Protocol(message) if message.contains("schema")));
+
+        let not_png = parse_framebuffer_capture(&json!({
+            "schema": "mister-magik-framebuffer-capture-v1",
+            "png_hex": "00010203"
+        }))
+        .expect_err("non-PNG payload should fail");
+        assert!(
+            matches!(not_png, AgentError::Protocol(message) if message.contains("did not return a PNG"))
+        );
     }
 
     #[test]
