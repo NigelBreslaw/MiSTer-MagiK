@@ -10,8 +10,9 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const AGENT_PORT: u16 = 7498;
@@ -74,7 +75,12 @@ pub struct FramebufferCaptureTiming {
 
 pub struct FramebufferStream {
     reader: BufReader<TcpStream>,
+    control: FramebufferStreamControl,
     state: FramebufferStreamState,
+}
+
+pub struct FramebufferStreamControl {
+    stream: TcpStream,
 }
 
 #[derive(Default)]
@@ -182,11 +188,39 @@ pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, Agent
 pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
-    let (_, reader) = client.request_stream("framebuffer_stream_v1", json!({}))?;
+    let (_, reader) = request_framebuffer_stream_with_retry(&client)?;
+    let control = FramebufferStreamControl {
+        stream: reader
+            .get_ref()
+            .try_clone()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?,
+    };
     Ok(FramebufferStream {
         reader,
+        control,
         state: FramebufferStreamState::default(),
     })
+}
+
+fn request_framebuffer_stream_with_retry(
+    client: &AgentClient,
+) -> Result<(Value, BufReader<TcpStream>), AgentError> {
+    let mut last_error = None;
+    for attempt in 0..5 {
+        match client.request_stream("framebuffer_stream_v1", json!({})) {
+            Ok(stream) => return Ok(stream),
+            Err(AgentError::Command(err))
+                if err.contains("framebuffer stream already has a desktop consumer") =>
+            {
+                last_error = Some(AgentError::Command(err));
+                thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        AgentError::Command("framebuffer stream already has a desktop consumer".to_string())
+    }))
 }
 
 struct AgentClient {
@@ -329,6 +363,16 @@ impl AgentClient {
 }
 
 impl FramebufferStream {
+    pub fn control(&self) -> Result<FramebufferStreamControl, AgentError> {
+        Ok(FramebufferStreamControl {
+            stream: self
+                .control
+                .stream
+                .try_clone()
+                .map_err(|err| AgentError::Unreachable(err.to_string()))?,
+        })
+    }
+
     pub fn next_capture(&mut self) -> Result<FramebufferCapture, AgentError> {
         loop {
             let (header, payload) = read_frame(&mut self.reader).map_err(|err| {
@@ -356,6 +400,12 @@ impl FramebufferStream {
                 }
             }
         }
+    }
+}
+
+impl FramebufferStreamControl {
+    pub fn shutdown(&self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
     }
 }
 
