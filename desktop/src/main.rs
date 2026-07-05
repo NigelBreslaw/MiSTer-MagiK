@@ -586,13 +586,13 @@ fn apply_live_framebuffer_capture_result(
     instance: &slint_interpreter::ComponentInstance,
     result: Result<agent_client::FramebufferCapture, String>,
 ) {
-    use slint::{Image, SharedString};
+    use slint::SharedString;
     use slint_interpreter::Value;
 
     let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(false));
     match result {
         Ok(capture) => {
-            let image = Image::load_from_path(&capture.png_path).unwrap_or_default();
+            let image = framebuffer_capture_image(&capture);
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "framebuffer-image",
@@ -642,8 +642,7 @@ fn apply_compiled_framebuffer_capture_result(
     state.set_loading(false);
     match result {
         Ok(capture) => {
-            let image = slint::Image::load_from_path(&capture.png_path).unwrap_or_default();
-            state.set_framebuffer_image(image);
+            state.set_framebuffer_image(framebuffer_capture_image(&capture));
             state.set_has_image(true);
             state.set_status(framebuffer_capture_status(&capture).into());
             state.set_last_error("".into());
@@ -657,13 +656,36 @@ fn apply_compiled_framebuffer_capture_result(
 
 fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> String {
     format!(
-        "Captured {}x{} {}bpp framebuffer ({} raw; {} PNG).",
+        "Captured {}x{} {}bpp framebuffer ({} payload; {} raw; {}).",
         capture.width,
         capture.height,
         capture.bpp,
+        format_byte_size(capture.payload_bytes),
         format_byte_size(capture.raw_bytes),
-        format_byte_size(capture.png_bytes)
+        capture.encoding
     )
+}
+
+fn framebuffer_capture_image(capture: &agent_client::FramebufferCapture) -> slint::Image {
+    let width = u32::try_from(capture.width).unwrap_or(0);
+    let height = u32::try_from(capture.height).unwrap_or(0);
+    if width == 0 || height == 0 {
+        return slint::Image::default();
+    }
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+    let dst = pixels.make_mut_slice();
+    if capture.rgba_pixels.len() != dst.len().saturating_mul(4) {
+        return slint::Image::default();
+    }
+    for (pixel, rgba) in dst.iter_mut().zip(capture.rgba_pixels.chunks_exact(4)) {
+        *pixel = slint::Rgba8Pixel {
+            r: rgba[0],
+            g: rgba[1],
+            b: rgba[2],
+            a: rgba[3],
+        };
+    }
+    slint::Image::from_rgba8(pixels)
 }
 
 fn format_byte_size(bytes: u64) -> String {
@@ -883,21 +905,24 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_capture_status_includes_raw_and_png_sizes() {
+    fn framebuffer_capture_status_includes_payload_and_raw_sizes() {
         let capture = agent_client::FramebufferCapture {
             png_path: std::path::PathBuf::from("/tmp/fb.png"),
+            rgba_pixels: Vec::new(),
             width: 960,
             height: 540,
             bpp: 16,
             raw_bytes: 1_036_800,
-            png_bytes: 2_074_363,
-            png_hex_bytes: 4_148_726,
+            payload_bytes: 10_212,
+            encoding: "lz4-block-size-prepended".to_string(),
+            png_bytes: 0,
+            png_hex_bytes: 0,
             timing: agent_client::FramebufferCaptureTiming::default(),
         };
 
         assert_eq!(
             framebuffer_capture_status(&capture),
-            "Captured 960x540 16bpp framebuffer (1012 KB raw; 2.0 MB PNG)."
+            "Captured 960x540 16bpp framebuffer (10 KB payload; 1012 KB raw; lz4-block-size-prepended)."
         );
     }
 }

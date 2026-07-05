@@ -11,6 +11,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+lz4_flex = "0.13.1"
 serde_json = "1"
 slint = { version = "~1.17", default-features = false, features = ["std", "backend-winit", "renderer-skia", "compat-1-2", "accessibility", "unstable-winit-030"] }
 slint-interpreter = { version = "~1.17", optional = true, default-features = false, features = ["compat-1-2", "display-diagnostics"] }

@@ -6,7 +6,7 @@ use crate::sd_card::{SdDirectoryListing, SdEntry, SdEntryKind};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -42,10 +42,13 @@ pub enum AgentError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FramebufferCapture {
     pub png_path: PathBuf,
+    pub rgba_pixels: Vec<u8>,
     pub width: u64,
     pub height: u64,
     pub bpp: u64,
     pub raw_bytes: u64,
+    pub payload_bytes: u64,
+    pub encoding: String,
     pub png_bytes: u64,
     pub png_hex_bytes: u64,
     pub timing: FramebufferCaptureTiming,
@@ -62,6 +65,7 @@ pub struct FramebufferCaptureTiming {
     pub png_wrap_us: u64,
     pub png_total_us: u64,
     pub hex_encode_us: u64,
+    pub lz4_encode_us: u64,
     pub total_us: u64,
 }
 
@@ -156,8 +160,8 @@ pub fn fetch_sd_directory(
 pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
-    let value = client.request("framebuffer_capture", json!({}))?;
-    parse_framebuffer_capture(&value)
+    let (value, payload) = client.request_binary("framebuffer_capture_lz4_stream", json!({}))?;
+    parse_framebuffer_capture_lz4(&value, &payload)
 }
 
 struct AgentClient {
@@ -205,6 +209,55 @@ impl AgentClient {
             .read_line(&mut line)
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         parse_response(&line, start.elapsed())
+    }
+
+    fn request_binary(&self, cmd: &str, args: Value) -> Result<(Value, Vec<u8>), AgentError> {
+        let addr = format!("{}:{AGENT_PORT}", self.host)
+            .to_socket_addrs()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?
+            .next()
+            .ok_or_else(|| {
+                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
+            })?;
+
+        let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_read_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_write_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let request = json!({
+            "token": self.token,
+            "id": 1,
+            "cmd": cmd,
+            "args": args,
+        });
+        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .flush()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        let value = parse_response(&line, Duration::ZERO)?;
+        let payload_bytes = value
+            .pointer("/payload_bytes")
+            .or_else(|| value.pointer("/raw_bytes"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                AgentError::Protocol("binary response missing payload byte count".to_string())
+            })? as usize;
+        let mut payload = vec![0u8; payload_bytes];
+        reader
+            .read_exact(&mut payload)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        Ok((value, payload))
     }
 }
 
@@ -299,6 +352,7 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
     })
 }
 
+#[cfg(test)]
 fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentError> {
     if string_at(value, "/schema") != Some("mister-magik-framebuffer-capture-v1") {
         return Err(AgentError::Protocol(
@@ -318,6 +372,7 @@ fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentE
         .map_err(|err| AgentError::Unreachable(format!("write framebuffer PNG: {err}")))?;
     Ok(FramebufferCapture {
         png_path,
+        rgba_pixels: Vec::new(),
         width: value.pointer("/width").and_then(Value::as_u64).unwrap_or(0),
         height: value
             .pointer("/height")
@@ -328,6 +383,11 @@ fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentE
             .pointer("/raw_bytes")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        payload_bytes: value
+            .pointer("/png_hex_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or((png.len() * 2) as u64),
+        encoding: "png-hex".to_string(),
         png_bytes: png.len() as u64,
         png_hex_bytes: value
             .pointer("/png_hex_bytes")
@@ -335,6 +395,125 @@ fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentE
             .unwrap_or((png.len() * 2) as u64),
         timing: parse_framebuffer_capture_timing(value),
     })
+}
+
+fn parse_framebuffer_capture_lz4(
+    value: &Value,
+    payload: &[u8],
+) -> Result<FramebufferCapture, AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-framebuffer-raw-stream-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected framebuffer raw stream response schema".to_string(),
+        ));
+    }
+    let encoding = string_at(value, "/encoding").unwrap_or("raw");
+    let raw = if encoding == "lz4-block-size-prepended" {
+        lz4_flex::decompress_size_prepended(payload)
+            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer LZ4: {err}")))?
+    } else {
+        payload.to_vec()
+    };
+    let width = value.pointer("/width").and_then(Value::as_u64).unwrap_or(0);
+    let height = value.pointer("/height").and_then(Value::as_u64).unwrap_or(0);
+    let stride = value.pointer("/stride").and_then(Value::as_u64).unwrap_or(0);
+    let bpp = value.pointer("/bpp").and_then(Value::as_u64).unwrap_or(0);
+    let expected_raw = value
+        .pointer("/raw_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(raw.len() as u64) as usize;
+    if raw.len() != expected_raw {
+        return Err(AgentError::Protocol(format!(
+            "decoded framebuffer size mismatch expected={expected_raw} actual={}",
+            raw.len()
+        )));
+    }
+    let rgba_pixels = framebuffer_raw_to_rgba(&raw, width, height, stride, bpp)?;
+    Ok(FramebufferCapture {
+        png_path: PathBuf::new(),
+        rgba_pixels,
+        width,
+        height,
+        bpp,
+        raw_bytes: raw.len() as u64,
+        payload_bytes: payload.len() as u64,
+        encoding: encoding.to_string(),
+        png_bytes: 0,
+        png_hex_bytes: 0,
+        timing: parse_framebuffer_capture_timing(value),
+    })
+}
+
+fn framebuffer_raw_to_rgba(
+    raw: &[u8],
+    width: u64,
+    height: u64,
+    stride: u64,
+    bpp: u64,
+) -> Result<Vec<u8>, AgentError> {
+    let width = usize::try_from(width)
+        .map_err(|_| AgentError::Protocol("framebuffer width too large".to_string()))?;
+    let height = usize::try_from(height)
+        .map_err(|_| AgentError::Protocol("framebuffer height too large".to_string()))?;
+    let stride = usize::try_from(stride)
+        .map_err(|_| AgentError::Protocol("framebuffer stride too large".to_string()))?;
+    let bytes_per_pixel = match bpp {
+        16 => 2,
+        32 => 4,
+        _ => {
+            return Err(AgentError::Protocol(format!(
+                "unsupported framebuffer bpp: {bpp}"
+            )))
+        }
+    };
+    let packed_stride = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| AgentError::Protocol("framebuffer row size overflow".to_string()))?;
+    if stride < packed_stride {
+        return Err(AgentError::Protocol(format!(
+            "framebuffer stride {stride} smaller than packed row {packed_stride}"
+        )));
+    }
+    let expected = stride
+        .checked_mul(height)
+        .ok_or_else(|| AgentError::Protocol("framebuffer byte size overflow".to_string()))?;
+    if raw.len() < expected {
+        return Err(AgentError::Protocol(format!(
+            "framebuffer raw too short expected={expected} actual={}",
+            raw.len()
+        )));
+    }
+
+    let mut rgba = Vec::with_capacity(
+        width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| AgentError::Protocol("RGBA image size overflow".to_string()))?,
+    );
+    for y in 0..height {
+        for x in 0..width {
+            match bpp {
+                16 => {
+                    let i = y * stride + x * 2;
+                    let v = u16::from_le_bytes([raw[i], raw[i + 1]]);
+                    let r5 = (v >> 11) & 0x1f;
+                    let g6 = (v >> 5) & 0x3f;
+                    let b5 = v & 0x1f;
+                    rgba.extend_from_slice(&[
+                        ((r5 << 3) | (r5 >> 2)) as u8,
+                        ((g6 << 2) | (g6 >> 4)) as u8,
+                        ((b5 << 3) | (b5 >> 2)) as u8,
+                        0xff,
+                    ]);
+                }
+                32 => {
+                    let i = y * stride + x * 4;
+                    rgba.extend_from_slice(&[raw[i + 2], raw[i + 1], raw[i], 0xff]);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    Ok(rgba)
 }
 
 fn parse_framebuffer_capture_timing(value: &Value) -> FramebufferCaptureTiming {
@@ -355,10 +534,12 @@ fn parse_framebuffer_capture_timing(value: &Value) -> FramebufferCaptureTiming {
         png_wrap_us: field(value, "png_wrap_us"),
         png_total_us: field(value, "png_total_us"),
         hex_encode_us: field(value, "hex_encode_us"),
+        lz4_encode_us: field(value, "lz4_encode_us"),
         total_us: field(value, "total_us"),
     }
 }
 
+#[cfg(test)]
 fn local_framebuffer_capture_path() -> PathBuf {
     env::temp_dir().join(format!(
         "mister-magik-framebuffer-{}.png",
@@ -366,6 +547,7 @@ fn local_framebuffer_capture_path() -> PathBuf {
     ))
 }
 
+#[cfg(test)]
 fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
         return Err("hex payload has odd length".to_string());
@@ -382,6 +564,7 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn hex_value(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
@@ -685,6 +868,8 @@ mod tests {
         assert_eq!(capture.height, 1);
         assert_eq!(capture.bpp, 16);
         assert_eq!(capture.raw_bytes, 4);
+        assert_eq!(capture.payload_bytes, 24);
+        assert_eq!(capture.encoding, "png-hex");
         assert_eq!(capture.png_bytes, 12);
         assert_eq!(capture.png_hex_bytes, 24);
         assert_eq!(capture.timing.raw_read_us, 10);
@@ -694,6 +879,46 @@ mod tests {
             .expect("capture PNG should be written")
             .starts_with(b"\x89PNG\r\n\x1a\n"));
         let _ = fs::remove_file(capture.png_path);
+    }
+
+    #[test]
+    fn parse_framebuffer_lz4_capture_expands_rgb565_pixels() {
+        let raw = [0x00, 0xf8, 0xe0, 0x07];
+        let payload = lz4_flex::compress_prepend_size(&raw);
+        let capture = parse_framebuffer_capture_lz4(
+            &json!({
+                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "width": 2,
+                "height": 1,
+                "stride": 4,
+                "bpp": 16,
+                "format": "rgb565-le",
+                "encoding": "lz4-block-size-prepended",
+                "raw_bytes": 4,
+                "payload_bytes": payload.len(),
+                "timings": {
+                    "raw_read_us": 10,
+                    "lz4_encode_us": 20,
+                    "total_us": 30
+                }
+            }),
+            &payload,
+        )
+        .expect("LZ4 framebuffer capture should parse");
+
+        assert_eq!(capture.width, 2);
+        assert_eq!(capture.height, 1);
+        assert_eq!(capture.bpp, 16);
+        assert_eq!(capture.raw_bytes, 4);
+        assert_eq!(capture.payload_bytes, payload.len() as u64);
+        assert_eq!(capture.encoding, "lz4-block-size-prepended");
+        assert_eq!(
+            capture.rgba_pixels,
+            vec![255, 0, 0, 255, 0, 255, 0, 255]
+        );
+        assert_eq!(capture.timing.raw_read_us, 10);
+        assert_eq!(capture.timing.lz4_encode_us, 20);
+        assert_eq!(capture.timing.total_us, 30);
     }
 
     #[test]
