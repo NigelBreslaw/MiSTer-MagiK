@@ -210,6 +210,91 @@ mod sd_browse {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+mod library_snapshot {
+    use serde_json::{json, Value};
+    use std::fs;
+    use std::path::Path;
+    use std::time::UNIX_EPOCH;
+
+    pub const SCHEMA: &str = "mister-magik-library-db-snapshot-v1";
+    pub const LIBRARY_DB_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
+
+    #[derive(Debug)]
+    pub struct LibraryDatabaseSnapshot {
+        pub result: Value,
+        pub payload: Vec<u8>,
+    }
+
+    #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
+    pub fn snapshot_for_args(args: &Value) -> Result<LibraryDatabaseSnapshot, String> {
+        let remote_path = args
+            .get("remote_path")
+            .and_then(Value::as_str)
+            .unwrap_or(LIBRARY_DB_PATH);
+        snapshot(remote_path)
+    }
+
+    #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
+    pub fn snapshot(remote_path: &str) -> Result<LibraryDatabaseSnapshot, String> {
+        validate_remote_path(remote_path)?;
+        snapshot_allowlisted_path(Path::new(remote_path), remote_path)
+    }
+
+    fn snapshot_allowlisted_path(
+        path: &Path,
+        remote_path: &str,
+    ) -> Result<LibraryDatabaseSnapshot, String> {
+        let metadata = fs::metadata(path).map_err(|err| format!("stat {remote_path}: {err}"))?;
+        if !metadata.is_file() {
+            return Err(format!("library database is not a file: {remote_path}"));
+        }
+        let bytes = fs::read(path).map_err(|err| format!("read {remote_path}: {err}"))?;
+        let raw_bytes = bytes.len() as u64;
+        let checksum = fnv64_hex(&bytes);
+        let payload = lz4_flex::block::compress(&bytes);
+        let mtime_unix_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        Ok(LibraryDatabaseSnapshot {
+            result: json!({
+                "schema": SCHEMA,
+                "remote_path": remote_path,
+                "raw_bytes": raw_bytes,
+                "payload_bytes": payload.len() as u64,
+                "encoding": "lz4-block",
+                "checksum": checksum,
+                "mtime_unix_ms": mtime_unix_ms,
+            }),
+            payload,
+        })
+    }
+
+    pub fn validate_remote_path(remote_path: &str) -> Result<(), String> {
+        if remote_path != LIBRARY_DB_PATH {
+            return Err("library snapshot path is not allowlisted".to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn snapshot_test_path(path: &Path) -> Result<LibraryDatabaseSnapshot, String> {
+        snapshot_allowlisted_path(path, LIBRARY_DB_PATH)
+    }
+
+    pub fn fnv64_hex(bytes: &[u8]) -> String {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use flate2::{write::ZlibEncoder, Compression};
@@ -576,6 +661,9 @@ mod linux {
                 {
                     return;
                 }
+                if maybe_handle_library_database_snapshot_stream(&line, &token, &mut stream) {
+                    return;
+                }
                 handle_control_line(&line, &token, boot_id, started, &mut reader)
             }
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
@@ -711,6 +799,54 @@ mod linux {
                 let response = response(id, true, Some(capture.result), None);
                 let _ = writeln!(stream, "{response}");
                 let _ = stream.write_all(&capture.payload);
+            }
+            Err(err) => {
+                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+            }
+        }
+        true
+    }
+
+    fn maybe_handle_library_database_snapshot_stream(
+        line: &str,
+        token: &str,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("cmd").and_then(Value::as_str)
+            != Some("library_database_snapshot_lz4_stream")
+        {
+            return false;
+        }
+        let id = parsed.get("id").cloned();
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(id, false, None, Some("unauthorized"))
+            );
+            return true;
+        }
+        let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
+        timeline_record_once(
+            "first_command",
+            "cmd=library_database_snapshot_lz4_stream".to_string(),
+        );
+        match crate::library_snapshot::snapshot_for_args(&args) {
+            Ok(snapshot) => {
+                append_log_line(format!(
+                    "library_database_snapshot_lz4_stream raw_bytes={} payload_bytes={} checksum={}",
+                    snapshot.result["raw_bytes"],
+                    snapshot.result["payload_bytes"],
+                    snapshot.result["checksum"].as_str().unwrap_or("")
+                ));
+                let response = response(id, true, Some(snapshot.result), None);
+                let _ = writeln!(stream, "{response}");
+                let _ = stream.write_all(&snapshot.payload);
             }
             Err(err) => {
                 let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
@@ -2242,6 +2378,55 @@ mod tests {
         assert!(err.contains("read_dir /missing"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn library_snapshot_rejects_non_allowlisted_paths() {
+        assert!(library_snapshot::validate_remote_path(
+            "/media/fat/mister-magik/other.sqlite3"
+        )
+        .is_err());
+        assert!(library_snapshot::validate_remote_path("/tmp/library.sqlite3").is_err());
+        assert!(library_snapshot::validate_remote_path(library_snapshot::LIBRARY_DB_PATH).is_ok());
+    }
+
+    #[test]
+    fn library_snapshot_reports_missing_database_cleanly() {
+        let missing = std::env::temp_dir().join(format!(
+            "mister-magik-missing-library-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+        let err = library_snapshot::snapshot_test_path(&missing).unwrap_err();
+        assert!(err.contains("stat /media/fat/mister-magik/library.sqlite3"));
+    }
+
+    #[test]
+    fn library_snapshot_lz4_payload_matches_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-library-{}.sqlite3",
+            std::process::id()
+        ));
+        let bytes = b"not really sqlite, just bytes";
+        std::fs::write(&path, bytes).unwrap();
+
+        let snapshot = library_snapshot::snapshot_test_path(&path).unwrap();
+        assert_eq!(snapshot.result["schema"], library_snapshot::SCHEMA);
+        assert_eq!(
+            snapshot.result["remote_path"],
+            library_snapshot::LIBRARY_DB_PATH
+        );
+        assert_eq!(snapshot.result["raw_bytes"], bytes.len() as u64);
+        assert_eq!(snapshot.result["payload_bytes"], snapshot.payload.len() as u64);
+        assert_eq!(snapshot.result["encoding"], "lz4-block");
+        assert_eq!(
+            snapshot.result["checksum"],
+            library_snapshot::fnv64_hex(bytes)
+        );
+        let decoded = lz4_flex::block::decompress(&snapshot.payload, bytes.len()).unwrap();
+        assert_eq!(decoded, bytes);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(not(target_os = "linux"))]
