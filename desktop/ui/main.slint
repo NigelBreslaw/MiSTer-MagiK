@@ -61,8 +61,18 @@ export global AppState {
     in-out property <string> selected-page: "debug";
 }
 
+export struct DirtyRectOverlay {
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    kind: string,
+}
+
 export global AnalyticsState {
     in-out property <image> framebuffer-image;
+    in-out property <int> framebuffer-width: 0;
+    in-out property <int> framebuffer-height: 0;
     in-out property <string> status: "Ready to capture /dev/fb0.";
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
@@ -70,6 +80,9 @@ export global AnalyticsState {
     in-out property <bool> can-save-image: false;
     in-out property <bool> live-stream: false;
     in-out property <string> live-stream-summary: "Live stream off.";
+    in-out property <bool> show-dirty-rects: true;
+    in-out property <[DirtyRectOverlay]> dirty-rects: [];
+    in-out property <string> dirty-rect-summary: "Dirty overlay idle.";
 }
 
 export global SdCardState {

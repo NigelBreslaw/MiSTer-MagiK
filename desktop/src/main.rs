@@ -16,6 +16,7 @@ use sd_card::SdCardBrowser;
 use sd_card::SdTreeRow;
 #[cfg(feature = "live-ui")]
 use slint::ComponentHandle;
+use std::collections::VecDeque;
 use std::error::Error;
 #[cfg(feature = "live-ui")]
 use std::path::Path;
@@ -31,6 +32,18 @@ type SharedLibraryBrowser = Arc<Mutex<LibraryBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
+
+const DIRTY_RECT_LINGER_FRAMES: usize = 8;
+const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
+
+#[derive(Clone, Debug)]
+struct DirtyRectOverlayState {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    kind: String,
+}
 
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
@@ -1741,6 +1754,17 @@ fn apply_live_framebuffer_capture_result(
                 instance.set_global_property("AnalyticsState", "can-save-image", Value::Bool(true));
             let _ = instance.set_global_property(
                 "AnalyticsState",
+                "framebuffer-width",
+                Value::Number(capture.width as f64),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "framebuffer-height",
+                Value::Number(capture.height as f64),
+            );
+            clear_live_dirty_rects(instance);
+            let _ = instance.set_global_property(
+                "AnalyticsState",
                 "status",
                 Value::String(SharedString::from(framebuffer_capture_status(&capture))),
             );
@@ -1785,6 +1809,9 @@ fn apply_compiled_framebuffer_capture_result(
             state.set_framebuffer_image(framebuffer_capture_image(&capture));
             state.set_has_image(true);
             state.set_can_save_image(true);
+            state.set_framebuffer_width(capture.width as i32);
+            state.set_framebuffer_height(capture.height as i32);
+            clear_compiled_dirty_rects(ui);
             state.set_status(framebuffer_capture_status(&capture).into());
             state.set_last_error("".into());
         }
@@ -2020,6 +2047,135 @@ fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Durati
         "{fps:.1} fps avg, {:.0} ms last frame",
         last_frame.as_secs_f64() * 1000.0
     )
+}
+
+fn dirty_rect_from_stream_frame(
+    frame: &agent_client::FramebufferStreamFrame,
+) -> DirtyRectOverlayState {
+    DirtyRectOverlayState {
+        x: frame.rect.x.min(i32::MAX as u32) as i32,
+        y: frame.rect.y.min(i32::MAX as u32) as i32,
+        width: frame.rect.width.min(i32::MAX as u32) as i32,
+        height: frame.rect.height.min(i32::MAX as u32) as i32,
+        kind: match frame.kind {
+            mister_magik_framebuffer_stream::FrameKind::Keyframe => "keyframe",
+            mister_magik_framebuffer_stream::FrameKind::RectDelta => "delta",
+            _ => "frame",
+        }
+        .to_string(),
+    }
+}
+
+fn push_recent_dirty_rect(
+    recent: &mut VecDeque<DirtyRectOverlayState>,
+    frame: &agent_client::FramebufferStreamFrame,
+) {
+    recent.push_back(dirty_rect_from_stream_frame(frame));
+    while recent.len() > DIRTY_RECT_LINGER_FRAMES || recent.len() > MAX_DIRTY_RECT_OVERLAYS {
+        recent.pop_front();
+    }
+}
+
+fn dirty_rect_summary(frame: &agent_client::FramebufferStreamFrame, visible_count: usize) -> String {
+    let kind = match frame.kind {
+        mister_magik_framebuffer_stream::FrameKind::Keyframe => "keyframe",
+        mister_magik_framebuffer_stream::FrameKind::RectDelta => "delta",
+        _ => "frame",
+    };
+    format!(
+        "{kind} #{} rect {}x{}+{},{}; showing {} recent.",
+        frame.sequence,
+        frame.rect.width,
+        frame.rect.height,
+        frame.rect.x,
+        frame.rect.y,
+        visible_count
+    )
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_dirty_rects(
+    instance: &slint_interpreter::ComponentInstance,
+    rects: &VecDeque<DirtyRectOverlayState>,
+    summary: &str,
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    let values = rects
+        .iter()
+        .map(|rect| {
+            Value::Struct(Struct::from_iter([
+                ("x".to_string(), Value::Number(rect.x as f64)),
+                ("y".to_string(), Value::Number(rect.y as f64)),
+                ("width".to_string(), Value::Number(rect.width as f64)),
+                ("height".to_string(), Value::Number(rect.height as f64)),
+                (
+                    "kind".to_string(),
+                    Value::String(SharedString::from(rect.kind.as_str())),
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "dirty-rects",
+        Value::Model(ModelRc::new(VecModel::from(values))),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "dirty-rect-summary",
+        Value::String(SharedString::from(summary)),
+    );
+}
+
+#[cfg(feature = "live-ui")]
+fn clear_live_dirty_rects(instance: &slint_interpreter::ComponentInstance) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "dirty-rects",
+        Value::Model(ModelRc::new(VecModel::<Value>::from(Vec::new()))),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "dirty-rect-summary",
+        Value::String(SharedString::from("Dirty overlay idle.")),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_dirty_rects(
+    ui: &AppWindow,
+    rects: &VecDeque<DirtyRectOverlayState>,
+    summary: &str,
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+
+    let values = rects
+        .iter()
+        .map(|rect| DirtyRectOverlay {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            kind: SharedString::from(rect.kind.as_str()),
+        })
+        .collect::<Vec<_>>();
+    let state = ui.global::<AnalyticsState>();
+    state.set_dirty_rects(ModelRc::new(VecModel::from(values)));
+    state.set_dirty_rect_summary(summary.into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn clear_compiled_dirty_rects(ui: &AppWindow) {
+    use slint::{ModelRc, VecModel};
+
+    let state = ui.global::<AnalyticsState>();
+    state.set_dirty_rects(ModelRc::new(VecModel::<DirtyRectOverlay>::from(Vec::new())));
+    state.set_dirty_rect_summary("Dirty overlay idle.".into());
 }
 
 fn format_byte_size(bytes: u64) -> String {
@@ -2386,6 +2542,7 @@ fn spawn_live_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
+        let mut recent_dirty_rects = VecDeque::new();
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -2442,16 +2599,26 @@ fn spawn_live_framebuffer_stream(
         register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
-            let result = stream.next_capture().map_err(|err| err.to_string());
+            let result = stream.next_frame().map_err(|err| err.to_string());
             let frame_elapsed = frame_start.elapsed();
-            if result.is_ok() {
+            if let Ok(frame) = &result {
                 frames += 1;
+                push_recent_dirty_rect(&mut recent_dirty_rects, frame);
             }
             let summary = result
                 .as_ref()
                 .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
                 .unwrap_or_else(|_| "Live stream disconnected.".to_string());
-            let capture = result.as_ref().ok().cloned();
+            let dirty_summary = result
+                .as_ref()
+                .map(|frame| dirty_rect_summary(frame, recent_dirty_rects.len()))
+                .unwrap_or_else(|_| "Dirty overlay idle.".to_string());
+            let dirty_rects = recent_dirty_rects.clone();
+            let capture = result.as_ref().ok().map(|frame| frame.capture.clone());
+            let capture_result = result
+                .as_ref()
+                .map(|frame| frame.capture.clone())
+                .map_err(Clone::clone);
             let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
             let disconnected = result.is_err();
             let event_generation = Arc::clone(&stream_generation);
@@ -2473,7 +2640,8 @@ fn spawn_live_framebuffer_stream(
                             .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
                         apply_live_stream_disconnected(&instance, &err);
                     } else {
-                        apply_live_framebuffer_capture_result(&instance, result);
+                        apply_live_framebuffer_capture_result(&instance, capture_result);
+                        apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
                         apply_live_stream_summary(&instance, &summary);
                     }
                 }
@@ -2589,6 +2757,7 @@ fn spawn_compiled_framebuffer_stream(
     std::thread::spawn(move || {
         let stream_start = Instant::now();
         let mut frames = 0_u64;
+        let mut recent_dirty_rects = VecDeque::new();
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -2645,16 +2814,26 @@ fn spawn_compiled_framebuffer_stream(
         register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
             let frame_start = Instant::now();
-            let result = stream.next_capture().map_err(|err| err.to_string());
+            let result = stream.next_frame().map_err(|err| err.to_string());
             let frame_elapsed = frame_start.elapsed();
-            if result.is_ok() {
+            if let Ok(frame) = &result {
                 frames += 1;
+                push_recent_dirty_rect(&mut recent_dirty_rects, frame);
             }
             let summary = result
                 .as_ref()
                 .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
                 .unwrap_or_else(|_| "Live stream disconnected.".to_string());
-            let capture = result.as_ref().ok().cloned();
+            let dirty_summary = result
+                .as_ref()
+                .map(|frame| dirty_rect_summary(frame, recent_dirty_rects.len()))
+                .unwrap_or_else(|_| "Dirty overlay idle.".to_string());
+            let dirty_rects = recent_dirty_rects.clone();
+            let capture = result.as_ref().ok().map(|frame| frame.capture.clone());
+            let capture_result = result
+                .as_ref()
+                .map(|frame| frame.capture.clone())
+                .map_err(Clone::clone);
             let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
             let disconnected = result.is_err();
             let event_generation = Arc::clone(&stream_generation);
@@ -2676,7 +2855,8 @@ fn spawn_compiled_framebuffer_stream(
                             .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
                         apply_compiled_stream_disconnected(&ui, &err);
                     } else {
-                        apply_compiled_framebuffer_capture_result(&ui, result);
+                        apply_compiled_framebuffer_capture_result(&ui, capture_result);
+                        apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
                         apply_compiled_stream_summary(&ui, &summary);
                     }
                 }
