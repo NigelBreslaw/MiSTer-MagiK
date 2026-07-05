@@ -31,7 +31,29 @@ framebuffer_stream_bench_tsv	mode=poll	frames=120	fps=6.38	elapsed_ms=18816	p50_
 - The first active-scene attempt used `tear_pattern`, but that scene bypasses
   the tapped `UiFrameTarget` path. A direct `nc` probe saw no producer bytes
   there. The launcher scenario did emit valid `MMFSv1` frames.
-- Current v1 still compresses and writes on the UI present path. During a direct
+- Initial v1 still compressed and wrote on the UI present path. During a direct
   `nc` probe, launcher `fb-present` rose sharply, so the next large win should
   move compression/socket writes to a producer worker with a latest-frame queue.
 
+## Follow-Up Hardening
+
+After multi-agent review, the producer moved compression and socket writes off
+the UI present path into a bounded worker queue. The no-subscriber path now
+returns through an atomic fast path, while keeping a one-time startup keyframe so
+an idle launcher can still show an initial live image. The local producer socket
+rejects extra subscribers, emits heartbeats, retries bind after rapid restarts,
+and publishes from the shared cached framebuffer copy helper so diagnostic loops
+such as `tear_pattern` do not bypass the stream tap.
+
+Additional full-frame stress rows from `tear_pattern 60`:
+
+```text
+framebuffer_stream_bench_tsv	mode=stream	frames=120	fps=18.51	elapsed_ms=6482	p50_ms=49.6	p95_ms=54.9	avg_payload_bytes=139084	avg_raw_bytes=1036800
+framebuffer_stream_bench_tsv	mode=poll	frames=60	fps=5.02	elapsed_ms=11948	p50_ms=180.6	p95_ms=270.7	avg_payload_bytes=138670	avg_raw_bytes=1036800
+```
+
+This is a 3.69x desktop FPS gain on the least flattering case: full-frame dirty
+rects every frame. The scene stayed mostly near 60 fps, but the 60-second run
+averaged 52.9 fps while a stream subscriber was active, so the remaining hot
+spot is producer-side full-frame compression/copy cost. Dirty-region launcher
+work should be materially cheaper than this stress case.
