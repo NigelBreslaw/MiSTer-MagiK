@@ -1,6 +1,3 @@
-use flate2::read::GzDecoder;
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
 use mister_magik_catalog::sqlite_inspect::{sqlite_query_is_read_only, sqlite_query_to_tsv};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
@@ -10,7 +7,7 @@ use ssh2::Session;
 use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -28,8 +25,11 @@ use remote::{
     put_dir, sftp_write_profile, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
 };
 
+#[cfg(test)]
 const DEFAULT_FB_W: usize = 1920;
+#[cfg(test)]
 const DEFAULT_FB_H: usize = 1080;
+#[cfg(test)]
 const DEFAULT_FB_BPP: usize = 32;
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
@@ -241,11 +241,6 @@ fn run_cli() -> Result<()> {
                 }
             }
         }
-        "snapshot" => {
-            let sess = connect(10)?;
-            let out_dir = args.first().map(PathBuf::from);
-            snapshot(&sess, out_dir)?;
-        }
         "boot-capture" => {
             let keep_enabled = args.iter().any(|a| a == "--keep-enabled");
             let deploy = args.iter().any(|a| a == "--deploy");
@@ -302,9 +297,6 @@ fn run_cli() -> Result<()> {
                 .ok_or("profile-summary needs <frame-profile.tsv>")?;
             profile_summary(Path::new(path))?;
         }
-        "raw-to-png" => {
-            raw_to_png_cli(&args)?;
-        }
         "mame-metadata-build" => {
             mame_metadata_build(&args)?;
         }
@@ -329,7 +321,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|snapshot|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|raw-to-png|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
 }
 
@@ -1519,6 +1511,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
         }
+        "framebuffer-capture" => {
+            agent_framebuffer_capture(&args[1..])?;
+        }
         "deploy-magik-bin" => {
             agent_deploy_magik_bin(&args[1..])?;
         }
@@ -1539,8 +1534,134 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
+}
+
+fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
+    let mut output = None;
+    let mut json_output = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--json" => {
+                idx += 1;
+                let path = args
+                    .get(idx)
+                    .ok_or("agent framebuffer-capture --json needs OUT.json")?;
+                json_output = Some(PathBuf::from(path));
+            }
+            "-h" | "--help" => {
+                println!(
+                    "usage: scripts/mister agent framebuffer-capture OUT.png [--json OUT.json]"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown framebuffer-capture option: {other}").into());
+            }
+            path => {
+                if output.is_some() {
+                    return Err("agent framebuffer-capture takes one OUT.png path".into());
+                }
+                output = Some(PathBuf::from(path));
+            }
+        }
+        idx += 1;
+    }
+    let output = output.ok_or("agent framebuffer-capture needs OUT.png")?;
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let reply = agent_request("framebuffer_capture", json!({}), Duration::from_secs(10))?;
+    let result = reply
+        .response
+        .get("result")
+        .ok_or("agent framebuffer_capture response missing result")?;
+    let png_hex = result
+        .get("png_hex")
+        .and_then(Value::as_str)
+        .ok_or("agent framebuffer_capture response missing png_hex")?;
+    let png = decode_hex(png_hex)?;
+    fs::write(&output, &png)?;
+
+    let metadata = framebuffer_capture_metadata(result, reply.elapsed_ms, &output);
+    if let Some(path) = json_output {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, serde_json::to_vec_pretty(&metadata)?)?;
+    }
+
+    let width = result.get("width").and_then(Value::as_u64).unwrap_or(0);
+    let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
+    let png_bytes = result
+        .get("png_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(png.len() as u64);
+    println!(
+        "framebuffer_capture: {} ({}x{}, {}, {}ms)",
+        output.display(),
+        width,
+        height,
+        format_bytes_nearest_kb(png_bytes),
+        reply.elapsed_ms
+    );
+    Ok(())
+}
+
+fn framebuffer_capture_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
+    let mut metadata = result.clone();
+    if let Value::Object(ref mut object) = metadata {
+        object.remove("png_hex");
+        object.insert("transport".to_string(), Value::String("agent".to_string()));
+        object.insert("request_ms".to_string(), Value::from(request_ms as u64));
+        object.insert(
+            "png_path".to_string(),
+            Value::String(output.display().to_string()),
+        );
+    }
+    metadata
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return Err("hex payload has odd length".into());
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let raw = hex.as_bytes();
+    let mut idx = 0;
+    while idx < raw.len() {
+        let hi = hex_value(raw[idx])?;
+        let lo = hex_value(raw[idx + 1])?;
+        bytes.push((hi << 4) | lo);
+        idx += 2;
+    }
+    Ok(bytes)
+}
+
+fn hex_value(byte: u8) -> Result<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("invalid hex byte: {byte}").into()),
+    }
+}
+
+fn format_bytes_nearest_kb(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else {
+        format!("{} KB", (bytes + 512) / 1024)
+    }
 }
 
 fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
@@ -3569,16 +3690,17 @@ fn assignment_value(line: &str) -> Option<String> {
 }
 
 fn collect_status(sess: &Session) -> Result<Value> {
-    let visual = fb_visual_sample(sess)?;
     let main_status = parse_json(remote_read(sess, "/tmp/mister-magik/main-status.json"));
     let slint_status = parse_json(remote_read(sess, "/tmp/mister-magik/status.json"));
     let owner = main_status
         .as_ref()
         .and_then(|v| v.get("visible_owner"))
         .and_then(Value::as_str);
-    let visual_class = visual.get("class").and_then(Value::as_str);
-    let fb0_visible_candidate = owner == Some("fb0")
-        && !matches!(visual_class, None | Some("mostly_black") | Some("unknown"));
+    let visual = json!({
+        "class": "not_sampled",
+        "note": "Use scripts/mister agent framebuffer-capture OUT.png for agent-backed PNG capture."
+    });
+    let fb0_visible_candidate = owner == Some("fb0");
     Ok(json!({
         "schema": "mister-magik-status-v1",
         "collected_at_unix": unix_secs(),
@@ -3782,11 +3904,7 @@ done
     Ok(json!({"by_device": by_device, "by_process": by_process}))
 }
 
-fn fb_visual_sample(sess: &Session) -> Result<Value> {
-    let capture = capture_fb(sess, "status")?;
-    Ok(classify_fb(&capture.raw, &capture.geometry))
-}
-
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FbGeometry {
     width: usize,
@@ -3795,6 +3913,7 @@ struct FbGeometry {
     bpp: usize,
 }
 
+#[cfg(test)]
 impl FbGeometry {
     fn bytes(self) -> Result<usize> {
         self.stride
@@ -3803,85 +3922,13 @@ impl FbGeometry {
     }
 }
 
-struct FbCapture {
-    raw: Vec<u8>,
-    geometry: FbGeometry,
-}
-
-fn framebuffer_geometry(sess: &Session) -> Result<FbGeometry> {
-    let virtual_size = remote_trim(sess, "/sys/class/graphics/fb0/virtual_size")
-        .unwrap_or_else(|| format!("{DEFAULT_FB_W},{DEFAULT_FB_H}"));
-    let (width, height) = parse_virtual_size(&virtual_size).unwrap_or((DEFAULT_FB_W, DEFAULT_FB_H));
-    let bpp = remote_trim(sess, "/sys/class/graphics/fb0/bits_per_pixel")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_FB_BPP);
-    let bytes_per_pixel = bpp
-        .checked_div(8)
-        .filter(|v| *v > 0)
-        .ok_or_else(|| format!("unsupported framebuffer bpp: {bpp}"))?;
-    let packed_stride = width
-        .checked_mul(bytes_per_pixel)
-        .ok_or("framebuffer stride overflow")?;
-    let stride = remote_trim(sess, "/sys/class/graphics/fb0/stride")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(packed_stride);
-    if stride < packed_stride {
-        return Err(format!(
-            "framebuffer stride {stride} is smaller than packed row {packed_stride}"
-        )
-        .into());
-    }
-    Ok(FbGeometry {
-        width,
-        height,
-        stride,
-        bpp,
-    })
-}
-
+#[cfg(test)]
 fn parse_virtual_size(text: &str) -> Option<(usize, usize)> {
     let (w, h) = text.trim().split_once(',')?;
     Some((w.parse().ok()?, h.parse().ok()?))
 }
 
-fn capture_fb(sess: &Session, label: &str) -> Result<FbCapture> {
-    let geometry = framebuffer_geometry(sess)?;
-    let expected = geometry.bytes()?;
-    let remote_gz = format!("/tmp/mister-magik-{label}-{}.raw.gz", unix_secs());
-    let cmd = format!(
-        "dd if=/dev/fb0 bs={} count=1 2>/dev/null | gzip -9 -c > {} && wc -c {}",
-        expected,
-        sh(&remote_gz),
-        sh(&remote_gz)
-    );
-    let out = exec(sess, &cmd, true)?;
-    if out.rc != 0 {
-        let _ = exec(sess, &format!("rm -f {}", sh(&remote_gz)), true);
-        return Err(format!("failed to capture /dev/fb0: {}", out.stdout).into());
-    }
-    let sftp = sess.sftp()?;
-    let mut file = sftp.open(Path::new(&remote_gz))?;
-    let mut compressed = Vec::new();
-    file.read_to_end(&mut compressed)?;
-    let _ = sftp.unlink(Path::new(&remote_gz));
-    let mut decoder = GzDecoder::new(compressed.as_slice());
-    let mut raw = Vec::with_capacity(expected);
-    decoder.read_to_end(&mut raw)?;
-    if raw.len() < expected {
-        return Err(format!(
-            "fb0 raw had {} bytes after gzip decode, expected {expected} for {}x{} stride={} bpp={}",
-            raw.len(),
-            geometry.width,
-            geometry.height,
-            geometry.stride,
-            geometry.bpp
-        )
-        .into());
-    }
-    raw.truncate(expected);
-    Ok(FbCapture { raw, geometry })
-}
-
+#[cfg(test)]
 fn classify_fb(raw: &[u8], geometry: &FbGeometry) -> Value {
     let mut samples = 0u32;
     let mut nonzero = 0u32;
@@ -3945,6 +3992,7 @@ fn classify_fb(raw: &[u8], geometry: &FbGeometry) -> Value {
     })
 }
 
+#[cfg(test)]
 fn color_distance(a: u32, b: u32) -> u32 {
     let ar = (a >> 16) & 0xff;
     let ag = (a >> 8) & 0xff;
@@ -3955,6 +4003,7 @@ fn color_distance(a: u32, b: u32) -> u32 {
     ar.abs_diff(br) + ag.abs_diff(bg) + ab.abs_diff(bb)
 }
 
+#[cfg(test)]
 fn pct(n: u32, d: u32) -> f64 {
     if d == 0 {
         0.0
@@ -3963,6 +4012,7 @@ fn pct(n: u32, d: u32) -> f64 {
     }
 }
 
+#[cfg(test)]
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
@@ -4130,6 +4180,7 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         Some("mostly_black") => {
             findings.push(("error".into(), "/dev/fb0 samples as mostly_black".into()))
         }
+        Some("not_sampled") => {}
         Some("unknown") | None => {
             findings.push(("warn".into(), "/dev/fb0 visual class is unknown".into()))
         }
@@ -4164,19 +4215,6 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         ));
     }
     findings
-}
-
-fn snapshot(sess: &Session, out_dir: Option<PathBuf>) -> Result<()> {
-    let dir = out_dir.unwrap_or_else(|| PathBuf::from("build/device-snapshots").join(timestamp()));
-    fs::create_dir_all(&dir)?;
-    let capture = capture_fb(sess, "snapshot")?;
-    let status = collect_status(sess)?;
-    fs::write(dir.join("status.json"), serde_json::to_vec_pretty(&status)?)?;
-    fs::write(dir.join("fb0.raw"), &capture.raw)?;
-    write_png_bgrx_stride(&capture.raw, &capture.geometry, &dir.join("fb0.png"))?;
-    println!("snapshot: {}", dir.display());
-    println!("png: {}", dir.join("fb0.png").display());
-    Ok(())
 }
 
 fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()> {
@@ -4300,44 +4338,7 @@ fn profile_summary_text(path: &Path) -> Result<String> {
     Ok(out)
 }
 
-fn write_png_bgrx_stride(raw: &[u8], geometry: &FbGeometry, path: &Path) -> Result<()> {
-    let expected = geometry.bytes()?;
-    if raw.len() < expected {
-        return Err(format!(
-            "raw framebuffer has {} bytes, expected at least {expected}",
-            raw.len()
-        )
-        .into());
-    }
-    let w = geometry.width;
-    let h = geometry.height;
-    let mut rgba = Vec::with_capacity((w * 4 + 1) * h);
-    for y in 0..h {
-        rgba.push(0);
-        for x in 0..w {
-            let Some((r, g, b)) = rgb_from_raw(raw, geometry, x, y) else {
-                rgba.extend_from_slice(&[0, 0, 0, 0xff]);
-                continue;
-            };
-            rgba.push(r as u8);
-            rgba.push(g as u8);
-            rgba.push(b as u8);
-            rgba.push(0xff);
-        }
-    }
-    let mut png = Vec::new();
-    png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&(w as u32).to_be_bytes());
-    ihdr.extend_from_slice(&(h as u32).to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    png_chunk(&mut png, b"IHDR", &ihdr);
-    png_chunk(&mut png, b"IDAT", &zlib_deflate(&rgba)?);
-    png_chunk(&mut png, b"IEND", &[]);
-    fs::write(path, png)?;
-    Ok(())
-}
-
+#[cfg(test)]
 fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option<(u32, u32, u32)> {
     match geometry.bpp {
         32 => {
@@ -4367,120 +4368,6 @@ fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option
         }
         _ => None,
     }
-}
-
-fn raw_to_png_cli(args: &[String]) -> Result<()> {
-    if args.len() < 4 {
-        return Err(
-            "raw-to-png needs <raw> <width> <height> <out.png> [--stride N] [--bpp 16|32]".into(),
-        );
-    }
-    let raw_path = Path::new(&args[0]);
-    let width = args[1].parse::<usize>()?;
-    let height = args[2].parse::<usize>()?;
-    let out_path = Path::new(&args[3]);
-    let mut stride = None;
-    let mut bpp = 32usize;
-    let mut i = 4;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--stride" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or("raw-to-png --stride needs a byte count")?;
-                stride = Some(value.parse::<usize>()?);
-                i += 2;
-            }
-            "--bpp" => {
-                let value = args.get(i + 1).ok_or("raw-to-png --bpp needs 16 or 32")?;
-                bpp = value.parse::<usize>()?;
-                i += 2;
-            }
-            other => return Err(format!("unknown raw-to-png option: {other}").into()),
-        }
-    }
-
-    raw_to_png(raw_path, width, height, out_path, stride, bpp)
-}
-
-fn raw_to_png(
-    raw_path: &Path,
-    w: usize,
-    h: usize,
-    out_path: &Path,
-    stride: Option<usize>,
-    bpp: usize,
-) -> Result<()> {
-    let raw = fs::read(raw_path)?;
-    let bytes_per_pixel = match bpp {
-        16 => 2,
-        32 => 4,
-        _ => return Err(format!("unsupported raw framebuffer bpp: {bpp}").into()),
-    };
-    let packed_stride = w
-        .checked_mul(bytes_per_pixel)
-        .ok_or("raw dimensions overflow")?;
-    let stride = stride.unwrap_or(packed_stride);
-    if stride < packed_stride {
-        return Err(
-            format!("raw stride {stride} is smaller than packed row {packed_stride}").into(),
-        );
-    }
-    let geometry = FbGeometry {
-        width: w,
-        height: h,
-        stride,
-        bpp,
-    };
-    let expected = geometry.bytes()?;
-    if raw.len() < expected {
-        return Err(format!(
-            "{} has {} bytes, expected at least {expected}",
-            raw_path.display(),
-            raw.len()
-        )
-        .into());
-    }
-    write_png_bgrx_stride(&raw[..expected], &geometry, out_path)
-}
-
-fn zlib_deflate(data: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::best());
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
-}
-
-fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(data);
-    let mut crc_input = Vec::with_capacity(tag.len() + data.len());
-    crc_input.extend_from_slice(tag);
-    crc_input.extend_from_slice(data);
-    out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
-}
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xffff_ffffu32;
-    for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            let mask = 0u32.wrapping_sub(crc & 1);
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
-}
-
-#[cfg(test)]
-fn adler32(data: &[u8]) -> u32 {
-    let mut a = 1u32;
-    let mut b = 0u32;
-    for &byte in data {
-        a = (a + byte as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
 }
 
 fn sh(s: &str) -> String {
@@ -5335,96 +5222,6 @@ H: Handlers=event3 js0"#
             Some("build/mame.sqlite3".to_string())
         );
         assert_eq!(option_value(&args, "--missing"), None);
-    }
-
-    #[test]
-    fn png_writer_outputs_valid_signature_and_chunks() {
-        let path = temp_path("tiny.png");
-        let raw = vec![
-            0x00, 0x00, 0xff, 0x00, // red in BGRX
-            0x00, 0xff, 0x00, 0x00, // green
-            0xff, 0x00, 0x00, 0x00, // blue
-            0xff, 0xff, 0xff, 0x00, // white
-        ];
-        let geometry = FbGeometry {
-            width: 2,
-            height: 2,
-            stride: 8,
-            bpp: 32,
-        };
-        write_png_bgrx_stride(&raw, &geometry, &path).unwrap();
-        let png = fs::read(&path).unwrap();
-        let _ = fs::remove_file(&path);
-        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
-        assert!(png.windows(4).any(|w| w == b"IHDR"));
-        assert!(png.windows(4).any(|w| w == b"IDAT"));
-        assert!(png.windows(4).any(|w| w == b"IEND"));
-        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
-        assert_eq!(adler32(b"Wikipedia"), 0x11e6_0398);
-    }
-
-    #[test]
-    fn raw_to_png_reads_bgrx_file_and_rejects_short_input() {
-        let raw_path = temp_path("tiny.raw");
-        let png_path = temp_path("tiny-from-raw.png");
-        fs::write(
-            &raw_path,
-            [
-                0x00, 0x00, 0xff, 0x00, // red in BGRX
-                0x00, 0xff, 0x00, 0x00, // green
-                0xff, 0x00, 0x00, 0x00, // blue
-                0xff, 0xff, 0xff, 0x00, // white
-            ],
-        )
-        .unwrap();
-        raw_to_png(&raw_path, 2, 2, &png_path, None, 32).unwrap();
-        let png = fs::read(&png_path).unwrap();
-        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
-
-        let err = raw_to_png(&raw_path, 3, 3, &png_path, None, 32).unwrap_err();
-        assert!(err.to_string().contains("expected at least 36"));
-        let _ = fs::remove_file(&raw_path);
-        let _ = fs::remove_file(&png_path);
-    }
-
-    #[test]
-    fn raw_to_png_reads_strided_rgb565_file_and_rejects_short_input() {
-        let raw_path = temp_path("tiny-rgb565.raw");
-        let png_path = temp_path("tiny-rgb565.png");
-        fs::write(
-            &raw_path,
-            [
-                0x00, 0xf8, // red in RGB565 little-endian
-                0xe0, 0x07, // green
-                0xaa, 0xbb, // row padding
-                0x1f, 0x00, // blue
-                0xff, 0xff, // white
-                0xcc, 0xdd, // row padding
-            ],
-        )
-        .unwrap();
-        raw_to_png(&raw_path, 2, 2, &png_path, Some(6), 16).unwrap();
-        let png = fs::read(&png_path).unwrap();
-        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
-
-        let err = raw_to_png(&raw_path, 2, 3, &png_path, Some(6), 16).unwrap_err();
-        assert!(err.to_string().contains("expected at least 18"));
-        let _ = fs::remove_file(&raw_path);
-        let _ = fs::remove_file(&png_path);
-    }
-
-    #[test]
-    fn raw_to_png_rejects_invalid_framebuffer_geometry() {
-        let raw_path = temp_path("invalid-geometry.raw");
-        let png_path = temp_path("invalid-geometry.png");
-        fs::write(&raw_path, [0u8; 8]).unwrap();
-
-        let err = raw_to_png(&raw_path, 2, 2, &png_path, Some(3), 16).unwrap_err();
-        assert!(err.to_string().contains("smaller than packed row"));
-        let err = raw_to_png(&raw_path, 2, 2, &png_path, None, 24).unwrap_err();
-        assert!(err.to_string().contains("unsupported raw framebuffer bpp"));
-        let _ = fs::remove_file(&raw_path);
-        let _ = fs::remove_file(&png_path);
     }
 
     #[test]
