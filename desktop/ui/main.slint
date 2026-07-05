@@ -20,6 +20,9 @@ import {
     Pagination,
     PrimerTreeView,
     PrimerTextInput,
+    SegmentedControl,
+    SegmentedControlSegment,
+    SegmentedControlSize,
     Select,
     SelectOption,
     Size,
@@ -440,6 +443,13 @@ component DebugPage {
         { id: "screen", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Screen", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.screen-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
         { id: "input", cells: [{ kind: DataTableCellKind.iconText, text: "Input", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.checkbox, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Controller", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.input-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
     ];
+    property <int> debug-tab-index: 0;
+    property <[SegmentedControlSegment]> debug-tabs: [
+        { label: "Connection", has-leading-icon: true, leading-icon: Icons.link, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Device", has-leading-icon: true, leading-icon: Icons.repo, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Runtime", has-leading-icon: true, leading-icon: Icons.layout_grid, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Library + Input", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
+    ];
 
     VerticalLayout {
         spacing: 16px;
@@ -463,7 +473,14 @@ component DebugPage {
                 variant: BannerVariant.critical;
             }
 
-            TableContainer {
+            SegmentedControl {
+                selected-index <=> root.debug-tab-index;
+                segments: root.debug-tabs;
+                size: SegmentedControlSize.medium;
+                accessible-name: "Debug sections";
+            }
+
+            if root.debug-tab-index == 0: TableContainer {
                 title: "Connection";
                 subtitle: "Agent reachability and token source.";
                 primary-action-label: "Refresh";
@@ -478,7 +495,7 @@ component DebugPage {
                 }
             }
 
-            TableContainer {
+            if root.debug-tab-index == 1: TableContainer {
                 title: "Device";
                 subtitle: "Agent build, uptime, and network identity.";
 
@@ -490,7 +507,7 @@ component DebugPage {
                 }
             }
 
-            TableContainer {
+            if root.debug-tab-index == 2: TableContainer {
                 title: "Runtime";
                 subtitle: "Main, launcher, and Slint status ownership.";
 
@@ -502,7 +519,7 @@ component DebugPage {
                 }
             }
 
-            TableContainer {
+            if root.debug-tab-index == 3: TableContainer {
                 title: "Library and input";
                 subtitle: "Catalog, visible scene, and controller summary.";
 
@@ -1062,7 +1079,71 @@ component ProfileHeatmap {
     }
 }
 
-component ProfileArtifactsPanel {
+component ProfileArtifactControls {
+    VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+
+            PrimerTextInput {
+                horizontal-stretch: 1;
+                text: AnalyticsState.profile-path;
+                placeholder: "Path to MISTER_PROFILE_FILE TSV";
+                has-leading-visual: true;
+                leading-visual: Icons.file;
+                edited(value) => { AnalyticsState.profile-path = value; }
+            }
+
+            Button {
+                width: 112px;
+                height: 32px;
+                label: AnalyticsState.profile-loading ? "Loading..." : "Load TSV";
+                disabled: AnalyticsState.profile-loading;
+                variant: ButtonVariant.default;
+                clicked => { Actions.load-profile-artifact(AnalyticsState.profile-path); }
+            }
+        }
+
+        if AnalyticsState.profile-last-error != "": Banner {
+            title: "Profile load error";
+            description: AnalyticsState.profile-last-error;
+            variant: BannerVariant.critical;
+        }
+
+        Text {
+            text: AnalyticsState.profile-status + " " + AnalyticsState.profile-summary;
+            color: PrimerColors.fgColor-muted;
+            font-size: LayoutTokens.text-body-size-small;
+            wrap: word-wrap;
+        }
+    }
+}
+
+component ProfileBudgetPanel {
+    TableContainer {
+        title: "Frame Budget";
+        subtitle: "Stacked frame phases against the 16.667ms budget.";
+
+        ProfileBudgetChart {
+            bars: AnalyticsState.profile-bars;
+        }
+    }
+}
+
+component ProfileHeatmapPanel {
+    TableContainer {
+        title: "Dirty-Region Heatmap";
+        subtitle: "Presented rect density bucketed across the framebuffer.";
+
+        ProfileHeatmap {
+            cells: AnalyticsState.profile-heatmap;
+        }
+    }
+}
+
+component ProfileStatsPanel {
     property <[DataTableColumn]> stats-columns: [
         { header: "Metric", id: "metric", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: false },
         { header: "Avg", id: "avg", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
@@ -1071,85 +1152,48 @@ component ProfileArtifactsPanel {
         { header: "p99", id: "p99", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
         { header: "Max", id: "max", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
     ];
-    property <[DataTableColumn]> slow-columns: [
-        { header: "Frame", id: "frame", sortable: false, align: DataTableCellAlign.end, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
-        { header: "Wall", id: "wall", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 84px, width: 84px, monospace: true },
-        { header: "Dominant", id: "dominant", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: false },
-        { header: "Rect", id: "rect", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: true },
-    ];
     property <[DataTableColumn]> histogram-columns: [
         { header: "Bucket", id: "bucket", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: true },
         { header: "Frames", id: "frames", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 80px, width: 80px, monospace: true },
     ];
 
     TableContainer {
-        title: "Profile Artifacts";
-        subtitle: AnalyticsState.profile-status;
-        primary-action-label: AnalyticsState.profile-loading ? "Loading..." : "Load TSV";
-        primary-action-variant: ButtonVariant.default;
-        primary-action => { Actions.load-profile-artifact(AnalyticsState.profile-path); }
+        title: "Phase Stats And Histogram";
+        subtitle: "Phase percentiles and wall-time frame distribution.";
 
-        VerticalLayout {
+        HorizontalLayout {
             spacing: 12px;
 
-            PrimerTextInput {
-                width: 100%;
-                text: AnalyticsState.profile-path;
-                placeholder: "Path to MISTER_PROFILE_FILE TSV";
-                has-leading-visual: true;
-                leading-visual: Icons.file;
-                edited(value) => { AnalyticsState.profile-path = value; }
+            DataTable {
+                horizontal-stretch: 2;
+                cell-padding: DataTableCellPadding.condensed;
+                columns: stats-columns;
+                rows: AnalyticsState.profile-stats-rows;
             }
 
-            if AnalyticsState.profile-last-error != "": Banner {
-                title: "Profile load error";
-                description: AnalyticsState.profile-last-error;
-                variant: BannerVariant.critical;
+            DataTable {
+                horizontal-stretch: 1;
+                cell-padding: DataTableCellPadding.condensed;
+                columns: histogram-columns;
+                rows: AnalyticsState.profile-histogram-rows;
             }
+        }
+    }
+}
 
-            Text {
-                text: AnalyticsState.profile-summary;
-                color: PrimerColors.fgColor-muted;
-                font-size: LayoutTokens.text-body-size-small;
-                wrap: word-wrap;
-            }
+component ProfileSlowFramesPanel {
+    property <[DataTableColumn]> slow-columns: [
+        { header: "Frame", id: "frame", sortable: false, align: DataTableCellAlign.end, row-header: true, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 72px, width: 72px, monospace: true },
+        { header: "Wall", id: "wall", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 84px, width: 84px, monospace: true },
+        { header: "Dominant", id: "dominant", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 120px, width: 0px, monospace: false },
+        { header: "Rect", id: "rect", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: true },
+    ];
 
-            HorizontalLayout {
-                spacing: 12px;
+    TableContainer {
+        title: "Slow Frames";
+        subtitle: "Frames at or above the 16.667ms budget, ordered by wall time.";
 
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 8px;
-                    Text { text: "Frame budget"; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
-                    ProfileBudgetChart { bars: AnalyticsState.profile-bars; }
-                }
-
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 8px;
-                    Text { text: "Dirty heatmap"; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
-                    ProfileHeatmap { cells: AnalyticsState.profile-heatmap; }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 12px;
-
-                DataTable {
-                    horizontal-stretch: 2;
-                    cell-padding: DataTableCellPadding.condensed;
-                    columns: stats-columns;
-                    rows: AnalyticsState.profile-stats-rows;
-                }
-
-                DataTable {
-                    horizontal-stretch: 1;
-                    cell-padding: DataTableCellPadding.condensed;
-                    columns: histogram-columns;
-                    rows: AnalyticsState.profile-histogram-rows;
-                }
-            }
-
+        VerticalLayout {
             DataTable {
                 width: 100%;
                 cell-padding: DataTableCellPadding.condensed;
@@ -1161,6 +1205,15 @@ component ProfileArtifactsPanel {
 }
 
 component AnalyticsPage {
+    property <int> analytics-tab-index: 0;
+    property <[SegmentedControlSegment]> analytics-tabs: [
+        { label: "Framebuffer", has-leading-icon: true, leading-icon: Icons.eye, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Budget", has-leading-icon: true, leading-icon: Icons.history, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Heatmap", has-leading-icon: true, leading-icon: Icons.palette, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Stats", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Slow Frames", has-leading-icon: true, leading-icon: Icons.alert, disabled: false, has-count: false, count-text: "", icon-only: false },
+    ];
+
     VerticalLayout {
         spacing: 16px;
         alignment: start;
@@ -1183,7 +1236,14 @@ component AnalyticsPage {
                 variant: BannerVariant.critical;
             }
 
-            TableContainer {
+            SegmentedControl {
+                selected-index <=> root.analytics-tab-index;
+                segments: root.analytics-tabs;
+                size: SegmentedControlSize.medium;
+                accessible-name: "Analytics tools";
+            }
+
+            if root.analytics-tab-index == 0: TableContainer {
                 vertical-stretch: 1;
                 title: "Framebuffer";
                 subtitle: "Current /dev/fb0 frame from the MiSTer agent.";
@@ -1292,7 +1352,15 @@ component AnalyticsPage {
                 }
             }
 
-            ProfileArtifactsPanel { }
+            if root.analytics-tab-index > 0: ProfileArtifactControls { }
+
+            if root.analytics-tab-index == 1: ProfileBudgetPanel { }
+
+            if root.analytics-tab-index == 2: ProfileHeatmapPanel { }
+
+            if root.analytics-tab-index == 3: ProfileStatsPanel { }
+
+            if root.analytics-tab-index == 4: ProfileSlowFramesPanel { }
         }
     }
 }
