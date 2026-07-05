@@ -4,6 +4,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/mister-supervision-lib.sh"
 RUST_DIR="$HERE/magik-gui"
 OUT_DIR="$HERE/build/cpu-flamegraphs"
 
@@ -68,6 +69,8 @@ echo "==> Build profiling binary"
 "$RUST_DIR/build-arm.sh" "${build_args[@]}"
 
 echo "==> Deploy profiling binary"
+mister_suspend_launcher
+trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
 "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
 "$MISTER" put "$bin" /media/fat/mister-magik/mister-magik-fb
 "$MISTER" run "chmod +x /media/fat/mister-magik/mister-magik-fb"

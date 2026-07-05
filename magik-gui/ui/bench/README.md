@@ -12,8 +12,10 @@ ownership looks confused, reboot through the supervised
 `scripts/mister reboot-wait` path instead of killing Main.
 
 ```bash
+printf 'mister_magik_suspend\n' > /dev/MiSTer_cmd
 kill -9 $(pidof mister-magik-fb) 2>/dev/null
 /media/fat/mister-magik/mister-magik-fb ui video_playback 20
+printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd
 ```
 
 With a production `--video` build, run `video_playback`. It accepts a single

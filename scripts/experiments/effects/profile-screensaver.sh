@@ -70,6 +70,8 @@ local_tsv="$OUT_DIR/${label}-screensaver.tsv"
 local_log="$OUT_DIR/${label}-screensaver.log"
 
 echo "==> screensaver experiment label=$label mode=$mode secs=$secs segment_secs=$segment_secs"
+effect_suspend_launcher
+trap effect_cleanup_temp_files EXIT
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true

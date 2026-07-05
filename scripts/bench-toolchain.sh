@@ -9,6 +9,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
+source "$HERE/scripts/mister-supervision-lib.sh"
 BUILD_PROFILE=release-device
 BUILD_FLAG=(--device)
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
@@ -805,11 +806,11 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   echo "==> Cross-build (timed)"
   build_log="$(mktemp)"
   HOST_COMPILE_SEC="$( ( time -p env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" "$RUST_DIR/build-arm.sh" "${BUILD_FLAG[@]}" ) 2>&1 | tee "$build_log" | awk '/^real /{print $2}')"
-  HOST_NOTES="profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
+  HOST_NOTES="profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=suspend-main-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   rm -f "$build_log"
   [[ -f "$BIN" ]] || { echo "Build failed: missing $BIN" >&2; exit 1; }
 else
-  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=kill-mister-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
+  HOST_NOTES="skip-build; profile=$BUILD_PROFILE; ui_scope=$UI_SCOPE; prep=suspend-main-ui; design=runtime; render=runtime; font=PressStart2P; fpga-scale-ui=960x540-to-1920x1080"
   [[ -f "$BIN" ]] || { echo "No binary at $BIN" >&2; exit 1; }
 fi
 
@@ -822,6 +823,8 @@ echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BY
 
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   echo "==> Deploy $BIN"
+  mister_suspend_launcher
+  trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
   mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"

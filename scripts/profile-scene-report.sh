@@ -4,6 +4,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/mister-supervision-lib.sh"
 OUT_DIR="$HERE/build/frame-profiles"
 
 usage() {
@@ -41,6 +42,8 @@ local_heatmap="$OUT_DIR/${label}-heatmap.svg"
 local_report="$OUT_DIR/${label}-report.html"
 
 echo "==> Profile scene=$scene secs=$secs label=$label"
+mister_suspend_launcher
+trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
 "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; sleep 5; MISTER_PROFILE=summary MISTER_PROFILE_FILE=$remote_tsv MISTER_TRACE_FILE=$remote_trace /media/fat/mister-magik/mister-magik-fb ui $scene $secs >$remote_log 2>&1; grep -E 'frame_profile:|present-bandwidth' $remote_log"
 
 echo "==> Pull profile artifacts"

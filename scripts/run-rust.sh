@@ -10,6 +10,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/mister-supervision-lib.sh"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 SCENE="${1:-launcher}"
 SECS="${2:-0}"
@@ -53,7 +55,7 @@ esac
 
 if [[ "$SCENE" == "launcher" ]]; then
   echo "==> Restarting Main-supervised launcher"
-  "$HERE/scripts/mister" run "rm -f /media/fat/mister-magik/launcher.env; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  "$MISTER" run "rm -f /media/fat/mister-magik/launcher.env; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
   exit 0
 fi
 
@@ -62,7 +64,9 @@ if [ -n "$EXTRA_ENV" ]; then
   echo "==> Extra env: $EXTRA_ENV"
 fi
 echo "==> Log: $LOG"
-"$HERE/scripts/mister" run "
+mister_suspend_launcher
+trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
+"$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 test -x '$REMOTE' || chmod +x '$REMOTE'

@@ -89,6 +89,8 @@ local_tsv="$OUT_DIR/${label}-transition-effects.tsv"
 local_log="$OUT_DIR/${label}-transition-effects.log"
 
 echo "==> transition-effects label=$label mode=$mode secs=$secs segment_secs=$segment_secs preview_format=$preview_format"
+effect_suspend_launcher
+trap effect_cleanup_temp_files EXIT
 "$MISTER" run "
 set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
@@ -251,13 +253,12 @@ if [[ "$visual_captures" == "0" ]]; then
   visual_ok="not-run"
 fi
 
-summary_tmp="$(mktemp)"
+effect_temp_file summary_tmp
 summarize_by_effect "$local_tsv" "$label" "${rss:-0}" "${cpu_sample_max:-0}" "$visual_ok" "$notes" >"$summary_tmp"
 cat "$summary_tmp" >>"$RESULTS"
 
 echo
 echo "$HEADER"
 cat "$summary_tmp"
-rm -f "$summary_tmp"
 echo
 echo "appended $RESULTS"

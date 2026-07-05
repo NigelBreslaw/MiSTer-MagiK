@@ -4,6 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 EFFECT_PROFILE_TMP_FILES=()
+EFFECT_PROFILE_RESUME_ARMED=0
 
 effect_profile_setup() {
   local output_subdir="$1"
@@ -11,9 +12,22 @@ effect_profile_setup() {
 
   HERE="$(experiment_repo_root)"
   MISTER="$HERE/scripts/mister"
+  source "$HERE/scripts/mister-supervision-lib.sh"
   REMOTE="${EFFECT_REMOTE:-/media/fat/mister-magik/mister-magik-fb}"
   OUT_DIR="$HERE/build/$output_subdir"
   RESULTS="$HERE/history/toolchain-bench/$results_file"
+}
+
+effect_suspend_launcher() {
+  mister_suspend_launcher
+  EFFECT_PROFILE_RESUME_ARMED=1
+}
+
+effect_restart_launcher_if_armed() {
+  if [[ "$EFFECT_PROFILE_RESUME_ARMED" == "1" ]]; then
+    mister_restart_launcher >/dev/null 2>&1 || true
+    EFFECT_PROFILE_RESUME_ARMED=0
+  fi
 }
 
 effect_default_label() {
@@ -140,6 +154,7 @@ effect_temp_file() {
 }
 
 effect_cleanup_temp_files() {
+  effect_restart_launcher_if_armed
   if [[ "${#EFFECT_PROFILE_TMP_FILES[@]}" -gt 0 ]]; then
     rm -f "${EFFECT_PROFILE_TMP_FILES[@]}"
   fi

@@ -104,11 +104,16 @@ cleanup() {
 trap cleanup EXIT
 
 sleep 1
+MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/mister-supervision-lib.sh"
+mister_suspend_launcher
+trap 'cleanup; mister_restart_launcher >/dev/null 2>&1 || true' EXIT
 set +e
-"$HERE/scripts/mister" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; sleep 0.5; MISTER_UI_FB_SIZE='$ui_fb_size' MISTER_FB_PRESENT_DELAY_US='$present_delay_us' /media/fat/mister-magik/mister-magik-fb ui tear_pattern $secs" | tee "$scene_log"
+"$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; sleep 0.5; MISTER_UI_FB_SIZE='$ui_fb_size' MISTER_FB_PRESENT_DELAY_US='$present_delay_us' /media/fat/mister-magik/mister-magik-fb ui tear_pattern $secs" | tee "$scene_log"
 scene_status=${PIPESTATUS[0]}
 set -e
 wait "$camera_pid"
+mister_restart_launcher >/dev/null 2>&1 || true
 trap - EXIT
 
 ffmpeg -hide_banner -loglevel warning -y \
