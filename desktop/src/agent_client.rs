@@ -330,9 +330,32 @@ impl AgentClient {
 
 impl FramebufferStream {
     pub fn next_capture(&mut self) -> Result<FramebufferCapture, AgentError> {
-        let (header, payload) = read_frame(&mut self.reader)
-            .map_err(|err| AgentError::Unreachable(format!("read framebuffer stream: {err}")))?;
-        self.state.apply_frame(header, &payload)
+        loop {
+            let (header, payload) = read_frame(&mut self.reader).map_err(|err| {
+                AgentError::Unreachable(format!("read framebuffer stream: {err}"))
+            })?;
+            match header.kind {
+                FrameKind::Keyframe | FrameKind::RectDelta => {
+                    return self.state.apply_frame(header, &payload);
+                }
+                FrameKind::Heartbeat => continue,
+                FrameKind::End => {
+                    return Err(AgentError::Command(
+                        "framebuffer stream ended by producer".to_string(),
+                    ));
+                }
+                FrameKind::Error => {
+                    return Err(AgentError::Command(
+                        String::from_utf8_lossy(&payload).into_owned(),
+                    ));
+                }
+                FrameKind::Hello => {
+                    return Err(AgentError::Protocol(
+                        "unexpected framebuffer stream hello frame".to_string(),
+                    ));
+                }
+            }
+        }
     }
 }
 

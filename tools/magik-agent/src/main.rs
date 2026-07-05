@@ -600,11 +600,7 @@ mod linux {
         }
     }
 
-    fn maybe_handle_framebuffer_stream_v1(
-        line: &str,
-        token: &str,
-        stream: &mut TcpStream,
-    ) -> bool {
+    fn maybe_handle_framebuffer_stream_v1(line: &str, token: &str, stream: &mut TcpStream) -> bool {
         let parsed: Value = match serde_json::from_str(line.trim()) {
             Ok(value) => value,
             Err(_) => return false,
@@ -615,7 +611,11 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(stream, "{}", response(id, false, None, Some("unauthorized")));
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(id, false, None, Some("unauthorized"))
+            );
             return true;
         }
         let Some(_guard) = ActiveFramebufferStream::claim() else {
@@ -658,6 +658,7 @@ mod linux {
             "format": "rgb565-le",
         });
         let _ = writeln!(stream, "{}", response(id, true, Some(result), None));
+        let _ = stream.flush();
         match io::copy(&mut producer, stream) {
             Ok(bytes) => append_log_line(format!("framebuffer_stream_v1_end bytes={bytes}")),
             Err(err) => append_log_line(format!("framebuffer_stream_v1_error err={err}")),
@@ -686,7 +687,11 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(stream, "{}", response(id, false, None, Some("unauthorized")));
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(id, false, None, Some("unauthorized"))
+            );
             return true;
         }
         timeline_record_once("first_command", format!("cmd={}", cmd.unwrap_or("")));

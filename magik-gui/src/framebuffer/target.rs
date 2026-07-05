@@ -234,6 +234,19 @@ pub fn dirty_rect_is_broad(rect: DirtyRect, render_w: usize) -> bool {
     rect.width() * 100 >= render_w * dirty_rect_broad_pct()
 }
 
+fn cached_present_rect(rect: DirtyRect, geometry: FramebufferTargetGeometry) -> DirtyRect {
+    if rect.is_full_width(geometry.render_w()) || dirty_rect_is_broad(rect, geometry.render_w()) {
+        DirtyRect {
+            x0: 0,
+            y0: rect.y0,
+            x1: geometry.render_w(),
+            y1: rect.y1,
+        }
+    } else {
+        rect
+    }
+}
+
 pub fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -346,10 +359,11 @@ pub fn copy_cached_rect_565(
     geometry: FramebufferTargetGeometry,
     cached: &[Rgb565Pixel],
     rect: DirtyRect,
-) {
-    if rect.is_full_width(geometry.render_w()) || dirty_rect_is_broad(rect, geometry.render_w()) {
+) -> DirtyRect {
+    let copied_rect = cached_present_rect(rect, geometry);
+    if copied_rect.is_full_width(geometry.render_w()) {
         copy_cached_rows_565(disp, cached, rect.y0, rect.y1);
-        return;
+        return copied_rect;
     }
     if let Err(e) = disp.present_rect_565_strided(
         rect.x0,
@@ -363,6 +377,7 @@ pub fn copy_cached_rect_565(
     ) {
         log_present_error("rect", &e);
     }
+    copied_rect
 }
 
 pub fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -431,9 +446,13 @@ impl UiFrameTarget {
         geometry: FramebufferTargetGeometry,
         rect: DirtyRect,
     ) -> u32 {
-        copy_cached_rect_565(disp, geometry, &self.cached, rect);
-        stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(rect), &self.cached);
-        rect.rows()
+        let copied_rect = copy_cached_rect_565(disp, geometry, &self.cached, rect);
+        stream::publish_cached_rect(
+            geometry.stream_geometry(),
+            stream_rect(copied_rect),
+            &self.cached,
+        );
+        copied_rect.rows()
     }
 
     pub fn present_rect_565(
@@ -635,6 +654,20 @@ mod tests {
         let plan = build_launcher_present_plan(None, &cached_overlays, &direct_overlays).to_vec();
 
         assert_eq!(plan, vec![cached_overlay]);
+    }
+
+    #[test]
+    fn cached_present_rect_reports_full_rows_for_broad_rects() {
+        let geometry = FramebufferTargetGeometry::new(100, 50);
+
+        assert_eq!(
+            cached_present_rect(rect(15, 10, 100, 12), geometry),
+            rect(0, 10, 100, 12)
+        );
+        assert_eq!(
+            cached_present_rect(rect(20, 10, 40, 12), geometry),
+            rect(20, 10, 40, 12)
+        );
     }
 
     #[test]
