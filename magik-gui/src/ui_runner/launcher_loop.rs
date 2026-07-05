@@ -822,7 +822,10 @@ pub(super) fn run_launcher_loop(
                 scheduler.start_catalog_worker(
                     arcade_root.clone(),
                     request,
-                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                    summary_seed_catalog_worker_initial_cache(
+                        request,
+                        return_catalog_hydration_needed,
+                    ),
                 );
             } else {
                 print_startup_event(
@@ -837,7 +840,10 @@ pub(super) fn run_launcher_loop(
                 scheduler.start_catalog_worker(
                     arcade_root.clone(),
                     request,
-                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                    summary_seed_catalog_worker_initial_cache(
+                        request,
+                        return_catalog_hydration_needed,
+                    ),
                 );
             }
         } else {
@@ -3294,6 +3300,17 @@ fn summary_seed_catalog_worker_request(
         .then_some(request)
 }
 
+fn summary_seed_catalog_worker_initial_cache(
+    request: CatalogWorkerRequest,
+    return_catalog_hydration_needed: bool,
+) -> CatalogWorkerInitialCache {
+    if request == CatalogWorkerRequest::ForceBuild || return_catalog_hydration_needed {
+        CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+    } else {
+        CatalogWorkerInitialCache::AlreadyLoadedReady
+    }
+}
+
 fn launcher_bench_initial_preview_ready(
     scenario: LauncherBenchScenario,
     preview_cache_state: &str,
@@ -4302,6 +4319,22 @@ mod tests {
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),
             Some(CatalogWorkerRequest::ForceBuild)
+        );
+    }
+
+    #[test]
+    pub(super) fn summary_warm_validation_skips_eager_navigation_hydration() {
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
+            CatalogWorkerInitialCache::AlreadyLoadedReady
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::LoadOnly, true),
+            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
+            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
         );
     }
 }
