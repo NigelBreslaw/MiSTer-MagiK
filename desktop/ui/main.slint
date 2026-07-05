@@ -1080,65 +1080,43 @@ component ProfileHeatmap {
 }
 
 component ProfileArtifactControls {
-    VerticalLayout {
-        spacing: 8px;
+    Rectangle {
+        width: 100%;
+        min-height: AnalyticsState.profile-last-error != "" ? 124px : 40px;
 
-        HorizontalLayout {
+        content := VerticalLayout {
+            width: 100%;
             spacing: 8px;
-            cross-axis-alignment: center;
 
-            PrimerTextInput {
-                horizontal-stretch: 1;
-                text: AnalyticsState.profile-path;
-                placeholder: "Path to MISTER_PROFILE_FILE TSV";
-                has-leading-visual: true;
-                leading-visual: Icons.file;
-                edited(value) => { AnalyticsState.profile-path = value; }
+            HorizontalLayout {
+                width: 100%;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                PrimerTextInput {
+                    horizontal-stretch: 1;
+                    text: AnalyticsState.profile-path;
+                    placeholder: "Path to MISTER_PROFILE_FILE TSV";
+                    has-leading-visual: true;
+                    leading-visual: Icons.file;
+                    edited(value) => { AnalyticsState.profile-path = value; }
+                }
+
+                Button {
+                    width: 112px;
+                    height: 32px;
+                    label: AnalyticsState.profile-loading ? "Loading..." : "Load TSV";
+                    disabled: AnalyticsState.profile-loading;
+                    variant: ButtonVariant.default;
+                    clicked => { Actions.load-profile-artifact(AnalyticsState.profile-path); }
+                }
             }
 
-            Button {
-                width: 112px;
-                height: 32px;
-                label: AnalyticsState.profile-loading ? "Loading..." : "Load TSV";
-                disabled: AnalyticsState.profile-loading;
-                variant: ButtonVariant.default;
-                clicked => { Actions.load-profile-artifact(AnalyticsState.profile-path); }
+            if AnalyticsState.profile-last-error != "": Banner {
+                title: "Profile load error";
+                description: AnalyticsState.profile-last-error;
+                variant: BannerVariant.critical;
             }
-        }
-
-        if AnalyticsState.profile-last-error != "": Banner {
-            title: "Profile load error";
-            description: AnalyticsState.profile-last-error;
-            variant: BannerVariant.critical;
-        }
-
-        Text {
-            text: AnalyticsState.profile-status + " " + AnalyticsState.profile-summary;
-            color: PrimerColors.fgColor-muted;
-            font-size: LayoutTokens.text-body-size-small;
-            wrap: word-wrap;
-        }
-    }
-}
-
-component ProfileBudgetPanel {
-    TableContainer {
-        title: "Frame Budget";
-        subtitle: "Stacked frame phases against the 16.667ms budget.";
-
-        ProfileBudgetChart {
-            bars: AnalyticsState.profile-bars;
-        }
-    }
-}
-
-component ProfileHeatmapPanel {
-    TableContainer {
-        title: "Dirty-Region Heatmap";
-        subtitle: "Presented rect density bucketed across the framebuffer.";
-
-        ProfileHeatmap {
-            cells: AnalyticsState.profile-heatmap;
         }
     }
 }
@@ -1157,26 +1135,22 @@ component ProfileStatsPanel {
         { header: "Frames", id: "frames", sortable: false, align: DataTableCellAlign.end, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 0, min-width: 80px, width: 80px, monospace: true },
     ];
 
-    TableContainer {
-        title: "Phase Stats And Histogram";
-        subtitle: "Phase percentiles and wall-time frame distribution.";
+    HorizontalLayout {
+        width: 100%;
+        spacing: 12px;
 
-        HorizontalLayout {
-            spacing: 12px;
+        DataTable {
+            horizontal-stretch: 2;
+            cell-padding: DataTableCellPadding.condensed;
+            columns: stats-columns;
+            rows: AnalyticsState.profile-stats-rows;
+        }
 
-            DataTable {
-                horizontal-stretch: 2;
-                cell-padding: DataTableCellPadding.condensed;
-                columns: stats-columns;
-                rows: AnalyticsState.profile-stats-rows;
-            }
-
-            DataTable {
-                horizontal-stretch: 1;
-                cell-padding: DataTableCellPadding.condensed;
-                columns: histogram-columns;
-                rows: AnalyticsState.profile-histogram-rows;
-            }
+        DataTable {
+            horizontal-stretch: 1;
+            cell-padding: DataTableCellPadding.condensed;
+            columns: histogram-columns;
+            rows: AnalyticsState.profile-histogram-rows;
         }
     }
 }
@@ -1189,18 +1163,11 @@ component ProfileSlowFramesPanel {
         { header: "Rect", id: "rect", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: true },
     ];
 
-    TableContainer {
-        title: "Slow Frames";
-        subtitle: "Frames at or above the 16.667ms budget, ordered by wall time.";
-
-        VerticalLayout {
-            DataTable {
-                width: 100%;
-                cell-padding: DataTableCellPadding.condensed;
-                columns: slow-columns;
-                rows: AnalyticsState.profile-slow-rows;
-            }
-        }
+    DataTable {
+        width: 100%;
+        cell-padding: DataTableCellPadding.condensed;
+        columns: slow-columns;
+        rows: AnalyticsState.profile-slow-rows;
     }
 }
 
@@ -1354,13 +1321,37 @@ component AnalyticsPage {
 
             if root.analytics-tab-index > 0: ProfileArtifactControls { }
 
-            if root.analytics-tab-index == 1: ProfileBudgetPanel { }
+            if root.analytics-tab-index == 1: TableContainer {
+                title: "Frame Budget";
+                subtitle: "Stacked frame phases against the 16.667ms budget.";
 
-            if root.analytics-tab-index == 2: ProfileHeatmapPanel { }
+                ProfileBudgetChart {
+                    bars: AnalyticsState.profile-bars;
+                }
+            }
 
-            if root.analytics-tab-index == 3: ProfileStatsPanel { }
+            if root.analytics-tab-index == 2: TableContainer {
+                title: "Dirty-Region Heatmap";
+                subtitle: "Presented rect density bucketed across the framebuffer.";
 
-            if root.analytics-tab-index == 4: ProfileSlowFramesPanel { }
+                ProfileHeatmap {
+                    cells: AnalyticsState.profile-heatmap;
+                }
+            }
+
+            if root.analytics-tab-index == 3: TableContainer {
+                title: "Phase Stats And Histogram";
+                subtitle: "Phase percentiles and wall-time frame distribution.";
+
+                ProfileStatsPanel { }
+            }
+
+            if root.analytics-tab-index == 4: TableContainer {
+                title: "Slow Frames";
+                subtitle: "Frames at or above the 16.667ms budget, ordered by wall time.";
+
+                ProfileSlowFramesPanel { }
+            }
         }
     }
 }
