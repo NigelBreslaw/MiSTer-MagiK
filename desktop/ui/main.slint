@@ -1,7 +1,6 @@
 import {
     Banner,
     BannerVariant,
-    Button,
     ButtonVariant,
     DataTable,
     DataTableCell,
@@ -18,7 +17,6 @@ import {
     NavList,
     NavListItem,
     PageHeader,
-    Size,
     StateLabel,
     StateLabelSize,
     StateLabelStatus,
@@ -62,7 +60,6 @@ component AppHeader {
     in property <length> safe-left: 0px;
     in property <length> safe-right: 0px;
     in property <length> safe-top: 0px;
-    callback refresh;
     callback start-window-drag;
 
     height: max(64px, safe-top + 56px);
@@ -91,13 +88,6 @@ component AppHeader {
             spacing: 12px;
             alignment: center;
             cross-axis-alignment: center;
-
-            Image {
-                width: 24px;
-                height: 24px;
-                source: Icons.palette;
-                colorize: #ffffff;
-            }
 
             Text {
                 text: "MiSTer MagiK";
@@ -140,15 +130,6 @@ component AppHeader {
                 }
             }
 
-            Button {
-                label: "Refresh";
-                size: Size.small;
-                has-leading-icon: true;
-                leading-icon: Icons.arrow_down;
-                clicked => {
-                    root.refresh();
-                }
-            }
         }
     }
 }
@@ -370,7 +351,6 @@ export component AppWindow inherits Window {
     min-width: 760px;
     min-height: 520px;
     default-font-family: "Mona Sans";
-    icon: Icons.palette;
 
     Rectangle {
         background: PrimerColors.bgColor-default;
@@ -380,7 +360,6 @@ export component AppWindow inherits Window {
                 safe-left: root.safe-area-insets.left;
                 safe-right: root.safe-area-insets.right;
                 safe-top: root.safe-area-insets.top;
-                refresh => { Actions.refresh-status(); }
                 start-window-drag => { WindowActions.start-window-drag(); }
             }
 
