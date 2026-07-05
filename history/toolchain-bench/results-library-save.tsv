@@ -39,3 +39,4 @@ library_sqlite_publish_tsv	P2-20260703-LIB-SAVE	2	progress	10268672	0	706	0	0	0	
 library_sqlite_publish_tsv	P2-20260703-LIB-SAVE	3	progress	10268672	0	675	0	0	0	682	41	bench-ok
 library_sqlite_publish_tsv	P2-20260703-LIB-SAVE	4	progress	10268672	0	670	0	0	0	677	41	bench-ok
 library_sqlite_publish_tsv	P2-20260703-LIB-SAVE	5	progress	10268672	0	677	0	0	0	684	41	bench-ok
+library_sqlite_publish_tsv	PERF-20260705-SAVE	1	progress	41885696	0	2911	0	0	0	2941	161	bench-ok
