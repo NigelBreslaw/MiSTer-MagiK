@@ -7,6 +7,7 @@ MISTER="$HERE/scripts/mister"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
+REMOTE_NAV="/media/fat/mister-magik/library.nav.lz4b"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 BENCH_DIR="$HERE/history/toolchain-bench"
 OUT_DIR="$HERE/build/first-scan-profiles"
@@ -56,7 +57,27 @@ first_scan_self_test() {
     echo "save gate accepted gate+1" >&2
     return 1
   fi
+  first_scan_reset_artifact_self_test
   echo "profile-first-scan self-test ok"
+}
+
+first_scan_reset_artifact_self_test() {
+  local rows
+  rows="$(
+    for path in "$REMOTE_DB" "$REMOTE_SUMMARY" "$REMOTE_NAV"; do
+      printf 'artifact_reset_tsv\tSELFTEST\tmissing\t%s\t0\n' "$path"
+    done
+  )"
+  if [[ "$(printf '%s\n' "$rows" | wc -l | tr -d ' ')" != "3" ]]; then
+    echo "artifact reset self-test expected three rows" >&2
+    return 1
+  fi
+  for path in "$REMOTE_DB" "$REMOTE_SUMMARY" "$REMOTE_NAV"; do
+    if ! printf '%s\n' "$rows" | grep -q $'^artifact_reset_tsv\tSELFTEST\tmissing\t'"$path"$'\t0$'; then
+      echo "artifact reset self-test missing row for $path" >&2
+      return 1
+    fi
+  done
 }
 
 while [[ $# -gt 0 ]]; do
@@ -152,7 +173,19 @@ fi
 printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log; sync"
+reset_report="$("$MISTER" run "
+for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+  if [ -e \"\$path\" ]; then
+    bytes=\$(wc -c <\"\$path\" 2>/dev/null || echo 0)
+    echo \"artifact_reset_tsv	$LABEL	removed	\$path	\$bytes\"
+  else
+    echo \"artifact_reset_tsv	$LABEL	missing	\$path	0\"
+  fi
+done
+rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log
+sync
+")"
+printf '%s\n' "$reset_report" | tee "$OUT_DIR/${LABEL}-artifact-reset.tsv"
 "$MISTER" reboot-wait --direct-reset
 thread_sample_start "$LABEL" "first-scan" "$OUT_DIR" "$TIMEOUT_SECS"
 
