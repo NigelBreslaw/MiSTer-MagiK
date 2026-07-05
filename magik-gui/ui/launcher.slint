@@ -31,7 +31,7 @@ component LauncherTile inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Text {
+        if subtitle != "" : Text {
             text: subtitle;
             color: #9080a8;
             font-size: 8px;
