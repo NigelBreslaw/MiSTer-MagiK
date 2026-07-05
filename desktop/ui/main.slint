@@ -17,10 +17,16 @@ import {
     NavList,
     NavListItem,
     PageHeader,
+    PrimerTreeView,
     StateLabel,
     StateLabelSize,
     StateLabelStatus,
     TableContainer,
+    ToggleSwitch,
+    ToggleSwitchSize,
+    ToggleSwitchStatusLabelPosition,
+    TreeViewRow,
+    TreeViewTrailingVisual,
 } from "../../../github-app/packages/primer-slint/primer.slint";
 import { LayoutTokens, PrimerColors } from "../../../github-app/packages/primer-slint/tokens.slint";
 
@@ -48,8 +54,47 @@ export global DeviceState {
     in-out property <string> last-error: "";
 }
 
+export global AppState {
+    in-out property <string> selected-page: "debug";
+}
+
+export global SdCardState {
+    in-out property <string> current-path: "/";
+    in-out property <string> status: "Ready to browse /media/fat.";
+    in-out property <string> last-error: "";
+    in-out property <bool> loading: false;
+    in-out property <bool> show-hidden: false;
+    in-out property <[TreeViewRow]> rows: [
+        {
+            id: "/",
+            label: "SD Card",
+            level: 1,
+            has-children: true,
+            expanded: false,
+            current: true,
+            leading-is-directory: true,
+            has-leading-visual: true,
+            trailing: TreeViewTrailingVisual.none,
+            has-leading-action: false,
+            show-leading-action-icon: false,
+            leading-action-icon: Icons.dot_fill,
+            leading-file-icon: Icons.file,
+            interactive: true,
+            is-skeleton: false,
+            has-secondary-actions: false,
+            secondary-actions-badge: "",
+            loading-children-badge: "",
+        },
+    ];
+}
+
 export global Actions {
     callback refresh-status();
+    callback select-page(string);
+    callback sd-row-toggle(string);
+    callback sd-row-current(string);
+    callback sd-refresh-folder();
+    callback sd-show-hidden-changed(bool);
 }
 
 export global WindowActions {
@@ -167,9 +212,18 @@ component Sidebar {
 
                 NavListItem {
                     label: "Debug";
-                    active: true;
+                    active: AppState.selected-page == "debug";
                     has-leading-visual: true;
                     leading-icon: Icons.issue_opened;
+                    clicked => { Actions.select-page("debug"); }
+                }
+
+                NavListItem {
+                    label: "SD Card";
+                    active: AppState.selected-page == "sd-card";
+                    has-leading-visual: true;
+                    leading-icon: Icons.file_directory_fill;
+                    clicked => { Actions.select-page("sd-card"); }
                 }
             }
         }
@@ -344,6 +398,127 @@ component DebugPage {
     }
 }
 
+component SdCardStatusStrip {
+    HorizontalLayout {
+        spacing: LayoutTokens.base-size-8;
+        cross-axis-alignment: center;
+
+        StateLabel {
+            text: SdCardState.loading ? "Loading" : "Cached session";
+            size: StateLabelSize.small;
+            status: SdCardState.last-error != "" ? StateLabelStatus.AlertOpened : StateLabelStatus.Open;
+        }
+
+        StateLabel {
+            text: SdCardState.current-path;
+            size: StateLabelSize.small;
+            status: StateLabelStatus.Open;
+        }
+    }
+}
+
+component SdCardPage {
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        alignment: start;
+
+        PageHeader {
+            HorizontalLayout {
+                width: parent.width;
+                height: parent.height;
+                padding-left: LayoutTokens.stack-padding-normal;
+                padding-right: LayoutTokens.stack-padding-normal;
+                spacing: LayoutTokens.stack-padding-normal;
+                alignment: space-between;
+                cross-axis-alignment: center;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+
+                    Text {
+                        text: "SD Card";
+                        color: PrimerColors.fgColor-default;
+                        font-size: 20px;
+                        font-weight: LayoutTokens.base-text-weight-semibold;
+                    }
+
+                    Text {
+                        text: SdCardState.status;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                        overflow: elide;
+                    }
+                }
+
+                SdCardStatusStrip { }
+            }
+        }
+
+        if SdCardState.last-error != "": Banner {
+            title: "SD Card browse error";
+            description: SdCardState.last-error;
+            variant: BannerVariant.critical;
+        }
+
+        HorizontalLayout {
+            width: 100%;
+            spacing: LayoutTokens.base-size-8;
+            alignment: end;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "Hidden files";
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                vertical-alignment: center;
+            }
+
+            ToggleSwitch {
+                checked: SdCardState.show-hidden;
+                size: ToggleSwitchSize.small;
+                status-label-position: ToggleSwitchStatusLabelPosition.end;
+                button-label-on: "On";
+                button-label-off: "Off";
+                changed(show) => { Actions.sd-show-hidden-changed(show); }
+            }
+        }
+
+        TableContainer {
+            vertical-stretch: 1;
+            title: "/media/fat";
+            subtitle: "Browse-only session cache. Visited folders are reused until refreshed.";
+            primary-action-label: "Refresh folder";
+            primary-action-variant: ButtonVariant.default;
+            primary-action => { Actions.sd-refresh-folder(); }
+
+            Rectangle {
+                width: 100%;
+                vertical-stretch: 1;
+                min-height: 360px;
+                border-width: 1px;
+                border-color: PrimerColors.borderColor-default;
+                border-radius: LayoutTokens.borderRadius-medium;
+                background: PrimerColors.bgColor-default;
+
+                PrimerTreeView {
+                    x: LayoutTokens.base-size-8;
+                    y: LayoutTokens.base-size-8;
+                    width: parent.width - 2 * LayoutTokens.base-size-8;
+                    height: parent.height - 2 * LayoutTokens.base-size-8;
+                    rows: SdCardState.rows;
+                    virtualized: true;
+                    suppress-current-for-directories: true;
+                    accessible-name: "SD Card files";
+                    row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
+                    row-current-requested(id) => { Actions.sd-row-current(id); }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "MiSTer MagiK";
     preferred-width: 1100px;
@@ -373,7 +548,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                     background: PrimerColors.bgColor-default;
 
-                    Flickable {
+                    if AppState.selected-page == "debug": Flickable {
                         width: parent.width;
                         height: parent.height;
                         viewport-width: self.width;
@@ -386,6 +561,11 @@ export component AppWindow inherits Window {
 
                             DebugPage { }
                         }
+                    }
+
+                    if AppState.selected-page == "sd-card": SdCardPage {
+                        width: parent.width;
+                        height: parent.height;
                     }
                 }
             }

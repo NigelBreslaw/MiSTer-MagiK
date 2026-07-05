@@ -23,6 +23,195 @@ fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
     Ok(mac)
 }
 
+#[cfg(any(target_os = "linux", test))]
+mod sd_browse {
+    use serde_json::{json, Value};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{Instant, UNIX_EPOCH};
+
+    pub const ROOT_PATH: &str = "/";
+    pub const SD_ROOT: &str = "/media/fat";
+
+    pub fn list_dir_at_root(
+        root: &Path,
+        requested_path: &str,
+        show_hidden: bool,
+    ) -> Result<Value, String> {
+        let start = Instant::now();
+        let relative_path = normalize_sd_relative_path(requested_path)?;
+        let host_path = sd_host_path(root, &relative_path);
+        let mut entries = Vec::new();
+        for entry in
+            fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
+        {
+            let entry = entry.map_err(|err| format!("read_dir {relative_path}: {err}"))?;
+            if !show_hidden && is_hidden_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            entries.push(sd_entry_json(&relative_path, entry)?);
+        }
+        entries.sort_by(sd_entry_value_cmp);
+        Ok(json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": relative_path,
+            "show_hidden": show_hidden,
+            "entries": entries,
+            "elapsed_ms": start.elapsed().as_millis() as u64,
+        }))
+    }
+
+    pub fn normalize_sd_relative_path(path: &str) -> Result<String, String> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() || trimmed == ROOT_PATH {
+            return Ok(ROOT_PATH.to_string());
+        }
+        if trimmed.starts_with("/media/fat/") || trimmed == SD_ROOT {
+            return Err("sd path must be relative to /media/fat".to_string());
+        }
+        let mut parts = Vec::new();
+        for part in trimmed.split('/') {
+            if part.is_empty() || part == "." {
+                continue;
+            }
+            if part == ".." {
+                return Err("sd path may not contain ..".to_string());
+            }
+            if part.contains('\0') {
+                return Err("sd path may not contain NUL".to_string());
+            }
+            parts.push(part);
+        }
+        if parts.is_empty() {
+            Ok(ROOT_PATH.to_string())
+        } else {
+            Ok(format!("/{}", parts.join("/")))
+        }
+    }
+
+    pub fn sd_host_path(root: &Path, relative_path: &str) -> PathBuf {
+        let mut path = root.to_path_buf();
+        for part in relative_path.split('/').filter(|part| !part.is_empty()) {
+            path.push(part);
+        }
+        path
+    }
+
+    pub fn sd_entry_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = child_sd_path(parent_path, &name);
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type {entry_path}: {err}"))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("metadata {entry_path}: {err}"))?;
+        let kind = if file_type.is_dir() {
+            "directory"
+        } else {
+            "file"
+        };
+        let modified_unix_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        Ok(json!({
+            "name": name,
+            "path": entry_path,
+            "kind": kind,
+            "size": if file_type.is_dir() { 0 } else { metadata.len() },
+            "modified_unix_ms": modified_unix_ms,
+            "readonly": metadata.permissions().readonly(),
+            "hidden": is_hidden_name(&name),
+        }))
+    }
+
+    fn is_hidden_name(name: &str) -> bool {
+        name.starts_with('.')
+    }
+
+    pub fn child_sd_path(parent_path: &str, name: &str) -> String {
+        if parent_path == ROOT_PATH {
+            format!("/{name}")
+        } else {
+            format!("{parent_path}/{name}")
+        }
+    }
+
+    pub fn sd_entry_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+        let a_dir = a.get("kind").and_then(Value::as_str) == Some("directory");
+        let b_dir = b.get("kind").and_then(Value::as_str) == Some("directory");
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| natural_name_cmp(entry_name(a), entry_name(b)))
+    }
+
+    fn entry_name(value: &Value) -> &str {
+        value.get("name").and_then(Value::as_str).unwrap_or("")
+    }
+
+    fn natural_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+        let mut a_chars = a.char_indices().peekable();
+        let mut b_chars = b.char_indices().peekable();
+        loop {
+            match (a_chars.peek().copied(), b_chars.peek().copied()) {
+                (None, None) => return std::cmp::Ordering::Equal,
+                (None, Some(_)) => return std::cmp::Ordering::Less,
+                (Some(_), None) => return std::cmp::Ordering::Greater,
+                (Some((_, ac)), Some((_, bc))) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
+                    let a_digits = take_ascii_digits(a, &mut a_chars);
+                    let b_digits = take_ascii_digits(b, &mut b_chars);
+                    let a_trimmed = a_digits.trim_start_matches('0');
+                    let b_trimmed = b_digits.trim_start_matches('0');
+                    let a_number = if a_trimmed.is_empty() { "0" } else { a_trimmed };
+                    let b_number = if b_trimmed.is_empty() { "0" } else { b_trimmed };
+                    let by_len = a_number.len().cmp(&b_number.len());
+                    if by_len != std::cmp::Ordering::Equal {
+                        return by_len;
+                    }
+                    let by_value = a_number.cmp(b_number);
+                    if by_value != std::cmp::Ordering::Equal {
+                        return by_value;
+                    }
+                    let by_raw_len = a_digits.len().cmp(&b_digits.len());
+                    if by_raw_len != std::cmp::Ordering::Equal {
+                        return by_raw_len;
+                    }
+                }
+                (Some((_, ac)), Some((_, bc))) => {
+                    a_chars.next();
+                    b_chars.next();
+                    let by_char = ac
+                        .to_ascii_lowercase()
+                        .cmp(&bc.to_ascii_lowercase())
+                        .then_with(|| ac.cmp(&bc));
+                    if by_char != std::cmp::Ordering::Equal {
+                        return by_char;
+                    }
+                }
+            }
+        }
+    }
+
+    fn take_ascii_digits<'a>(
+        text: &'a str,
+        chars: &mut std::iter::Peekable<std::str::CharIndices<'a>>,
+    ) -> &'a str {
+        let start = chars.peek().map(|(index, _)| *index).unwrap_or(text.len());
+        let mut end = start;
+        while let Some((index, ch)) = chars.peek().copied() {
+            if !ch.is_ascii_digit() {
+                break;
+            }
+            end = index + ch.len_utf8();
+            chars.next();
+        }
+        &text[start..end]
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     use libc::{
@@ -423,6 +612,10 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
+            "sd_list_dir" => match sd_list_dir(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
                     id,
@@ -519,6 +712,18 @@ mod linux {
             "suspend" | "resume" | "restart-launcher" => magik_fifo_action(action),
             _ => Err(format!("unsupported magik action: {action}")),
         }
+    }
+
+    fn sd_list_dir(args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        let show_hidden = args
+            .get("show_hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        crate::sd_browse::list_dir_at_root(Path::new(crate::sd_browse::SD_ROOT), path, show_hidden)
     }
 
     fn deploy_magik_bin(args: Value) -> Result<Value, String> {
@@ -1432,6 +1637,118 @@ mod tests {
             parse_mac_text("aa:bb:cc:dd:ee:zz").unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn sd_relative_paths_normalize_and_reject_escapes() {
+        assert_eq!(sd_browse::normalize_sd_relative_path("").unwrap(), "/");
+        assert_eq!(
+            sd_browse::normalize_sd_relative_path("///games//NES/./").unwrap(),
+            "/games/NES"
+        );
+        assert_eq!(
+            sd_browse::normalize_sd_relative_path("/_Arcade").unwrap(),
+            "/_Arcade"
+        );
+        assert!(sd_browse::normalize_sd_relative_path("../secret").is_err());
+        assert!(sd_browse::normalize_sd_relative_path("/games/../secret").is_err());
+        assert!(sd_browse::normalize_sd_relative_path("/media/fat").is_err());
+        assert!(sd_browse::normalize_sd_relative_path("/media/fat/games").is_err());
+    }
+
+    #[test]
+    fn sd_host_path_stays_under_root_after_normalization() {
+        let root = std::path::Path::new("/media/fat");
+        assert_eq!(sd_browse::sd_host_path(root, "/"), root);
+        assert_eq!(
+            sd_browse::sd_host_path(root, "/games/NES"),
+            std::path::PathBuf::from("/media/fat/games/NES")
+        );
+    }
+
+    #[test]
+    fn sd_list_dir_sorts_and_classifies_entries() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-sd-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("folder10")).unwrap();
+        std::fs::create_dir_all(root.join("folder2")).unwrap();
+        std::fs::write(root.join("file10.rom"), b"0123456789").unwrap();
+        std::fs::write(root.join("file2.rom"), b"12").unwrap();
+        std::fs::write(root.join(".hidden"), b"h").unwrap();
+        std::fs::write(root.join("readonly.txt"), b"r").unwrap();
+        let mut readonly_permissions = std::fs::metadata(root.join("readonly.txt"))
+            .unwrap()
+            .permissions();
+        readonly_permissions.set_readonly(true);
+        std::fs::set_permissions(root.join("readonly.txt"), readonly_permissions).unwrap();
+
+        let visible = sd_browse::list_dir_at_root(&root, "/", false).unwrap();
+        let entries = visible["entries"].as_array().unwrap();
+
+        let names = entries
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "folder2",
+                "folder10",
+                "file2.rom",
+                "file10.rom",
+                "readonly.txt"
+            ]
+        );
+        assert_eq!(visible["show_hidden"], false);
+        assert_eq!(entries[0]["kind"], "directory");
+        assert_eq!(entries[2]["size"], 2);
+        assert_eq!(entries[4]["readonly"], true);
+
+        let hidden = sd_browse::list_dir_at_root(&root, "/", true).unwrap();
+        let hidden_entries = hidden["entries"].as_array().unwrap();
+        let hidden_names = hidden_entries
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            hidden_names,
+            vec![
+                "folder2",
+                "folder10",
+                ".hidden",
+                "file2.rom",
+                "file10.rom",
+                "readonly.txt"
+            ]
+        );
+        assert_eq!(hidden["show_hidden"], true);
+        assert_eq!(hidden_entries[2]["hidden"], true);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_list_dir_returns_expected_json_shape() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-sd-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("games")).unwrap();
+        std::fs::write(root.join("MiSTer.ini"), b"ini").unwrap();
+
+        let result = sd_browse::list_dir_at_root(&root, "/", false).unwrap();
+        assert_eq!(result["schema"], "mister-magik-sd-list-dir-v1");
+        assert_eq!(result["path"], "/");
+        assert_eq!(result["show_hidden"], false);
+        assert_eq!(result["entries"][0]["name"], "games");
+        assert_eq!(result["entries"][0]["kind"], "directory");
+        assert_eq!(result["entries"][1]["name"], "MiSTer.ini");
+        assert_eq!(result["entries"][1]["kind"], "file");
+
+        let err = sd_browse::list_dir_at_root(&root, "/missing", false).unwrap_err();
+        assert!(err.contains("read_dir /missing"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(not(target_os = "linux"))]

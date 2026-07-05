@@ -2,6 +2,7 @@ use crate::app_state::{
     catalog_summary, input_summary, process_summary, screen_summary, string_at, uptime_label,
     ConnectionOutcome, DashboardSnapshot,
 };
+use crate::sd_card::{SdDirectoryListing, SdEntry, SdEntryKind};
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
@@ -110,6 +111,20 @@ pub fn fetch_dashboard(host: &str) -> DashboardSnapshot {
     }
 
     snapshot
+}
+
+pub fn fetch_sd_directory(
+    host: &str,
+    path: &str,
+    show_hidden: bool,
+) -> Result<SdDirectoryListing, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let value = client.request(
+        "sd_list_dir",
+        json!({ "path": path, "show_hidden": show_hidden }),
+    )?;
+    parse_sd_directory(&value)
 }
 
 struct AgentClient {
@@ -222,6 +237,70 @@ fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
     snapshot.catalog_summary = catalog_summary(slint_status);
     snapshot.screen_summary = screen_summary(slint_status);
     snapshot.input_summary = input_summary(slint_status);
+}
+
+fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-sd-list-dir-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected sd_list_dir response schema".to_string(),
+        ));
+    }
+    let path = string_at(value, "/path")
+        .ok_or_else(|| AgentError::Protocol("missing sd_list_dir path".to_string()))?
+        .to_string();
+    let elapsed_ms = value
+        .pointer("/elapsed_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let entries = value
+        .pointer("/entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AgentError::Protocol("missing sd_list_dir entries".to_string()))?
+        .iter()
+        .map(parse_sd_entry)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SdDirectoryListing {
+        path,
+        entries,
+        elapsed_ms,
+    })
+}
+
+fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
+    let name = string_at(value, "/name")
+        .ok_or_else(|| AgentError::Protocol("missing sd entry name".to_string()))?
+        .to_string();
+    let path = string_at(value, "/path")
+        .ok_or_else(|| AgentError::Protocol("missing sd entry path".to_string()))?
+        .to_string();
+    let kind = match string_at(value, "/kind") {
+        Some("directory") => SdEntryKind::Directory,
+        Some("file") => SdEntryKind::File,
+        Some(other) => {
+            return Err(AgentError::Protocol(format!(
+                "unsupported sd entry kind: {other}"
+            )))
+        }
+        None => return Err(AgentError::Protocol("missing sd entry kind".to_string())),
+    };
+    Ok(SdEntry {
+        name,
+        path,
+        kind,
+        size: value.pointer("/size").and_then(Value::as_u64).unwrap_or(0),
+        modified_unix_ms: value
+            .pointer("/modified_unix_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        readonly: value
+            .pointer("/readonly")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        hidden: value
+            .pointer("/hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 impl std::fmt::Display for AgentError {
@@ -415,5 +494,47 @@ mod tests {
             "unknown / unknown; - fps; last frame -ms ago"
         );
         assert_eq!(snapshot.input_summary, "- pad(s); active: none");
+    }
+
+    #[test]
+    fn parse_sd_directory_validates_schema_and_entries() {
+        let listing = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v1",
+            "path": "/",
+            "elapsed_ms": 12,
+            "entries": [
+                {
+                    "name": "_Arcade",
+                    "path": "/_Arcade",
+                    "kind": "directory",
+                    "size": 0,
+                    "modified_unix_ms": 0,
+                    "readonly": false,
+                    "hidden": false
+                },
+                {
+                    "name": "MiSTer.ini",
+                    "path": "/MiSTer.ini",
+                    "kind": "file",
+                    "size": 42,
+                    "modified_unix_ms": 1234,
+                    "readonly": true,
+                    "hidden": true
+                }
+            ]
+        }))
+        .expect("sd directory response should parse");
+
+        assert_eq!(listing.path, "/");
+        assert_eq!(listing.elapsed_ms, 12);
+        assert_eq!(listing.entries[0].kind, SdEntryKind::Directory);
+        assert_eq!(listing.entries[1].kind, SdEntryKind::File);
+        assert_eq!(listing.entries[1].size, 42);
+        assert!(listing.entries[1].readonly);
+        assert!(listing.entries[1].hidden);
+
+        let err = parse_sd_directory(&json!({"schema": "wrong"}))
+            .expect_err("schema mismatch should fail");
+        assert!(matches!(err, AgentError::Protocol(message) if message.contains("schema")));
     }
 }
