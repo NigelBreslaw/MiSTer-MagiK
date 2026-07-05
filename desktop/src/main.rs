@@ -975,6 +975,7 @@ fn apply_live_library_state(
         let _ = instance.set_global_property("LibraryState", name, value);
     }
 
+    set(instance, "updating_controls", Value::Bool(true));
     set(
         instance,
         "status",
@@ -1174,6 +1175,7 @@ fn apply_live_library_state(
         "confidence-index",
         Value::Number(library_option_index(&confidence_options, &browser.query.confidence) as f64),
     );
+    set(instance, "updating_controls", Value::Bool(false));
 }
 
 #[cfg(feature = "live-ui")]
@@ -2062,6 +2064,7 @@ fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) 
         return;
     };
     let state = ui.global::<LibraryState>();
+    state.set_updating_controls(true);
     state.set_status(browser.status.as_str().into());
     state.set_warning(browser.warning.as_str().into());
     state.set_last_error(browser.last_error.as_str().into());
@@ -2156,6 +2159,7 @@ fn apply_compiled_library_state(ui: &AppWindow, browser: &SharedLibraryBrowser) 
         &confidence_options,
         &browser.query.confidence,
     ));
+    state.set_updating_controls(false);
 }
 
 #[cfg(feature = "compiled-ui")]

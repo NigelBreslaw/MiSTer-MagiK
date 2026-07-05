@@ -108,6 +108,7 @@ export global LibraryState {
     in-out property <string> warning: "";
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
+    in-out property <bool> updating_controls: false;
     in-out property <string> query: "";
     in-out property <string> system-filter: "";
     in-out property <string> category-filter: "";
@@ -601,21 +602,33 @@ component LibraryTableContent {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.system-index;
                     options: LibraryState.system-options;
-                    selected-changed(index) => { Actions.library-filter-changed("system", LibraryState.system-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("system", LibraryState.system-options[index].value);
+                        }
+                    }
                 }
 
                 Select {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.category-index;
                     options: LibraryState.category-options;
-                    selected-changed(index) => { Actions.library-filter-changed("category", LibraryState.category-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("category", LibraryState.category-options[index].value);
+                        }
+                    }
                 }
 
                 Select {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.region-index;
                     options: LibraryState.region-options;
-                    selected-changed(index) => { Actions.library-filter-changed("region", LibraryState.region-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("region", LibraryState.region-options[index].value);
+                        }
+                    }
                 }
             }
 
@@ -627,21 +640,33 @@ component LibraryTableContent {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.manufacturer-index;
                     options: LibraryState.manufacturer-options;
-                    selected-changed(index) => { Actions.library-filter-changed("manufacturer", LibraryState.manufacturer-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("manufacturer", LibraryState.manufacturer-options[index].value);
+                        }
+                    }
                 }
 
                 Select {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.preview-index;
                     options: LibraryState.preview-options;
-                    selected-changed(index) => { Actions.library-filter-changed("preview", LibraryState.preview-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("preview", LibraryState.preview-options[index].value);
+                        }
+                    }
                 }
 
                 Select {
                     horizontal-stretch: 1;
                     selected-index: LibraryState.confidence-index;
                     options: LibraryState.confidence-options;
-                    selected-changed(index) => { Actions.library-filter-changed("confidence", LibraryState.confidence-options[index].value); }
+                    selected-changed(index) => {
+                        if !LibraryState.updating_controls {
+                            Actions.library-filter-changed("confidence", LibraryState.confidence-options[index].value);
+                        }
+                    }
                 }
             }
         }
