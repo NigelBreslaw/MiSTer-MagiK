@@ -1,5 +1,6 @@
 mod agent_client;
 mod app_state;
+mod file_icons;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod sd_card;
@@ -323,11 +324,9 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
                 ("has-children".to_string(), Value::Bool(row.has_children)),
                 ("expanded".to_string(), Value::Bool(row.expanded)),
                 ("current".to_string(), Value::Bool(row.current)),
-                (
-                    "leading-is-directory".to_string(),
-                    Value::Bool(row.leading_is_directory),
-                ),
+                ("leading-is-directory".to_string(), Value::Bool(false)),
                 ("has-leading-visual".to_string(), Value::Bool(true)),
+                ("preserve-leading-icon-color".to_string(), Value::Bool(true)),
                 (
                     "trailing".to_string(),
                     Value::EnumerationValue(
@@ -343,7 +342,7 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
                 ),
                 (
                     "leading-file-icon".to_string(),
-                    Value::Image(Image::default()),
+                    Value::Image(file_icons::material_icon(row.icon_key.as_str())),
                 ),
                 ("interactive".to_string(), Value::Bool(row.interactive)),
                 ("is-skeleton".to_string(), Value::Bool(row.is_skeleton)),
@@ -570,13 +569,14 @@ fn compiled_tree_row(row: &SdTreeRow) -> TreeViewRow {
         has_children: row.has_children,
         expanded: row.expanded,
         current: row.current,
-        leading_is_directory: row.leading_is_directory,
+        leading_is_directory: false,
         has_leading_visual: true,
+        preserve_leading_icon_color: true,
         trailing: TreeViewTrailingVisual::None,
         has_leading_action: false,
         show_leading_action_icon: false,
         leading_action_icon: slint::Image::default(),
-        leading_file_icon: slint::Image::default(),
+        leading_file_icon: file_icons::material_icon(row.icon_key.as_str()),
         interactive: row.interactive,
         is_skeleton: row.is_skeleton,
         has_secondary_actions: false,

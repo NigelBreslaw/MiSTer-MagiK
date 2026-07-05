@@ -36,6 +36,7 @@ pub struct SdDirectoryListing {
 pub struct SdTreeRow {
     pub id: String,
     pub label: String,
+    pub icon_key: String,
     pub level: i32,
     pub has_children: bool,
     pub expanded: bool,
@@ -269,6 +270,7 @@ impl SdCardBrowser {
         rows.push(SdTreeRow {
             id: path.to_string(),
             label: label.to_string(),
+            icon_key: "folder-base".to_string(),
             level,
             has_children: true,
             expanded,
@@ -292,6 +294,7 @@ impl SdCardBrowser {
                 rows.push(SdTreeRow {
                     id: format!("{path}::loading-{index}"),
                     label: String::new(),
+                    icon_key: "document".to_string(),
                     level: level + 1,
                     has_children: false,
                     expanded: false,
@@ -318,6 +321,7 @@ impl SdCardBrowser {
                         rows.push(SdTreeRow {
                             id: entry.path.clone(),
                             label: entry.name.clone(),
+                            icon_key: material_icon_key_for_file_name(&entry.name).to_string(),
                             level: level + 1,
                             has_children: false,
                             expanded: false,
@@ -344,6 +348,7 @@ fn message_row(parent: &str, label: &str, level: i32) -> SdTreeRow {
     SdTreeRow {
         id: format!("{parent}::{label}"),
         label: label.to_string(),
+        icon_key: "document".to_string(),
         level,
         has_children: false,
         expanded: false,
@@ -367,6 +372,60 @@ pub fn normalize_ui_path(path: &str) -> String {
         ROOT_PATH.to_string()
     } else {
         format!("/{}", parts.join("/"))
+    }
+}
+
+pub fn material_icon_key_for_file_name(name: &str) -> &'static str {
+    let lowered = name.trim().to_ascii_lowercase();
+    let base = lowered.as_str();
+    if base == "license" || base == "copying" || base == "unlicense" {
+        return "license";
+    }
+    if base == "readme" || base.starts_with("readme.") {
+        return "readme";
+    }
+    if base.ends_with(".lock") {
+        return "lock";
+    }
+
+    match base.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("7z" | "gz" | "rar" | "tar" | "tgz" | "zip") => "zip",
+        Some("bmp" | "gif" | "icns" | "ico" | "jpeg" | "jpg" | "png" | "svg" | "webp") => "image",
+        Some("aac" | "flac" | "m4a" | "mp3" | "ogg" | "wav") => "audio",
+        Some("avi" | "mkv" | "mov" | "mp4" | "mpeg" | "mpg" | "webm") => "video",
+        Some("md" | "mdown" | "markdown") => "markdown",
+        Some("json" | "jsonc") => "json",
+        Some("xml") => "xml",
+        Some("yaml" | "yml") => "yaml",
+        Some("toml") => "toml",
+        Some("ini" | "cfg" | "conf") => "settings",
+        Some("log") => "log",
+        Some("pdf") => "pdf",
+        Some("mra" | "mgl") => "console",
+        Some("cue") => "cue",
+        Some("bin" | "chd" | "cso" | "img" | "iso") => "disc",
+        Some("rbf" | "sv" | "v" | "vhd" | "vhdl") => "flash",
+        Some(
+            "gb" | "gba" | "gbc" | "gen" | "mfc" | "n64" | "neo" | "nes" | "pce" | "rom" | "sfc"
+            | "smc" | "smd" | "sms" | "z64",
+        ) => "disc",
+        Some("sav" | "srm" | "sqlite" | "sqlite3" | "db") => "database",
+        Some("rs") => "rust",
+        Some("sh" | "bash" | "zsh") => "shellcheck",
+        Some("ps1" | "psm1") => "powershell",
+        Some("exe") => "exe",
+        Some("dll") => "dll",
+        Some("hex") => "hex",
+        Some("c") => "c",
+        Some("cc" | "cpp" | "cxx") => "cpp",
+        Some("h" | "hh" | "hpp" | "hxx") => "h",
+        Some("py") => "python",
+        Some("js" | "mjs" | "cjs") => "javascript",
+        Some("ts" | "tsx") => "typescript",
+        Some("java" | "class" | "jar") => "java",
+        Some("ttf" | "otf" | "woff" | "woff2") => "font",
+        Some("key" | "pem" | "pub") => "key",
+        _ => "document",
     }
 }
 
@@ -540,5 +599,16 @@ mod tests {
     fn ui_paths_normalize_duplicate_slashes_and_dots() {
         assert_eq!(normalize_ui_path(""), ROOT_PATH);
         assert_eq!(normalize_ui_path("///games//NES/./"), "/games/NES");
+    }
+
+    #[test]
+    fn material_icon_keys_cover_sd_card_file_types() {
+        assert_eq!(material_icon_key_for_file_name("MiSTer.ini"), "settings");
+        assert_eq!(material_icon_key_for_file_name("menu.rbf"), "flash");
+        assert_eq!(material_icon_key_for_file_name("game.mra"), "console");
+        assert_eq!(material_icon_key_for_file_name("disc.cue"), "cue");
+        assert_eq!(material_icon_key_for_file_name("archive.7z"), "zip");
+        assert_eq!(material_icon_key_for_file_name("save.srm"), "database");
+        assert_eq!(material_icon_key_for_file_name("README.md"), "readme");
     }
 }
