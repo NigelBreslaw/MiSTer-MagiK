@@ -5,20 +5,21 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use std::io;
 use std::io::ErrorKind;
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 pub const PRODUCER_STREAM_PORT: u16 = 7499;
+const KEYFRAME_INTERVAL_FRAMES: u64 = 60;
 
 static STATE: OnceLock<Mutex<ProducerState>> = OnceLock::new();
 static STARTED_AT: OnceLock<Instant> = OnceLock::new();
 static LISTENER_STARTED: OnceLock<()> = OnceLock::new();
-static WORKER_TX: OnceLock<SyncSender<WorkerCommand>> = OnceLock::new();
+static WORKER_QUEUE: OnceLock<Arc<WorkerQueue>> = OnceLock::new();
 static SUBSCRIBER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static NEEDS_KEYFRAME: AtomicBool = AtomicBool::new(true);
+static COALESCED_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 struct ProducerState {
     latest_geometry: Option<FrameGeometry>,
@@ -33,18 +34,12 @@ impl ProducerState {
         }
     }
 
-    fn remember_rect(
+    fn remember_rect_pixels(
         &mut self,
         geometry: FrameGeometry,
         rect: FrameRect,
-        pixels: &[Rgb565Pixel],
-        src_stride: usize,
-        src_x: usize,
-        src_y: usize,
+        rect_pixels: &[Rgb565Pixel],
     ) {
-        let Some(rect_pixels) = collect_strided_rect(pixels, src_stride, src_x, src_y, rect) else {
-            return;
-        };
         let len = geometry
             .stride_pixels
             .checked_mul(geometry.height)
@@ -55,8 +50,14 @@ impl ProducerState {
             self.latest_pixels.resize(len, Rgb565Pixel(0));
             self.latest_geometry = Some(geometry);
         }
-        copy_rect_into_latest(&mut self.latest_pixels, geometry, rect, &rect_pixels);
+        copy_rect_into_latest(&mut self.latest_pixels, geometry, rect, rect_pixels);
     }
+}
+
+struct FrameUpdate {
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    pixels: Vec<Rgb565Pixel>,
 }
 
 struct FrameJob {
@@ -66,15 +67,80 @@ struct FrameJob {
     raw: Vec<u8>,
 }
 
-enum WorkerCommand {
+enum WorkerEvent {
     Subscriber(TcpStream),
-    Frame(FrameJob),
+    Frame(FrameUpdate),
+    Timeout,
+    Disconnected,
+}
+
+struct WorkerQueue {
+    state: Mutex<WorkerQueueState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct WorkerQueueState {
+    subscriber: Option<TcpStream>,
+    frame: Option<FrameUpdate>,
+}
+
+impl WorkerQueue {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(WorkerQueueState::default()),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn push_subscriber(&self, stream: TcpStream) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        state.subscriber = Some(stream);
+        self.ready.notify_one();
+        true
+    }
+
+    fn push_frame(&self, frame: FrameUpdate) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.frame.replace(frame).is_some() {
+            COALESCED_FRAMES.fetch_add(1, Ordering::Relaxed);
+            NEEDS_KEYFRAME.store(true, Ordering::Release);
+        }
+        self.ready.notify_one();
+        true
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> WorkerEvent {
+        let Ok(mut state) = self.state.lock() else {
+            return WorkerEvent::Disconnected;
+        };
+        while state.subscriber.is_none() && state.frame.is_none() {
+            let Ok((next_state, wait_result)) = self.ready.wait_timeout(state, timeout) else {
+                return WorkerEvent::Disconnected;
+            };
+            state = next_state;
+            if wait_result.timed_out() {
+                return WorkerEvent::Timeout;
+            }
+        }
+        if let Some(stream) = state.subscriber.take() {
+            return WorkerEvent::Subscriber(stream);
+        }
+        if let Some(frame) = state.frame.take() {
+            return WorkerEvent::Frame(frame);
+        }
+        WorkerEvent::Timeout
+    }
 }
 
 pub fn start() {
     let _ = STARTED_AT.get_or_init(Instant::now);
     let _ = STATE.get_or_init(|| Mutex::new(ProducerState::new()));
-    let _ = worker_tx();
+    let _ = worker_queue();
     let _ = LISTENER_STARTED.get_or_init(|| {
         thread::spawn(move || {
             let listener = match bind_listener() {
@@ -117,10 +183,7 @@ pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[R
         remember_startup_keyframe(geometry, rect, pixels);
         return;
     }
-    let Ok(mut state) = state().lock() else {
-        return;
-    };
-    state.remember_rect(
+    publish_rect(
         geometry,
         rect,
         pixels,
@@ -128,50 +191,13 @@ pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[R
         rect.x as usize,
         rect.y as usize,
     );
-    let job = if NEEDS_KEYFRAME.swap(false, Ordering::AcqRel) {
-        latest_keyframe_job(&state)
-    } else {
-        Some(frame_job(
-            geometry,
-            rect,
-            FrameKind::RectDelta,
-            pixels,
-            geometry.stride_pixels as usize,
-            rect.x as usize,
-            rect.y as usize,
-        ))
-    };
-    drop(state);
-    if let Some(job) = job {
-        enqueue_frame(job);
-    }
 }
 
 pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    let Ok(mut state) = state().lock() else {
-        return;
-    };
-    state.remember_rect(geometry, rect, pixels, rect.width as usize, 0, 0);
-    let job = if NEEDS_KEYFRAME.swap(false, Ordering::AcqRel) {
-        latest_keyframe_job(&state)
-    } else {
-        Some(frame_job(
-            geometry,
-            rect,
-            FrameKind::RectDelta,
-            pixels,
-            rect.width as usize,
-            0,
-            0,
-        ))
-    };
-    drop(state);
-    if let Some(job) = job {
-        enqueue_frame(job);
-    }
+    publish_rect(geometry, rect, pixels, rect.width as usize, 0, 0);
 }
 
 pub fn publish_strided_rect(
@@ -185,26 +211,27 @@ pub fn publish_strided_rect(
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    let Ok(mut state) = state().lock() else {
+    publish_rect(geometry, rect, pixels, src_stride, src_x, src_y);
+}
+
+fn publish_rect(
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    pixels: &[Rgb565Pixel],
+    src_stride: usize,
+    src_x: usize,
+    src_y: usize,
+) {
+    let Some(pixels) = collect_strided_rect(pixels, src_stride, src_x, src_y, rect) else {
         return;
     };
-    state.remember_rect(geometry, rect, pixels, src_stride, src_x, src_y);
-    let job = if NEEDS_KEYFRAME.swap(false, Ordering::AcqRel) {
-        latest_keyframe_job(&state)
-    } else {
-        Some(frame_job(
-            geometry,
-            rect,
-            FrameKind::RectDelta,
-            pixels,
-            src_stride,
-            src_x,
-            src_y,
-        ))
-    };
-    drop(state);
-    if let Some(job) = job {
-        enqueue_frame(job);
+    if !worker_queue().push_frame(FrameUpdate {
+        geometry,
+        rect,
+        pixels,
+    }) {
+        SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+        NEEDS_KEYFRAME.store(true, Ordering::Release);
     }
 }
 
@@ -216,14 +243,13 @@ fn install_subscriber(stream: TcpStream) {
         return;
     }
     NEEDS_KEYFRAME.store(true, Ordering::Release);
-    if worker_tx().send(WorkerCommand::Subscriber(stream)).is_err() {
+    if !worker_queue().push_subscriber(stream) {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         return;
     }
     if let Ok(state) = state().lock() {
-        if let Some(job) = latest_keyframe_job(&state) {
-            NEEDS_KEYFRAME.store(false, Ordering::Release);
-            enqueue_frame(job);
+        if let Some(update) = latest_keyframe_update(&state) {
+            let _ = worker_queue().push_frame(update);
         }
     }
     crate::ui_logln!("framebuffer stream producer subscriber connected");
@@ -239,45 +265,50 @@ fn remember_startup_keyframe(geometry: FrameGeometry, rect: FrameRect, pixels: &
     if state.latest_geometry.is_some() {
         return;
     }
-    state.remember_rect(
-        geometry,
-        rect,
+    let Some(rect_pixels) = collect_strided_rect(
         pixels,
         geometry.stride_pixels as usize,
         rect.x as usize,
         rect.y as usize,
-    );
+        rect,
+    ) else {
+        return;
+    };
+    state.remember_rect_pixels(geometry, rect, &rect_pixels);
 }
 
 fn is_full_frame(geometry: FrameGeometry, rect: FrameRect) -> bool {
     rect.x == 0 && rect.y == 0 && rect.width == geometry.width && rect.height == geometry.height
 }
 
+fn latest_keyframe_update(state: &ProducerState) -> Option<FrameUpdate> {
+    let geometry = state.latest_geometry?;
+    Some(FrameUpdate {
+        geometry,
+        rect: FrameRect::full(geometry),
+        pixels: state.latest_pixels.clone(),
+    })
+}
+
 fn latest_keyframe_job(state: &ProducerState) -> Option<FrameJob> {
-    let Some(geometry) = state.latest_geometry else {
-        return None;
-    };
-    Some(frame_job(
+    let geometry = state.latest_geometry?;
+    Some(frame_job_from_pixels(
         geometry,
         FrameRect::full(geometry),
         FrameKind::Keyframe,
         &state.latest_pixels,
         geometry.stride_pixels as usize,
-        0,
-        0,
     ))
 }
 
-fn frame_job(
+fn frame_job_from_pixels(
     geometry: FrameGeometry,
     rect: FrameRect,
     kind: FrameKind,
     pixels: &[Rgb565Pixel],
     stride_pixels: usize,
-    src_x: usize,
-    src_y: usize,
 ) -> FrameJob {
-    let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, src_x, src_y);
+    let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, 0, 0);
     FrameJob {
         kind,
         geometry,
@@ -286,77 +317,86 @@ fn frame_job(
     }
 }
 
-fn enqueue_frame(job: FrameJob) {
-    if job.raw.is_empty() {
-        if matches!(job.kind, FrameKind::Keyframe) {
-            NEEDS_KEYFRAME.store(true, Ordering::Release);
-        }
-        return;
-    }
-    match worker_tx().try_send(WorkerCommand::Frame(job)) {
-        Ok(()) => {}
-        Err(TrySendError::Full(WorkerCommand::Frame(job))) => {
-            if SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
-                NEEDS_KEYFRAME.store(true, Ordering::Release);
-                if matches!(job.kind, FrameKind::Keyframe) {
-                    crate::ui_errln!("framebuffer stream producer dropped keyframe");
-                }
-            }
-        }
-        Err(TrySendError::Disconnected(_)) => {
-            SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-            NEEDS_KEYFRAME.store(true, Ordering::Release);
-        }
-        Err(TrySendError::Full(WorkerCommand::Subscriber(_))) => unreachable!(),
-    }
+fn worker_queue() -> &'static Arc<WorkerQueue> {
+    WORKER_QUEUE.get_or_init(|| {
+        let queue = Arc::new(WorkerQueue::new());
+        let worker_queue = Arc::clone(&queue);
+        thread::Builder::new()
+            .name("fb-stream-producer".to_string())
+            .spawn(move || run_worker(worker_queue))
+            .expect("spawn framebuffer stream worker");
+        queue
+    })
 }
 
-fn worker_tx() -> &'static SyncSender<WorkerCommand> {
-    WORKER_TX.get_or_init(|| {
-        let (tx, rx) = sync_channel::<WorkerCommand>(1);
-        thread::spawn(move || {
-            let mut subscriber: Option<TcpStream> = None;
-            let mut sequence = 0_u64;
-            loop {
-                match rx.recv_timeout(Duration::from_millis(500)) {
-                    Ok(WorkerCommand::Subscriber(stream)) => {
-                        subscriber = Some(stream);
-                        sequence = 0;
+fn run_worker(queue: Arc<WorkerQueue>) {
+    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+        mister_magik_catalog::runtime_thread::RuntimeThreadRole::FramebufferStream,
+    );
+    let mut subscriber: Option<TcpStream> = None;
+    let mut producer_state = ProducerState::new();
+    let mut sequence = 0_u64;
+    loop {
+        match queue.recv_timeout(Duration::from_millis(500)) {
+            WorkerEvent::Subscriber(stream) => {
+                subscriber = Some(stream);
+                sequence = 0;
+                NEEDS_KEYFRAME.store(true, Ordering::Release);
+            }
+            WorkerEvent::Frame(update) => {
+                producer_state.remember_rect_pixels(update.geometry, update.rect, &update.pixels);
+                let Some(stream) = subscriber.as_mut() else {
+                    SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+                    NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    continue;
+                };
+                let force_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel)
+                    || sequence == 0
+                    || sequence.is_multiple_of(KEYFRAME_INTERVAL_FRAMES);
+                let job = if force_keyframe {
+                    latest_keyframe_job(&producer_state)
+                } else {
+                    Some(frame_job_from_pixels(
+                        update.geometry,
+                        update.rect,
+                        FrameKind::RectDelta,
+                        &update.pixels,
+                        update.rect.width as usize,
+                    ))
+                };
+                let Some(job) = job else {
+                    NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    continue;
+                };
+                if job.raw.is_empty() {
+                    if force_keyframe {
+                        NEEDS_KEYFRAME.store(true, Ordering::Release);
                     }
-                    Ok(WorkerCommand::Frame(job)) => {
-                        let Some(stream) = subscriber.as_mut() else {
-                            SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-                            NEEDS_KEYFRAME.store(true, Ordering::Release);
-                            continue;
-                        };
-                        sequence = sequence.saturating_add(1);
-                        if let Err(err) = write_job(stream, sequence, job) {
-                            crate::ui_errln!("framebuffer stream producer write failed: {err}");
-                            subscriber = None;
-                            SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-                            NEEDS_KEYFRAME.store(true, Ordering::Release);
-                        }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        if let Some(stream) = subscriber.as_mut() {
-                            if let Err(err) = write_heartbeat(stream) {
-                                crate::ui_errln!(
-                                    "framebuffer stream producer heartbeat failed: {err}"
-                                );
-                                subscriber = None;
-                                SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-                                NEEDS_KEYFRAME.store(true, Ordering::Release);
-                            }
-                        }
-                    }
-                    Err(RecvTimeoutError::Disconnected) => break,
+                    continue;
+                }
+                sequence = sequence.saturating_add(1);
+                if let Err(err) = write_job(stream, sequence, job) {
+                    crate::ui_errln!("framebuffer stream producer write failed: {err}");
+                    subscriber = None;
+                    SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+                    NEEDS_KEYFRAME.store(true, Ordering::Release);
                 }
             }
-            SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
-            NEEDS_KEYFRAME.store(true, Ordering::Release);
-        });
-        tx
-    })
+            WorkerEvent::Timeout => {
+                if let Some(stream) = subscriber.as_mut() {
+                    if let Err(err) = write_heartbeat(stream) {
+                        crate::ui_errln!("framebuffer stream producer heartbeat failed: {err}");
+                        subscriber = None;
+                        SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+                        NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    }
+                }
+            }
+            WorkerEvent::Disconnected => break,
+        }
+    }
+    SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+    NEEDS_KEYFRAME.store(true, Ordering::Release);
 }
 
 fn write_heartbeat(stream: &mut TcpStream) -> io::Result<()> {
@@ -545,7 +585,7 @@ mod tests {
         };
         let mut state = ProducerState::new();
         let full = (0..12).map(Rgb565Pixel).collect::<Vec<_>>();
-        state.remember_rect(
+        state.remember_rect_pixels(
             geometry,
             FrameRect {
                 x: 0,
@@ -554,9 +594,6 @@ mod tests {
                 height: 3,
             },
             &full,
-            4,
-            0,
-            0,
         );
         let patch = [
             Rgb565Pixel(100),
@@ -564,7 +601,7 @@ mod tests {
             Rgb565Pixel(102),
             Rgb565Pixel(103),
         ];
-        state.remember_rect(
+        state.remember_rect_pixels(
             geometry,
             FrameRect {
                 x: 1,
@@ -573,9 +610,6 @@ mod tests {
                 height: 2,
             },
             &patch,
-            2,
-            0,
-            0,
         );
 
         assert_eq!(
@@ -595,5 +629,34 @@ mod tests {
                 Rgb565Pixel(11),
             ]
         );
+    }
+
+    #[test]
+    fn worker_queue_replaces_pending_frame_and_requests_keyframe() {
+        NEEDS_KEYFRAME.store(false, Ordering::Release);
+        let queue = WorkerQueue::new();
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let first = FrameUpdate {
+            geometry,
+            rect: FrameRect::full(geometry),
+            pixels: vec![Rgb565Pixel(1), Rgb565Pixel(2)],
+        };
+        let second = FrameUpdate {
+            geometry,
+            rect: FrameRect::full(geometry),
+            pixels: vec![Rgb565Pixel(3), Rgb565Pixel(4)],
+        };
+
+        assert!(queue.push_frame(first));
+        assert!(queue.push_frame(second));
+
+        assert!(NEEDS_KEYFRAME.load(Ordering::Acquire));
+        let state = queue.state.lock().expect("queue state");
+        let pending = state.frame.as_ref().expect("latest frame remains queued");
+        assert_eq!(pending.pixels, vec![Rgb565Pixel(3), Rgb565Pixel(4)]);
     }
 }

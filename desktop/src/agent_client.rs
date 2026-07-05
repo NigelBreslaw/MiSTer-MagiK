@@ -58,6 +58,13 @@ pub struct FramebufferCapture {
     pub timing: FramebufferCaptureTiming,
 }
 
+#[derive(Debug)]
+pub struct FramebufferStreamDrainStats {
+    pub latencies: Vec<Duration>,
+    pub payload_bytes: u64,
+    pub raw_bytes: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FramebufferCaptureTiming {
     pub request_received_uptime_ms: u64,
@@ -88,6 +95,7 @@ struct FramebufferStreamState {
     rgb565: Vec<u8>,
     geometry: Option<FrameGeometry>,
     expected_sequence: Option<u64>,
+    awaiting_keyframe: bool,
 }
 
 pub fn read_token() -> (String, TokenSource) {
@@ -199,6 +207,51 @@ pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, Agent
         reader,
         control,
         state: FramebufferStreamState::default(),
+    })
+}
+
+pub fn drain_framebuffer_stream(
+    host: &str,
+    frames: u64,
+) -> Result<FramebufferStreamDrainStats, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let (_, mut reader) = request_framebuffer_stream_with_retry(&client)?;
+    let mut latencies = Vec::with_capacity(frames as usize);
+    let mut payload_bytes = 0_u64;
+    let mut raw_bytes = 0_u64;
+    while latencies.len() < frames as usize {
+        let frame_started = Instant::now();
+        let (header, payload) = read_frame(&mut reader)
+            .map_err(|err| AgentError::Unreachable(format!("read framebuffer stream: {err}")))?;
+        match header.kind {
+            FrameKind::Keyframe | FrameKind::RectDelta => {
+                latencies.push(frame_started.elapsed());
+                payload_bytes += payload.len() as u64;
+                raw_bytes += header.raw_bytes as u64;
+            }
+            FrameKind::Heartbeat => {}
+            FrameKind::End => {
+                return Err(AgentError::Command(
+                    "framebuffer stream ended by producer".to_string(),
+                ));
+            }
+            FrameKind::Error => {
+                return Err(AgentError::Command(
+                    String::from_utf8_lossy(&payload).into_owned(),
+                ));
+            }
+            FrameKind::Hello => {
+                return Err(AgentError::Protocol(
+                    "unexpected framebuffer stream hello frame".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(FramebufferStreamDrainStats {
+        latencies,
+        payload_bytes,
+        raw_bytes,
     })
 }
 
@@ -380,7 +433,9 @@ impl FramebufferStream {
             })?;
             match header.kind {
                 FrameKind::Keyframe | FrameKind::RectDelta => {
-                    return self.state.apply_frame(header, &payload);
+                    if let Some(capture) = self.state.apply_frame(header, &payload)? {
+                        return Ok(capture);
+                    }
                 }
                 FrameKind::Heartbeat => continue,
                 FrameKind::End => {
@@ -414,7 +469,7 @@ impl FramebufferStreamState {
         &mut self,
         header: FrameHeader,
         payload: &[u8],
-    ) -> Result<FramebufferCapture, AgentError> {
+    ) -> Result<Option<FramebufferCapture>, AgentError> {
         if header.flags & FLAG_LZ4_SIZE_PREPENDED == 0 {
             return Err(AgentError::Protocol(
                 "framebuffer stream frame is not LZ4 encoded".to_string(),
@@ -430,10 +485,12 @@ impl FramebufferStreamState {
             .validate_shape()
             .map_err(|err| AgentError::Protocol(err.to_string()))?;
         if header.kind == FrameKind::RectDelta && self.expected_sequence != Some(header.sequence) {
-            return Err(AgentError::Protocol(format!(
-                "framebuffer stream sequence gap expected={:?} actual={}",
-                self.expected_sequence, header.sequence
-            )));
+            self.awaiting_keyframe = true;
+            self.expected_sequence = None;
+            return Ok(None);
+        }
+        if self.awaiting_keyframe && header.kind != FrameKind::Keyframe {
+            return Ok(None);
         }
         let raw = lz4_flex::decompress_size_prepended(payload)
             .map_err(|err| AgentError::Protocol(format!("decompress framebuffer stream: {err}")))?;
@@ -450,6 +507,7 @@ impl FramebufferStreamState {
         apply_rgb565_rect(&mut self.rgb565, header.geometry, header.rect, &raw)?;
         self.geometry = Some(header.geometry);
         self.expected_sequence = Some(header.sequence.saturating_add(1));
+        self.awaiting_keyframe = false;
         let stride_bytes = header
             .geometry
             .stride_pixels
@@ -463,7 +521,7 @@ impl FramebufferStreamState {
             stride_bytes,
             16,
         )?;
-        Ok(FramebufferCapture {
+        Ok(Some(FramebufferCapture {
             png_path: PathBuf::new(),
             rgba_pixels,
             width: header.geometry.width as u64,
@@ -475,7 +533,7 @@ impl FramebufferStreamState {
             png_bytes: 0,
             png_hex_bytes: 0,
             timing: FramebufferCaptureTiming::default(),
-        })
+        }))
     }
 
     fn reset_buffer(&mut self, geometry: FrameGeometry) -> Result<(), AgentError> {
@@ -489,6 +547,7 @@ impl FramebufferStreamState {
         self.rgb565.clear();
         self.rgb565.resize(bytes, 0);
         self.expected_sequence = None;
+        self.awaiting_keyframe = false;
         Ok(())
     }
 }
@@ -1226,7 +1285,8 @@ mod tests {
 
         let capture = stream
             .apply_frame(header, &payload)
-            .expect("keyframe should apply");
+            .expect("keyframe should apply")
+            .expect("keyframe should produce capture");
 
         assert_eq!(capture.width, 3);
         assert_eq!(capture.height, 2);
@@ -1245,7 +1305,8 @@ mod tests {
 
         stream
             .apply_frame(header, &payload)
-            .expect("delta should apply");
+            .expect("delta should apply")
+            .expect("delta should produce capture");
 
         assert_eq!(
             stream.rgb565,
@@ -1255,7 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_stream_rejects_sequence_gap() {
+    fn framebuffer_stream_waits_for_keyframe_after_sequence_gap() {
         let geometry = FrameGeometry {
             width: 2,
             height: 1,
@@ -1271,7 +1332,8 @@ mod tests {
         );
         stream
             .apply_frame(header, &payload)
-            .expect("keyframe should apply");
+            .expect("keyframe should apply")
+            .expect("keyframe should produce capture");
 
         let (header, payload) = encoded_stream_frame(
             FrameKind::RectDelta,
@@ -1286,11 +1348,44 @@ mod tests {
             &[4, 5],
         );
 
-        let err = stream
+        let capture = stream
             .apply_frame(header, &payload)
-            .expect_err("sequence gap should fail");
+            .expect("sequence gap should be tolerated");
 
-        assert!(matches!(err, AgentError::Protocol(message) if message.contains("sequence gap")));
+        assert!(capture.is_none());
+        assert!(stream.awaiting_keyframe);
+
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::RectDelta,
+            13,
+            geometry,
+            FrameRect {
+                x: 1,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &[6, 7],
+        );
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("delta while waiting should be tolerated");
+        assert!(capture.is_none());
+
+        let (header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            14,
+            geometry,
+            FrameRect::full(geometry),
+            &[8, 9, 10, 11],
+        );
+        let capture = stream
+            .apply_frame(header, &payload)
+            .expect("recovery keyframe should apply")
+            .expect("recovery keyframe should produce capture");
+        assert_eq!(capture.width, 2);
+        assert!(!stream.awaiting_keyframe);
+        assert_eq!(stream.expected_sequence, Some(15));
     }
 
     #[test]
@@ -1315,7 +1410,8 @@ mod tests {
         );
         stream
             .apply_frame(header, &payload)
-            .expect("first geometry should apply");
+            .expect("first geometry should apply")
+            .expect("first geometry should produce capture");
 
         let (header, payload) = encoded_stream_frame(
             FrameKind::Keyframe,
@@ -1326,7 +1422,8 @@ mod tests {
         );
         let capture = stream
             .apply_frame(header, &payload)
-            .expect("geometry keyframe should apply");
+            .expect("geometry keyframe should apply")
+            .expect("geometry keyframe should produce capture");
 
         assert_eq!(capture.width, 1);
         assert_eq!(capture.height, 2);
