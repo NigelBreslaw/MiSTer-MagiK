@@ -949,16 +949,27 @@ component AnalyticsPage {
                         }
                     }
 
+                    ToggleSwitch {
+                        checked: AnalyticsState.show-dirty-rects;
+                        size: ToggleSwitchSize.small;
+                        button-label-on: "Dirty rects";
+                        button-label-off: "Dirty rects";
+                        changed(checked) => {
+                            AnalyticsState.show-dirty-rects = checked;
+                        }
+                    }
+
                     Text {
                         vertical-stretch: 1;
-                        text: AnalyticsState.live-stream-summary;
+                        text: AnalyticsState.live-stream-summary + " · " + AnalyticsState.dirty-rect-summary;
                         color: PrimerColors.fgColor-muted;
                         font-size: LayoutTokens.text-body-size-small;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
 
-                Rectangle {
+                frame-view := Rectangle {
                     width: 100%;
                     vertical-stretch: 1;
                     min-height: 420px;
@@ -967,12 +978,40 @@ component AnalyticsPage {
                     border-radius: LayoutTokens.borderRadius-medium;
                     background: #0d1117;
                     clip: true;
+                    property <float> framebuffer-aspect: AnalyticsState.framebuffer-width > 0 && AnalyticsState.framebuffer-height > 0
+                        ? AnalyticsState.framebuffer-width / AnalyticsState.framebuffer-height
+                        : 1.0;
+                    property <bool> image-constrained-by-width: AnalyticsState.framebuffer-width <= 0 || AnalyticsState.framebuffer-height <= 0
+                        ? true
+                        : self.width / self.height < self.framebuffer-aspect;
+                    property <length> image-width: self.image-constrained-by-width
+                        ? self.width
+                        : self.height * self.framebuffer-aspect;
+                    property <length> image-height: self.image-constrained-by-width
+                        ? self.width / self.framebuffer-aspect
+                        : self.height;
+                    property <length> image-x: (self.width - self.image-width) / 2;
+                    property <length> image-y: (self.height - self.image-height) / 2;
 
                     if AnalyticsState.has-image: Image {
-                        width: parent.width;
-                        height: parent.height;
+                        x: frame-view.image-x;
+                        y: frame-view.image-y;
+                        width: frame-view.image-width;
+                        height: frame-view.image-height;
                         source: AnalyticsState.framebuffer-image;
                         image-fit: contain;
+                    }
+
+                    if AnalyticsState.has-image && AnalyticsState.show-dirty-rects && AnalyticsState.framebuffer-width > 0 && AnalyticsState.framebuffer-height > 0: Rectangle {
+                        for rect in AnalyticsState.dirty-rects : Rectangle {
+                            x: frame-view.image-x + frame-view.image-width * rect.x / AnalyticsState.framebuffer-width;
+                            y: frame-view.image-y + frame-view.image-height * rect.y / AnalyticsState.framebuffer-height;
+                            width: max(1px, frame-view.image-width * rect.width / AnalyticsState.framebuffer-width);
+                            height: max(1px, frame-view.image-height * rect.height / AnalyticsState.framebuffer-height);
+                            border-width: 1px;
+                            border-color: rect.kind == "keyframe" ? #ff6b6b : #ff2d2d;
+                            background: #00000000;
+                        }
                     }
 
                     if !AnalyticsState.has-image: Text {
