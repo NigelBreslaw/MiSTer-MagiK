@@ -8,6 +8,7 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
+source "$HERE/scripts/mister-supervision-lib.sh"
 RUST_DIR="$HERE/magik-gui"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
@@ -63,12 +64,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 LOCK_DIR="${TMPDIR:-/tmp}/mister-magik-bench-effects.lock"
+BENCH_EFFECTS_RESUME_ARMED=0
+
+bench_effects_cleanup() {
+  if [[ "$BENCH_EFFECTS_RESUME_ARMED" == "1" ]]; then
+    mister_restart_launcher >/dev/null 2>&1 || true
+  fi
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "ERROR: another bench-effects.sh run is already active (lock: $LOCK_DIR)" >&2
   echo "       Stop the old run or remove the lock if it is stale." >&2
   exit 1
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+trap bench_effects_cleanup EXIT INT TERM
 
 HEADER="label	effect	mode	fill	internal	scale	date	rustc	compile_sec	bytes	frames	fps	effect_us	slint_us	scale_copy_us	vsync_us	wall_us	cpu_mean	cpu_max	rss_kb	visual_ok	notes"
 
@@ -221,7 +231,7 @@ echo "==> Effects bench label=$LABEL matrix=$MATRIX fill=$FILL_FILTER secs=$SCEN
 
 HOST_COMPILE_SEC=""
 HOST_BYTES=""
-HOST_NOTES="profile=$BUILD_PROFILE; prep=kill-mister-ui"
+HOST_NOTES="profile=$BUILD_PROFILE; prep=suspend-main-ui"
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
@@ -240,6 +250,8 @@ fi
 
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   echo "==> Deploy $BIN"
+  mister_suspend_launcher
+  BENCH_EFFECTS_RESUME_ARMED=1
   mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"

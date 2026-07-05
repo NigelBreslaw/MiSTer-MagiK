@@ -51,6 +51,7 @@ for script in \
   "$ROOT/scripts/mister-fifo-lib.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
+  "$ROOT/scripts/mister-supervision-lib.sh" \
   "$ROOT/scripts/profile-first-scan.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
   "$ROOT/scripts/profile-preview-index-refresh.sh" \
@@ -123,6 +124,12 @@ PY
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
+  -g '*.rs' \
+  -g '!fallible_log.rs' >/dev/null; then
+  echo "standard Rust stdio macros panic on output errors; use ui_log*/ui_errln* instead" >&2
+  exit 1
+fi
 source "$ROOT/scripts/bench-context-lib.sh"
 verified_context="$(bench_context_binary_fields release-device launcher ui "$ROOT/does-not-exist" production verified)"
 case "$verified_context" in
