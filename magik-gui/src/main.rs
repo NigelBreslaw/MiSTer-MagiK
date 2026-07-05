@@ -77,7 +77,7 @@ mod media_bench_save;
 mod media_pack_save;
 mod memory_pressure;
 mod mr_audio;
-#[cfg(feature = "diagnostics")]
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 mod preview_pack_bench;
 mod preview_state;
 mod runtime_status;
@@ -164,9 +164,9 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-save" => media_bench_save::run(),
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-pack-bench" => preview_pack_bench::run(),
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         "library-sql" => run_library_sql(),
         #[cfg(feature = "diagnostics")]
@@ -540,7 +540,7 @@ fn run_hbmame_metadata_from_library() {
     }
 }
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn run_preview_index_refresh_bench() {
     let label = std::env::args()
         .nth(2)

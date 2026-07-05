@@ -10,7 +10,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/profile-preview-index-refresh.sh LABEL [--deploy-device]
 
-Runs the diagnostics preview-index-refresh-bench command on-device. The command
+Runs the bench-tools preview-index-refresh-bench command on-device. The command
 updates library preview availability from installed screenshot pack .idx files
 without rescanning the library or decoding screenshot payloads.
 USAGE
@@ -36,7 +36,7 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 fi
 
 if [[ "$deploy_device" == "1" ]]; then
-  "$HERE/scripts/deploy-rust.sh" --device --diagnostics --ui-scope launcher
+  "$HERE/scripts/deploy-rust.sh" --device --bench-tools --ui-scope launcher
 fi
 
 mkdir -p "$OUT_DIR"
@@ -50,7 +50,7 @@ if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik/m
   "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
   if grep -q "unknown command 'preview-index-refresh-bench'" "$local_log" "$local_tsv" 2>/dev/null; then
     echo "ERROR: deployed mister-magik-fb does not expose preview-index-refresh-bench." >&2
-    echo "Build/deploy a diagnostics-capable binary first: scripts/deploy-rust.sh --device --diagnostics" >&2
+    echo "Build/deploy a bench-tools-capable binary first: scripts/deploy-rust.sh --device --bench-tools" >&2
     exit 3
   fi
   echo "preview index refresh profile failed; see $local_log" >&2
