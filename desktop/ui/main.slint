@@ -57,7 +57,6 @@ export global AppState {
 export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <string> status: "Ready to capture /dev/fb0.";
-    in-out property <string> details: "";
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
     in-out property <bool> has-image: false;
@@ -502,26 +501,6 @@ component AnalyticsPage {
                 title: "Framebuffer capture error";
                 description: AnalyticsState.last-error;
                 variant: BannerVariant.critical;
-            }
-
-            if AnalyticsState.details != "": Rectangle {
-                width: 100%;
-                min-height: 104px;
-                border-width: 1px;
-                border-color: PrimerColors.borderColor-default;
-                border-radius: LayoutTokens.borderRadius-medium;
-                background: PrimerColors.bgColor-inset;
-
-                Text {
-                    x: 12px;
-                    y: 10px;
-                    width: parent.width - 24px;
-                    text: AnalyticsState.details;
-                    color: PrimerColors.fgColor-muted;
-                    font-family: "Vera Mono";
-                    font-size: LayoutTokens.text-body-size-small;
-                    wrap: word-wrap;
-                }
             }
 
             TableContainer {
