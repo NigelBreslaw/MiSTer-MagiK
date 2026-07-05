@@ -310,10 +310,6 @@ impl SdCardBrowser {
 
         match self.directory_cache.get(path) {
             Some(CachedDirectory::Loaded { entries, .. }) => {
-                if entries.is_empty() {
-                    rows.push(message_row(path, "No files", level + 1));
-                    return;
-                }
                 for entry in entries {
                     if entry.is_directory() {
                         self.push_directory_row(rows, &entry.path, &entry.name, level + 1);
@@ -548,6 +544,27 @@ mod tests {
         assert!(browser.last_error().contains("permission denied"));
 
         assert_eq!(browser.refresh_current_folder().as_deref(), Some(ROOT_PATH));
+    }
+
+    #[test]
+    fn loaded_empty_directories_do_not_show_placeholder_rows() {
+        let mut browser = SdCardBrowser::new();
+        assert_eq!(
+            browser.toggle_directory(ROOT_PATH).as_deref(),
+            Some(ROOT_PATH)
+        );
+
+        browser.apply_listing(
+            ROOT_PATH,
+            Ok(SdDirectoryListing {
+                path: ROOT_PATH.to_string(),
+                entries: vec![],
+                elapsed_ms: 1,
+            }),
+        );
+
+        assert_eq!(browser.rows().len(), 1);
+        assert_eq!(browser.rows()[0].id, ROOT_PATH);
     }
 
     #[test]

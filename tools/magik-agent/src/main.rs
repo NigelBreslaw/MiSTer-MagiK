@@ -146,6 +146,7 @@ mod sd_browse {
         b_dir
             .cmp(&a_dir)
             .then_with(|| natural_name_cmp(entry_name(a), entry_name(b)))
+            .then_with(|| entry_name(a).cmp(entry_name(b)))
     }
 
     fn entry_name(value: &Value) -> &str {
@@ -183,10 +184,7 @@ mod sd_browse {
                 (Some((_, ac)), Some((_, bc))) => {
                     a_chars.next();
                     b_chars.next();
-                    let by_char = ac
-                        .to_ascii_lowercase()
-                        .cmp(&bc.to_ascii_lowercase())
-                        .then_with(|| ac.cmp(&bc));
+                    let by_char = ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase());
                     if by_char != std::cmp::Ordering::Equal {
                         return by_char;
                     }
@@ -1673,6 +1671,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("folder10")).unwrap();
         std::fs::create_dir_all(root.join("folder2")).unwrap();
+        std::fs::create_dir_all(root.join("MyVision")).unwrap();
+        std::fs::create_dir_all(root.join("mame")).unwrap();
+        std::fs::create_dir_all(root.join("MegaDrive")).unwrap();
         std::fs::write(root.join("file10.rom"), b"0123456789").unwrap();
         std::fs::write(root.join("file2.rom"), b"12").unwrap();
         std::fs::write(root.join(".hidden"), b"h").unwrap();
@@ -1695,6 +1696,9 @@ mod tests {
             vec![
                 "folder2",
                 "folder10",
+                "mame",
+                "MegaDrive",
+                "MyVision",
                 "file2.rom",
                 "file10.rom",
                 "readonly.txt"
@@ -1702,8 +1706,16 @@ mod tests {
         );
         assert_eq!(visible["show_hidden"], false);
         assert_eq!(entries[0]["kind"], "directory");
-        assert_eq!(entries[2]["size"], 2);
-        assert_eq!(entries[4]["readonly"], true);
+        let file2 = entries
+            .iter()
+            .find(|entry| entry["name"] == "file2.rom")
+            .unwrap();
+        let readonly = entries
+            .iter()
+            .find(|entry| entry["name"] == "readonly.txt")
+            .unwrap();
+        assert_eq!(file2["size"], 2);
+        assert_eq!(readonly["readonly"], true);
 
         let hidden = sd_browse::list_dir_at_root(&root, "/", true).unwrap();
         let hidden_entries = hidden["entries"].as_array().unwrap();
@@ -1716,6 +1728,9 @@ mod tests {
             vec![
                 "folder2",
                 "folder10",
+                "mame",
+                "MegaDrive",
+                "MyVision",
                 ".hidden",
                 "file2.rom",
                 "file10.rom",
@@ -1723,7 +1738,11 @@ mod tests {
             ]
         );
         assert_eq!(hidden["show_hidden"], true);
-        assert_eq!(hidden_entries[2]["hidden"], true);
+        let hidden_entry = hidden_entries
+            .iter()
+            .find(|entry| entry["name"] == ".hidden")
+            .unwrap();
+        assert_eq!(hidden_entry["hidden"], true);
 
         let _ = std::fs::remove_dir_all(&root);
     }
