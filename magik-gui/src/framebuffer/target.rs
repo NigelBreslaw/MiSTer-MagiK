@@ -363,6 +363,7 @@ pub fn copy_cached_rect_565(
     let copied_rect = cached_present_rect(rect, geometry);
     if copied_rect.is_full_width(geometry.render_w()) {
         copy_cached_rows_565(disp, cached, rect.y0, rect.y1);
+        stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(copied_rect), cached);
         return copied_rect;
     }
     if let Err(e) = disp.present_rect_565_strided(
@@ -377,6 +378,7 @@ pub fn copy_cached_rect_565(
     ) {
         log_present_error("rect", &e);
     }
+    stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(copied_rect), cached);
     copied_rect
 }
 
@@ -447,11 +449,6 @@ impl UiFrameTarget {
         rect: DirtyRect,
     ) -> u32 {
         let copied_rect = copy_cached_rect_565(disp, geometry, &self.cached, rect);
-        stream::publish_cached_rect(
-            geometry.stream_geometry(),
-            stream_rect(copied_rect),
-            &self.cached,
-        );
         copied_rect.rows()
     }
 
