@@ -4,6 +4,10 @@ use std::fmt::Write as _;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::io::{BufWriter, Write as _};
 
+const FRAME_BUDGET_US: u64 = 16_667;
+const FRAME_BUDGET_20MS_US: u64 = 20_000;
+const FRAME_BUDGET_33MS_US: u64 = 33_334;
+
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
     fps_frames: u64,
@@ -38,6 +42,9 @@ pub(super) struct LauncherFrameAccounting {
     last_rolling_vsync_us: u64,
     last_rolling_present_us: u64,
     last_rolling_rows: u64,
+    frame_budget_total: FrameBudgetAccumulator,
+    frame_budget_window: FrameBudgetAccumulator,
+    last_frame_budget_status: runtime_status::FrameBudgetStatus,
 }
 
 pub(super) struct LauncherPresentedFrame {
@@ -238,6 +245,81 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) effect_label_us: u128,
 }
 
+#[derive(Clone, Copy, Default)]
+struct FrameBudgetAccumulator {
+    frames: u64,
+    over_budget: u64,
+    over_20ms: u64,
+    over_33ms: u64,
+    max_wall_us: u64,
+    latest_over_budget_frame: u64,
+    latest_over_budget_wall_us: u64,
+    max_vsync_miss_streak: u64,
+    vsync: u64,
+    fallback: u64,
+    timeout: u64,
+    error: u64,
+    prepare_us: u128,
+    render_us: u128,
+    custom_draw_us: u128,
+    vsync_us: u128,
+    present_us: u128,
+}
+
+impl FrameBudgetAccumulator {
+    fn record(&mut self, sample: FrameBudgetSample) {
+        self.frames = self.frames.saturating_add(1);
+        self.max_wall_us = self.max_wall_us.max(sample.wall_us);
+        self.max_vsync_miss_streak = self
+            .max_vsync_miss_streak
+            .max(u64::from(sample.vsync_miss_streak));
+        if sample.wall_us > FRAME_BUDGET_US {
+            self.over_budget = self.over_budget.saturating_add(1);
+            self.latest_over_budget_frame = sample.frame;
+            self.latest_over_budget_wall_us = sample.wall_us;
+        }
+        if sample.wall_us > FRAME_BUDGET_20MS_US {
+            self.over_20ms = self.over_20ms.saturating_add(1);
+        }
+        if sample.wall_us > FRAME_BUDGET_33MS_US {
+            self.over_33ms = self.over_33ms.saturating_add(1);
+        }
+        match sample.vsync_source {
+            Some(VsyncPaceSource::Vsync) => self.vsync = self.vsync.saturating_add(1),
+            Some(VsyncPaceSource::Fallback) => self.fallback = self.fallback.saturating_add(1),
+            Some(VsyncPaceSource::Timeout) => self.timeout = self.timeout.saturating_add(1),
+            Some(VsyncPaceSource::Error) => self.error = self.error.saturating_add(1),
+            None => {}
+        }
+        self.prepare_us = self.prepare_us.saturating_add(sample.prepare_us);
+        self.render_us = self.render_us.saturating_add(sample.render_us);
+        self.custom_draw_us = self.custom_draw_us.saturating_add(sample.custom_draw_us);
+        self.vsync_us = self.vsync_us.saturating_add(sample.vsync_us);
+        self.present_us = self.present_us.saturating_add(sample.present_us);
+    }
+
+    fn avg_us(sum: u128, frames: u64) -> u64 {
+        if frames == 0 {
+            0
+        } else {
+            (sum / u128::from(frames)) as u64
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FrameBudgetSample {
+    frame: u64,
+    wall_us: u64,
+    prepare_us: u128,
+    render_us: u128,
+    custom_draw_us: u128,
+    vsync_us: u128,
+    present_us: u128,
+    vsync_source: Option<VsyncPaceSource>,
+    vsync_miss_streak: u32,
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum ArcadeUpdateTrace {
     None,
@@ -301,6 +383,12 @@ impl LauncherFrameAccounting {
             last_rolling_vsync_us: 0,
             last_rolling_present_us: 0,
             last_rolling_rows: 0,
+            frame_budget_total: FrameBudgetAccumulator::default(),
+            frame_budget_window: FrameBudgetAccumulator::default(),
+            last_frame_budget_status: runtime_status::FrameBudgetStatus {
+                budget_us: FRAME_BUDGET_US,
+                ..runtime_status::FrameBudgetStatus::default()
+            },
         }
     }
 
@@ -358,6 +446,7 @@ impl LauncherFrameAccounting {
     ) {
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
+        self.accumulate_frame_budget(&frame);
         self.record_stable_samples(frame.frames, disp);
         self.last_rendered_frame_at = frame.frame_t4;
         self.idle_loops_since_status = 0;
@@ -668,6 +757,56 @@ impl LauncherFrameAccounting {
         }
     }
 
+    fn accumulate_frame_budget(&mut self, frame: &LauncherPresentedFrame) {
+        let sample = FrameBudgetSample {
+            frame: frame.frames,
+            wall_us: u128_to_u64_saturating((frame.frame_t4 - frame.loop_start).as_micros()),
+            prepare_us: frame.prepare_us,
+            render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
+            custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
+            vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
+            present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
+            vsync_source: frame.vsync_source,
+            vsync_miss_streak: frame.vsync_miss_streak,
+        };
+        self.frame_budget_total.record(sample);
+        self.frame_budget_window.record(sample);
+    }
+
+    fn current_frame_budget_status(&self) -> runtime_status::FrameBudgetStatus {
+        let total = self.frame_budget_total;
+        let window = self.frame_budget_window;
+        runtime_status::FrameBudgetStatus {
+            budget_us: FRAME_BUDGET_US,
+            frames_total: total.frames,
+            over_budget_total: total.over_budget,
+            over_20ms_total: total.over_20ms,
+            over_33ms_total: total.over_33ms,
+            max_wall_us: total.max_wall_us,
+            latest_over_budget_frame: total.latest_over_budget_frame,
+            latest_over_budget_wall_us: total.latest_over_budget_wall_us,
+            max_vsync_miss_streak: total.max_vsync_miss_streak,
+            vsync_total: total.vsync,
+            fallback_total: total.fallback,
+            timeout_total: total.timeout,
+            error_total: total.error,
+            window_frames: window.frames,
+            window_over_budget: window.over_budget,
+            window_over_20ms: window.over_20ms,
+            window_over_33ms: window.over_33ms,
+            window_max_wall_us: window.max_wall_us,
+            window_max_vsync_miss_streak: window.max_vsync_miss_streak,
+            window_prepare_us: FrameBudgetAccumulator::avg_us(window.prepare_us, window.frames),
+            window_render_us: FrameBudgetAccumulator::avg_us(window.render_us, window.frames),
+            window_custom_draw_us: FrameBudgetAccumulator::avg_us(
+                window.custom_draw_us,
+                window.frames,
+            ),
+            window_vsync_us: FrameBudgetAccumulator::avg_us(window.vsync_us, window.frames),
+            window_present_us: FrameBudgetAccumulator::avg_us(window.present_us, window.frames),
+        }
+    }
+
     fn record_stable_samples(&mut self, frames: u64, disp: &mut MappedRgb565Framebuffer) {
         if frames == 30 && !self.stable_frame_logged {
             self.stable_frame_logged = true;
@@ -811,6 +950,11 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
+        let frame_budget = if idle {
+            self.last_frame_budget_status
+        } else {
+            self.current_frame_budget_status()
+        };
         runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
@@ -877,11 +1021,85 @@ impl LauncherFrameAccounting {
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
+            frame_budget,
         });
+        if !idle {
+            self.last_frame_budget_status = frame_budget;
+            self.frame_budget_window = FrameBudgetAccumulator::default();
+        }
         self.last_status_write = Instant::now();
         if idle {
             self.idle_loops_since_status = 0;
         }
+    }
+}
+
+fn u128_to_u64_saturating(value: u128) -> u64 {
+    value.min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(frame: u64, wall_us: u64) -> FrameBudgetSample {
+        FrameBudgetSample {
+            frame,
+            wall_us,
+            prepare_us: 100,
+            render_us: 200,
+            custom_draw_us: 300,
+            vsync_us: 400,
+            present_us: 500,
+            vsync_source: Some(VsyncPaceSource::Vsync),
+            vsync_miss_streak: 0,
+        }
+    }
+
+    #[test]
+    fn frame_budget_accumulator_counts_thresholds_and_phases() {
+        let mut acc = FrameBudgetAccumulator::default();
+        acc.record(sample(1, 16_000));
+        acc.record(sample(2, 17_000));
+        acc.record(sample(3, 21_000));
+        acc.record(sample(4, 34_000));
+
+        assert_eq!(acc.frames, 4);
+        assert_eq!(acc.over_budget, 3);
+        assert_eq!(acc.over_20ms, 2);
+        assert_eq!(acc.over_33ms, 1);
+        assert_eq!(acc.max_wall_us, 34_000);
+        assert_eq!(acc.latest_over_budget_frame, 4);
+        assert_eq!(acc.latest_over_budget_wall_us, 34_000);
+        assert_eq!(
+            FrameBudgetAccumulator::avg_us(acc.present_us, acc.frames),
+            500
+        );
+    }
+
+    #[test]
+    fn frame_budget_accumulator_tracks_vsync_sources_and_miss_streak() {
+        let mut acc = FrameBudgetAccumulator::default();
+        for (idx, source) in [
+            VsyncPaceSource::Vsync,
+            VsyncPaceSource::Fallback,
+            VsyncPaceSource::Timeout,
+            VsyncPaceSource::Error,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut item = sample(idx as u64, 17_000);
+            item.vsync_source = Some(source);
+            item.vsync_miss_streak = idx as u32;
+            acc.record(item);
+        }
+
+        assert_eq!(acc.vsync, 1);
+        assert_eq!(acc.fallback, 1);
+        assert_eq!(acc.timeout, 1);
+        assert_eq!(acc.error, 1);
+        assert_eq!(acc.max_vsync_miss_streak, 3);
     }
 }
 
