@@ -54,9 +54,9 @@ fn preview_loading_enabled() -> bool {
 fn preview_turbo_runway_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("MISTER_PREVIEW_TURBO_RUNWAY").as_deref(),
-            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+            Ok("0") | Ok("off") | Ok("false") | Ok("no")
         )
     })
 }
@@ -915,7 +915,7 @@ pub(crate) fn request_arcade_preview_window(
     };
     bridge.set_arcade_preview_placeholder_visible(true);
 
-    let turbo_runway_active = preview_turbo_runway_enabled();
+    let turbo_runway_active = turbo_active && preview_turbo_runway_enabled();
     let prefetch_radius = if turbo_runway_active {
         TURBO_PREVIEW_LOOKAHEAD
     } else {
@@ -1103,6 +1103,71 @@ pub(crate) fn request_arcade_preview_window(
         );
     }
     if turbo_active {
+        if let Some(loaded) = preview.worker.load_decoded_cache_asset(
+            candidate_game.preview_archive_path.as_ref(),
+            candidate_game.preview_asset_key.as_ref(),
+        ) {
+            let completed_at_ms = preview.trace_elapsed_ms();
+            let load_source = loaded.load_source;
+            let total_us = loaded.total_us;
+            let read_us = loaded.read_us;
+            let decode_us = loaded.decode_us;
+            let raw565_parse_us = loaded.raw565_parse_us;
+            let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
+            if preview_startup_trace_enabled() {
+                crate::ui_errln!(
+                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
+                    completed_at_ms,
+                    candidate_game.system_id,
+                    candidate_game.title,
+                    candidate_game.preview_asset_key,
+                    load_source.label(),
+                    total_us,
+                    read_us,
+                    decode_us,
+                    raw565_parse_us,
+                    age_us
+                );
+            }
+            let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
+            preview.cache.insert(
+                preview_key.clone(),
+                Arc::clone(&loaded_image),
+                &preview.window_preview_keys,
+                Some(&preview.visible_preview_key),
+            );
+            preview.current_generation = 0;
+            preview.selected_preview_key = Some(preview_key.clone());
+            preview.has_visible_preview = true;
+            preview.visible_preview_load_source = load_source.label();
+            preview.begin_raw_transition_to(&preview_key);
+            preview.visible_preview_key = preview_key;
+            preview.raw_dirty = true;
+            apply_preview_image_bridge(bridge, &loaded_image);
+            if preview_startup_trace_enabled() {
+                crate::ui_errln!(
+                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
+                    preview.trace_elapsed_ms(),
+                    candidate_game.system_id,
+                    selected,
+                    candidate_game.title,
+                    candidate_game.preview_asset_key,
+                    load_source.label(),
+                    total_us,
+                    read_us,
+                    decode_us,
+                    age_us
+                );
+            }
+            trace_preview_coverage_sample(
+                preview,
+                selected,
+                selected_game,
+                Some(&candidate),
+                turbo_active,
+            );
+            return true;
+        }
         request_selected_preview_async(preview, selected, selected_game, &candidate);
         trace_preview_coverage_sample(
             preview,
@@ -1281,8 +1346,8 @@ fn request_preview_prefetches(
     preview: &mut PreviewState,
     turbo_active: bool,
 ) {
-    let turbo_runway_for_prefetch = preview_turbo_runway_enabled();
-    let turbo_active = turbo_active || turbo_runway_for_prefetch;
+    let turbo_runway_for_prefetch = turbo_active && preview_turbo_runway_enabled();
+    let turbo_active = turbo_runway_for_prefetch;
     let selected_changed = preview
         .last_prefetch_selected
         .is_some_and(|previous| previous != selected);
@@ -2073,16 +2138,30 @@ mod tests {
     }
 
     #[test]
-    fn prefetch_guard_allows_scroll_only_for_explicit_runway() {
+    fn prefetch_guard_allows_scroll_by_default_runway() {
         assert!(preview_prefetch_allowed(false));
-        assert_eq!(
-            preview_prefetch_allowed(true),
-            preview_turbo_runway_enabled()
-        );
+        assert!(preview_prefetch_allowed(true));
     }
 
     #[test]
-    fn scroll_active_prefetch_uses_selection_change_throttle() {
+    fn normal_prefetch_uses_selection_change_throttle() {
+        let games = vec![
+            preview_game("Previous", "previous.mra", "previous.png", true),
+            preview_game("Selected", "selected.mra", "selected.png", true),
+            preview_game("Next", "next.mra", "next.png", true),
+        ];
+        let mut preview = PreviewState::new();
+        preview.last_prefetch_selected = Some(0);
+        preview.pending_prefetch_keys.insert("stale".to_string());
+
+        request_preview_prefetches(ArcadeGameView::contiguous(&games), 1, &mut preview, false);
+
+        assert!(preview.pending_prefetch_keys.is_empty());
+        assert!(preview.prefetch_throttle_until.is_some());
+    }
+
+    #[test]
+    fn turbo_prefetch_bypasses_selection_change_throttle_by_default() {
         let games = vec![
             preview_game("Previous", "previous.mra", "previous.png", true),
             preview_game("Selected", "selected.mra", "selected.png", true),
@@ -2094,8 +2173,10 @@ mod tests {
 
         request_preview_prefetches(ArcadeGameView::contiguous(&games), 1, &mut preview, true);
 
-        assert!(preview.pending_prefetch_keys.is_empty());
-        assert!(preview.prefetch_throttle_until.is_some());
+        assert!(preview.prefetch_throttle_until.is_none());
+        assert!(preview
+            .pending_prefetch_keys
+            .contains(&game_preview_key(&games[2]).unwrap()));
     }
 
     #[test]
