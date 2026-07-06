@@ -111,7 +111,16 @@ pub struct FramebufferStream {
     state: FramebufferStreamState,
 }
 
+pub struct DeviceTelemetryStream {
+    reader: BufReader<TcpStream>,
+    control: DeviceTelemetryStreamControl,
+}
+
 pub struct FramebufferStreamControl {
+    stream: TcpStream,
+}
+
+pub struct DeviceTelemetryStreamControl {
     stream: TcpStream,
 }
 
@@ -120,6 +129,86 @@ struct FramebufferStreamState {
     geometry: Option<FrameGeometry>,
     expected_sequence: Option<u64>,
     awaiting_keyframe: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeviceTelemetrySample {
+    pub seq: u64,
+    pub combined_cpu_pct: f64,
+    pub cores: Vec<CpuCoreTelemetry>,
+    pub memory: MemoryTelemetry,
+    pub frame_budget: FrameBudgetTelemetry,
+    pub launcher: LauncherTelemetry,
+    pub magik: ProcessTelemetry,
+    pub main: ProcessTelemetry,
+    pub network: NetworkTelemetry,
+    pub storage: StorageTelemetry,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CpuCoreTelemetry {
+    pub label: String,
+    pub busy_pct: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MemoryTelemetry {
+    pub total_kb: u64,
+    pub magik_kb: u64,
+    pub main_kb: u64,
+    pub other_used_kb: u64,
+    pub available_kb: u64,
+    pub magik_pct: f64,
+    pub other_used_pct: f64,
+    pub available_pct: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FrameBudgetTelemetry {
+    pub budget_us: u64,
+    pub frames_total: u64,
+    pub window_frames: u64,
+    pub window_over_budget: u64,
+    pub window_over_20ms: u64,
+    pub window_over_33ms: u64,
+    pub window_max_wall_us: u64,
+    pub max_wall_us: u64,
+    pub max_vsync_miss_streak: u64,
+    pub window_prepare_us: u64,
+    pub window_render_us: u64,
+    pub window_custom_draw_us: u64,
+    pub window_vsync_us: u64,
+    pub window_present_us: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LauncherTelemetry {
+    pub status_current: bool,
+    pub screen: String,
+    pub scene: String,
+    pub idle: bool,
+    pub fps: String,
+    pub preview_cache_state: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcessTelemetry {
+    pub pids: Vec<u64>,
+    pub rss_kb: u64,
+    pub threads: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetworkTelemetry {
+    pub rx_bytes_per_sec: u64,
+    pub tx_bytes_per_sec: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StorageTelemetry {
+    pub available_bytes: u64,
+    pub total_bytes: u64,
+    pub available_pct: f64,
 }
 
 impl Default for FramebufferStreamState {
@@ -238,6 +327,19 @@ pub fn fetch_library_database_snapshot(host: &str) -> Result<LibraryDatabaseSnap
 
 pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, AgentError> {
     connect_framebuffer_stream_seeded(host, None)
+}
+
+pub fn connect_device_telemetry_stream(host: &str) -> Result<DeviceTelemetryStream, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let (_, reader) = client.request_stream("device_telemetry_stream_v1", json!({}))?;
+    let control = DeviceTelemetryStreamControl {
+        stream: reader
+            .get_ref()
+            .try_clone()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?,
+    };
+    Ok(DeviceTelemetryStream { reader, control })
 }
 
 pub fn connect_framebuffer_stream_seeded(
@@ -516,6 +618,36 @@ impl FramebufferStream {
     }
 }
 
+impl DeviceTelemetryStream {
+    pub fn control(&self) -> Result<DeviceTelemetryStreamControl, AgentError> {
+        Ok(DeviceTelemetryStreamControl {
+            stream: self
+                .control
+                .stream
+                .try_clone()
+                .map_err(|err| AgentError::Unreachable(err.to_string()))?,
+        })
+    }
+
+    pub fn next_sample(&mut self) -> Result<DeviceTelemetrySample, AgentError> {
+        let mut line = String::new();
+        let bytes = self
+            .reader
+            .read_line(&mut line)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        if bytes == 0 {
+            return Err(AgentError::Command("telemetry stream ended".to_string()));
+        }
+        parse_device_telemetry_sample(&line)
+    }
+}
+
+impl DeviceTelemetryStreamControl {
+    pub fn shutdown(&self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
+}
+
 impl FramebufferStreamControl {
     pub fn shutdown(&self) {
         let _ = self.stream.shutdown(Shutdown::Both);
@@ -766,6 +898,124 @@ fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
             Err(AgentError::Command(error.to_string()))
         }
     }
+}
+
+fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, AgentError> {
+    let value: Value = serde_json::from_str(line.trim())
+        .map_err(|err| AgentError::Protocol(format!("invalid telemetry JSON: {err}")))?;
+    if value.get("schema").and_then(Value::as_str) != Some("mister-magik-device-telemetry-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected telemetry schema".to_string(),
+        ));
+    }
+    let frame = value
+        .pointer("/launcher/frame_budget")
+        .unwrap_or(&Value::Null);
+    Ok(DeviceTelemetrySample {
+        seq: u64_at(&value, "/seq"),
+        combined_cpu_pct: f64_at(&value, "/cpu/combined_busy_pct"),
+        cores: value
+            .pointer("/cpu/cores")
+            .and_then(Value::as_array)
+            .map(|cores| {
+                cores
+                    .iter()
+                    .map(|core| CpuCoreTelemetry {
+                        label: format!("CPU{}", u64_at(core, "/id")),
+                        busy_pct: f64_at(core, "/busy_pct"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        memory: MemoryTelemetry {
+            total_kb: u64_at(&value, "/memory/total_kb"),
+            magik_kb: u64_at(&value, "/memory/magik_kb"),
+            main_kb: u64_at(&value, "/memory/main_kb"),
+            other_used_kb: u64_at(&value, "/memory/other_used_kb"),
+            available_kb: u64_at(&value, "/memory/available_kb"),
+            magik_pct: f64_at(&value, "/memory/magik_pct"),
+            other_used_pct: f64_at(&value, "/memory/other_used_pct"),
+            available_pct: f64_at(&value, "/memory/available_pct"),
+        },
+        frame_budget: FrameBudgetTelemetry {
+            budget_us: u64_at(frame, "/budget_us").max(16_667),
+            frames_total: u64_at(frame, "/frames_total"),
+            window_frames: u64_at(frame, "/window_frames"),
+            window_over_budget: u64_at(frame, "/window_over_budget"),
+            window_over_20ms: u64_at(frame, "/window_over_20ms"),
+            window_over_33ms: u64_at(frame, "/window_over_33ms"),
+            window_max_wall_us: u64_at(frame, "/window_max_wall_us"),
+            max_wall_us: u64_at(frame, "/max_wall_us"),
+            max_vsync_miss_streak: u64_at(frame, "/max_vsync_miss_streak"),
+            window_prepare_us: u64_at(frame, "/window_prepare_us"),
+            window_render_us: u64_at(frame, "/window_render_us"),
+            window_custom_draw_us: u64_at(frame, "/window_custom_draw_us"),
+            window_vsync_us: u64_at(frame, "/window_vsync_us"),
+            window_present_us: u64_at(frame, "/window_present_us"),
+        },
+        launcher: LauncherTelemetry {
+            status_current: value
+                .pointer("/launcher/status_current")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            screen: str_at(&value, "/launcher/screen", "unknown"),
+            scene: str_at(&value, "/launcher/scene", "unknown"),
+            idle: value
+                .pointer("/launcher/idle")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            fps: value
+                .pointer("/launcher/rolling_fps")
+                .or_else(|| value.pointer("/launcher/fps_estimate"))
+                .and_then(Value::as_f64)
+                .map(|fps| format!("{fps:.1} fps"))
+                .unwrap_or_else(|| "- fps".to_string()),
+            preview_cache_state: str_at(&value, "/launcher/preview_cache_state", "unknown"),
+        },
+        magik: process_telemetry_at(&value, "/processes/mister-magik-fb"),
+        main: process_telemetry_at(&value, "/processes/MiSTer_MagiK"),
+        network: NetworkTelemetry {
+            rx_bytes_per_sec: u64_at(&value, "/network/rx_bytes_per_sec"),
+            tx_bytes_per_sec: u64_at(&value, "/network/tx_bytes_per_sec"),
+        },
+        storage: StorageTelemetry {
+            available_bytes: u64_at(&value, "/storage/available_bytes"),
+            total_bytes: u64_at(&value, "/storage/total_bytes"),
+            available_pct: f64_at(&value, "/storage/available_pct"),
+        },
+    })
+}
+
+fn process_telemetry_at(value: &Value, pointer: &str) -> ProcessTelemetry {
+    let item = value.pointer(pointer).unwrap_or(&Value::Null);
+    ProcessTelemetry {
+        pids: item
+            .get("pids")
+            .and_then(Value::as_array)
+            .map(|pids| pids.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default(),
+        rss_kb: item.get("rss_kb").and_then(Value::as_u64).unwrap_or(0),
+        threads: item.get("threads").and_then(Value::as_u64).unwrap_or(0),
+    }
+}
+
+fn u64_at(value: &Value, pointer: &str) -> u64 {
+    value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn f64_at(value: &Value, pointer: &str) -> f64 {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+fn str_at(value: &Value, pointer: &str, fallback: &str) -> String {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 fn apply_agent_status(snapshot: &mut DashboardSnapshot, status: &Value) {
@@ -1262,6 +1512,33 @@ mod tests {
         assert!(
             matches!(default_command, AgentError::Command(message) if message == "agent command failed")
         );
+    }
+
+    #[test]
+    fn parse_device_telemetry_sample_extracts_ui_fields() {
+        let sample = parse_device_telemetry_sample(
+            r#"{
+                "schema":"mister-magik-device-telemetry-v1",
+                "seq":7,
+                "cpu":{"combined_busy_pct":12.5,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
+                "memory":{"total_kb":1000,"magik_kb":100,"main_kb":20,"other_used_kb":600,"available_kb":300,"magik_pct":10.0,"other_used_pct":60.0,"available_pct":30.0},
+                "launcher":{"status_current":true,"screen":"arcade","scene":"launcher","idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500}},
+                "processes":{"mister-magik-fb":{"pids":[42],"rss_kb":100,"threads":7},"MiSTer_MagiK":{"pids":[9],"rss_kb":20,"threads":1}},
+                "network":{"rx_bytes_per_sec":123,"tx_bytes_per_sec":456},
+                "storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}
+            }"#,
+        )
+        .expect("telemetry should parse");
+
+        assert_eq!(sample.seq, 7);
+        assert_eq!(sample.cores.len(), 2);
+        assert_eq!(sample.cores[0].label, "CPU0");
+        assert_eq!(sample.memory.magik_pct, 10.0);
+        assert_eq!(sample.frame_budget.window_over_budget, 2);
+        assert_eq!(sample.launcher.fps, "59.9 fps");
+        assert_eq!(sample.magik.pids, vec![42]);
+        assert_eq!(sample.network.tx_bytes_per_sec, 456);
+        assert_eq!(sample.storage.available_pct, 50.0);
     }
 
     #[test]
