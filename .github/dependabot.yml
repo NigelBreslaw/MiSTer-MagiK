@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directories:
+      - "/desktop"
+      - "/framebuffer-stream"
       - "/magik-gui"
       - "/magik-gui/catalog"
       - "/magik-gui/ui-generated"
