@@ -95,6 +95,26 @@ default. Override with `MISTER_MAIN_DIR`.
 - Prefer direct commands such as `scripts/mister ...`, `scripts/deploy-rust.sh`,
   and `scripts/bench-toolchain.sh ...`. Avoid `/bin/zsh -lc` wrappers for normal
   device work because sandbox approvals key off the outer command.
+- First-attempt escalation policy: commands that need Apple container,
+  virtualization, device networking, or MiSTer agent access must be run with
+  `sandbox_permissions: "require_escalated"` on the first tool call. Do not
+  probe them sandboxed first and then retry escalated. Use the direct stable
+  command prefix so the existing approval can match.
+- Known first-attempt escalation commands include `magik-gui/build-arm.sh ...`,
+  `scripts/deploy-rust.sh ...`, `scripts/run-rust.sh ...`, `scripts/mister ...`,
+  `scripts/bench-toolchain.sh ...`, `scripts/profile-*.sh ...`,
+  `scripts/gate-*.sh ...`, `scripts/device-*.sh ...`,
+  `scripts/install-slint-boot.sh`, `scripts/restore-stock-boot.sh`, and
+  `scripts/deploy-main-mister-experiment.sh ...`.
+- Do not hide an escalation command behind inline environment assignments,
+  shell wrappers, command substitutions, pipes, or redirects. If a command needs
+  unusual environment, prefer a repository script/flag or ask before running a
+  one-off shape that approvals cannot match.
+- For device/network checks, make one direct wrapper attempt first. If
+  `scripts/mister ...` reports timeout, no route to host, connection refused, or
+  authentication failure, stop and report the device as unavailable. Do not
+  repeat the same probe or switch to raw ssh/scp unless the user explicitly asks
+  for recovery work.
 - `scripts/deploy-rust.sh` deploys the MagiK binary through the agent by
   default. It is runtime-only; build/publish catalog metadata and screenshot
   packs with the catalog/media tools, not deploy flags. Use

@@ -21,13 +21,23 @@ Desktop-specific notes for agents working in this folder. The root
 ## Slint And MCP
 
 - Prefer the live dev script while iterating:
-  `SLINT_MCP_PORT=9315 desktop/scripts/dev-live.sh`
+  `desktop/scripts/dev-live.sh`
 - `desktop/scripts/dev-live.sh` intentionally runs a release build because live
   reload behaves better there.
 - Always visually verify UI changes with the Slint MCP server before calling
   them done. Query the live tree for structure and interactions; use screenshots
   when layout, color, or clipping needs actual visual inspection.
 - The MCP endpoint is local, for example `http://127.0.0.1:9315/mcp`.
+- Use the direct MCP wrapper for MCP sessions:
+  `desktop/scripts/dev-live-mcp.sh`. Do not start MCP by prefixing
+  `MISTER_DESKTOP_MCP=1` or `SLINT_MCP_PORT=...` inline; stable wrapper commands
+  make first-attempt escalation and approval matching work.
+- Desktop app launches and local MCP probes are outside the workspace sandbox.
+  Run both `desktop/scripts/dev-live-mcp.sh` and `desktop/scripts/mcp-smoke.sh`
+  with `sandbox_permissions: "require_escalated"` on the first tool call. Start
+  the app once, then verify the endpoint once with `desktop/scripts/mcp-smoke.sh`;
+  if the port is unavailable, report that result instead of retrying with a
+  different command shape.
 - For compiled UI validation use:
   `cargo check --manifest-path desktop/Cargo.toml --no-default-features --features compiled-ui`
 

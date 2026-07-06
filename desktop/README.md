@@ -22,7 +22,7 @@ The script runs the app with:
 Enable the embedded Slint MCP server only when needed:
 
 ```bash
-MISTER_DESKTOP_MCP=1 scripts/dev-live.sh
+scripts/dev-live-mcp.sh
 ```
 
 That adds Cargo features `slint/mcp,live-ui` and sets `SLINT_MCP_PORT=9315`.
@@ -95,5 +95,5 @@ scripts/check-ui.sh
 The `compiled-ui` feature keeps a build-time Slint path available for future
 packaging, but V1 defaults to runtime-loaded UI for iteration speed.
 
-For MCP smoke testing, run the app with `MISTER_DESKTOP_MCP=1 scripts/dev-live.sh`
-in one terminal and then run `scripts/mcp-smoke.sh` in another.
+For MCP smoke testing, run the app with `scripts/dev-live-mcp.sh` in one
+terminal and then run `scripts/mcp-smoke.sh` in another.
