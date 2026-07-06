@@ -85,6 +85,29 @@ from `mister-magik-fb` on local port `127.0.0.1:7499`; it does not poll or read
 `/dev/fb0`. Frames are RGB565 little-endian keyframes or dirty rect deltas, LZ4
 compressed per message, with heartbeat frames while idle.
 
+`device_telemetry_stream_v1` is the lightweight desktop Real Time debug path.
+The desktop sends one authenticated JSON request on TCP `7498`, then the agent
+replies with a JSON `ok` line and keeps the connection in newline-delimited JSON
+mode. It sends one `mister-magik-device-telemetry-v1` snapshot per second until
+the desktop closes the socket. The stream samples `/proc` and `/sys`, reads the
+current Slint status file from `/tmp/mister-magik/status.json` when present, and
+does not read framebuffer pixels, query SQLite, walk media directories, or write
+to `/media/fat`.
+
+Each telemetry snapshot may be partial if the launcher or status file is not
+available. The desktop should treat missing nested objects as unknown values,
+not as stream failure. Current fields include:
+
+- per-core and combined CPU busy percent from `/proc/stat`
+- memory split as MagiK RSS, other used, and available
+- MagiK/Main pids, RSS, and thread counts
+- network RX/TX byte rates
+- `/media/fat` capacity
+- launcher screen, idle/FPS, preview cache state, and frame-budget aggregates
+
+The desktop starts this stream only while the Debug page's `Real Time` tab is
+active, and stops it when the user switches tabs or leaves the Debug page.
+
 `framebuffer-capture` is the one-shot still-image path. It asks the MiSTer-side
 agent to read the current framebuffer, convert the raw pixels to PNG on the ARM
 device, and return the PNG plus metadata over the authenticated TCP protocol.
