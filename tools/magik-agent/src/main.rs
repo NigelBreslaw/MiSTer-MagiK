@@ -1145,9 +1145,9 @@ mod linux {
         }
         // SAFETY: statvfs returned success, so stats is initialized.
         let stats = unsafe { stats.assume_init() };
-        let block_size = u64::from(stats.f_frsize);
-        let total_bytes = u64::from(stats.f_blocks).saturating_mul(block_size);
-        let available_bytes = u64::from(stats.f_bavail).saturating_mul(block_size);
+        let block_size = statvfs_value_to_u64(stats.f_frsize);
+        let total_bytes = statvfs_value_to_u64(stats.f_blocks).saturating_mul(block_size);
+        let available_bytes = statvfs_value_to_u64(stats.f_bavail).saturating_mul(block_size);
         json!({
             "path": path,
             "total_bytes": total_bytes,
@@ -1155,6 +1155,16 @@ mod linux {
             "used_bytes": total_bytes.saturating_sub(available_bytes),
             "available_pct": percent_of(available_bytes, total_bytes),
         })
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    fn statvfs_value_to_u64(value: u64) -> u64 {
+        value
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    fn statvfs_value_to_u64<T: Into<u64>>(value: T) -> u64 {
+        value.into()
     }
 
     fn percent_of(value: u64, total: u64) -> f64 {
