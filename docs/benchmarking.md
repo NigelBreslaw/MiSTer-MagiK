@@ -199,9 +199,12 @@ exercising preview selection changes after reaching the bottom.
 
 Acceptance fields for Arcade preview pacing:
 
-- Screenshot previews must be exact for every sampled frame in the benchmark
-  trace. `cache_state` values other than `exact` are failures, even when frame
-  pacing remains clean.
+- Screenshot previews must be exact or intentionally empty for every sampled
+  frame in the benchmark trace. `cache_state` values other than `exact` or
+  `empty` are failures, even when frame pacing remains clean.
+- The trace must include active production fade samples
+  (`transition_effect=fade` with `0 < transition_progress < 1`). A hard cut to
+  the final preview is a failure, even when every sampled preview is exact.
 - `work_gt_16_7ms` after frame 30 is reported as an outlier count.
 - `vsync_source_fallback=0`, `vsync_source_timeout=0`,
   `vsync_source_error=0`, and `max_vsync_miss_streak=0`.

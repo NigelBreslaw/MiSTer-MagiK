@@ -2076,6 +2076,7 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
+            duration_divisor: 1,
         };
         let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
 
@@ -2243,6 +2244,7 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
+            duration_divisor: 1,
         };
 
         for alpha in [1, 64, 128, 192, 254] {
@@ -2313,6 +2315,7 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
+            duration_divisor: 1,
         };
         let previous_view = raw565_view(frame.previous.as_ref().unwrap(), screen, 0);
         let current_view = raw565_view(&frame.current, screen, 0);
@@ -2363,6 +2366,7 @@ mod tests {
             previous: None,
             current,
             transition_id: 1,
+            duration_divisor: 1,
         };
 
         let sentinel = Rgb565Pixel(0x4208);
@@ -2420,6 +2424,7 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
+            duration_divisor: 1,
         };
         let alpha = 128;
         let sentinel = Rgb565Pixel(0x4208);

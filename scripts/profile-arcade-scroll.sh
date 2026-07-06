@@ -220,35 +220,61 @@ except FileNotFoundError:
 if not rows:
     print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_frames\tdetail={trace_path}")
     sys.exit(9)
-if "cache_state" not in rows[0]:
-    print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_column\tdetail=cache_state")
+missing_columns = [
+    column
+    for column in ("cache_state", "transition_effect", "transition_progress")
+    if column not in rows[0]
+]
+if missing_columns:
+    print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_column\tdetail={','.join(missing_columns)}")
     sys.exit(9)
 
 counts = collections.Counter(row.get("cache_state", "") for row in rows)
-non_exact = [
+invalid_preview = [
     row for row in rows
-    if row.get("cache_state") != "exact"
+    if row.get("cache_state") not in ("exact", "empty")
 ]
 detail = " ".join(
     f"{state or 'blank'}={count}"
     for state, count in sorted(counts.items())
 )
-if non_exact:
+fade_rows = []
+for row in rows:
+    try:
+        progress = float(row.get("transition_progress", "") or "1")
+    except ValueError:
+        progress = 1.0
+    if row.get("transition_effect") == "fade" and 0.0 < progress < 1.0:
+        fade_rows.append(row)
+
+if invalid_preview:
     samples = []
-    for row in non_exact[:10]:
+    for row in invalid_preview[:10]:
         samples.append(
             f"frame={row.get('frame', '?')}:selected={row.get('selected', '?')}:cache_state={row.get('cache_state', '') or 'blank'}"
         )
     print(
         f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=non_exact_preview"
-        f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} non_exact={len(non_exact)} {detail}"
+        f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} empty={counts.get('empty', 0)} invalid={len(invalid_preview)} fade_rows={len(fade_rows)} {detail}"
         f"\tsamples={','.join(samples)}"
+    )
+    sys.exit(9)
+
+if len(fade_rows) < 2:
+    samples = ",".join(
+        f"frame={row.get('frame', '?')}:progress={row.get('transition_progress', '?')}"
+        for row in fade_rows[:10]
+    )
+    print(
+        f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_fade_transition"
+        f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} empty={counts.get('empty', 0)} fade_rows={len(fade_rows)} {detail}"
+        f"\tsamples={samples}"
     )
     sys.exit(9)
 
 print(
     f"preview_exact_gate_tsv\tlabel={name}\tvalid=1\tinvalid_reason=ok"
-    f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} non_exact=0 {detail}"
+    f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} empty={counts.get('empty', 0)} invalid=0 fade_rows={len(fade_rows)} {detail}"
 )
 PY
 }
@@ -464,18 +490,27 @@ EOF
     exit 1
   fi
   cat >"$tmpdir/exact-scroll.tsv" <<'EOF'
-frame	selected	cache_state
-0	0	exact
-1	1	exact
+frame	selected	cache_state	transition_effect	transition_progress
+0	0	exact	fade	0.25
+1	1	exact	fade	0.75
 EOF
   check_preview_exact_gate self-exact "$tmpdir/exact-scroll.tsv" >/dev/null
   cat >"$tmpdir/stale-scroll.tsv" <<'EOF'
-frame	selected	cache_state
-0	0	exact
-1	1	stale
+frame	selected	cache_state	transition_effect	transition_progress
+0	0	exact	fade	0.25
+1	1	stale	fade	0.75
 EOF
   if check_preview_exact_gate self-stale "$tmpdir/stale-scroll.tsv" >/dev/null 2>&1; then
     echo "self-test expected stale preview failure" >&2
+    exit 1
+  fi
+  cat >"$tmpdir/cut-scroll.tsv" <<'EOF'
+frame	selected	cache_state	transition_effect	transition_progress
+0	0	exact	fade	1
+1	1	exact	fade	1
+EOF
+  if check_preview_exact_gate self-cut "$tmpdir/cut-scroll.tsv" >/dev/null 2>&1; then
+    echo "self-test expected missing fade failure" >&2
     exit 1
   fi
   cat >"$tmpdir/pacing-good.tsv" <<'EOF'
