@@ -156,7 +156,6 @@ pub(crate) fn catalog_row(
     CatalogProjectionRow {
         launch_id: 0,
         game: arcade_game(title).path(path).build(),
-        discovered_at_unix: None,
         source_kind: "mra".to_string(),
         setname: setname.to_string(),
         parent: parent.to_string(),
@@ -168,7 +167,6 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjection
     CatalogProjectionRow {
         launch_id: 0,
         game: arcade_game(title).path(path).system_id("unknown").build(),
-        discovered_at_unix: None,
         source_kind: "mgl".to_string(),
         setname: String::new(),
         parent: String::new(),
@@ -180,7 +178,6 @@ pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow
     CatalogProjectionRow {
         launch_id: 0,
         game: arcade_game(title).path(path).system_id("amiga").build(),
-        discovered_at_unix: None,
         source_kind: "catalog-entry".to_string(),
         setname: String::new(),
         parent: String::new(),

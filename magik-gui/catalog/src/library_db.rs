@@ -1118,7 +1118,6 @@ impl CatalogProjectionBuildContext<'_> {
             metadata,
             sqlite_catalog::is_new_discovery(discovered_at_unix, self.now),
             CatalogProjectionSource {
-                discovered_at_unix,
                 source_kind: launch_kind_for_discovery(discovery).to_string(),
                 setname,
                 parent,
@@ -1287,7 +1286,6 @@ fn build_arcade_catalog_from_scan_with_metadata(
             },
             false,
             CatalogProjectionSource {
-                discovered_at_unix: None,
                 source_kind: launch_kind_for_discovery(discovery).to_string(),
                 setname,
                 parent,

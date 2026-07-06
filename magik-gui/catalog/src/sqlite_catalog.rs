@@ -710,12 +710,22 @@ pub(crate) fn catalog_projection_pair_current(
 
 pub(crate) fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?1)",
         [table],
         |row| row.get::<_, i64>(0),
     )
     .map(|exists| exists != 0)
     .map_err(|e| format!("check sqlite table {table}: {e}"))
+}
+
+fn sqlite_physical_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(|e| format!("check sqlite physical table {table}: {e}"))
 }
 
 fn optional_year_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u16>> {
@@ -845,7 +855,6 @@ pub(crate) fn load_joined_launcher_catalog(
                 },
                 is_new_discovery(discovered_at_unix, now),
                 CatalogProjectionSource {
-                    discovered_at_unix,
                     source_kind: row.get::<_, String>(10)?,
                     setname: row.get::<_, String>(11)?,
                     parent: row.get::<_, String>(12)?,
@@ -1861,19 +1870,29 @@ fn write_sqlite_scan_with_sources_inner(
             preferred_reason TEXT NOT NULL,
             PRIMARY KEY(family_id, variant_ordinal)
         ) WITHOUT ROWID;
-        CREATE TABLE launcher_catalog (
+        CREATE TABLE launcher_catalog_rows (
             ordinal INTEGER PRIMARY KEY,
             launch_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            sort_title TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
-            has_preview INTEGER NOT NULL,
-            system_id TEXT NOT NULL,
-            year INTEGER,
-            manufacturer TEXT,
-            category TEXT,
-            discovered_at_unix INTEGER
+            has_preview INTEGER NOT NULL
         );
+        CREATE VIEW launcher_catalog AS
+            SELECT launcher_catalog_rows.ordinal,
+                   launcher_catalog_rows.launch_id,
+                   COALESCE(ui_arcade_preferred_text.title, games.title) AS title,
+                   COALESCE(ui_arcade_preferred_text.sort_title, games.sort_title) AS sort_title,
+                   launcher_catalog_rows.preview_asset_key,
+                   launcher_catalog_rows.has_preview,
+                   games.system_id,
+                   COALESCE(ui_arcade_preferred_text.year, games.year) AS year,
+                   COALESCE(ui_arcade_preferred_text.manufacturer, games.manufacturer) AS manufacturer,
+                   COALESCE(ui_arcade_preferred_text.category, games.genre) AS category,
+                   COALESCE(ui_arcade_preferred_text.discovered_at_unix, games.discovered_at_unix) AS discovered_at_unix
+            FROM launcher_catalog_rows
+            JOIN launch_targets ON launch_targets.launch_id = launcher_catalog_rows.launch_id
+            JOIN games ON games.game_key_id = launch_targets.game_key_id
+            LEFT JOIN ui_arcade_preferred_text
+                   ON ui_arcade_preferred_text.launch_id = launcher_catalog_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
@@ -2170,7 +2189,6 @@ fn write_sqlite_scan_with_sources_inner(
                         },
                         false,
                         CatalogProjectionSource {
-                            discovered_at_unix,
                             source_kind: launch_kind_for_discovery(discovery).to_string(),
                             setname: discovery.setname.clone().unwrap_or_default(),
                             parent: discovery.parent.clone().unwrap_or_default(),
@@ -2671,7 +2689,12 @@ fn set_preview_flags_for_system(
     system_id: &str,
     entries: Option<&[String]>,
 ) -> Result<(usize, usize), String> {
-    const TABLES: &[&str] = &["launcher_catalog", "ui_arcade_variants"];
+    let launcher_table = if sqlite_physical_table_exists(conn, "launcher_catalog_rows")? {
+        "launcher_catalog_rows"
+    } else {
+        "launcher_catalog"
+    };
+    let tables = [launcher_table, "ui_arcade_variants"];
     let tx = conn
         .transaction()
         .map_err(|e| format!("begin preview index refresh tx: {e}"))?;
@@ -2691,7 +2714,7 @@ fn set_preview_flags_for_system(
     }
     let mut candidate_rows = 0usize;
     let mut updated_rows = 0usize;
-    for table in TABLES {
+    for table in tables {
         candidate_rows += count_preview_candidates(&tx, table, system_id)?;
         updated_rows += update_preview_candidates(&tx, table, system_id, entries.is_some())?;
     }
@@ -2705,16 +2728,23 @@ fn count_preview_candidates(
     table: &str,
     system_id: &str,
 ) -> Result<usize, String> {
-    conn.query_row(
-        &format!(
+    let sql = if table == "launcher_catalog_rows" {
+        "SELECT count(*)
+         FROM launcher_catalog_rows
+         JOIN launch_targets ON launch_targets.launch_id = launcher_catalog_rows.launch_id
+         JOIN games ON games.game_key_id = launch_targets.game_key_id
+         WHERE games.system_id=?1
+           AND launcher_catalog_rows.preview_asset_key != ''"
+            .to_string()
+    } else {
+        format!(
             "SELECT count(*)
              FROM {table}
              WHERE system_id=?1
                AND preview_asset_key != ''"
-        ),
-        [system_id],
-        |row| row.get::<_, i64>(0),
-    )
+        )
+    };
+    conn.query_row(&sql, [system_id], |row| row.get::<_, i64>(0))
     .map(|count| count.max(0) as usize)
     .map_err(|e| format!("count preview candidates in {table}: {e}"))
 }
@@ -2726,25 +2756,59 @@ fn update_preview_candidates(
     has_index: bool,
 ) -> Result<usize, String> {
     let sql = if has_index {
-        format!(
-            "UPDATE {table}
+        if table == "launcher_catalog_rows" {
+            "UPDATE launcher_catalog_rows
              SET has_preview = CASE
                  WHEN EXISTS (
                      SELECT 1
                      FROM preview_index_keys k
-                     WHERE k.asset_key = lower({table}.preview_asset_key)
+                     WHERE k.asset_key = lower(launcher_catalog_rows.preview_asset_key)
                  )
                  THEN 1 ELSE 0 END
-             WHERE system_id=?1
-               AND preview_asset_key != ''"
-        )
+             WHERE preview_asset_key != ''
+               AND EXISTS (
+                   SELECT 1
+                   FROM launch_targets
+                   JOIN games ON games.game_key_id = launch_targets.game_key_id
+                   WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
+                     AND games.system_id=?1
+               )"
+                .to_string()
+        } else {
+            format!(
+                "UPDATE {table}
+                 SET has_preview = CASE
+                     WHEN EXISTS (
+                         SELECT 1
+                         FROM preview_index_keys k
+                         WHERE k.asset_key = lower({table}.preview_asset_key)
+                     )
+                     THEN 1 ELSE 0 END
+                 WHERE system_id=?1
+                   AND preview_asset_key != ''"
+            )
+        }
     } else {
-        format!(
-            "UPDATE {table}
+        if table == "launcher_catalog_rows" {
+            "UPDATE launcher_catalog_rows
              SET has_preview = 0
-             WHERE system_id=?1
-               AND preview_asset_key != ''"
-        )
+             WHERE preview_asset_key != ''
+               AND EXISTS (
+                   SELECT 1
+                   FROM launch_targets
+                   JOIN games ON games.game_key_id = launch_targets.game_key_id
+                   WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
+                     AND games.system_id=?1
+               )"
+                .to_string()
+        } else {
+            format!(
+                "UPDATE {table}
+                 SET has_preview = 0
+                 WHERE system_id=?1
+                   AND preview_asset_key != ''"
+            )
+        }
     };
     conn.execute(&sql, [system_id])
         .map_err(|e| format!("update preview candidates in {table}: {e}"))
