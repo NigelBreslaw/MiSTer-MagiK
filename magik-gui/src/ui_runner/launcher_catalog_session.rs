@@ -144,6 +144,7 @@ impl LauncherCatalogSession {
         &mut self,
         worker_running: bool,
         first_visible_copy_done: bool,
+        background_work_allowed: bool,
         loop_start: Instant,
         delay: Duration,
     ) -> Option<CatalogWorkerStart> {
@@ -152,6 +153,9 @@ impl LauncherCatalogSession {
         }
         let deferred = self.deferred_worker.as_mut()?;
         if !first_visible_copy_done {
+            return None;
+        }
+        if !background_work_allowed {
             return None;
         }
         let start_after = *deferred
@@ -1239,21 +1243,52 @@ mod tests {
         );
 
         assert!(session
-            .maybe_start_deferred_worker(false, false, now + delay, delay)
+            .maybe_start_deferred_worker(false, false, true, now + delay, delay)
             .is_none());
         assert!(session
-            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(20), delay)
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(20), delay)
             .is_none());
 
         let worker = session
-            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(70), delay)
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(70), delay)
             .expect("deferred worker");
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
         assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
         assert!(session
-            .maybe_start_deferred_worker(false, true, now + Duration::from_millis(200), delay)
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(200), delay)
+            .is_none());
+    }
+
+    #[test]
+    fn deferred_catalog_worker_waits_until_background_work_is_allowed() {
+        let mut session = LauncherCatalogSession::new(false);
+        let now = Instant::now();
+        let delay = Duration::from_millis(50);
+
+        session.defer_catalog_worker(
+            "/media/fat/_Arcade".to_string(),
+            CatalogWorkerRequest::CheckStamp,
+            CatalogWorkerInitialCache::ProbeSqlite,
+        );
+
+        assert!(session
+            .maybe_start_deferred_worker(false, true, false, now + Duration::from_millis(70), delay)
+            .is_none());
+        assert!(session
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(80), delay)
+            .is_none());
+
+        let worker = session
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(140), delay)
+            .expect("deferred worker");
+
+        assert_eq!(worker.root, "/media/fat/_Arcade");
+        assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
+        assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
+        assert!(session
+            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(200), delay)
             .is_none());
     }
 

@@ -1070,28 +1070,27 @@ pub(super) fn run_launcher_loop(
             return_catalog_hydration_needed,
         );
         if let Some(request) = request {
-            if request == CatalogWorkerRequest::ForceBuild {
+            let initial_cache =
+                summary_seed_catalog_worker_initial_cache(request, return_catalog_hydration_needed);
+            if summary_seed_catalog_worker_starts_immediately(
+                request,
+                return_catalog_hydration_needed,
+            ) {
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
-                scheduler.start_catalog_worker(
-                    arcade_root.clone(),
-                    request,
-                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
-                );
+                scheduler.start_catalog_worker(arcade_root.clone(), request, initial_cache);
             } else {
+                let delay = catalog_background_validation_delay();
                 print_startup_event(
                     start,
-                    "catalog_worker_start",
+                    "catalog_worker_deferred",
                     format!(
-                        "{} request={} reason=summary_hydration",
+                        "root={} request={} delay_ms={} reason=summary_hydration",
                         arcade_root,
-                        request.label()
+                        request.label(),
+                        delay.as_millis()
                     ),
                 );
-                scheduler.start_catalog_worker(
-                    arcade_root.clone(),
-                    request,
-                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
-                );
+                catalog_session.defer_catalog_worker(arcade_root.clone(), request, initial_cache);
             }
         } else {
             print_startup_event(
@@ -1479,6 +1478,7 @@ pub(super) fn run_launcher_loop(
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
+            catalog_background_work_allowed(&nav),
             loop_start,
             catalog_worker_delay,
         ) {
@@ -3542,6 +3542,13 @@ fn summary_seed_catalog_worker_request(
         .then_some(request)
 }
 
+fn summary_seed_catalog_worker_starts_immediately(
+    request: CatalogWorkerRequest,
+    return_catalog_hydration_needed: bool,
+) -> bool {
+    request == CatalogWorkerRequest::ForceBuild || return_catalog_hydration_needed
+}
+
 fn summary_seed_catalog_worker_initial_cache(
     request: CatalogWorkerRequest,
     return_catalog_hydration_needed: bool,
@@ -3554,6 +3561,11 @@ fn summary_seed_catalog_worker_initial_cache(
     } else {
         CatalogWorkerInitialCache::AlreadyLoadedReady
     }
+}
+
+fn catalog_background_work_allowed(nav: &LauncherNav) -> bool {
+    nav.screen != Screen::Arcade
+        || (!nav.arcade.has_scroll_motion_or_queue() && !nav.arcade.is_scroll_active())
 }
 
 fn launcher_bench_initial_preview_ready(
@@ -4556,6 +4568,22 @@ mod tests {
     }
 
     #[test]
+    pub(super) fn summary_warm_validation_defers_non_return_hydration() {
+        assert!(!summary_seed_catalog_worker_starts_immediately(
+            CatalogWorkerRequest::CheckStamp,
+            false
+        ));
+        assert!(summary_seed_catalog_worker_starts_immediately(
+            CatalogWorkerRequest::CheckStamp,
+            true
+        ));
+        assert!(summary_seed_catalog_worker_starts_immediately(
+            CatalogWorkerRequest::ForceBuild,
+            false
+        ));
+    }
+
+    #[test]
     pub(super) fn summary_warm_validation_hydrates_navigation_in_worker() {
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
@@ -4569,5 +4597,28 @@ mod tests {
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
             CatalogWorkerInitialCache::ProbeNavigationThenSqlite
         );
+    }
+
+    #[test]
+    pub(super) fn catalog_background_work_waits_while_arcade_scrolls() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        assert!(catalog_background_work_allowed(&nav));
+
+        nav.screen = Screen::Arcade;
+        assert!(catalog_background_work_allowed(&nav));
+
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+        assert!(!catalog_background_work_allowed(&nav));
+    }
+
+    #[test]
+    pub(super) fn catalog_background_work_runs_on_non_arcade_screens() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Home;
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+
+        assert!(catalog_background_work_allowed(&nav));
     }
 }
