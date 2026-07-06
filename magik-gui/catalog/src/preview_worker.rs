@@ -294,6 +294,7 @@ pub struct PreviewWorker {
     selected_tx: mpsc::Sender<PreviewRequest>,
     prefetch_tx: mpsc::Sender<PreviewRequest>,
     rx: mpsc::Receiver<PreviewResult>,
+    decoded_cache: SharedPreviewDecodedCache,
     sync_scratch: PreviewArchiveScratch,
     trace_start: Instant,
     next_generation: u64,
@@ -326,16 +327,18 @@ impl PreviewWorker {
             })
             .expect("spawn preview-selected-loader");
         let prefetch_trace_start = trace_start;
+        let prefetch_cache = Arc::clone(&decoded_cache);
         std::thread::Builder::new()
             .name("preview-prefetch-loader".to_string())
             .spawn(move || {
-                preview_prefetch_thread(prefetch_rx, res_tx, decoded_cache, prefetch_trace_start)
+                preview_prefetch_thread(prefetch_rx, res_tx, prefetch_cache, prefetch_trace_start)
             })
             .expect("spawn preview-prefetch-loader");
         Self {
             selected_tx,
             prefetch_tx,
             rx: res_rx,
+            decoded_cache,
             sync_scratch: PreviewArchiveScratch::default(),
             trace_start,
             next_generation: 1,
@@ -400,6 +403,38 @@ impl PreviewWorker {
             preview_asset_key,
             &mut self.sync_scratch,
         )
+    }
+
+    pub fn load_decoded_cache_asset(
+        &mut self,
+        preview_archive_path: &str,
+        preview_asset_key: &str,
+    ) -> Option<LoadedPreviewAsset> {
+        static RESIZE: OnceLock<PreviewResizeSpec> = OnceLock::new();
+        let resize = *RESIZE.get_or_init(PreviewResizeSpec::from_env);
+        let direct_cache_key = preview_cache_key(preview_archive_path, preview_asset_key, resize);
+        let loaded = decoded_cache_get(&self.decoded_cache, &direct_cache_key).or_else(|| {
+            let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
+            if resolved_archive_path == preview_archive_path {
+                None
+            } else {
+                let resolved_cache_key =
+                    preview_cache_key(&resolved_archive_path, preview_asset_key, resize);
+                decoded_cache_get(&self.decoded_cache, &resolved_cache_key)
+            }
+        })?;
+        Some(LoadedPreviewAsset {
+            pixels: loaded.image,
+            read_us: loaded.timing.read_us,
+            decode_us: loaded.timing.decode_us,
+            raw565_parse_us: loaded.timing.raw565_parse_us,
+            resize_us: loaded.timing.resize_us,
+            total_us: loaded.timing.total_us,
+            encoded_bytes: loaded.timing.encoded_bytes,
+            load_source: loaded.timing.load_source,
+            storage_format: PreviewStorageFormat::from_env(),
+            resize_filter: resize.filter,
+        })
     }
 }
 

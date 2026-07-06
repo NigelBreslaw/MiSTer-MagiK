@@ -1731,7 +1731,9 @@ pub(super) fn run_launcher_loop(
             };
             if catalog_ready_for_bench && launcher_bench_waiting_for_initial_preview {
                 let cache_state = preview.trace_cache_state();
-                if launcher_bench_initial_preview_ready(scenario, cache_state) {
+                let selected_has_preview = selected_arcade_game_has_preview(&nav, &catalog);
+                if launcher_bench_initial_preview_ready(scenario, cache_state, selected_has_preview)
+                {
                     launcher_bench_waiting_for_initial_preview = false;
                     launcher_bench_next_step = Instant::now();
                     print_startup_event(
@@ -3571,8 +3573,16 @@ fn catalog_background_work_allowed(nav: &LauncherNav) -> bool {
 fn launcher_bench_initial_preview_ready(
     scenario: LauncherBenchScenario,
     preview_cache_state: &str,
+    selected_has_preview: bool,
 ) -> bool {
-    !scenario.starts_on_arcade() || matches!(preview_cache_state, "exact" | "empty")
+    if !scenario.starts_on_arcade() {
+        return true;
+    }
+    if selected_has_preview {
+        preview_cache_state == "exact"
+    } else {
+        matches!(preview_cache_state, "exact" | "empty")
+    }
 }
 
 fn apply_start_system_from_env(
@@ -4209,19 +4219,32 @@ mod tests {
 
         assert!(!launcher_bench_initial_preview_ready(
             scenario,
-            "placeholder"
+            "placeholder",
+            true
         ));
-        assert!(!launcher_bench_initial_preview_ready(scenario, "cached"));
-        assert!(!launcher_bench_initial_preview_ready(scenario, "stale"));
-        assert!(launcher_bench_initial_preview_ready(scenario, "exact"));
-        assert!(launcher_bench_initial_preview_ready(scenario, "empty"));
+        assert!(!launcher_bench_initial_preview_ready(
+            scenario, "cached", true
+        ));
+        assert!(!launcher_bench_initial_preview_ready(
+            scenario, "stale", true
+        ));
+        assert!(!launcher_bench_initial_preview_ready(
+            scenario, "empty", true
+        ));
+        assert!(launcher_bench_initial_preview_ready(
+            scenario, "exact", true
+        ));
+        assert!(launcher_bench_initial_preview_ready(
+            scenario, "empty", false
+        ));
     }
 
     #[test]
     pub(super) fn non_arcade_bench_does_not_wait_for_preview() {
         assert!(launcher_bench_initial_preview_ready(
             LauncherBenchScenario::HomeNav,
-            "placeholder"
+            "placeholder",
+            true
         ));
     }
 
