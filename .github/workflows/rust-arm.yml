@@ -181,7 +181,18 @@ jobs:
             target-arm-${{ runner.os }}-${{ matrix.name }}-
 
       - name: Build ARM binary
-        run: magik-gui/build-arm.sh ${{ matrix.args }}
+        run: |
+          start_epoch=$(date +%s)
+          magik-gui/build-arm.sh ${{ matrix.args }}
+          end_epoch=$(date +%s)
+          duration_seconds=$((end_epoch - start_epoch))
+          {
+            echo "### ARM build timing"
+            echo
+            echo "| Variant | Duration |"
+            echo "| --- | ---: |"
+            echo "| ${{ matrix.name }} | ${duration_seconds}s |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
@@ -243,7 +254,18 @@ jobs:
             target-agent-arm-${{ runner.os }}-
 
       - name: Build ARM agent
-        run: MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
+        run: |
+          start_epoch=$(date +%s)
+          MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
+          end_epoch=$(date +%s)
+          duration_seconds=$((end_epoch - start_epoch))
+          {
+            echo "### ARM agent build timing"
+            echo
+            echo "| Target | Duration |"
+            echo "| --- | ---: |"
+            echo "| mister-magik-agent | ${duration_seconds}s |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload ARM agent
         uses: actions/upload-artifact@v7
