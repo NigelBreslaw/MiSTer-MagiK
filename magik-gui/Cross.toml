@@ -1,5 +1,5 @@
 [target.armv7-unknown-linux-gnueabihf]
-image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5"
+image = "ghcr.io/nigelbreslaw/mister-magik/cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5"
 
 [build.env]
 passthrough = [

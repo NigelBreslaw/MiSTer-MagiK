@@ -8,14 +8,14 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
-  MISTER_CROSS_CACHE_FAMILY: stock-cross-rs-armv7-0.2.5
-  MISTER_CROSS_IMAGE: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5
+  MISTER_CROSS_IMAGE: ghcr.io/nigelbreslaw/mister-magik/cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
 
 jobs:
   host-dev:
@@ -163,12 +163,25 @@ jobs:
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
+      - name: Prepare cross Docker image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$MISTER_CROSS_IMAGE"; then
+            echo "==> pulled prebuilt cross image: $MISTER_CROSS_IMAGE"
+          else
+            echo "==> prebuilt cross image unavailable; building exact local fallback: $MISTER_CROSS_IMAGE"
+            docker build -t "$MISTER_CROSS_IMAGE" -f magik-gui/Dockerfile.cross-armv7 magik-gui
+          fi
+
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
         uses: actions/cache@v6
         with:
           path: magik-gui/target/ffmpeg-minimal/armv7
-          key: ffmpeg-minimal-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Cross.toml') }}
+          key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
       - name: Cache ARM build outputs
         uses: actions/cache@v6
@@ -176,10 +189,10 @@ jobs:
           path: |
             magik-gui/target/${{ matrix.profile }}
             magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Cross.toml') }}
+          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
-            target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-
+            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-${{ runner.os }}-${{ matrix.name }}-
 
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
