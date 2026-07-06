@@ -331,6 +331,7 @@ mod linux {
     const CONTROL_AUTH_DISABLED: bool = true;
     const LOG: &str = "/tmp/mister-magik-agent.log";
     const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
+    const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
     static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
     const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
     const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
@@ -798,7 +799,14 @@ mod linux {
             );
             return true;
         }
-        append_log_line("device_telemetry_stream_v1_start".to_string());
+        let analytics_mode = parsed
+            .pointer("/args/analytics_mode")
+            .and_then(Value::as_str)
+            .map(normalize_frame_analytics_mode)
+            .unwrap_or("process");
+        append_log_line(format!(
+            "device_telemetry_stream_v1_start analytics_mode={analytics_mode}"
+        ));
         let result = json!({
             "schema": "mister-magik-device-telemetry-stream-v1",
             "cadence_ms": 1000,
@@ -817,6 +825,7 @@ mod linux {
         let mut seq = 0_u64;
         loop {
             let sample_started = Instant::now();
+            refresh_frame_analytics_lease(analytics_mode);
             let snapshot = state.snapshot(seq, boot_id, started);
             if writeln!(stream, "{snapshot}").is_err() || stream.flush().is_err() {
                 break;
@@ -827,8 +836,33 @@ mod linux {
                 thread::sleep(Duration::from_secs(1) - elapsed);
             }
         }
+        clear_frame_analytics_lease();
         append_log_line("device_telemetry_stream_v1_end".to_string());
         true
+    }
+
+    fn normalize_frame_analytics_mode(mode: &str) -> &'static str {
+        match mode {
+            "off" => "off",
+            "wall" => "wall",
+            "thread" => "thread",
+            _ => "process",
+        }
+    }
+
+    fn refresh_frame_analytics_lease(mode: &str) {
+        if mode == "off" {
+            clear_frame_analytics_lease();
+            return;
+        }
+        if let Some(parent) = std::path::Path::new(FRAME_ANALYTICS_LEASE_PATH).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(FRAME_ANALYTICS_LEASE_PATH, format!("{mode}\n"));
+    }
+
+    fn clear_frame_analytics_lease() {
+        let _ = fs::remove_file(FRAME_ANALYTICS_LEASE_PATH);
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 use super::launcher_frame_accounting::{
-    LauncherCustomDrawTrace, LauncherFrameAccounting, LauncherPresentedFrame,
+    FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
+    LauncherPresentedFrame,
 };
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
@@ -1374,6 +1375,8 @@ pub(super) fn run_launcher_loop(
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
         let loop_start = Instant::now();
+        let frame_analytics_mode = frame_accounting.frame_analytics_mode();
+        let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
         let arcade_filter_visual_index_at_loop_start = nav.arcade_filter.visual_index;
         let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
@@ -2598,10 +2601,12 @@ pub(super) fn run_launcher_loop(
             continue;
         }
 
+        let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
         update_slint_animations(animation_clock);
         let mut layer_target = LayerTarget::new(target, disp, ui);
+        let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         let this_rect = expand_home_pan_dirty_rect(
             layer_target.render_slint_base(&window),
@@ -2609,7 +2614,9 @@ pub(super) fn run_launcher_loop(
             home_pan_present_active,
         );
         launcher_redraw_pending = false;
+        let cpu_t2 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t2 = Instant::now();
+        let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_start = Instant::now();
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
@@ -2666,6 +2673,7 @@ pub(super) fn run_launcher_loop(
             preview_blit_us,
             effect_label_us,
         };
+        let cpu_custom_draw_done = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_done = Instant::now();
         if !first_render_logged {
             first_render_logged = true;
@@ -2678,12 +2686,18 @@ pub(super) fn run_launcher_loop(
             let pace = pacer.wait();
             let vsync_done = Instant::now();
             present_timing.wait_until_present_time(vsync_done);
+            let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
             let frame_t3 = Instant::now();
-            (Some(pace), frame_t3)
+            (Some(pace), frame_t3, cpu_t3)
         } else {
-            (None, Instant::now())
+            (
+                None,
+                Instant::now(),
+                FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+            )
         };
         let frame_t3 = pace.1;
+        let cpu_t3 = pace.2;
         let vsync_source = pace.0.as_ref().map(|pace| pace.source);
         let vsync_period_us = pace
             .0
@@ -2708,7 +2722,7 @@ pub(super) fn run_launcher_loop(
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
         let startup_can_present = lifecycle.startup_can_present_frame();
-        let (presentation, frame_t4) = {
+        let (presentation, frame_t4, cpu_t4) = {
             let presentation = if startup_can_present {
                 LauncherCompositor::present(LauncherPresentRequest {
                     layer_target: &mut layer_target,
@@ -2731,7 +2745,11 @@ pub(super) fn run_launcher_loop(
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
             };
-            (presentation, Instant::now())
+            (
+                presentation,
+                Instant::now(),
+                FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+            )
         };
         if presentation.copied_rows > 0 {
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
@@ -2785,6 +2803,14 @@ pub(super) fn run_launcher_loop(
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,
+                cpu_loop_start,
+                cpu_t0,
+                cpu_t1,
+                cpu_t2,
+                cpu_custom_draw_start,
+                cpu_custom_draw_done,
+                cpu_t3,
+                cpu_t4,
             },
             start,
             disp,

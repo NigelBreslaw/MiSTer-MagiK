@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::VecDeque;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::fmt::Write as _;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -7,6 +8,9 @@ use std::io::{BufWriter, Write as _};
 const FRAME_BUDGET_US: u64 = 16_667;
 const FRAME_BUDGET_20MS_US: u64 = 20_000;
 const FRAME_BUDGET_33MS_US: u64 = 33_334;
+const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
+const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
+const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
@@ -45,6 +49,8 @@ pub(super) struct LauncherFrameAccounting {
     frame_budget_total: FrameBudgetAccumulator,
     frame_budget_window: FrameBudgetAccumulator,
     last_frame_budget_status: runtime_status::FrameBudgetStatus,
+    frame_analytics_mode: FrameAnalyticsMode,
+    frame_analytics_samples: VecDeque<runtime_status::FrameBudgetRecentFrame>,
 }
 
 pub(super) struct LauncherPresentedFrame {
@@ -83,6 +89,72 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
+    pub(super) cpu_loop_start: FrameAnalyticsCpuStamp,
+    pub(super) cpu_t0: FrameAnalyticsCpuStamp,
+    pub(super) cpu_t1: FrameAnalyticsCpuStamp,
+    pub(super) cpu_t2: FrameAnalyticsCpuStamp,
+    pub(super) cpu_custom_draw_start: FrameAnalyticsCpuStamp,
+    pub(super) cpu_custom_draw_done: FrameAnalyticsCpuStamp,
+    pub(super) cpu_t3: FrameAnalyticsCpuStamp,
+    pub(super) cpu_t4: FrameAnalyticsCpuStamp,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum FrameAnalyticsMode {
+    #[default]
+    Off,
+    Wall,
+    Thread,
+    Process,
+}
+
+impl FrameAnalyticsMode {
+    fn from_lease_text(text: &str) -> Self {
+        match text.trim() {
+            "wall" => Self::Wall,
+            "thread" => Self::Thread,
+            "process" | "1" | "true" => Self::Process,
+            _ => Self::Off,
+        }
+    }
+
+    pub(super) fn records_wall(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    fn records_thread_cpu(self) -> bool {
+        matches!(self, Self::Thread | Self::Process)
+    }
+
+    fn records_process_cpu(self) -> bool {
+        matches!(self, Self::Process)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct FrameAnalyticsCpuStamp {
+    thread_us: u64,
+    process_us: u64,
+}
+
+impl FrameAnalyticsCpuStamp {
+    pub(super) fn capture(mode: FrameAnalyticsMode) -> Self {
+        if matches!(mode, FrameAnalyticsMode::Off | FrameAnalyticsMode::Wall) {
+            return Self::default();
+        }
+        Self {
+            thread_us: mode
+                .records_thread_cpu()
+                .then(cpu_thread_us)
+                .flatten()
+                .unwrap_or(0),
+            process_us: mode
+                .records_process_cpu()
+                .then(cpu_process_us)
+                .flatten()
+                .unwrap_or(0),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -389,6 +461,8 @@ impl LauncherFrameAccounting {
                 budget_us: FRAME_BUDGET_US,
                 ..runtime_status::FrameBudgetStatus::default()
             },
+            frame_analytics_mode: FrameAnalyticsMode::Off,
+            frame_analytics_samples: VecDeque::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
         }
     }
 
@@ -409,6 +483,10 @@ impl LauncherFrameAccounting {
 
     pub(super) fn status_write_due(&self) -> bool {
         self.last_status_write.elapsed() >= Duration::from_secs(1)
+    }
+
+    pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
+        self.frame_analytics_mode
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -444,6 +522,9 @@ impl LauncherFrameAccounting {
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
     ) {
+        if frame.status_write_due {
+            self.refresh_frame_analytics_mode();
+        }
         self.record_first_copy(&frame, disp);
         self.accumulate_fps(&frame);
         self.accumulate_frame_budget(&frame);
@@ -503,6 +584,27 @@ impl LauncherFrameAccounting {
         }
     }
 
+    fn refresh_frame_analytics_mode(&mut self) {
+        let mode = std::fs::metadata(FRAME_ANALYTICS_LEASE_PATH)
+            .and_then(|metadata| {
+                let age = metadata
+                    .modified()?
+                    .elapsed()
+                    .unwrap_or(FRAME_ANALYTICS_LEASE_MAX_AGE);
+                if age <= FRAME_ANALYTICS_LEASE_MAX_AGE {
+                    std::fs::read_to_string(FRAME_ANALYTICS_LEASE_PATH)
+                } else {
+                    Ok(String::new())
+                }
+            })
+            .map(|text| FrameAnalyticsMode::from_lease_text(&text))
+            .unwrap_or(FrameAnalyticsMode::Off);
+        if mode != self.frame_analytics_mode {
+            self.frame_analytics_mode = mode;
+            self.frame_analytics_samples.clear();
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn finish_idle_loop(
         &mut self,
@@ -543,12 +645,16 @@ impl LauncherFrameAccounting {
         startup_status: StartupRevealStatus,
     ) {
         self.idle_loops_since_status = self.idle_loops_since_status.saturating_add(1);
+        let status_write_due = self.status_write_due();
+        if status_write_due {
+            self.refresh_frame_analytics_mode();
+        }
         let last_frame_ms_ago = now
             .saturating_duration_since(self.last_rendered_frame_at)
             .as_millis()
             .min(u64::MAX as u128) as u64;
         self.write_runtime_status(
-            self.status_write_due(),
+            status_write_due,
             frames,
             run_start,
             nav,
@@ -758,19 +864,77 @@ impl LauncherFrameAccounting {
     }
 
     fn accumulate_frame_budget(&mut self, frame: &LauncherPresentedFrame) {
+        let wall_us = u128_to_u64_saturating((frame.frame_t4 - frame.loop_start).as_micros());
+        let prepare_us = u128_to_u64_saturating(frame.prepare_us);
+        let render_us = u128_to_u64_saturating((frame.frame_t2 - frame.frame_t1).as_micros());
+        let custom_draw_us =
+            u128_to_u64_saturating((frame.custom_draw_done - frame.custom_draw_start).as_micros());
+        let vsync_us =
+            u128_to_u64_saturating((frame.frame_t3 - frame.custom_draw_done).as_micros());
+        let present_us = u128_to_u64_saturating((frame.frame_t4 - frame.frame_t3).as_micros());
         let sample = FrameBudgetSample {
             frame: frame.frames,
-            wall_us: u128_to_u64_saturating((frame.frame_t4 - frame.loop_start).as_micros()),
-            prepare_us: frame.prepare_us,
-            render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
-            custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
-            vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
-            present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
+            wall_us,
+            prepare_us: u128::from(prepare_us),
+            render_us: u128::from(render_us),
+            custom_draw_us: u128::from(custom_draw_us),
+            vsync_us: u128::from(vsync_us),
+            present_us: u128::from(present_us),
             vsync_source: frame.vsync_source,
             vsync_miss_streak: frame.vsync_miss_streak,
         };
         self.frame_budget_total.record(sample);
         self.frame_budget_window.record(sample);
+        if self.frame_analytics_mode.records_wall() {
+            self.push_frame_analytics_sample(
+                frame,
+                wall_us,
+                prepare_us,
+                render_us,
+                custom_draw_us,
+                vsync_us,
+                present_us,
+            );
+        }
+    }
+
+    fn push_frame_analytics_sample(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        wall_us: u64,
+        prepare_us: u64,
+        render_us: u64,
+        custom_draw_us: u64,
+        vsync_us: u64,
+        present_us: u64,
+    ) {
+        if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
+            self.frame_analytics_samples.pop_front();
+        }
+        self.frame_analytics_samples
+            .push_back(runtime_status::FrameBudgetRecentFrame {
+                frame: frame.frames,
+                wall_us,
+                prepare_us,
+                render_us,
+                custom_draw_us,
+                vsync_us,
+                present_us,
+                cpu_prepare_us: cpu_delta(frame.cpu_loop_start, frame.cpu_t0),
+                cpu_render_us: cpu_delta(frame.cpu_t1, frame.cpu_t2),
+                cpu_custom_draw_us: cpu_delta(
+                    frame.cpu_custom_draw_start,
+                    frame.cpu_custom_draw_done,
+                ),
+                cpu_vsync_us: cpu_delta(frame.cpu_custom_draw_done, frame.cpu_t3),
+                cpu_present_us: cpu_delta(frame.cpu_t3, frame.cpu_t4),
+                process_cpu_us: frame
+                    .cpu_t4
+                    .process_us
+                    .saturating_sub(frame.cpu_loop_start.process_us),
+                vsync_source: vsync_source_label(frame.vsync_source),
+                vsync_miss_streak: frame.vsync_miss_streak,
+            });
     }
 
     fn current_frame_budget_status(&self) -> runtime_status::FrameBudgetStatus {
@@ -804,6 +968,7 @@ impl LauncherFrameAccounting {
             ),
             window_vsync_us: FrameBudgetAccumulator::avg_us(window.vsync_us, window.frames),
             window_present_us: FrameBudgetAccumulator::avg_us(window.present_us, window.frames),
+            recent_frames: self.frame_analytics_samples.iter().copied().collect(),
         }
     }
 
@@ -951,7 +1116,9 @@ impl LauncherFrameAccounting {
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
         let frame_budget = if idle {
-            self.last_frame_budget_status
+            let mut status = self.last_frame_budget_status.clone();
+            status.recent_frames.clear();
+            status
         } else {
             self.current_frame_budget_status()
         };
@@ -1021,17 +1188,68 @@ impl LauncherFrameAccounting {
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
-            frame_budget,
+            frame_budget: frame_budget.clone(),
         });
         if !idle {
             self.last_frame_budget_status = frame_budget;
             self.frame_budget_window = FrameBudgetAccumulator::default();
         }
+        self.frame_analytics_samples.clear();
         self.last_status_write = Instant::now();
         if idle {
             self.idle_loops_since_status = 0;
         }
     }
+}
+
+fn cpu_delta(start: FrameAnalyticsCpuStamp, end: FrameAnalyticsCpuStamp) -> u64 {
+    end.thread_us.saturating_sub(start.thread_us)
+}
+
+fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
+    match source {
+        Some(VsyncPaceSource::Vsync) => "vsync",
+        Some(VsyncPaceSource::Fallback) => "fallback",
+        Some(VsyncPaceSource::Timeout) => "timeout",
+        Some(VsyncPaceSource::Error) => "error",
+        None => "none",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_thread_us() -> Option<u64> {
+    cpu_clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_thread_us() -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_process_us() -> Option<u64> {
+    cpu_clock_us(libc::CLOCK_PROCESS_CPUTIME_ID)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cpu_process_us() -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_clock_us(clock_id: libc::clockid_t) -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is valid writable storage for this syscall; errors are
+    // represented as missing CPU timing so telemetry remains best-effort.
+    let rc = unsafe { libc::clock_gettime(clock_id, &mut ts) };
+    (rc == 0).then(|| {
+        (ts.tv_sec as u64)
+            .saturating_mul(1_000_000)
+            .saturating_add((ts.tv_nsec as u64) / 1_000)
+    })
 }
 
 fn u128_to_u64_saturating(value: u128) -> u64 {
