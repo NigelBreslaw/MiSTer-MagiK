@@ -183,20 +183,21 @@ jobs:
       - name: Measure ARM cache payload
         shell: bash
         run: |
+          set +e
           for dir in \
             "magik-gui/target/${{ matrix.profile }}" \
             "magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}"
           do
             if [ -d "$dir" ]; then
               echo "::group::$dir"
-              du -sh "$dir"
-              find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20
+              du -sh "$dir" || true
+              find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20 || true
               echo "::endgroup::"
 
               for child in deps build; do
                 if [ -d "$dir/$child" ]; then
                   echo "::group::$dir/$child file payload"
-                  find "$dir/$child" -type f -printf '%s %p\n' | sort -nr | head -30
+                  find "$dir/$child" -type f -printf '%s %p\n' | sort -nr | head -30 || true
                   find "$dir/$child" -type f -printf '%f %s\n' | awk '
                     {
                       name=$1
@@ -214,7 +215,7 @@ jobs:
                         printf "%12d %8d %s\n", bytes[ext], count[ext], ext
                       }
                     }
-                  ' | sort -nr | head -20
+                  ' | sort -nr | head -20 || true
                   echo "::endgroup::"
                 fi
               done
@@ -222,6 +223,7 @@ jobs:
               echo "missing $dir"
             fi
           done
+          exit 0
 
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
