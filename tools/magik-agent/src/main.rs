@@ -657,6 +657,15 @@ mod linux {
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
                 }
+                if maybe_handle_device_telemetry_stream_v1(
+                    &line,
+                    &token,
+                    boot_id,
+                    started,
+                    &mut stream,
+                ) {
+                    return;
+                }
                 if maybe_handle_framebuffer_raw_stream(&line, &token, boot_id, started, &mut stream)
                 {
                     return;
@@ -765,6 +774,397 @@ mod linux {
         true
     }
 
+    fn maybe_handle_device_telemetry_stream_v1(
+        line: &str,
+        token: &str,
+        boot_id: u64,
+        started: Instant,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("cmd").and_then(Value::as_str) != Some("device_telemetry_stream_v1") {
+            return false;
+        }
+        let id = parsed.get("id").cloned();
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(id, false, None, Some("unauthorized"))
+            );
+            return true;
+        }
+        append_log_line("device_telemetry_stream_v1_start".to_string());
+        let result = json!({
+            "schema": "mister-magik-device-telemetry-stream-v1",
+            "cadence_ms": 1000,
+            "encoding": "jsonl",
+        });
+        let _ = stream.set_nodelay(true);
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        if writeln!(stream, "{}", response(id, true, Some(result), None)).is_err() {
+            return true;
+        }
+        if stream.flush().is_err() {
+            return true;
+        }
+
+        let mut state = DeviceTelemetryStreamState::default();
+        let mut seq = 0_u64;
+        loop {
+            let sample_started = Instant::now();
+            let snapshot = state.snapshot(seq, boot_id, started);
+            if writeln!(stream, "{snapshot}").is_err() || stream.flush().is_err() {
+                break;
+            }
+            seq = seq.saturating_add(1);
+            let elapsed = sample_started.elapsed();
+            if elapsed < Duration::from_secs(1) {
+                thread::sleep(Duration::from_secs(1) - elapsed);
+            }
+        }
+        append_log_line("device_telemetry_stream_v1_end".to_string());
+        true
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(super) struct CpuTimes {
+        pub(super) user: u64,
+        pub(super) nice: u64,
+        pub(super) system: u64,
+        pub(super) idle: u64,
+        pub(super) iowait: u64,
+        pub(super) irq: u64,
+        pub(super) softirq: u64,
+        pub(super) steal: u64,
+    }
+
+    impl CpuTimes {
+        fn total(self) -> u64 {
+            self.user
+                .saturating_add(self.nice)
+                .saturating_add(self.system)
+                .saturating_add(self.idle)
+                .saturating_add(self.iowait)
+                .saturating_add(self.irq)
+                .saturating_add(self.softirq)
+                .saturating_add(self.steal)
+        }
+
+        fn idle_total(self) -> u64 {
+            self.idle.saturating_add(self.iowait)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(super) struct NetSample {
+        pub(super) rx_bytes: u64,
+        pub(super) tx_bytes: u64,
+        pub(super) at: Option<Instant>,
+    }
+
+    #[derive(Default)]
+    struct DeviceTelemetryStreamState {
+        previous_cpu: Option<Vec<CpuTimes>>,
+        previous_net: Option<NetSample>,
+    }
+
+    impl DeviceTelemetryStreamState {
+        fn snapshot(&mut self, seq: u64, boot_id: u64, started: Instant) -> Value {
+            let cpu_times = read_cpu_times().unwrap_or_default();
+            let cpu = cpu_json(self.previous_cpu.as_deref(), &cpu_times);
+            self.previous_cpu = Some(cpu_times);
+
+            let net_fields = read_netdev_stats_fields(IFACE);
+            let now = Instant::now();
+            let network = network_json(self.previous_net, net_fields, now);
+            self.previous_net = net_fields.map(|fields| NetSample {
+                rx_bytes: fields[0],
+                tx_bytes: fields[8],
+                at: Some(now),
+            });
+
+            let magik = process_telemetry("mister-magik-fb");
+            let main = process_telemetry("MiSTer_MagiK");
+            let magik_rss_kb = magik.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
+            let main_rss_kb = main.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
+            let slint_status = read_json_value("/tmp/mister-magik/status.json");
+            let slint_current = status_pid_matches(&slint_status, &magik["pids"]);
+            json!({
+                "schema": "mister-magik-device-telemetry-v1",
+                "seq": seq,
+                "agent": {
+                    "boot_id": boot_id,
+                    "uptime_ms": started.elapsed().as_millis() as u64,
+                },
+                "cpu": cpu,
+                "memory": memory_json(magik_rss_kb, main_rss_kb),
+                "processes": {
+                    "mister-magik-fb": magik,
+                    "MiSTer_MagiK": main,
+                },
+                "network": network,
+                "storage": storage_json("/media/fat"),
+                "launcher": {
+                    "status_current": slint_current,
+                    "screen": slint_status.get("screen").cloned().unwrap_or(Value::Null),
+                    "scene": slint_status.get("scene").cloned().unwrap_or(Value::Null),
+                    "idle": slint_status.get("idle").cloned().unwrap_or(Value::Null),
+                    "rolling_fps": slint_status.get("rolling_fps").cloned().unwrap_or(Value::Null),
+                    "fps_estimate": slint_status.get("fps_estimate").cloned().unwrap_or(Value::Null),
+                    "preview_cache_state": slint_status.get("preview_cache_state").cloned().unwrap_or(Value::Null),
+                    "frame_budget": slint_status.get("frame_budget").cloned().unwrap_or(Value::Null),
+                    "last_error": Value::Null,
+                },
+            })
+        }
+    }
+
+    pub(super) fn parse_cpu_times_text(text: &str) -> Vec<CpuTimes> {
+        text.lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let label = fields.next()?;
+                if label != "cpu"
+                    && !label
+                        .strip_prefix("cpu")?
+                        .chars()
+                        .all(|c| c.is_ascii_digit())
+                {
+                    return None;
+                }
+                let nums = fields
+                    .take(8)
+                    .map(|field| field.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>();
+                Some(CpuTimes {
+                    user: *nums.first().unwrap_or(&0),
+                    nice: *nums.get(1).unwrap_or(&0),
+                    system: *nums.get(2).unwrap_or(&0),
+                    idle: *nums.get(3).unwrap_or(&0),
+                    iowait: *nums.get(4).unwrap_or(&0),
+                    irq: *nums.get(5).unwrap_or(&0),
+                    softirq: *nums.get(6).unwrap_or(&0),
+                    steal: *nums.get(7).unwrap_or(&0),
+                })
+            })
+            .collect()
+    }
+
+    fn read_cpu_times() -> Option<Vec<CpuTimes>> {
+        fs::read_to_string("/proc/stat")
+            .ok()
+            .map(|text| parse_cpu_times_text(&text))
+    }
+
+    pub(super) fn cpu_busy_percent(previous: CpuTimes, current: CpuTimes) -> f64 {
+        let total_delta = current.total().saturating_sub(previous.total());
+        if total_delta == 0 {
+            return 0.0;
+        }
+        let idle_delta = current.idle_total().saturating_sub(previous.idle_total());
+        let busy = total_delta.saturating_sub(idle_delta);
+        ((busy as f64 * 1000.0 / total_delta as f64).round()) / 10.0
+    }
+
+    fn cpu_json(previous: Option<&[CpuTimes]>, current: &[CpuTimes]) -> Value {
+        let combined = match (previous.and_then(|items| items.first()), current.first()) {
+            (Some(prev), Some(now)) => cpu_busy_percent(*prev, *now),
+            _ => 0.0,
+        };
+        let cores = current
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(index, now)| {
+                let busy_pct = previous
+                    .and_then(|items| items.get(index))
+                    .map(|prev| cpu_busy_percent(*prev, *now))
+                    .unwrap_or(0.0);
+                json!({"id": index - 1, "busy_pct": busy_pct})
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "combined_busy_pct": combined,
+            "cores": cores,
+        })
+    }
+
+    pub(super) fn memory_split_json(
+        mem_total_kb: u64,
+        mem_available_kb: u64,
+        magik_rss_kb: u64,
+        main_rss_kb: u64,
+    ) -> Value {
+        let available_kb = mem_available_kb.min(mem_total_kb);
+        let magik_kb = magik_rss_kb.min(mem_total_kb);
+        let used_without_available = mem_total_kb.saturating_sub(available_kb);
+        let other_used_kb = used_without_available.saturating_sub(magik_kb);
+        json!({
+            "total_kb": mem_total_kb,
+            "available_kb": available_kb,
+            "magik_kb": magik_kb,
+            "main_kb": main_rss_kb,
+            "other_used_kb": other_used_kb,
+            "available_pct": percent_of(available_kb, mem_total_kb),
+            "magik_pct": percent_of(magik_kb, mem_total_kb),
+            "other_used_pct": percent_of(other_used_kb, mem_total_kb),
+        })
+    }
+
+    fn memory_json(magik_rss_kb: u64, main_rss_kb: u64) -> Value {
+        let meminfo = read_meminfo();
+        let total = meminfo_value(&meminfo, "MemTotal").unwrap_or(0);
+        let available = meminfo_value(&meminfo, "MemAvailable").unwrap_or_else(|| {
+            meminfo_value(&meminfo, "MemFree").unwrap_or(0)
+                + meminfo_value(&meminfo, "Buffers").unwrap_or(0)
+                + meminfo_value(&meminfo, "Cached").unwrap_or(0)
+        });
+        memory_split_json(total, available, magik_rss_kb, main_rss_kb)
+    }
+
+    fn read_meminfo() -> Vec<(String, u64)> {
+        fs::read_to_string("/proc/meminfo")
+            .ok()
+            .map(|text| {
+                text.lines()
+                    .filter_map(|line| {
+                        let (key, rest) = line.split_once(':')?;
+                        let value = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+                        Some((key.to_string(), value))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn meminfo_value(items: &[(String, u64)], key: &str) -> Option<u64> {
+        items
+            .iter()
+            .find_map(|(item_key, value)| (item_key == key).then_some(*value))
+    }
+
+    fn process_telemetry(name: &str) -> Value {
+        let pids = read_pidof(name)
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|pid| pid.parse::<u64>().ok())
+            .collect::<Vec<_>>();
+        let rss_kb = pids
+            .iter()
+            .map(|pid| proc_status_kb(*pid, "VmRSS"))
+            .sum::<u64>();
+        let threads = pids
+            .iter()
+            .map(|pid| proc_status_number(*pid, "Threads"))
+            .sum::<u64>();
+        json!({
+            "pids": pids,
+            "rss_kb": rss_kb,
+            "threads": threads,
+        })
+    }
+
+    fn proc_status_kb(pid: u64, key: &str) -> u64 {
+        proc_status_field(pid, key)
+            .and_then(|value| value.split_whitespace().next()?.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    fn proc_status_number(pid: u64, key: &str) -> u64 {
+        proc_status_field(pid, key)
+            .and_then(|value| value.split_whitespace().next()?.parse::<u64>().ok())
+            .unwrap_or(0)
+    }
+
+    fn proc_status_field(pid: u64, key: &str) -> Option<String> {
+        let text = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        text.lines().find_map(|line| {
+            let (line_key, rest) = line.split_once(':')?;
+            (line_key == key).then(|| rest.trim().to_string())
+        })
+    }
+
+    pub(super) fn network_rate_json(previous: Option<NetSample>, current: NetSample) -> Value {
+        let elapsed = previous
+            .and_then(|previous| {
+                Some(
+                    current
+                        .at?
+                        .saturating_duration_since(previous.at?)
+                        .as_secs_f64(),
+                )
+            })
+            .unwrap_or(0.0);
+        let (rx_bps, tx_bps) = if elapsed > 0.0 {
+            let previous = previous.unwrap_or_default();
+            (
+                ((current.rx_bytes.saturating_sub(previous.rx_bytes) as f64) / elapsed).round()
+                    as u64,
+                ((current.tx_bytes.saturating_sub(previous.tx_bytes) as f64) / elapsed).round()
+                    as u64,
+            )
+        } else {
+            (0, 0)
+        };
+        json!({
+            "rx_bytes": current.rx_bytes,
+            "tx_bytes": current.tx_bytes,
+            "rx_bytes_per_sec": rx_bps,
+            "tx_bytes_per_sec": tx_bps,
+        })
+    }
+
+    fn network_json(previous: Option<NetSample>, fields: Option<[u64; 16]>, now: Instant) -> Value {
+        match fields {
+            Some(fields) => network_rate_json(
+                previous,
+                NetSample {
+                    rx_bytes: fields[0],
+                    tx_bytes: fields[8],
+                    at: Some(now),
+                },
+            ),
+            None => Value::Null,
+        }
+    }
+
+    fn storage_json(path: &str) -> Value {
+        let Ok(c_path) = CString::new(path) else {
+            return Value::Null;
+        };
+        let mut stats = mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: statvfs writes a valid statvfs struct when it returns 0; c_path is NUL-terminated.
+        let rc = unsafe { libc::statvfs(c_path.as_ptr(), stats.as_mut_ptr()) };
+        if rc != 0 {
+            return Value::Null;
+        }
+        // SAFETY: statvfs returned success, so stats is initialized.
+        let stats = unsafe { stats.assume_init() };
+        let block_size = stats.f_frsize;
+        let total_bytes = stats.f_blocks.saturating_mul(block_size);
+        let available_bytes = stats.f_bavail.saturating_mul(block_size);
+        json!({
+            "path": path,
+            "total_bytes": total_bytes,
+            "available_bytes": available_bytes,
+            "used_bytes": total_bytes.saturating_sub(available_bytes),
+            "available_pct": percent_of(available_bytes, total_bytes),
+        })
+    }
+
+    fn percent_of(value: u64, total: u64) -> f64 {
+        if total == 0 {
+            0.0
+        } else {
+            ((value as f64 * 1000.0 / total as f64).round()) / 10.0
+        }
+    }
+
     fn maybe_handle_framebuffer_raw_stream(
         line: &str,
         token: &str,
@@ -816,8 +1216,7 @@ mod linux {
             Ok(value) => value,
             Err(_) => return false,
         };
-        if parsed.get("cmd").and_then(Value::as_str)
-            != Some("library_database_snapshot_lz4_stream")
+        if parsed.get("cmd").and_then(Value::as_str) != Some("library_database_snapshot_lz4_stream")
         {
             return false;
         }
@@ -2382,10 +2781,10 @@ mod tests {
 
     #[test]
     fn library_snapshot_rejects_non_allowlisted_paths() {
-        assert!(library_snapshot::validate_remote_path(
-            "/media/fat/mister-magik/other.sqlite3"
-        )
-        .is_err());
+        assert!(
+            library_snapshot::validate_remote_path("/media/fat/mister-magik/other.sqlite3")
+                .is_err()
+        );
         assert!(library_snapshot::validate_remote_path("/tmp/library.sqlite3").is_err());
         assert!(library_snapshot::validate_remote_path(library_snapshot::LIBRARY_DB_PATH).is_ok());
     }
@@ -2417,7 +2816,10 @@ mod tests {
             library_snapshot::LIBRARY_DB_PATH
         );
         assert_eq!(snapshot.result["raw_bytes"], bytes.len() as u64);
-        assert_eq!(snapshot.result["payload_bytes"], snapshot.payload.len() as u64);
+        assert_eq!(
+            snapshot.result["payload_bytes"],
+            snapshot.payload.len() as u64
+        );
         assert_eq!(snapshot.result["encoding"], "lz4-block");
         assert_eq!(
             snapshot.result["checksum"],
@@ -2427,6 +2829,78 @@ mod tests {
         assert_eq!(decoded, bytes);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_cpu_delta_math_reports_busy_percent() {
+        let previous = linux::CpuTimes {
+            user: 100,
+            nice: 0,
+            system: 100,
+            idle: 800,
+            iowait: 0,
+            irq: 0,
+            softirq: 0,
+            steal: 0,
+        };
+        let current = linux::CpuTimes {
+            user: 150,
+            nice: 0,
+            system: 150,
+            idle: 900,
+            iowait: 0,
+            irq: 0,
+            softirq: 0,
+            steal: 0,
+        };
+        assert_eq!(linux::cpu_busy_percent(previous, current), 50.0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_cpu_parser_keeps_aggregate_and_cores() {
+        let rows = linux::parse_cpu_times_text(
+            "cpu  1 2 3 4 5 6 7 8 9 10\ncpu0 10 0 20 70 0 0 0 0\ncpu1 20 0 10 70 0 0 0 0\nintr 1 2 3\n",
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].user, 1);
+        assert_eq!(rows[1].system, 20);
+        assert_eq!(rows[2].idle, 70);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_memory_split_balances_total() {
+        let value = linux::memory_split_json(1_000, 300, 100, 20);
+        assert_eq!(value["magik_kb"], 100);
+        assert_eq!(value["other_used_kb"], 600);
+        assert_eq!(value["available_kb"], 300);
+        assert_eq!(
+            value["magik_kb"].as_u64().unwrap()
+                + value["other_used_kb"].as_u64().unwrap()
+                + value["available_kb"].as_u64().unwrap(),
+            1_000
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_network_rates_use_elapsed_delta() {
+        let start = std::time::Instant::now();
+        let previous = linux::NetSample {
+            rx_bytes: 1_000,
+            tx_bytes: 2_000,
+            at: Some(start),
+        };
+        let current = linux::NetSample {
+            rx_bytes: 2_000,
+            tx_bytes: 2_500,
+            at: Some(start + std::time::Duration::from_secs(2)),
+        };
+        let value = linux::network_rate_json(Some(previous), current);
+        assert_eq!(value["rx_bytes_per_sec"], 500);
+        assert_eq!(value["tx_bytes_per_sec"], 250);
     }
 
     #[cfg(not(target_os = "linux"))]
