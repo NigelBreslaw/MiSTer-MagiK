@@ -40,9 +40,13 @@ fn main() {
     }
 
     let mut inputs = vec![
+        "../ui/api.slint",
         "build.rs",
         "../ui/arcade_game.slint",
         "../ui/arcade_list.slint",
+        "../ui/components/launcher_chrome.slint",
+        "../ui/components/overlays.slint",
+        "../ui/components/progress.slint",
         "../ui/controller_panel.slint",
         "../ui/controller_setup.slint",
         "../ui/controller_test.slint",
@@ -50,6 +54,9 @@ fn main() {
         "../ui/launcher.slint",
         "../ui/mister_bridge.slint",
         "../ui/mister_window.slint",
+        "../ui/views/arcade_list.slint",
+        "../ui/views/home.slint",
+        "../ui/views/settings.slint",
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/icons/settings.svg",
     ];

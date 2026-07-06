@@ -1,0 +1,86 @@
+import { ListView } from "std-widgets.slint";
+import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
+import { LauncherTile, OsdSideLabel, SettingsButton } from "../components/launcher_chrome.slint";
+
+export component HomeGrid inherits Rectangle {
+    property <int> s: MisterUi.scale;
+    property <length> tile-width: 220px * s;
+    property <length> tile-gap: 16px * s;
+    property <length> content-width: MisterBridge.game-systems.length * tile-width
+        + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
+    property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
+
+    background: #0b0d14;
+
+    HorizontalLayout {
+        OsdSideLabel { }
+
+        VerticalLayout {
+            padding: 18px * s;
+            spacing: 14px * s;
+
+            Rectangle {
+                height: 42px * s;
+                background: #172131;
+                border-width: 1px;
+                border-color: #52647d;
+
+                HorizontalLayout {
+                    padding-left: 14px * s;
+                    padding-right: 10px * s;
+                    spacing: 12px * s;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "MiSTer MagiK";
+                        color: #d7eef8;
+                        font-size: 16px * s;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                    Text {
+                        text: MisterBridge.clock-text;
+                        color: #d7eef8;
+                        font-size: 16px * s;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+
+                    SettingsButton {
+                        width: 34px * s;
+                        height: 34px * s;
+                        focused: MisterBridge.settings-focused;
+                    }
+                }
+            }
+
+            system-list := ListView {
+                vertical-stretch: 1;
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                viewport-width: root.content-width;
+                viewport-height: self.height;
+                viewport-x: -scroll-x;
+                animate viewport-x { duration: 160ms; easing: ease-out; }
+
+                for _ in 1: Rectangle {
+                    width: root.content-width;
+                    height: parent.height;
+                    background: transparent;
+
+                    for system[i] in MisterBridge.game-systems: LauncherTile {
+                        x: i * (root.tile-width + root.tile-gap);
+                        width: root.tile-width;
+                        height: parent.height;
+                        label: system.title;
+                        subtitle: system.count + " games";
+                        focused: !MisterBridge.settings-focused && MisterBridge.selected-index == i;
+                    }
+                }
+            }
+        }
+    }
+}

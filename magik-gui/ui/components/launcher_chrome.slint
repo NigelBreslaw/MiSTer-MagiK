@@ -1,0 +1,80 @@
+import { MisterUi } from "../mister_window.slint";
+
+export component LauncherTile inherits Rectangle {
+    in property <string> label;
+    in property <string> subtitle;
+    in property <bool> focused;
+
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+    border-radius: 0px;
+    background: focused ? #2a2236 : #1e1828;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 6px;
+        alignment: center;
+
+        Text {
+            text: label;
+            color: focused ? #06d6a0 : #e8e0f0;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+
+        if subtitle != "" : Text {
+            text: subtitle;
+            color: #9080a8;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component CogIcon inherits Image {
+    in property <bool> focused;
+
+    source: @image-url("../icons/settings.svg");
+    colorize: white;
+    opacity: focused ? 1.0 : 0.5;
+}
+
+export component SettingsButton inherits Rectangle {
+    in property <bool> focused;
+
+    width: 56px;
+    height: 56px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? white : #5c4a72;
+
+    CogIcon {
+        width: 24px;
+        height: 24px;
+        focused: parent.focused;
+    }
+}
+
+export component OsdSideLabel inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    width: 56px * s;
+    height: 100%;
+    background: #101420;
+    border-width: 1px;
+    border-color: #52647d;
+
+    VerticalLayout {
+        padding-top: 26px * s;
+        padding-bottom: 26px * s;
+        spacing: 10px * s;
+        alignment: center;
+
+        Text { text: "M"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "I"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "S"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "T"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "E"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+        Text { text: "R"; color: #d7eef8; font-size: 16px * s; horizontal-alignment: center; }
+    }
+}

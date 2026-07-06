@@ -1,0 +1,87 @@
+import { MisterBridge } from "../api.slint";
+
+component SettingsRow inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+
+    height: 64px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+
+        Text {
+            text: label;
+            color: focused ? #06d6a0 : #e8e0f0;
+            font-size: 16px;
+        }
+
+        Text {
+            text: detail;
+            color: #9080a8;
+            font-size: 8px;
+        }
+    }
+}
+
+export component SettingsScreen inherits Rectangle {
+    background: #0b0d14;
+
+    HorizontalLayout {
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 16px;
+
+            Text {
+                text: "MiSTer MagiK";
+                color: #e8e0f0;
+                font-size: 24px;
+                horizontal-alignment: center;
+            }
+
+            SettingsRow {
+                label: "Exit to MiSTer";
+                detail: "Use the stock MiSTer menu until reboot";
+                focused: MisterBridge.settings-selected == 0;
+            }
+
+            SettingsRow {
+                label: "Controller Test";
+                detail: "Open joypad tester";
+                focused: MisterBridge.settings-selected == 1;
+            }
+
+            SettingsRow {
+                label: "Simple joystick handling";
+                detail: MisterBridge.simple-joystick-handling ? "On" : "Off";
+                focused: MisterBridge.settings-selected == 2;
+            }
+
+            SettingsRow {
+                label: "Reset Database";
+                detail: "Delete library database and reboot";
+                focused: MisterBridge.settings-selected == 3;
+            }
+
+            SettingsRow {
+                label: "Restart";
+                detail: "Reboot the MiSTer";
+                focused: MisterBridge.settings-selected == 4;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
+
+            Text {
+                text: MisterBridge.build-label;
+                color: #6f8198;
+                font-size: 8px;
+                horizontal-alignment: left;
+            }
+        }
+    }
+}
