@@ -1,0 +1,192 @@
+import { Icons } from "../../vendor/github-app/packages/primer-slint/primer.slint";
+import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
+import { Actions, AppState, DeviceState } from "../api.slint";
+
+export component AppHeader {
+    in property <length> safe-left: 0px;
+    in property <length> safe-right: 0px;
+    in property <length> safe-top: 0px;
+    callback start-window-drag;
+
+    height: safe-top + 50px;
+
+    Rectangle {
+        background: PrimerColors.bgColor-inset;
+
+        Rectangle {
+            y: parent.height - 1px;
+            height: 1px;
+            background: PrimerColors.borderColor-default;
+        }
+
+        TouchArea {
+            x: 0;
+            y: safe-top;
+            width: parent.width;
+            height: parent.height - safe-top;
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.start-window-drag();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            y: safe-top;
+            width: parent.width;
+            height: parent.height - safe-top;
+            padding-left: max(16px, safe-left + 16px);
+            padding-right: max(16px, safe-right + 16px);
+            spacing: 16px;
+            alignment: space-between;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 32px;
+                max-width: 420px;
+                border-width: 1px;
+                border-color: PrimerColors.borderColor-default;
+                border-radius: LayoutTokens.borderRadius-medium;
+                background: PrimerColors.bgColor-default;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    cross-axis-alignment: center;
+
+                    Image {
+                        width: LayoutTokens.iconButton-icon-size-medium;
+                        height: LayoutTokens.iconButton-icon-size-medium;
+                        source: Icons.search;
+                        colorize: PrimerColors.fgColor-muted;
+                    }
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Host " + DeviceState.host + " · " + DeviceState.connection-state;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+export component SidebarIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active;
+    callback clicked;
+
+    width: 64px;
+    height: 48px;
+    background: transparent;
+
+    Rectangle {
+        x: 8px;
+        y: 4px;
+        width: 48px;
+        height: 40px;
+        border-radius: LayoutTokens.borderRadius-medium;
+        border-width: root.active ? 1px : 0px;
+        border-color: root.active ? PrimerColors.borderColor-accent-muted : transparent;
+        background: root.active ? PrimerColors.bgColor-accent-muted
+            : ta.has-hover ? PrimerColors.table-row-bgColor-hover
+            : transparent;
+    }
+
+    Image {
+        width: 20px;
+        height: 20px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.icon;
+        colorize: root.active ? PrimerColors.fgColor-link : PrimerColors.fgColor-muted;
+    }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <length> safe-top: 0px;
+
+    width: 64px;
+    vertical-stretch: 1;
+    background: PrimerColors.bgColor-inset;
+
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: PrimerColors.borderColor-default;
+    }
+
+    VerticalLayout {
+        padding-top: safe-top + 8px;
+        spacing: 4px;
+
+        SidebarIconButton {
+            icon: Icons.issue_opened;
+            active: AppState.selected-page == "debug";
+            clicked => { Actions.select-page("debug"); }
+        }
+
+        SidebarIconButton {
+            icon: Icons.file_directory_fill;
+            active: AppState.selected-page == "sd-card";
+            clicked => { Actions.select-page("sd-card"); }
+        }
+
+        SidebarIconButton {
+            icon: Icons.table;
+            active: AppState.selected-page == "library";
+            clicked => { Actions.select-page("library"); }
+        }
+
+        SidebarIconButton {
+            icon: Icons.eye;
+            active: AppState.selected-page == "analytics";
+            clicked => { Actions.select-page("analytics"); }
+        }
+    }
+}
+
+export component ViewTitle {
+    in property <string> title;
+    in property <string> subtitle;
+
+    width: 100%;
+    height: 72px;
+
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+
+            Text {
+                text: root.title;
+                color: PrimerColors.fgColor-default;
+                font-size: 20px;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+            }
+
+            Text {
+                text: root.subtitle;
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                overflow: elide;
+            }
+        }
+    }
+}
+

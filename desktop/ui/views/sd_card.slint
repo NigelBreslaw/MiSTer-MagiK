@@ -1,0 +1,119 @@
+import {
+    Banner,
+    BannerVariant,
+    Button,
+    ButtonVariant,
+    DataTable,
+    DataTableCell,
+    DataTableCellAlign,
+    DataTableCellKind,
+    DataTableCellPadding,
+    DataTableColumn,
+    DataTableIconTint,
+    DataTableRow,
+    DataTableSortDirection,
+    Icons,
+    LabelSize,
+    LabelVariant,
+    Pagination,
+    PrimerTreeView,
+    PrimerTextInput,
+    SegmentedControl,
+    SegmentedControlSegment,
+    SegmentedControlSize,
+    Select,
+    SelectOption,
+    Size,
+    Spinner,
+    TableContainer,
+    ToggleSwitch,
+    ToggleSwitchSize,
+    ToggleSwitchStatusLabelPosition,
+    TreeViewRow,
+    TreeViewTrailingVisual,
+} from "../../vendor/github-app/packages/primer-slint/primer.slint";
+import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
+import { Actions, SdCardState } from "../api.slint";
+import { ViewTitle } from "../components/chrome.slint";
+
+export component SdCardPage {
+    VerticalLayout {
+        spacing: 16px;
+        alignment: start;
+
+        ViewTitle {
+            title: "SD Card";
+            subtitle: SdCardState.status;
+        }
+
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 24px;
+            spacing: 16px;
+            alignment: start;
+
+            if SdCardState.last-error != "": Banner {
+                title: "SD Card browse error";
+                description: SdCardState.last-error;
+                variant: BannerVariant.critical;
+            }
+
+            HorizontalLayout {
+                width: 100%;
+                spacing: LayoutTokens.base-size-8;
+                alignment: end;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: "Hidden files";
+                    color: PrimerColors.fgColor-muted;
+                    font-size: LayoutTokens.text-body-size-small;
+                    vertical-alignment: center;
+                }
+
+                ToggleSwitch {
+                    checked: SdCardState.show-hidden;
+                    size: ToggleSwitchSize.small;
+                    status-label-position: ToggleSwitchStatusLabelPosition.end;
+                    button-label-on: "On";
+                    button-label-off: "Off";
+                    changed(show) => { Actions.sd-show-hidden-changed(show); }
+                }
+            }
+
+            TableContainer {
+                vertical-stretch: 1;
+                title: "/media/fat";
+                subtitle: "Browse-only session cache. Visited folders are reused until refreshed.";
+                primary-action-label: "Refresh folder";
+                primary-action-variant: ButtonVariant.default;
+                primary-action => { Actions.sd-refresh-folder(); }
+
+                Rectangle {
+                    width: 100%;
+                    vertical-stretch: 1;
+                    min-height: 360px;
+                    border-width: 1px;
+                    border-color: PrimerColors.borderColor-default;
+                    border-radius: LayoutTokens.borderRadius-medium;
+                    background: PrimerColors.bgColor-default;
+
+                    PrimerTreeView {
+                        x: LayoutTokens.base-size-8;
+                        y: LayoutTokens.base-size-8;
+                        width: parent.width - 2 * LayoutTokens.base-size-8;
+                        height: parent.height - 2 * LayoutTokens.base-size-8;
+                        rows: SdCardState.rows;
+                        virtualized: true;
+                        suppress-current-for-directories: true;
+                        accessible-name: "SD Card files";
+                        row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
+                        row-current-requested(id) => { Actions.sd-row-current(id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
