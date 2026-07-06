@@ -296,7 +296,7 @@ impl PreviewTransitionDemo {
             if active.transition_id == frame.transition_id {
                 let progress = transition_progress(
                     elapsed.saturating_sub(active.start_elapsed),
-                    self.duration,
+                    transition_duration_for_frame(self.duration, frame.duration_divisor),
                 );
                 if progress < 1.0 {
                     return PreviewTransitionTrace {
@@ -342,6 +342,12 @@ fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
     (elapsed.as_secs_f32() / denom).clamp(0.0, 1.0)
 }
 
+fn transition_duration_for_frame(duration: Duration, divisor: u32) -> Duration {
+    let divisor = divisor.max(1) as u128;
+    let micros = (duration.as_micros() / divisor).max(1);
+    Duration::from_micros(micros.min(u64::MAX as u128) as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +374,18 @@ mod tests {
         );
         assert_eq!(PreviewTransitionEffect::parse("wipe"), None);
         assert_eq!(PreviewTransitionEffect::parse("mega"), None);
+    }
+
+    #[test]
+    fn transition_duration_divisor_shortens_fade() {
+        assert_eq!(
+            transition_duration_for_frame(Duration::from_millis(200), 2),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            transition_duration_for_frame(Duration::from_millis(200), 0),
+            Duration::from_millis(200)
+        );
     }
 
     #[cfg(mister_experiments)]
