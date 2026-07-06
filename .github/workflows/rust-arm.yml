@@ -175,14 +175,12 @@ jobs:
           path: |
             magik-gui/target/${{ matrix.profile }}
             magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-prune-build-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
-            target-arm-prune-build-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
             target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-
 
-      - name: Measure ARM cache footprint
+      - name: Measure ARM cache payload
         shell: bash
         run: |
           for dir in \
@@ -194,6 +192,32 @@ jobs:
               du -sh "$dir"
               find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20
               echo "::endgroup::"
+
+              for child in deps build; do
+                if [ -d "$dir/$child" ]; then
+                  echo "::group::$dir/$child file payload"
+                  find "$dir/$child" -type f -printf '%s %p\n' | sort -nr | head -30
+                  find "$dir/$child" -type f -printf '%f %s\n' | awk '
+                    {
+                      name=$1
+                      size=$2
+                      ext="(none)"
+                      if (name ~ /\./) {
+                        ext=name
+                        sub(/^.*\./, ".", ext)
+                      }
+                      bytes[ext]+=size
+                      count[ext]+=1
+                    }
+                    END {
+                      for (ext in bytes) {
+                        printf "%12d %8d %s\n", bytes[ext], count[ext], ext
+                      }
+                    }
+                  ' | sort -nr | head -20
+                  echo "::endgroup::"
+                fi
+              done
             else
               echo "missing $dir"
             fi
@@ -218,24 +242,6 @@ jobs:
           name: binary-size-${{ matrix.name }}
           path: build/binary-size.tsv
           if-no-files-found: error
-
-      - name: Prune ARM cache build directories
-        shell: bash
-        run: |
-          for dir in \
-            "magik-gui/target/${{ matrix.profile }}" \
-            "magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}"
-          do
-            if [ -d "$dir/build" ]; then
-              rm -rf "$dir/build"
-            fi
-            if [ -d "$dir" ]; then
-              echo "::group::pruned $dir"
-              du -sh "$dir"
-              find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20
-              echo "::endgroup::"
-            fi
-          done
 
   agent-arm-build:
     name: agent-arm-build
