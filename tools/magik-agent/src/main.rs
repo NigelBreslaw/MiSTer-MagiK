@@ -911,8 +911,6 @@ mod linux {
                 "storage": storage_json("/media/fat"),
                 "launcher": {
                     "status_current": slint_current,
-                    "screen": slint_status.get("screen").cloned().unwrap_or(Value::Null),
-                    "scene": slint_status.get("scene").cloned().unwrap_or(Value::Null),
                     "idle": slint_status.get("idle").cloned().unwrap_or(Value::Null),
                     "rolling_fps": slint_status.get("rolling_fps").cloned().unwrap_or(Value::Null),
                     "fps_estimate": slint_status.get("fps_estimate").cloned().unwrap_or(Value::Null),

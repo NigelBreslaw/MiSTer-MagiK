@@ -51,8 +51,6 @@ component RealtimeStatusStrip inherits GridLayout {
 
     for item[ix] in [
         { title: "Stream", value: RealtimeState.streaming ? "Live" : "Off" },
-        { title: "Sample", value: RealtimeState.sample-age },
-        { title: "Launcher", value: RealtimeState.launcher-summary },
         { title: "Frame", value: RealtimeState.fps-summary },
     ] : Rectangle {
         row: ix / 2;
@@ -198,39 +196,6 @@ component RealtimeSparkline inherits Rectangle {
     }
 }
 
-component MemorySplitBar inherits Rectangle {
-    width: 100%;
-    height: 20px;
-    border-width: 1px;
-    border-color: PrimerColors.borderColor-default;
-    border-radius: LayoutTokens.borderRadius-medium;
-    background: PrimerColors.bgColor-inset;
-    clip: true;
-
-    Rectangle {
-        x: 0px;
-        width: parent.width * RealtimeState.magik-memory-pct / 100.0;
-        height: parent.height;
-        background: #0969da;
-    }
-
-    Rectangle {
-        x: parent.width * RealtimeState.magik-memory-pct / 100.0;
-        width: parent.width * RealtimeState.other-memory-pct / 100.0;
-        height: parent.height;
-        background: #9a6700;
-    }
-
-    Rectangle {
-        x: parent.width * (RealtimeState.magik-memory-pct + RealtimeState.other-memory-pct) / 100.0;
-        width: parent.width * RealtimeState.available-memory-pct / 100.0;
-        height: parent.height;
-        background: #1a7f37;
-    }
-
-    TouchArea { }
-}
-
 component StoragePieChart inherits Rectangle {
     private property <angle> used-sweep: RealtimeState.storage-used-pct * 3.6deg;
     private property <bool> hovering: false;
@@ -258,8 +223,6 @@ component StoragePieChart inherits Rectangle {
             root.hover-label = "";
         }
     }
-
-    width: 100%;
     height: 150px;
     background: PrimerColors.bgColor-default;
 
@@ -313,6 +276,111 @@ component StoragePieChart inherits Rectangle {
 
     if root.hovering: Rectangle {
         width: 118px;
+        height: 30px;
+        x: min(max(0px, root.hover-x + 12px), root.width - self.width);
+        y: min(max(0px, root.hover-y + 12px), root.height - self.height);
+        border-radius: LayoutTokens.borderRadius-medium;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        background: PrimerColors.bgColor-neutral-emphasis;
+
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.hover-label;
+            color: #ffffff;
+            font-size: LayoutTokens.text-body-size-small;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+component MemoryPieChart inherits Rectangle {
+    private property <angle> magik-sweep: RealtimeState.magik-memory-pct * 3.6deg;
+    private property <angle> other-sweep: RealtimeState.other-memory-pct * 3.6deg;
+    private property <angle> used-sweep: root.magik-sweep + root.other-sweep;
+    private property <bool> hovering: false;
+    private property <string> hover-label: "";
+    private property <length> hover-x: 0px;
+    private property <length> hover-y: 0px;
+
+    function set-hover(mx: length, my: length) {
+        let dx = (mx - pie.width / 2) / 1px;
+        let dy = (my - pie.height / 2) / 1px;
+        let distance-squared = dx * dx + dy * dy;
+        let outer-radius = (pie.width / 2) / 1px;
+        let inner-radius = 36;
+        if distance-squared >= inner-radius * inner-radius && distance-squared <= outer-radius * outer-radius {
+            let raw-angle = atan2(dx, -dy);
+            let sweep-angle = raw-angle < 0deg ? raw-angle + 360deg : raw-angle;
+            root.hovering = true;
+            root.hover-x = pie.x + mx;
+            root.hover-y = pie.y + my;
+            root.hover-label = sweep-angle <= root.magik-sweep
+                ? RealtimeState.memory-magik-label
+                : sweep-angle <= root.used-sweep
+                    ? RealtimeState.memory-other-label
+                    : RealtimeState.memory-available-label;
+        } else {
+            root.hovering = false;
+            root.hover-label = "";
+        }
+    }
+    height: 150px;
+    background: PrimerColors.bgColor-default;
+
+    pie := Rectangle {
+        width: 124px;
+        height: 124px;
+        x: (parent.width - self.width) / 2;
+        y: 8px;
+        border-radius: self.width / 2;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        background: @conic-gradient(#0969da 0deg, #0969da root.magik-sweep, #9a6700 root.magik-sweep, #9a6700 root.used-sweep, #1a7f37 root.used-sweep, #1a7f37 360deg);
+        clip: true;
+
+        Rectangle {
+            width: 72px;
+            height: 72px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: self.width / 2;
+            background: PrimerColors.bgColor-default;
+
+            Text {
+                width: parent.width;
+                height: parent.height;
+                text: RealtimeState.memory-total-label;
+                color: PrimerColors.fgColor-default;
+                font-size: LayoutTokens.text-body-size-medium;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        TouchArea {
+            mouse-cursor: pointer;
+            changed has-hover => {
+                if !self.has-hover {
+                    root.hovering = false;
+                    root.hover-label = "";
+                }
+            }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.move || event.kind == PointerEventKind.down {
+                    root.set-hover(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+
+    if root.hovering: Rectangle {
+        width: 142px;
         height: 30px;
         x: min(max(0px, root.hover-x + 12px), root.width - self.width);
         y: min(max(0px, root.hover-y + 12px), root.height - self.height);
@@ -423,8 +491,6 @@ component RealTimePanel inherits VerticalLayout {
     init => {
         Actions.realtime-stream-changed(true);
     }
-
-    width: 100%;
     spacing: 12px;
     alignment: start;
 
@@ -453,25 +519,6 @@ component RealTimePanel inherits VerticalLayout {
 
         TableContainer {
             width: 100%;
-            title: "Memory";
-            subtitle: RealtimeState.memory-hover != "" ? RealtimeState.memory-hover : RealtimeState.memory-summary;
-
-            VerticalLayout {
-                width: 100%;
-                spacing: 8px;
-
-                MemorySplitBar { }
-
-                RealtimeSparkline {
-                        points: RealtimeState.memory-history;
-                        empty-label: "Waiting for MagiK memory samples.";
-                        line-color: #8250df;
-                }
-            }
-        }
-
-        TableContainer {
-            width: 100%;
             title: "Frame Budget";
             subtitle: RealtimeState.frame-hover != "" ? RealtimeState.frame-hover : RealtimeState.frame-summary;
 
@@ -492,12 +539,22 @@ component RealTimePanel inherits VerticalLayout {
             }
         }
 
-        TableContainer {
-            width: 100%;
-            title: "SD Card";
-            subtitle: RealtimeState.storage-total-label;
+        HorizontalLayout {
+            spacing: 8px;
 
-            StoragePieChart { }
+            TableContainer {
+                title: "Memory";
+                subtitle: RealtimeState.memory-total-label;
+
+                MemoryPieChart { }
+            }
+
+            TableContainer {
+                title: "SD Card";
+                subtitle: RealtimeState.storage-total-label;
+
+                StoragePieChart { }
+            }
         }
 
         TableContainer {
