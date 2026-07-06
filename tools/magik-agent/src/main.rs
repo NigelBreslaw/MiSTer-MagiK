@@ -2859,6 +2859,44 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    fn telemetry_cpu_delta_math_treats_iowait_as_idle() {
+        let previous = linux::CpuTimes {
+            user: 100,
+            nice: 0,
+            system: 100,
+            idle: 800,
+            iowait: 0,
+            irq: 0,
+            softirq: 0,
+            steal: 0,
+        };
+        let wait_only = linux::CpuTimes {
+            user: 100,
+            nice: 0,
+            system: 100,
+            idle: 800,
+            iowait: 100,
+            irq: 0,
+            softirq: 0,
+            steal: 0,
+        };
+        let mixed = linux::CpuTimes {
+            user: 125,
+            nice: 0,
+            system: 125,
+            idle: 800,
+            iowait: 150,
+            irq: 0,
+            softirq: 0,
+            steal: 0,
+        };
+
+        assert_eq!(linux::cpu_busy_percent(previous, wait_only), 0.0);
+        assert_eq!(linux::cpu_busy_percent(previous, mixed), 25.0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
     fn telemetry_cpu_parser_keeps_aggregate_and_cores() {
         let rows = linux::parse_cpu_times_text(
             "cpu  1 2 3 4 5 6 7 8 9 10\ncpu0 10 0 20 70 0 0 0 0\ncpu1 20 0 10 70 0 0 0 0\nintr 1 2 3\n",
