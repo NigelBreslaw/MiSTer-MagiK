@@ -162,6 +162,17 @@ jobs:
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
+      - name: Cache cross Docker image
+        id: cross-image-cache
+        uses: actions/cache@v6
+        with:
+          path: /tmp/mister-cross-image.tar
+          key: cross-image-armv7-${{ runner.os }}-${{ env.CROSS_VERSION }}-${{ hashFiles('magik-gui/Cross.toml', 'magik-gui/Dockerfile.cross-armv7') }}
+
+      - name: Load cross Docker image
+        if: steps.cross-image-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/mister-cross-image.tar
+
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
         uses: actions/cache@v6
@@ -170,7 +181,6 @@ jobs:
           key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
       - name: Cache ARM build outputs
-        if: matrix.features != 'video'
         uses: actions/cache@v6
         with:
           path: |
@@ -181,20 +191,21 @@ jobs:
             target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-
 
-      - name: Cache ARM build outputs
-        if: matrix.features == 'video'
-        uses: actions/cache@v6
-        with:
-          path: |
-            magik-gui/target/${{ matrix.profile }}
-            magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
-
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+
+      - name: Save cross Docker image
+        if: steps.cross-image-cache.outputs.cache-hit != 'true'
+        run: |
+          image="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep '^cross-custom-magik-gui:armv7-unknown-linux-gnueabihf-' | head -n1)"
+          if [ -z "$image" ]; then
+            image="$MISTER_CROSS_IMAGE"
+          fi
+          docker save "$image" -o /tmp/mister-cross-image.tar
+          ls -lh /tmp/mister-cross-image.tar
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
