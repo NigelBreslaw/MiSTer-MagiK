@@ -60,6 +60,41 @@ struct SqlitePathInterner {
     next_path_id: i64,
 }
 
+#[derive(Default)]
+struct SqliteStringInterner {
+    values: HashMap<String, i64>,
+    rows: Vec<(i64, String)>,
+    next_id: i64,
+}
+
+impl SqliteStringInterner {
+    fn intern(&mut self, value: &str) -> i64 {
+        if let Some(id) = self.values.get(value).copied() {
+            return id;
+        }
+        self.next_id += 1;
+        let value_id = self.next_id;
+        self.values.insert(value.to_string(), value_id);
+        self.rows.push((value_id, value.to_string()));
+        value_id
+    }
+
+    fn intern_optional(&mut self, value: Option<&str>) -> Option<i64> {
+        value.map(|value| self.intern(value))
+    }
+
+    fn flush(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
+        let mut stmt = tx
+            .prepare("INSERT INTO string_values(string_id,value) VALUES (?1,?2)")
+            .map_err(|e| format!("prepare string value insert: {e}"))?;
+        for (string_id, value) in &self.rows {
+            stmt.execute(params![string_id, value])
+                .map_err(|e| format!("insert string value: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
 impl SqlitePathInterner {
     fn intern_optional(&mut self, value: Option<&str>) -> Option<i64> {
         match value {
@@ -891,11 +926,8 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let profiles =
         launch_profiles::active_profiles_for_roots_with_facts(&installed_cores, &game_dirs);
     let audit_t = Instant::now();
-    let audit_rows = core_audit::audit_catalog_coverage_from_facts(
-        &profiles,
-        &installed_cores,
-        &game_dirs,
-    );
+    let audit_rows =
+        core_audit::audit_catalog_coverage_from_facts(&profiles, &installed_cores, &game_dirs);
     catalog_checkpoint::report_checkpoint_timing(
         "coverage_audit",
         audit_t.elapsed().as_micros() as u64,
@@ -1737,25 +1769,62 @@ fn write_sqlite_scan_with_sources_inner(
             prefix_id INTEGER NOT NULL,
             leaf TEXT NOT NULL
         );
-        CREATE TABLE launch_targets (
+        CREATE TABLE string_values (
+            string_id INTEGER PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE launch_target_rows (
             launch_id INTEGER PRIMARY KEY,
             game_key_id INTEGER NOT NULL,
-            profile_id TEXT,
-            launch_kind TEXT NOT NULL,
+            profile_string_id INTEGER,
+            launch_kind_string_id INTEGER NOT NULL,
             source_path_id INTEGER NOT NULL,
-            launch_ref_kind TEXT NOT NULL,
+            launch_ref_kind_string_id INTEGER NOT NULL,
             launch_path_id INTEGER,
             launcher_path_id INTEGER,
             payload_path_id INTEGER,
-            core_id TEXT NOT NULL,
-            hardware_id TEXT NOT NULL,
+            core_string_id INTEGER NOT NULL,
+            hardware_string_id INTEGER NOT NULL,
             setname TEXT,
             parent TEXT,
-            mount_kind TEXT,
+            mount_kind_string_id INTEGER,
             mount_index INTEGER,
             delay_secs INTEGER,
-            confidence TEXT NOT NULL
+            confidence_string_id INTEGER NOT NULL
         );
+        CREATE VIEW launch_targets AS
+            SELECT launch_target_rows.launch_id,
+                   launch_target_rows.game_key_id,
+                   profile_values.value AS profile_id,
+                   launch_kind_values.value AS launch_kind,
+                   launch_target_rows.source_path_id,
+                   launch_ref_kind_values.value AS launch_ref_kind,
+                   launch_target_rows.launch_path_id,
+                   launch_target_rows.launcher_path_id,
+                   launch_target_rows.payload_path_id,
+                   core_values.value AS core_id,
+                   hardware_values.value AS hardware_id,
+                   launch_target_rows.setname,
+                   launch_target_rows.parent,
+                   mount_kind_values.value AS mount_kind,
+                   launch_target_rows.mount_index,
+                   launch_target_rows.delay_secs,
+                   confidence_values.value AS confidence
+            FROM launch_target_rows
+            LEFT JOIN string_values profile_values
+                   ON profile_values.string_id = launch_target_rows.profile_string_id
+            JOIN string_values launch_kind_values
+                   ON launch_kind_values.string_id = launch_target_rows.launch_kind_string_id
+            JOIN string_values launch_ref_kind_values
+                   ON launch_ref_kind_values.string_id = launch_target_rows.launch_ref_kind_string_id
+            JOIN string_values core_values
+                   ON core_values.string_id = launch_target_rows.core_string_id
+            JOIN string_values hardware_values
+                   ON hardware_values.string_id = launch_target_rows.hardware_string_id
+            LEFT JOIN string_values mount_kind_values
+                   ON mount_kind_values.string_id = launch_target_rows.mount_kind_string_id
+            JOIN string_values confidence_values
+                   ON confidence_values.string_id = launch_target_rows.confidence_string_id;
         CREATE VIEW path_values_text AS
             SELECT path_values.path_id AS path_id,
                    path_prefixes.prefix || path_values.leaf AS path
@@ -1889,22 +1958,30 @@ fn write_sqlite_scan_with_sources_inner(
                    COALESCE(ui_arcade_preferred_text.category, games.genre) AS category,
                    COALESCE(ui_arcade_preferred_text.discovered_at_unix, games.discovered_at_unix) AS discovered_at_unix
             FROM launcher_catalog_rows
-            JOIN launch_targets ON launch_targets.launch_id = launcher_catalog_rows.launch_id
-            JOIN games ON games.game_key_id = launch_targets.game_key_id
+            JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
+            JOIN games ON games.game_key_id = launch_target_rows.game_key_id
             LEFT JOIN ui_arcade_preferred_text
                    ON ui_arcade_preferred_text.launch_id = launcher_catalog_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
                    launcher_catalog.system_id,
-                   COALESCE(profiles.core_path, launch_targets.core_id) AS core_path,
-                   COALESCE(launch_targets.mount_kind, 'mount-image') AS mount_kind,
-                   COALESCE(launch_targets.mount_index, 0) AS mount_index,
-                   COALESCE(launch_targets.delay_secs, 1) AS delay_secs
+                   COALESCE(profiles.core_path, core_values.value) AS core_path,
+                   COALESCE(mount_kind_values.value, 'mount-image') AS mount_kind,
+                   COALESCE(launch_target_rows.mount_index, 0) AS mount_index,
+                   COALESCE(launch_target_rows.delay_secs, 1) AS delay_secs
             FROM launcher_catalog
-            JOIN launch_targets ON launch_targets.launch_id = launcher_catalog.launch_id
-            LEFT JOIN profiles ON profiles.profile_id = launch_targets.profile_id
-            WHERE launch_targets.launch_kind = 'virtual-mgl';
+            JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog.launch_id
+            JOIN string_values launch_kind_values
+                 ON launch_kind_values.string_id = launch_target_rows.launch_kind_string_id
+            JOIN string_values core_values
+                 ON core_values.string_id = launch_target_rows.core_string_id
+            LEFT JOIN string_values profile_values
+                 ON profile_values.string_id = launch_target_rows.profile_string_id
+            LEFT JOIN string_values mount_kind_values
+                 ON mount_kind_values.string_id = launch_target_rows.mount_kind_string_id
+            LEFT JOIN profiles ON profiles.profile_id = profile_values.value
+            WHERE launch_kind_values.value = 'virtual-mgl';
         CREATE VIEW ui_arcade_variants_text AS
             SELECT ui_arcade_variants.*,
                    launch_plans.launch_ref AS launch_ref
@@ -1936,15 +2013,37 @@ fn write_sqlite_scan_with_sources_inner(
              AND ui_arcade_variants_text.variant_ordinal = ui_arcade_preferred.variant_ordinal;
         CREATE VIEW launcher_catalog_text AS
             SELECT launcher_catalog.*,
-                   launch_plans.launch_ref AS launch_ref
+                   CASE launch_ref_kind_values.value
+                       WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                       WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                       WHEN 'same-payload' THEN payload_paths.path
+                       ELSE launch_paths.path
+                   END AS launch_ref
             FROM launcher_catalog
-            JOIN launch_plans ON launch_plans.launch_id = launcher_catalog.launch_id;
+            JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog.launch_id
+            JOIN string_values launch_ref_kind_values
+                 ON launch_ref_kind_values.string_id = launch_target_rows.launch_ref_kind_string_id
+            LEFT JOIN path_values_text launch_paths
+                 ON launch_paths.path_id = launch_target_rows.launch_path_id
+            LEFT JOIN path_values_text payload_paths
+                 ON payload_paths.path_id = launch_target_rows.payload_path_id;
         CREATE VIEW launcher_launch_plans_text AS
             SELECT launcher_launch_plans.*,
-                   launch_plans.launch_ref AS launch_ref,
-                   COALESCE(launch_plans.payload_path, '') AS payload_path
+                   CASE launch_ref_kind_values.value
+                       WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                       WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                       WHEN 'same-payload' THEN payload_paths.path
+                       ELSE launch_paths.path
+                   END AS launch_ref,
+                   COALESCE(payload_paths.path, '') AS payload_path
             FROM launcher_launch_plans
-            JOIN launch_plans ON launch_plans.launch_id = launcher_launch_plans.launch_id;
+            JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_launch_plans.launch_id
+            JOIN string_values launch_ref_kind_values
+                 ON launch_ref_kind_values.string_id = launch_target_rows.launch_ref_kind_string_id
+            LEFT JOIN path_values_text launch_paths
+                 ON launch_paths.path_id = launch_target_rows.launch_path_id
+            LEFT JOIN path_values_text payload_paths
+                 ON payload_paths.path_id = launch_target_rows.payload_path_id;
         CREATE TABLE region_metadata_rows (
             game_key_id INTEGER PRIMARY KEY,
             inferred_region TEXT,
@@ -2012,6 +2111,7 @@ fn write_sqlite_scan_with_sources_inner(
         .map_err(|e| format!("begin sqlite tx: {e}"))?;
     report_library_import_timing("begin_tx", tx_t, "");
     let mut path_interner = SqlitePathInterner::default();
+    let mut string_interner = SqliteStringInterner::default();
     {
         let stage_t = Instant::now();
         let mut stmt = tx
@@ -2081,7 +2181,7 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
-                "INSERT INTO launch_targets(launch_id,game_key_id,profile_id,launch_kind,source_path_id,launch_ref_kind,launch_path_id,launcher_path_id,payload_path_id,core_id,hardware_id,setname,parent,mount_kind,mount_index,delay_secs,confidence)
+                "INSERT INTO launch_target_rows(launch_id,game_key_id,profile_string_id,launch_kind_string_id,source_path_id,launch_ref_kind_string_id,launch_path_id,launcher_path_id,payload_path_id,core_string_id,hardware_string_id,setname,parent,mount_kind_string_id,mount_index,delay_secs,confidence_string_id)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
@@ -2209,25 +2309,26 @@ fn write_sqlite_scan_with_sources_inner(
             let launch_path_id = path_interner.intern_optional(launch_ref_storage.path);
             let profile_id = profile_id_for_discovery(discovery);
             let mount = launch_target_mount_for_discovery(discovery, profile_id, &scan.profiles);
+            let mount_kind = mount.map(|mount| mount_kind_str(mount.kind));
             target_stmt
                 .execute(params![
                     launch_id,
                     game_key_id,
-                    profile_id,
-                    launch_kind_for_discovery(discovery),
+                    string_interner.intern_optional(profile_id),
+                    string_interner.intern(launch_kind_for_discovery(discovery)),
                     source_path_id,
-                    launch_ref_storage.kind,
+                    string_interner.intern(launch_ref_storage.kind),
                     launch_path_id,
                     launcher_path_id,
                     payload_path_id,
-                    discovery.core_id.as_str(),
-                    discovery.hardware_id.as_str(),
+                    string_interner.intern(discovery.core_id.as_str()),
+                    string_interner.intern(discovery.hardware_id.as_str()),
                     discovery.setname.as_deref(),
                     discovery.parent.as_deref(),
-                    mount.map(|mount| mount_kind_str(mount.kind)),
+                    string_interner.intern_optional(mount_kind),
                     mount.map(|mount| mount.index as i64),
                     mount.map(|mount| mount.delay_secs as i64),
-                    confidence_str(discovery.confidence)
+                    string_interner.intern(confidence_str(discovery.confidence))
                 ])
                 .map_err(|e| format!("insert launch target: {e}"))?;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
@@ -2302,6 +2403,7 @@ fn write_sqlite_scan_with_sources_inner(
         report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
         drop(target_stmt);
         path_interner.flush(&tx)?;
+        string_interner.flush(&tx)?;
         drop(region_stmt);
         drop(identity_stmt);
         drop(game_stmt);
@@ -2745,8 +2847,8 @@ fn count_preview_candidates(
         )
     };
     conn.query_row(&sql, [system_id], |row| row.get::<_, i64>(0))
-    .map(|count| count.max(0) as usize)
-    .map_err(|e| format!("count preview candidates in {table}: {e}"))
+        .map(|count| count.max(0) as usize)
+        .map_err(|e| format!("count preview candidates in {table}: {e}"))
 }
 
 fn update_preview_candidates(
@@ -2773,7 +2875,7 @@ fn update_preview_candidates(
                    WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
                      AND games.system_id=?1
                )"
-                .to_string()
+            .to_string()
         } else {
             format!(
                 "UPDATE {table}
@@ -2800,7 +2902,7 @@ fn update_preview_candidates(
                    WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
                      AND games.system_id=?1
                )"
-                .to_string()
+            .to_string()
         } else {
             format!(
                 "UPDATE {table}
