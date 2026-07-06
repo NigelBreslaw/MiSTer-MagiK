@@ -18,7 +18,7 @@ use sd_card::SdCardBrowser;
 use sd_card::SdTreeRow;
 #[cfg(feature = "live-ui")]
 use slint::ComponentHandle;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 #[cfg(feature = "live-ui")]
 use std::path::Path;
@@ -39,7 +39,8 @@ type SharedRealtimeStreamControl = Arc<Mutex<Option<(u64, DeviceTelemetryStreamC
 const DIRTY_RECT_LINGER_FRAMES: usize = 8;
 const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
 const REALTIME_HISTORY_CAPACITY: usize = 300;
-const REALTIME_FRAME_SAMPLE_CAPACITY: usize = 240;
+const REALTIME_FRAME_SAMPLE_CAPACITY: usize = 1200;
+const REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE: u64 = 60;
 
 #[derive(Clone, Debug)]
 struct DirtyRectOverlayState {
@@ -88,6 +89,8 @@ struct RealtimeViewState {
     frame_budget_pct: f64,
     cores: Vec<agent_client::CpuCoreTelemetry>,
     cpu_history: Vec<RealtimeChartPoint>,
+    cpu0_path: String,
+    cpu1_path: String,
     frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
     frame_samples: Vec<RealtimeFrameSampleView>,
@@ -124,6 +127,7 @@ struct RealtimeFrameSampleView {
     cpu_present_us: u64,
     process_cpu_us: u64,
     over_budget: bool,
+    idle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -383,6 +387,10 @@ fn realtime_view_from_history(
             alert: sample.combined_cpu_pct >= 85.0,
         })
         .collect::<Vec<_>>();
+    let cpu0_history = realtime_core_history(history, 0);
+    let cpu1_history = realtime_core_history(history, 1);
+    let cpu0_path = realtime_chart_path(&cpu0_history, REALTIME_HISTORY_CAPACITY);
+    let cpu1_path = realtime_chart_path(&cpu1_history, REALTIME_HISTORY_CAPACITY);
     let frame_history = history
         .samples
         .iter()
@@ -395,11 +403,16 @@ fn realtime_view_from_history(
             }
         })
         .collect::<Vec<_>>();
-    let mut frame_samples = history
-        .samples
-        .iter()
-        .flat_map(|sample| realtime_frame_samples_from_telemetry(sample).into_iter())
-        .collect::<Vec<_>>();
+    let mut seen_frame_samples = HashSet::new();
+    let mut frame_samples = Vec::new();
+    for sample in &history.samples {
+        let launcher_pid = sample.magik.pids.first().copied().unwrap_or(0);
+        for frame in realtime_frame_samples_from_telemetry(sample) {
+            if frame.idle || seen_frame_samples.insert((launcher_pid, frame.frame)) {
+                frame_samples.push(frame);
+            }
+        }
+    }
     if frame_samples.len() > REALTIME_FRAME_SAMPLE_CAPACITY {
         frame_samples =
             frame_samples.split_off(frame_samples.len() - REALTIME_FRAME_SAMPLE_CAPACITY);
@@ -435,6 +448,8 @@ fn realtime_view_from_history(
             frame_budget_pct: 0.0,
             cores: Vec::new(),
             cpu_history,
+            cpu0_path,
+            cpu1_path,
             frame_history,
             phases: Vec::new(),
             frame_samples,
@@ -543,6 +558,8 @@ fn realtime_view_from_history(
         frame_budget_pct,
         cores: sample.cores.clone(),
         cpu_history,
+        cpu0_path,
+        cpu1_path,
         frame_history,
         phases,
         frame_samples,
@@ -553,50 +570,97 @@ fn realtime_view_from_history(
 fn realtime_frame_samples_from_telemetry(
     sample: &DeviceTelemetrySample,
 ) -> Vec<RealtimeFrameSampleView> {
-    if !sample.frame_budget.recent_frames.is_empty() {
-        let budget_us = sample.frame_budget.budget_us.max(1);
-        return sample
-            .frame_budget
-            .recent_frames
-            .iter()
-            .map(|frame| RealtimeFrameSampleView {
-                frame: frame.frame,
-                wall_us: frame.wall_us,
-                prepare_us: frame.prepare_us,
-                render_us: frame.render_us,
-                custom_draw_us: frame.custom_draw_us,
-                vsync_us: frame.vsync_us,
-                present_us: frame.present_us,
-                cpu_prepare_us: frame.cpu_prepare_us,
-                cpu_render_us: frame.cpu_render_us,
-                cpu_custom_draw_us: frame.cpu_custom_draw_us,
-                cpu_vsync_us: frame.cpu_vsync_us,
-                cpu_present_us: frame.cpu_present_us,
-                process_cpu_us: frame.process_cpu_us,
-                over_budget: frame.wall_us > budget_us,
-            })
-            .collect();
+    let budget_us = sample.frame_budget.budget_us.max(1);
+    let frames = sample
+        .frame_budget
+        .recent_frames
+        .iter()
+        .map(|frame| RealtimeFrameSampleView {
+            frame: frame.frame,
+            wall_us: frame.wall_us,
+            prepare_us: frame.prepare_us,
+            render_us: frame.render_us,
+            custom_draw_us: frame.custom_draw_us,
+            vsync_us: frame.vsync_us,
+            present_us: frame.present_us,
+            cpu_prepare_us: frame.cpu_prepare_us,
+            cpu_render_us: frame.cpu_render_us,
+            cpu_custom_draw_us: frame.cpu_custom_draw_us,
+            cpu_vsync_us: frame.cpu_vsync_us,
+            cpu_present_us: frame.cpu_present_us,
+            process_cpu_us: frame.process_cpu_us,
+            over_budget: frame.wall_us > budget_us,
+            idle: false,
+        })
+        .collect::<Vec<_>>();
+    if !frames.is_empty() || !sample.launcher.idle {
+        return frames;
     }
-    if sample.frame_budget.window_frames == 0 {
-        return Vec::new();
+
+    (0..REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE)
+        .map(|ix| RealtimeFrameSampleView {
+            frame: sample
+                .seq
+                .saturating_mul(REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE)
+                .saturating_add(ix),
+            wall_us: 0,
+            prepare_us: 0,
+            render_us: 0,
+            custom_draw_us: 0,
+            vsync_us: 0,
+            present_us: 0,
+            cpu_prepare_us: 0,
+            cpu_render_us: 0,
+            cpu_custom_draw_us: 0,
+            cpu_vsync_us: 0,
+            cpu_present_us: 0,
+            process_cpu_us: 0,
+            over_budget: false,
+            idle: true,
+        })
+        .collect()
+}
+
+fn realtime_core_history(history: &RealtimeHistory, core_index: usize) -> Vec<f64> {
+    history
+        .samples
+        .iter()
+        .filter_map(|sample| sample.cores.get(core_index).map(|core| core.busy_pct))
+        .collect()
+}
+
+fn realtime_chart_path(values: &[f64], capacity: usize) -> String {
+    if values.is_empty() || capacity == 0 {
+        return String::new();
     }
-    let wall_us = sample.frame_budget.window_max_wall_us;
-    vec![RealtimeFrameSampleView {
-        frame: sample.frame_budget.frames_total,
-        wall_us,
-        prepare_us: sample.frame_budget.window_prepare_us,
-        render_us: sample.frame_budget.window_render_us,
-        custom_draw_us: sample.frame_budget.window_custom_draw_us,
-        vsync_us: sample.frame_budget.window_vsync_us,
-        present_us: sample.frame_budget.window_present_us,
-        cpu_prepare_us: 0,
-        cpu_render_us: 0,
-        cpu_custom_draw_us: 0,
-        cpu_vsync_us: 0,
-        cpu_present_us: 0,
-        process_cpu_us: 0,
-        over_budget: wall_us > sample.frame_budget.budget_us.max(1),
-    }]
+
+    let step = if capacity > 1 {
+        100.0 / (capacity - 1) as f64
+    } else {
+        0.0
+    };
+    let start_index = capacity.saturating_sub(values.len());
+    let mut path = String::with_capacity(values.len() * 12);
+    for (ix, value) in values.iter().enumerate() {
+        let x = ((start_index + ix) as f64 * step).clamp(0.0, 100.0);
+        let y = 100.0 - value.clamp(0.0, 100.0);
+        if ix == 0 {
+            path.push('M');
+        } else {
+            path.push('L');
+        }
+        path.push(' ');
+        push_path_number(&mut path, x);
+        path.push(' ');
+        push_path_number(&mut path, y);
+        path.push(' ');
+    }
+    path.trim_end().to_string()
+}
+
+fn push_path_number(path: &mut String, value: f64) {
+    use std::fmt::Write;
+    let _ = write!(path, "{value:.2}");
 }
 
 fn realtime_frame_phases(
@@ -2922,6 +2986,16 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
+        "cpu0-path",
+        Value::String(SharedString::from(view.cpu0_path.as_str())),
+    );
+    set(
+        instance,
+        "cpu1-path",
+        Value::String(SharedString::from(view.cpu1_path.as_str())),
+    );
+    set(
+        instance,
         "frame-history",
         Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
             &view.frame_history,
@@ -3060,6 +3134,7 @@ fn live_realtime_frame_samples(
                     Value::Number(sample.process_cpu_us as f64),
                 ),
                 ("over-budget".to_string(), Value::Bool(sample.over_budget)),
+                ("idle".to_string(), Value::Bool(sample.idle)),
             ]))
         })
         .collect()
@@ -3108,6 +3183,8 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
             .collect::<Vec<_>>(),
     )));
     state.set_cpu_history(compiled_realtime_points(&view.cpu_history));
+    state.set_cpu0_path(view.cpu0_path.as_str().into());
+    state.set_cpu1_path(view.cpu1_path.as_str().into());
     state.set_frame_history(compiled_realtime_points(&view.frame_history));
     state.set_frame_phases(ModelRc::new(VecModel::from(
         view.phases
@@ -3173,6 +3250,7 @@ fn compiled_realtime_frame_samples(
                 cpu_present_us: clamp_u64_i32(sample.cpu_present_us),
                 process_cpu_us: clamp_u64_i32(sample.process_cpu_us),
                 over_budget: sample.over_budget,
+                idle: sample.idle,
             })
             .collect::<Vec<_>>(),
     ))
@@ -4543,10 +4621,16 @@ mod tests {
         DeviceTelemetrySample {
             seq,
             combined_cpu_pct: 12.5,
-            cores: vec![agent_client::CpuCoreTelemetry {
-                label: "CPU0".to_string(),
-                busy_pct: 12.5,
-            }],
+            cores: vec![
+                agent_client::CpuCoreTelemetry {
+                    label: "CPU0".to_string(),
+                    busy_pct: 12.5,
+                },
+                agent_client::CpuCoreTelemetry {
+                    label: "CPU1".to_string(),
+                    busy_pct: 25.0,
+                },
+            ],
             memory: agent_client::MemoryTelemetry {
                 total_kb: 1_000_000,
                 magik_kb: 100_000,
@@ -4642,6 +4726,8 @@ mod tests {
 
         assert!(view.streaming);
         assert_eq!(view.cpu_history.len(), 1);
+        assert_eq!(view.cpu0_path, "M 100.00 87.50");
+        assert_eq!(view.cpu1_path, "M 100.00 75.00");
         assert_eq!(view.memory_total_label, "976.6 MiB");
         assert_eq!(view.memory_magik_label, "MagiK: 97.7 MiB");
         assert_eq!(view.memory_other_label, "Other: 488.3 MiB");
@@ -4649,6 +4735,7 @@ mod tests {
         assert_eq!(view.frame_history[0].alert, true);
         assert_eq!(view.frame_samples.len(), 1);
         assert_eq!(view.frame_samples[0].process_cpu_us, 80);
+        assert!(!view.frame_samples[0].idle);
         assert_eq!(view.phases.len(), 5);
         assert_eq!(view.health_tiles.len(), 3);
         assert_eq!(view.health_tiles[0].title, "MagiK");
@@ -4658,6 +4745,59 @@ mod tests {
         assert_eq!(view.storage_used_label, "Used: 375GB");
         assert_eq!(view.storage_empty_label, "Free: 137GB");
         assert_eq!(view.storage_used_pct, 73.2);
+    }
+
+    #[test]
+    fn realtime_view_does_not_plot_aggregate_frame_budget_as_live_samples() {
+        let mut sample = telemetry_sample(1);
+        sample.frame_budget.recent_frames.clear();
+        sample.frame_budget.window_frames = 60;
+        sample.frame_budget.window_render_us = 12_935;
+
+        let mut history = RealtimeHistory::default();
+        history.push(sample);
+
+        let view = realtime_view_from_history(&history, true, "");
+
+        assert_eq!(view.frame_samples.len(), 0);
+        assert_eq!(view.phases[1].label, "Render");
+        assert_eq!(view.phases[1].us, 12_935);
+    }
+
+    #[test]
+    fn realtime_view_plots_idle_frame_budget_as_time_markers() {
+        let mut sample = telemetry_sample(1);
+        sample.frame_budget.recent_frames.clear();
+        sample.launcher.idle = true;
+
+        let mut history = RealtimeHistory::default();
+        history.push(sample);
+
+        let view = realtime_view_from_history(&history, true, "");
+
+        assert_eq!(
+            view.frame_samples.len(),
+            REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE as usize
+        );
+        assert!(view.frame_samples.iter().all(|sample| sample.idle));
+        assert!(view.frame_samples.iter().all(|sample| sample.wall_us == 0));
+    }
+
+    #[test]
+    fn realtime_view_deduplicates_overlapping_frame_sample_batches() {
+        let mut first = telemetry_sample(1);
+        let mut second = telemetry_sample(2);
+        first.frame_budget.recent_frames[0].frame = 42;
+        second.frame_budget.recent_frames[0].frame = 42;
+
+        let mut history = RealtimeHistory::default();
+        history.push(first);
+        history.push(second);
+
+        let view = realtime_view_from_history(&history, true, "");
+
+        assert_eq!(view.frame_samples.len(), 1);
+        assert_eq!(view.frame_samples[0].frame, 42);
     }
 
     #[test]
@@ -4671,6 +4811,15 @@ mod tests {
         let view = realtime_view_from_history(&history, true, "");
 
         assert_eq!(view.fps_summary, "60fps idle");
+    }
+
+    #[test]
+    fn realtime_chart_path_right_aligns_and_clamps_values() {
+        assert_eq!(realtime_chart_path(&[], 4), "");
+        assert_eq!(
+            realtime_chart_path(&[-10.0, 50.0, 125.0], 4),
+            "M 33.33 100.00 L 66.67 50.00 L 100.00 0.00"
+        );
     }
 
     #[cfg(feature = "live-ui")]
