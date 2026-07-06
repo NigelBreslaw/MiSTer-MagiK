@@ -933,19 +933,38 @@ check_preview_visibility_gate() {
   local name="$1" tsv="$2"
   awk -v name="$name" '
     BEGIN { FS="\t" }
-    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      if (!("cache_state" in col)) {
+        printf "%s preview visibility gate failed: missing cache_state column\n", name > "/dev/stderr"
+        exit 6
+      }
+      next
+    }
     NF {
       n++
       state = $(col["cache_state"])
       states[state]++
+      if (state != "exact") {
+        non_exact++
+        if (non_exact <= 10) {
+          frame = ("frame" in col) ? $(col["frame"]) : n
+          selected = ("selected" in col) ? $(col["selected"]) : "?"
+          printf "%s preview visibility miss frame=%s selected=%s cache_state=%s\n", name, frame, selected, state > "/dev/stderr"
+        }
+      }
     }
     END {
       exact = states["exact"] + 0
-      if (exact == 0) {
-        printf "%s preview visibility gate failed: exact=0 frames=%d\n", name, n > "/dev/stderr"
+      if (n == 0) {
+        printf "%s preview visibility gate failed: frames=0\n", name > "/dev/stderr"
         exit 6
       }
-      printf "%s preview_visibility_gate frames=%d exact=%d\n", name, n, exact
+      if (non_exact > 0) {
+        printf "%s preview visibility gate failed: frames=%d exact=%d non_exact=%d\n", name, n, exact, non_exact > "/dev/stderr"
+        exit 6
+      }
+      printf "%s preview_visibility_gate frames=%d exact=%d non_exact=0\n", name, n, exact
     }
   ' "$tsv"
 }
@@ -1044,22 +1063,33 @@ run_self_test() {
 
   local no_exact="$tmp/no-exact.tsv"
   local exact="$tmp/exact.tsv"
+  local mixed="$tmp/mixed.tsv"
   cat >"$no_exact" <<'EOF'
 frame	cache_state
 0	cached
 1	placeholder
 EOF
-  cat >"$exact" <<'EOF'
-frame	cache_state
-0	cached
-1	exact
+  cat >"$mixed" <<'EOF'
+frame	selected	cache_state
+0	0	exact
+1	1	stale
 EOF
 
   if check_preview_visibility_gate selftest "$no_exact" >/dev/null 2>&1; then
-    echo "preview visibility self-test expected exact=0 failure" >&2
+    echo "preview visibility self-test expected all-non-exact failure" >&2
     rm -rf "$tmp"
     exit 1
   fi
+  if check_preview_visibility_gate selftest "$mixed" >/dev/null 2>&1; then
+    echo "preview visibility self-test expected mixed exact/stale failure" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  cat >"$exact" <<'EOF'
+frame	cache_state
+0	exact
+1	exact
+EOF
   check_preview_visibility_gate selftest "$exact" >/dev/null
 
   local wall_wait_ok="$tmp/wall-wait-ok.tsv"

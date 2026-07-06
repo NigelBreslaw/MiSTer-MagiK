@@ -197,6 +197,57 @@ raise SystemExit(0 if count == 0 else 11)
 PY
 }
 
+check_preview_exact_gate() {
+  local name="$1" trace="$2"
+  python3 - "$name" "$trace" <<'PY'
+import collections
+import csv
+import sys
+
+name, trace_path = sys.argv[1:3]
+try:
+    with open(trace_path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+except FileNotFoundError:
+    print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_trace\tdetail={trace_path}")
+    sys.exit(9)
+
+if not rows:
+    print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_frames\tdetail={trace_path}")
+    sys.exit(9)
+if "cache_state" not in rows[0]:
+    print(f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_column\tdetail=cache_state")
+    sys.exit(9)
+
+counts = collections.Counter(row.get("cache_state", "") for row in rows)
+non_exact = [
+    row for row in rows
+    if row.get("cache_state") != "exact"
+]
+detail = " ".join(
+    f"{state or 'blank'}={count}"
+    for state, count in sorted(counts.items())
+)
+if non_exact:
+    samples = []
+    for row in non_exact[:10]:
+        samples.append(
+            f"frame={row.get('frame', '?')}:selected={row.get('selected', '?')}:cache_state={row.get('cache_state', '') or 'blank'}"
+        )
+    print(
+        f"preview_exact_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=non_exact_preview"
+        f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} non_exact={len(non_exact)} {detail}"
+        f"\tsamples={','.join(samples)}"
+    )
+    sys.exit(9)
+
+print(
+    f"preview_exact_gate_tsv\tlabel={name}\tvalid=1\tinvalid_reason=ok"
+    f"\tdetail=frames={len(rows)} exact={counts.get('exact', 0)} non_exact=0 {detail}"
+)
+PY
+}
+
 gate_arcade_entry_trace() {
   local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5"
   python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" <<'PY'
@@ -302,6 +353,21 @@ EOF
   grep -v '^arcade_preview_exact' "$tmpdir/good.tsv" >"$tmpdir/missing.tsv"
   if gate_arcade_entry_trace self-missing "$tmpdir/missing.tsv" "$tmpdir/good.log" 350 50 >/dev/null 2>&1; then
     echo "self-test expected missing screenshot failure" >&2
+    exit 1
+  fi
+  cat >"$tmpdir/exact-scroll.tsv" <<'EOF'
+frame	selected	cache_state
+0	0	exact
+1	1	exact
+EOF
+  check_preview_exact_gate self-exact "$tmpdir/exact-scroll.tsv" >/dev/null
+  cat >"$tmpdir/stale-scroll.tsv" <<'EOF'
+frame	selected	cache_state
+0	0	exact
+1	1	stale
+EOF
+  if check_preview_exact_gate self-stale "$tmpdir/stale-scroll.tsv" >/dev/null 2>&1; then
+    echo "self-test expected stale preview failure" >&2
     exit 1
   fi
   printf 'startup_timing\tcatalog_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
@@ -455,3 +521,5 @@ echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width"
+echo
+check_preview_exact_gate "$label" "$local_tsv"

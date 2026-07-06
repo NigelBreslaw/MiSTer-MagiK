@@ -413,23 +413,11 @@ pub(super) fn sync_bridge_launcher(
     let mut active_games_loading = false;
     if let Some(catalog) = catalog {
         let games = active_system_game_view(catalog, nav);
-        let system = active_system(catalog, nav);
-        let base_title = system
-            .map(|system| system.title.clone())
-            .unwrap_or_else(|| "Games".to_string());
-        let filter_label = nav.arcade_filter.active_label();
-        let title = if filter_label == "Games A-Z" {
-            base_title
-        } else {
-            format!("{base_title} - {filter_label}")
-        };
-        let count = system
-            .map(|system| nav.active_arcade_game_count(catalog, &system.id))
-            .unwrap_or_else(|| games.len());
+        let header = active_system_header(catalog, nav, games.len());
         active_games_loading = active_system_games_loading(catalog, nav);
         bridge.set_game_systems(models.game_systems(catalog, catalog_version));
-        bridge.set_active_system_title(title.into());
-        bridge.set_active_system_count(count as i32);
+        bridge.set_active_system_title(header.title.into());
+        bridge.set_active_system_count(header.count as i32);
         active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
@@ -475,6 +463,23 @@ pub(super) fn sync_bridge_launcher_light(
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
+    let active_games_len = active_arcade_games.as_ref().map_or_else(
+        || active_system_game_view(catalog, nav).len(),
+        |games| games.len(),
+    );
+    let header = active_system_header(catalog, nav, active_games_len);
+    set_bridge_string_if_changed!(
+        bridge,
+        get_active_system_title,
+        set_active_system_title,
+        header.title
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_active_system_count,
+        set_active_system_count,
+        header.count as i32
+    );
     set_bridge_if_changed!(
         bridge,
         get_screen_mode,
@@ -617,6 +622,35 @@ pub(super) fn active_system_game_view<'a>(
     active_system(catalog, nav)
         .map(|system| nav.active_arcade_game_view(catalog, &system.id))
         .unwrap_or_else(ArcadeGameView::empty)
+}
+
+struct ActiveSystemHeader {
+    title: String,
+    count: usize,
+}
+
+fn active_system_header(
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+    fallback_count: usize,
+) -> ActiveSystemHeader {
+    let Some(system) = active_system(catalog, nav) else {
+        return ActiveSystemHeader {
+            title: "Games".to_string(),
+            count: fallback_count,
+        };
+    };
+    let base_title = system.title.clone();
+    let filter_label = nav.arcade_filter.active_label();
+    let title = if filter_label == "Games A-Z" {
+        base_title
+    } else {
+        format!("{base_title} - {filter_label}")
+    };
+    ActiveSystemHeader {
+        title,
+        count: nav.active_arcade_game_count(catalog, &system.id),
+    }
 }
 
 fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &LauncherNav) {
@@ -800,6 +834,13 @@ impl LauncherBridgeModels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, DEFAULT_ARCADE_ROOT};
+    use crate::test_support::arcade_game;
+    use std::cell::Cell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+    use std::sync::Once;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn launcher_bridge_key_tracks_arcade_search_suggestion() {
@@ -820,5 +861,68 @@ mod tests {
 
         assert_eq!(text.left_label, "OK");
         assert_eq!(text.right_label, "");
+    }
+
+    fn init_test_slint_platform() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+            let _ = slint::platform::set_platform(Box::new(MisterPlatform {
+                window,
+                start: Instant::now(),
+                fixed_time,
+            }));
+        });
+    }
+
+    #[test]
+    fn light_bridge_sync_refreshes_active_system_header() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        bridge.set_active_system_title("AcornAtom".into());
+        bridge.set_active_system_count(0);
+
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            vec![
+                arcade_game("1941").system_id("arcade").build(),
+                arcade_game("1942").system_id("arcade").build(),
+            ],
+            vec![
+                GameSystemEntry {
+                    id: "acornatom".into(),
+                    title: "AcornAtom".into(),
+                    count: 0,
+                },
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 2,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.selected = 1;
+        let mut preview = PreviewState::new();
+
+        sync_bridge_launcher_light(
+            &app,
+            &nav,
+            &SetupNav::new(),
+            "",
+            "",
+            &catalog,
+            None,
+            &mut preview,
+            false,
+            false,
+            960,
+        );
+
+        assert_eq!(bridge.get_active_system_title().as_str(), "Arcade");
+        assert_eq!(bridge.get_active_system_count(), 2);
     }
 }
