@@ -68,6 +68,40 @@ jobs:
         working-directory: magik-gui
         run: cargo check --lib --no-default-features
 
+  host-tools:
+    name: host-tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-host-tools-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          restore-keys: |
+            cargo-host-tools-${{ runner.os }}-
+            cargo-host-${{ runner.os }}-
+
+      - name: Cache host tools build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            tools/magik-agent/target/debug
+            tools/mister/target/debug
+          key: target-host-tools-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          restore-keys: |
+            target-host-tools-${{ runner.os }}-
+            target-host-${{ runner.os }}-
+
       - name: Check host tools
         run: scripts/dev-rust host-tools
 
