@@ -72,7 +72,7 @@ pub struct LauncherStatus<'a> {
     pub frame_budget: FrameBudgetStatus,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FrameBudgetStatus {
     pub budget_us: u64,
     pub frames_total: u64,
@@ -98,6 +98,26 @@ pub struct FrameBudgetStatus {
     pub window_custom_draw_us: u64,
     pub window_vsync_us: u64,
     pub window_present_us: u64,
+    pub recent_frames: Vec<FrameBudgetRecentFrame>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameBudgetRecentFrame {
+    pub frame: u64,
+    pub wall_us: u64,
+    pub prepare_us: u64,
+    pub render_us: u64,
+    pub custom_draw_us: u64,
+    pub vsync_us: u64,
+    pub present_us: u64,
+    pub cpu_prepare_us: u64,
+    pub cpu_render_us: u64,
+    pub cpu_custom_draw_us: u64,
+    pub cpu_vsync_us: u64,
+    pub cpu_present_us: u64,
+    pub process_cpu_us: u64,
+    pub vsync_source: &'static str,
+    pub vsync_miss_streak: u32,
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
@@ -229,39 +249,64 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("input_enabled", status.input_enabled);
     insert!("reveal_ms", status.reveal_ms);
     insert!("input_enabled_ms", status.input_enabled_ms);
-    insert!(
-        "frame_budget",
-        json!({
-            "budget_us": status.frame_budget.budget_us,
-            "frames_total": status.frame_budget.frames_total,
-            "over_budget_total": status.frame_budget.over_budget_total,
-            "over_20ms_total": status.frame_budget.over_20ms_total,
-            "over_33ms_total": status.frame_budget.over_33ms_total,
-            "max_wall_us": status.frame_budget.max_wall_us,
-            "latest_over_budget_frame": status.frame_budget.latest_over_budget_frame,
-            "latest_over_budget_wall_us": status.frame_budget.latest_over_budget_wall_us,
-            "max_vsync_miss_streak": status.frame_budget.max_vsync_miss_streak,
-            "vsync_total": status.frame_budget.vsync_total,
-            "fallback_total": status.frame_budget.fallback_total,
-            "timeout_total": status.frame_budget.timeout_total,
-            "error_total": status.frame_budget.error_total,
-            "window_frames": status.frame_budget.window_frames,
-            "window_over_budget": status.frame_budget.window_over_budget,
-            "window_over_20ms": status.frame_budget.window_over_20ms,
-            "window_over_33ms": status.frame_budget.window_over_33ms,
-            "window_max_wall_us": status.frame_budget.window_max_wall_us,
-            "window_max_vsync_miss_streak": status.frame_budget.window_max_vsync_miss_streak,
-            "window_prepare_us": status.frame_budget.window_prepare_us,
-            "window_render_us": status.frame_budget.window_render_us,
-            "window_custom_draw_us": status.frame_budget.window_custom_draw_us,
-            "window_vsync_us": status.frame_budget.window_vsync_us,
-            "window_present_us": status.frame_budget.window_present_us,
-        })
+    map.insert(
+        "frame_budget".to_string(),
+        frame_budget_status_value(&status.frame_budget),
     );
     insert!("rss_kb", current_rss_kb());
     insert!("rss_hwm_kb", current_rss_hwm_kb());
 
     Value::Object(map)
+}
+
+fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
+    json!({
+        "budget_us": status.budget_us,
+        "frames_total": status.frames_total,
+        "over_budget_total": status.over_budget_total,
+        "over_20ms_total": status.over_20ms_total,
+        "over_33ms_total": status.over_33ms_total,
+        "max_wall_us": status.max_wall_us,
+        "latest_over_budget_frame": status.latest_over_budget_frame,
+        "latest_over_budget_wall_us": status.latest_over_budget_wall_us,
+        "max_vsync_miss_streak": status.max_vsync_miss_streak,
+        "vsync_total": status.vsync_total,
+        "fallback_total": status.fallback_total,
+        "timeout_total": status.timeout_total,
+        "error_total": status.error_total,
+        "window_frames": status.window_frames,
+        "window_over_budget": status.window_over_budget,
+        "window_over_20ms": status.window_over_20ms,
+        "window_over_33ms": status.window_over_33ms,
+        "window_max_wall_us": status.window_max_wall_us,
+        "window_max_vsync_miss_streak": status.window_max_vsync_miss_streak,
+        "window_prepare_us": status.window_prepare_us,
+        "window_render_us": status.window_render_us,
+        "window_custom_draw_us": status.window_custom_draw_us,
+        "window_vsync_us": status.window_vsync_us,
+        "window_present_us": status.window_present_us,
+        "recent_frames": status.recent_frames.iter().map(frame_budget_recent_frame_value).collect::<Vec<_>>(),
+    })
+}
+
+fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
+    json!({
+        "frame": frame.frame,
+        "wall_us": frame.wall_us,
+        "prepare_us": frame.prepare_us,
+        "render_us": frame.render_us,
+        "custom_draw_us": frame.custom_draw_us,
+        "vsync_us": frame.vsync_us,
+        "present_us": frame.present_us,
+        "cpu_prepare_us": frame.cpu_prepare_us,
+        "cpu_render_us": frame.cpu_render_us,
+        "cpu_custom_draw_us": frame.cpu_custom_draw_us,
+        "cpu_vsync_us": frame.cpu_vsync_us,
+        "cpu_present_us": frame.cpu_present_us,
+        "process_cpu_us": frame.process_cpu_us,
+        "vsync_source": frame.vsync_source,
+        "vsync_miss_streak": frame.vsync_miss_streak,
+    })
 }
 
 fn current_rss_kb() -> u64 {
@@ -435,6 +480,23 @@ mod tests {
                     window_custom_draw_us: 3_000,
                     window_vsync_us: 8_000,
                     window_present_us: 900,
+                    recent_frames: vec![FrameBudgetRecentFrame {
+                        frame: 42,
+                        wall_us: 18_000,
+                        prepare_us: 100,
+                        render_us: 2_000,
+                        custom_draw_us: 3_000,
+                        vsync_us: 8_000,
+                        present_us: 900,
+                        cpu_prepare_us: 10,
+                        cpu_render_us: 20,
+                        cpu_custom_draw_us: 30,
+                        cpu_vsync_us: 1,
+                        cpu_present_us: 5,
+                        process_cpu_us: 75,
+                        vsync_source: "vsync",
+                        vsync_miss_streak: 1,
+                    }],
                 },
             },
             5678,
@@ -445,6 +507,11 @@ mod tests {
         assert_eq!(value["frame_budget"]["budget_us"], 16_667);
         assert_eq!(value["frame_budget"]["over_budget_total"], 2);
         assert_eq!(value["frame_budget"]["window_present_us"], 900);
+        assert_eq!(value["frame_budget"]["recent_frames"][0]["frame"], 42);
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["process_cpu_us"],
+            75
+        );
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);
         assert_eq!(value["mode"], "ui");

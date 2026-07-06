@@ -39,6 +39,7 @@ type SharedRealtimeStreamControl = Arc<Mutex<Option<(u64, DeviceTelemetryStreamC
 const DIRTY_RECT_LINGER_FRAMES: usize = 8;
 const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
 const REALTIME_HISTORY_CAPACITY: usize = 300;
+const REALTIME_FRAME_SAMPLE_CAPACITY: usize = 240;
 
 #[derive(Clone, Debug)]
 struct DirtyRectOverlayState {
@@ -89,6 +90,7 @@ struct RealtimeViewState {
     cpu_history: Vec<RealtimeChartPoint>,
     frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
+    frame_samples: Vec<RealtimeFrameSampleView>,
     health_tiles: Vec<RealtimeHealthTileView>,
 }
 
@@ -104,6 +106,24 @@ struct RealtimeFramePhaseView {
     us: u64,
     start_us: u64,
     color_index: i32,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeFrameSampleView {
+    frame: u64,
+    wall_us: u64,
+    prepare_us: u64,
+    render_us: u64,
+    custom_draw_us: u64,
+    vsync_us: u64,
+    present_us: u64,
+    cpu_prepare_us: u64,
+    cpu_render_us: u64,
+    cpu_custom_draw_us: u64,
+    cpu_vsync_us: u64,
+    cpu_present_us: u64,
+    process_cpu_us: u64,
+    over_budget: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -375,6 +395,15 @@ fn realtime_view_from_history(
             }
         })
         .collect::<Vec<_>>();
+    let mut frame_samples = history
+        .samples
+        .iter()
+        .flat_map(|sample| realtime_frame_samples_from_telemetry(sample).into_iter())
+        .collect::<Vec<_>>();
+    if frame_samples.len() > REALTIME_FRAME_SAMPLE_CAPACITY {
+        frame_samples =
+            frame_samples.split_off(frame_samples.len() - REALTIME_FRAME_SAMPLE_CAPACITY);
+    }
 
     let Some(sample) = latest else {
         return RealtimeViewState {
@@ -408,6 +437,7 @@ fn realtime_view_from_history(
             cpu_history,
             frame_history,
             phases: Vec::new(),
+            frame_samples,
             health_tiles: Vec::new(),
         };
     };
@@ -429,7 +459,10 @@ fn realtime_view_from_history(
         .saturating_sub(sample.storage.available_bytes);
     let storage_total_label = format_storage_gb(sample.storage.total_bytes);
     let storage_used_label = format!("Used: {}", format_storage_gb(storage_used_bytes));
-    let storage_empty_label = format!("Free: {}", format_storage_gb(sample.storage.available_bytes));
+    let storage_empty_label = format!(
+        "Free: {}",
+        format_storage_gb(sample.storage.available_bytes)
+    );
     let frame_summary = format!(
         "{} frames, {} over budget, max {}",
         sample.frame_budget.window_frames,
@@ -512,8 +545,58 @@ fn realtime_view_from_history(
         cpu_history,
         frame_history,
         phases,
+        frame_samples,
         health_tiles,
     }
+}
+
+fn realtime_frame_samples_from_telemetry(
+    sample: &DeviceTelemetrySample,
+) -> Vec<RealtimeFrameSampleView> {
+    if !sample.frame_budget.recent_frames.is_empty() {
+        let budget_us = sample.frame_budget.budget_us.max(1);
+        return sample
+            .frame_budget
+            .recent_frames
+            .iter()
+            .map(|frame| RealtimeFrameSampleView {
+                frame: frame.frame,
+                wall_us: frame.wall_us,
+                prepare_us: frame.prepare_us,
+                render_us: frame.render_us,
+                custom_draw_us: frame.custom_draw_us,
+                vsync_us: frame.vsync_us,
+                present_us: frame.present_us,
+                cpu_prepare_us: frame.cpu_prepare_us,
+                cpu_render_us: frame.cpu_render_us,
+                cpu_custom_draw_us: frame.cpu_custom_draw_us,
+                cpu_vsync_us: frame.cpu_vsync_us,
+                cpu_present_us: frame.cpu_present_us,
+                process_cpu_us: frame.process_cpu_us,
+                over_budget: frame.wall_us > budget_us,
+            })
+            .collect();
+    }
+    if sample.frame_budget.window_frames == 0 {
+        return Vec::new();
+    }
+    let wall_us = sample.frame_budget.window_max_wall_us;
+    vec![RealtimeFrameSampleView {
+        frame: sample.frame_budget.frames_total,
+        wall_us,
+        prepare_us: sample.frame_budget.window_prepare_us,
+        render_us: sample.frame_budget.window_render_us,
+        custom_draw_us: sample.frame_budget.window_custom_draw_us,
+        vsync_us: sample.frame_budget.window_vsync_us,
+        present_us: sample.frame_budget.window_present_us,
+        cpu_prepare_us: 0,
+        cpu_render_us: 0,
+        cpu_custom_draw_us: 0,
+        cpu_vsync_us: 0,
+        cpu_present_us: 0,
+        process_cpu_us: 0,
+        over_budget: wall_us > sample.frame_budget.budget_us.max(1),
+    }]
 }
 
 fn realtime_frame_phases(
@@ -2869,6 +2952,13 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
+        "frame-samples",
+        Value::Model(ModelRc::new(VecModel::from(live_realtime_frame_samples(
+            &view.frame_samples,
+        )))),
+    );
+    set(
+        instance,
         "health-tiles",
         Value::Model(ModelRc::new(VecModel::from(
             view.health_tiles
@@ -2908,6 +2998,68 @@ fn live_realtime_points(points: &[RealtimeChartPoint]) -> Vec<slint_interpreter:
             Value::Struct(Struct::from_iter([
                 ("value".to_string(), Value::Number(point.value)),
                 ("alert".to_string(), Value::Bool(point.alert)),
+            ]))
+        })
+        .collect()
+}
+
+#[cfg(feature = "live-ui")]
+fn live_realtime_frame_samples(
+    samples: &[RealtimeFrameSampleView],
+) -> Vec<slint_interpreter::Value> {
+    use slint_interpreter::{Struct, Value};
+
+    samples
+        .iter()
+        .map(|sample| {
+            Value::Struct(Struct::from_iter([
+                ("frame".to_string(), Value::Number(sample.frame as f64)),
+                ("wall-us".to_string(), Value::Number(sample.wall_us as f64)),
+                (
+                    "prepare-us".to_string(),
+                    Value::Number(sample.prepare_us as f64),
+                ),
+                (
+                    "render-us".to_string(),
+                    Value::Number(sample.render_us as f64),
+                ),
+                (
+                    "custom-draw-us".to_string(),
+                    Value::Number(sample.custom_draw_us as f64),
+                ),
+                (
+                    "vsync-us".to_string(),
+                    Value::Number(sample.vsync_us as f64),
+                ),
+                (
+                    "present-us".to_string(),
+                    Value::Number(sample.present_us as f64),
+                ),
+                (
+                    "cpu-prepare-us".to_string(),
+                    Value::Number(sample.cpu_prepare_us as f64),
+                ),
+                (
+                    "cpu-render-us".to_string(),
+                    Value::Number(sample.cpu_render_us as f64),
+                ),
+                (
+                    "cpu-custom-draw-us".to_string(),
+                    Value::Number(sample.cpu_custom_draw_us as f64),
+                ),
+                (
+                    "cpu-vsync-us".to_string(),
+                    Value::Number(sample.cpu_vsync_us as f64),
+                ),
+                (
+                    "cpu-present-us".to_string(),
+                    Value::Number(sample.cpu_present_us as f64),
+                ),
+                (
+                    "process-cpu-us".to_string(),
+                    Value::Number(sample.process_cpu_us as f64),
+                ),
+                ("over-budget".to_string(), Value::Bool(sample.over_budget)),
             ]))
         })
         .collect()
@@ -2968,6 +3120,7 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
             })
             .collect::<Vec<_>>(),
     )));
+    state.set_frame_samples(compiled_realtime_frame_samples(&view.frame_samples));
     state.set_health_tiles(ModelRc::new(VecModel::from(
         view.health_tiles
             .iter()
@@ -2991,6 +3144,35 @@ fn compiled_realtime_points(points: &[RealtimeChartPoint]) -> slint::ModelRc<Rea
             .map(|point| RealtimePoint {
                 value: point.value as f32,
                 alert: point.alert,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_realtime_frame_samples(
+    samples: &[RealtimeFrameSampleView],
+) -> slint::ModelRc<RealtimeFrameSample> {
+    use slint::{ModelRc, VecModel};
+
+    ModelRc::new(VecModel::from(
+        samples
+            .iter()
+            .map(|sample| RealtimeFrameSample {
+                frame: clamp_u64_i32(sample.frame),
+                wall_us: clamp_u64_i32(sample.wall_us),
+                prepare_us: clamp_u64_i32(sample.prepare_us),
+                render_us: clamp_u64_i32(sample.render_us),
+                custom_draw_us: clamp_u64_i32(sample.custom_draw_us),
+                vsync_us: clamp_u64_i32(sample.vsync_us),
+                present_us: clamp_u64_i32(sample.present_us),
+                cpu_prepare_us: clamp_u64_i32(sample.cpu_prepare_us),
+                cpu_render_us: clamp_u64_i32(sample.cpu_render_us),
+                cpu_custom_draw_us: clamp_u64_i32(sample.cpu_custom_draw_us),
+                cpu_vsync_us: clamp_u64_i32(sample.cpu_vsync_us),
+                cpu_present_us: clamp_u64_i32(sample.cpu_present_us),
+                process_cpu_us: clamp_u64_i32(sample.process_cpu_us),
+                over_budget: sample.over_budget,
             })
             .collect::<Vec<_>>(),
     ))
@@ -4390,6 +4572,23 @@ mod tests {
                 window_custom_draw_us: 300,
                 window_vsync_us: 400,
                 window_present_us: 500,
+                recent_frames: vec![agent_client::FrameBudgetFrameTelemetry {
+                    frame: seq,
+                    wall_us: 21_000,
+                    prepare_us: 100,
+                    render_us: 200,
+                    custom_draw_us: 300,
+                    vsync_us: 400,
+                    present_us: 500,
+                    cpu_prepare_us: 10,
+                    cpu_render_us: 20,
+                    cpu_custom_draw_us: 30,
+                    cpu_vsync_us: 1,
+                    cpu_present_us: 5,
+                    process_cpu_us: 80,
+                    vsync_source: "vsync".to_string(),
+                    vsync_miss_streak: 1,
+                }],
             },
             launcher: agent_client::LauncherTelemetry {
                 status_current: true,
@@ -4448,6 +4647,8 @@ mod tests {
         assert_eq!(view.memory_other_label, "Other: 488.3 MiB");
         assert_eq!(view.memory_available_label, "Available: 390.6 MiB");
         assert_eq!(view.frame_history[0].alert, true);
+        assert_eq!(view.frame_samples.len(), 1);
+        assert_eq!(view.frame_samples[0].process_cpu_us, 80);
         assert_eq!(view.phases.len(), 5);
         assert_eq!(view.health_tiles.len(), 3);
         assert_eq!(view.health_tiles[0].title, "MagiK");

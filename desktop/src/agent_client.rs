@@ -179,6 +179,26 @@ pub struct FrameBudgetTelemetry {
     pub window_custom_draw_us: u64,
     pub window_vsync_us: u64,
     pub window_present_us: u64,
+    pub recent_frames: Vec<FrameBudgetFrameTelemetry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FrameBudgetFrameTelemetry {
+    pub frame: u64,
+    pub wall_us: u64,
+    pub prepare_us: u64,
+    pub render_us: u64,
+    pub custom_draw_us: u64,
+    pub vsync_us: u64,
+    pub present_us: u64,
+    pub cpu_prepare_us: u64,
+    pub cpu_render_us: u64,
+    pub cpu_custom_draw_us: u64,
+    pub cpu_vsync_us: u64,
+    pub cpu_present_us: u64,
+    pub process_cpu_us: u64,
+    pub vsync_source: String,
+    pub vsync_miss_streak: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -330,7 +350,10 @@ pub fn connect_framebuffer_stream(host: &str) -> Result<FramebufferStream, Agent
 pub fn connect_device_telemetry_stream(host: &str) -> Result<DeviceTelemetryStream, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
-    let (_, reader) = client.request_stream("device_telemetry_stream_v1", json!({}))?;
+    let (_, reader) = client.request_stream(
+        "device_telemetry_stream_v1",
+        json!({"analytics_mode": "process"}),
+    )?;
     let control = DeviceTelemetryStreamControl {
         stream: reader
             .get_ref()
@@ -950,6 +973,11 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
             window_custom_draw_us: u64_at(frame, "/window_custom_draw_us"),
             window_vsync_us: u64_at(frame, "/window_vsync_us"),
             window_present_us: u64_at(frame, "/window_present_us"),
+            recent_frames: frame
+                .pointer("/recent_frames")
+                .and_then(Value::as_array)
+                .map(|frames| frames.iter().map(parse_frame_budget_recent_frame).collect())
+                .unwrap_or_default(),
         },
         launcher: LauncherTelemetry {
             status_current: value
@@ -980,6 +1008,30 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
             available_pct: f64_at(&value, "/storage/available_pct"),
         },
     })
+}
+
+fn parse_frame_budget_recent_frame(value: &Value) -> FrameBudgetFrameTelemetry {
+    FrameBudgetFrameTelemetry {
+        frame: u64_at(value, "/frame"),
+        wall_us: u64_at(value, "/wall_us"),
+        prepare_us: u64_at(value, "/prepare_us"),
+        render_us: u64_at(value, "/render_us"),
+        custom_draw_us: u64_at(value, "/custom_draw_us"),
+        vsync_us: u64_at(value, "/vsync_us"),
+        present_us: u64_at(value, "/present_us"),
+        cpu_prepare_us: u64_at(value, "/cpu_prepare_us"),
+        cpu_render_us: u64_at(value, "/cpu_render_us"),
+        cpu_custom_draw_us: u64_at(value, "/cpu_custom_draw_us"),
+        cpu_vsync_us: u64_at(value, "/cpu_vsync_us"),
+        cpu_present_us: u64_at(value, "/cpu_present_us"),
+        process_cpu_us: u64_at(value, "/process_cpu_us"),
+        vsync_source: value
+            .pointer("/vsync_source")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        vsync_miss_streak: u64_at(value, "/vsync_miss_streak"),
+    }
 }
 
 fn process_telemetry_at(value: &Value, pointer: &str) -> ProcessTelemetry {
@@ -1518,7 +1570,7 @@ mod tests {
                 "seq":7,
                 "cpu":{"combined_busy_pct":12.5,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
                 "memory":{"total_kb":1000,"magik_kb":100,"main_kb":20,"other_used_kb":600,"available_kb":300,"magik_pct":10.0,"other_used_pct":60.0,"available_pct":30.0},
-                "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500}},
+                "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500,"recent_frames":[{"frame":120,"wall_us":17000,"prepare_us":100,"render_us":200,"custom_draw_us":300,"vsync_us":400,"present_us":500,"cpu_prepare_us":10,"cpu_render_us":20,"cpu_custom_draw_us":30,"cpu_vsync_us":1,"cpu_present_us":5,"process_cpu_us":80,"vsync_source":"vsync","vsync_miss_streak":1}]}},
                 "processes":{"mister-magik-fb":{"pids":[42],"rss_kb":100,"threads":7},"MiSTer_MagiK":{"pids":[9],"rss_kb":20,"threads":1}},
                 "network":{"rx_bytes_per_sec":123,"tx_bytes_per_sec":456},
                 "storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}
@@ -1531,6 +1583,8 @@ mod tests {
         assert_eq!(sample.cores[0].label, "CPU0");
         assert_eq!(sample.memory.magik_pct, 10.0);
         assert_eq!(sample.frame_budget.window_over_budget, 2);
+        assert_eq!(sample.frame_budget.recent_frames.len(), 1);
+        assert_eq!(sample.frame_budget.recent_frames[0].process_cpu_us, 80);
         assert_eq!(sample.launcher.fps, "59.9 fps");
         assert_eq!(sample.magik.pids, vec![42]);
         assert_eq!(sample.network.tx_bytes_per_sec, 456);

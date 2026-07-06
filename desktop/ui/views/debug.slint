@@ -38,7 +38,7 @@ import {
     AppState,
     DeviceState,
     RealtimeCpuCore,
-    RealtimeFramePhase,
+    RealtimeFrameSample,
     RealtimeHealthTile,
     RealtimePoint,
     RealtimeState,
@@ -403,42 +403,219 @@ component MemoryPieChart inherits Rectangle {
     }
 }
 
-component FramePhaseBar inherits Rectangle {
-    in property <[RealtimeFramePhase]> phases;
-    in property <int> max-us: 16667;
+component RealtimeFrameBudgetChart inherits Rectangle {
+    in property <[RealtimeFrameSample]> samples;
+    in property <int> budget-us: 16667;
+    in property <int> max-us: 33334;
+    private property <length> plot-x: 46px;
+    private property <length> plot-y: 12px;
+    private property <length> plot-w: self.width - 58px;
+    private property <length> plot-h: self.height - 34px;
+    private property <length> budget-y: root.plot-y + root.plot-h - root.plot-h * root.budget-us / root.max-us;
 
     width: 100%;
-    height: 32px;
+    height: 156px;
     border-width: 1px;
     border-color: PrimerColors.borderColor-default;
     border-radius: LayoutTokens.borderRadius-medium;
-    background: PrimerColors.bgColor-inset;
+    background: PrimerColors.bgColor-default;
     clip: true;
 
-    for phase in root.phases : Rectangle {
-        x: parent.width * phase.start-us / max(1, root.max-us);
-        width: max(2px, parent.width * phase.us / max(1, root.max-us));
-        height: parent.height;
-        background: phase.color-index == 0 ? #6e7781
-            : phase.color-index == 1 ? #0969da
-            : phase.color-index == 2 ? #8250df
-            : phase.color-index == 3 ? #bf8700
-            : #1a7f37;
+    Text {
+        x: 8px;
+        y: root.plot-y + root.plot-h - 3px;
+        text: "0ms";
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
 
-        TouchArea {
-            mouse-cursor: pointer;
-            pointer-event(event) => {
-                if event.kind == PointerEventKind.move || event.kind == PointerEventKind.down {
-                    RealtimeState.frame-hover = phase.label + ": " + phase.us + "us";
-                }
+    Text {
+        x: 4px;
+        y: root.budget-y - 8px;
+        text: "16.7";
+        color: #cf222e;
+        font-size: 9px;
+    }
+
+    Text {
+        x: 2px;
+        y: root.plot-y - 2px;
+        text: "33ms";
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
+
+    plot := Rectangle {
+        x: root.plot-x;
+        y: root.plot-y;
+        width: root.plot-w;
+        height: root.plot-h;
+        background: PrimerColors.bgColor-inset;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-muted;
+        clip: true;
+
+        Rectangle {
+            y: parent.height / 2;
+            width: parent.width;
+            height: 1px;
+            background: #cf222e;
+            opacity: 0.7;
+        }
+
+        Rectangle {
+            y: parent.height / 4;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: 0.55;
+        }
+
+        Rectangle {
+            y: parent.height * 3 / 4;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: 0.55;
+        }
+
+        for sample[ix] in root.samples : Rectangle {
+            private property <length> prepare-h: max(1px, parent.height * sample.prepare-us / root.max-us);
+            private property <length> render-h: max(1px, parent.height * sample.render-us / root.max-us);
+            private property <length> custom-h: max(1px, parent.height * sample.custom-draw-us / root.max-us);
+            private property <length> vsync-h: max(1px, parent.height * sample.vsync-us / root.max-us);
+            private property <length> present-h: max(1px, parent.height * sample.present-us / root.max-us);
+            private property <length> cpu-prepare-h: parent.height * sample.cpu-prepare-us / root.max-us;
+            private property <length> cpu-render-h: parent.height * sample.cpu-render-us / root.max-us;
+            private property <length> cpu-custom-h: parent.height * sample.cpu-custom-draw-us / root.max-us;
+            private property <length> cpu-vsync-h: parent.height * sample.cpu-vsync-us / root.max-us;
+            private property <length> cpu-present-h: parent.height * sample.cpu-present-us / root.max-us;
+            private property <length> process-y: parent.height - parent.height * sample.process-cpu-us / root.max-us;
+
+            x: parent.width - root.samples.length * 1px + ix * 1px;
+            width: 1px;
+            height: parent.height;
+
+            Rectangle {
+                y: parent.height - parent.prepare-h;
+                width: 1px;
+                height: parent.prepare-h;
+                background: #6b7280;
+            }
+
+            Rectangle {
+                y: parent.height - parent.prepare-h - parent.render-h;
+                width: 1px;
+                height: parent.render-h;
+                background: #2563eb;
+            }
+
+            Rectangle {
+                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h;
+                width: 1px;
+                height: parent.custom-h;
+                background: #a855f7;
+            }
+
+            Rectangle {
+                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h;
+                width: 1px;
+                height: parent.vsync-h;
+                background: #f59e0b;
+            }
+
+            Rectangle {
+                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h - parent.present-h;
+                width: 1px;
+                height: parent.present-h;
+                background: #06b6d4;
+            }
+
+            Rectangle {
+                y: parent.height - parent.cpu-prepare-h;
+                width: 1px;
+                height: max(0px, parent.cpu-prepare-h);
+                background: #ffffff;
+                opacity: 0.45;
+            }
+
+            Rectangle {
+                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h;
+                width: 1px;
+                height: max(0px, parent.cpu-render-h);
+                background: #ffffff;
+                opacity: 0.45;
+            }
+
+            Rectangle {
+                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h;
+                width: 1px;
+                height: max(0px, parent.cpu-custom-h);
+                background: #ffffff;
+                opacity: 0.45;
+            }
+
+            Rectangle {
+                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h;
+                width: 1px;
+                height: max(0px, parent.cpu-vsync-h);
+                background: #ffffff;
+                opacity: 0.45;
+            }
+
+            Rectangle {
+                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h - parent.cpu-present-h;
+                width: 1px;
+                height: max(0px, parent.cpu-present-h);
+                background: #ffffff;
+                opacity: 0.45;
+            }
+
+            Rectangle {
+                y: min(max(0px, parent.process-y), parent.height - 2px);
+                width: 1px;
+                height: 2px;
+                background: #111827;
             }
         }
     }
 
-    Rectangle {
-        x: parent.width - 1px;
-        width: 1px;
-        background: #cf222e;
+    if root.samples.length == 0: Text {
+        x: root.plot-x + 10px;
+        y: root.plot-y + 10px;
+        text: "Waiting for live frame samples.";
+        color: PrimerColors.fgColor-muted;
+        font-size: LayoutTokens.text-body-size-small;
+    }
+
+    HorizontalLayout {
+        x: root.plot-x;
+        y: root.height - 18px;
+        width: root.plot-w;
+        height: 14px;
+        spacing: 10px;
+
+        for item in [
+            { label: "prepare", color: #6b7280 },
+            { label: "render", color: #2563eb },
+            { label: "custom", color: #a855f7 },
+            { label: "vsync", color: #f59e0b },
+            { label: "present", color: #06b6d4 },
+            { label: "cpu", color: #111827 },
+        ] : HorizontalLayout {
+            spacing: 4px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                y: 3px;
+                background: item.color;
+            }
+            Text {
+                text: item.label;
+                color: PrimerColors.fgColor-muted;
+                font-size: 9px;
+            }
+        }
     }
 }
 
@@ -527,15 +704,8 @@ component RealTimePanel inherits VerticalLayout {
                 width: 100%;
                 spacing: 8px;
 
-                FramePhaseBar {
-                    phases: RealtimeState.frame-phases;
-                }
-
-                RealtimeSparkline {
-                    points: RealtimeState.frame-history;
-                    empty-label: "Waiting for frame-budget samples.";
-                    line-color: #1a7f37;
-                    alert-color: #cf222e;
+                RealtimeFrameBudgetChart {
+                    samples: RealtimeState.frame-samples;
                 }
             }
         }
