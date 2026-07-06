@@ -4,7 +4,6 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         gcc \
-        g++-arm-linux-gnueabihf \
         gcc-arm-linux-gnueabihf \
         libc6-dev-armhf-cross \
         libclang-dev \
@@ -14,7 +13,6 @@ RUN apt-get update \
 
 ENV AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
 ENV CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
-ENV CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
 ENV CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
 ENV LIBCLANG_PATH=/usr/lib/llvm-10/lib
 ENV BINDGEN_EXTRA_CLANG_ARGS="--target=arm-linux-gnueabihf --sysroot=/usr/arm-linux-gnueabihf -I/usr/arm-linux-gnueabihf/include"
