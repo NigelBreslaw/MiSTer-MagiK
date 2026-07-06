@@ -70,6 +70,7 @@ jobs:
 
   host-tools:
     name: host-tools
+    needs: host-dev
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
