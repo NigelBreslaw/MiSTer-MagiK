@@ -290,18 +290,34 @@ pub(crate) fn materialize_arcade_ui_projections(
         )
         WITH candidates AS (
             SELECT
-                COALESCE(i.family_id, l.launchable_id) AS family_id,
-                l.launchable_id AS launchable_id,
-                l.launch_id AS launch_id,
-                l.title AS title,
-                lower(l.title) AS sort_title,
-                l.launch_ref AS launch_ref,
-                l.system_id AS system_id,
+                COALESCE(
+                    i.family_id,
+                    CASE game_id_kind_values.value
+                        WHEN 'payload' THEN 'payload:' || game_id_paths.path
+                        WHEN 'archive' THEN 'archive:' || game_id_paths.path
+                        ELSE g.game_id_text
+                    END
+                ) AS family_id,
+                CASE game_id_kind_values.value
+                    WHEN 'payload' THEN 'payload:' || game_id_paths.path
+                    WHEN 'archive' THEN 'archive:' || game_id_paths.path
+                    ELSE g.game_id_text
+                END AS launchable_id,
+                lt.launch_id AS launch_id,
+                g.title AS title,
+                lower(g.title) AS sort_title,
+                CASE launch_ref_kind_values.value
+                    WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                    WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                    WHEN 'same-payload' THEN payload_paths.path
+                    ELSE launch_paths.path
+                END AS launch_ref,
+                g.system_id AS system_id,
                 COALESCE(i.year, g.year) AS year,
                 COALESCE(i.manufacturer, g.manufacturer) AS manufacturer,
                 COALESCE(i.category, g.genre) AS category,
                 g.discovered_at_unix AS discovered_at_unix,
-                l.setname AS setname,
+                lt.setname AS setname,
                 i.identity_id AS identity_id,
                 CASE
                     WHEN i.identity_id IS NOT NULL
@@ -316,13 +332,30 @@ pub(crate) fn materialize_arcade_ui_projections(
                     THEN 1
                     ELSE 0
                 END AS is_parent
-            FROM launchables l
-            JOIN games g ON g.game_id = l.launchable_id
-            LEFT JOIN launchable_identities i
-              ON i.launchable_id = l.launchable_id
+            FROM launch_target_rows lt
+            JOIN game_rows g ON g.game_key_id = lt.game_key_id
+            JOIN string_values game_id_kind_values
+              ON game_id_kind_values.string_id = g.game_id_kind_string_id
+            JOIN string_values launch_ref_kind_values
+              ON launch_ref_kind_values.string_id = lt.launch_ref_kind_string_id
+            LEFT JOIN path_values_text game_id_paths
+              ON game_id_paths.path_id = g.game_id_path_id
+            LEFT JOIN path_values_text launch_paths
+              ON launch_paths.path_id = lt.launch_path_id
+            LEFT JOIN path_values_text payload_paths
+              ON payload_paths.path_id = lt.payload_path_id
+            LEFT JOIN launchable_identity_rows i
+              ON i.game_key_id = lt.game_key_id
              AND i.namespace = 'mame'
-            WHERE l.system_id IN ('arcade','neogeo')
-              AND l.launch_ref != ''
+            WHERE g.system_id IN ('arcade','neogeo')
+              AND (
+                CASE launch_ref_kind_values.value
+                    WHEN 'payload' THEN 'magik-plan:payload:' || payload_paths.path
+                    WHEN 'archive' THEN 'magik-plan:archive:' || payload_paths.path
+                    WHEN 'same-payload' THEN payload_paths.path
+                    ELSE launch_paths.path
+                END
+              ) != ''
         ),
         resolved AS (
             SELECT
