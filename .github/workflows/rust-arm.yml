@@ -71,6 +71,9 @@ jobs:
       - name: Check host tools
         run: scripts/dev-rust host-tools
 
+      - name: Check MagiK agent
+        run: cargo check --manifest-path tools/magik-agent/Cargo.toml
+
       - name: Clippy host tools
         run: cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
 
