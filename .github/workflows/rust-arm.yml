@@ -169,13 +169,21 @@ jobs:
           path: magik-gui/target/ffmpeg-minimal/armv7
           key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
-      - name: Cache ARM build outputs
+      - name: Cache ARM native build outputs
         uses: actions/cache@v6
         with:
           path: magik-gui/target/${{ matrix.profile }}
-          key: target-arm-native-profile-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-native-split-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
-            target-arm-native-profile-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-native-split-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+
+      - name: Cache ARM target build outputs
+        uses: actions/cache@v6
+        with:
+          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
+          key: target-arm-cross-split-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          restore-keys: |
+            target-arm-cross-split-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
 
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
