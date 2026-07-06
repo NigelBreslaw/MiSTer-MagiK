@@ -50,7 +50,6 @@ impl LauncherPreviewAsset {
 pub(crate) struct CatalogProjectionRow {
     pub(crate) launch_id: i64,
     pub(crate) game: ArcadeGameEntry,
-    pub(crate) discovered_at_unix: Option<i64>,
     pub(crate) source_kind: String,
     pub(crate) setname: String,
     pub(crate) parent: String,
@@ -59,7 +58,6 @@ pub(crate) struct CatalogProjectionRow {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogProjectionSource {
-    pub(crate) discovered_at_unix: Option<i64>,
     pub(crate) source_kind: String,
     pub(crate) setname: String,
     pub(crate) parent: String,
@@ -91,7 +89,6 @@ impl CatalogProjectionRow {
                 has_preview,
                 is_new,
             ),
-            discovered_at_unix: source.discovered_at_unix,
             source_kind: source.source_kind,
             setname: source.setname,
             parent: source.parent,
@@ -422,8 +419,8 @@ pub(crate) fn materialize_arcade_ui_projections(
 
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute(
-        "INSERT INTO launcher_catalog(ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
-         SELECT ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix
+        "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
+         SELECT ordinal,launch_id,preview_asset_key,has_preview
          FROM ui_arcade_preferred_text
          ORDER BY ordinal",
         [],
@@ -437,7 +434,7 @@ pub(crate) fn insert_console_launcher_catalog(
     mut rows: Vec<CatalogProjectionRow>,
 ) -> Result<usize, String> {
     let ordinal_offset = tx
-        .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
+        .query_row("SELECT count(*) FROM launcher_catalog_rows", [], |row| {
             row.get::<_, i64>(0)
         })
         .map_err(|e| format!("query launcher catalog offset: {e}"))?;
@@ -445,8 +442,8 @@ pub(crate) fn insert_console_launcher_catalog(
     let launcher_games = collapse_catalog_variant_rows(rows);
     let mut launcher_stmt = tx
         .prepare(
-            "INSERT INTO launcher_catalog(ordinal,launch_id,title,sort_title,preview_asset_key,has_preview,system_id,year,manufacturer,category,discovered_at_unix)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
+             VALUES (?1,?2,?3,?4)",
         )
         .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
     for (idx, row) in launcher_games.iter().enumerate() {
@@ -455,27 +452,12 @@ pub(crate) fn insert_console_launcher_catalog(
             .execute(params![
                 ordinal_offset + idx as i64,
                 row.launch_id,
-                game.title.as_ref(),
-                library_db::normalize_title(&game.title),
                 game.preview_asset_key.as_ref(),
-                if game.has_preview { 1 } else { 0 },
-                game.system_id.as_ref(),
-                game.year.map(i64::from),
-                non_empty_arc_str(&game.manufacturer),
-                non_empty_arc_str(&game.category),
-                row.discovered_at_unix
+                if game.has_preview { 1 } else { 0 }
             ])
             .map_err(|e| format!("insert launcher catalog: {e}"))?;
     }
     Ok(launcher_games.len())
-}
-
-fn non_empty_arc_str(value: &std::sync::Arc<str>) -> Option<&str> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value.as_ref())
-    }
 }
 
 pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<usize, String> {
