@@ -175,8 +175,10 @@ jobs:
           path: |
             magik-gui/target/${{ matrix.profile }}
             magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-prune-build-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
+            target-arm-prune-build-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
             target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-
 
@@ -216,6 +218,24 @@ jobs:
           name: binary-size-${{ matrix.name }}
           path: build/binary-size.tsv
           if-no-files-found: error
+
+      - name: Prune ARM cache build directories
+        shell: bash
+        run: |
+          for dir in \
+            "magik-gui/target/${{ matrix.profile }}" \
+            "magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}"
+          do
+            if [ -d "$dir/build" ]; then
+              rm -rf "$dir/build"
+            fi
+            if [ -d "$dir" ]; then
+              echo "::group::pruned $dir"
+              du -sh "$dir"
+              find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20
+              echo "::endgroup::"
+            fi
+          done
 
   agent-arm-build:
     name: agent-arm-build
