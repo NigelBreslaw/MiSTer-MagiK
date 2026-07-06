@@ -1755,7 +1755,6 @@ fn write_sqlite_scan_with_sources_inner(
             game_id_path_id INTEGER,
             game_id_text TEXT,
             title TEXT NOT NULL,
-            sort_title TEXT NOT NULL,
             system_id TEXT NOT NULL,
             manufacturer TEXT,
             genre TEXT,
@@ -1840,7 +1839,7 @@ fn write_sqlite_scan_with_sources_inner(
                        ELSE game_rows.game_id_text
                    END AS game_id,
                    game_rows.title,
-                   game_rows.sort_title,
+                   lower(game_rows.title) AS sort_title,
                    game_rows.system_id,
                    game_rows.manufacturer,
                    game_rows.genre,
@@ -1970,7 +1969,7 @@ fn write_sqlite_scan_with_sources_inner(
             SELECT launcher_catalog_rows.ordinal,
                    launcher_catalog_rows.launch_id,
                    COALESCE(ui_arcade_preferred_text.title, game_rows.title) AS title,
-                   COALESCE(ui_arcade_preferred_text.sort_title, game_rows.sort_title) AS sort_title,
+                   COALESCE(ui_arcade_preferred_text.sort_title, lower(game_rows.title)) AS sort_title,
                    launcher_catalog_rows.preview_asset_key,
                    launcher_catalog_rows.has_preview,
                    game_rows.system_id,
@@ -2196,8 +2195,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,sort_title,system_id,manufacturer,genre,year,discovered_at_unix)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,system_id,manufacturer,genre,year,discovered_at_unix)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
@@ -2271,7 +2270,6 @@ fn write_sqlite_scan_with_sources_inner(
                     game_id_storage.path.map(|path| path_interner.intern(path)),
                     game_id_storage.text,
                     discovery.title.as_str(),
-                    library_db::normalize_title(&discovery.title),
                     system_id.as_str(),
                     discovery.manufacturer.as_deref(),
                     discovery.genre.as_deref(),
