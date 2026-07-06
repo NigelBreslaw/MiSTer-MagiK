@@ -35,7 +35,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-host-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          key: cargo-host-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'magik-gui/catalog/Cargo.lock') }}
           restore-keys: |
             cargo-host-${{ runner.os }}-
 
@@ -44,9 +44,7 @@ jobs:
         with:
           path: |
             magik-gui/target/debug
-            tools/magik-agent/target/debug
-            tools/mister/target/debug
-          key: target-host-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          key: target-host-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/catalog/Cargo.lock') }}
           restore-keys: |
             target-host-${{ runner.os }}-
 
