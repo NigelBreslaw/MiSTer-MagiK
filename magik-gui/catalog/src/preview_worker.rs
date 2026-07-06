@@ -806,7 +806,11 @@ pub fn load_preview_asset_pixels_timed(
     preview_asset_key: &str,
 ) -> Result<LoadedPreviewAsset, String> {
     let mut scratch = PreviewArchiveScratch::default();
-    load_preview_asset_pixels_timed_with_scratch(preview_archive_path, preview_asset_key, &mut scratch)
+    load_preview_asset_pixels_timed_with_scratch(
+        preview_archive_path,
+        preview_asset_key,
+        &mut scratch,
+    )
 }
 
 fn load_preview_asset_pixels_timed_with_scratch(
@@ -817,8 +821,8 @@ fn load_preview_asset_pixels_timed_with_scratch(
     let resize = PreviewResizeSpec::from_env();
     let storage_format = PreviewStorageFormat::from_env();
     let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
-    load_preview_pixels(&resolved_archive_path, preview_asset_key, scratch, resize).map(
-        |loaded| LoadedPreviewAsset {
+    load_preview_pixels(&resolved_archive_path, preview_asset_key, scratch, resize).map(|loaded| {
+        LoadedPreviewAsset {
             pixels: loaded.image,
             read_us: loaded.timing.read_us,
             decode_us: loaded.timing.decode_us,
@@ -829,8 +833,8 @@ fn load_preview_asset_pixels_timed_with_scratch(
             load_source: loaded.timing.load_source,
             storage_format,
             resize_filter: resize.filter,
-        },
-    )
+        }
+    })
 }
 
 fn load_raw565_preview_asset_timed(
@@ -845,11 +849,9 @@ fn load_raw565_preview_asset_timed(
     }
     let entry_name = format!("{asset_key}.rgb565");
     if preview_archive_mem_primary_enabled() {
-        if let Some(loaded) = load_raw565_preview_asset_from_archive_mem(
-            archive_path,
-            &entry_name,
-            scratch,
-        )? {
+        if let Some(loaded) =
+            load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
+        {
             return Ok(loaded);
         }
     }
@@ -962,7 +964,12 @@ impl PreviewArchiveScratch {
         self.index_pread_file
             .as_ref()
             .map(|cached| &cached.file)
-            .ok_or_else(|| format!("open preview archive {}: cache empty", archive_path.display()))
+            .ok_or_else(|| {
+                format!(
+                    "open preview archive {}: cache empty",
+                    archive_path.display()
+                )
+            })
     }
 }
 
@@ -1008,7 +1015,8 @@ fn warm_preview_sidecar_indexes_from_env() -> Result<bool, String> {
                 if preview_trace_enabled() {
                     crate::catalog_errln!(
                         "preview_trace sidecar_warm_skipped archive_path={} error={}",
-                        resolved_path, error
+                        resolved_path,
+                        error
                     );
                 }
             }
@@ -1025,7 +1033,9 @@ pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
         cached.clear();
     }
     if preview_trace_enabled() {
-        crate::catalog_errln!("preview_trace metadata_cache event=forced_invalidation reason={reason}");
+        crate::catalog_errln!(
+            "preview_trace metadata_cache event=forced_invalidation reason={reason}"
+        );
     }
 }
 
@@ -1752,7 +1762,8 @@ fn preview_archive_sidecar_lookup(
     let index_fingerprint = preview_archive_fingerprint(&index_path)?;
     let read_t = Instant::now();
     let index = read_preview_archive_sidecar_index(&index_path, archive_fingerprint.size)?;
-    let trust = preview_archive_sidecar_trust(archive_path, &index_path, &archive_fingerprint, &index)?;
+    let trust =
+        preview_archive_sidecar_trust(archive_path, &index_path, &archive_fingerprint, &index)?;
     let read_us = read_t.elapsed().as_micros() as u64;
     if preview_trace_enabled() {
         crate::catalog_errln!(
@@ -1877,7 +1888,14 @@ fn sidecar_state_entry_matches(
     archive_sha256: &str,
     found_archive_state: &mut bool,
 ) -> Result<bool, String> {
-    if pack_state_matches(value, archive_path, index_path, archive_bytes, archive_sha256, found_archive_state)? {
+    if pack_state_matches(
+        value,
+        archive_path,
+        index_path,
+        archive_bytes,
+        archive_sha256,
+        found_archive_state,
+    )? {
         return Ok(true);
     }
     if let Some(size) = value
@@ -1938,14 +1956,18 @@ fn pack_state_matches(
         .and_then(serde_json::Value::as_str)
         != Some(index_path)
     {
-        return Err(format!("{index_path}: preview archive index path mismatch in state"));
+        return Err(format!(
+            "{index_path}: preview archive index path mismatch in state"
+        ));
     }
     if index_state
         .get("archive_bytes")
         .and_then(serde_json::Value::as_u64)
         != Some(archive_bytes)
     {
-        return Err(format!("{index_path}: preview archive byte count mismatch in state"));
+        return Err(format!(
+            "{index_path}: preview archive byte count mismatch in state"
+        ));
     }
     if index_state
         .get("archive_sha256")
@@ -1954,7 +1976,9 @@ fn pack_state_matches(
         .as_deref()
         != Some(archive_sha256)
     {
-        return Err(format!("{index_path}: preview archive sha mismatch in state"));
+        return Err(format!(
+            "{index_path}: preview archive sha mismatch in state"
+        ));
     }
     Ok(true)
 }
@@ -2303,6 +2327,12 @@ fn decode_raw565_preview_bytes(data: &[u8]) -> Result<PreviewPixels, String> {
     let width = u32::from_le_bytes(data[8..12].try_into().unwrap());
     let height = u32::from_le_bytes(data[12..16].try_into().unwrap());
     let stride_bytes = u32::from_le_bytes(data[16..20].try_into().unwrap());
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "raw565 preview bad dimensions width={} height={}",
+            width, height
+        ));
+    }
     let min_stride = width as usize * 2;
     if !(stride_bytes as usize).is_multiple_of(16) || (stride_bytes as usize) < min_stride {
         return Err(format!(
@@ -2474,7 +2504,12 @@ mod tests {
     fn stale_prefetch_prune_keeps_selected_and_recent_generations() {
         let mut queue = vec![
             queued_request(1, "old selected", "selected", PreviewPriority::Selected),
-            queued_request(2, "old prefetch", "old", PreviewPriority::Prefetch { distance: 1 }),
+            queued_request(
+                2,
+                "old prefetch",
+                "old",
+                PreviewPriority::Prefetch { distance: 1 },
+            ),
             queued_request(
                 TURBO_PREVIEW_DECODED_CACHE_CAP as u64 + 9,
                 "recent prefetch",
@@ -2975,11 +3010,7 @@ mod tests {
             "mister-magik-preview-index-missing-entry-{}.mmlz4b",
             std::process::id()
         ));
-        write_lz4_block_archive_with_index(
-            &path,
-            "tiny.rgb565",
-            &raw565_fixture(1, 1, &[0xf800]),
-        );
+        write_lz4_block_archive_with_index(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
         preview_archives_for_paths(vec![path.display().to_string()])
             .expect("warm archive before missing indexed load");
         let mut scratch = PreviewArchiveScratch::default();
@@ -3208,6 +3239,21 @@ mod tests {
                 assert_eq!(&words[..3], &[0xf800, 0x07e0, 0x001f]);
             }
         }
+    }
+
+    #[test]
+    fn raw565_preview_header_rejects_zero_dimensions() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MM56501\0");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.resize(20 + 16, 0);
+
+        let err = decode_raw565_preview_bytes(&bytes)
+            .expect_err("zero-width raw565 preview must be rejected");
+
+        assert!(err.contains("dimensions"), "unexpected error: {err}");
     }
 
     #[test]
@@ -3609,7 +3655,10 @@ mod tests {
             .expect("archive");
 
         assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(preview_archive_metadata_calls(&path_text), calls_after_first);
+        assert_eq!(
+            preview_archive_metadata_calls(&path_text),
+            calls_after_first
+        );
         let _ = std::fs::remove_file(path);
     }
 

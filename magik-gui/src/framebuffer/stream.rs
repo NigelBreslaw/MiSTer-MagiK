@@ -449,7 +449,11 @@ fn collect_strided_rect(
 ) -> Option<Vec<Rgb565Pixel>> {
     let width = rect.width as usize;
     let height = rect.height as usize;
-    if width == 0 || height == 0 || src_stride < width || src_x > src_stride {
+    if width == 0
+        || height == 0
+        || src_stride < width
+        || src_x.checked_add(width).is_none_or(|end| end > src_stride)
+    {
         return None;
     }
     let mut out = Vec::with_capacity(width.checked_mul(height)?);
@@ -537,6 +541,19 @@ mod tests {
                 Rgb565Pixel(10)
             ]
         );
+    }
+
+    #[test]
+    fn strided_rect_collection_rejects_rows_that_overrun_stride() {
+        let pixels = (0..9).map(Rgb565Pixel).collect::<Vec<_>>();
+        let rect = FrameRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+
+        assert_eq!(collect_strided_rect(&pixels, 3, 2, 0, rect), None);
     }
 
     #[test]

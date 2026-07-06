@@ -893,11 +893,15 @@ fn parse_framebuffer_capture_lz4(
         ));
     }
     let encoding = string_at(value, "/encoding").unwrap_or("raw");
-    let raw = if encoding == "lz4-block-size-prepended" {
-        lz4_flex::decompress_size_prepended(payload)
-            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer LZ4: {err}")))?
-    } else {
-        payload.to_vec()
+    let raw = match encoding {
+        "lz4-block-size-prepended" => lz4_flex::decompress_size_prepended(payload)
+            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer LZ4: {err}")))?,
+        "raw" => payload.to_vec(),
+        other => {
+            return Err(AgentError::Protocol(format!(
+                "unsupported framebuffer raw stream encoding: {other}"
+            )))
+        }
     };
     let width = value.pointer("/width").and_then(Value::as_u64).unwrap_or(0);
     let height = value
@@ -1493,6 +1497,27 @@ mod tests {
         assert_eq!(capture.timing.raw_read_us, 10);
         assert_eq!(capture.timing.lz4_encode_us, 20);
         assert_eq!(capture.timing.total_us, 30);
+    }
+
+    #[test]
+    fn parse_framebuffer_lz4_capture_rejects_unknown_encoding() {
+        let err = parse_framebuffer_capture_lz4(
+            &json!({
+                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "width": 1,
+                "height": 1,
+                "stride": 2,
+                "bpp": 16,
+                "format": "rgb565-le",
+                "encoding": "zstd",
+                "raw_bytes": 2,
+                "payload_bytes": 2
+            }),
+            &[0, 0],
+        )
+        .expect_err("unsupported encoding should fail");
+
+        assert!(matches!(err, AgentError::Protocol(message) if message.contains("unsupported")));
     }
 
     #[test]

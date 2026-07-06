@@ -341,7 +341,7 @@ stop_active_trigger() {
 
 cleanup_on_exit() {
   stop_active_trigger
-  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION")" >/dev/null 2>&1 || true
+  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION") $(sq "$REMOTE_REBUILD_MARKER")" >/dev/null 2>&1 || true
 }
 
 trap cleanup_on_exit EXIT INT TERM

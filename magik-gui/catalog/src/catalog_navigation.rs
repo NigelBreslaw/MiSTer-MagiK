@@ -6,7 +6,6 @@ use crate::arcade_catalog::{
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
-use crate::preview_worker;
 use crate::sqlite_catalog;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -14,8 +13,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 5;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB5\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 6;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB6\0";
 const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
@@ -249,6 +248,7 @@ struct CompactNavigationProjection<'a> {
 struct CompactNavigationGame<'a> {
     title: &'a str,
     launch_ref: CompactGameLaunchRef<'a>,
+    preview_archive_path: &'a str,
     preview_asset_key: &'a str,
     has_preview: bool,
     system_id: &'a str,
@@ -374,6 +374,7 @@ impl<'a> CompactNavigationProjection<'a> {
             games.push(CompactNavigationGame {
                 title: game.title.as_ref(),
                 launch_ref,
+                preview_archive_path: game.preview_archive_path.as_ref(),
                 preview_asset_key: game.preview_asset_key.as_ref(),
                 has_preview: game.has_preview,
                 system_id: game.system_id.as_ref(),
@@ -498,6 +499,7 @@ fn encode_navigation_projection(
             }
         }
         write_string(&mut out, game.preview_asset_key)?;
+        write_string(&mut out, game.preview_archive_path)?;
         write_bool(&mut out, game.has_preview);
         write_string(&mut out, game.system_id)?;
         match game.year {
@@ -583,7 +585,6 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     }
     let game_count = reader.read_len()?;
     let mut game_rows = Vec::with_capacity(game_count);
-    let mut preview_archive_paths_by_system = HashMap::<String, Arc<str>>::new();
     for _ in 0..game_count {
         let title = reader.read_arc_string()?;
         let launch_ref = match reader.read_u8()? {
@@ -596,18 +597,9 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             }
         };
         let preview_asset_key = reader.read_arc_string()?;
+        let preview_archive_path = reader.read_arc_string()?;
         let has_preview = reader.read_bool()?;
         let system_id = reader.read_arc_string()?;
-        let preview_archive_path = if preview_asset_key.is_empty() {
-            Arc::from("")
-        } else {
-            preview_archive_paths_by_system
-                .entry(system_id.to_string())
-                .or_insert_with(|| {
-                    preview_worker::preview_archive_path_for_system(&system_id).into()
-                })
-                .clone()
-        };
         let year = if reader.read_bool()? {
             Some(reader.read_u16()?)
         } else {
@@ -916,7 +908,7 @@ mod tests {
     fn projection_catalog() -> ArcadeCatalog {
         let saturn_payload = "/media/fat/games/Saturn/Nights.chd";
         let neogeo_payload = "/media/fat/games/NEOGEO/Pack.zip/Pack/World A-Z/mslug.neo";
-        let games = vec![
+        let mut games = vec![
             game("1942", "/media/fat/_Arcade/1942.mra", "arcade"),
             game(
                 "Nights",
@@ -929,6 +921,8 @@ mod tests {
                 "neogeo",
             ),
         ];
+        games[2].preview_archive_path =
+            Arc::from("/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b");
         let systems = vec![
             GameSystemEntry {
                 id: "arcade".to_string(),
@@ -997,6 +991,14 @@ mod tests {
         assert_eq!(loaded.games.len(), catalog.games.len());
         assert_eq!(loaded.systems.len(), catalog.systems.len());
         assert_eq!(loaded.launch_plans.len(), 2);
+        assert_eq!(
+            loaded.games[2].preview_archive_path.as_ref(),
+            "/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b"
+        );
+        assert_eq!(
+            hydrated.games[2].preview_archive_path.as_ref(),
+            "/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b"
+        );
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
         assert_eq!(hydrated.decade_option_count("arcade"), 1);

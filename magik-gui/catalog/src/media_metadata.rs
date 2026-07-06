@@ -268,12 +268,7 @@ fn parse_mra_metadata_xml_reader(reader: impl BufRead) -> Option<MraMetadata> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) | Err(_) => break,
             Ok(event) => {
-                if !apply_mra_metadata_event(
-                    event,
-                    &mut metadata,
-                    &mut field,
-                    &mut field_text,
-                ) {
+                if !apply_mra_metadata_event(event, &mut metadata, &mut field, &mut field_text) {
                     break;
                 }
             }
@@ -321,7 +316,11 @@ fn apply_mra_metadata_event(
                 }
                 *field = None;
                 field_text.clear();
-            } else if e.name().as_ref().eq_ignore_ascii_case(b"misterromdescription") {
+            } else if e
+                .name()
+                .as_ref()
+                .eq_ignore_ascii_case(b"misterromdescription")
+            {
                 return false;
             }
         }
@@ -334,7 +333,9 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
     let mut reader = XmlReader::from_str(text);
     let mut metadata = MglMetadata::default();
     let mut in_rbf = false;
+    let mut in_file = false;
     let mut rbf_text = String::new();
+    let mut file_text = String::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
@@ -344,6 +345,8 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                     rbf_text.clear();
                 } else if tag.as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none()
                 {
+                    in_file = true;
+                    file_text.clear();
                     metadata.file_path = xml_attr_value(&e, b"path");
                 }
             }
@@ -353,23 +356,29 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if in_rbf {
-                    if let Ok(value) = e.xml10_content() {
+                if let Ok(value) = e.xml10_content() {
+                    if in_rbf {
                         rbf_text.push_str(&value);
+                    } else if in_file && metadata.file_path.is_none() {
+                        file_text.push_str(&value);
                     }
                 }
             }
             Ok(Event::CData(e)) => {
-                if in_rbf {
-                    if let Ok(value) = e.xml10_content() {
+                if let Ok(value) = e.xml10_content() {
+                    if in_rbf {
                         rbf_text.push_str(&value);
+                    } else if in_file && metadata.file_path.is_none() {
+                        file_text.push_str(&value);
                     }
                 }
             }
             Ok(Event::GeneralRef(e)) => {
-                if in_rbf {
-                    if let Some(value) = xml_general_ref_text(e.as_ref()) {
+                if let Some(value) = xml_general_ref_text(e.as_ref()) {
+                    if in_rbf {
                         rbf_text.push_str(value);
+                    } else if in_file && metadata.file_path.is_none() {
+                        file_text.push_str(value);
                     }
                 }
             }
@@ -378,6 +387,12 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                     set_optional_trimmed(&mut metadata.rbf, &rbf_text);
                     in_rbf = false;
                     rbf_text.clear();
+                } else if e.name().as_ref().eq_ignore_ascii_case(b"file") {
+                    if metadata.file_path.is_none() {
+                        set_optional_trimmed(&mut metadata.file_path, &file_text);
+                    }
+                    in_file = false;
+                    file_text.clear();
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -827,6 +842,27 @@ mod tests {
         assert_eq!(
             metadata.file_path.as_deref(),
             Some("games/NES/Super Mario Bros.nes")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_metadata_parser_reads_file_text_payload() {
+        let root = unique_temp_dir("mgl-file-text");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Fixture.mgl");
+        std::fs::write(
+            &path,
+            r#"<mistergamelist><rbf>NES</rbf><file delay="1" type="s">../games/NES/Mario.nes</file></mistergamelist>"#,
+        )
+        .expect("write mgl fixture");
+
+        let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
+
+        assert_eq!(metadata.rbf.as_deref(), Some("NES"));
+        assert_eq!(
+            metadata.file_path.as_deref(),
+            Some("../games/NES/Mario.nes")
         );
         let _ = std::fs::remove_dir_all(root);
     }

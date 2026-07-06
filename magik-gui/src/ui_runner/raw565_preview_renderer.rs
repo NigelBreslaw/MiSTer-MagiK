@@ -41,11 +41,13 @@ pub(super) fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
     let right_w = ui.render_w().saturating_sub(right_x);
     let cabinet_x = right_x + right_w.saturating_sub(CABINET_W) / 2;
     let cabinet_y = ui.render_h().saturating_sub(CABINET_H) / 2;
+    let x0 = (cabinet_x + ARCADE_PREVIEW_BOX_X).min(ui.render_w());
+    let y0 = (cabinet_y + ARCADE_PREVIEW_BOX_Y).min(ui.render_h());
     DirtyRect {
-        x0: cabinet_x + ARCADE_PREVIEW_BOX_X,
-        y0: cabinet_y + ARCADE_PREVIEW_BOX_Y,
-        x1: cabinet_x + ARCADE_PREVIEW_BOX_X + ARCADE_PREVIEW_BOX_W as usize,
-        y1: cabinet_y + ARCADE_PREVIEW_BOX_Y + ARCADE_PREVIEW_BOX_H as usize,
+        x0,
+        y0,
+        x1: (cabinet_x + ARCADE_PREVIEW_BOX_X + ARCADE_PREVIEW_BOX_W as usize).min(ui.render_w()),
+        y1: (cabinet_y + ARCADE_PREVIEW_BOX_Y + ARCADE_PREVIEW_BOX_H as usize).min(ui.render_h()),
     }
 }
 
@@ -2007,6 +2009,17 @@ mod tests {
         assert_eq!(rect, screen);
         let center = ((screen.y0 + screen.y1) / 2) * ui.render_w() + (screen.x0 + screen.x1) / 2;
         assert_eq!(cached[center].0, 0);
+    }
+
+    #[test]
+    fn preview_screen_rect_stays_inside_small_framebuffer() {
+        let ui = UiDisplay::for_framebuffer(320, 240);
+        let rect = preview_screen_rect(&ui);
+
+        assert!(rect.x0 <= rect.x1);
+        assert!(rect.y0 <= rect.y1);
+        assert!(rect.x1 <= ui.render_w());
+        assert!(rect.y1 <= ui.render_h());
     }
 
     #[test]

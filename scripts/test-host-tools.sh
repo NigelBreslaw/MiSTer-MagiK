@@ -122,6 +122,29 @@ if not gate:
     sys.exit(1)
 PY
 
+python3 - "$ROOT/scripts/device-fs-fault-reset.sh" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+match = re.search(r"cleanup_on_exit\(\) \{(?P<body>.*?)\n\}", text, re.S)
+if not match:
+    print("could not find fs-fault cleanup_on_exit body", file=sys.stderr)
+    sys.exit(1)
+body = match.group("body")
+for needle in [
+    "REMOTE_ENV",
+    "REMOTE_FAULT_ENV",
+    "REMOTE_MARKER",
+    "REMOTE_SESSION",
+    "REMOTE_REBUILD_MARKER",
+]:
+    if needle not in body:
+        print(f"fs-fault cleanup_on_exit missing {needle}", file=sys.stderr)
+        sys.exit(1)
+PY
+
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \

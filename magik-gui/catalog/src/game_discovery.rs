@@ -159,10 +159,23 @@ fn number_after_marker(haystack: &str, marker: &str) -> Option<u32> {
 }
 
 fn normalize_launch_path(path: &str) -> String {
-    path.replace("/./", "/")
-        .trim()
-        .trim_start_matches("./")
-        .to_ascii_lowercase()
+    let trimmed = path.trim().trim_start_matches("./");
+    let absolute = trimmed.starts_with('/');
+    let mut parts = Vec::new();
+    for part in trimmed.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            value => parts.push(value),
+        }
+    }
+    let mut normalized = parts.join("/");
+    if absolute {
+        normalized.insert(0, '/');
+    }
+    normalized.to_ascii_lowercase()
 }
 
 pub(crate) fn discovery_from_profile_file(
@@ -216,6 +229,7 @@ pub(crate) fn discovery_from_profile_file(
             let payload_profile = mgl
                 .file_path
                 .as_deref()
+                .filter(|_| profile.id == "mgl")
                 .and_then(|payload| profile_for_mgl_payload(profiles, &file.path, payload));
             let profile = payload_profile.unwrap_or(profile);
             let setname = if profile.system_id == "neogeo" {
@@ -702,6 +716,17 @@ mod tests {
             },
             payload("/media/fat/games/NES/Mario.nes"),
         ];
+
+        assert_eq!(unique_discovery_count(&discoveries), 1);
+    }
+
+    #[test]
+    fn mgl_covered_payload_normalizes_parent_components() {
+        let mut launcher = mgl("/media/fat/_Games/Mario.mgl", "/media/fat/_Games/Mario.mgl");
+        launcher.covered_payload_path =
+            Some("/media/fat/_Games/../games/NES/Mario.nes".to_string());
+
+        let discoveries = vec![launcher, payload("/media/fat/games/NES/Mario.nes")];
 
         assert_eq!(unique_discovery_count(&discoveries), 1);
     }

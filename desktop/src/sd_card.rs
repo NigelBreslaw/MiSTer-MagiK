@@ -359,10 +359,13 @@ fn message_row(parent: &str, label: &str, level: i32) -> SdTreeRow {
 pub fn normalize_ui_path(path: &str) -> String {
     let mut parts = Vec::new();
     for part in path.split('/') {
-        if part.is_empty() || part == "." {
-            continue;
+        match part {
+            "" | "." => continue,
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
         }
-        parts.push(part);
     }
     if parts.is_empty() {
         ROOT_PATH.to_string()
@@ -674,6 +677,11 @@ mod tests {
     fn ui_paths_normalize_duplicate_slashes_and_dots() {
         assert_eq!(normalize_ui_path(""), ROOT_PATH);
         assert_eq!(normalize_ui_path("///games//NES/./"), "/games/NES");
+        assert_eq!(
+            normalize_ui_path("/games/NES/../../MiSTer.ini"),
+            "/MiSTer.ini"
+        );
+        assert_eq!(normalize_ui_path("/../../etc/passwd"), "/etc/passwd");
     }
 
     #[test]
