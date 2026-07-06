@@ -83,66 +83,66 @@ export {
 
 export component AppWindow inherits Window {
     title: "MiSTer MagiK";
-    preferred-width: 1100px;
-    preferred-height: 760px;
-    min-width: 640px;
-    min-height: 320px;
-    max-width: 10000px;
-    max-height: 10000px;
+    min-width: 1100px;
+    min-height: 760px;
     default-font-family: "Mona Sans";
 
     Rectangle {
         background: PrimerColors.bgColor-default;
-
-        HorizontalLayout {
-            Sidebar {
+        VerticalLayout {
+            height: parent.height;
+            AppHeader {
+                safe-left: 0px;
+                safe-right: root.safe-area-insets.right;
                 safe-top: root.safe-area-insets.top;
+                start-window-drag => { WindowActions.start-window-drag(); }
             }
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-
-                AppHeader {
-                    safe-left: 0px;
-                    safe-right: root.safe-area-insets.right;
+            HorizontalLayout {
+                Sidebar {
+                    
                     safe-top: root.safe-area-insets.top;
-                    start-window-drag => { WindowActions.start-window-drag(); }
                 }
-
-                Rectangle {
+    
+                VerticalLayout {
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
-                    background: PrimerColors.bgColor-default;
-
-                    if AppState.selected-page == "debug": Flickable {
-                        width: parent.width;
-                        height: parent.height;
-                        viewport-width: self.width;
-                        viewport-height: content.preferred-height;
-
-                        content := VerticalLayout {
+    
+                    
+    
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        background: PrimerColors.bgColor-default;
+    
+                        if AppState.selected-page == "debug": Flickable {
                             width: parent.width;
-                            min-height: parent.height;
-                            alignment: start;
-
-                            DebugPage { }
+                            height: parent.height;
+                            viewport-width: self.width;
+                            viewport-height: content.preferred-height;
+    
+                            content := VerticalLayout {
+                                width: parent.width;
+                                min-height: parent.height;
+                                alignment: start;
+    
+                                DebugPage { }
+                            }
                         }
-                    }
-
-                    if AppState.selected-page == "sd-card": SdCardPage {
-                        width: parent.width;
-                        height: parent.height;
-                    }
-
-                    if AppState.selected-page == "library": LibraryPage {
-                        width: parent.width;
-                        height: parent.height;
-                    }
-
-                    if AppState.selected-page == "analytics": AnalyticsPage {
-                        width: parent.width;
-                        height: parent.height;
+    
+                        if AppState.selected-page == "sd-card": SdCardPage {
+                            width: parent.width;
+                            height: parent.height;
+                        }
+    
+                        if AppState.selected-page == "library": LibraryPage {
+                            width: parent.width;
+                            height: parent.height;
+                        }
+    
+                        if AppState.selected-page == "analytics": AnalyticsPage {
+                            width: parent.width;
+                            height: parent.height;
+                        }
                     }
                 }
             }
