@@ -39,17 +39,6 @@ jobs:
           restore-keys: |
             cargo-host-${{ runner.os }}-
 
-      - name: Cache host build outputs
-        uses: actions/cache@v6
-        with:
-          path: |
-            magik-gui/target/debug
-            tools/magik-agent/target/debug
-            tools/mister/target/debug
-          key: target-host-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'tools/magik-agent/Cargo.lock', 'tools/mister/Cargo.lock') }}
-          restore-keys: |
-            target-host-${{ runner.os }}-
-
       - name: Format
         working-directory: magik-gui
         run: cargo fmt --check
