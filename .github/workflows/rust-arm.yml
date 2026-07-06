@@ -172,9 +172,14 @@ jobs:
       - name: Cache ARM build outputs
         uses: actions/cache@v6
         with:
-          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          path: |
+            magik-gui/target/${{ matrix.profile }}
+            magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
+          key: target-arm-${{ runner.os }}-${{ matrix.profile }}-${{ matrix.features }}-${{ matrix.name }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
+            target-arm-${{ runner.os }}-${{ matrix.profile }}-${{ matrix.features }}-${{ matrix.name }}-
+            target-arm-${{ runner.os }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-${{ runner.os }}-${{ matrix.profile }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-
 
