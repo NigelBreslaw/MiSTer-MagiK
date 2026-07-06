@@ -22,9 +22,10 @@ Runs the final Arcade preview fade pacing gate:
   - held-scroll fade
   - turbo-hold fade
 
-Fails if either run has vsync fallback/timeout/error, non-zero max vsync miss
-streak, or p99 work above the threshold. Reports work-over-budget outliers
-separately so scheduler spikes do not hide p99 headroom.
+Fails if either run has non-exact screenshot previews, vsync
+fallback/timeout/error, non-zero max vsync miss streak, or p99 work above the
+threshold. Reports work-over-budget outliers separately so scheduler spikes do
+not hide p99 headroom.
 
 When --baseline-label is provided, also compares BASE-FADE-VEL/TURBO traces
 against the current run and fails on present-path regressions:
@@ -58,7 +59,7 @@ gate_trace() {
     awk -F '\t' -v works="$works" '
       NR == 1 {
         for (i = 1; i <= NF; i++) col[$i] = i
-        required = "frame prepare_us slint_render_us custom_draw_us fb_present_us vsync_source vsync_miss_streak"
+        required = "frame cache_state prepare_us slint_render_us custom_draw_us fb_present_us vsync_source vsync_miss_streak"
         split(required, req, " ")
         for (i in req) {
           if (!(req[i] in col)) {
@@ -73,6 +74,14 @@ gate_trace() {
         work = $(col["prepare_us"]) + $(col["slint_render_us"]) + $(col["custom_draw_us"]) + $(col["fb_present_us"])
         print work > works
         if (work > 16667) work_over++
+        cache_state = $(col["cache_state"])
+        if (cache_state == "exact") exact++
+        else {
+          non_exact++
+          if (non_exact <= 10) {
+            printf "%s preview_exact_gate miss frame=%s cache_state=%s\n", name, $(col["frame"]), cache_state > "/dev/stderr"
+          }
+        }
         source = $(col["vsync_source"])
         if (source == "vsync") vsync++
         else if (source == "fallback") fallback++
@@ -83,13 +92,14 @@ gate_trace() {
         if (miss > max_miss) max_miss = miss
       }
       END {
-        printf "%d %d %d %d %d %d %d %d\n",
+        printf "%d %d %d %d %d %d %d %d %d %d\n",
           n + 0, work_over + 0, vsync + 0, fallback + 0,
-          timeout + 0, error + 0, other_source + 0, max_miss + 0
+          timeout + 0, error + 0, other_source + 0, max_miss + 0,
+          exact + 0, non_exact + 0
       }
     ' "$tsv"
   )"
-  read -r frames work_over vsync fallback timeout error other_source max_miss <<<"$summary"
+  read -r frames work_over vsync fallback timeout error other_source max_miss exact non_exact <<<"$summary"
   if [[ "${frames:-0}" == missing-column:* ]]; then
     echo "validity_tsv	label=$name	valid=0	invalid_reason=missing_column	detail=${frames#missing-column:}"
     echo "$name gate failed: ${frames#missing-column:} column missing in $tsv" >&2
@@ -108,21 +118,33 @@ gate_trace() {
   p99_work="$(sort -n "$works" | awk -v idx="$p99_index" 'NR == idx { print; exit }')"
   rm -f "$works"
 
-  echo "$name gate frames_after_30=$frames p99_work_us=$p99_work work_gt_16667=$work_over vsync=$vsync fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
-  if [[ "$fallback" -ne 0 || "$timeout" -ne 0 || "$error" -ne 0 || "$other_source" -ne 0 || "$max_miss" -ne 0 || "$p99_work" -ge "$p99_work_us" ]]; then
-    echo "validity_tsv	label=$name	valid=0	invalid_reason=gate_failed	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
+  echo "$name gate frames_after_30=$frames p99_work_us=$p99_work work_gt_16667=$work_over vsync=$vsync fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss exact=$exact non_exact=$non_exact"
+  if [[ "$fallback" -ne 0 || "$timeout" -ne 0 || "$error" -ne 0 || "$other_source" -ne 0 || "$max_miss" -ne 0 || "${non_exact:-0}" -ne 0 || "$p99_work" -ge "$p99_work_us" ]]; then
+    echo "validity_tsv	label=$name	valid=0	invalid_reason=gate_failed	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss exact=$exact non_exact=$non_exact"
     echo "$name gate failed" >&2
     return 9
   fi
-  echo "validity_tsv	label=$name	valid=1	invalid_reason=ok	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss"
+  echo "validity_tsv	label=$name	valid=1	invalid_reason=ok	detail=p99_work_us=$p99_work threshold=$p99_work_us fallback=$fallback timeout=$timeout error=$error other_source=$other_source max_miss_streak=$max_miss exact=$exact non_exact=0"
 }
 
 write_self_test_trace() {
   local path="$1" work="$2" source="$3" miss="$4"
   {
-    echo $'frame\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tvsync_source\tvsync_miss_streak'
+    echo $'frame\tcache_state\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tvsync_source\tvsync_miss_streak'
     for frame in $(seq 0 40); do
-      echo "${frame}"$'\t'"${work}"$'\t0\t0\t0\t'"${source}"$'\t'"${miss}"
+      echo "${frame}"$'\texact\t'"${work}"$'\t0\t0\t0\t'"${source}"$'\t'"${miss}"
+    done
+  } >"$path"
+}
+
+write_preview_miss_self_test_trace() {
+  local path="$1"
+  {
+    echo $'frame\tcache_state\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tvsync_source\tvsync_miss_streak'
+    for frame in $(seq 0 40); do
+      state="exact"
+      if [[ "$frame" == "35" ]]; then state="stale"; fi
+      echo "${frame}"$'\t'"${state}"$'\t1000\t0\t0\t0\tvsync\t0'
     done
   } >"$path"
 }
@@ -130,9 +152,9 @@ write_self_test_trace() {
 write_present_self_test_trace() {
   local path="$1" cached_present="$2" fb_present="$3" rows="$4" source="$5" miss="$6"
   {
-    echo $'frame\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_miss_streak'
+    echo $'frame\tcache_state\tarcade_update\trows\tprepare_us\tslint_render_us\tcustom_draw_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tvsync_source\tvsync_miss_streak'
     for frame in $(seq 0 180); do
-      echo "${frame}"$'\tscroll:-12\t'"${rows}"$'\t0\t0\t0\t'"${fb_present}"$'\t'"${cached_present}"$'\t500\t'"${source}"$'\t'"${miss}"
+      echo "${frame}"$'\texact\tscroll:-12\t'"${rows}"$'\t0\t0\t0\t'"${fb_present}"$'\t'"${cached_present}"$'\t500\t'"${source}"$'\t'"${miss}"
     done
   } >"$path"
 }
@@ -150,6 +172,11 @@ if [[ "$self_test" == "1" ]]; then
   write_self_test_trace "$tmpdir/bad-vsync.tsv" 1000 fallback 1
   if gate_trace self-bad-vsync "$tmpdir/bad-vsync.tsv" >/dev/null 2>&1; then
     echo "self-test expected vsync gate failure" >&2
+    exit 1
+  fi
+  write_preview_miss_self_test_trace "$tmpdir/bad-preview.tsv"
+  if gate_trace self-bad-preview "$tmpdir/bad-preview.tsv" >/dev/null 2>&1; then
+    echo "self-test expected non-exact preview gate failure" >&2
     exit 1
   fi
   write_present_self_test_trace "$tmpdir/present-before.tsv" 400 900 704 vsync 0

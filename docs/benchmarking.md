@@ -186,6 +186,9 @@ exercising preview selection changes after reaching the bottom.
 
 Acceptance fields for Arcade preview pacing:
 
+- Screenshot previews must be exact for every sampled frame in the benchmark
+  trace. `cache_state` values other than `exact` are failures, even when frame
+  pacing remains clean.
 - `work_gt_16_7ms` after frame 30 is reported as an outlier count.
 - `vsync_source_fallback=0`, `vsync_source_timeout=0`,
   `vsync_source_error=0`, and `max_vsync_miss_streak=0`.
@@ -206,12 +209,12 @@ scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
 The gate is for release-candidate confirmation. Per-commit scroll evidence uses
 the shorter targeted 30s `turbo-hold` profile above, then the gate can be run
 with `--secs 30` when a combined preservation check is useful. It fails if a
-trace has non-vsync pacing sources, non-zero max miss streak, or p99 work
-at/above the configured threshold. It reports `work_gt_16_7ms` separately so
-isolated scheduler/prepare-wall outliers can be investigated without hiding p99
-headroom. Pass `--baseline-label BASE` when validating a before/after change so
-the gate also fails on present-path regressions in the copied RGB565 rows. Its
-parser self-test is:
+trace has non-vsync pacing sources, non-zero max miss streak, any non-exact
+preview cache state, or p99 work at/above the configured threshold. It reports
+`work_gt_16_7ms` separately so isolated scheduler/prepare-wall outliers can be
+investigated without hiding p99 headroom. Pass `--baseline-label BASE` when
+validating a before/after change so the gate also fails on present-path
+regressions in the copied RGB565 rows. Its parser self-test is:
 
 ```bash
 scripts/gate-preview-60fps.sh --self-test
