@@ -64,9 +64,9 @@ jobs:
       - name: Clippy catalog crate
         run: cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings
 
-      - name: Check host logic
+      - name: Clippy magik-gui host logic
         working-directory: magik-gui
-        run: cargo check --lib --no-default-features
+        run: cargo clippy --lib --no-default-features -- -D warnings
 
       - name: Check host tools
         run: scripts/dev-rust host-tools
@@ -79,42 +79,6 @@ jobs:
 
       - name: Clippy MagiK agent
         run: cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings
-
-  ci-clippy:
-    name: ci-clippy
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        working-directory: magik-gui
-        run: rustup show
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-clippy-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
-          restore-keys: |
-            cargo-clippy-${{ runner.os }}-
-            cargo-host-${{ runner.os }}-
-
-      - name: Cache Clippy build outputs
-        uses: actions/cache@v6
-        with:
-          path: magik-gui/target/debug
-          key: target-clippy-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock') }}
-          restore-keys: |
-            target-clippy-${{ runner.os }}-
-            target-host-${{ runner.os }}-
-
-      - name: Clippy magik-gui host logic
-        working-directory: magik-gui
-        run: cargo clippy --lib --no-default-features -- -D warnings
 
   arm-build:
     name: ${{ matrix.name }}
