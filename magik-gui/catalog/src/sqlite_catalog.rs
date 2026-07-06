@@ -1719,6 +1719,7 @@ fn write_sqlite_scan_with_sources_inner(
     let schema_t = Instant::now();
     conn.execute_batch(
         r#"
+        PRAGMA page_size=1024;
         PRAGMA journal_mode=OFF;
         PRAGMA synchronous=OFF;
         PRAGMA temp_store=MEMORY;
