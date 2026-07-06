@@ -171,6 +171,9 @@ jobs:
       - name: Build cross Docker image
         run: |
           mkdir -p /tmp/.buildx-cache-cross-armv7
+          rm -rf /tmp/.buildx-cache-cross-armv7-new
+          docker buildx create --name cross-cache-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
           docker buildx build \
             --load \
             --tag "$MISTER_CROSS_IMAGE" \
