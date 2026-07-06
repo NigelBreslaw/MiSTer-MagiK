@@ -67,16 +67,16 @@ impl RealtimeHistory {
 struct RealtimeViewState {
     status: String,
     last_error: String,
-    sample_age: String,
-    launcher_summary: String,
     fps_summary: String,
     cpu_summary: String,
-    memory_summary: String,
+    memory_total_label: String,
+    memory_magik_label: String,
+    memory_other_label: String,
+    memory_available_label: String,
     frame_summary: String,
     storage_total_label: String,
     storage_used_label: String,
     storage_empty_label: String,
-    memory_hover: String,
     frame_hover: String,
     streaming: bool,
     combined_cpu_pct: f64,
@@ -87,7 +87,6 @@ struct RealtimeViewState {
     frame_budget_pct: f64,
     cores: Vec<agent_client::CpuCoreTelemetry>,
     cpu_history: Vec<RealtimeChartPoint>,
-    memory_history: Vec<RealtimeChartPoint>,
     frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
     health_tiles: Vec<RealtimeHealthTileView>,
@@ -364,14 +363,6 @@ fn realtime_view_from_history(
             alert: sample.combined_cpu_pct >= 85.0,
         })
         .collect::<Vec<_>>();
-    let memory_history = history
-        .samples
-        .iter()
-        .map(|sample| RealtimeChartPoint {
-            value: sample.memory.magik_pct.clamp(0.0, 100.0),
-            alert: sample.memory.magik_pct >= 25.0,
-        })
-        .collect::<Vec<_>>();
     let frame_history = history
         .samples
         .iter()
@@ -386,16 +377,6 @@ fn realtime_view_from_history(
         .collect::<Vec<_>>();
 
     let Some(sample) = latest else {
-        let health_tiles = if last_error.is_empty() {
-            Vec::new()
-        } else {
-            vec![RealtimeHealthTileView {
-                title: "Telemetry".to_string(),
-                value: "Error".to_string(),
-                detail: last_error.to_string(),
-                state: "bad".to_string(),
-            }]
-        };
         return RealtimeViewState {
             status: if streaming {
                 "Real Time stream starting...".to_string()
@@ -405,16 +386,16 @@ fn realtime_view_from_history(
                 "Real Time stream off.".to_string()
             },
             last_error: last_error.to_string(),
-            sample_age: "-".to_string(),
-            launcher_summary: "-".to_string(),
             fps_summary: "-".to_string(),
             cpu_summary: "-".to_string(),
-            memory_summary: "-".to_string(),
+            memory_total_label: "-".to_string(),
+            memory_magik_label: "MagiK: 0 KiB".to_string(),
+            memory_other_label: "Other: 0 KiB".to_string(),
+            memory_available_label: "Available: 0 KiB".to_string(),
             frame_summary: "-".to_string(),
             storage_total_label: "-".to_string(),
             storage_used_label: "Used: 0GB".to_string(),
             storage_empty_label: "Free: 0GB".to_string(),
-            memory_hover: String::new(),
             frame_hover: String::new(),
             streaming,
             combined_cpu_pct: 0.0,
@@ -425,10 +406,9 @@ fn realtime_view_from_history(
             frame_budget_pct: 0.0,
             cores: Vec::new(),
             cpu_history,
-            memory_history,
             frame_history,
             phases: Vec::new(),
-            health_tiles,
+            health_tiles: Vec::new(),
         };
     };
 
@@ -437,15 +417,10 @@ fn realtime_view_from_history(
         / frame_budget as f64)
         .clamp(0.0, 100.0);
     let phases = realtime_frame_phases(&sample.frame_budget);
-    let memory_hover = format!(
-        "MagiK {} ({:.1}%) | Other {} ({:.1}%) | Available {} ({:.1}%)",
-        format_kib(sample.memory.magik_kb),
-        sample.memory.magik_pct,
-        format_kib(sample.memory.other_used_kb),
-        sample.memory.other_used_pct,
-        format_kib(sample.memory.available_kb),
-        sample.memory.available_pct
-    );
+    let memory_total_label = format_kib(sample.memory.total_kb);
+    let memory_magik_label = format!("MagiK: {}", format_kib(sample.memory.magik_kb));
+    let memory_other_label = format!("Other: {}", format_kib(sample.memory.other_used_kb));
+    let memory_available_label = format!("Available: {}", format_kib(sample.memory.available_kb));
     let storage_empty_pct = sample.storage.available_pct.clamp(0.0, 100.0);
     let storage_used_pct = (100.0 - storage_empty_pct).clamp(0.0, 100.0);
     let storage_used_bytes = sample
@@ -502,32 +477,6 @@ fn realtime_view_from_history(
             detail: "eth0 agent link".to_string(),
             state: "good".to_string(),
         },
-        RealtimeHealthTileView {
-            title: "Preview".to_string(),
-            value: sample.launcher.preview_cache_state.clone(),
-            detail: "Selected preview cache".to_string(),
-            state: if sample.launcher.preview_cache_state == "exact" {
-                "good"
-            } else {
-                "warn"
-            }
-            .to_string(),
-        },
-        RealtimeHealthTileView {
-            title: "Telemetry".to_string(),
-            value: if last_error.is_empty() {
-                "Healthy"
-            } else {
-                "Error"
-            }
-            .to_string(),
-            detail: if last_error.is_empty() {
-                format!("{} samples buffered", history.samples.len())
-            } else {
-                last_error.to_string()
-            },
-            state: if last_error.is_empty() { "good" } else { "bad" }.to_string(),
-        },
     ];
 
     RealtimeViewState {
@@ -537,24 +486,20 @@ fn realtime_view_from_history(
             "Real Time stream off.".to_string()
         },
         last_error: last_error.to_string(),
-        sample_age: "now".to_string(),
-        launcher_summary: format!("{}/{}", sample.launcher.screen, sample.launcher.scene),
         fps_summary: if sample.launcher.idle {
             "60fps idle".to_string()
         } else {
             sample.launcher.fps.clone()
         },
         cpu_summary: format!("Combined {:.1}%", sample.combined_cpu_pct),
-        memory_summary: format!(
-            "MagiK {}, available {}",
-            format_kib(sample.memory.magik_kb),
-            format_kib(sample.memory.available_kb)
-        ),
+        memory_total_label,
+        memory_magik_label,
+        memory_other_label,
+        memory_available_label,
         frame_summary,
         storage_total_label,
         storage_used_label,
         storage_empty_label,
-        memory_hover,
         frame_hover: String::new(),
         streaming,
         combined_cpu_pct: sample.combined_cpu_pct,
@@ -565,7 +510,6 @@ fn realtime_view_from_history(
         frame_budget_pct,
         cores: sample.cores.clone(),
         cpu_history,
-        memory_history,
         frame_history,
         phases,
         health_tiles,
@@ -2784,16 +2728,6 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
-        "sample-age",
-        Value::String(SharedString::from(view.sample_age.as_str())),
-    );
-    set(
-        instance,
-        "launcher-summary",
-        Value::String(SharedString::from(view.launcher_summary.as_str())),
-    );
-    set(
-        instance,
         "fps-summary",
         Value::String(SharedString::from(view.fps_summary.as_str())),
     );
@@ -2804,8 +2738,23 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
-        "memory-summary",
-        Value::String(SharedString::from(view.memory_summary.as_str())),
+        "memory-total-label",
+        Value::String(SharedString::from(view.memory_total_label.as_str())),
+    );
+    set(
+        instance,
+        "memory-magik-label",
+        Value::String(SharedString::from(view.memory_magik_label.as_str())),
+    );
+    set(
+        instance,
+        "memory-other-label",
+        Value::String(SharedString::from(view.memory_other_label.as_str())),
+    );
+    set(
+        instance,
+        "memory-available-label",
+        Value::String(SharedString::from(view.memory_available_label.as_str())),
     );
     set(
         instance,
@@ -2826,11 +2775,6 @@ fn apply_live_realtime_view(
         instance,
         "storage-empty-label",
         Value::String(SharedString::from(view.storage_empty_label.as_str())),
-    );
-    set(
-        instance,
-        "memory-hover",
-        Value::String(SharedString::from(view.memory_hover.as_str())),
     );
     set(
         instance,
@@ -2891,13 +2835,6 @@ fn apply_live_realtime_view(
         "cpu-history",
         Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
             &view.cpu_history,
-        )))),
-    );
-    set(
-        instance,
-        "memory-history",
-        Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
-            &view.memory_history,
         )))),
     );
     set(
@@ -2992,16 +2929,16 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
     state.set_streaming(view.streaming);
     state.set_status(view.status.as_str().into());
     state.set_last_error(view.last_error.as_str().into());
-    state.set_sample_age(view.sample_age.as_str().into());
-    state.set_launcher_summary(view.launcher_summary.as_str().into());
     state.set_fps_summary(view.fps_summary.as_str().into());
     state.set_cpu_summary(view.cpu_summary.as_str().into());
-    state.set_memory_summary(view.memory_summary.as_str().into());
+    state.set_memory_total_label(view.memory_total_label.as_str().into());
+    state.set_memory_magik_label(view.memory_magik_label.as_str().into());
+    state.set_memory_other_label(view.memory_other_label.as_str().into());
+    state.set_memory_available_label(view.memory_available_label.as_str().into());
     state.set_frame_summary(view.frame_summary.as_str().into());
     state.set_storage_total_label(view.storage_total_label.as_str().into());
     state.set_storage_used_label(view.storage_used_label.as_str().into());
     state.set_storage_empty_label(view.storage_empty_label.as_str().into());
-    state.set_memory_hover(view.memory_hover.as_str().into());
     state.set_frame_hover(view.frame_hover.as_str().into());
     state.set_combined_cpu_pct(view.combined_cpu_pct as f32);
     state.set_magik_memory_pct(view.magik_memory_pct as f32);
@@ -3019,7 +2956,6 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
             .collect::<Vec<_>>(),
     )));
     state.set_cpu_history(compiled_realtime_points(&view.cpu_history));
-    state.set_memory_history(compiled_realtime_points(&view.memory_history));
     state.set_frame_history(compiled_realtime_points(&view.frame_history));
     state.set_frame_phases(ModelRc::new(VecModel::from(
         view.phases
@@ -4457,8 +4393,6 @@ mod tests {
             },
             launcher: agent_client::LauncherTelemetry {
                 status_current: true,
-                screen: "arcade".to_string(),
-                scene: "launcher".to_string(),
                 idle: false,
                 fps: "59.9 fps".to_string(),
                 preview_cache_state: "exact".to_string(),
@@ -4508,12 +4442,17 @@ mod tests {
         let view = realtime_view_from_history(&history, true, "");
 
         assert!(view.streaming);
-        assert_eq!(view.launcher_summary, "arcade/launcher");
         assert_eq!(view.cpu_history.len(), 1);
-        assert_eq!(view.memory_history[0].value, 10.0);
+        assert_eq!(view.memory_total_label, "976.6 MiB");
+        assert_eq!(view.memory_magik_label, "MagiK: 97.7 MiB");
+        assert_eq!(view.memory_other_label, "Other: 488.3 MiB");
+        assert_eq!(view.memory_available_label, "Available: 390.6 MiB");
         assert_eq!(view.frame_history[0].alert, true);
         assert_eq!(view.phases.len(), 5);
-        assert_eq!(view.health_tiles.len(), 5);
+        assert_eq!(view.health_tiles.len(), 3);
+        assert_eq!(view.health_tiles[0].title, "MagiK");
+        assert_eq!(view.health_tiles[1].title, "Main");
+        assert_eq!(view.health_tiles[2].title, "Network");
         assert_eq!(view.storage_total_label, "512GB");
         assert_eq!(view.storage_used_label, "Used: 375GB");
         assert_eq!(view.storage_empty_label, "Free: 137GB");

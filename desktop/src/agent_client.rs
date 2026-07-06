@@ -184,8 +184,6 @@ pub struct FrameBudgetTelemetry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LauncherTelemetry {
     pub status_current: bool,
-    pub screen: String,
-    pub scene: String,
     pub idle: bool,
     pub fps: String,
     pub preview_cache_state: String,
@@ -958,8 +956,6 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
                 .pointer("/launcher/status_current")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            screen: str_at(&value, "/launcher/screen", "unknown"),
-            scene: str_at(&value, "/launcher/scene", "unknown"),
             idle: value
                 .pointer("/launcher/idle")
                 .and_then(Value::as_bool)
@@ -1522,7 +1518,7 @@ mod tests {
                 "seq":7,
                 "cpu":{"combined_busy_pct":12.5,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
                 "memory":{"total_kb":1000,"magik_kb":100,"main_kb":20,"other_used_kb":600,"available_kb":300,"magik_pct":10.0,"other_used_pct":60.0,"available_pct":30.0},
-                "launcher":{"status_current":true,"screen":"arcade","scene":"launcher","idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500}},
+                "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500}},
                 "processes":{"mister-magik-fb":{"pids":[42],"rss_kb":100,"threads":7},"MiSTer_MagiK":{"pids":[9],"rss_kb":20,"threads":1}},
                 "network":{"rx_bytes_per_sec":123,"tx_bytes_per_sec":456},
                 "storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}

@@ -142,16 +142,16 @@ export global RealtimeState {
     in-out property <bool> streaming: false;
     in-out property <string> status: "Real Time stream off.";
     in-out property <string> last-error: "";
-    in-out property <string> sample-age: "-";
-    in-out property <string> launcher-summary: "-";
     in-out property <string> fps-summary: "-";
     in-out property <string> cpu-summary: "-";
-    in-out property <string> memory-summary: "-";
+    in-out property <string> memory-total-label: "-";
+    in-out property <string> memory-magik-label: "MagiK: 0 KiB";
+    in-out property <string> memory-other-label: "Other: 0 KiB";
+    in-out property <string> memory-available-label: "Available: 0 KiB";
     in-out property <string> frame-summary: "-";
     in-out property <string> storage-total-label: "-";
     in-out property <string> storage-used-label: "Used: 0GB";
     in-out property <string> storage-empty-label: "Free: 0GB";
-    in-out property <string> memory-hover: "";
     in-out property <string> frame-hover: "";
     in-out property <float> combined-cpu-pct: 0;
     in-out property <float> magik-memory-pct: 0;
@@ -161,7 +161,6 @@ export global RealtimeState {
     in-out property <float> frame-budget-pct: 0;
     in-out property <[RealtimeCpuCore]> cpu-cores: [];
     in-out property <[RealtimePoint]> cpu-history: [];
-    in-out property <[RealtimePoint]> memory-history: [];
     in-out property <[RealtimePoint]> frame-history: [];
     in-out property <[RealtimeFramePhase]> frame-phases: [];
     in-out property <[RealtimeHealthTile]> health-tiles: [];
