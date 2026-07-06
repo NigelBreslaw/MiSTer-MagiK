@@ -100,35 +100,39 @@ component RealtimeStatusStrip inherits GridLayout {
     }
 }
 
-component CpuCoreBars inherits VerticalLayout {
+component CpuCoreBars inherits HorizontalLayout {
     in property <[RealtimeCpuCore]> cores;
 
     width: 100%;
-    spacing: 8px;
+    height: 100px;
+    spacing: 12px;
+    cross-axis-alignment: end;
 
-    for core in root.cores : HorizontalLayout {
-        height: 24px;
-        spacing: 8px;
-        cross-axis-alignment: center;
+    for core in root.cores : VerticalLayout {
+        width: 54px;
+        height: 100px;
+        spacing: 4px;
+        alignment: center;
 
         Text {
-            width: 48px;
-            text: core.label;
-            color: PrimerColors.fgColor-muted;
+            height: 16px;
+            text: core.busy-pct + "%";
+            color: PrimerColors.fgColor-default;
             font-size: LayoutTokens.text-body-size-small;
-            vertical-alignment: center;
+            horizontal-alignment: center;
         }
 
         bar := Rectangle {
-            horizontal-stretch: 1;
-            height: 10px;
+            width: 28px;
+            height: 56px;
             border-radius: 5px;
             background: PrimerColors.bgColor-inset;
             clip: true;
 
             Rectangle {
-                width: parent.width * min(100.0, max(0.0, core.busy-pct)) / 100.0;
-                height: parent.height;
+                width: parent.width;
+                height: parent.height * min(100.0, max(0.0, core.busy-pct)) / 100.0;
+                y: parent.height - self.height;
                 border-radius: 5px;
                 background: core.busy-pct >= 85.0 ? #cf222e
                     : core.busy-pct >= 65.0 ? #bf8700
@@ -137,12 +141,11 @@ component CpuCoreBars inherits VerticalLayout {
         }
 
         Text {
-            width: 48px;
-            text: core.busy-pct + "%";
-            color: PrimerColors.fgColor-default;
+            height: 16px;
+            text: core.label;
+            color: PrimerColors.fgColor-muted;
             font-size: LayoutTokens.text-body-size-small;
-            horizontal-alignment: right;
-            vertical-alignment: center;
+            horizontal-alignment: center;
         }
     }
 
