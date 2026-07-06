@@ -893,6 +893,8 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let mut frames = 0u64;
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let launcher_bench_after_input_script =
+        launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
     let mut scheduler = LauncherScheduler::new(launcher_bench_launch_handoff);
@@ -905,8 +907,8 @@ pub(super) fn run_launcher_loop(
     let mut lifecycle_effects = LifecycleEffects::new();
     let mut preview_systems_entered = BTreeSet::new();
     let mut preview_initial_lists_ready = BTreeSet::new();
-    let bench_starts_on_arcade =
-        launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
+    let bench_starts_on_arcade = launcher_bench_scenario
+        .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
     let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
     let env_start_screen = launcher_start_screen_from_env();
     let env_start_system = launcher_start_system_from_env();
@@ -925,8 +927,9 @@ pub(super) fn run_launcher_loop(
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
     let startup_return_requested = pending_launch_return_state.is_some();
     let mut launch_return_restored = false;
-    let arcade_catalog_required_at_start =
-        start_screen == Screen::Arcade || lock_screen == Some(Screen::Arcade);
+    let arcade_catalog_required_at_start = start_screen == Screen::Arcade
+        || lock_screen == Some(Screen::Arcade)
+        || launcher_bench_after_input_script;
     let mut pending_start_system = env_start_system.clone();
     let mut nav = LauncherNav::new();
     nav.settings = crate::settings::MagikSettings::load();
@@ -937,6 +940,8 @@ pub(super) fn run_launcher_loop(
     let mut last_clock_text = launcher_clock_text();
     let mut launcher_bench_next_step: Instant;
     let mut launcher_bench_state = LauncherBenchState::default();
+    let mut launcher_bench_active =
+        launcher_bench_scenario.is_some() && !launcher_bench_after_input_script;
     let auto_launch_selected = launcher_auto_launch_selected_enabled();
     let mut auto_launch_selected_done = false;
     let dirty_opt = launcher_dirty_opt_enabled();
@@ -1006,8 +1011,8 @@ pub(super) fn run_launcher_loop(
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
     let mut preview = PreviewState::new_with_trace_start(start);
-    let mut launcher_bench_waiting_for_initial_preview =
-        launcher_bench_scenario.is_some_and(|scenario| scenario.starts_on_arcade());
+    let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
+        .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
     let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
     let transition_picker_enabled = preview_transition.picker_enabled();
@@ -1222,8 +1227,9 @@ pub(super) fn run_launcher_loop(
         }
     }
     let bridge_systems_t = Instant::now();
-    let mut arcade_screen_pending =
-        arcade_catalog_required_at_start && !arcade_navigation_ready(catalog_ready, &catalog);
+    let mut arcade_screen_pending = (start_screen == Screen::Arcade
+        || lock_screen == Some(Screen::Arcade))
+        && !arcade_navigation_ready(catalog_ready, &catalog);
     bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
     print_startup_event(
         start,
@@ -1344,14 +1350,14 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
         }};
     }
-    let run_start =
+    let mut run_start =
         if arcade_catalog_required_at_start && arcade_navigation_ready(catalog_ready, &catalog) {
             Instant::now()
         } else {
             start
         };
     launcher_bench_next_step = run_start;
-    let preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
+    let mut preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
@@ -1724,12 +1730,35 @@ pub(super) fn run_launcher_loop(
         }
 
         if let Some(scenario) = launcher_bench_scenario {
+            if launcher_bench_after_input_script
+                && !launcher_bench_active
+                && !launcher_input_script.active()
+                && nav.screen == Screen::Arcade
+                && arcade_navigation_ready(catalog_ready, &catalog)
+            {
+                run_start = Instant::now();
+                frame_accounting = LauncherFrameAccounting::new(run_start);
+                launcher_bench_active = true;
+                launcher_bench_waiting_for_initial_preview = false;
+                launcher_bench_next_step = run_start;
+                preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
+                arcade_entry_latency
+                    .record_first_nav_input(start, run_start, &lifecycle, &catalog, &nav);
+                print_startup_event(
+                    start,
+                    "launcher_bench_after_input_script_start",
+                    format!("scenario={}", scenario.label()),
+                );
+            }
             let catalog_ready_for_bench = if scenario.starts_on_arcade() {
                 arcade_navigation_ready(catalog_ready, &catalog)
             } else {
                 catalog_ready
             };
-            if catalog_ready_for_bench && launcher_bench_waiting_for_initial_preview {
+            if launcher_bench_active
+                && catalog_ready_for_bench
+                && launcher_bench_waiting_for_initial_preview
+            {
                 let cache_state = preview.trace_cache_state();
                 let selected_has_preview = selected_arcade_game_has_preview(&nav, &catalog);
                 if launcher_bench_initial_preview_ready(scenario, cache_state, selected_has_preview)
@@ -1743,7 +1772,8 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
-            if catalog_ready_for_bench
+            if launcher_bench_active
+                && catalog_ready_for_bench
                 && !launcher_bench_waiting_for_initial_preview
                 && launcher_bench_next_step.elapsed() >= scenario.period()
             {
@@ -1831,7 +1861,10 @@ pub(super) fn run_launcher_loop(
                 }
                 let setup_after = SetupBridgeKey::from_setup(&setup);
                 full_bridge_dirty |= pad_changed || setup_before != setup_after;
-            } else if launcher_bench_scenario.is_none() || launcher_bench_launch_handoff {
+            } else if launcher_bench_scenario.is_none()
+                || launcher_bench_launch_handoff
+                || (launcher_bench_after_input_script && !launcher_bench_active)
+            {
                 if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                     let setup_before = SetupBridgeKey::from_setup(&setup);
                     setup.maybe_open(info, active_idx, pad.db(), true);
@@ -2398,7 +2431,12 @@ pub(super) fn run_launcher_loop(
         if !launching
             && !arcade_search_active
             && !memory_guard.active()
-            && apply_ready_preview(&app, &mut preview, defer_selected_preview)
+            && apply_ready_preview(
+                &app,
+                &mut preview,
+                defer_selected_preview,
+                nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+            )
         {
             request_launcher_redraw!();
         }
@@ -2474,7 +2512,7 @@ pub(super) fn run_launcher_loop(
             redraw_pending: launcher_redraw_pending,
             launching,
             setup_active,
-            benchmark_active: launcher_bench_scenario.is_some(),
+            benchmark_active: launcher_bench_active,
             scripted_input_active: launcher_input_script.active(),
             startup_input_enabled: startup_status.input_enabled,
             route_forces_full_present: route_action.force_full_present,

@@ -119,6 +119,12 @@ def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 9
                 dirty_rows = max(0, int_field(row, "dirty_y1") - int_field(row, "dirty_y0"))
                 dirty_bytes = dirty_rows * present_width * 2
                 row["wasted_present_bytes"] = str(max(0, int_field(row, "present_bytes") - dirty_bytes))
+            if (
+                not rows
+                and row.get("vsync_source", "") in ("", "none")
+                and int_field(row, "vsync_miss_streak") == 0
+            ):
+                continue
             if int_field(row, "frame") > ignore_frames_through:
                 rows.append(row)
     if not rows:

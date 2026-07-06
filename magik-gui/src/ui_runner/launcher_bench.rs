@@ -108,6 +108,15 @@ pub(super) fn launcher_lock_screen_from_env() -> Option<Screen> {
     launcher_screen_from_env("MISTER_LAUNCHER_LOCK_SCREEN")
 }
 
+pub(super) fn launcher_bench_after_input_script_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("on") | Some("true") | Some("yes")
+    )
+}
+
 fn launcher_screen_from_env(name: &str) -> Option<Screen> {
     match std::env::var(name).ok()?.to_ascii_lowercase().as_str() {
         "home" => Some(Screen::Home),
