@@ -1,0 +1,174 @@
+import {
+    Banner,
+    BannerVariant,
+    Button,
+    ButtonVariant,
+    DataTable,
+    DataTableCell,
+    DataTableCellAlign,
+    DataTableCellKind,
+    DataTableCellPadding,
+    DataTableColumn,
+    DataTableIconTint,
+    DataTableRow,
+    DataTableSortDirection,
+    Icons,
+    LabelSize,
+    LabelVariant,
+    Pagination,
+    PrimerTreeView,
+    PrimerTextInput,
+    SegmentedControl,
+    SegmentedControlSegment,
+    SegmentedControlSize,
+    Select,
+    SelectOption,
+    Size,
+    Spinner,
+    TableContainer,
+    ToggleSwitch,
+    ToggleSwitchSize,
+    ToggleSwitchStatusLabelPosition,
+    TreeViewRow,
+    TreeViewTrailingVisual,
+} from "../../vendor/github-app/packages/primer-slint/primer.slint";
+import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
+import { Actions, DeviceState } from "../api.slint";
+import { ViewTitle } from "../components/chrome.slint";
+
+export component DebugPage {
+    property <DataTableCell> empty-cell: {
+        kind: DataTableCellKind.text,
+        text: "",
+        label-variant: LabelVariant.default,
+        label-size: LabelSize.small,
+        icon: Icons.dot_fill,
+        icon-tint: DataTableIconTint.default
+    };
+
+    property <[DataTableColumn]> detail-columns: [
+        { header: "Area", id: "area", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.iconText, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: false },
+        { header: "Field", id: "field", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 150px, width: 0px, monospace: false },
+        { header: "Value", id: "value", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 2, min-width: 220px, width: 0px, monospace: true },
+    ];
+
+    property <[DataTableColumn]> runtime-columns: [
+        { header: "Process", id: "process", sortable: false, align: DataTableCellAlign.start, row-header: true, cell-kind: DataTableCellKind.iconText, horizontal-stretch: 1, min-width: 160px, width: 0px, monospace: false },
+        { header: "State", id: "state", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 2, min-width: 260px, width: 0px, monospace: true },
+        { header: "Owner", id: "owner", sortable: false, align: DataTableCellAlign.start, row-header: false, cell-kind: DataTableCellKind.text, horizontal-stretch: 1, min-width: 160px, width: 0px, monospace: true },
+    ];
+
+    property <[DataTableRow]> connection-rows: [
+        { id: "host", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Host", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.host, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "agent", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-status, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "token", cells: [{ kind: DataTableCellKind.iconText, text: "Connection", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.shield_check, icon-tint: DataTableIconTint.success }, { kind: DataTableCellKind.text, text: "Token", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.token-source, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> device-rows: [
+        { id: "version", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.repo, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent version", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-version, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "uptime", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.history, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Agent uptime", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.agent-uptime, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "network", cells: [{ kind: DataTableCellKind.iconText, text: "Device", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.link, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Network", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.network-summary + "; mac " + DeviceState.mac-address, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> runtime-rows: [
+        { id: "main", cells: [{ kind: DataTableCellKind.iconText, text: "Main", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.repo, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.main-process, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.visible-owner, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "launcher", cells: [{ kind: DataTableCellKind.iconText, text: "Launcher", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.layout_grid, icon-tint: DataTableIconTint.done }, { kind: DataTableCellKind.text, text: DeviceState.launcher-process, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.launcher-state, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "slint-status", cells: [{ kind: DataTableCellKind.iconText, text: "Slint status", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.palette, icon-tint: DataTableIconTint.success }, { kind: DataTableCellKind.text, text: DeviceState.slint-status-freshness, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "owner " + DeviceState.visible-owner, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+
+    property <[DataTableRow]> library-rows: [
+        { id: "catalog", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.table, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Catalog", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.catalog-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "screen", cells: [{ kind: DataTableCellKind.iconText, text: "Library", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.eye, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Screen", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.screen-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+        { id: "input", cells: [{ kind: DataTableCellKind.iconText, text: "Input", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.checkbox, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: "Controller", label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }, { kind: DataTableCellKind.text, text: DeviceState.input-summary, label-variant: LabelVariant.default, label-size: LabelSize.small, icon: Icons.dot_fill, icon-tint: DataTableIconTint.default }] },
+    ];
+    property <int> debug-tab-index: 0;
+    property <[SegmentedControlSegment]> debug-tabs: [
+        { label: "Connection", has-leading-icon: true, leading-icon: Icons.link, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Device", has-leading-icon: true, leading-icon: Icons.repo, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Runtime", has-leading-icon: true, leading-icon: Icons.layout_grid, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Library + Input", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
+    ];
+
+    VerticalLayout {
+        spacing: 16px;
+        alignment: start;
+
+        ViewTitle {
+            title: "Debug";
+            subtitle: "Read-only device, runtime, catalog, and input telemetry.";
+        }
+
+        VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-bottom: 24px;
+            spacing: 16px;
+            alignment: start;
+
+            if DeviceState.last-error != "": Banner {
+                title: "Connection error";
+                description: DeviceState.last-error;
+                variant: BannerVariant.critical;
+            }
+
+            SegmentedControl {
+                selected-index <=> root.debug-tab-index;
+                segments: root.debug-tabs;
+                size: SegmentedControlSize.medium;
+                accessible-name: "Debug sections";
+            }
+
+            if root.debug-tab-index == 0: TableContainer {
+                title: "Connection";
+                subtitle: "Agent reachability and token source.";
+                primary-action-label: "Refresh";
+                primary-action-variant: ButtonVariant.default;
+                primary-action => { Actions.refresh-status(); }
+
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: connection-rows;
+                }
+            }
+
+            if root.debug-tab-index == 1: TableContainer {
+                title: "Device";
+                subtitle: "Agent build, uptime, and network identity.";
+
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: device-rows;
+                }
+            }
+
+            if root.debug-tab-index == 2: TableContainer {
+                title: "Runtime";
+                subtitle: "Main, launcher, and Slint status ownership.";
+
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: runtime-columns;
+                    rows: runtime-rows;
+                }
+            }
+
+            if root.debug-tab-index == 3: TableContainer {
+                title: "Library and input";
+                subtitle: "Catalog, visible scene, and controller summary.";
+
+                DataTable {
+                    width: 100%;
+                    cell-padding: DataTableCellPadding.normal;
+                    columns: detail-columns;
+                    rows: library-rows;
+                }
+            }
+        }
+    }
+}
+
