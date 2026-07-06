@@ -162,6 +162,25 @@ jobs:
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
+      - name: Cache cross Docker layers
+        uses: actions/cache@v6
+        with:
+          path: /tmp/.buildx-cache-cross-armv7
+          key: docker-cross-armv7-${{ runner.os }}-${{ hashFiles('magik-gui/Dockerfile.cross-armv7') }}
+
+      - name: Build cross Docker image
+        run: |
+          mkdir -p /tmp/.buildx-cache-cross-armv7
+          docker buildx build \
+            --load \
+            --tag "$MISTER_CROSS_IMAGE" \
+            --file magik-gui/Dockerfile.cross-armv7 \
+            --cache-from type=local,src=/tmp/.buildx-cache-cross-armv7 \
+            --cache-to type=local,dest=/tmp/.buildx-cache-cross-armv7-new,mode=max \
+            magik-gui
+          rm -rf /tmp/.buildx-cache-cross-armv7
+          mv /tmp/.buildx-cache-cross-armv7-new /tmp/.buildx-cache-cross-armv7
+
       - name: Cache minimal FFmpeg
         if: matrix.features == 'video'
         uses: actions/cache@v6
