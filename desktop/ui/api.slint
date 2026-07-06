@@ -148,12 +148,16 @@ export global RealtimeState {
     in-out property <string> cpu-summary: "-";
     in-out property <string> memory-summary: "-";
     in-out property <string> frame-summary: "-";
+    in-out property <string> storage-total-label: "-";
+    in-out property <string> storage-used-label: "Used: 0GB";
+    in-out property <string> storage-empty-label: "Free: 0GB";
     in-out property <string> memory-hover: "";
     in-out property <string> frame-hover: "";
     in-out property <float> combined-cpu-pct: 0;
     in-out property <float> magik-memory-pct: 0;
     in-out property <float> other-memory-pct: 0;
     in-out property <float> available-memory-pct: 0;
+    in-out property <float> storage-used-pct: 0;
     in-out property <float> frame-budget-pct: 0;
     in-out property <[RealtimeCpuCore]> cpu-cores: [];
     in-out property <[RealtimePoint]> cpu-history: [];

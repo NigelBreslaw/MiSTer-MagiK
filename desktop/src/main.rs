@@ -73,6 +73,9 @@ struct RealtimeViewState {
     cpu_summary: String,
     memory_summary: String,
     frame_summary: String,
+    storage_total_label: String,
+    storage_used_label: String,
+    storage_empty_label: String,
     memory_hover: String,
     frame_hover: String,
     streaming: bool,
@@ -80,6 +83,7 @@ struct RealtimeViewState {
     magik_memory_pct: f64,
     other_memory_pct: f64,
     available_memory_pct: f64,
+    storage_used_pct: f64,
     frame_budget_pct: f64,
     cores: Vec<agent_client::CpuCoreTelemetry>,
     cpu_history: Vec<RealtimeChartPoint>,
@@ -407,6 +411,9 @@ fn realtime_view_from_history(
             cpu_summary: "-".to_string(),
             memory_summary: "-".to_string(),
             frame_summary: "-".to_string(),
+            storage_total_label: "-".to_string(),
+            storage_used_label: "Used: 0GB".to_string(),
+            storage_empty_label: "Free: 0GB".to_string(),
             memory_hover: String::new(),
             frame_hover: String::new(),
             streaming,
@@ -414,6 +421,7 @@ fn realtime_view_from_history(
             magik_memory_pct: 0.0,
             other_memory_pct: 0.0,
             available_memory_pct: 0.0,
+            storage_used_pct: 0.0,
             frame_budget_pct: 0.0,
             cores: Vec::new(),
             cpu_history,
@@ -438,6 +446,15 @@ fn realtime_view_from_history(
         format_kib(sample.memory.available_kb),
         sample.memory.available_pct
     );
+    let storage_empty_pct = sample.storage.available_pct.clamp(0.0, 100.0);
+    let storage_used_pct = (100.0 - storage_empty_pct).clamp(0.0, 100.0);
+    let storage_used_bytes = sample
+        .storage
+        .total_bytes
+        .saturating_sub(sample.storage.available_bytes);
+    let storage_total_label = format_storage_gb(sample.storage.total_bytes);
+    let storage_used_label = format!("Used: {}", format_storage_gb(storage_used_bytes));
+    let storage_empty_label = format!("Free: {}", format_storage_gb(sample.storage.available_bytes));
     let frame_summary = format!(
         "{} frames, {} over budget, max {}",
         sample.frame_budget.window_frames,
@@ -484,17 +501,6 @@ fn realtime_view_from_history(
             ),
             detail: "eth0 agent link".to_string(),
             state: "good".to_string(),
-        },
-        RealtimeHealthTileView {
-            title: "SD Card".to_string(),
-            value: format_byte_size(sample.storage.available_bytes),
-            detail: format!("{:.1}% available", sample.storage.available_pct),
-            state: if sample.storage.available_pct < 5.0 {
-                "warn"
-            } else {
-                "good"
-            }
-            .to_string(),
         },
         RealtimeHealthTileView {
             title: "Preview".to_string(),
@@ -545,6 +551,9 @@ fn realtime_view_from_history(
             format_kib(sample.memory.available_kb)
         ),
         frame_summary,
+        storage_total_label,
+        storage_used_label,
+        storage_empty_label,
         memory_hover,
         frame_hover: String::new(),
         streaming,
@@ -552,6 +561,7 @@ fn realtime_view_from_history(
         magik_memory_pct: sample.memory.magik_pct,
         other_memory_pct: sample.memory.other_used_pct,
         available_memory_pct: sample.memory.available_pct,
+        storage_used_pct,
         frame_budget_pct,
         cores: sample.cores.clone(),
         cpu_history,
@@ -624,6 +634,11 @@ fn format_us(us: u64) -> String {
 
 fn format_byte_rate(bytes: u64) -> String {
     format!("{}/s", format_byte_size(bytes))
+}
+
+fn format_storage_gb(bytes: u64) -> String {
+    const GB: f64 = 1_000_000_000.0;
+    format!("{:.0}GB", bytes as f64 / GB)
 }
 
 fn library_detail_sections(game: Option<&library::LibraryGame>) -> LibraryDetailSections {
@@ -2799,6 +2814,21 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
+        "storage-total-label",
+        Value::String(SharedString::from(view.storage_total_label.as_str())),
+    );
+    set(
+        instance,
+        "storage-used-label",
+        Value::String(SharedString::from(view.storage_used_label.as_str())),
+    );
+    set(
+        instance,
+        "storage-empty-label",
+        Value::String(SharedString::from(view.storage_empty_label.as_str())),
+    );
+    set(
+        instance,
         "memory-hover",
         Value::String(SharedString::from(view.memory_hover.as_str())),
     );
@@ -2826,6 +2856,11 @@ fn apply_live_realtime_view(
         instance,
         "available-memory-pct",
         Value::Number(view.available_memory_pct),
+    );
+    set(
+        instance,
+        "storage-used-pct",
+        Value::Number(view.storage_used_pct),
     );
     set(
         instance,
@@ -2963,12 +2998,16 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
     state.set_cpu_summary(view.cpu_summary.as_str().into());
     state.set_memory_summary(view.memory_summary.as_str().into());
     state.set_frame_summary(view.frame_summary.as_str().into());
+    state.set_storage_total_label(view.storage_total_label.as_str().into());
+    state.set_storage_used_label(view.storage_used_label.as_str().into());
+    state.set_storage_empty_label(view.storage_empty_label.as_str().into());
     state.set_memory_hover(view.memory_hover.as_str().into());
     state.set_frame_hover(view.frame_hover.as_str().into());
     state.set_combined_cpu_pct(view.combined_cpu_pct as f32);
     state.set_magik_memory_pct(view.magik_memory_pct as f32);
     state.set_other_memory_pct(view.other_memory_pct as f32);
     state.set_available_memory_pct(view.available_memory_pct as f32);
+    state.set_storage_used_pct(view.storage_used_pct as f32);
     state.set_frame_budget_pct(view.frame_budget_pct as f32);
     state.set_cpu_cores(ModelRc::new(VecModel::from(
         view.cores
@@ -4439,9 +4478,9 @@ mod tests {
                 tx_bytes_per_sec: 2048,
             },
             storage: agent_client::StorageTelemetry {
-                available_bytes: 1024 * 1024 * 1024,
-                total_bytes: 2 * 1024 * 1024 * 1024,
-                available_pct: 50.0,
+                available_bytes: 137_000_000_000,
+                total_bytes: 512_000_000_000,
+                available_pct: 26.8,
             },
         }
     }
@@ -4474,7 +4513,11 @@ mod tests {
         assert_eq!(view.memory_history[0].value, 10.0);
         assert_eq!(view.frame_history[0].alert, true);
         assert_eq!(view.phases.len(), 5);
-        assert_eq!(view.health_tiles.len(), 6);
+        assert_eq!(view.health_tiles.len(), 5);
+        assert_eq!(view.storage_total_label, "512GB");
+        assert_eq!(view.storage_used_label, "Used: 375GB");
+        assert_eq!(view.storage_empty_label, "Free: 137GB");
+        assert_eq!(view.storage_used_pct, 73.2);
     }
 
     #[test]
@@ -4524,6 +4567,12 @@ mod tests {
         assert_eq!(format_byte_size(512), "512 B");
         assert_eq!(format_byte_size(1536), "2 KB");
         assert_eq!(format_byte_size(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn storage_labels_use_decimal_gb() {
+        assert_eq!(format_storage_gb(512_000_000_000), "512GB");
+        assert_eq!(format_storage_gb(137_400_000_000), "137GB");
     }
 
     #[test]
