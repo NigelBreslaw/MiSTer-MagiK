@@ -23,9 +23,8 @@ use std::error::Error;
 #[cfg(feature = "live-ui")]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(feature = "live-ui")]
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -383,9 +382,21 @@ fn realtime_view_from_history(
         .collect::<Vec<_>>();
 
     let Some(sample) = latest else {
+        let health_tiles = if last_error.is_empty() {
+            Vec::new()
+        } else {
+            vec![RealtimeHealthTileView {
+                title: "Telemetry".to_string(),
+                value: "Error".to_string(),
+                detail: last_error.to_string(),
+                state: "bad".to_string(),
+            }]
+        };
         return RealtimeViewState {
             status: if streaming {
                 "Real Time stream starting...".to_string()
+            } else if !last_error.is_empty() {
+                "Real Time stream unavailable.".to_string()
             } else {
                 "Real Time stream off.".to_string()
             },
@@ -409,7 +420,7 @@ fn realtime_view_from_history(
             memory_history,
             frame_history,
             phases: Vec::new(),
-            health_tiles: Vec::new(),
+            health_tiles,
         };
     };
 
@@ -935,6 +946,8 @@ fn create_live_instance(
     let live_stream_control = Arc::new(Mutex::new(None));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
+    let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
+    let realtime_debug_tab_index = Arc::new(AtomicI32::new(0));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -949,6 +962,9 @@ fn create_live_instance(
     let select_instance = instance.as_weak();
     let select_realtime_generation = Arc::clone(&realtime_stream_generation);
     let select_realtime_control = Arc::clone(&realtime_stream_control);
+    let select_realtime_page_active = Arc::clone(&realtime_debug_page_active);
+    let select_realtime_tab_index = Arc::clone(&realtime_debug_tab_index);
+    let select_realtime_host = host.to_string();
     instance.set_global_callback("Actions", "select-page", move |args| {
         if let Some(instance) = select_instance.upgrade() {
             if let Some(Value::String(page)) = args.first() {
@@ -957,11 +973,15 @@ fn create_live_instance(
                     "selected-page",
                     Value::String(page.clone()),
                 );
-                if page.as_str() != "debug" {
-                    select_realtime_generation.fetch_add(1, Ordering::SeqCst);
-                    cancel_realtime_stream(&select_realtime_control);
-                    apply_live_realtime_off(&instance);
-                }
+                let debug_active = page.as_str() == "debug";
+                select_realtime_page_active.store(debug_active, Ordering::SeqCst);
+                start_or_stop_live_realtime(
+                    select_instance.clone(),
+                    Arc::clone(&select_realtime_generation),
+                    Arc::clone(&select_realtime_control),
+                    select_realtime_host.clone(),
+                    debug_active && select_realtime_tab_index.load(Ordering::SeqCst) == 1,
+                );
             }
         }
         Value::Void
@@ -971,11 +991,15 @@ fn create_live_instance(
     let debug_tab_host = host.to_string();
     let debug_tab_generation = Arc::clone(&realtime_stream_generation);
     let debug_tab_control = Arc::clone(&realtime_stream_control);
+    let debug_tab_page_active = Arc::clone(&realtime_debug_page_active);
+    let debug_tab_index_state = Arc::clone(&realtime_debug_tab_index);
     instance.set_global_callback("Actions", "debug-tab-changed", move |args| {
         let Some(Value::Number(index)) = args.first() else {
             return Value::Void;
         };
-        let active = (*index as i32) == 1;
+        let index = *index as i32;
+        debug_tab_index_state.store(index, Ordering::SeqCst);
+        let active = debug_tab_page_active.load(Ordering::SeqCst) && index == 1;
         start_or_stop_live_realtime(
             debug_tab_instance.clone(),
             Arc::clone(&debug_tab_generation),
@@ -1810,6 +1834,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let live_stream_control = Arc::new(Mutex::new(None));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
+    let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
+    let realtime_debug_tab_index = Arc::new(AtomicI32::new(0));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -1822,14 +1848,21 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let select_ui = ui.as_weak();
     let select_realtime_generation = Arc::clone(&realtime_stream_generation);
     let select_realtime_control = Arc::clone(&realtime_stream_control);
+    let select_realtime_page_active = Arc::clone(&realtime_debug_page_active);
+    let select_realtime_tab_index = Arc::clone(&realtime_debug_tab_index);
+    let select_realtime_host = host.clone();
     ui.global::<Actions>().on_select_page(move |page| {
         if let Some(ui) = select_ui.upgrade() {
-            if page.as_str() != "debug" {
-                select_realtime_generation.fetch_add(1, Ordering::SeqCst);
-                cancel_realtime_stream(&select_realtime_control);
-                apply_compiled_realtime_off(&ui);
-            }
+            let debug_active = page.as_str() == "debug";
+            select_realtime_page_active.store(debug_active, Ordering::SeqCst);
             ui.global::<AppState>().set_selected_page(page);
+            start_or_stop_compiled_realtime(
+                select_ui.clone(),
+                Arc::clone(&select_realtime_generation),
+                Arc::clone(&select_realtime_control),
+                select_realtime_host.clone(),
+                debug_active && select_realtime_tab_index.load(Ordering::SeqCst) == 1,
+            );
         }
     });
 
@@ -1837,13 +1870,16 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let debug_tab_host = host.clone();
     let debug_tab_generation = Arc::clone(&realtime_stream_generation);
     let debug_tab_control = Arc::clone(&realtime_stream_control);
+    let debug_tab_page_active = Arc::clone(&realtime_debug_page_active);
+    let debug_tab_index_state = Arc::clone(&realtime_debug_tab_index);
     ui.global::<Actions>().on_debug_tab_changed(move |index| {
+        debug_tab_index_state.store(index, Ordering::SeqCst);
         start_or_stop_compiled_realtime(
             debug_tab_ui.clone(),
             Arc::clone(&debug_tab_generation),
             Arc::clone(&debug_tab_control),
             debug_tab_host.clone(),
-            index == 1,
+            debug_tab_page_active.load(Ordering::SeqCst) && index == 1,
         );
     });
 
