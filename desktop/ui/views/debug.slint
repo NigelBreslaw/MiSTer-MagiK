@@ -40,7 +40,6 @@ import {
     RealtimeCpuCore,
     RealtimeFrameSample,
     RealtimeHealthTile,
-    RealtimePoint,
     RealtimeState,
 } from "../api.slint";
 import { ViewTitle } from "../components/chrome.slint";
@@ -149,49 +148,6 @@ component CpuCoreBars inherits HorizontalLayout {
 
     if root.cores.length == 0: Text {
         text: "Waiting for CPU samples.";
-        color: PrimerColors.fgColor-muted;
-        font-size: LayoutTokens.text-body-size-small;
-    }
-}
-
-component RealtimeSparkline inherits Rectangle {
-    in property <[RealtimePoint]> points;
-    in property <string> empty-label;
-    in property <color> line-color: PrimerColors.fgColor-accent;
-    in property <color> alert-color: #cf222e;
-
-    width: 100%;
-    height: 116px;
-    border-width: 1px;
-    border-color: PrimerColors.borderColor-default;
-    border-radius: LayoutTokens.borderRadius-medium;
-    background: PrimerColors.bgColor-default;
-    clip: true;
-
-    Rectangle {
-        x: 10px;
-        y: 10px;
-        width: parent.width - 20px;
-        height: parent.height - 20px;
-        background: PrimerColors.bgColor-inset;
-        border-width: 1px;
-        border-color: PrimerColors.borderColor-muted;
-        clip: true;
-
-        for point[ix] in root.points : Rectangle {
-            width: 1px;
-            height: max(2px, parent.height * min(100.0, max(0.0, point.value)) / 100.0);
-            x: parent.width - root.points.length * 1px + ix * 1px;
-            y: parent.height - self.height;
-            background: point.alert ? root.alert-color : root.line-color;
-            opacity: point.alert ? 1.0 : 0.78;
-        }
-    }
-
-    if root.points.length == 0: Text {
-        x: 12px;
-        y: 12px;
-        text: root.empty-label;
         color: PrimerColors.fgColor-muted;
         font-size: LayoutTokens.text-body-size-small;
     }
