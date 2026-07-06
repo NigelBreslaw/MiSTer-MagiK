@@ -14,7 +14,8 @@ env:
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
-  MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
+  MISTER_CROSS_CACHE_FAMILY: stock-cross-rs-armv7-0.2.5
+  MISTER_CROSS_IMAGE: ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5
 
 jobs:
   host-dev:
@@ -167,7 +168,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: magik-gui/target/ffmpeg-minimal/armv7
-          key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: ffmpeg-minimal-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Cross.toml') }}
 
       - name: Cache ARM build outputs
         uses: actions/cache@v6
@@ -175,26 +176,13 @@ jobs:
           path: |
             magik-gui/target/${{ matrix.profile }}
             magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Cross.toml') }}
           restore-keys: |
-            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ matrix.name }}-
-
-      - name: Docker image state before ARM build
-        run: |
-          echo "docker-state-before=$(date -u +%FT%TZ)"
-          docker image ls --digests --format 'table {{.Repository}}\t{{.Tag}}\t{{.Digest}}\t{{.ID}}\t{{.Size}}' | sed -n '1p;/cross/p;/ubuntu/p;/rust/p;/magik/p'
-          docker system df
+            target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
+            target-arm-${{ runner.os }}-${{ env.MISTER_CROSS_CACHE_FAMILY }}-${{ matrix.name }}-
 
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
-
-      - name: Docker image state after ARM build
-        if: always()
-        run: |
-          echo "docker-state-after=$(date -u +%FT%TZ)"
-          docker image ls --digests --format 'table {{.Repository}}\t{{.Tag}}\t{{.Digest}}\t{{.ID}}\t{{.Size}}' | sed -n '1p;/cross/p;/ubuntu/p;/rust/p;/magik/p'
-          docker system df
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb

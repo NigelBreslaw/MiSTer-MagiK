@@ -1,5 +1,5 @@
 [target.armv7-unknown-linux-gnueabihf]
-dockerfile = "Dockerfile.cross-armv7"
+image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:0.2.5"
 
 [build.env]
 passthrough = [
