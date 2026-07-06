@@ -1749,9 +1749,11 @@ fn write_sqlite_scan_with_sources_inner(
             catalog_status TEXT NOT NULL,
             reason TEXT NOT NULL
         );
-        CREATE TABLE games (
+        CREATE TABLE game_rows (
             game_key_id INTEGER PRIMARY KEY,
-            game_id TEXT NOT NULL,
+            game_id_kind_string_id INTEGER NOT NULL,
+            game_id_path_id INTEGER,
+            game_id_text TEXT,
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             system_id TEXT NOT NULL,
@@ -1830,6 +1832,25 @@ fn write_sqlite_scan_with_sources_inner(
                    path_prefixes.prefix || path_values.leaf AS path
             FROM path_values
             JOIN path_prefixes ON path_prefixes.prefix_id = path_values.prefix_id;
+        CREATE VIEW games AS
+            SELECT game_rows.game_key_id,
+                   CASE game_id_kind_values.value
+                       WHEN 'payload' THEN 'payload:' || game_id_paths.path
+                       WHEN 'archive' THEN 'archive:' || game_id_paths.path
+                       ELSE game_rows.game_id_text
+                   END AS game_id,
+                   game_rows.title,
+                   game_rows.sort_title,
+                   game_rows.system_id,
+                   game_rows.manufacturer,
+                   game_rows.genre,
+                   game_rows.year,
+                   game_rows.discovered_at_unix
+            FROM game_rows
+            JOIN string_values game_id_kind_values
+                 ON game_id_kind_values.string_id = game_rows.game_id_kind_string_id
+            LEFT JOIN path_values_text game_id_paths
+                 ON game_id_paths.path_id = game_rows.game_id_path_id;
         CREATE VIEW launch_plans AS
             WITH expanded AS (
                 SELECT lt.*,
@@ -1948,18 +1969,18 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE VIEW launcher_catalog AS
             SELECT launcher_catalog_rows.ordinal,
                    launcher_catalog_rows.launch_id,
-                   COALESCE(ui_arcade_preferred_text.title, games.title) AS title,
-                   COALESCE(ui_arcade_preferred_text.sort_title, games.sort_title) AS sort_title,
+                   COALESCE(ui_arcade_preferred_text.title, game_rows.title) AS title,
+                   COALESCE(ui_arcade_preferred_text.sort_title, game_rows.sort_title) AS sort_title,
                    launcher_catalog_rows.preview_asset_key,
                    launcher_catalog_rows.has_preview,
-                   games.system_id,
-                   COALESCE(ui_arcade_preferred_text.year, games.year) AS year,
-                   COALESCE(ui_arcade_preferred_text.manufacturer, games.manufacturer) AS manufacturer,
-                   COALESCE(ui_arcade_preferred_text.category, games.genre) AS category,
-                   COALESCE(ui_arcade_preferred_text.discovered_at_unix, games.discovered_at_unix) AS discovered_at_unix
+                   game_rows.system_id,
+                   COALESCE(ui_arcade_preferred_text.year, game_rows.year) AS year,
+                   COALESCE(ui_arcade_preferred_text.manufacturer, game_rows.manufacturer) AS manufacturer,
+                   COALESCE(ui_arcade_preferred_text.category, game_rows.genre) AS category,
+                   COALESCE(ui_arcade_preferred_text.discovered_at_unix, game_rows.discovered_at_unix) AS discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
-            JOIN games ON games.game_key_id = launch_target_rows.game_key_id
+            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id
             LEFT JOIN ui_arcade_preferred_text
                    ON ui_arcade_preferred_text.launch_id = launcher_catalog_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
@@ -2175,8 +2196,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO games(game_key_id,game_id,title,sort_title,system_id,manufacturer,genre,year,discovered_at_unix)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,sort_title,system_id,manufacturer,genre,year,discovered_at_unix)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
@@ -2242,10 +2263,13 @@ fn write_sqlite_scan_with_sources_inner(
             let preview_asset = software_identity
                 .as_ref()
                 .and_then(|identity| console_preview_asset(identity, sources.preview_paths));
+            let game_id_storage = game_id_storage_for(&key, discovery);
             game_stmt
                 .execute(params![
                     game_key_id,
-                    key.as_str(),
+                    string_interner.intern(game_id_storage.kind),
+                    game_id_storage.path.map(|path| path_interner.intern(path)),
+                    game_id_storage.text,
                     discovery.title.as_str(),
                     library_db::normalize_title(&discovery.title),
                     system_id.as_str(),
@@ -2966,6 +2990,32 @@ pub(crate) fn mount_kind_str(kind: MountKind) -> &'static str {
 struct LaunchRefStorage<'a> {
     kind: &'static str,
     path: Option<&'a str>,
+}
+
+struct GameIdStorage<'a> {
+    kind: &'static str,
+    path: Option<&'a str>,
+    text: Option<&'a str>,
+}
+
+fn game_id_storage_for<'a>(game_id: &'a str, discovery: &'a GameDiscovery) -> GameIdStorage<'a> {
+    match discovery.source_kind {
+        DiscoverySourceKind::Mgl | DiscoverySourceKind::PayloadFile => GameIdStorage {
+            kind: "payload",
+            path: Some(discovery.launch_ref.as_str()),
+            text: None,
+        },
+        DiscoverySourceKind::ArchiveEntry => GameIdStorage {
+            kind: "archive",
+            path: Some(discovery.launch_ref.as_str()),
+            text: None,
+        },
+        DiscoverySourceKind::Mra | DiscoverySourceKind::CatalogEntry => GameIdStorage {
+            kind: "text",
+            path: None,
+            text: Some(game_id),
+        },
+    }
 }
 
 fn launch_ref_storage_for<'a>(
