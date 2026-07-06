@@ -155,6 +155,19 @@ scripts/profile-preview-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-first-preview.sh LABEL --skip-build
 ```
 
+`profile-arcade-scroll.sh` is the reproduction gate for boot-entry stutter. Its
+default path reboots the MiSTer, starts the launcher on Home, quickly navigates
+to Arcade using `MISTER_ARCADE_ENTRY_INPUT_SCRIPT` or the default Right...A
+sequence, then starts the timed `turbo-hold` trace in that same launcher
+session. Use `--skip-boot-prelude` only for old direct-to-Arcade comparisons;
+do not use that shortcut as evidence for the user-visible boot-to-Arcade flow.
+The script emits and enforces `frame_pacing_gate_tsv` for the 60fps/drop-frame
+contract and `preview_exact_gate_tsv` for the no-skipped-preview contract.
+The turbo preview runway defaults to 32 previews ahead; use
+`MISTER_PREVIEW_TURBO_LOOKAHEAD=64` to reproduce the old aggressive prefetch
+behavior, or `MISTER_PREVIEW_TURBO_RUNWAY=0` only as a diagnostic because it
+allows stale/empty previews during turbo scroll.
+
 For the "perfect 60fps Arcade preview" work, each single-commit PR must record
 before/after device evidence with the same command set. Use labels that include
 the PR slice and BEFORE/AFTER state:
@@ -193,6 +206,9 @@ Acceptance fields for Arcade preview pacing:
 - `vsync_source_fallback=0`, `vsync_source_timeout=0`,
   `vsync_source_error=0`, and `max_vsync_miss_streak=0`.
 - `p99_work_us < 14500` for the preservation-of-fade milestone.
+- `profile-arcade-scroll.sh` hard-fails this contract through
+  `frame_pacing_gate_tsv`; the p99 work threshold can be overridden with
+  `MISTER_ARCADE_SCROLL_P99_WORK_US` for diagnostic comparisons only.
 - For render-contract, framebuffer-format, route, or copy-helper changes, use
   `scripts/launcher-present-trace.py compare BEFORE.tsv AFTER.tsv` and report
   the `present_path_tsv` rows. `cached_present_us`, `arcade_list_present_us`,

@@ -18,9 +18,10 @@ use crate::ui_display::{UI_FB_H, UI_FB_W};
 const PREVIEW_MAX_AREA: u32 = (UI_FB_W as u32 * UI_FB_H as u32 * 40) / 100;
 const MAX_PREFETCH_RESULTS_PER_FRAME: usize = 1;
 const DIRECTIONAL_PREFETCH_TAIL_RADIUS: usize = 2;
-const TURBO_PREVIEW_LOOKAHEAD: usize = 64;
+const DEFAULT_TURBO_PREVIEW_LOOKAHEAD: usize = 32;
+const MAX_TURBO_PREVIEW_LOOKAHEAD: usize = 64;
 const TURBO_PREVIEW_BACKTAIL: usize = 4;
-const TURBO_PREVIEW_CACHE_CAP: usize = 96;
+const TURBO_PREVIEW_CACHE_CAP: usize = 512;
 const PREFETCH_SCROLL_SETTLE: Duration = Duration::from_millis(40);
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
@@ -58,6 +59,17 @@ fn preview_turbo_runway_enabled() -> bool {
             std::env::var("MISTER_PREVIEW_TURBO_RUNWAY").as_deref(),
             Ok("0") | Ok("off") | Ok("false") | Ok("no")
         )
+    })
+}
+
+fn preview_turbo_lookahead() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_PREVIEW_TURBO_LOOKAHEAD")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_TURBO_PREVIEW_LOOKAHEAD)
+            .clamp(DEFAULT_PREVIEW_RADIUS, MAX_TURBO_PREVIEW_LOOKAHEAD)
     })
 }
 
@@ -162,13 +174,14 @@ impl PreviewImageCache {
     }
 
     fn retain_window(&mut self, window_preview_keys: &[String], visible_preview_key: Option<&str>) {
-        if !window_preview_keys.is_empty() {
+        let turbo_window = window_preview_keys.len() > DEFAULT_PREVIEW_CACHE_CAP;
+        if !window_preview_keys.is_empty() && !turbo_window {
             self.entries.retain(|(path, _)| {
                 visible_preview_key.is_some_and(|visible| visible == path)
                     || window_preview_keys.iter().any(|keep| keep == path)
             });
         }
-        let cap = if window_preview_keys.len() > DEFAULT_PREVIEW_CACHE_CAP {
+        let cap = if turbo_window {
             TURBO_PREVIEW_CACHE_CAP
         } else {
             DEFAULT_PREVIEW_CACHE_CAP
@@ -509,11 +522,11 @@ impl PreviewState {
         }
     }
 
-    fn begin_raw_transition_to(&mut self, next_path: &str) {
+    fn begin_raw_transition_to(&mut self, next_path: &str, animate: bool) {
         if self.visible_preview_key == next_path {
             return;
         }
-        self.previous_image = if self.has_visible_preview {
+        self.previous_image = if animate && self.has_visible_preview {
             self.cache
                 .peek_shared(&self.visible_preview_key)
                 .map(Arc::clone)
@@ -917,7 +930,7 @@ pub(crate) fn request_arcade_preview_window(
 
     let turbo_runway_active = turbo_active && preview_turbo_runway_enabled();
     let prefetch_radius = if turbo_runway_active {
-        TURBO_PREVIEW_LOOKAHEAD
+        preview_turbo_lookahead()
     } else {
         DEFAULT_PREVIEW_RADIUS
     };
@@ -958,7 +971,7 @@ pub(crate) fn request_arcade_preview_window(
                     }
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
-                    preview.begin_raw_transition_to(&path);
+                    preview.begin_raw_transition_to(&path, !turbo_active);
                     preview.visible_preview_key = path;
                     preview.visible_preview_load_source = "decoded_cache";
                     preview.raw_dirty = true;
@@ -1077,7 +1090,7 @@ pub(crate) fn request_arcade_preview_window(
                 candidate_game.preview_asset_key
             );
         }
-        preview.begin_raw_transition_to(&preview_key);
+        preview.begin_raw_transition_to(&preview_key, !turbo_active);
         preview.visible_preview_key = preview_key;
         preview.raw_dirty = true;
         apply_preview_image_bridge(bridge, &image);
@@ -1140,7 +1153,7 @@ pub(crate) fn request_arcade_preview_window(
             preview.selected_preview_key = Some(preview_key.clone());
             preview.has_visible_preview = true;
             preview.visible_preview_load_source = load_source.label();
-            preview.begin_raw_transition_to(&preview_key);
+            preview.begin_raw_transition_to(&preview_key, !turbo_active);
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &loaded_image);
@@ -1227,7 +1240,7 @@ pub(crate) fn request_arcade_preview_window(
             preview.selected_preview_key = Some(preview_key.clone());
             preview.has_visible_preview = true;
             preview.visible_preview_load_source = load_source.label();
-            preview.begin_raw_transition_to(&preview_key);
+            preview.begin_raw_transition_to(&preview_key, true);
             preview.visible_preview_key = preview_key;
             preview.raw_dirty = true;
             apply_preview_image_bridge(bridge, &loaded_image);
@@ -1382,7 +1395,7 @@ fn request_preview_prefetches(
         games.len(),
         selected,
         if turbo_active {
-            TURBO_PREVIEW_LOOKAHEAD
+            preview_turbo_lookahead()
         } else {
             DEFAULT_PREVIEW_RADIUS
         },
@@ -1438,7 +1451,7 @@ fn prune_pending_prefetch_keys_for_turbo(
     let keep: HashSet<String> = direction_aware_prefetch_indices(
         games.len(),
         selected,
-        TURBO_PREVIEW_LOOKAHEAD,
+        preview_turbo_lookahead(),
         preview.prefetch_direction,
         TURBO_PREVIEW_BACKTAIL,
     )
@@ -1497,7 +1510,7 @@ fn prefetch_window_is_covered(
         games.len(),
         selected,
         if turbo_active {
-            TURBO_PREVIEW_LOOKAHEAD
+            preview_turbo_lookahead()
         } else {
             DEFAULT_PREVIEW_RADIUS
         },
@@ -1678,6 +1691,7 @@ pub(crate) fn apply_ready_preview(
     app: &slint_ui::launcher::Launcher,
     preview: &mut PreviewState,
     defer_selected_result: bool,
+    scroll_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
@@ -1794,7 +1808,7 @@ pub(crate) fn apply_ready_preview(
                 bridge.set_arcade_preview_title(result_title.clone().into());
                 preview.has_visible_preview = true;
                 preview.visible_preview_load_source = result.load_source.label();
-                preview.begin_raw_transition_to(&result_preview_key);
+                preview.begin_raw_transition_to(&result_preview_key, !scroll_active);
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
                 apply_preview_image_bridge(&bridge, &image);
@@ -2069,7 +2083,7 @@ mod tests {
         let forward = direction_aware_prefetch_indices(
             100,
             10,
-            TURBO_PREVIEW_LOOKAHEAD,
+            MAX_TURBO_PREVIEW_LOOKAHEAD,
             1,
             TURBO_PREVIEW_BACKTAIL,
         );
@@ -2079,7 +2093,7 @@ mod tests {
         let reverse = direction_aware_prefetch_indices(
             100,
             74,
-            TURBO_PREVIEW_LOOKAHEAD,
+            MAX_TURBO_PREVIEW_LOOKAHEAD,
             -1,
             TURBO_PREVIEW_BACKTAIL,
         );
@@ -2093,7 +2107,7 @@ mod tests {
             direction_aware_prefetch_indices(
                 5,
                 0,
-                TURBO_PREVIEW_LOOKAHEAD,
+                MAX_TURBO_PREVIEW_LOOKAHEAD,
                 1,
                 TURBO_PREVIEW_BACKTAIL
             ),
@@ -2103,7 +2117,7 @@ mod tests {
             direction_aware_prefetch_indices(
                 5,
                 4,
-                TURBO_PREVIEW_LOOKAHEAD,
+                MAX_TURBO_PREVIEW_LOOKAHEAD,
                 -1,
                 TURBO_PREVIEW_BACKTAIL
             ),
@@ -2221,6 +2235,34 @@ mod tests {
         ) = (&first_hit.pixels, &second_hit.pixels);
         assert!(Arc::ptr_eq(first_words, second_words));
         assert!(Arc::ptr_eq(&words, first_words));
+    }
+
+    #[test]
+    fn turbo_preview_cache_retention_defers_window_pruning() {
+        let mut cache = PreviewImageCache::default();
+        cache.insert("old.png".into(), preview_image(0xf800), &[], None);
+        let normal_window = vec!["current.png".to_string()];
+        cache.insert(
+            "current.png".into(),
+            preview_image(0x07e0),
+            &normal_window,
+            Some("current.png"),
+        );
+        assert!(!cache.contains("old.png"));
+
+        let mut cache = PreviewImageCache::default();
+        cache.insert("old.png".into(), preview_image(0xf800), &[], None);
+        let turbo_window = (0..=DEFAULT_PREVIEW_CACHE_CAP)
+            .map(|idx| format!("runway-{idx}.png"))
+            .collect::<Vec<_>>();
+        cache.insert(
+            "current.png".into(),
+            preview_image(0x07e0),
+            &turbo_window,
+            Some("current.png"),
+        );
+
+        assert!(cache.contains("old.png"));
     }
 
     #[test]
@@ -2455,6 +2497,62 @@ mod tests {
             .expect("empty preview transition frame");
         assert!(frame.previous.is_some());
         assert!(matches!(frame.current.pixels, PreviewRawPixels::Empty));
+    }
+
+    #[test]
+    fn raw_transition_keeps_previous_image_when_animation_enabled() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "previous.png".into(),
+            preview_image(0xf800),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "previous.png".into();
+        let previous_transition_id = preview.raw_transition_id;
+
+        preview.begin_raw_transition_to("selected.png", true);
+
+        assert_eq!(
+            preview.raw_transition_id,
+            previous_transition_id.wrapping_add(1)
+        );
+        assert!(preview.previous_image.is_some());
+    }
+
+    #[test]
+    fn raw_transition_cuts_without_previous_image_when_animation_disabled() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "previous.png".into(),
+            preview_image(0xf800),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "previous.png".into();
+        let previous_transition_id = preview.raw_transition_id;
+
+        preview.begin_raw_transition_to("selected.png", false);
+
+        assert_eq!(
+            preview.raw_transition_id,
+            previous_transition_id.wrapping_add(1)
+        );
+        assert!(preview.previous_image.is_none());
     }
 
     fn preview_result(

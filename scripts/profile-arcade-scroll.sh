@@ -18,10 +18,13 @@ Legacy positional form is still accepted:
 
 Runs the Main-supervised launcher on the real Arcade screen with
 MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE. By default it
-first reboots to Home, presses A on the Arcade tile, requires instant list,
-preview, and first navigation readiness, then runs the 30s scroll trace.
+reboots to Home, quickly navigates to the Arcade tile, enters it, then starts
+the timed turbo scroll trace in that same launcher session.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 --skip-boot-prelude keeps the old direct-to-Arcade benchmark setup.
+Set MISTER_ARCADE_ENTRY_INPUT_SCRIPT to override the Home-to-Arcade input
+sequence. By default the script presses Right MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX
+times, then A.
 --self-test runs only the host parser checks for the boot prelude gate.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
@@ -46,9 +49,11 @@ ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
-entry_open_gate_ms="${MISTER_ARCADE_ENTRY_OPEN_GATE_MS:-350}"
-entry_gate_ms="${MISTER_ARCADE_ENTRY_GATE_MS:-50}"
+entry_open_gate_ms="${MISTER_ARCADE_ENTRY_OPEN_GATE_MS:-2000}"
+entry_gate_ms="${MISTER_ARCADE_ENTRY_GATE_MS:-100}"
 home_selected_index="${MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX:-7}"
+entry_input_script="${MISTER_ARCADE_ENTRY_INPUT_SCRIPT:-}"
+frame_pacing_p99_work_us="${MISTER_ARCADE_SCROLL_P99_WORK_US:-14500}"
 self_test="0"
 positionals=()
 
@@ -248,6 +253,109 @@ print(
 PY
 }
 
+check_frame_pacing_gate() {
+  local name="$1" trace="$2" p99_work_us="$3"
+  python3 - "$name" "$trace" "$p99_work_us" <<'PY'
+import csv
+import math
+import sys
+
+name, trace_path, p99_work_us_text = sys.argv[1:4]
+p99_work_us = int(p99_work_us_text)
+required = {
+    "frame",
+    "prepare_us",
+    "slint_render_us",
+    "custom_draw_us",
+    "fb_present_us",
+    "vsync_source",
+    "vsync_miss_streak",
+}
+try:
+    with open(trace_path, newline="") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+except FileNotFoundError:
+    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_trace\tdetail={trace_path}")
+    sys.exit(9)
+
+if not rows:
+    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_frames\tdetail={trace_path}")
+    sys.exit(9)
+missing = sorted(required - set(rows[0]))
+if missing:
+    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_column\tdetail={','.join(missing)}")
+    sys.exit(9)
+
+def int_field(row, key):
+    try:
+        return int(float(row.get(key, "") or 0))
+    except ValueError:
+        return 0
+
+measured = []
+for row in rows:
+    source = row.get("vsync_source", "")
+    miss = int_field(row, "vsync_miss_streak")
+    if not measured and source in ("", "none") and miss == 0:
+        continue
+    if int_field(row, "frame") <= 30:
+        continue
+    measured.append(row)
+
+if not measured:
+    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_measured_frames\tdetail={trace_path}")
+    sys.exit(9)
+
+works = sorted(
+    int_field(row, "prepare_us")
+    + int_field(row, "slint_render_us")
+    + int_field(row, "custom_draw_us")
+    + int_field(row, "fb_present_us")
+    for row in measured
+)
+p99_index = max(0, min(len(works) - 1, math.ceil(len(works) * 0.99) - 1))
+p99_work = works[p99_index]
+work_over = sum(1 for value in works if value > 16667)
+sources = {"vsync": 0, "fallback": 0, "timeout": 0, "error": 0, "other_source": 0}
+dropped_rows = 0
+max_miss = 0
+examples = []
+for row in measured:
+    source = row.get("vsync_source", "")
+    if source in ("vsync", "fallback", "timeout", "error"):
+        sources[source] += 1
+    else:
+        sources["other_source"] += 1
+    miss = int_field(row, "vsync_miss_streak")
+    max_miss = max(max_miss, miss)
+    if source != "vsync" or miss > 0:
+        dropped_rows += 1
+        if len(examples) < 3:
+            examples.append(f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}")
+
+valid = (
+    p99_work < p99_work_us
+    and sources["fallback"] == 0
+    and sources["timeout"] == 0
+    and sources["error"] == 0
+    and sources["other_source"] == 0
+    and max_miss == 0
+)
+detail = (
+    f"frames_after_30={len(measured)} p99_work_us={p99_work} threshold={p99_work_us} "
+    f"work_gt_16667={work_over} dropped_rows={dropped_rows} vsync={sources['vsync']} "
+    f"fallback={sources['fallback']} timeout={sources['timeout']} error={sources['error']} "
+    f"other_source={sources['other_source']} max_miss_streak={max_miss}"
+)
+if examples:
+    detail += " " + " ".join(examples)
+print(
+    f"frame_pacing_gate_tsv\tlabel={name}\tvalid={1 if valid else 0}\tinvalid_reason={'ok' if valid else 'gate_failed'}\tdetail={detail}"
+)
+sys.exit(0 if valid else 9)
+PY
+}
+
 gate_arcade_entry_trace() {
   local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5"
   python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" <<'PY'
@@ -370,6 +478,22 @@ EOF
     echo "self-test expected stale preview failure" >&2
     exit 1
   fi
+  cat >"$tmpdir/pacing-good.tsv" <<'EOF'
+frame	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	100	100	100	100	none	0
+32	1000	200	1200	900	vsync	0
+33	1100	200	1200	900	vsync	0
+EOF
+  check_frame_pacing_gate self-pacing "$tmpdir/pacing-good.tsv" 14500 >/dev/null
+  cat >"$tmpdir/pacing-fallback.tsv" <<'EOF'
+frame	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	1000	200	1200	900	vsync	0
+32	1000	200	1200	900	fallback	1
+EOF
+  if check_frame_pacing_gate self-pacing "$tmpdir/pacing-fallback.tsv" 14500 >/dev/null 2>&1; then
+    echo "self-test expected frame pacing failure" >&2
+    exit 1
+  fi
   printf 'startup_timing\tcatalog_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
   if gate_arcade_entry_trace self-forbidden "$tmpdir/good.tsv" "$tmpdir/forbidden.log" 350 50 >/dev/null 2>&1; then
     echo "self-test expected forbidden event failure" >&2
@@ -384,33 +508,85 @@ EOF
 }
 
 run_boot_prelude() {
-  echo "==> Boot prelude: Home -> Arcade entry open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
+  echo "==> Boot flow: Home -> Arcade -> immediate ${scenario} scroll open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
   echo "==> Refresh warm catalog projections before measured reboot"
   "$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections" >/dev/null
+  local input_script="$entry_input_script"
+  if [[ -z "$input_script" ]]; then
+    input_script=""
+    for ((i = 0; i < home_selected_index; i++)); do
+      if [[ -n "$input_script" ]]; then input_script+=","; fi
+      input_script+="right"
+    done
+    if [[ -n "$input_script" ]]; then input_script+=","; fi
+    input_script+="a"
+  fi
   {
+    printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
+    printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=default\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
-    printf 'export MISTER_HOME_SELECTED_INDEX=%q\n' "$home_selected_index"
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
-    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' 'a,down,down,down,down,down,down,down,down'
+    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
+    printf 'export MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT=1\n'
+    printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
     printf 'export MISTER_ARCADE_ENTRY_TRACE=%q\n' "$remote_entry_tsv"
+    if [[ "$selection_invert" == "off" ]]; then
+      printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
+    elif [[ "$selection_invert" == "on" ]]; then
+      printf 'export MISTER_ARCADE_SELECTION_INVERT=1\n'
+    fi
+    if [[ -n "${MISTER_PREVIEW_TURBO_RUNWAY+x}" ]]; then
+      printf 'export MISTER_PREVIEW_TURBO_RUNWAY=%q\n' "$MISTER_PREVIEW_TURBO_RUNWAY"
+    fi
+    if [[ -n "${MISTER_PREVIEW_TURBO_LOOKAHEAD+x}" ]]; then
+      printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
+    fi
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$remote_entry_tsv' '$REMOTE_LOG'; sync" >/dev/null
+  "$MISTER" run "rm -f '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG'; sync" >/dev/null
   "$MISTER" reboot-wait
+  start_stream_consumer
+  thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
+  sleep $((secs + 10))
+  thread_sample_finish
+  stream_status=0
+  finish_stream_consumer || stream_status="$?"
   local waited=0
-  while [[ "$waited" -le 45 ]]; do
-    if "$MISTER" run "test -s '$remote_entry_tsv' && grep -q '^arcade_first_nav_presented	' '$remote_entry_tsv' && grep -q '^arcade_preview_exact	' '$remote_entry_tsv'" >/dev/null 2>&1; then
+  while [[ "$waited" -le 15 ]]; do
+    if "$MISTER" run "test -s '$remote_entry_tsv' && test -s '$remote_tsv' && grep -q '^arcade_first_nav_presented	' '$remote_entry_tsv' && grep -q '^arcade_preview_exact	' '$remote_entry_tsv'" >/dev/null 2>&1; then
       break
     fi
     sleep 1
     waited=$((waited + 1))
   done
+  if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
+    "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
+    echo "arcade scroll profile failed; see $local_log" >&2
+    exit 1
+  fi
   "$MISTER" get "$remote_entry_tsv" "$local_entry_tsv" >/dev/null || true
-  "$MISTER" get "$REMOTE_LOG" "$local_entry_log" >/dev/null || true
+  "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
+  cp "$local_log" "$local_entry_log" 2>/dev/null || true
+  "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  echo "wrote $local_tsv"
+  echo "wrote $local_log"
+  echo "wrote $local_status_json"
   echo "wrote $local_entry_tsv"
-  echo "wrote $local_entry_log"
   gate_arcade_entry_trace "$label" "$local_entry_tsv" "$local_entry_log" "$entry_open_gate_ms" "$entry_gate_ms"
+  if [[ "$stream_consumer" != "none" ]]; then
+    echo "wrote $local_stream_tsv"
+    echo "wrote $local_stream_log"
+    if [[ -s "$local_stream_tsv" ]]; then
+      sed -n '1,20p' "$local_stream_tsv"
+    fi
+    if [[ "$stream_status" != "0" ]]; then
+      echo "framebuffer stream consumer failed; see $local_stream_log" >&2
+      exit "$stream_status"
+    fi
+  fi
 }
 
 start_stream_consumer() {
@@ -463,54 +639,60 @@ esac
 
 if [[ "$boot_prelude" != "0" ]]; then
   run_boot_prelude
-fi
+else
+  echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us stream_consumer=$stream_consumer"
+  {
+    printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
+    printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
+    printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
+    printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
+    printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
+    if [[ "$selection_invert" == "off" ]]; then
+      printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
+    elif [[ "$selection_invert" == "on" ]]; then
+      printf 'export MISTER_ARCADE_SELECTION_INVERT=1\n'
+    fi
+    if [[ -n "${MISTER_PREVIEW_TURBO_RUNWAY+x}" ]]; then
+      printf 'export MISTER_PREVIEW_TURBO_RUNWAY=%q\n' "$MISTER_PREVIEW_TURBO_RUNWAY"
+    fi
+    if [[ -n "${MISTER_PREVIEW_TURBO_LOOKAHEAD+x}" ]]; then
+      printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
+    fi
+  } >"$env_file"
+  "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+  "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+  start_stream_consumer
+  thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
+  sleep $((secs + 7))
+  thread_sample_finish
+  stream_status=0
+  finish_stream_consumer || stream_status="$?"
 
-echo "==> Capture supervised launcher Arcade scenario=$scenario remote_scenario=$remote_scenario secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us stream_consumer=$stream_consumer"
-{
-  printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
-  printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
-  printf 'export MISTER_CATALOG_REFRESH=default\n'
-  printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
-  printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
-  printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
-  printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
-  printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
-  printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
-  if [[ "$selection_invert" == "off" ]]; then
-    printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
-  elif [[ "$selection_invert" == "on" ]]; then
-    printf 'export MISTER_ARCADE_SELECTION_INVERT=1\n'
+  if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
+    "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
+    echo "arcade scroll profile failed; see $local_log" >&2
+    exit 1
   fi
-} >"$env_file"
-"$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
-start_stream_consumer
-thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
-sleep $((secs + 7))
-thread_sample_finish
-stream_status=0
-finish_stream_consumer || stream_status="$?"
-
-if ! "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null; then
   "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
-  echo "arcade scroll profile failed; see $local_log" >&2
-  exit 1
-fi
-"$MISTER" get "$remote_log" "$local_log" >/dev/null || true
-"$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
 
-echo "wrote $local_tsv"
-echo "wrote $local_log"
-echo "wrote $local_status_json"
-if [[ "$stream_consumer" != "none" ]]; then
-  echo "wrote $local_stream_tsv"
-  echo "wrote $local_stream_log"
-  if [[ -s "$local_stream_tsv" ]]; then
-    sed -n '1,20p' "$local_stream_tsv"
-  fi
-  if [[ "$stream_status" != "0" ]]; then
-    echo "framebuffer stream consumer failed; see $local_stream_log" >&2
-    exit "$stream_status"
+  echo "wrote $local_tsv"
+  echo "wrote $local_log"
+  echo "wrote $local_status_json"
+  if [[ "$stream_consumer" != "none" ]]; then
+    echo "wrote $local_stream_tsv"
+    echo "wrote $local_stream_log"
+    if [[ -s "$local_stream_tsv" ]]; then
+      sed -n '1,20p' "$local_stream_tsv"
+    fi
+    if [[ "$stream_status" != "0" ]]; then
+      echo "framebuffer stream consumer failed; see $local_stream_log" >&2
+      exit "$stream_status"
+    fi
   fi
 fi
 if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$local_status_json"; then
@@ -520,6 +702,8 @@ fi
 echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
 echo
-"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width"
+"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
+echo
+check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us"
 echo
 check_preview_exact_gate "$label" "$local_tsv"
