@@ -169,20 +169,7 @@ jobs:
           path: magik-gui/target/ffmpeg-minimal/armv7
           key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
 
-      - name: Restore ARM build outputs
-        if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@v6
-        with:
-          path: |
-            magik-gui/target/${{ matrix.profile }}
-            magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
-          restore-keys: |
-            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ matrix.name }}-
-
       - name: Cache ARM build outputs
-        if: github.event_name != 'pull_request'
         uses: actions/cache@v6
         with:
           path: |
@@ -192,6 +179,23 @@ jobs:
           restore-keys: |
             target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
             target-arm-${{ runner.os }}-${{ matrix.name }}-
+
+      - name: Measure ARM cache footprint
+        shell: bash
+        run: |
+          for dir in \
+            "magik-gui/target/${{ matrix.profile }}" \
+            "magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}"
+          do
+            if [ -d "$dir" ]; then
+              echo "::group::$dir"
+              du -sh "$dir"
+              find "$dir" -mindepth 1 -maxdepth 1 -exec du -sh {} + | sort -h | tail -20
+              echo "::endgroup::"
+            else
+              echo "missing $dir"
+            fi
+          done
 
       - name: Build ARM binary
         run: magik-gui/build-arm.sh ${{ matrix.args }}
