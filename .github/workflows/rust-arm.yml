@@ -186,7 +186,9 @@ jobs:
           magik-gui/build-arm.sh ${{ matrix.args }}
           end_epoch=$(date +%s)
           duration_seconds=$((end_epoch - start_epoch))
-          echo "ci_timing_tsv	job=${{ matrix.name }}	step=build-arm-binary	duration_seconds=${duration_seconds}"
+          timing_marker_prefix="ci_timing_"
+          timing_marker="${timing_marker_prefix}tsv"
+          printf "%s\tjob=%s\tstep=build-arm-binary\tduration_seconds=%s\n" "$timing_marker" "${{ matrix.name }}" "$duration_seconds"
           {
             echo "### ARM build timing"
             echo
@@ -260,7 +262,9 @@ jobs:
           MISTER_ARM_BUILD_BACKEND=cross scripts/build-mister-agent.sh
           end_epoch=$(date +%s)
           duration_seconds=$((end_epoch - start_epoch))
-          echo "ci_timing_tsv	job=agent-arm-build	step=build-arm-agent	duration_seconds=${duration_seconds}"
+          timing_marker_prefix="ci_timing_"
+          timing_marker="${timing_marker_prefix}tsv"
+          printf "%s\tjob=agent-arm-build\tstep=build-arm-agent\tduration_seconds=%s\n" "$timing_marker" "$duration_seconds"
           {
             echo "### ARM agent build timing"
             echo
