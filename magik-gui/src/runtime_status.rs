@@ -69,6 +69,35 @@ pub struct LauncherStatus<'a> {
     pub input_enabled: bool,
     pub reveal_ms: u64,
     pub input_enabled_ms: u64,
+    pub frame_budget: FrameBudgetStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameBudgetStatus {
+    pub budget_us: u64,
+    pub frames_total: u64,
+    pub over_budget_total: u64,
+    pub over_20ms_total: u64,
+    pub over_33ms_total: u64,
+    pub max_wall_us: u64,
+    pub latest_over_budget_frame: u64,
+    pub latest_over_budget_wall_us: u64,
+    pub max_vsync_miss_streak: u64,
+    pub vsync_total: u64,
+    pub fallback_total: u64,
+    pub timeout_total: u64,
+    pub error_total: u64,
+    pub window_frames: u64,
+    pub window_over_budget: u64,
+    pub window_over_20ms: u64,
+    pub window_over_33ms: u64,
+    pub window_max_wall_us: u64,
+    pub window_max_vsync_miss_streak: u64,
+    pub window_prepare_us: u64,
+    pub window_render_us: u64,
+    pub window_custom_draw_us: u64,
+    pub window_vsync_us: u64,
+    pub window_present_us: u64,
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
@@ -200,6 +229,35 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("input_enabled", status.input_enabled);
     insert!("reveal_ms", status.reveal_ms);
     insert!("input_enabled_ms", status.input_enabled_ms);
+    insert!(
+        "frame_budget",
+        json!({
+            "budget_us": status.frame_budget.budget_us,
+            "frames_total": status.frame_budget.frames_total,
+            "over_budget_total": status.frame_budget.over_budget_total,
+            "over_20ms_total": status.frame_budget.over_20ms_total,
+            "over_33ms_total": status.frame_budget.over_33ms_total,
+            "max_wall_us": status.frame_budget.max_wall_us,
+            "latest_over_budget_frame": status.frame_budget.latest_over_budget_frame,
+            "latest_over_budget_wall_us": status.frame_budget.latest_over_budget_wall_us,
+            "max_vsync_miss_streak": status.frame_budget.max_vsync_miss_streak,
+            "vsync_total": status.frame_budget.vsync_total,
+            "fallback_total": status.frame_budget.fallback_total,
+            "timeout_total": status.frame_budget.timeout_total,
+            "error_total": status.frame_budget.error_total,
+            "window_frames": status.frame_budget.window_frames,
+            "window_over_budget": status.frame_budget.window_over_budget,
+            "window_over_20ms": status.frame_budget.window_over_20ms,
+            "window_over_33ms": status.frame_budget.window_over_33ms,
+            "window_max_wall_us": status.frame_budget.window_max_wall_us,
+            "window_max_vsync_miss_streak": status.frame_budget.window_max_vsync_miss_streak,
+            "window_prepare_us": status.frame_budget.window_prepare_us,
+            "window_render_us": status.frame_budget.window_render_us,
+            "window_custom_draw_us": status.frame_budget.window_custom_draw_us,
+            "window_vsync_us": status.frame_budget.window_vsync_us,
+            "window_present_us": status.frame_budget.window_present_us,
+        })
+    );
     insert!("rss_kb", current_rss_kb());
     insert!("rss_hwm_kb", current_rss_hwm_kb());
 
@@ -352,12 +410,41 @@ mod tests {
                 input_enabled: true,
                 reveal_ms: 37,
                 input_enabled_ms: 37,
+                frame_budget: FrameBudgetStatus {
+                    budget_us: 16_667,
+                    frames_total: 42,
+                    over_budget_total: 2,
+                    over_20ms_total: 1,
+                    over_33ms_total: 0,
+                    max_wall_us: 21_000,
+                    latest_over_budget_frame: 40,
+                    latest_over_budget_wall_us: 18_000,
+                    max_vsync_miss_streak: 1,
+                    vsync_total: 40,
+                    fallback_total: 1,
+                    timeout_total: 1,
+                    error_total: 0,
+                    window_frames: 30,
+                    window_over_budget: 1,
+                    window_over_20ms: 0,
+                    window_over_33ms: 0,
+                    window_max_wall_us: 18_000,
+                    window_max_vsync_miss_streak: 1,
+                    window_prepare_us: 100,
+                    window_render_us: 2_000,
+                    window_custom_draw_us: 3_000,
+                    window_vsync_us: 8_000,
+                    window_present_us: 900,
+                },
             },
             5678,
             101,
         );
 
         assert_eq!(value["schema"], "mister-magik-slint-status-v1");
+        assert_eq!(value["frame_budget"]["budget_us"], 16_667);
+        assert_eq!(value["frame_budget"]["over_budget_total"], 2);
+        assert_eq!(value["frame_budget"]["window_present_us"], 900);
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);
         assert_eq!(value["mode"], "ui");
@@ -492,6 +579,7 @@ mod tests {
             input_enabled: false,
             reveal_ms: 0,
             input_enabled_ms: 0,
+            frame_budget: FrameBudgetStatus::default(),
         });
 
         let text = fs::read_to_string(STATUS_PATH).expect("status json should be written");
@@ -510,6 +598,7 @@ mod tests {
         assert_eq!(value["catalog_background_scan_visible"], true);
         assert_eq!(value["confirm_visible"], false);
         assert_eq!(value["loading_title"], "1942");
+        assert_eq!(value["frame_budget"]["frames_total"], 0);
         assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }
 }
