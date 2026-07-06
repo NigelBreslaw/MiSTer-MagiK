@@ -197,6 +197,119 @@ component RealtimeSparkline inherits Rectangle {
     }
 }
 
+component CpuCoreLineChart inherits Rectangle {
+    width: 100%;
+    height: 116px;
+    border-width: 1px;
+    border-color: PrimerColors.borderColor-default;
+    border-radius: LayoutTokens.borderRadius-medium;
+    background: PrimerColors.bgColor-default;
+    clip: true;
+
+    plot := Rectangle {
+        x: 10px;
+        y: 10px;
+        width: parent.width - 20px;
+        height: parent.height - 32px;
+        background: PrimerColors.bgColor-inset;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-muted;
+        clip: true;
+
+        Rectangle {
+            y: parent.height / 2;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: 0.55;
+        }
+
+        Rectangle {
+            y: parent.height / 4;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: 0.35;
+        }
+
+        Rectangle {
+            y: parent.height * 3 / 4;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: 0.35;
+        }
+
+        if RealtimeState.cpu0-path != "": Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: 100;
+            viewbox-height: 100;
+            fit: fill;
+            clip: true;
+            commands: RealtimeState.cpu0-path;
+            fill: transparent;
+            stroke: #0969da;
+            stroke-width: 2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+
+        if RealtimeState.cpu1-path != "": Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: 100;
+            viewbox-height: 100;
+            fit: fill;
+            clip: true;
+            commands: RealtimeState.cpu1-path;
+            fill: transparent;
+            stroke: #bf3989;
+            stroke-width: 2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+    }
+
+    if RealtimeState.cpu0-path == "" && RealtimeState.cpu1-path == "": Text {
+        x: 12px;
+        y: 12px;
+        text: "Waiting for per-core CPU samples.";
+        color: PrimerColors.fgColor-muted;
+        font-size: LayoutTokens.text-body-size-small;
+    }
+
+    HorizontalLayout {
+        x: 10px;
+        y: parent.height - 18px;
+        width: parent.width - 20px;
+        height: 14px;
+        spacing: 12px;
+
+        for item in [
+            { label: "CPU0", color: #0969da },
+            { label: "CPU1", color: #bf3989 },
+        ] : HorizontalLayout {
+            spacing: 4px;
+            Rectangle {
+                width: 14px;
+                height: 2px;
+                y: 6px;
+                background: item.color;
+            }
+            Text {
+                text: item.label;
+                color: PrimerColors.fgColor-muted;
+                font-size: 9px;
+            }
+        }
+    }
+}
+
 component StoragePieChart inherits Rectangle {
     private property <angle> used-sweep: RealtimeState.storage-used-pct * 3.6deg;
     private property <bool> hovering: false;
@@ -496,42 +609,50 @@ component RealtimeFrameBudgetChart inherits Rectangle {
             width: 1px;
             height: parent.height;
 
-            Rectangle {
+            if sample.idle: Rectangle {
+                y: parent.height - 1px;
+                width: 1px;
+                height: 1px;
+                background: #1a7f37;
+                opacity: 0.8;
+            }
+
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.prepare-h;
                 width: 1px;
                 height: parent.prepare-h;
                 background: #6b7280;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.prepare-h - parent.render-h;
                 width: 1px;
                 height: parent.render-h;
                 background: #2563eb;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h;
                 width: 1px;
                 height: parent.custom-h;
                 background: #a855f7;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h;
                 width: 1px;
                 height: parent.vsync-h;
                 background: #f59e0b;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h - parent.present-h;
                 width: 1px;
                 height: parent.present-h;
                 background: #06b6d4;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.cpu-prepare-h;
                 width: 1px;
                 height: max(0px, parent.cpu-prepare-h);
@@ -539,7 +660,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
                 opacity: 0.45;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h;
                 width: 1px;
                 height: max(0px, parent.cpu-render-h);
@@ -547,7 +668,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
                 opacity: 0.45;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h;
                 width: 1px;
                 height: max(0px, parent.cpu-custom-h);
@@ -555,7 +676,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
                 opacity: 0.45;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h;
                 width: 1px;
                 height: max(0px, parent.cpu-vsync-h);
@@ -563,7 +684,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
                 opacity: 0.45;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h - parent.cpu-present-h;
                 width: 1px;
                 height: max(0px, parent.cpu-present-h);
@@ -571,7 +692,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
                 opacity: 0.45;
             }
 
-            Rectangle {
+            if !sample.idle: Rectangle {
                 y: min(max(0px, parent.process-y), parent.height - 2px);
                 width: 1px;
                 height: 2px;
@@ -583,7 +704,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
     if root.samples.length == 0: Text {
         x: root.plot-x + 10px;
         y: root.plot-y + 10px;
-        text: "Waiting for live frame samples.";
+        text: "No per-frame samples in the current stream.";
         color: PrimerColors.fgColor-muted;
         font-size: LayoutTokens.text-body-size-small;
     }
@@ -602,6 +723,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
             { label: "vsync", color: #f59e0b },
             { label: "present", color: #06b6d4 },
             { label: "cpu", color: #111827 },
+            { label: "idle", color: #1a7f37 },
         ] : HorizontalLayout {
             spacing: 4px;
             Rectangle {
@@ -687,11 +809,7 @@ component RealTimePanel inherits VerticalLayout {
                     cores: RealtimeState.cpu-cores;
                 }
 
-                RealtimeSparkline {
-                    points: RealtimeState.cpu-history;
-                    empty-label: "Waiting for combined CPU samples.";
-                    line-color: #0969da;
-                }
+                CpuCoreLineChart { }
             }
         }
 

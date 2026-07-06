@@ -1116,9 +1116,7 @@ impl LauncherFrameAccounting {
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
         let frame_budget = if idle {
-            let mut status = self.last_frame_budget_status.clone();
-            status.recent_frames.clear();
-            status
+            self.last_frame_budget_status.clone()
         } else {
             self.current_frame_budget_status()
         };

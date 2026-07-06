@@ -119,6 +119,7 @@ export struct RealtimeFrameSample {
     cpu-present-us: int,
     process-cpu-us: int,
     over-budget: bool,
+    idle: bool,
 }
 
 export struct RealtimeHealthTile {
@@ -178,6 +179,8 @@ export global RealtimeState {
     in-out property <float> frame-budget-pct: 0;
     in-out property <[RealtimeCpuCore]> cpu-cores: [];
     in-out property <[RealtimePoint]> cpu-history: [];
+    in-out property <string> cpu0-path: "";
+    in-out property <string> cpu1-path: "";
     in-out property <[RealtimePoint]> frame-history: [];
     in-out property <[RealtimeFramePhase]> frame-phases: [];
     in-out property <[RealtimeFrameSample]> frame-samples: [];
