@@ -1,0 +1,64 @@
+import { ScreenshotPackProgress } from "../api.slint";
+
+export component ScreenshotPackProgressRow inherits Rectangle {
+    in property <int> s;
+    in property <ScreenshotPackProgress> pack;
+    property <int> clamped-percent: Math.max(0, Math.min(100, pack.percent));
+    property <bool> determinate: pack.percent >= 0;
+
+    height: 18px * s;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 2px * root.s;
+
+        HorizontalLayout {
+            spacing: 6px * root.s;
+
+            Text {
+                width: 130px * root.s;
+                text: root.pack.system + " " + root.pack.image-size;
+                color: #d7eef8;
+                font-size: 6px * root.s;
+            }
+
+            Text {
+                width: 86px * root.s;
+                text: root.pack.phase;
+                color: #06d6a0;
+                font-size: 6px * root.s;
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.pack.pack-position;
+                color: #9080a8;
+                font-size: 6px * root.s;
+                horizontal-alignment: right;
+            }
+        }
+
+        Rectangle {
+            width: parent.width;
+            height: 3px * root.s;
+            background: #0e0c14;
+            border-width: 1px;
+            border-color: #5c4a72;
+            clip: true;
+
+            if root.determinate : Rectangle {
+                x: 0;
+                width: parent.width * root.clamped-percent / 100;
+                height: parent.height;
+                background: #06d6a0;
+            }
+
+            if !root.determinate : Rectangle {
+                width: 72px * root.s;
+                height: parent.height;
+                x: (parent.width - self.width) * Math.mod(animation-tick() / 1ms, 900) / 900;
+                background: #06d6a0;
+            }
+        }
+    }
+}
