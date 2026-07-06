@@ -8,8 +8,9 @@ mod macos_titlebar;
 mod sd_card;
 
 use agent_client::{
-    connect_framebuffer_stream, connect_framebuffer_stream_seeded, drain_framebuffer_stream,
-    fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory, FramebufferStreamControl,
+    connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
+    drain_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
+    DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -33,9 +34,12 @@ type SharedLibraryBrowser = Arc<Mutex<LibraryBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
 type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
+type SharedRealtimeStreamGeneration = Arc<AtomicU64>;
+type SharedRealtimeStreamControl = Arc<Mutex<Option<(u64, DeviceTelemetryStreamControl)>>>;
 
 const DIRTY_RECT_LINGER_FRAMES: usize = 8;
 const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
+const REALTIME_HISTORY_CAPACITY: usize = 300;
 
 #[derive(Clone, Debug)]
 struct DirtyRectOverlayState {
@@ -44,6 +48,68 @@ struct DirtyRectOverlayState {
     width: i32,
     height: i32,
     kind: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RealtimeHistory {
+    samples: VecDeque<DeviceTelemetrySample>,
+}
+
+impl RealtimeHistory {
+    fn push(&mut self, sample: DeviceTelemetrySample) {
+        self.samples.push_back(sample);
+        while self.samples.len() > REALTIME_HISTORY_CAPACITY {
+            self.samples.pop_front();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeViewState {
+    status: String,
+    last_error: String,
+    sample_age: String,
+    launcher_summary: String,
+    fps_summary: String,
+    cpu_summary: String,
+    memory_summary: String,
+    frame_summary: String,
+    memory_hover: String,
+    frame_hover: String,
+    streaming: bool,
+    combined_cpu_pct: f64,
+    magik_memory_pct: f64,
+    other_memory_pct: f64,
+    available_memory_pct: f64,
+    frame_budget_pct: f64,
+    cores: Vec<agent_client::CpuCoreTelemetry>,
+    cpu_history: Vec<RealtimeChartPoint>,
+    memory_history: Vec<RealtimeChartPoint>,
+    frame_history: Vec<RealtimeChartPoint>,
+    phases: Vec<RealtimeFramePhaseView>,
+    health_tiles: Vec<RealtimeHealthTileView>,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeChartPoint {
+    value: f64,
+    alert: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeFramePhaseView {
+    label: String,
+    us: u64,
+    start_us: u64,
+    color_index: i32,
+}
+
+#[derive(Clone, Debug)]
+struct RealtimeHealthTileView {
+    title: String,
+    value: String,
+    detail: String,
+    state: String,
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -279,6 +345,274 @@ fn library_preview_label(has_preview: bool) -> &'static str {
     } else {
         "Missing"
     }
+}
+
+fn realtime_view_from_history(
+    history: &RealtimeHistory,
+    streaming: bool,
+    last_error: &str,
+) -> RealtimeViewState {
+    let latest = history.samples.back();
+    let cpu_history = history
+        .samples
+        .iter()
+        .map(|sample| RealtimeChartPoint {
+            value: sample.combined_cpu_pct.clamp(0.0, 100.0),
+            alert: sample.combined_cpu_pct >= 85.0,
+        })
+        .collect::<Vec<_>>();
+    let memory_history = history
+        .samples
+        .iter()
+        .map(|sample| RealtimeChartPoint {
+            value: sample.memory.magik_pct.clamp(0.0, 100.0),
+            alert: sample.memory.magik_pct >= 25.0,
+        })
+        .collect::<Vec<_>>();
+    let frame_history = history
+        .samples
+        .iter()
+        .map(|sample| {
+            let budget = sample.frame_budget.budget_us.max(1) as f64;
+            let value = sample.frame_budget.window_max_wall_us as f64 * 100.0 / budget;
+            RealtimeChartPoint {
+                value: value.clamp(0.0, 100.0),
+                alert: sample.frame_budget.window_over_budget > 0,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let Some(sample) = latest else {
+        return RealtimeViewState {
+            status: if streaming {
+                "Real Time stream starting...".to_string()
+            } else {
+                "Real Time stream off.".to_string()
+            },
+            last_error: last_error.to_string(),
+            sample_age: "-".to_string(),
+            launcher_summary: "-".to_string(),
+            fps_summary: "-".to_string(),
+            cpu_summary: "-".to_string(),
+            memory_summary: "-".to_string(),
+            frame_summary: "-".to_string(),
+            memory_hover: String::new(),
+            frame_hover: String::new(),
+            streaming,
+            combined_cpu_pct: 0.0,
+            magik_memory_pct: 0.0,
+            other_memory_pct: 0.0,
+            available_memory_pct: 0.0,
+            frame_budget_pct: 0.0,
+            cores: Vec::new(),
+            cpu_history,
+            memory_history,
+            frame_history,
+            phases: Vec::new(),
+            health_tiles: Vec::new(),
+        };
+    };
+
+    let frame_budget = sample.frame_budget.budget_us.max(1);
+    let frame_budget_pct = (sample.frame_budget.window_max_wall_us as f64 * 100.0
+        / frame_budget as f64)
+        .clamp(0.0, 100.0);
+    let phases = realtime_frame_phases(&sample.frame_budget);
+    let memory_hover = format!(
+        "MagiK {} ({:.1}%) | Other {} ({:.1}%) | Available {} ({:.1}%)",
+        format_kib(sample.memory.magik_kb),
+        sample.memory.magik_pct,
+        format_kib(sample.memory.other_used_kb),
+        sample.memory.other_used_pct,
+        format_kib(sample.memory.available_kb),
+        sample.memory.available_pct
+    );
+    let frame_summary = format!(
+        "{} frames, {} over budget, max {}",
+        sample.frame_budget.window_frames,
+        sample.frame_budget.window_over_budget,
+        format_us(sample.frame_budget.window_max_wall_us)
+    );
+    let health_tiles = vec![
+        RealtimeHealthTileView {
+            title: "MagiK".to_string(),
+            value: process_tile_value(&sample.magik),
+            detail: format!(
+                "{} RSS, {} threads",
+                format_kib(sample.magik.rss_kb),
+                sample.magik.threads
+            ),
+            state: if sample.magik.pids.is_empty() {
+                "bad"
+            } else {
+                "good"
+            }
+            .to_string(),
+        },
+        RealtimeHealthTileView {
+            title: "Main".to_string(),
+            value: process_tile_value(&sample.main),
+            detail: format!(
+                "{} RSS, {} threads",
+                format_kib(sample.main.rss_kb),
+                sample.main.threads
+            ),
+            state: if sample.main.pids.is_empty() {
+                "warn"
+            } else {
+                "good"
+            }
+            .to_string(),
+        },
+        RealtimeHealthTileView {
+            title: "Network".to_string(),
+            value: format!(
+                "{} down / {} up",
+                format_byte_rate(sample.network.rx_bytes_per_sec),
+                format_byte_rate(sample.network.tx_bytes_per_sec)
+            ),
+            detail: "eth0 agent link".to_string(),
+            state: "good".to_string(),
+        },
+        RealtimeHealthTileView {
+            title: "SD Card".to_string(),
+            value: format_byte_size(sample.storage.available_bytes),
+            detail: format!("{:.1}% available", sample.storage.available_pct),
+            state: if sample.storage.available_pct < 5.0 {
+                "warn"
+            } else {
+                "good"
+            }
+            .to_string(),
+        },
+        RealtimeHealthTileView {
+            title: "Preview".to_string(),
+            value: sample.launcher.preview_cache_state.clone(),
+            detail: "Selected preview cache".to_string(),
+            state: if sample.launcher.preview_cache_state == "exact" {
+                "good"
+            } else {
+                "warn"
+            }
+            .to_string(),
+        },
+        RealtimeHealthTileView {
+            title: "Telemetry".to_string(),
+            value: if last_error.is_empty() {
+                "Healthy"
+            } else {
+                "Error"
+            }
+            .to_string(),
+            detail: if last_error.is_empty() {
+                format!("{} samples buffered", history.samples.len())
+            } else {
+                last_error.to_string()
+            },
+            state: if last_error.is_empty() { "good" } else { "bad" }.to_string(),
+        },
+    ];
+
+    RealtimeViewState {
+        status: if streaming {
+            "Streaming lightweight telemetry at 1 Hz.".to_string()
+        } else {
+            "Real Time stream off.".to_string()
+        },
+        last_error: last_error.to_string(),
+        sample_age: "now".to_string(),
+        launcher_summary: format!("{}/{}", sample.launcher.screen, sample.launcher.scene),
+        fps_summary: if sample.launcher.idle {
+            format!("{} idle", sample.launcher.fps)
+        } else {
+            sample.launcher.fps.clone()
+        },
+        cpu_summary: format!("Combined {:.1}%", sample.combined_cpu_pct),
+        memory_summary: format!(
+            "MagiK {}, available {}",
+            format_kib(sample.memory.magik_kb),
+            format_kib(sample.memory.available_kb)
+        ),
+        frame_summary,
+        memory_hover,
+        frame_hover: String::new(),
+        streaming,
+        combined_cpu_pct: sample.combined_cpu_pct,
+        magik_memory_pct: sample.memory.magik_pct,
+        other_memory_pct: sample.memory.other_used_pct,
+        available_memory_pct: sample.memory.available_pct,
+        frame_budget_pct,
+        cores: sample.cores.clone(),
+        cpu_history,
+        memory_history,
+        frame_history,
+        phases,
+        health_tiles,
+    }
+}
+
+fn realtime_frame_phases(
+    frame: &agent_client::FrameBudgetTelemetry,
+) -> Vec<RealtimeFramePhaseView> {
+    let phases = [
+        ("Prepare", frame.window_prepare_us, 0),
+        ("Render", frame.window_render_us, 1),
+        ("Custom", frame.window_custom_draw_us, 2),
+        ("Vsync", frame.window_vsync_us, 3),
+        ("Present", frame.window_present_us, 4),
+    ];
+    let mut start = 0_u64;
+    phases
+        .into_iter()
+        .map(|(label, us, color_index)| {
+            let item = RealtimeFramePhaseView {
+                label: label.to_string(),
+                us,
+                start_us: start,
+                color_index,
+            };
+            start = start.saturating_add(us);
+            item
+        })
+        .collect()
+}
+
+fn process_tile_value(process: &agent_client::ProcessTelemetry) -> String {
+    if process.pids.is_empty() {
+        "not running".to_string()
+    } else {
+        format!(
+            "pid {}",
+            process
+                .pids
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    }
+}
+
+fn format_kib(kb: u64) -> String {
+    if kb >= 1024 * 1024 {
+        format!("{:.1} GiB", kb as f64 / 1024.0 / 1024.0)
+    } else if kb >= 1024 {
+        format!("{:.1} MiB", kb as f64 / 1024.0)
+    } else {
+        format!("{kb} KiB")
+    }
+}
+
+fn format_us(us: u64) -> String {
+    if us >= 1000 {
+        format!("{:.1}ms", us as f64 / 1000.0)
+    } else {
+        format!("{us}us")
+    }
+}
+
+fn format_byte_rate(bytes: u64) -> String {
+    format!("{}/s", format_byte_size(bytes))
 }
 
 fn library_detail_sections(game: Option<&library::LibraryGame>) -> LibraryDetailSections {
@@ -599,6 +933,8 @@ fn create_live_instance(
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
+    let realtime_stream_generation = Arc::new(AtomicU64::new(0));
+    let realtime_stream_control = Arc::new(Mutex::new(None));
 
     let refresh_instance = instance.as_weak();
     let refresh_host = host.to_string();
@@ -611,6 +947,8 @@ fn create_live_instance(
     })?;
 
     let select_instance = instance.as_weak();
+    let select_realtime_generation = Arc::clone(&realtime_stream_generation);
+    let select_realtime_control = Arc::clone(&realtime_stream_control);
     instance.set_global_callback("Actions", "select-page", move |args| {
         if let Some(instance) = select_instance.upgrade() {
             if let Some(Value::String(page)) = args.first() {
@@ -619,8 +957,50 @@ fn create_live_instance(
                     "selected-page",
                     Value::String(page.clone()),
                 );
+                if page.as_str() != "debug" {
+                    select_realtime_generation.fetch_add(1, Ordering::SeqCst);
+                    cancel_realtime_stream(&select_realtime_control);
+                    apply_live_realtime_off(&instance);
+                }
             }
         }
+        Value::Void
+    })?;
+
+    let debug_tab_instance = instance.as_weak();
+    let debug_tab_host = host.to_string();
+    let debug_tab_generation = Arc::clone(&realtime_stream_generation);
+    let debug_tab_control = Arc::clone(&realtime_stream_control);
+    instance.set_global_callback("Actions", "debug-tab-changed", move |args| {
+        let Some(Value::Number(index)) = args.first() else {
+            return Value::Void;
+        };
+        let active = (*index as i32) == 1;
+        start_or_stop_live_realtime(
+            debug_tab_instance.clone(),
+            Arc::clone(&debug_tab_generation),
+            Arc::clone(&debug_tab_control),
+            debug_tab_host.clone(),
+            active,
+        );
+        Value::Void
+    })?;
+
+    let realtime_instance = instance.as_weak();
+    let realtime_host = host.to_string();
+    let realtime_generation = Arc::clone(&realtime_stream_generation);
+    let realtime_control = Arc::clone(&realtime_stream_control);
+    instance.set_global_callback("Actions", "realtime-stream-changed", move |args| {
+        let Some(Value::Bool(active)) = args.first() else {
+            return Value::Void;
+        };
+        start_or_stop_live_realtime(
+            realtime_instance.clone(),
+            Arc::clone(&realtime_generation),
+            Arc::clone(&realtime_control),
+            realtime_host.clone(),
+            *active,
+        );
         Value::Void
     })?;
 
@@ -1428,6 +1808,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let framebuffer_capture = Arc::new(Mutex::new(None));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
+    let realtime_stream_generation = Arc::new(AtomicU64::new(0));
+    let realtime_stream_control = Arc::new(Mutex::new(None));
     let refresh_ui = ui.as_weak();
     let refresh_host = host.clone();
     ui.global::<Actions>().on_refresh_status(move || {
@@ -1438,11 +1820,47 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     });
 
     let select_ui = ui.as_weak();
+    let select_realtime_generation = Arc::clone(&realtime_stream_generation);
+    let select_realtime_control = Arc::clone(&realtime_stream_control);
     ui.global::<Actions>().on_select_page(move |page| {
         if let Some(ui) = select_ui.upgrade() {
+            if page.as_str() != "debug" {
+                select_realtime_generation.fetch_add(1, Ordering::SeqCst);
+                cancel_realtime_stream(&select_realtime_control);
+                apply_compiled_realtime_off(&ui);
+            }
             ui.global::<AppState>().set_selected_page(page);
         }
     });
+
+    let debug_tab_ui = ui.as_weak();
+    let debug_tab_host = host.clone();
+    let debug_tab_generation = Arc::clone(&realtime_stream_generation);
+    let debug_tab_control = Arc::clone(&realtime_stream_control);
+    ui.global::<Actions>().on_debug_tab_changed(move |index| {
+        start_or_stop_compiled_realtime(
+            debug_tab_ui.clone(),
+            Arc::clone(&debug_tab_generation),
+            Arc::clone(&debug_tab_control),
+            debug_tab_host.clone(),
+            index == 1,
+        );
+    });
+
+    let realtime_ui = ui.as_weak();
+    let realtime_host = host.clone();
+    let realtime_generation = Arc::clone(&realtime_stream_generation);
+    let realtime_control = Arc::clone(&realtime_stream_control);
+    ui.global::<Actions>()
+        .on_realtime_stream_changed(move |active| {
+            start_or_stop_compiled_realtime(
+                realtime_ui.clone(),
+                Arc::clone(&realtime_generation),
+                Arc::clone(&realtime_control),
+                realtime_host.clone(),
+                active,
+            );
+        });
 
     let capture_ui = ui.as_weak();
     let capture_host = host.clone();
@@ -2059,6 +2477,93 @@ fn unregister_framebuffer_stream(stream_control: &SharedFramebufferStreamControl
     }
 }
 
+fn cancel_realtime_stream(stream_control: &SharedRealtimeStreamControl) {
+    if let Ok(mut active) = stream_control.lock() {
+        if let Some((_, control)) = active.take() {
+            control.shutdown();
+        }
+    }
+}
+
+fn register_realtime_stream(
+    stream_control: &SharedRealtimeStreamControl,
+    generation: u64,
+    control: DeviceTelemetryStreamControl,
+) {
+    if let Ok(mut active) = stream_control.lock() {
+        if let Some((_, old_control)) = active.replace((generation, control)) {
+            old_control.shutdown();
+        }
+    }
+}
+
+fn unregister_realtime_stream(stream_control: &SharedRealtimeStreamControl, generation: u64) {
+    if let Ok(mut active) = stream_control.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|(active_generation, _)| *active_generation == generation)
+        {
+            active.take();
+        }
+    }
+}
+
+#[cfg(feature = "live-ui")]
+fn start_or_stop_live_realtime(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    stream_generation: SharedRealtimeStreamGeneration,
+    stream_control: SharedRealtimeStreamControl,
+    host: String,
+    active: bool,
+) {
+    let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    cancel_realtime_stream(&stream_control);
+    if !active {
+        if let Some(instance) = instance.upgrade() {
+            apply_live_realtime_off(&instance);
+        }
+        return;
+    }
+    if let Some(instance) = instance.upgrade() {
+        apply_live_realtime_view(
+            &instance,
+            &realtime_view_from_history(&RealtimeHistory::default(), true, ""),
+        );
+    }
+    spawn_live_realtime_stream(
+        instance,
+        stream_generation,
+        stream_control,
+        host,
+        generation,
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn start_or_stop_compiled_realtime(
+    ui: slint::Weak<AppWindow>,
+    stream_generation: SharedRealtimeStreamGeneration,
+    stream_control: SharedRealtimeStreamControl,
+    host: String,
+    active: bool,
+) {
+    let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    cancel_realtime_stream(&stream_control);
+    if !active {
+        if let Some(ui) = ui.upgrade() {
+            apply_compiled_realtime_off(&ui);
+        }
+        return;
+    }
+    if let Some(ui) = ui.upgrade() {
+        apply_compiled_realtime_view(
+            &ui,
+            &realtime_view_from_history(&RealtimeHistory::default(), true, ""),
+        );
+    }
+    spawn_compiled_realtime_stream(ui, stream_generation, stream_control, host, generation);
+}
+
 fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Duration) -> String {
     let fps = if elapsed.is_zero() {
         0.0
@@ -2201,6 +2706,291 @@ fn clear_compiled_dirty_rects(ui: &AppWindow) {
     let state = ui.global::<AnalyticsState>();
     state.set_dirty_rects(ModelRc::new(VecModel::<DirtyRectOverlay>::from(Vec::new())));
     state.set_dirty_rect_summary("Dirty overlay idle.".into());
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_realtime_view(
+    instance: &slint_interpreter::ComponentInstance,
+    view: &RealtimeViewState,
+) {
+    use slint::{ModelRc, SharedString, VecModel};
+    use slint_interpreter::{Struct, Value};
+
+    fn set(instance: &slint_interpreter::ComponentInstance, name: &str, value: Value) {
+        let _ = instance.set_global_property("RealtimeState", name, value);
+    }
+
+    set(instance, "streaming", Value::Bool(view.streaming));
+    set(
+        instance,
+        "status",
+        Value::String(SharedString::from(view.status.as_str())),
+    );
+    set(
+        instance,
+        "last-error",
+        Value::String(SharedString::from(view.last_error.as_str())),
+    );
+    set(
+        instance,
+        "sample-age",
+        Value::String(SharedString::from(view.sample_age.as_str())),
+    );
+    set(
+        instance,
+        "launcher-summary",
+        Value::String(SharedString::from(view.launcher_summary.as_str())),
+    );
+    set(
+        instance,
+        "fps-summary",
+        Value::String(SharedString::from(view.fps_summary.as_str())),
+    );
+    set(
+        instance,
+        "cpu-summary",
+        Value::String(SharedString::from(view.cpu_summary.as_str())),
+    );
+    set(
+        instance,
+        "memory-summary",
+        Value::String(SharedString::from(view.memory_summary.as_str())),
+    );
+    set(
+        instance,
+        "frame-summary",
+        Value::String(SharedString::from(view.frame_summary.as_str())),
+    );
+    set(
+        instance,
+        "memory-hover",
+        Value::String(SharedString::from(view.memory_hover.as_str())),
+    );
+    set(
+        instance,
+        "frame-hover",
+        Value::String(SharedString::from(view.frame_hover.as_str())),
+    );
+    set(
+        instance,
+        "combined-cpu-pct",
+        Value::Number(view.combined_cpu_pct),
+    );
+    set(
+        instance,
+        "magik-memory-pct",
+        Value::Number(view.magik_memory_pct),
+    );
+    set(
+        instance,
+        "other-memory-pct",
+        Value::Number(view.other_memory_pct),
+    );
+    set(
+        instance,
+        "available-memory-pct",
+        Value::Number(view.available_memory_pct),
+    );
+    set(
+        instance,
+        "frame-budget-pct",
+        Value::Number(view.frame_budget_pct),
+    );
+
+    set(
+        instance,
+        "cpu-cores",
+        Value::Model(ModelRc::new(VecModel::from(
+            view.cores
+                .iter()
+                .map(|core| {
+                    Value::Struct(Struct::from_iter([
+                        (
+                            "label".to_string(),
+                            Value::String(SharedString::from(core.label.as_str())),
+                        ),
+                        ("busy-pct".to_string(), Value::Number(core.busy_pct)),
+                    ]))
+                })
+                .collect::<Vec<_>>(),
+        ))),
+    );
+    set(
+        instance,
+        "cpu-history",
+        Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
+            &view.cpu_history,
+        )))),
+    );
+    set(
+        instance,
+        "memory-history",
+        Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
+            &view.memory_history,
+        )))),
+    );
+    set(
+        instance,
+        "frame-history",
+        Value::Model(ModelRc::new(VecModel::from(live_realtime_points(
+            &view.frame_history,
+        )))),
+    );
+    set(
+        instance,
+        "frame-phases",
+        Value::Model(ModelRc::new(VecModel::from(
+            view.phases
+                .iter()
+                .map(|phase| {
+                    Value::Struct(Struct::from_iter([
+                        (
+                            "label".to_string(),
+                            Value::String(SharedString::from(phase.label.as_str())),
+                        ),
+                        ("us".to_string(), Value::Number(phase.us as f64)),
+                        ("start-us".to_string(), Value::Number(phase.start_us as f64)),
+                        (
+                            "color-index".to_string(),
+                            Value::Number(f64::from(phase.color_index)),
+                        ),
+                    ]))
+                })
+                .collect::<Vec<_>>(),
+        ))),
+    );
+    set(
+        instance,
+        "health-tiles",
+        Value::Model(ModelRc::new(VecModel::from(
+            view.health_tiles
+                .iter()
+                .map(|tile| {
+                    Value::Struct(Struct::from_iter([
+                        (
+                            "title".to_string(),
+                            Value::String(SharedString::from(tile.title.as_str())),
+                        ),
+                        (
+                            "value".to_string(),
+                            Value::String(SharedString::from(tile.value.as_str())),
+                        ),
+                        (
+                            "detail".to_string(),
+                            Value::String(SharedString::from(tile.detail.as_str())),
+                        ),
+                        (
+                            "state".to_string(),
+                            Value::String(SharedString::from(tile.state.as_str())),
+                        ),
+                    ]))
+                })
+                .collect::<Vec<_>>(),
+        ))),
+    );
+}
+
+#[cfg(feature = "live-ui")]
+fn live_realtime_points(points: &[RealtimeChartPoint]) -> Vec<slint_interpreter::Value> {
+    use slint_interpreter::{Struct, Value};
+
+    points
+        .iter()
+        .map(|point| {
+            Value::Struct(Struct::from_iter([
+                ("value".to_string(), Value::Number(point.value)),
+                ("alert".to_string(), Value::Bool(point.alert)),
+            ]))
+        })
+        .collect()
+}
+
+#[cfg(feature = "live-ui")]
+fn apply_live_realtime_off(instance: &slint_interpreter::ComponentInstance) {
+    apply_live_realtime_view(
+        instance,
+        &realtime_view_from_history(&RealtimeHistory::default(), false, ""),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
+    use slint::{ModelRc, SharedString, VecModel};
+
+    let state = ui.global::<RealtimeState>();
+    state.set_streaming(view.streaming);
+    state.set_status(view.status.as_str().into());
+    state.set_last_error(view.last_error.as_str().into());
+    state.set_sample_age(view.sample_age.as_str().into());
+    state.set_launcher_summary(view.launcher_summary.as_str().into());
+    state.set_fps_summary(view.fps_summary.as_str().into());
+    state.set_cpu_summary(view.cpu_summary.as_str().into());
+    state.set_memory_summary(view.memory_summary.as_str().into());
+    state.set_frame_summary(view.frame_summary.as_str().into());
+    state.set_memory_hover(view.memory_hover.as_str().into());
+    state.set_frame_hover(view.frame_hover.as_str().into());
+    state.set_combined_cpu_pct(view.combined_cpu_pct as f32);
+    state.set_magik_memory_pct(view.magik_memory_pct as f32);
+    state.set_other_memory_pct(view.other_memory_pct as f32);
+    state.set_available_memory_pct(view.available_memory_pct as f32);
+    state.set_frame_budget_pct(view.frame_budget_pct as f32);
+    state.set_cpu_cores(ModelRc::new(VecModel::from(
+        view.cores
+            .iter()
+            .map(|core| RealtimeCpuCore {
+                label: SharedString::from(core.label.as_str()),
+                busy_pct: core.busy_pct as f32,
+            })
+            .collect::<Vec<_>>(),
+    )));
+    state.set_cpu_history(compiled_realtime_points(&view.cpu_history));
+    state.set_memory_history(compiled_realtime_points(&view.memory_history));
+    state.set_frame_history(compiled_realtime_points(&view.frame_history));
+    state.set_frame_phases(ModelRc::new(VecModel::from(
+        view.phases
+            .iter()
+            .map(|phase| RealtimeFramePhase {
+                label: SharedString::from(phase.label.as_str()),
+                us: phase.us as i32,
+                start_us: phase.start_us as i32,
+                color_index: phase.color_index,
+            })
+            .collect::<Vec<_>>(),
+    )));
+    state.set_health_tiles(ModelRc::new(VecModel::from(
+        view.health_tiles
+            .iter()
+            .map(|tile| RealtimeHealthTile {
+                title: SharedString::from(tile.title.as_str()),
+                value: SharedString::from(tile.value.as_str()),
+                detail: SharedString::from(tile.detail.as_str()),
+                state: SharedString::from(tile.state.as_str()),
+            })
+            .collect::<Vec<_>>(),
+    )));
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_realtime_points(points: &[RealtimeChartPoint]) -> slint::ModelRc<RealtimePoint> {
+    use slint::{ModelRc, VecModel};
+
+    ModelRc::new(VecModel::from(
+        points
+            .iter()
+            .map(|point| RealtimePoint {
+                value: point.value as f32,
+                alert: point.alert,
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_realtime_off(ui: &AppWindow) {
+    apply_compiled_realtime_view(
+        ui,
+        &realtime_view_from_history(&RealtimeHistory::default(), false, ""),
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -3097,6 +3887,96 @@ fn spawn_live_framebuffer_stream(
     });
 }
 
+#[cfg(feature = "live-ui")]
+fn spawn_live_realtime_stream(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    stream_generation: SharedRealtimeStreamGeneration,
+    stream_control: SharedRealtimeStreamControl,
+    host: String,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let mut history = RealtimeHistory::default();
+        let mut stream = match connect_device_telemetry_stream(&host) {
+            Ok(stream) => stream,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(instance) = instance.upgrade() {
+                        apply_live_realtime_view(
+                            &instance,
+                            &realtime_view_from_history(&history, false, &err),
+                        );
+                    }
+                });
+                return;
+            }
+        };
+        let control = match stream.control() {
+            Ok(control) => control,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(instance) = instance.upgrade() {
+                        apply_live_realtime_view(
+                            &instance,
+                            &realtime_view_from_history(&history, false, &err),
+                        );
+                    }
+                });
+                return;
+            }
+        };
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            control.shutdown();
+            return;
+        }
+        register_realtime_stream(&stream_control, generation, control);
+        while stream_generation.load(Ordering::SeqCst) == generation {
+            match stream.next_sample() {
+                Ok(sample) => {
+                    history.push(sample);
+                    let view = realtime_view_from_history(&history, true, "");
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_instance = instance.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(instance) = event_instance.upgrade() {
+                            apply_live_realtime_view(&instance, &view);
+                        }
+                    });
+                }
+                Err(err) => {
+                    let err = err.to_string();
+                    let view = realtime_view_from_history(&history, false, &err);
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_instance = instance.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(instance) = event_instance.upgrade() {
+                            apply_live_realtime_view(&instance, &view);
+                        }
+                    });
+                    break;
+                }
+            }
+        }
+        unregister_realtime_stream(&stream_control, generation);
+    });
+}
+
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_library_sync(
     ui: slint::Weak<AppWindow>,
@@ -3324,6 +4204,96 @@ fn spawn_compiled_framebuffer_stream(
     });
 }
 
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_realtime_stream(
+    ui: slint::Weak<AppWindow>,
+    stream_generation: SharedRealtimeStreamGeneration,
+    stream_control: SharedRealtimeStreamControl,
+    host: String,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let mut history = RealtimeHistory::default();
+        let mut stream = match connect_device_telemetry_stream(&host) {
+            Ok(stream) => stream,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(ui) = ui.upgrade() {
+                        apply_compiled_realtime_view(
+                            &ui,
+                            &realtime_view_from_history(&history, false, &err),
+                        );
+                    }
+                });
+                return;
+            }
+        };
+        let control = match stream.control() {
+            Ok(control) => control,
+            Err(err) => {
+                let err = err.to_string();
+                let event_generation = Arc::clone(&stream_generation);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if event_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    if let Some(ui) = ui.upgrade() {
+                        apply_compiled_realtime_view(
+                            &ui,
+                            &realtime_view_from_history(&history, false, &err),
+                        );
+                    }
+                });
+                return;
+            }
+        };
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            control.shutdown();
+            return;
+        }
+        register_realtime_stream(&stream_control, generation, control);
+        while stream_generation.load(Ordering::SeqCst) == generation {
+            match stream.next_sample() {
+                Ok(sample) => {
+                    history.push(sample);
+                    let view = realtime_view_from_history(&history, true, "");
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_ui = ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(ui) = event_ui.upgrade() {
+                            apply_compiled_realtime_view(&ui, &view);
+                        }
+                    });
+                }
+                Err(err) => {
+                    let err = err.to_string();
+                    let view = realtime_view_from_history(&history, false, &err);
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_ui = ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(ui) = event_ui.upgrade() {
+                            apply_compiled_realtime_view(&ui, &view);
+                        }
+                    });
+                    break;
+                }
+            }
+        }
+        unregister_realtime_stream(&stream_control, generation);
+    });
+}
+
 fn start_window_drag(window: &slint::Window) {
     use slint::winit_030::WinitWindowAccessor;
     window.with_winit_window(|winit_window| {
@@ -3374,6 +4344,101 @@ mod tests {
             is_skeleton: false,
             loading_children_badge: "loading".to_string(),
         }
+    }
+
+    fn telemetry_sample(seq: u64) -> DeviceTelemetrySample {
+        DeviceTelemetrySample {
+            seq,
+            combined_cpu_pct: 12.5,
+            cores: vec![agent_client::CpuCoreTelemetry {
+                label: "CPU0".to_string(),
+                busy_pct: 12.5,
+            }],
+            memory: agent_client::MemoryTelemetry {
+                total_kb: 1_000_000,
+                magik_kb: 100_000,
+                main_kb: 20_000,
+                other_used_kb: 500_000,
+                available_kb: 400_000,
+                magik_pct: 10.0,
+                other_used_pct: 50.0,
+                available_pct: 40.0,
+            },
+            frame_budget: agent_client::FrameBudgetTelemetry {
+                budget_us: 16_667,
+                frames_total: seq,
+                window_frames: 60,
+                window_over_budget: 1,
+                window_over_20ms: 1,
+                window_over_33ms: 0,
+                window_max_wall_us: 21_000,
+                max_wall_us: 21_000,
+                max_vsync_miss_streak: 1,
+                window_prepare_us: 100,
+                window_render_us: 200,
+                window_custom_draw_us: 300,
+                window_vsync_us: 400,
+                window_present_us: 500,
+            },
+            launcher: agent_client::LauncherTelemetry {
+                status_current: true,
+                screen: "arcade".to_string(),
+                scene: "launcher".to_string(),
+                idle: false,
+                fps: "59.9 fps".to_string(),
+                preview_cache_state: "exact".to_string(),
+            },
+            magik: agent_client::ProcessTelemetry {
+                pids: vec![42],
+                rss_kb: 100_000,
+                threads: 7,
+            },
+            main: agent_client::ProcessTelemetry {
+                pids: vec![9],
+                rss_kb: 20_000,
+                threads: 1,
+            },
+            network: agent_client::NetworkTelemetry {
+                rx_bytes_per_sec: 1024,
+                tx_bytes_per_sec: 2048,
+            },
+            storage: agent_client::StorageTelemetry {
+                available_bytes: 1024 * 1024 * 1024,
+                total_bytes: 2 * 1024 * 1024 * 1024,
+                available_pct: 50.0,
+            },
+        }
+    }
+
+    #[test]
+    fn realtime_history_caps_at_five_minutes() {
+        let mut history = RealtimeHistory::default();
+        for seq in 0..(REALTIME_HISTORY_CAPACITY as u64 + 5) {
+            history.push(telemetry_sample(seq));
+        }
+
+        assert_eq!(history.samples.len(), REALTIME_HISTORY_CAPACITY);
+        assert_eq!(history.samples.front().unwrap().seq, 5);
+        assert_eq!(
+            history.samples.back().unwrap().seq,
+            REALTIME_HISTORY_CAPACITY as u64 + 4
+        );
+    }
+
+    #[test]
+    fn realtime_view_summarizes_latest_sample() {
+        let mut history = RealtimeHistory::default();
+        history.push(telemetry_sample(1));
+
+        let view = realtime_view_from_history(&history, true, "");
+
+        assert!(view.streaming);
+        assert_eq!(view.launcher_summary, "arcade/launcher");
+        assert_eq!(view.cpu_history.len(), 1);
+        assert_eq!(view.memory_history[0].value, 10.0);
+        assert_eq!(view.frame_history[0].alert, true);
+        assert_eq!(view.phases.len(), 5);
+        assert_eq!(view.health_tiles.len(), 6);
     }
 
     #[cfg(feature = "live-ui")]

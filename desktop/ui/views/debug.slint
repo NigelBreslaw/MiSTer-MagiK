@@ -33,8 +33,379 @@ import {
     TreeViewTrailingVisual,
 } from "../../vendor/github-app/packages/primer-slint/primer.slint";
 import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
-import { Actions, DeviceState } from "../api.slint";
+import {
+    Actions,
+    DeviceState,
+    RealtimeCpuCore,
+    RealtimeFramePhase,
+    RealtimeHealthTile,
+    RealtimePoint,
+    RealtimeState,
+} from "../api.slint";
 import { ViewTitle } from "../components/chrome.slint";
+
+component RealtimeStatusStrip {
+    HorizontalLayout {
+        width: 100%;
+        spacing: 8px;
+        cross-axis-alignment: center;
+
+        for item in [
+            { title: "Stream", value: RealtimeState.streaming ? "Live" : "Off" },
+            { title: "Sample", value: RealtimeState.sample-age },
+            { title: "Launcher", value: RealtimeState.launcher-summary },
+            { title: "Frame", value: RealtimeState.fps-summary },
+        ] : Rectangle {
+            horizontal-stretch: 1;
+            min-height: 48px;
+            border-width: 1px;
+            border-color: PrimerColors.borderColor-default;
+            border-radius: LayoutTokens.borderRadius-medium;
+            background: PrimerColors.bgColor-default;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: item.title == "Stream" && RealtimeState.streaming ? PrimerColors.fgColor-success
+                        : item.title == "Stream" ? PrimerColors.fgColor-muted
+                        : PrimerColors.fgColor-accent;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+
+                    Text {
+                        text: item.title;
+                        color: PrimerColors.fgColor-muted;
+                        font-size: LayoutTokens.text-body-size-small;
+                    }
+
+                    Text {
+                        text: item.value;
+                        color: PrimerColors.fgColor-default;
+                        font-size: LayoutTokens.text-body-size-small;
+                        font-weight: LayoutTokens.base-text-weight-semibold;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component CpuCoreBars {
+    in property <[RealtimeCpuCore]> cores;
+
+    VerticalLayout {
+        width: 100%;
+        spacing: 8px;
+
+        for core in root.cores : HorizontalLayout {
+            height: 24px;
+            spacing: 8px;
+            cross-axis-alignment: center;
+
+            Text {
+                width: 48px;
+                text: core.label;
+                color: PrimerColors.fgColor-muted;
+                font-size: LayoutTokens.text-body-size-small;
+                vertical-alignment: center;
+            }
+
+            bar := Rectangle {
+                horizontal-stretch: 1;
+                height: 10px;
+                border-radius: 5px;
+                background: PrimerColors.bgColor-inset;
+                clip: true;
+
+                Rectangle {
+                    width: parent.width * min(100.0, max(0.0, core.busy-pct)) / 100.0;
+                    height: parent.height;
+                    border-radius: 5px;
+                    background: core.busy-pct >= 85.0 ? #cf222e
+                        : core.busy-pct >= 65.0 ? #bf8700
+                        : #1f883d;
+                }
+            }
+
+            Text {
+                width: 48px;
+                text: core.busy-pct + "%";
+                color: PrimerColors.fgColor-default;
+                font-size: LayoutTokens.text-body-size-small;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        if root.cores.length == 0: Text {
+            text: "Waiting for CPU samples.";
+            color: PrimerColors.fgColor-muted;
+            font-size: LayoutTokens.text-body-size-small;
+        }
+    }
+}
+
+component RealtimeSparkline {
+    in property <[RealtimePoint]> points;
+    in property <string> empty-label;
+    in property <color> color: PrimerColors.fgColor-accent;
+    in property <color> alert-color: #cf222e;
+
+    Rectangle {
+        width: 100%;
+        height: 116px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-default;
+        clip: true;
+
+        Rectangle {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            height: parent.height - 20px;
+            background: PrimerColors.bgColor-inset;
+            border-width: 1px;
+            border-color: PrimerColors.borderColor-muted;
+
+            for point[ix] in root.points : Rectangle {
+                width: max(2px, parent.width / max(1, root.points.length));
+                height: max(2px, parent.height * min(100.0, max(0.0, point.value)) / 100.0);
+                x: parent.width * ix / max(1, root.points.length);
+                y: parent.height - self.height;
+                background: point.alert ? root.alert-color : root.color;
+                opacity: point.alert ? 1.0 : 0.78;
+            }
+        }
+
+        if root.points.length == 0: Text {
+            x: 12px;
+            y: 12px;
+            text: root.empty-label;
+            color: PrimerColors.fgColor-muted;
+            font-size: LayoutTokens.text-body-size-small;
+        }
+    }
+}
+
+component MemorySplitBar {
+    Rectangle {
+        width: 100%;
+        height: 20px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-inset;
+        clip: true;
+
+        Rectangle {
+            x: 0px;
+            width: parent.width * RealtimeState.magik-memory-pct / 100.0;
+            height: parent.height;
+            background: #0969da;
+        }
+
+        Rectangle {
+            x: parent.width * RealtimeState.magik-memory-pct / 100.0;
+            width: parent.width * RealtimeState.other-memory-pct / 100.0;
+            height: parent.height;
+            background: #9a6700;
+        }
+
+        Rectangle {
+            x: parent.width * (RealtimeState.magik-memory-pct + RealtimeState.other-memory-pct) / 100.0;
+            width: parent.width * RealtimeState.available-memory-pct / 100.0;
+            height: parent.height;
+            background: #1a7f37;
+        }
+
+        TouchArea { }
+    }
+}
+
+component FramePhaseBar {
+    in property <[RealtimeFramePhase]> phases;
+    in property <int> max-us: 16667;
+
+    Rectangle {
+        width: 100%;
+        height: 32px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-inset;
+        clip: true;
+
+        for phase in root.phases : Rectangle {
+            x: parent.width * phase.start-us / max(1, root.max-us);
+            width: max(2px, parent.width * phase.us / max(1, root.max-us));
+            height: parent.height;
+            background: phase.color-index == 0 ? #6e7781
+                : phase.color-index == 1 ? #0969da
+                : phase.color-index == 2 ? #8250df
+                : phase.color-index == 3 ? #bf8700
+                : #1a7f37;
+
+            TouchArea {
+                mouse-cursor: pointer;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.move || event.kind == PointerEventKind.down {
+                        RealtimeState.frame-hover = phase.label + ": " + phase.us + "us";
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            x: parent.width - 1px;
+            width: 1px;
+            background: #cf222e;
+        }
+    }
+}
+
+component HealthTiles {
+    in property <[RealtimeHealthTile]> tiles;
+
+    GridLayout {
+        width: 100%;
+        spacing: 8px;
+
+        for tile[ix] in root.tiles : Rectangle {
+            row: ix / 3;
+            col: Math.mod(ix, 3);
+            min-height: 74px;
+            border-width: 1px;
+            border-color: tile.state == "bad" ? PrimerColors.borderColor-danger-muted
+                : tile.state == "warn" ? PrimerColors.borderColor-attention-muted
+                : PrimerColors.borderColor-default;
+            border-radius: LayoutTokens.borderRadius-medium;
+            background: PrimerColors.bgColor-default;
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 4px;
+
+                Text {
+                    text: tile.title;
+                    color: PrimerColors.fgColor-muted;
+                    font-size: LayoutTokens.text-body-size-small;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: tile.value;
+                    color: PrimerColors.fgColor-default;
+                    font-size: LayoutTokens.text-body-size-medium;
+                    font-weight: LayoutTokens.base-text-weight-semibold;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: tile.detail;
+                    color: PrimerColors.fgColor-muted;
+                    font-size: LayoutTokens.text-body-size-small;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}
+
+component RealTimePanel {
+    VerticalLayout {
+        width: 100%;
+        spacing: 12px;
+        alignment: start;
+
+        RealtimeStatusStrip { }
+
+        HorizontalLayout {
+            width: 100%;
+            spacing: 12px;
+            alignment: start;
+
+            TableContainer {
+                horizontal-stretch: 1;
+                title: "CPU";
+                subtitle: RealtimeState.cpu-summary;
+
+                CpuCoreBars {
+                    cores: RealtimeState.cpu-cores;
+                }
+
+                RealtimeSparkline {
+                    points: RealtimeState.cpu-history;
+                    empty-label: "Waiting for combined CPU samples.";
+                    color: #0969da;
+                }
+            }
+
+            TableContainer {
+                horizontal-stretch: 1;
+                title: "Memory";
+                subtitle: RealtimeState.memory-hover != "" ? RealtimeState.memory-hover : RealtimeState.memory-summary;
+
+                VerticalLayout {
+                    width: 100%;
+                    spacing: 8px;
+
+                    MemorySplitBar { }
+
+                    RealtimeSparkline {
+                        points: RealtimeState.memory-history;
+                        empty-label: "Waiting for MagiK memory samples.";
+                        color: #8250df;
+                    }
+                }
+            }
+        }
+
+        TableContainer {
+            width: 100%;
+            title: "Frame Budget";
+            subtitle: RealtimeState.frame-hover != "" ? RealtimeState.frame-hover : RealtimeState.frame-summary;
+
+            VerticalLayout {
+                width: 100%;
+                spacing: 8px;
+
+                FramePhaseBar {
+                    phases: RealtimeState.frame-phases;
+                }
+
+                RealtimeSparkline {
+                    points: RealtimeState.frame-history;
+                    empty-label: "Waiting for frame-budget samples.";
+                    color: #1a7f37;
+                    alert-color: #cf222e;
+                }
+            }
+        }
+
+        TableContainer {
+            width: 100%;
+            title: "Other Health";
+            subtitle: RealtimeState.status;
+
+            HealthTiles {
+                tiles: RealtimeState.health-tiles;
+            }
+        }
+    }
+}
 
 export component DebugPage {
     property <DataTableCell> empty-cell: {
@@ -84,6 +455,7 @@ export component DebugPage {
     property <int> debug-tab-index: 0;
     property <[SegmentedControlSegment]> debug-tabs: [
         { label: "Connection", has-leading-icon: true, leading-icon: Icons.link, disabled: false, has-count: false, count-text: "", icon-only: false },
+        { label: "Real Time", has-leading-icon: true, leading-icon: Icons.history, disabled: false, has-count: false, count-text: "", icon-only: false },
         { label: "Device", has-leading-icon: true, leading-icon: Icons.repo, disabled: false, has-count: false, count-text: "", icon-only: false },
         { label: "Runtime", has-leading-icon: true, leading-icon: Icons.layout_grid, disabled: false, has-count: false, count-text: "", icon-only: false },
         { label: "Library + Input", has-leading-icon: true, leading-icon: Icons.table, disabled: false, has-count: false, count-text: "", icon-only: false },
@@ -116,6 +488,7 @@ export component DebugPage {
                 segments: root.debug-tabs;
                 size: SegmentedControlSize.medium;
                 accessible-name: "Debug sections";
+                selected-changed(index) => { Actions.debug-tab-changed(index); }
             }
 
             if root.debug-tab-index == 0: TableContainer {
@@ -133,7 +506,9 @@ export component DebugPage {
                 }
             }
 
-            if root.debug-tab-index == 1: TableContainer {
+            if root.debug-tab-index == 1: RealTimePanel { }
+
+            if root.debug-tab-index == 2: TableContainer {
                 title: "Device";
                 subtitle: "Agent build, uptime, and network identity.";
 
@@ -145,7 +520,7 @@ export component DebugPage {
                 }
             }
 
-            if root.debug-tab-index == 2: TableContainer {
+            if root.debug-tab-index == 3: TableContainer {
                 title: "Runtime";
                 subtitle: "Main, launcher, and Slint status ownership.";
 
@@ -157,7 +532,7 @@ export component DebugPage {
                 }
             }
 
-            if root.debug-tab-index == 3: TableContainer {
+            if root.debug-tab-index == 4: TableContainer {
                 title: "Library and input";
                 subtitle: "Catalog, visible scene, and controller summary.";
 
@@ -171,4 +546,3 @@ export component DebugPage {
         }
     }
 }
-

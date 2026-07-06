@@ -86,6 +86,30 @@ export struct ProfileHeatmapCell {
     intensity: float,
 }
 
+export struct RealtimeCpuCore {
+    label: string,
+    busy-pct: float,
+}
+
+export struct RealtimePoint {
+    value: float,
+    alert: bool,
+}
+
+export struct RealtimeFramePhase {
+    label: string,
+    us: int,
+    start-us: int,
+    color-index: int,
+}
+
+export struct RealtimeHealthTile {
+    title: string,
+    value: string,
+    detail: string,
+    state: string,
+}
+
 export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <int> framebuffer-width: 0;
@@ -111,6 +135,31 @@ export global AnalyticsState {
     in-out property <[DataTableRow]> profile-stats-rows: [];
     in-out property <[DataTableRow]> profile-slow-rows: [];
     in-out property <[DataTableRow]> profile-histogram-rows: [];
+}
+
+export global RealtimeState {
+    in-out property <bool> streaming: false;
+    in-out property <string> status: "Real Time stream off.";
+    in-out property <string> last-error: "";
+    in-out property <string> sample-age: "-";
+    in-out property <string> launcher-summary: "-";
+    in-out property <string> fps-summary: "-";
+    in-out property <string> cpu-summary: "-";
+    in-out property <string> memory-summary: "-";
+    in-out property <string> frame-summary: "-";
+    in-out property <string> memory-hover: "";
+    in-out property <string> frame-hover: "";
+    in-out property <float> combined-cpu-pct: 0;
+    in-out property <float> magik-memory-pct: 0;
+    in-out property <float> other-memory-pct: 0;
+    in-out property <float> available-memory-pct: 0;
+    in-out property <float> frame-budget-pct: 0;
+    in-out property <[RealtimeCpuCore]> cpu-cores: [];
+    in-out property <[RealtimePoint]> cpu-history: [];
+    in-out property <[RealtimePoint]> memory-history: [];
+    in-out property <[RealtimePoint]> frame-history: [];
+    in-out property <[RealtimeFramePhase]> frame-phases: [];
+    in-out property <[RealtimeHealthTile]> health-tiles: [];
 }
 
 export global SdCardState {
@@ -194,6 +243,8 @@ export global LibraryState {
 export global Actions {
     callback refresh-status();
     callback select-page(string);
+    callback debug-tab-changed(int);
+    callback realtime-stream-changed(bool);
     callback capture-framebuffer();
     callback save-framebuffer-image();
     callback live-stream-changed(bool);
