@@ -1145,9 +1145,9 @@ mod linux {
         }
         // SAFETY: statvfs returned success, so stats is initialized.
         let stats = unsafe { stats.assume_init() };
-        let block_size = stats.f_frsize as u64;
-        let total_bytes = (stats.f_blocks as u64).saturating_mul(block_size);
-        let available_bytes = (stats.f_bavail as u64).saturating_mul(block_size);
+        let block_size = u64::from(stats.f_frsize);
+        let total_bytes = u64::from(stats.f_blocks).saturating_mul(block_size);
+        let available_bytes = u64::from(stats.f_bavail).saturating_mul(block_size);
         json!({
             "path": path,
             "total_bytes": total_bytes,
