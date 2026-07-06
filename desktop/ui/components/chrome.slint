@@ -38,11 +38,10 @@ export component AppHeader {
             padding-left: max(16px, safe-left + 16px);
             padding-right: max(16px, safe-right + 16px);
             spacing: 16px;
-            alignment: space-between;
+            alignment: end;
             cross-axis-alignment: center;
 
             Rectangle {
-                horizontal-stretch: 1;
                 height: 32px;
                 max-width: 420px;
                 border-width: 1px;
@@ -55,6 +54,7 @@ export component AppHeader {
                     padding-right: 10px;
                     spacing: 8px;
                     cross-axis-alignment: center;
+                    alignment: center;
 
                     Image {
                         width: LayoutTokens.iconButton-icon-size-medium;
@@ -118,7 +118,6 @@ export component Sidebar inherits Rectangle {
     in property <length> safe-top: 0px;
 
     width: 64px;
-    vertical-stretch: 1;
     background: PrimerColors.bgColor-inset;
 
     Rectangle {
@@ -130,6 +129,7 @@ export component Sidebar inherits Rectangle {
     VerticalLayout {
         padding-top: safe-top + 8px;
         spacing: 4px;
+        alignment: start;
 
         SidebarIconButton {
             icon: Icons.issue_opened;

@@ -176,11 +176,12 @@ component RealtimeSparkline inherits Rectangle {
         background: PrimerColors.bgColor-inset;
         border-width: 1px;
         border-color: PrimerColors.borderColor-muted;
+        clip: true;
 
         for point[ix] in root.points : Rectangle {
-            width: max(2px, parent.width / max(1, root.points.length));
+            width: 1px;
             height: max(2px, parent.height * min(100.0, max(0.0, point.value)) / 100.0);
-            x: parent.width * ix / max(1, root.points.length);
+            x: parent.width - root.points.length * 1px + ix * 1px;
             y: parent.height - self.height;
             background: point.alert ? root.alert-color : root.line-color;
             opacity: point.alert ? 1.0 : 0.78;
@@ -444,10 +445,10 @@ component FramePhaseBar inherits Rectangle {
 component HealthTiles inherits GridLayout {
     in property <[RealtimeHealthTile]> tiles;
 
-    width: 100%;
     spacing: 8px;
 
     for tile[ix] in root.tiles : Rectangle {
+        width: parent.width / 2;
         row: ix / 2;
         col: Math.mod(ix, 2);
         min-height: 74px;
@@ -558,7 +559,6 @@ component RealTimePanel inherits VerticalLayout {
         }
 
         TableContainer {
-            width: 100%;
             title: "Other Health";
             subtitle: RealtimeState.status;
 
