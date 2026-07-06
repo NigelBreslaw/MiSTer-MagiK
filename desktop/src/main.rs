@@ -534,7 +534,7 @@ fn realtime_view_from_history(
         sample_age: "now".to_string(),
         launcher_summary: format!("{}/{}", sample.launcher.screen, sample.launcher.scene),
         fps_summary: if sample.launcher.idle {
-            format!("{} idle", sample.launcher.fps)
+            "60fps idle".to_string()
         } else {
             sample.launcher.fps.clone()
         },
@@ -4475,6 +4475,19 @@ mod tests {
         assert_eq!(view.frame_history[0].alert, true);
         assert_eq!(view.phases.len(), 5);
         assert_eq!(view.health_tiles.len(), 6);
+    }
+
+    #[test]
+    fn realtime_view_reports_nominal_sixty_fps_when_idle() {
+        let mut history = RealtimeHistory::default();
+        let mut sample = telemetry_sample(1);
+        sample.launcher.idle = true;
+        sample.launcher.fps = "0.0 fps".to_string();
+        history.push(sample);
+
+        let view = realtime_view_from_history(&history, true, "");
+
+        assert_eq!(view.fps_summary, "60fps idle");
     }
 
     #[cfg(feature = "live-ui")]
