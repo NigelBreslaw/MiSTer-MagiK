@@ -94,7 +94,10 @@ impl<'a> CatalogRefreshPipeline<'a> {
         let scan = LibraryIndexer::foreground(self.cfg)
             .scan_without_coverage_audit_with_progress_and_events(progress, scan_events);
         let stats = scan_stats(&scan, scan_t);
-        LibraryRamScanArtifact { scan, stats }
+        crate::library_db::apply_library_path_map_to_ram_artifact(LibraryRamScanArtifact {
+            scan,
+            stats,
+        })
     }
 
     fn scan_artifact_with_events_using(
@@ -110,7 +113,8 @@ impl<'a> CatalogRefreshPipeline<'a> {
             &scan.audit_rows,
         );
         let stats = scan_stats(&scan, scan_t);
-        LibraryScanArtifact { scan, stats, stamp }
+        let artifact = LibraryScanArtifact { scan, stats, stamp };
+        crate::library_db::apply_library_path_map(artifact)
     }
 
     pub(crate) fn save_artifact(

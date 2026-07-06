@@ -884,6 +884,54 @@ pub(crate) fn save_scan_artifact_to_sqlite_with_catalog_projection(
     })
 }
 
+pub(crate) fn apply_library_path_map(mut artifact: LibraryScanArtifact) -> LibraryScanArtifact {
+    let rules = catalog_config::library_path_map_from_env();
+    if rules.is_empty() {
+        return artifact;
+    }
+    remap_library_scan_paths(&mut artifact.scan, &rules);
+    artifact.stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
+        &artifact.scan.roots,
+        &artifact.scan.audit_rows,
+    );
+    artifact
+}
+
+pub(crate) fn apply_library_path_map_to_ram_artifact(
+    mut artifact: LibraryRamScanArtifact,
+) -> LibraryRamScanArtifact {
+    let rules = catalog_config::library_path_map_from_env();
+    if rules.is_empty() {
+        return artifact;
+    }
+    remap_library_scan_paths(&mut artifact.scan, &rules);
+    artifact
+}
+
+fn remap_library_scan_paths(scan: &mut LibraryScan, rules: &[catalog_config::PathMapRule]) {
+    for root in &mut scan.roots {
+        *root = catalog_config::map_library_path(root, rules);
+    }
+    for file in &mut scan.normal_files {
+        file.path = catalog_config::map_library_path(&file.path, rules);
+    }
+    for container in &mut scan.containers {
+        container.file_path = catalog_config::map_library_path(&container.file_path, rules);
+    }
+    for entry in &mut scan.entries {
+        entry.file_path = catalog_config::map_library_path(&entry.file_path, rules);
+        entry.launch_ref = catalog_config::map_library_path(&entry.launch_ref, rules);
+    }
+    for row in &mut scan.audit_rows {
+        row.core_path = catalog_config::map_library_path(&row.core_path, rules);
+        row.expected_game_dir = catalog_config::map_library_path(&row.expected_game_dir, rules);
+    }
+    for discovery in &mut scan.discoveries {
+        discovery.source_path = catalog_config::map_library_path(&discovery.source_path, rules);
+        discovery.launch_ref = catalog_config::map_library_path(&discovery.launch_ref, rules);
+    }
+}
+
 #[cfg(test)]
 fn build_arcade_catalog_from_scan(root: impl AsRef<Path>, scan: &LibraryScan) -> ArcadeCatalog {
     let arcade_metadata = crate::software_identity::load_arcade_machine_metadata(

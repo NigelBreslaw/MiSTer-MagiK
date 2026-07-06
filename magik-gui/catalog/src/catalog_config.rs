@@ -51,6 +51,61 @@ pub fn library_roots_from_env() -> Vec<String> {
         .unwrap_or_else(|| DEFAULT_ROOTS.iter().map(|s| s.to_string()).collect())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathMapRule {
+    pub from: String,
+    pub to: String,
+}
+
+pub fn library_path_map_from_env() -> Vec<PathMapRule> {
+    std::env::var("MISTER_LIBRARY_PATH_MAP")
+        .ok()
+        .map(|s| parse_library_path_map(&s))
+        .unwrap_or_default()
+}
+
+pub fn parse_library_path_map(value: &str) -> Vec<PathMapRule> {
+    let mut rules = value
+        .split('|')
+        .filter_map(|part| {
+            let (from, to) = part.split_once('=')?;
+            let from = trim_trailing_slash(from.trim());
+            let to = trim_trailing_slash(to.trim());
+            if from.is_empty() || to.is_empty() {
+                return None;
+            }
+            Some(PathMapRule {
+                from: from.to_string(),
+                to: to.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    rules.sort_by_key(|rule| std::cmp::Reverse(rule.from.len()));
+    rules
+}
+
+pub fn map_library_path(value: &str, rules: &[PathMapRule]) -> String {
+    for rule in rules {
+        if value == rule.from {
+            return rule.to.clone();
+        }
+        if let Some(rest) = value.strip_prefix(&rule.from) {
+            if rest.starts_with('/') {
+                return format!("{}{}", rule.to, rest);
+            }
+        }
+    }
+    value.to_string()
+}
+
+fn trim_trailing_slash(value: &str) -> &str {
+    if value == "/" {
+        value
+    } else {
+        value.trim_end_matches('/')
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +189,26 @@ mod tests {
                 .iter()
                 .map(|root| root.to_string())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn path_map_parses_longest_prefix_first_and_maps_boundaries() {
+        let rules = parse_library_path_map(
+            "/tmp/mirror/games=/media/fat/games|/tmp/mirror=/media/fat|broken",
+        );
+
+        assert_eq!(
+            map_library_path("/tmp/mirror/games/NES/Zelda.nes", &rules),
+            "/media/fat/games/NES/Zelda.nes"
+        );
+        assert_eq!(
+            map_library_path("/tmp/mirror/_Arcade", &rules),
+            "/media/fat/_Arcade"
+        );
+        assert_eq!(
+            map_library_path("/tmp/mirrorish/_Arcade", &rules),
+            "/tmp/mirrorish/_Arcade"
         );
     }
 }
