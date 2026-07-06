@@ -152,12 +152,6 @@ if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
 fi
 rm -f "$DOCKER_INFO_ERR"
 
-CROSS_IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
-if ! docker image inspect "$CROSS_IMAGE" >/dev/null 2>&1; then
-  echo "==> building cross image $CROSS_IMAGE"
-  docker build -t "$CROSS_IMAGE" -f "$PWD/Dockerfile.cross-armv7" "$PWD"
-fi
-
 export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9 -C target-feature=+neon"
 if [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
