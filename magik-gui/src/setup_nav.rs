@@ -266,7 +266,7 @@ impl SetupNav {
     pub fn configure_live_hint(state: &PadState) -> String {
         if state.last_event_label.is_empty() {
             "Press any button on this controller to test input".into()
-        } else if state.pressed_now.is_empty() {
+        } else if state.pressed_now.is_empty() || state.pressed_now == "—" {
             format!("Last input: {}", state.last_event_label)
         } else {
             format!(
@@ -608,6 +608,21 @@ mod tests {
         assert_eq!(
             SetupNav::configure_live_hint(&state),
             "Held: A+B  ·  Last: A"
+        );
+    }
+
+    #[test]
+    fn configure_live_hint_treats_idle_marker_as_idle() {
+        let mut state = PadState {
+            last_event_label: "A up (js btn 0)".to_string(),
+            ..PadState::default()
+        };
+        state.rebuild_pressed_now();
+
+        assert_eq!(state.pressed_now, "—");
+        assert_eq!(
+            SetupNav::configure_live_hint(&state),
+            "Last input: A up (js btn 0)"
         );
     }
 

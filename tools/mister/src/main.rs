@@ -398,6 +398,8 @@ fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
 
 fn validate_remote_run_command(command: &str) -> Result<()> {
     let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = expand_simple_shell_assignments(&normalized);
+    let unquoted = normalized.replace(['\'', '"'], "");
     let direct_arcade = [
         "mister-magik-fb ui arcade",
         "mister-magik-fb' ui arcade",
@@ -407,11 +409,32 @@ fn validate_remote_run_command(command: &str) -> Result<()> {
         "mister-magic-fb\" ui arcade",
     ]
     .iter()
-    .any(|needle| normalized.contains(needle));
+    .any(|needle| normalized.contains(needle) || unquoted.contains(needle));
     if direct_arcade {
         return Err("refusing removed direct arcade scene; benchmark Arcade through the Main-supervised launcher env/restart path".into());
     }
     Ok(())
+}
+
+fn expand_simple_shell_assignments(command: &str) -> String {
+    let mut expanded = command.to_string();
+    for token in command.split_whitespace() {
+        let token = token.trim_end_matches(';');
+        let Some((name, value)) = token.split_once('=') else {
+            continue;
+        };
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            continue;
+        }
+        let value = value.trim_matches(|ch| ch == '\'' || ch == '"');
+        expanded = expanded.replace(&format!("${name}"), value);
+        expanded = expanded.replace(&format!("${{{name}}}"), value);
+    }
+    expanded
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1141,6 +1164,9 @@ impl MagikDeployTransaction {
         if !remote.starts_with('/') || remote.ends_with('/') || remote.contains('\0') {
             return Err(format!("unsupported deploy remote: {remote}").into());
         }
+        if remote.split('/').any(|part| part == "." || part == "..") {
+            return Err(format!("unsupported deploy remote path component: {remote}").into());
+        }
         let remote_dir = remote_parent_dir(remote)?.to_string();
         let local_bytes = fs::metadata(local)?.len();
         Ok(Self {
@@ -1366,10 +1392,27 @@ fn fnv64_hex(bytes: &[u8]) -> String {
 }
 
 fn parse_profile_count(args: &[String], default: usize) -> usize {
-    args.iter()
-        .find(|arg| !arg.starts_with('-'))
-        .and_then(|arg| arg.parse::<usize>().ok())
-        .unwrap_or(default)
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "--bytes" | "--timeout" | "--probe-timeout-ms" | "--sleep-ms"
+        ) {
+            skip_value = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        if let Ok(samples) = arg.parse::<usize>() {
+            return samples;
+        }
+    }
+    default
 }
 
 fn parse_profile_bytes(args: &[String], default: usize) -> usize {
@@ -4758,6 +4801,10 @@ video_mode=14
             "'/media/fat/mister-magik/mister-magik-fb' ui arcade 20"
         )
         .is_err());
+        assert!(validate_remote_run_command(
+            "scene=arcade; /media/fat/mister-magik/mister-magik-fb ui \"$scene\" 20"
+        )
+        .is_err());
     }
 
     #[test]
@@ -5268,8 +5315,32 @@ H: Handlers=event3 js0"#
 
         assert!(MagikDeployTransaction::validate(&local, "relative/path").is_err());
         assert!(MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/").is_err());
+        assert!(
+            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/../MiSTer").is_err()
+        );
 
         let _ = fs::remove_file(&local);
+    }
+
+    #[test]
+    fn parse_profile_count_skips_option_values() {
+        assert_eq!(
+            parse_profile_count(&["--timeout".to_string(), "30".to_string()], 1),
+            1
+        );
+        assert_eq!(
+            parse_profile_count(
+                &[
+                    "--timeout".to_string(),
+                    "30".to_string(),
+                    "4".to_string(),
+                    "--bytes".to_string(),
+                    "1024".to_string(),
+                ],
+                1,
+            ),
+            4
+        );
     }
 
     #[test]

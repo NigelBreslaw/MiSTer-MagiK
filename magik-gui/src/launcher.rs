@@ -2227,7 +2227,7 @@ fn magik_handoff_ack_is_newer(
     before: Option<MagikMainStatusSnapshot>,
     snapshot: MagikMainStatusSnapshot,
 ) -> bool {
-    before.is_some_and(|before| snapshot.ts_boot_ms > before.ts_boot_ms)
+    before.is_none_or(|before| snapshot.ts_boot_ms > before.ts_boot_ms)
 }
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
@@ -2429,6 +2429,7 @@ fn execute_game_launch_with(
         return Err(LaunchError::new(e, spawned));
     }
     if magik_running && !io.wait_for_magik_handoff_ack(main_status_before_handoff) {
+        let _ = io.write_input_policy_marker(false);
         return Err(LaunchError::new(
             format!(
                 "timed out waiting for MiSTer_MagiK launch acknowledgement in {MAIN_STATUS_PATH}"
@@ -4487,6 +4488,7 @@ mod tests {
         assert!(err
             .to_string()
             .contains("MiSTer_MagiK launch acknowledgement"));
+        assert_eq!(io.input_policy_markers, vec![false, false]);
         assert!(!launch_in_progress());
     }
 
@@ -4619,7 +4621,7 @@ mod tests {
         assert!(stale.handoff_acknowledged);
         assert!(!magik_handoff_ack_is_newer(Some(before), stale));
         assert!(magik_handoff_ack_is_newer(Some(before), fresh));
-        assert!(!magik_handoff_ack_is_newer(None, fresh));
+        assert!(magik_handoff_ack_is_newer(None, fresh));
     }
 
     #[test]

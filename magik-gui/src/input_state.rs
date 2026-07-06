@@ -425,6 +425,10 @@ impl InputProfile {
                         state.btn_home = pressed;
                         "Home"
                     }
+                    13 => {
+                        state.btn_capture = pressed;
+                        "Capture"
+                    }
                     _ => {
                         state.set_debug_event_label(debug_labels, || {
                             format!(
@@ -579,6 +583,17 @@ mod tests {
         assert!(state.last_raw.is_empty());
         assert!(state.last_event_label.is_empty());
         assert_eq!(state.pressed_now, "A");
+    }
+
+    #[test]
+    fn generic_button_13_maps_to_capture() {
+        let mut state = PadState::default();
+
+        assert!(InputProfile::generic().apply_js_event(&mut state, js_button(13, 1), true));
+
+        assert!(state.btn_capture);
+        assert_eq!(state.last_event_label, "Capture down (js btn 13)");
+        assert_eq!(state.pressed_now, "Capture");
     }
 
     #[test]

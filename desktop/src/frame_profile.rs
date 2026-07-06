@@ -267,6 +267,13 @@ impl FrameProfileRow {
 }
 
 fn parse_row(columns: &[&str], cells: &[&str]) -> Result<FrameProfileRow, String> {
+    if cells.len() != columns.len() {
+        return Err(format!(
+            "expected {} cells, got {}",
+            columns.len(),
+            cells.len()
+        ));
+    }
     let values = columns
         .iter()
         .enumerate()
@@ -320,11 +327,14 @@ fn value_from(values: &HashMap<String, u64>, key: &str) -> u64 {
 }
 
 fn dominant_phase(values: &HashMap<String, u64>) -> &'static str {
-    PHASES
+    let Some((_, label)) = PHASES
         .iter()
+        .filter(|(key, _)| value_from(values, key) > 0)
         .max_by_key(|(key, _)| value_from(values, key))
-        .map(|(_, label)| *label)
-        .unwrap_or("unknown")
+    else {
+        return "unknown";
+    };
+    label
 }
 
 fn percentile(sorted_values: &[u64], pct: u64) -> u64 {
@@ -385,6 +395,21 @@ mod tests {
                 y1: 70
             })
         );
+    }
+
+    #[test]
+    fn parse_tsv_rejects_rows_missing_declared_cells() {
+        let err = FrameProfile::parse_tsv("frame\twall_us\n7\n")
+            .expect_err("missing wall_us cell should fail");
+
+        assert!(err.contains("row 2"));
+    }
+
+    #[test]
+    fn dominant_phase_is_unknown_when_no_phase_has_time() {
+        let profile = FrameProfile::parse_tsv("frame\twall_us\n0\t1234\n").expect("profile");
+
+        assert_eq!(profile.rows[0].dominant, "unknown");
     }
 
     #[test]
