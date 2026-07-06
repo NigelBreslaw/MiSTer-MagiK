@@ -1710,7 +1710,7 @@ fn write_sqlite_scan_with_sources_inner(
         );
         CREATE TABLE games (
             game_key_id INTEGER PRIMARY KEY,
-            game_id TEXT NOT NULL UNIQUE,
+            game_id TEXT NOT NULL,
             title TEXT NOT NULL,
             sort_title TEXT NOT NULL,
             system_id TEXT NOT NULL,
@@ -1721,13 +1721,12 @@ fn write_sqlite_scan_with_sources_inner(
         );
         CREATE TABLE path_prefixes (
             prefix_id INTEGER PRIMARY KEY,
-            prefix TEXT NOT NULL UNIQUE
+            prefix TEXT NOT NULL
         );
         CREATE TABLE path_values (
             path_id INTEGER PRIMARY KEY,
             prefix_id INTEGER NOT NULL,
-            leaf TEXT NOT NULL,
-            UNIQUE(prefix_id, leaf)
+            leaf TEXT NOT NULL
         );
         CREATE TABLE launch_targets (
             launch_id INTEGER PRIMARY KEY,
