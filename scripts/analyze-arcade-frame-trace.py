@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 
 
@@ -36,6 +37,26 @@ PHASES = [
     "wasted_present_bytes",
     "wall_us",
     "rows",
+]
+WINDOWS_US = [
+    ("0-3s", 0, 3_000_000),
+    ("3-10s", 3_000_000, 10_000_000),
+    ("10-30s", 10_000_000, 30_000_000),
+]
+INTERRUPTION_COLUMNS = [
+    "catalog_worker_us",
+    "catalog_message_count",
+    "catalog_backlog",
+    "catalog_ready_deferred",
+    "media_worker_us",
+    "media_gate_us",
+    "preview_schedule_us",
+    "preview_apply_us",
+    "status_write_due",
+    "status_string_copy_us",
+    "runtime_status_write_us",
+    "dirty_y0",
+    "dirty_y1",
 ]
 
 
@@ -74,6 +95,113 @@ def print_stats(label: str, rows: list[dict[str, int | float | str]]) -> None:
         )
 
 
+def row_time_us(row: dict[str, int | float | str]) -> int:
+    if "elapsed_us" in row:
+        return int(row["elapsed_us"])
+    return int(row["frame"]) * 16_667
+
+
+def work_us(row: dict[str, int | float | str]) -> int:
+    return (
+        int(row.get("prepare_us", 0))
+        + int(row.get("slint_render_us", 0))
+        + int(row.get("custom_draw_us", 0))
+        + int(row.get("fb_present_us", 0))
+    )
+
+
+def print_window_report(rows: list[dict[str, int | float | str]]) -> None:
+    print("first 30s windows")
+    for label, start_us, end_us in WINDOWS_US:
+        group = [row for row in rows if start_us <= row_time_us(row) < end_us]
+        if not group:
+            print(f"  {label}: frames=0")
+            continue
+        walls = [int(row["wall_us"]) for row in group]
+        works = [work_us(row) for row in group]
+        near = [row for row in group if int(row["wall_us"]) >= 16_000]
+        drops = [row for row in group if int(row["wall_us"]) > 16_667]
+        print(
+            f"  {label}: frames={len(group)} "
+            f"wall_p99={percentile(walls, 99)} wall_max={max(walls)} "
+            f"work_p99={percentile(works, 99)} work_max={max(works)} "
+            f"near_drop_ge_16ms={len(near)} drops_gt_16_7ms={len(drops)}"
+        )
+        if near:
+            print_interruption_summary(f"    near/drop correlation {label}", near)
+
+
+def print_interruption_summary(
+    label: str, rows: list[dict[str, int | float | str]], *, top: int = 4
+) -> None:
+    print(label)
+    if not rows:
+        print("      none")
+        return
+    for column in INTERRUPTION_COLUMNS:
+        if column not in rows[0]:
+            continue
+        values = [int(row[column]) for row in rows]
+        total = sum(values)
+        maximum = max(values)
+        active = sum(1 for value in values if value > 0)
+        if total == 0 and maximum == 0:
+            continue
+        print(
+            f"      {column}: active_frames={active} "
+            f"sum={total} p95={percentile(values, 95)} max={maximum}"
+        )
+    print("      worst_frames:")
+    for row in sorted(rows, key=lambda item: int(item["wall_us"]), reverse=True)[:top]:
+        fields = [
+            f"frame={row.get('frame', '-')}",
+            f"elapsed_us={row_time_us(row)}",
+            f"wall_us={row.get('wall_us', 0)}",
+            f"work_us={work_us(row)}",
+            f"catalog_messages={row.get('catalog_message_count', 0)}",
+            f"catalog_backlog={row.get('catalog_backlog', 0)}",
+            f"media_worker_us={row.get('media_worker_us', 0)}",
+            f"preview_apply_us={row.get('preview_apply_us', 0)}",
+            f"status_due={row.get('status_write_due', 0)}",
+            f"runtime_status_write_us={row.get('runtime_status_write_us', 0)}",
+            f"dirty_y={row.get('dirty_y0', 0)}-{row.get('dirty_y1', 0)}",
+        ]
+        print("        " + " ".join(fields))
+
+
+def status_slow_frames(status_path: Path | None) -> list[dict[str, object]]:
+    if status_path is None or not status_path.exists() or status_path.stat().st_size == 0:
+        return []
+    with status_path.open() as f:
+        status = json.load(f)
+    launcher = status.get("launcher", {}) if isinstance(status, dict) else {}
+    frame_budget = launcher.get("frame_budget", {}) if isinstance(launcher, dict) else {}
+    slow = frame_budget.get("slow_frames", []) if isinstance(frame_budget, dict) else []
+    return [row for row in slow if isinstance(row, dict)]
+
+
+def print_status_tombstones(rows: list[dict[str, object]]) -> None:
+    print("runtime tombstones")
+    if not rows:
+        print("  unavailable")
+        return
+    for row in sorted(rows, key=lambda item: int(item.get("wall_us", 0)), reverse=True)[:8]:
+        fields = [
+            f"frame={row.get('frame', '-')}",
+            f"severity={row.get('severity', '-')}",
+            f"wall_us={row.get('wall_us', 0)}",
+            f"dominant={row.get('dominant_phase', '-')}",
+            f"catalog_messages={row.get('catalog_message_count', 0)}",
+            f"media_worker_us={row.get('media_worker_us', 0)}",
+            f"preview_backlog={row.get('preview_backlog', 0)}",
+            f"preview_drained={row.get('preview_worker_drained', 0)}",
+            f"status_due={row.get('status_write_due', 0)}",
+            f"analytics_mode={row.get('analytics_mode', '-')}",
+            f"dirty_y={row.get('dirty_y0', 0)}-{row.get('dirty_y1', 0)}",
+        ]
+        print("  " + " ".join(fields))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("trace", type=Path)
@@ -83,6 +211,11 @@ def main() -> int:
         help="include frame 0 instead of treating it as startup warmup",
     )
     parser.add_argument("--worst", type=int, default=8)
+    parser.add_argument(
+        "--status-json",
+        type=Path,
+        help="optional runtime status JSON with retained slow-frame tombstones",
+    )
     args = parser.parse_args()
 
     with args.trace.open(newline="") as f:
@@ -101,6 +234,10 @@ def main() -> int:
         rows = [row for row in rows if int(row["frame"]) != 0]
 
     print(f"{args.trace}: frames={len(rows)} include_first={args.include_first}")
+    print_window_report(rows)
+    print()
+    print_status_tombstones(status_slow_frames(args.status_json))
+    print()
     print_stats("all", rows)
     print()
     for update in sorted({str(row["update"]) for row in rows}):
