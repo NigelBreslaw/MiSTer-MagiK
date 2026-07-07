@@ -4224,6 +4224,10 @@ fn print_status_summary(status: &Value) {
             .unwrap_or_else(|| "none".to_string());
         println!("  {name:<15} pid={pid}");
     }
+    let magik_pids = process_pids(status, "mister-magik-fb");
+    if magik_pids.len() > 1 {
+        println!("  mister-magik-fb extra_pids={}", format_pids(&magik_pids));
+    }
     if let Some(main) = status["runtime"]["main_status"].as_object() {
         println!(
             "  main:      visible_owner={} launcher_pid={} osd_suppressed={}",
@@ -4269,6 +4273,22 @@ fn primary_process<'a>(status: &'a Value, name: &str) -> Option<&'a Value> {
     } else {
         processes.first()
     }
+}
+
+fn process_pids(status: &Value, name: &str) -> Vec<u64> {
+    status["processes"][name]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|process| process["pid"].as_u64())
+        .collect()
+}
+
+fn format_pids(pids: &[u64]) -> String {
+    pids.iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn ini_value<'a>(status: &'a Value, section: &str, key: &str) -> Option<&'a str> {
@@ -4378,6 +4398,16 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
             "/dev/fb0 is not owned by mister-magik-fb".into(),
         ));
     }
+    let magik_fb0_owner_pids = magik_fb0_owner_pids(status);
+    if magik_fb0_owner_pids.len() > 1 {
+        findings.push((
+            "error".into(),
+            format!(
+                "multiple mister-magik-fb processes own /dev/fb0: {}",
+                format_pids(&magik_fb0_owner_pids)
+            ),
+        ));
+    }
     if findings.is_empty() {
         findings.push((
             "ok".into(),
@@ -4385,6 +4415,22 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
         ));
     }
     findings
+}
+
+fn magik_fb0_owner_pids(status: &Value) -> Vec<u64> {
+    let mut pids = Vec::new();
+    if let Some(items) = status["owners"]["by_device"]["/dev/fb0"].as_array() {
+        for item in items {
+            if item["process"].as_str() == Some("mister-magik-fb") {
+                if let Some(pid) = item["pid"].as_u64() {
+                    if !pids.contains(&pid) {
+                        pids.push(pid);
+                    }
+                }
+            }
+        }
+    }
+    pids
 }
 
 fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()> {
@@ -5256,6 +5302,23 @@ H: Handlers=event3 js0"#
         assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));
         assert!(texts.contains(&"Main reports visible_owner=menu_bg rather than fb0"));
         assert!(texts.contains(&"/dev/fb0 is not owned by mister-magik-fb"));
+    }
+
+    #[test]
+    fn doctor_reports_multiple_magik_framebuffer_owners() {
+        let mut status = status_fixture();
+        status["processes"]["mister-magik-fb"] = json!([
+            {"pid": 11, "cmdline": "/media/fat/mister-magik/mister-magik-fb"},
+            {"pid": 12, "cmdline": "/media/fat/mister-magik/mister-magik-fb ui launcher 0"}
+        ]);
+        status["owners"]["by_device"]["/dev/fb0"] = json!([
+            {"process": "mister-magik-fb", "pid": 11, "fd": 5},
+            {"process": "mister-magik-fb", "pid": 12, "fd": 5}
+        ]);
+
+        let findings = doctor_findings(&status);
+        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(texts.contains(&"multiple mister-magik-fb processes own /dev/fb0: 11,12"));
     }
 
     #[test]

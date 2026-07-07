@@ -87,10 +87,13 @@ pub fn command_usage() -> String {
     command_names().collect::<Vec<_>>().join(" | ")
 }
 
+pub fn needs_explicit_command(args: &[String]) -> bool {
+    matches!(args.get(1).map(|s| s.as_str()), None | Some(""))
+}
+
 pub fn resolve_command(args: &[String]) -> String {
     match args.get(1).map(|s| s.as_str()) {
-        None => "ui".into(),
-        Some("") => "ui".into(),
+        None | Some("") => "".into(),
         Some(arg1) if is_launcher_boot(arg1) => "ui".into(),
         Some(arg1) => arg1.to_string(),
     }
@@ -119,6 +122,10 @@ pub fn is_launchable_arg(arg: &str) -> bool {
         || arg.ends_with(".rar")
 }
 
+pub fn requires_display_owner(command: &str) -> bool {
+    matches!(command, "early-black" | "ui" | "effect-bench")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,9 +135,15 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_launcher_ui() {
-        assert_eq!(resolve_command(&args(&["mister-magik-fb"])), "ui");
-        assert_eq!(resolve_command(&args(&["mister-magik-fb", ""])), "ui");
+    fn bare_binary_needs_explicit_command() {
+        assert!(needs_explicit_command(&args(&["mister-magik-fb"])));
+        assert!(needs_explicit_command(&args(&["mister-magik-fb", ""])));
+        assert_eq!(resolve_command(&args(&["mister-magik-fb"])), "");
+        assert_eq!(resolve_command(&args(&["mister-magik-fb", ""])), "");
+    }
+
+    #[test]
+    fn menu_rbf_boot_resolves_to_launcher_ui() {
         assert_eq!(
             resolve_command(&args(&["mister-magik-fb", "/media/fat/menu.rbf"])),
             "ui"
@@ -161,6 +174,16 @@ mod tests {
                 "duplicate command entry: {name}"
             );
         }
+    }
+
+    #[test]
+    fn display_owner_guard_is_scoped_to_framebuffer_renderers() {
+        assert!(requires_display_owner("ui"));
+        assert!(requires_display_owner("early-black"));
+        assert!(requires_display_owner("effect-bench"));
+        assert!(!requires_display_owner("library-refresh"));
+        assert!(!requires_display_owner("library-sql"));
+        assert!(!requires_display_owner("read"));
     }
 
     #[test]
