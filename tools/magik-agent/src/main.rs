@@ -910,7 +910,11 @@ mod linux {
     impl DeviceTelemetryStreamState {
         fn snapshot(&mut self, seq: u64, boot_id: u64, started: Instant) -> Value {
             let cpu_times = read_cpu_times().unwrap_or_default();
-            let cpu = cpu_json(self.previous_cpu.as_deref(), &cpu_times);
+            let cpu = cpu_json(
+                self.previous_cpu.as_deref(),
+                &cpu_times,
+                read_cpu_temperature_millidegrees(),
+            );
             self.previous_cpu = Some(cpu_times);
 
             let net_fields = read_netdev_stats_fields(IFACE);
@@ -1003,7 +1007,11 @@ mod linux {
         ((busy as f64 * 1000.0 / total_delta as f64).round()) / 10.0
     }
 
-    fn cpu_json(previous: Option<&[CpuTimes]>, current: &[CpuTimes]) -> Value {
+    fn cpu_json(
+        previous: Option<&[CpuTimes]>,
+        current: &[CpuTimes],
+        temperature_millidegrees_c: Option<i64>,
+    ) -> Value {
         let combined = match (previous.and_then(|items| items.first()), current.first()) {
             (Some(prev), Some(now)) => cpu_busy_percent(*prev, *now),
             _ => 0.0,
@@ -1022,8 +1030,29 @@ mod linux {
             .collect::<Vec<_>>();
         json!({
             "combined_busy_pct": combined,
+            "temperature_millidegrees_c": temperature_millidegrees_c,
             "cores": cores,
         })
+    }
+
+    fn read_cpu_temperature_millidegrees() -> Option<i64> {
+        read_first_temperature_millidegrees(&[
+            Path::new("/sys/class/thermal/thermal_zone0/temp"),
+            Path::new("/sys/class/hwmon/hwmon0/temp1_input"),
+        ])
+    }
+
+    pub(super) fn read_first_temperature_millidegrees(paths: &[&Path]) -> Option<i64> {
+        paths.iter().find_map(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|text| parse_temperature_millidegrees(&text))
+        })
+    }
+
+    pub(super) fn parse_temperature_millidegrees(text: &str) -> Option<i64> {
+        let value = text.trim().parse::<i64>().ok()?;
+        (value > -100_000 && value < 200_000).then_some(value)
     }
 
     pub(super) fn memory_split_json(
@@ -2947,6 +2976,32 @@ mod tests {
         assert_eq!(rows[0].user, 1);
         assert_eq!(rows[1].system, 20);
         assert_eq!(rows[2].idle, 70);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_temperature_parser_accepts_millidegrees() {
+        assert_eq!(
+            linux::parse_temperature_millidegrees("48231\n"),
+            Some(48_231)
+        );
+        assert_eq!(linux::parse_temperature_millidegrees("bad\n"), None);
+        assert_eq!(linux::parse_temperature_millidegrees("300000\n"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_temperature_reader_uses_first_readable_path() {
+        let first =
+            std::env::temp_dir().join(format!("mister-magik-missing-temp-{}", std::process::id()));
+        let second =
+            std::env::temp_dir().join(format!("mister-magik-readable-temp-{}", std::process::id()));
+        std::fs::write(&second, "51000\n").expect("write temp fixture");
+
+        let value = linux::read_first_temperature_millidegrees(&[&first, &second]);
+
+        assert_eq!(value, Some(51_000));
+        let _ = std::fs::remove_file(second);
     }
 
     #[cfg(target_os = "linux")]
