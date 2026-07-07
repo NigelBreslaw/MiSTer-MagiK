@@ -344,7 +344,7 @@ pub(crate) fn materialize_arcade_ui_projections(
               ON launch_paths.path_id = lt.launch_path_id
             LEFT JOIN path_values_text payload_paths
               ON payload_paths.path_id = lt.payload_path_id
-            LEFT JOIN launchable_identity_rows i
+            LEFT JOIN launchable_identities i
               ON i.game_key_id = lt.game_key_id
              AND i.namespace = 'mame'
             WHERE g.system_id IN ('arcade','neogeo')

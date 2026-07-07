@@ -1910,28 +1910,45 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE VIEW launch_plans_text AS SELECT * FROM launch_plans;
         CREATE TABLE launchable_identity_rows (
             game_key_id INTEGER NOT NULL,
-            namespace TEXT NOT NULL,
-            identity_id TEXT NOT NULL,
-            family_id TEXT,
-            metadata_title TEXT,
-            year TEXT,
-            manufacturer TEXT,
-            category TEXT,
-            source TEXT NOT NULL,
-            PRIMARY KEY(game_key_id, namespace, identity_id)
+            namespace_string_id INTEGER NOT NULL,
+            identity_string_id INTEGER NOT NULL,
+            family_string_id INTEGER,
+            metadata_title_string_id INTEGER,
+            year_string_id INTEGER,
+            manufacturer_string_id INTEGER,
+            category_string_id INTEGER,
+            source_string_id INTEGER NOT NULL,
+            PRIMARY KEY(game_key_id, namespace_string_id, identity_string_id)
         ) WITHOUT ROWID;
         CREATE VIEW launchable_identities AS
-            SELECT games.game_id AS launchable_id,
-                   launchable_identity_rows.namespace,
-                   launchable_identity_rows.identity_id,
-                   launchable_identity_rows.family_id,
-                   launchable_identity_rows.metadata_title,
-                   launchable_identity_rows.year,
-                   launchable_identity_rows.manufacturer,
-                   launchable_identity_rows.category,
-                   launchable_identity_rows.source
+            SELECT launchable_identity_rows.game_key_id,
+                   games.game_id AS launchable_id,
+                   namespace_values.value AS namespace,
+                   identity_values.value AS identity_id,
+                   family_values.value AS family_id,
+                   metadata_title_values.value AS metadata_title,
+                   year_values.value AS year,
+                   manufacturer_values.value AS manufacturer,
+                   category_values.value AS category,
+                   source_values.value AS source
             FROM launchable_identity_rows
-            JOIN games ON games.game_key_id = launchable_identity_rows.game_key_id;
+            JOIN games ON games.game_key_id = launchable_identity_rows.game_key_id
+            JOIN string_values namespace_values
+                 ON namespace_values.string_id = launchable_identity_rows.namespace_string_id
+            JOIN string_values identity_values
+                 ON identity_values.string_id = launchable_identity_rows.identity_string_id
+            LEFT JOIN string_values family_values
+                 ON family_values.string_id = launchable_identity_rows.family_string_id
+            LEFT JOIN string_values metadata_title_values
+                 ON metadata_title_values.string_id = launchable_identity_rows.metadata_title_string_id
+            LEFT JOIN string_values year_values
+                 ON year_values.string_id = launchable_identity_rows.year_string_id
+            LEFT JOIN string_values manufacturer_values
+                 ON manufacturer_values.string_id = launchable_identity_rows.manufacturer_string_id
+            LEFT JOIN string_values category_values
+                 ON category_values.string_id = launchable_identity_rows.category_string_id
+            JOIN string_values source_values
+                 ON source_values.string_id = launchable_identity_rows.source_string_id;
         CREATE TABLE ui_arcade_preferred (
             ordinal INTEGER PRIMARY KEY,
             family_id TEXT NOT NULL,
@@ -2208,7 +2225,7 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
-                "INSERT INTO launchable_identity_rows(game_key_id,namespace,identity_id,family_id,metadata_title,year,manufacturer,category,source)
+                "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,category_string_id,source_string_id)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             )
             .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
@@ -2364,14 +2381,14 @@ fn write_sqlite_scan_with_sources_inner(
                 identity_stmt
                     .execute(params![
                         game_key_id,
-                        "mame",
-                        identity_id.as_str(),
-                        family_id.as_str(),
-                        title,
-                        year,
-                        manufacturer,
-                        category,
-                        source
+                        string_interner.intern("mame"),
+                        string_interner.intern(identity_id.as_str()),
+                        string_interner.intern_optional(Some(family_id.as_str())),
+                        string_interner.intern_optional(title),
+                        string_interner.intern_optional(year),
+                        string_interner.intern_optional(manufacturer),
+                        string_interner.intern_optional(category),
+                        string_interner.intern(source)
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
             }
@@ -2380,14 +2397,14 @@ fn write_sqlite_scan_with_sources_inner(
                 identity_stmt
                     .execute(params![
                         game_key_id,
-                        "mame-software",
-                        identity_id.as_str(),
-                        identity.family_id.as_str(),
-                        identity.metadata_title.as_deref(),
-                        identity.year.as_deref(),
-                        identity.manufacturer.as_deref(),
-                        Option::<&str>::None,
-                        identity.source
+                        string_interner.intern("mame-software"),
+                        string_interner.intern(identity_id.as_str()),
+                        string_interner.intern(identity.family_id.as_str()),
+                        string_interner.intern_optional(identity.metadata_title.as_deref()),
+                        string_interner.intern_optional(identity.year.as_deref()),
+                        string_interner.intern_optional(identity.manufacturer.as_deref()),
+                        Option::<i64>::None,
+                        string_interner.intern(identity.source)
                     ])
                     .map_err(|e| format!("insert software launchable identity: {e}"))?;
             }
