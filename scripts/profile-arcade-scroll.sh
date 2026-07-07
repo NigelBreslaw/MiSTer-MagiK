@@ -163,7 +163,7 @@ if [[ ! "$frame_pacing_max_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCR
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold|human-turbo-hold) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
-    echo "row-step/jump scenario '$scenario' is not valid for arcade benchmarking; use velocity-scroll, held-scroll, or turbo-hold" >&2
+    echo "row-step/jump scenario '$scenario' is not valid for arcade benchmarking; use velocity-scroll, held-scroll, turbo-hold, or human-turbo-hold" >&2
     exit 2
     ;;
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
