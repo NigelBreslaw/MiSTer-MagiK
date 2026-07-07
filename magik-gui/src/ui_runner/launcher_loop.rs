@@ -2,7 +2,9 @@ use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherPresentedFrame,
 };
-use super::launcher_pacing::{LauncherFramePacingInput, LauncherFramePacingPolicy};
+use super::launcher_pacing::{
+    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
+};
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -2900,30 +2902,12 @@ pub(super) fn run_launcher_loop(
         };
         let frame_t3 = pace.1;
         let cpu_t3 = pace.2;
-        let vsync_source = pace.0.as_ref().map(|pace| pace.source);
-        let vsync_period_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.period_us)
-            .unwrap_or_else(|| pacer.period_us());
-        let vsync_miss_streak = pace.0.as_ref().map(|pace| pace.miss_streak).unwrap_or(0);
-        let vsync_stale_hits = pace.0.as_ref().map(|pace| pace.stale_hits).unwrap_or(0);
-        let vsync_wait_start_age_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.wait_start_age_us)
-            .unwrap_or(0);
-        let vsync_accepted_hit_age_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.accepted_hit_age_us)
-            .unwrap_or(0);
-        let present_phase_us = pace
-            .0
-            .as_ref()
-            .and_then(|pace| pace.hit_at)
-            .map(|hit_at| frame_t3.saturating_duration_since(hit_at).as_micros())
-            .unwrap_or(0);
+        let pacing_trace = LauncherPacingTrace::from_pace(
+            pace.0.as_ref(),
+            frame_start_phase_us,
+            pacer.period_us(),
+            frame_t3,
+        );
         if !first_vsync_logged
             && pace
                 .0
@@ -3003,14 +2987,14 @@ pub(super) fn run_launcher_loop(
                 cached_present_us: presentation.cached_present_us,
                 direct_preview_present_us: presentation.direct_preview_present_us,
                 arcade_list_present_us: presentation.arcade_list_present_us,
-                vsync_source,
-                vsync_period_us,
-                vsync_miss_streak,
-                vsync_stale_hits,
-                vsync_wait_start_age_us,
-                vsync_accepted_hit_age_us,
-                frame_start_phase_us,
-                present_phase_us,
+                vsync_source: pacing_trace.vsync_source,
+                vsync_period_us: pacing_trace.vsync_period_us,
+                vsync_miss_streak: pacing_trace.vsync_miss_streak,
+                vsync_stale_hits: pacing_trace.vsync_stale_hits,
+                vsync_wait_start_age_us: pacing_trace.vsync_wait_start_age_us,
+                vsync_accepted_hit_age_us: pacing_trace.vsync_accepted_hit_age_us,
+                frame_start_phase_us: pacing_trace.frame_start_phase_us,
+                present_phase_us: pacing_trace.present_phase_us,
                 arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
