@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::io::{BufWriter, Write as _};
 
 const FRAME_BUDGET_US: u64 = 16_667;
+const FRAME_NEAR_DROP_US: u64 = 16_000;
 const FRAME_BUDGET_20MS_US: u64 = 20_000;
 const FRAME_BUDGET_33MS_US: u64 = 33_334;
 const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
@@ -170,6 +171,15 @@ pub(super) struct LauncherPrepareTrace {
     pub(super) media_gate_us: u128,
     pub(super) preview_schedule_us: u128,
     pub(super) preview_apply_us: u128,
+    pub(super) preview_worker_drained: u32,
+    pub(super) preview_ready_processed: u32,
+    pub(super) preview_selected_processed: u32,
+    pub(super) preview_prefetch_processed: u32,
+    pub(super) preview_stale_results: u32,
+    pub(super) preview_cache_inserts: u32,
+    pub(super) preview_cache_evictions: u32,
+    pub(super) preview_failed_results: u32,
+    pub(super) preview_backlog: u32,
     pub(super) status_string_copy_us: u128,
 }
 
@@ -888,7 +898,7 @@ impl LauncherFrameAccounting {
         };
         self.frame_budget_total.record(sample);
         self.frame_budget_window.record(sample);
-        if wall_us > FRAME_BUDGET_US {
+        if wall_us >= FRAME_NEAR_DROP_US {
             self.push_slow_frame_sample(
                 frame,
                 wall_us,
@@ -976,7 +986,13 @@ impl LauncherFrameAccounting {
         self.slow_frame_samples
             .push_back(runtime_status::FrameBudgetSlowFrame {
                 frame: frame.frames,
+                severity: if wall_us > FRAME_BUDGET_US {
+                    "drop"
+                } else {
+                    "near-drop"
+                },
                 wall_us,
+                warning_us: FRAME_NEAR_DROP_US,
                 budget_us: FRAME_BUDGET_US,
                 over_budget_us: wall_us.saturating_sub(FRAME_BUDGET_US),
                 dominant_phase: dominant_frame_phase(
@@ -1010,10 +1026,21 @@ impl LauncherFrameAccounting {
                     frame.prepare_trace.preview_schedule_us,
                 ),
                 preview_apply_us: u128_to_u64_saturating(frame.prepare_trace.preview_apply_us),
+                preview_worker_drained: frame.prepare_trace.preview_worker_drained,
+                preview_ready_processed: frame.prepare_trace.preview_ready_processed,
+                preview_selected_processed: frame.prepare_trace.preview_selected_processed,
+                preview_prefetch_processed: frame.prepare_trace.preview_prefetch_processed,
+                preview_stale_results: frame.prepare_trace.preview_stale_results,
+                preview_cache_inserts: frame.prepare_trace.preview_cache_inserts,
+                preview_cache_evictions: frame.prepare_trace.preview_cache_evictions,
+                preview_failed_results: frame.prepare_trace.preview_failed_results,
+                preview_backlog: frame.prepare_trace.preview_backlog,
+                status_write_due: frame.status_write_due,
                 status_string_copy_us: u128_to_u64_saturating(
                     frame.prepare_trace.status_string_copy_us,
                 ),
                 status_string_copy_bytes: usize_to_u64_saturating(frame.status_string_copy_bytes),
+                analytics_mode: frame_analytics_mode_label(self.frame_analytics_mode),
                 vsync_source: vsync_source_label(frame.vsync_source),
                 vsync_miss_streak: frame.vsync_miss_streak,
             });
@@ -1297,6 +1324,15 @@ fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
     }
 }
 
+fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
+    match mode {
+        FrameAnalyticsMode::Off => "off",
+        FrameAnalyticsMode::Wall => "wall",
+        FrameAnalyticsMode::Thread => "thread",
+        FrameAnalyticsMode::Process => "process",
+    }
+}
+
 fn dominant_frame_phase(
     prepare_us: u64,
     render_us: u64,
@@ -1415,6 +1451,15 @@ mod tests {
                 media_gate_us: 7,
                 preview_schedule_us: 8,
                 preview_apply_us: 9,
+                preview_worker_drained: 5,
+                preview_ready_processed: 4,
+                preview_selected_processed: 1,
+                preview_prefetch_processed: 3,
+                preview_stale_results: 1,
+                preview_cache_inserts: 4,
+                preview_cache_evictions: 2,
+                preview_failed_results: 1,
+                preview_backlog: 6,
                 status_string_copy_us: 10,
             },
             prepare_us: 1_000,
@@ -1519,6 +1564,9 @@ mod tests {
         assert_eq!(status.slow_frames[31].dominant_phase, "fb-present");
         assert_eq!(status.slow_frames[31].catalog_message_count, 2);
         assert_eq!(status.slow_frames[31].media_worker_us, 60);
+        assert_eq!(status.slow_frames[31].preview_worker_drained, 5);
+        assert_eq!(status.slow_frames[31].preview_cache_evictions, 2);
+        assert_eq!(status.slow_frames[31].preview_backlog, 6);
         assert_eq!(status.slow_frames[31].dirty_y0, 12);
         assert_eq!(status.slow_frames[31].dirty_y1, 24);
 
@@ -1530,6 +1578,20 @@ mod tests {
             FRAME_SLOW_SAMPLE_CAP
         );
         assert_eq!(status_after_recent_clear.slow_frames[0].frame, 8);
+    }
+
+    #[test]
+    fn near_drop_frame_samples_are_retained_before_budget_miss() {
+        let start = Instant::now();
+        let mut accounting = LauncherFrameAccounting::new(start);
+        accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US));
+
+        let status = accounting.current_frame_budget_status();
+        assert_eq!(status.slow_frames.len(), 1);
+        assert_eq!(status.slow_frames[0].frame, 7);
+        assert_eq!(status.slow_frames[0].severity, "near-drop");
+        assert_eq!(status.slow_frames[0].warning_us, FRAME_NEAR_DROP_US);
+        assert_eq!(status.slow_frames[0].over_budget_us, 0);
     }
 }
 

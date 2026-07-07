@@ -151,12 +151,12 @@ impl PreviewImageCache {
         image: Arc<PreviewImage>,
         window_preview_keys: &[String],
         visible_preview_key: Option<&str>,
-    ) {
+    ) -> u32 {
         if let Some(idx) = self.entries.iter().position(|(p, _)| p == &path) {
             self.entries.remove(idx);
         }
         self.entries.push_back((path, image));
-        self.retain_window(window_preview_keys, visible_preview_key);
+        self.retain_window(window_preview_keys, visible_preview_key)
     }
 
     fn insert_failed(&mut self, path: String) {
@@ -174,13 +174,20 @@ impl PreviewImageCache {
         self.failed_paths.clear();
     }
 
-    fn retain_window(&mut self, window_preview_keys: &[String], visible_preview_key: Option<&str>) {
+    fn retain_window(
+        &mut self,
+        window_preview_keys: &[String],
+        visible_preview_key: Option<&str>,
+    ) -> u32 {
+        let mut evicted = 0;
         let turbo_window = window_preview_keys.len() > DEFAULT_PREVIEW_CACHE_CAP;
         if !window_preview_keys.is_empty() && !turbo_window {
+            let before = self.entries.len();
             self.entries.retain(|(path, _)| {
                 visible_preview_key.is_some_and(|visible| visible == path)
                     || window_preview_keys.iter().any(|keep| keep == path)
             });
+            evicted += before.saturating_sub(self.entries.len()) as u32;
         }
         let cap = if turbo_window {
             TURBO_PREVIEW_CACHE_CAP
@@ -199,8 +206,10 @@ impl PreviewImageCache {
                 }
             } else {
                 self.entries.pop_front();
+                evicted += 1;
             }
         }
+        evicted
     }
 
     fn contains(&self, path: &str) -> bool {
@@ -317,6 +326,21 @@ pub(crate) struct PreviewState {
     prefetch_direction: i8,
     last_prefetch_window: Option<PreviewPrefetchWindow>,
     prefetch_throttle_until: Option<Instant>,
+    last_apply_trace: PreviewApplyTrace,
+    frame_cache_evictions: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PreviewApplyTrace {
+    pub(crate) worker_drained: u32,
+    pub(crate) ready_processed: u32,
+    pub(crate) selected_processed: u32,
+    pub(crate) prefetch_processed: u32,
+    pub(crate) stale_results: u32,
+    pub(crate) cache_inserts: u32,
+    pub(crate) cache_evictions: u32,
+    pub(crate) failed_results: u32,
+    pub(crate) backlog_len: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,6 +496,8 @@ impl PreviewState {
             prefetch_direction: 0,
             last_prefetch_window: None,
             prefetch_throttle_until: None,
+            last_apply_trace: PreviewApplyTrace::default(),
+            frame_cache_evictions: 0,
         }
     }
 
@@ -718,7 +744,7 @@ fn refresh_preview_window(
 ) {
     preview.window_preview_keys = preview_window_keys(games, selected, radius);
     preview.window_shape = Some(preview_window_shape(games, selected, radius));
-    preview.cache.retain_window(
+    preview.frame_cache_evictions += preview.cache.retain_window(
         &preview.window_preview_keys,
         Some(&preview.visible_preview_key),
     );
@@ -1228,7 +1254,7 @@ pub(crate) fn request_arcade_preview_window(
                 );
             }
             let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
-            preview.cache.insert(
+            preview.frame_cache_evictions += preview.cache.insert(
                 preview_key.clone(),
                 Arc::clone(&loaded_image),
                 &preview.window_preview_keys,
@@ -1315,7 +1341,7 @@ pub(crate) fn request_arcade_preview_window(
                 );
             }
             let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
-            preview.cache.insert(
+            preview.frame_cache_evictions += preview.cache.insert(
                 preview_key.clone(),
                 Arc::clone(&loaded_image),
                 &preview.window_preview_keys,
@@ -1437,6 +1463,16 @@ impl PreviewState {
 
     pub(crate) fn clear_failed_preview_cache(&mut self) {
         self.cache.clear_failed();
+    }
+
+    pub(crate) fn last_apply_trace(&self) -> PreviewApplyTrace {
+        self.last_apply_trace
+    }
+
+    pub(crate) fn take_frame_cache_evictions(&mut self) -> u32 {
+        let evictions = self.frame_cache_evictions;
+        self.frame_cache_evictions = 0;
+        evictions
     }
 }
 
@@ -1801,6 +1837,7 @@ pub(crate) fn apply_ready_preview(
     defer_selected_result: bool,
     turbo_active: bool,
 ) -> bool {
+    preview.last_apply_trace = PreviewApplyTrace::default();
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
         preview.ready_backlog.clear();
@@ -1808,7 +1845,11 @@ pub(crate) fn apply_ready_preview(
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
-    preview.ready_backlog.extend(preview.worker.drain());
+    for result in preview.worker.drain() {
+        preview.last_apply_trace.worker_drained += 1;
+        preview.ready_backlog.push_back(result);
+    }
+    preview.last_apply_trace.backlog_len = preview.ready_backlog.len() as u32;
     let mut selected_processed = false;
     let mut prefetch_results = 0;
     while let Some(idx) = next_ready_result_index(
@@ -1822,6 +1863,7 @@ pub(crate) fn apply_ready_preview(
         let Some(result) = preview.ready_backlog.remove(idx) else {
             break;
         };
+        preview.last_apply_trace.ready_processed += 1;
         let result_preview_key = result.preview_key();
         preview.pending_prefetch_keys.remove(&result_preview_key);
         let is_selected_result = is_current_selected_result(
@@ -1831,10 +1873,13 @@ pub(crate) fn apply_ready_preview(
         );
         if is_selected_result {
             selected_processed = true;
+            preview.last_apply_trace.selected_processed += 1;
         } else if matches!(result.priority, PreviewPriority::Prefetch { .. }) {
             prefetch_results += 1;
+            preview.last_apply_trace.prefetch_processed += 1;
         }
         if !is_selected_result && matches!(result.priority, PreviewPriority::Selected) {
+            preview.last_apply_trace.stale_results += 1;
             if preview_trace_enabled() {
                 crate::ui_errln!(
                     "preview_trace stale_result generation={} current_generation={} archive_path={} asset_key={}",
@@ -1905,12 +1950,15 @@ pub(crate) fn apply_ready_preview(
                 );
             }
             let image = Arc::new(preview_image_from_pixels(image));
-            preview.cache.insert(
+            preview.last_apply_trace.cache_inserts += 1;
+            let cache_evictions = preview.cache.insert(
                 result_preview_key.clone(),
                 Arc::clone(&image),
                 &preview.window_preview_keys,
                 Some(&preview.visible_preview_key),
             );
+            preview.last_apply_trace.cache_evictions += cache_evictions;
+            preview.frame_cache_evictions += cache_evictions;
             if is_selected_result {
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result_title.clone().into());
@@ -1941,6 +1989,7 @@ pub(crate) fn apply_ready_preview(
                 dirty = true;
             }
         } else {
+            preview.last_apply_trace.failed_results += 1;
             preview.cache.insert_failed(result_preview_key);
             if preview_trace_enabled() {
                 crate::ui_errln!(
@@ -1959,6 +2008,7 @@ pub(crate) fn apply_ready_preview(
             }
         }
     }
+    preview.last_apply_trace.backlog_len = preview.ready_backlog.len() as u32;
     dirty
 }
 

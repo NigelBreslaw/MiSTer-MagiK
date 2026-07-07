@@ -124,7 +124,9 @@ pub struct FrameBudgetRecentFrame {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameBudgetSlowFrame {
     pub frame: u64,
+    pub severity: &'static str,
     pub wall_us: u64,
+    pub warning_us: u64,
     pub budget_us: u64,
     pub over_budget_us: u64,
     pub dominant_phase: &'static str,
@@ -148,8 +150,19 @@ pub struct FrameBudgetSlowFrame {
     pub media_gate_us: u64,
     pub preview_schedule_us: u64,
     pub preview_apply_us: u64,
+    pub preview_worker_drained: u32,
+    pub preview_ready_processed: u32,
+    pub preview_selected_processed: u32,
+    pub preview_prefetch_processed: u32,
+    pub preview_stale_results: u32,
+    pub preview_cache_inserts: u32,
+    pub preview_cache_evictions: u32,
+    pub preview_failed_results: u32,
+    pub preview_backlog: u32,
+    pub status_write_due: bool,
     pub status_string_copy_us: u64,
     pub status_string_copy_bytes: u64,
+    pub analytics_mode: &'static str,
     pub vsync_source: &'static str,
     pub vsync_miss_streak: u32,
 }
@@ -345,37 +358,98 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
 }
 
 fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
-    json!({
-        "frame": frame.frame,
-        "wall_us": frame.wall_us,
-        "budget_us": frame.budget_us,
-        "over_budget_us": frame.over_budget_us,
-        "dominant_phase": frame.dominant_phase,
-        "prepare_us": frame.prepare_us,
-        "render_us": frame.render_us,
-        "custom_draw_us": frame.custom_draw_us,
-        "vsync_us": frame.vsync_us,
-        "present_us": frame.present_us,
-        "present_bytes": frame.present_bytes,
-        "wasted_present_bytes": frame.wasted_present_bytes,
-        "copied_rows": frame.copied_rows,
-        "direct_preview_rows": frame.direct_preview_rows,
-        "dirty_y0": frame.dirty_y0,
-        "dirty_y1": frame.dirty_y1,
-        "catalog_worker_us": frame.catalog_worker_us,
-        "catalog_message_count": frame.catalog_message_count,
-        "catalog_backlog": frame.catalog_backlog,
-        "catalog_ready_deferred": frame.catalog_ready_deferred,
-        "catalog_ready_deferred_age_us": frame.catalog_ready_deferred_age_us,
-        "media_worker_us": frame.media_worker_us,
-        "media_gate_us": frame.media_gate_us,
-        "preview_schedule_us": frame.preview_schedule_us,
-        "preview_apply_us": frame.preview_apply_us,
-        "status_string_copy_us": frame.status_string_copy_us,
-        "status_string_copy_bytes": frame.status_string_copy_bytes,
-        "vsync_source": frame.vsync_source,
-        "vsync_miss_streak": frame.vsync_miss_streak,
-    })
+    let mut object = serde_json::Map::new();
+    object.insert("frame".into(), json!(frame.frame));
+    object.insert("severity".into(), json!(frame.severity));
+    object.insert("wall_us".into(), json!(frame.wall_us));
+    object.insert("warning_us".into(), json!(frame.warning_us));
+    object.insert("budget_us".into(), json!(frame.budget_us));
+    object.insert("over_budget_us".into(), json!(frame.over_budget_us));
+    object.insert("dominant_phase".into(), json!(frame.dominant_phase));
+    object.insert("prepare_us".into(), json!(frame.prepare_us));
+    object.insert("render_us".into(), json!(frame.render_us));
+    object.insert("custom_draw_us".into(), json!(frame.custom_draw_us));
+    object.insert("vsync_us".into(), json!(frame.vsync_us));
+    object.insert("present_us".into(), json!(frame.present_us));
+    object.insert("present_bytes".into(), json!(frame.present_bytes));
+    object.insert(
+        "wasted_present_bytes".into(),
+        json!(frame.wasted_present_bytes),
+    );
+    object.insert("copied_rows".into(), json!(frame.copied_rows));
+    object.insert(
+        "direct_preview_rows".into(),
+        json!(frame.direct_preview_rows),
+    );
+    object.insert("dirty_y0".into(), json!(frame.dirty_y0));
+    object.insert("dirty_y1".into(), json!(frame.dirty_y1));
+    object.insert("catalog_worker_us".into(), json!(frame.catalog_worker_us));
+    object.insert(
+        "catalog_message_count".into(),
+        json!(frame.catalog_message_count),
+    );
+    object.insert("catalog_backlog".into(), json!(frame.catalog_backlog));
+    object.insert(
+        "catalog_ready_deferred".into(),
+        json!(frame.catalog_ready_deferred),
+    );
+    object.insert(
+        "catalog_ready_deferred_age_us".into(),
+        json!(frame.catalog_ready_deferred_age_us),
+    );
+    object.insert("media_worker_us".into(), json!(frame.media_worker_us));
+    object.insert("media_gate_us".into(), json!(frame.media_gate_us));
+    object.insert(
+        "preview_schedule_us".into(),
+        json!(frame.preview_schedule_us),
+    );
+    object.insert("preview_apply_us".into(), json!(frame.preview_apply_us));
+    object.insert(
+        "preview_worker_drained".into(),
+        json!(frame.preview_worker_drained),
+    );
+    object.insert(
+        "preview_ready_processed".into(),
+        json!(frame.preview_ready_processed),
+    );
+    object.insert(
+        "preview_selected_processed".into(),
+        json!(frame.preview_selected_processed),
+    );
+    object.insert(
+        "preview_prefetch_processed".into(),
+        json!(frame.preview_prefetch_processed),
+    );
+    object.insert(
+        "preview_stale_results".into(),
+        json!(frame.preview_stale_results),
+    );
+    object.insert(
+        "preview_cache_inserts".into(),
+        json!(frame.preview_cache_inserts),
+    );
+    object.insert(
+        "preview_cache_evictions".into(),
+        json!(frame.preview_cache_evictions),
+    );
+    object.insert(
+        "preview_failed_results".into(),
+        json!(frame.preview_failed_results),
+    );
+    object.insert("preview_backlog".into(), json!(frame.preview_backlog));
+    object.insert("status_write_due".into(), json!(frame.status_write_due));
+    object.insert(
+        "status_string_copy_us".into(),
+        json!(frame.status_string_copy_us),
+    );
+    object.insert(
+        "status_string_copy_bytes".into(),
+        json!(frame.status_string_copy_bytes),
+    );
+    object.insert("analytics_mode".into(), json!(frame.analytics_mode));
+    object.insert("vsync_source".into(), json!(frame.vsync_source));
+    object.insert("vsync_miss_streak".into(), json!(frame.vsync_miss_streak));
+    Value::Object(object)
 }
 
 fn current_rss_kb() -> u64 {
@@ -568,7 +642,9 @@ mod tests {
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
                         frame: 41,
+                        severity: "drop",
                         wall_us: 22_000,
+                        warning_us: 16_000,
                         budget_us: 16_667,
                         over_budget_us: 5_333,
                         dominant_phase: "custom-draw",
@@ -592,8 +668,19 @@ mod tests {
                         media_gate_us: 11,
                         preview_schedule_us: 55,
                         preview_apply_us: 66,
+                        preview_worker_drained: 5,
+                        preview_ready_processed: 4,
+                        preview_selected_processed: 1,
+                        preview_prefetch_processed: 3,
+                        preview_stale_results: 1,
+                        preview_cache_inserts: 4,
+                        preview_cache_evictions: 2,
+                        preview_failed_results: 1,
+                        preview_backlog: 6,
+                        status_write_due: true,
                         status_string_copy_us: 7,
                         status_string_copy_bytes: 96,
+                        analytics_mode: "wall",
                         vsync_source: "fallback",
                         vsync_miss_streak: 2,
                     }],
@@ -613,6 +700,7 @@ mod tests {
             75
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
+        assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");
         assert_eq!(
             value["frame_budget"]["slow_frames"][0]["dominant_phase"],
             "custom-draw"
@@ -624,6 +712,18 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["slow_frames"][0]["status_string_copy_bytes"],
             96
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["preview_worker_drained"],
+            5
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["preview_cache_evictions"],
+            2
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["analytics_mode"],
+            "wall"
         );
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);
