@@ -10,6 +10,7 @@ pub(super) enum LauncherBenchScenario {
     QuickTap,
     RapidTaps,
     HeldScroll,
+    HumanTurboHold,
     TurboHold,
     PreviewStepHold,
     ModelSync,
@@ -38,6 +39,9 @@ impl LauncherBenchScenario {
                 "quick-tap" | "quick_tap" => Some(Self::QuickTap),
                 "rapid-taps" | "rapid_taps" => Some(Self::RapidTaps),
                 "held-scroll" | "held_scroll" => Some(Self::HeldScroll),
+                "human-turbo-hold" | "human_turbo_hold" | "human-turbo" | "human_turbo" => {
+                    Some(Self::HumanTurboHold)
+                }
                 "turbo-hold" | "turbo_hold" => Some(Self::TurboHold),
                 "preview-step-hold" | "preview_step_hold" | "step-hold" | "step_hold" => {
                     Some(Self::PreviewStepHold)
@@ -58,6 +62,7 @@ impl LauncherBenchScenario {
             Self::QuickTap => "quick-tap",
             Self::RapidTaps => "rapid-taps",
             Self::HeldScroll => "held-scroll",
+            Self::HumanTurboHold => "human-turbo-hold",
             Self::TurboHold => "turbo-hold",
             Self::PreviewStepHold => "preview-step-hold",
             Self::ModelSync => "model-sync",
@@ -74,6 +79,7 @@ impl LauncherBenchScenario {
             Self::QuickTap
             | Self::RapidTaps
             | Self::HeldScroll
+            | Self::HumanTurboHold
             | Self::TurboHold
             | Self::PreviewStepHold => Duration::ZERO,
         }
@@ -85,6 +91,7 @@ impl LauncherBenchScenario {
             Self::QuickTap
                 | Self::RapidTaps
                 | Self::HeldScroll
+                | Self::HumanTurboHold
                 | Self::TurboHold
                 | Self::PreviewIdle
                 | Self::PreviewStepHold
@@ -136,6 +143,39 @@ pub(super) fn preview_step_hold_frames() -> usize {
             .unwrap_or(5)
             .clamp(1, 60);
         secs.saturating_mul(60).max(1)
+    })
+}
+
+fn human_turbo_idle_frames() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_HUMAN_TURBO_IDLE_FRAMES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(30)
+            .min(180)
+    })
+}
+
+fn human_turbo_normal_frames() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_HUMAN_TURBO_NORMAL_FRAMES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(30)
+            .min(300)
+    })
+}
+
+fn human_turbo_pause_frames() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_HUMAN_TURBO_PAUSE_FRAMES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(30)
+            .min(300)
     })
 }
 
@@ -253,6 +293,39 @@ pub(super) fn launcher_bench_step(
             nav.screen = Screen::Arcade;
             let previous_dir = if state.step == 0 { 0 } else { 1 };
             nav.arcade.bench_direction_tick(1, previous_dir, count, now);
+            true
+        }
+        LauncherBenchScenario::HumanTurboHold => {
+            let Some(count) = launcher_bench_active_game_count(catalog, nav, active_game_count)
+            else {
+                return false;
+            };
+            if count == 0 {
+                return false;
+            }
+            nav.screen = Screen::Arcade;
+            let idle_frames = human_turbo_idle_frames();
+            let normal_frames = human_turbo_normal_frames();
+            let pause_frames = human_turbo_pause_frames();
+            if state.step < idle_frames {
+                nav.arcade.bench_direction_tick(0, 0, count, now);
+            } else if state.step < idle_frames.saturating_add(normal_frames) {
+                let previous_dir = if state.step == idle_frames { 0 } else { 1 };
+                nav.arcade.bench_direction_tick(1, previous_dir, count, now);
+            } else if state.step
+                < idle_frames
+                    .saturating_add(normal_frames)
+                    .saturating_add(pause_frames)
+            {
+                let previous_dir = if state.step == idle_frames.saturating_add(normal_frames) {
+                    1
+                } else {
+                    0
+                };
+                nav.arcade.bench_direction_tick(0, previous_dir, count, now);
+            } else {
+                nav.arcade.bench_turbo_bounce_tick(count, now);
+            }
             true
         }
         LauncherBenchScenario::PreviewStepHold => {

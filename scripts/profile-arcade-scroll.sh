@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -46,6 +46,12 @@ EOF
 secs="30"
 label="arcade-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 scenario="turbo-hold"
+human_turbo_idle_frames="${MISTER_HUMAN_TURBO_IDLE_FRAMES:-30}"
+human_turbo_normal_frames="${MISTER_HUMAN_TURBO_NORMAL_FRAMES:-30}"
+human_turbo_pause_frames="${MISTER_HUMAN_TURBO_PAUSE_FRAMES:-30}"
+entry_before_a_wait_frames="${MISTER_ARCADE_ENTRY_BEFORE_A_WAIT_FRAMES:-12}"
+repair_projections="${MISTER_ARCADE_SCROLL_REPAIR_PROJECTIONS:-0}"
+catalog_refresh="${MISTER_CATALOG_REFRESH:-default}"
 deploy="skip"
 selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
@@ -107,6 +113,11 @@ while [[ $# -gt 0 ]]; do
       present_delay_us="$2"
       shift 2
       ;;
+    --catalog-refresh)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--catalog-refresh needs default, off, or force" >&2; usage >&2; exit 2; fi
+      catalog_refresh="$2"
+      shift 2
+      ;;
     --stream-consumer)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-consumer needs none, desktop-bench, or null-drain" >&2; usage >&2; exit 2; fi
       stream_consumer="$2"
@@ -142,11 +153,15 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
+if [[ ! "$human_turbo_idle_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_IDLE_FRAMES must be an integer" >&2; exit 2; fi
+if [[ ! "$human_turbo_normal_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_NORMAL_FRAMES must be an integer" >&2; exit 2; fi
+if [[ ! "$human_turbo_pause_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_PAUSE_FRAMES must be an integer" >&2; exit 2; fi
+if [[ ! "$entry_before_a_wait_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_BEFORE_A_WAIT_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$frame_pacing_p99_work_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_P99_WORK_US must be an integer" >&2; exit 2; fi
 if [[ ! "$frame_pacing_p99_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_P99_WALL_US must be an integer" >&2; exit 2; fi
 if [[ ! "$frame_pacing_max_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_MAX_WALL_US must be an integer" >&2; exit 2; fi
 case "$scenario" in
-  velocity-scroll|held-scroll|turbo-hold) ;;
+  velocity-scroll|held-scroll|turbo-hold|human-turbo-hold) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
     echo "row-step/jump scenario '$scenario' is not valid for arcade benchmarking; use velocity-scroll, held-scroll, or turbo-hold" >&2
     exit 2
@@ -169,6 +184,10 @@ case "$stream_consumer" in
   none|desktop-bench|null-drain) ;;
   *) echo "--stream-consumer must be none, desktop-bench, or null-drain" >&2; exit 2 ;;
 esac
+case "$catalog_refresh" in
+  default|off|force) ;;
+  *) echo "--catalog-refresh must be default, off, or force" >&2; exit 2 ;;
+esac
 remote_scenario="$scenario"
 if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scroll"; fi
 
@@ -185,6 +204,7 @@ remote_entry_tsv="/tmp/${label}-arcade-entry.tsv"
 local_entry_tsv="$OUT_DIR/${label}-arcade-entry.tsv"
 local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
+run_id="${label}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 stream_pid=""
 stream_frames=$((secs * 20))
 if [[ "$stream_frames" -lt 1 ]]; then stream_frames=1; fi
@@ -408,13 +428,13 @@ PY
 }
 
 gate_arcade_entry_trace() {
-  local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5"
-  python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" <<'PY'
+  local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5" expected_run_id="${6:-}"
+  python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" "$expected_run_id" <<'PY'
 import csv
 import re
 import sys
 
-name, trace_path, log_path, open_threshold_s, interactive_threshold_s = sys.argv[1:6]
+name, trace_path, log_path, open_threshold_s, interactive_threshold_s, expected_run_id = sys.argv[1:7]
 open_threshold = int(open_threshold_s)
 interactive_threshold = int(interactive_threshold_s)
 required = [
@@ -439,6 +459,15 @@ missing = [event for event in required if event not in rows]
 if missing:
     print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_event\tdetail={','.join(missing)}")
     sys.exit(9)
+
+if expected_run_id:
+    mismatched = [event for event in required if rows[event].get("run_id") != expected_run_id]
+    if mismatched:
+        detail = ",".join(
+            f"{event}:{rows[event].get('run_id', '<missing>')}" for event in mismatched
+        )
+        print(f"arcade_entry_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=run_id_mismatch\tdetail=expected={expected_run_id} actual={detail}")
+        sys.exit(9)
 
 failures = []
 input_delay = int(rows["arcade_enter_input"]["since_input_enabled_ms"])
@@ -497,6 +526,12 @@ arcade_first_nav_presented	166	16	54	1	arcade	1	5	13000	exact	1942	copied_rows=5
 EOF
   : >"$tmpdir/good.log"
   gate_arcade_entry_trace self-good "$tmpdir/good.tsv" "$tmpdir/good.log" 350 50 >/dev/null
+  awk 'BEGIN { FS=OFS="\t" } NR == 1 { print $1, "run_id", $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12; next } { print $1, "run-1", $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 }' "$tmpdir/good.tsv" >"$tmpdir/good-run.tsv"
+  gate_arcade_entry_trace self-good-run "$tmpdir/good-run.tsv" "$tmpdir/good.log" 350 50 "run-1" >/dev/null
+  if gate_arcade_entry_trace self-wrong-run "$tmpdir/good-run.tsv" "$tmpdir/good.log" 350 50 "run-2" >/dev/null 2>&1; then
+    echo "self-test expected run id mismatch failure" >&2
+    exit 1
+  fi
   cp "$tmpdir/good.tsv" "$tmpdir/slow.tsv"
   sed -i.bak $'s/arcade_rows_ready\t139\t19/arcade_rows_ready\t190\t70/' "$tmpdir/slow.tsv"
   if gate_arcade_entry_trace self-slow "$tmpdir/slow.tsv" "$tmpdir/good.log" 350 50 >/dev/null 2>&1; then
@@ -577,9 +612,11 @@ EOF
 }
 
 run_boot_prelude() {
-  echo "==> Boot flow: Home -> Arcade -> immediate ${scenario} scroll open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
-  echo "==> Refresh warm catalog projections before measured reboot"
-  "$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections" >/dev/null
+  echo "==> Boot flow: Home -> Arcade -> ${scenario} scroll open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
+  if [[ "$repair_projections" == "1" || "$repair_projections" == "true" || "$repair_projections" == "yes" ]]; then
+    echo "==> Refresh warm catalog projections before measured reboot"
+    "$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections" >/dev/null
+  fi
   local input_script="$entry_input_script"
   if [[ -z "$input_script" ]]; then
     input_script=""
@@ -587,18 +624,25 @@ run_boot_prelude() {
       if [[ -n "$input_script" ]]; then input_script+=","; fi
       input_script+="right"
     done
+    if [[ "$entry_before_a_wait_frames" -gt 0 ]]; then
+      if [[ -n "$input_script" ]]; then input_script+=","; fi
+      input_script+="wait:$entry_before_a_wait_frames"
+    fi
     if [[ -n "$input_script" ]]; then input_script+=","; fi
     input_script+="a"
   fi
   {
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
-    printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
     printf 'export MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT=1\n'
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
+    printf 'export MISTER_HUMAN_TURBO_IDLE_FRAMES=%q\n' "$human_turbo_idle_frames"
+    printf 'export MISTER_HUMAN_TURBO_NORMAL_FRAMES=%q\n' "$human_turbo_normal_frames"
+    printf 'export MISTER_HUMAN_TURBO_PAUSE_FRAMES=%q\n' "$human_turbo_pause_frames"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
     if [[ "$cpu_profile" == "1" ]]; then
@@ -608,6 +652,7 @@ run_boot_prelude() {
       printf 'export MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE=1\n'
     fi
     printf 'export MISTER_ARCADE_ENTRY_TRACE=%q\n' "$remote_entry_tsv"
+    printf 'export MISTER_ARCADE_ENTRY_RUN_ID=%q\n' "$run_id"
     if [[ "$selection_invert" == "off" ]]; then
       printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
     elif [[ "$selection_invert" == "on" ]]; then
@@ -620,8 +665,10 @@ run_boot_prelude() {
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
   } >"$env_file"
+  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log"
+  "$MISTER" run "rm -f '$REMOTE_ENV' '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
+  echo "==> Armed fresh boot-entry run_id=$run_id entry_before_a_wait_frames=$entry_before_a_wait_frames human_idle_frames=$human_turbo_idle_frames human_normal_frames=$human_turbo_normal_frames human_pause_frames=$human_turbo_pause_frames"
   "$MISTER" reboot-wait
   start_stream_consumer
   thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
@@ -634,6 +681,7 @@ run_boot_prelude() {
     if "$MISTER" run "test -s '$remote_entry_tsv' && test -s '$remote_tsv' && grep -q '^arcade_first_nav_presented	' '$remote_entry_tsv' && grep -q '^arcade_preview_exact	' '$remote_entry_tsv'" >/dev/null 2>&1; then
       break
     fi
+    echo "==> Waiting for boot-entry trace artifacts (${waited}s) label=$label run_id=$run_id" >&2
     sleep 1
     waited=$((waited + 1))
   done
@@ -661,7 +709,7 @@ run_boot_prelude() {
   echo "wrote $local_log"
   echo "wrote $local_status_json"
   echo "wrote $local_entry_tsv"
-  gate_arcade_entry_trace "$label" "$local_entry_tsv" "$local_entry_log" "$entry_open_gate_ms" "$entry_gate_ms"
+  gate_arcade_entry_trace "$label" "$local_entry_tsv" "$local_entry_log" "$entry_open_gate_ms" "$entry_gate_ms" "$run_id"
   if [[ "$stream_consumer" != "none" ]]; then
     echo "wrote $local_stream_tsv"
     echo "wrote $local_stream_log"
@@ -741,11 +789,14 @@ else
   {
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
-    printf 'export MISTER_CATALOG_REFRESH=default\n'
+    printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
+    printf 'export MISTER_HUMAN_TURBO_IDLE_FRAMES=%q\n' "$human_turbo_idle_frames"
+    printf 'export MISTER_HUMAN_TURBO_NORMAL_FRAMES=%q\n' "$human_turbo_normal_frames"
+    printf 'export MISTER_HUMAN_TURBO_PAUSE_FRAMES=%q\n' "$human_turbo_pause_frames"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
     if [[ "$selection_invert" == "off" ]]; then

@@ -40,10 +40,12 @@ fn launcher_input_script_wait_frames() -> usize {
 
 struct ArcadeEntryLatencyTrace {
     writer: Option<std::io::BufWriter<std::fs::File>>,
+    run_id: String,
 }
 
 impl ArcadeEntryLatencyTrace {
     fn from_env() -> Self {
+        let run_id = std::env::var("MISTER_ARCADE_ENTRY_RUN_ID").unwrap_or_default();
         let writer = std::env::var("MISTER_ARCADE_ENTRY_TRACE")
             .ok()
             .and_then(|path| {
@@ -53,14 +55,14 @@ impl ArcadeEntryLatencyTrace {
                 let mut writer = std::io::BufWriter::with_capacity(16 * 1024, file);
                 writer
                     .write_all(
-                        b"event\telapsed_ms\tdelta_ms\tsince_input_enabled_ms\taccepted\tsystem\tselected\tframe\tprepare_us\tpreview_state\tasset_key\tdetail\n",
+                        b"event\trun_id\telapsed_ms\tdelta_ms\tsince_input_enabled_ms\taccepted\tsystem\tselected\tframe\tprepare_us\tpreview_state\tasset_key\tdetail\n",
                     )
                     .map_err(|e| crate::ui_errln!("arcade entry trace: header write failed: {e}"))
                     .ok()?;
-                crate::ui_logln!("arcade_entry_trace={path}");
+                crate::ui_logln!("arcade_entry_trace={path} run_id={run_id}");
                 Some(writer)
             });
-        Self { writer }
+        Self { writer, run_id }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -108,8 +110,9 @@ impl ArcadeEntryLatencyTrace {
         if let Some(writer) = self.writer.as_mut() {
             let _ = writeln!(
                 writer,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 event,
+                self.run_id,
                 elapsed_ms,
                 delta_ms,
                 since_input_enabled_ms,
@@ -491,6 +494,33 @@ enum LauncherInputScriptButton {
     B,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LauncherInputScriptStep {
+    Button(LauncherInputScriptButton),
+    Wait(usize),
+}
+
+impl LauncherInputScriptStep {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if let Some(frames) = value
+            .strip_prefix("wait:")
+            .or_else(|| value.strip_prefix("wait="))
+            .and_then(|frames| frames.parse::<usize>().ok())
+        {
+            return Some(Self::Wait(frames.min(600)));
+        }
+        LauncherInputScriptButton::parse(value).map(Self::Button)
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Button(button) => button.label().to_string(),
+            Self::Wait(frames) => format!("wait:{frames}"),
+        }
+    }
+}
+
 impl LauncherInputScriptButton {
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -528,9 +558,9 @@ impl LauncherInputScriptButton {
 }
 
 struct LauncherInputScriptDriver {
-    buttons: Vec<LauncherInputScriptButton>,
-    button_idx: usize,
-    frame_in_button: usize,
+    steps: Vec<LauncherInputScriptStep>,
+    step_idx: usize,
+    frame_in_step: usize,
     wait_frames: usize,
 }
 
@@ -543,14 +573,14 @@ impl LauncherInputScriptDriver {
     }
 
     fn from_script(value: &str, start: Instant) -> Self {
-        let mut buttons = Vec::new();
+        let mut steps = Vec::new();
         for token in value.split([',', ';', ' ']) {
             let token = token.trim();
             if token.is_empty() {
                 continue;
             }
-            match LauncherInputScriptButton::parse(token) {
-                Some(button) => buttons.push(button),
+            match LauncherInputScriptStep::parse(token) {
+                Some(step) => steps.push(step),
                 None => print_startup_event(
                     start,
                     "launcher_input_script_invalid_token",
@@ -558,10 +588,10 @@ impl LauncherInputScriptDriver {
                 ),
             }
         }
-        if !buttons.is_empty() {
-            let labels = buttons
+        if !steps.is_empty() {
+            let labels = steps
                 .iter()
-                .map(|button| button.label())
+                .map(|step| step.label())
                 .collect::<Vec<_>>()
                 .join(",");
             print_startup_event(
@@ -571,31 +601,42 @@ impl LauncherInputScriptDriver {
             );
         }
         Self {
-            buttons,
-            button_idx: 0,
-            frame_in_button: 0,
+            steps,
+            step_idx: 0,
+            frame_in_step: 0,
             wait_frames: launcher_input_script_wait_frames(),
         }
     }
 
     fn empty() -> Self {
         Self {
-            buttons: Vec::new(),
-            button_idx: 0,
-            frame_in_button: 0,
+            steps: Vec::new(),
+            step_idx: 0,
+            frame_in_step: 0,
             wait_frames: 0,
         }
     }
 
     fn input_for(&mut self) -> Option<PadState> {
-        let button = *self.buttons.get(self.button_idx)?;
-        if self.frame_in_button < self.wait_frames {
-            self.frame_in_button += 1;
+        let step = *self.steps.get(self.step_idx)?;
+        if self.frame_in_step < self.wait_frames {
+            self.frame_in_step += 1;
             return None;
         }
 
-        let local_frame = self.frame_in_button - self.wait_frames;
-        self.frame_in_button += 1;
+        let local_frame = self.frame_in_step - self.wait_frames;
+        self.frame_in_step += 1;
+        if let LauncherInputScriptStep::Wait(frames) = step {
+            if local_frame < frames {
+                return Some(PadState::default());
+            }
+            self.step_idx += 1;
+            self.frame_in_step = 0;
+            return Some(PadState::default());
+        }
+        let LauncherInputScriptStep::Button(button) = step else {
+            unreachable!();
+        };
         if local_frame < LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
             let mut state = PadState::default();
             button.apply(&mut state);
@@ -605,13 +646,13 @@ impl LauncherInputScriptDriver {
             return Some(PadState::default());
         }
 
-        self.button_idx += 1;
-        self.frame_in_button = 0;
+        self.step_idx += 1;
+        self.frame_in_step = 0;
         Some(PadState::default())
     }
 
     fn active(&self) -> bool {
-        self.button_idx < self.buttons.len()
+        self.step_idx < self.steps.len()
     }
 }
 
