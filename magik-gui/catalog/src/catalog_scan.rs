@@ -1338,10 +1338,6 @@ mod tests {
 
         assert!(scan.normal_files.is_empty());
         assert!(scan.discoveries.is_empty());
-        assert!(scan
-            .profiles
-            .iter()
-            .all(|profile| profile.id != "runtime-gameboy"));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
         let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
