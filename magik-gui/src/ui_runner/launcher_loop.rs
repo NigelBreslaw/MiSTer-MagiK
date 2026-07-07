@@ -942,19 +942,33 @@ fn read_catalog_summary_seed(
 
     match catalog_summary::read_catalog_summary(summary_path) {
         Ok(Some(summary)) if !summary.systems.is_empty() => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=ready systems={} games={} elapsed_us={} path={} {}",
-                    summary.systems.len(),
-                    summary.total_game_count,
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    library_db::catalog_load_counter_detail()
-                ),
-            );
-            Some(summary)
+            if catalog_summary_seed_matches_sqlite(sqlite_path, &summary) {
+                print_startup_event(
+                    start,
+                    "catalog_summary_load",
+                    format!(
+                        "status=ready systems={} games={} elapsed_us={} path={} {}",
+                        summary.systems.len(),
+                        summary.total_game_count,
+                        summary_t.elapsed().as_micros(),
+                        summary_path.display(),
+                        library_db::catalog_load_counter_detail()
+                    ),
+                );
+                Some(summary)
+            } else {
+                print_startup_event(
+                    start,
+                    "catalog_summary_load",
+                    format!(
+                        "status=missing_or_stale elapsed_us={} path={} {}",
+                        summary_t.elapsed().as_micros(),
+                        summary_path.display(),
+                        library_db::catalog_load_counter_detail()
+                    ),
+                );
+                None
+            }
         }
         Ok(Some(_)) => {
             print_startup_event(
@@ -996,6 +1010,22 @@ fn read_catalog_summary_seed(
             );
             None
         }
+    }
+}
+
+fn catalog_summary_seed_matches_sqlite(
+    sqlite_path: &Path,
+    summary: &catalog_summary::CatalogSummaryProjection,
+) -> bool {
+    let summary_stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(
+        summary.catalog_stamp_lines.clone(),
+    );
+    match library_db::read_sqlite_catalog_stamp(sqlite_path) {
+        Ok(Some(stored_stamp)) => {
+            stored_stamp == summary_stamp
+                && summary.catalog_stamp_fingerprint == stored_stamp.fingerprint_hex()
+        }
+        Ok(None) | Err(_) => false,
     }
 }
 
