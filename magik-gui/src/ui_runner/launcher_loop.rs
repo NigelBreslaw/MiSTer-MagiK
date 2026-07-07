@@ -667,63 +667,64 @@ fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct LauncherIdleInput {
+struct LauncherRenderIntent {
     first_visible_copy_done: bool,
-    redraw_pending: bool,
-    launching: bool,
-    setup_active: bool,
-    benchmark_active: bool,
-    scripted_input_active: bool,
     startup_input_enabled: bool,
-    route_forces_full_present: bool,
-    bridge_dirty: bool,
-    catalog_messages_active: bool,
-    media_message_seen: bool,
-    catalog_scan_visible: bool,
-    catalog_background_scan_visible: bool,
-    catalog_scan_redraw_due: bool,
-    catalog_games_found_detail_changed: bool,
-    slint_animation_active: bool,
-    home_pan_present_active: bool,
-    // Arcade list motion lives outside Slint's bridge key, so the final visual
-    // tick still has to present before the launcher is allowed to idle.
-    arcade_visual_changed_this_loop: bool,
-    arcade_scroll_active: bool,
-    arcade_filter_scroll_active: bool,
-    arcade_search_active: bool,
-    preview_dirty: bool,
-    preview_scheduled_this_loop: bool,
-    composition_forces_full_present: bool,
-    composition_clears_direct_layers: bool,
+    wake_reasons: LauncherWakeReasons,
 }
 
-impl LauncherIdleInput {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LauncherWakeReasons(u64);
+
+impl LauncherWakeReasons {
+    const REDRAW_PENDING: Self = Self(1 << 0);
+    const LAUNCHING: Self = Self(1 << 1);
+    const SETUP_ACTIVE: Self = Self(1 << 2);
+    const BENCHMARK_ACTIVE: Self = Self(1 << 3);
+    const SCRIPTED_INPUT_ACTIVE: Self = Self(1 << 4);
+    const ROUTE_FORCES_FULL_PRESENT: Self = Self(1 << 5);
+    const BRIDGE_DIRTY: Self = Self(1 << 6);
+    const CATALOG_MESSAGES_ACTIVE: Self = Self(1 << 7);
+    const MEDIA_MESSAGE_SEEN: Self = Self(1 << 8);
+    const CATALOG_SCAN_VISIBLE: Self = Self(1 << 9);
+    const CATALOG_BACKGROUND_SCAN_VISIBLE: Self = Self(1 << 10);
+    const CATALOG_SCAN_REDRAW_DUE: Self = Self(1 << 11);
+    const CATALOG_GAMES_FOUND_DETAIL_CHANGED: Self = Self(1 << 12);
+    const SLINT_ANIMATION_ACTIVE: Self = Self(1 << 13);
+    const HOME_PAN_PRESENT_ACTIVE: Self = Self(1 << 14);
+    const ARCADE_VISUAL_CHANGED_THIS_LOOP: Self = Self(1 << 15);
+    const ARCADE_SCROLL_ACTIVE: Self = Self(1 << 16);
+    const ARCADE_FILTER_SCROLL_ACTIVE: Self = Self(1 << 17);
+    const ARCADE_SEARCH_ACTIVE: Self = Self(1 << 18);
+    const PREVIEW_DIRTY: Self = Self(1 << 19);
+    const PREVIEW_SCHEDULED_THIS_LOOP: Self = Self(1 << 20);
+    const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
+    const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
+
+    #[inline]
+    fn insert_if(&mut self, reason: Self, active: bool) {
+        if active {
+            self.0 |= reason.0;
+        }
+    }
+
+    #[inline]
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for LauncherWakeReasons {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl LauncherRenderIntent {
     fn can_sleep(self) -> bool {
-        self.first_visible_copy_done
-            && !self.redraw_pending
-            && !self.launching
-            && !self.setup_active
-            && !self.benchmark_active
-            && !self.scripted_input_active
-            && self.startup_input_enabled
-            && !self.route_forces_full_present
-            && !self.bridge_dirty
-            && !self.catalog_messages_active
-            && !self.media_message_seen
-            && !self.catalog_scan_visible
-            && !self.catalog_background_scan_visible
-            && !self.catalog_scan_redraw_due
-            && !self.catalog_games_found_detail_changed
-            && !self.slint_animation_active
-            && !self.home_pan_present_active
-            && !self.arcade_visual_changed_this_loop
-            && !self.arcade_scroll_active
-            && !self.arcade_filter_scroll_active
-            && !self.arcade_search_active
-            && !self.preview_dirty
-            && !self.preview_scheduled_this_loop
-            && !self.composition_forces_full_present
-            && !self.composition_clears_direct_layers
+        self.first_visible_copy_done && self.startup_input_enabled && self.wake_reasons.is_empty()
     }
 }
 
@@ -2698,38 +2699,93 @@ pub(super) fn run_launcher_loop(
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
-        let idle_input = LauncherIdleInput {
-            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-            redraw_pending: launcher_redraw_pending,
-            launching,
-            setup_active,
-            benchmark_active: launcher_bench_active,
-            scripted_input_active: launcher_input_script.active(),
-            startup_input_enabled: startup_status.input_enabled,
-            route_forces_full_present: route_action.force_full_present,
-            bridge_dirty: full_bridge_dirty || light_bridge_dirty,
-            catalog_messages_active: prepare_trace.catalog_message_count > 0
+        let mut wake_reasons = LauncherWakeReasons::default();
+        wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, launcher_redraw_pending);
+        wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
+        wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, setup_active);
+        wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
+        wake_reasons.insert_if(
+            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
+            launcher_input_script.active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
+            route_action.force_full_present,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::BRIDGE_DIRTY,
+            full_bridge_dirty || light_bridge_dirty,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
+            prepare_trace.catalog_message_count > 0
                 || prepare_trace.catalog_backlog > 0
                 || pending_catalog_ready.is_some(),
-            media_message_seen,
+        );
+        wake_reasons.insert_if(LauncherWakeReasons::MEDIA_MESSAGE_SEEN, media_message_seen);
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
             catalog_scan_visible,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
             catalog_background_scan_visible,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
             catalog_scan_redraw_due,
-            catalog_games_found_detail_changed: games_found_detail_changed,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
+            games_found_detail_changed,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
             slint_animation_active,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
             home_pan_present_active,
+        );
+        // Arcade list motion lives outside Slint's bridge key, so the final
+        // visual tick still has to present before the launcher can idle.
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
             arcade_visual_changed_this_loop,
-            arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
-            arcade_filter_scroll_active: nav.screen == Screen::Arcade
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
+            nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
+            nav.screen == Screen::Arcade
                 && nav.arcade_filter.drawer_open
                 && nav.arcade_filter.is_scroll_active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
             arcade_search_active,
-            preview_dirty: preview.raw_dirty(),
+        );
+        wake_reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, preview.raw_dirty());
+        wake_reasons.insert_if(
+            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
             preview_scheduled_this_loop,
-            composition_forces_full_present: composition_decision.force_full_slint_present,
-            composition_clears_direct_layers: composition_decision.clear_direct_layers,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
+            composition_decision.force_full_slint_present,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+            composition_decision.clear_direct_layers,
+        );
+        let render_intent = LauncherRenderIntent {
+            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+            startup_input_enabled: startup_status.input_enabled,
+            wake_reasons,
         };
-        if idle_input.can_sleep() {
+        if render_intent.can_sleep() {
             frame_accounting.finish_idle_loop(
                 frames,
                 run_start,
@@ -4634,73 +4690,96 @@ mod tests {
 
     #[test]
     pub(super) fn launcher_idle_wait_requires_first_visible_copy_and_no_redraw() {
-        let mut input = LauncherIdleInput {
+        let mut intent = LauncherRenderIntent {
             first_visible_copy_done: true,
             startup_input_enabled: true,
-            ..LauncherIdleInput::default()
+            wake_reasons: LauncherWakeReasons::default(),
         };
 
-        assert!(input.can_sleep());
-        input.first_visible_copy_done = false;
-        assert!(!input.can_sleep());
-        input.first_visible_copy_done = true;
-        input.redraw_pending = true;
-        assert!(!input.can_sleep());
+        assert!(intent.can_sleep());
+        intent.first_visible_copy_done = false;
+        assert!(!intent.can_sleep());
+        intent.first_visible_copy_done = true;
+        intent
+            .wake_reasons
+            .insert_if(LauncherWakeReasons::REDRAW_PENDING, true);
+        assert!(!intent.can_sleep());
+        intent.wake_reasons = LauncherWakeReasons::default();
+        intent.startup_input_enabled = false;
+        assert!(!intent.can_sleep());
     }
 
     #[test]
     pub(super) fn launcher_idle_wait_rejects_active_work() {
-        let base = LauncherIdleInput {
-            first_visible_copy_done: true,
-            startup_input_enabled: true,
-            ..LauncherIdleInput::default()
-        };
+        for reason in [
+            LauncherWakeReasons::REDRAW_PENDING,
+            LauncherWakeReasons::LAUNCHING,
+            LauncherWakeReasons::SETUP_ACTIVE,
+            LauncherWakeReasons::BENCHMARK_ACTIVE,
+            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
+            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::BRIDGE_DIRTY,
+            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
+            LauncherWakeReasons::MEDIA_MESSAGE_SEEN,
+            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
+            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
+            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
+            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
+            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
+            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
+            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
+            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
+            LauncherWakeReasons::PREVIEW_DIRTY,
+            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
+            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+        ] {
+            assert!(!LauncherRenderIntent {
+                first_visible_copy_done: true,
+                startup_input_enabled: true,
+                wake_reasons: reason,
+            }
+            .can_sleep());
+        }
+    }
 
-        assert!(!LauncherIdleInput {
-            launching: true,
-            ..base
+    #[test]
+    pub(super) fn launcher_wake_reasons_combine_without_allocations() {
+        let mut reasons = LauncherWakeReasons::default();
+        assert!(reasons.is_empty());
+
+        reasons.insert_if(LauncherWakeReasons::LAUNCHING, true);
+        reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, true);
+        reasons.insert_if(LauncherWakeReasons::MEDIA_MESSAGE_SEEN, false);
+
+        assert_eq!(
+            reasons,
+            LauncherWakeReasons::LAUNCHING | LauncherWakeReasons::PREVIEW_DIRTY
+        );
+        assert!(!reasons.is_empty());
+    }
+
+    #[test]
+    pub(super) fn launcher_domain_wake_reasons_match_current_behavior() {
+        let arcade = LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP
+            | LauncherWakeReasons::ARCADE_SCROLL_ACTIVE
+            | LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE;
+        let search_preview = LauncherWakeReasons::ARCADE_SEARCH_ACTIVE
+            | LauncherWakeReasons::PREVIEW_DIRTY
+            | LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP;
+        let composition = LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT
+            | LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS;
+
+        for reasons in [arcade, search_preview, composition] {
+            assert!(!LauncherRenderIntent {
+                first_visible_copy_done: true,
+                startup_input_enabled: true,
+                wake_reasons: reasons,
+            }
+            .can_sleep());
         }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            catalog_messages_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            media_message_seen: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            preview_dirty: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            slint_animation_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            home_pan_present_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            arcade_visual_changed_this_loop: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            arcade_scroll_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            composition_forces_full_present: true,
-            ..base
-        }
-        .can_sleep());
     }
 
     #[test]
