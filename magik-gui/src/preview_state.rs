@@ -942,6 +942,7 @@ pub(crate) fn request_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,
+    scroll_active: bool,
     turbo_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
@@ -1003,6 +1004,7 @@ pub(crate) fn request_arcade_preview_window(
                             games,
                             selected,
                             preview,
+                            scroll_active,
                             turbo_active,
                         );
                         return false;
@@ -1017,7 +1019,13 @@ pub(crate) fn request_arcade_preview_window(
                     preview.visible_preview_load_source = "decoded_cache";
                     preview.raw_dirty = true;
                     apply_preview_image_bridge(bridge, &image);
-                    request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+                    request_preview_prefetches_if_allowed(
+                        games,
+                        selected,
+                        preview,
+                        scroll_active,
+                        turbo_active,
+                    );
                     trace_preview_coverage_sample(
                         preview,
                         selected,
@@ -1030,7 +1038,13 @@ pub(crate) fn request_arcade_preview_window(
                 if preview.cache.contains_failed(&path) {
                     preview.select_empty_preview(preview_transition_pace(turbo_active));
                     bridge.set_arcade_preview_status(PreviewStatus::Empty);
-                    request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+                    request_preview_prefetches_if_allowed(
+                        games,
+                        selected,
+                        preview,
+                        scroll_active,
+                        turbo_active,
+                    );
                     trace_preview_coverage_sample(
                         preview,
                         selected,
@@ -1042,7 +1056,13 @@ pub(crate) fn request_arcade_preview_window(
                 }
             }
         }
-        request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+        request_preview_prefetches_if_allowed(
+            games,
+            selected,
+            preview,
+            scroll_active,
+            turbo_active,
+        );
         trace_preview_coverage_sample(
             preview,
             selected,
@@ -1071,7 +1091,13 @@ pub(crate) fn request_arcade_preview_window(
         bridge.set_arcade_preview_placeholder_visible(true);
         clear_preview_image_bridge(bridge);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+        request_preview_prefetches_if_allowed(
+            games,
+            selected,
+            preview,
+            scroll_active,
+            turbo_active,
+        );
         trace_preview_coverage_sample(preview, selected, selected_game, None, turbo_active);
         return true;
     };
@@ -1095,7 +1121,13 @@ pub(crate) fn request_arcade_preview_window(
     if preview.cache.contains_failed(&preview_key) {
         preview.select_empty_preview(preview_transition_pace(turbo_active));
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+        request_preview_prefetches_if_allowed(
+            games,
+            selected,
+            preview,
+            scroll_active,
+            turbo_active,
+        );
         trace_preview_coverage_sample(
             preview,
             selected,
@@ -1107,7 +1139,13 @@ pub(crate) fn request_arcade_preview_window(
     }
     if let Some(image) = preview.cache.get(&preview_key) {
         if defer_selected_application {
-            request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+            request_preview_prefetches_if_allowed(
+                games,
+                selected,
+                preview,
+                scroll_active,
+                turbo_active,
+            );
             return false;
         }
         preview.current_generation = 0;
@@ -1135,7 +1173,13 @@ pub(crate) fn request_arcade_preview_window(
         preview.visible_preview_key = preview_key;
         preview.raw_dirty = true;
         apply_preview_image_bridge(bridge, &image);
-        request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+        request_preview_prefetches_if_allowed(
+            games,
+            selected,
+            preview,
+            scroll_active,
+            turbo_active,
+        );
         trace_preview_coverage_sample(
             preview,
             selected,
@@ -1300,7 +1344,13 @@ pub(crate) fn request_arcade_preview_window(
                     age_us
                 );
             }
-            request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+            request_preview_prefetches_if_allowed(
+                games,
+                selected,
+                preview,
+                scroll_active,
+                turbo_active,
+            );
             trace_preview_coverage_sample(
                 preview,
                 selected,
@@ -1336,12 +1386,19 @@ pub(crate) fn request_arcade_preview_window(
                     selected,
                     preview,
                     defer_selected_application,
+                    scroll_active,
                     turbo_active,
                 );
             }
             preview.select_empty_preview(preview_transition_pace(turbo_active));
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+            request_preview_prefetches_if_allowed(
+                games,
+                selected,
+                preview,
+                scroll_active,
+                turbo_active,
+            );
             trace_preview_coverage_sample(preview, selected, selected_game, None, turbo_active);
             return true;
         }
@@ -1388,9 +1445,10 @@ fn request_preview_prefetches_if_allowed(
     selected: usize,
     preview: &mut PreviewState,
     scroll_active: bool,
+    turbo_active: bool,
 ) {
     if preview_prefetch_allowed(scroll_active) {
-        request_preview_prefetches(games, selected, preview, scroll_active);
+        request_preview_prefetches(games, selected, preview, turbo_active);
     }
 }
 
@@ -1647,6 +1705,7 @@ pub(crate) fn schedule_arcade_preview_window(
     selected: usize,
     preview: &mut PreviewState,
     defer_selected_application: bool,
+    scroll_active: bool,
     turbo_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
@@ -1669,10 +1728,17 @@ pub(crate) fn schedule_arcade_preview_window(
                 selected,
                 preview,
                 defer_selected_application,
+                scroll_active,
                 turbo_active,
             );
         }
-        request_preview_prefetches_if_allowed(games, selected, preview, turbo_active);
+        request_preview_prefetches_if_allowed(
+            games,
+            selected,
+            preview,
+            scroll_active,
+            turbo_active,
+        );
         return false;
     }
     request_arcade_preview_window(
@@ -1681,6 +1747,7 @@ pub(crate) fn schedule_arcade_preview_window(
         selected,
         preview,
         defer_selected_application,
+        scroll_active,
         turbo_active,
     )
 }
@@ -1732,7 +1799,7 @@ pub(crate) fn apply_ready_preview(
     app: &slint_ui::launcher::Launcher,
     preview: &mut PreviewState,
     defer_selected_result: bool,
-    scroll_active: bool,
+    turbo_active: bool,
 ) -> bool {
     if !preview_loading_enabled() {
         for _ in preview.worker.drain() {}
@@ -1851,7 +1918,7 @@ pub(crate) fn apply_ready_preview(
                 preview.visible_preview_load_source = result.load_source.label();
                 preview.begin_raw_transition_to(
                     &result_preview_key,
-                    preview_transition_pace(scroll_active),
+                    preview_transition_pace(turbo_active),
                 );
                 preview.visible_preview_key = result_preview_key;
                 preview.raw_dirty = true;
@@ -1885,7 +1952,7 @@ pub(crate) fn apply_ready_preview(
                 );
             }
             if is_selected_result {
-                preview.select_empty_preview(preview_transition_pace(scroll_active));
+                preview.select_empty_preview(preview_transition_pace(turbo_active));
                 clear_preview_image_bridge(&bridge);
                 bridge.set_arcade_preview_status(PreviewStatus::Empty);
                 dirty = true;
@@ -2290,6 +2357,7 @@ mod tests {
             &mut preview,
             false,
             false,
+            false,
         );
 
         assert!(changed);
@@ -2638,6 +2706,35 @@ mod tests {
             previous_transition_id.wrapping_add(1)
         );
         assert!(preview.previous_image.is_some());
+    }
+
+    #[test]
+    fn raw_transition_uses_full_duration_for_normal_pace() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "previous.png".into(),
+            preview_image(0xf800),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["previous.png".into(), "selected.png".into()],
+            Some("previous.png"),
+        );
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "previous.png".into();
+
+        preview.begin_raw_transition_to("selected.png", preview_transition_pace(false));
+
+        assert_eq!(
+            preview
+                .raw_transition_frame()
+                .expect("normal transition frame")
+                .duration_divisor,
+            1
+        );
     }
 
     #[test]
