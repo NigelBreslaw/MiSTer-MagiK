@@ -123,6 +123,8 @@ pub struct VsyncPace {
     pub period_us: u64,
     pub miss_streak: u32,
     pub hit_at: Option<Instant>,
+    pub wait_start_age_us: u64,
+    pub accepted_hit_age_us: u64,
     pub stale_hits: u32,
     pub message: Option<String>,
 }
@@ -222,8 +224,15 @@ impl VsyncPacer {
         self.observed_max_miss_streak
     }
 
+    pub fn age_since_last_hit_us(&self, at: Instant) -> u64 {
+        self.last_hit_at
+            .map(|hit| at.saturating_duration_since(hit).as_micros() as u64)
+            .unwrap_or(0)
+    }
+
     pub fn wait(&mut self) -> VsyncPace {
         let wait_started_at = Instant::now();
+        let wait_start_age_us = self.age_since_last_hit_us(wait_started_at);
         let deadline = Duration::from_micros(self.period_us + VSYNC_GRACE_US);
         let deadline_at = wait_started_at + deadline;
         let mut stale_hits = 0u32;
@@ -252,6 +261,8 @@ impl VsyncPacer {
 
         match status {
             Some(VsyncWaitStatus::Hit { wait_us, at }) => {
+                let accepted_hit_age_us =
+                    wait_started_at.saturating_duration_since(at).as_micros() as u64;
                 self.record_hit(at);
                 self.last_frame_at = at;
                 VsyncPace {
@@ -260,13 +271,20 @@ impl VsyncPacer {
                     period_us: self.period_us,
                     miss_streak: self.miss_streak,
                     hit_at: Some(at),
+                    wait_start_age_us,
+                    accepted_hit_age_us,
                     stale_hits,
                     message: None,
                 }
             }
             Some(VsyncWaitStatus::Timeout { wait_us }) => {
                 self.timeouts += 1;
-                let mut pace = self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, None);
+                let mut pace = self.fallback_after_miss(
+                    VsyncPaceSource::Timeout,
+                    wait_us,
+                    wait_start_age_us,
+                    None,
+                );
                 pace.stale_hits = stale_hits;
                 pace
             }
@@ -274,14 +292,22 @@ impl VsyncPacer {
                 wait_us, message, ..
             }) => {
                 self.errors += 1;
-                let mut pace =
-                    self.fallback_after_miss(VsyncPaceSource::Error, wait_us, Some(message));
+                let mut pace = self.fallback_after_miss(
+                    VsyncPaceSource::Error,
+                    wait_us,
+                    wait_start_age_us,
+                    Some(message),
+                );
                 pace.stale_hits = stale_hits;
                 pace
             }
             None => {
-                let mut pace =
-                    self.fallback_after_miss(VsyncPaceSource::Fallback, self.period_us, None);
+                let mut pace = self.fallback_after_miss(
+                    VsyncPaceSource::Fallback,
+                    self.period_us,
+                    wait_start_age_us,
+                    None,
+                );
                 pace.stale_hits = stale_hits;
                 pace
             }
@@ -322,6 +348,7 @@ impl VsyncPacer {
         &mut self,
         source: VsyncPaceSource,
         wait_us: u64,
+        wait_start_age_us: u64,
         message: Option<String>,
     ) -> VsyncPace {
         self.miss_streak += 1;
@@ -353,6 +380,8 @@ impl VsyncPacer {
             period_us: self.period_us,
             miss_streak: self.miss_streak,
             hit_at: None,
+            wait_start_age_us,
+            accepted_hit_age_us: 0,
             stale_hits: 0,
             message,
         }
@@ -657,6 +686,21 @@ mod tests {
     }
 
     #[test]
+    fn runtime_pacer_reports_age_since_last_hit() {
+        let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
+        let at = Instant::now();
+        assert_eq!(pacer.age_since_last_hit_us(at), 0);
+
+        pacer.record_hit(at);
+
+        assert_eq!(pacer.age_since_last_hit_us(at), 0);
+        assert_eq!(
+            pacer.age_since_last_hit_us(at + Duration::from_micros(12_345)),
+            12_345
+        );
+    }
+
+    #[test]
     fn isolated_misses_create_one_fallback_frame_each_without_degraded_streak() {
         let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
         let mut at = Instant::now();
@@ -664,7 +708,7 @@ mod tests {
 
         for _ in 0..10 {
             pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
-            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, 0, None);
             assert_eq!(pace.source, VsyncPaceSource::Timeout);
             assert_eq!(pace.miss_streak, 1);
             at += Duration::from_micros(16_667);
@@ -682,7 +726,7 @@ mod tests {
         let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
         for expected in 1..=3 {
             pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
-            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+            let pace = pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, 0, None);
             assert_eq!(pace.miss_streak, expected);
         }
 
@@ -695,7 +739,7 @@ mod tests {
         let mut pacer = test_pacer(DEFAULT_VSYNC_FALLBACK_US);
         for _ in 0..3 {
             pacer.last_frame_at = Instant::now() - Duration::from_micros(pacer.period_us());
-            pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, None);
+            pacer.fallback_after_miss(VsyncPaceSource::Timeout, 16_667, 0, None);
         }
         assert_eq!(pacer.miss_streak, 3);
 

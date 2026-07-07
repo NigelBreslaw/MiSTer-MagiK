@@ -165,6 +165,11 @@ pub struct FrameBudgetSlowFrame {
     pub analytics_mode: &'static str,
     pub vsync_source: &'static str,
     pub vsync_miss_streak: u32,
+    pub vsync_stale_hits: u32,
+    pub vsync_wait_start_age_us: u64,
+    pub vsync_accepted_hit_age_us: u64,
+    pub frame_start_phase_us: u64,
+    pub present_phase_us: u64,
 }
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
@@ -449,6 +454,20 @@ fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
     object.insert("analytics_mode".into(), json!(frame.analytics_mode));
     object.insert("vsync_source".into(), json!(frame.vsync_source));
     object.insert("vsync_miss_streak".into(), json!(frame.vsync_miss_streak));
+    object.insert("vsync_stale_hits".into(), json!(frame.vsync_stale_hits));
+    object.insert(
+        "vsync_wait_start_age_us".into(),
+        json!(frame.vsync_wait_start_age_us),
+    );
+    object.insert(
+        "vsync_accepted_hit_age_us".into(),
+        json!(frame.vsync_accepted_hit_age_us),
+    );
+    object.insert(
+        "frame_start_phase_us".into(),
+        json!(frame.frame_start_phase_us),
+    );
+    object.insert("present_phase_us".into(), json!(frame.present_phase_us));
     Value::Object(object)
 }
 
@@ -683,6 +702,11 @@ mod tests {
                         analytics_mode: "wall",
                         vsync_source: "fallback",
                         vsync_miss_streak: 2,
+                        vsync_stale_hits: 3,
+                        vsync_wait_start_age_us: 12_345,
+                        vsync_accepted_hit_age_us: 456,
+                        frame_start_phase_us: 7_890,
+                        present_phase_us: 321,
                     }],
                 },
             },
@@ -724,6 +748,14 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["slow_frames"][0]["analytics_mode"],
             "wall"
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["vsync_wait_start_age_us"],
+            12_345
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["present_phase_us"],
+            321
         );
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);

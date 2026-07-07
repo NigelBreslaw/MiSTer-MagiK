@@ -58,6 +58,11 @@ INTERRUPTION_COLUMNS = [
     "runtime_status_write_us",
     "dirty_y0",
     "dirty_y1",
+    "vsync_stale_hits",
+    "vsync_wait_start_age_us",
+    "vsync_accepted_hit_age_us",
+    "frame_start_phase_us",
+    "present_phase_us",
 ]
 DOMINANT_DELTA_COLUMNS = [
     "vsync_us",
@@ -68,6 +73,9 @@ DOMINANT_DELTA_COLUMNS = [
     "preview_apply_us",
     "preview_cache_inserts",
     "preview_cache_evictions",
+    "vsync_wait_start_age_us",
+    "frame_start_phase_us",
+    "present_phase_us",
 ]
 
 

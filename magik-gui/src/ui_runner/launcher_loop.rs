@@ -2865,6 +2865,7 @@ pub(super) fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
+        let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
         let pace = if frame_accounting.first_visible_copy_done() {
             let pace = pacer.wait();
             let vsync_done = Instant::now();
@@ -2889,6 +2890,16 @@ pub(super) fn run_launcher_loop(
             .unwrap_or_else(|| pacer.period_us());
         let vsync_miss_streak = pace.0.as_ref().map(|pace| pace.miss_streak).unwrap_or(0);
         let vsync_stale_hits = pace.0.as_ref().map(|pace| pace.stale_hits).unwrap_or(0);
+        let vsync_wait_start_age_us = pace
+            .0
+            .as_ref()
+            .map(|pace| pace.wait_start_age_us)
+            .unwrap_or(0);
+        let vsync_accepted_hit_age_us = pace
+            .0
+            .as_ref()
+            .map(|pace| pace.accepted_hit_age_us)
+            .unwrap_or(0);
         let present_phase_us = pace
             .0
             .as_ref()
@@ -2978,6 +2989,9 @@ pub(super) fn run_launcher_loop(
                 vsync_period_us,
                 vsync_miss_streak,
                 vsync_stale_hits,
+                vsync_wait_start_age_us,
+                vsync_accepted_hit_age_us,
+                frame_start_phase_us,
                 present_phase_us,
                 arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
