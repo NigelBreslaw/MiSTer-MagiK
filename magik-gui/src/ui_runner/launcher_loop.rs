@@ -25,6 +25,7 @@ const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200)
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
+const LAUNCHER_LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 fn launcher_input_script_wait_frames() -> usize {
@@ -783,6 +784,16 @@ fn expand_home_pan_dirty_rect(
 
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
     Duration::from_micros(pacer.period_us().max(1))
+}
+
+fn launcher_should_wait_before_late_frame_render(
+    frame_start_phase_us: u64,
+    period_us: u64,
+) -> bool {
+    if period_us <= LAUNCHER_LATE_FRAME_START_HEADROOM_US {
+        return false;
+    }
+    frame_start_phase_us >= period_us - LAUNCHER_LATE_FRAME_START_HEADROOM_US
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2784,9 +2795,19 @@ pub(super) fn run_launcher_loop(
             continue;
         }
 
+        let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
+        let wait_before_render = frame_accounting.first_visible_copy_done()
+            && launcher_should_wait_before_late_frame_render(
+                frame_start_phase_us,
+                pacer.period_us(),
+            );
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
+        let pre_render_pace = wait_before_render.then(|| {
+            let pace = pacer.wait();
+            (pace, Instant::now())
+        });
         update_slint_animations(animation_clock);
         let mut layer_target = LayerTarget::new(target, disp, ui);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -2865,10 +2886,14 @@ pub(super) fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
-        let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
         let pace = if frame_accounting.first_visible_copy_done() {
-            let pace = pacer.wait();
-            let vsync_done = Instant::now();
+            let (pace, vsync_done) = match pre_render_pace {
+                Some((pace, vsync_done)) => (pace, vsync_done),
+                None => {
+                    let pace = pacer.wait();
+                    (pace, Instant::now())
+                }
+            };
             present_timing.wait_until_present_time(vsync_done);
             let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
             let frame_t3 = Instant::now();
@@ -3953,6 +3978,26 @@ mod tests {
             .map(|system_id| arcade_system(*system_id, 1))
             .collect();
         arcade_catalog(Vec::new(), systems)
+    }
+
+    #[test]
+    fn late_frame_start_waits_before_render() {
+        assert!(launcher_should_wait_before_late_frame_render(
+            10_667, 16_667
+        ));
+        assert!(launcher_should_wait_before_late_frame_render(
+            31_000, 16_667
+        ));
+    }
+
+    #[test]
+    fn early_frame_start_keeps_render_then_vsync_order() {
+        assert!(!launcher_should_wait_before_late_frame_render(
+            10_666, 16_667
+        ));
+        assert!(!launcher_should_wait_before_late_frame_render(
+            5_000, 20_000
+        ));
     }
 
     #[test]
