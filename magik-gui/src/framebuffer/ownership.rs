@@ -1,3 +1,7 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // Main_MiSTer now suppresses its OSD/menu/framebuffer paths while the MagiK
@@ -5,6 +9,7 @@ use std::time::Duration;
 // rather than normal steady-state work. Set MISTER_FB_ROUTE_REASSERT_FRAMES to a
 // positive frame interval to re-enable the watchdog during attended debugging.
 pub const DEFAULT_REASSERT_FRAMES: u64 = 0;
+pub const DEFAULT_DISPLAY_OWNER_LOCK_PATH: &str = "/tmp/mister-magik/display-owner.lock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramebufferRouteAction {
@@ -73,9 +78,159 @@ pub fn should_present_full_frame(launching: bool, route_action: FramebufferRoute
     launching || route_action.force_full_present
 }
 
+#[derive(Debug)]
+pub struct DisplayOwnerLock {
+    file: File,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ActiveDisplayOwner {
+    pub path: PathBuf,
+    pub pid: Option<u32>,
+    pub cmdline: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum DisplayOwnerLockError {
+    Active(ActiveDisplayOwner),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for DisplayOwnerLockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active(owner) => {
+                write!(f, "{} is already locked", owner.path.display())?;
+                if let Some(pid) = owner.pid {
+                    write!(f, " by pid {pid}")?;
+                }
+                if let Some(cmdline) = owner.cmdline.as_deref().filter(|cmd| !cmd.is_empty()) {
+                    write!(f, " ({cmdline})")?;
+                }
+                Ok(())
+            }
+            Self::Io(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for DisplayOwnerLockError {}
+
+impl DisplayOwnerLock {
+    pub fn acquire_default() -> Result<Self, DisplayOwnerLockError> {
+        let path = std::env::var("MISTER_DISPLAY_OWNER_LOCK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_DISPLAY_OWNER_LOCK_PATH));
+        Self::acquire(&path)
+    }
+
+    pub fn acquire(path: &Path) -> Result<Self, DisplayOwnerLockError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(DisplayOwnerLockError::Io)?;
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(DisplayOwnerLockError::Io)?;
+
+        if !try_lock_exclusive_nonblocking(&file).map_err(DisplayOwnerLockError::Io)? {
+            return Err(DisplayOwnerLockError::Active(read_active_owner(
+                path, &mut file,
+            )));
+        }
+
+        file.set_len(0).map_err(DisplayOwnerLockError::Io)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(DisplayOwnerLockError::Io)?;
+        writeln!(file, "{}", std::process::id()).map_err(DisplayOwnerLockError::Io)?;
+        file.sync_data().map_err(DisplayOwnerLockError::Io)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DisplayOwnerLock {
+    fn drop(&mut self) {
+        let _ = unlock_file(&self.file);
+    }
+}
+
+fn try_lock_exclusive_nonblocking(file: &File) -> std::io::Result<bool> {
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+    ) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+fn unlock_file(file: &File) -> std::io::Result<()> {
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn read_active_owner(path: &Path, file: &mut File) -> ActiveDisplayOwner {
+    let pid = read_lock_pid_from_file(file);
+    ActiveDisplayOwner {
+        path: path.to_path_buf(),
+        pid,
+        cmdline: pid.and_then(read_process_cmdline),
+    }
+}
+
+fn read_lock_pid_from_file(file: &mut File) -> Option<u32> {
+    let mut text = String::new();
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_to_string(&mut text).ok()?;
+    text.trim().parse::<u32>().ok()
+}
+
+fn read_process_cmdline(pid: u32) -> Option<String> {
+    let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let parts = bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| std::str::from_utf8(part).ok())
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_lock_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "mister-magik-{label}-{}-{nanos}.lock",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn guard_reasserts_on_first_frame() {
@@ -190,5 +345,35 @@ mod tests {
                 force_full_present: false
             }
         ));
+    }
+
+    #[test]
+    fn display_owner_lock_refuses_second_owner() {
+        let path = unique_lock_path("display-owner-active");
+        let first = DisplayOwnerLock::acquire(&path).expect("first lock");
+
+        let error = DisplayOwnerLock::acquire(&path).expect_err("second lock refused");
+
+        match error {
+            DisplayOwnerLockError::Active(owner) => {
+                assert_eq!(owner.path, path);
+                assert_eq!(owner.pid, Some(std::process::id()));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+        drop(first);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn display_owner_lock_releases_on_drop() {
+        let path = unique_lock_path("display-owner-release");
+        let first = DisplayOwnerLock::acquire(&path).expect("first lock");
+        drop(first);
+
+        let second = DisplayOwnerLock::acquire(&path).expect("second lock after drop");
+
+        drop(second);
+        let _ = std::fs::remove_file(path);
     }
 }

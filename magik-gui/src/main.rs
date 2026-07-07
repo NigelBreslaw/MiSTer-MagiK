@@ -102,6 +102,7 @@ pub use mister_magik_fb::{
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
+use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
@@ -121,6 +122,10 @@ fn main() {
             reject_direct_launch_arg(&args[1]);
         }
     }
+    if command_args::needs_explicit_command(&args) {
+        crate::ui_errln!("missing command (use: {})", command_args::command_usage());
+        std::process::exit(2);
+    }
 
     let cmd = command_args::resolve_command(&args);
 
@@ -136,6 +141,21 @@ fn main() {
         dispatch_pre_fpga(&cmd, &args);
         return;
     }
+
+    let _display_owner_lock = if command_args::requires_display_owner(&cmd) {
+        match DisplayOwnerLock::acquire_default() {
+            Ok(lock) => {
+                crate::ui_logln!("display_owner_lock\tacquired\t{}", lock.path().display());
+                Some(lock)
+            }
+            Err(error) => {
+                crate::ui_errln!("display_owner_lock\trefused\t{error}");
+                std::process::exit(13);
+            }
+        }
+    } else {
+        None
+    };
 
     let mut f = match Fpga::open() {
         Ok(f) => f,
