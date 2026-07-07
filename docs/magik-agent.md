@@ -99,7 +99,6 @@ available. The desktop should treat missing nested objects as unknown values,
 not as stream failure. Current fields include:
 
 - per-core and combined CPU busy percent from `/proc/stat`
-- CPU temperature in millidegrees Celsius from thermal sysfs when available
 - memory split as MagiK RSS, other used, and available
 - MagiK/Main pids, RSS, and thread counts
 - network RX/TX byte rates
