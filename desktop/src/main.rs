@@ -539,7 +539,7 @@ fn realtime_view_from_history(
         } else {
             sample.launcher.fps.clone()
         },
-        cpu_summary: format!("Combined {:.1}%", sample.combined_cpu_pct),
+        cpu_summary: format_cpu_summary(sample),
         memory_total_label,
         memory_magik_label,
         memory_other_label,
@@ -725,6 +725,17 @@ fn format_us(us: u64) -> String {
 
 fn format_byte_rate(bytes: u64) -> String {
     format!("{}/s", format_byte_size(bytes))
+}
+
+fn format_cpu_summary(sample: &DeviceTelemetrySample) -> String {
+    match sample.cpu_temperature_millidegrees_c {
+        Some(millidegrees) => format!(
+            "Combined {:.1}%, {:.1}C",
+            sample.combined_cpu_pct,
+            millidegrees as f64 / 1000.0
+        ),
+        None => format!("Combined {:.1}%", sample.combined_cpu_pct),
+    }
 }
 
 fn format_storage_gb(bytes: u64) -> String {
@@ -4621,6 +4632,7 @@ mod tests {
         DeviceTelemetrySample {
             seq,
             combined_cpu_pct: 12.5,
+            cpu_temperature_millidegrees_c: Some(48_231),
             cores: vec![
                 agent_client::CpuCoreTelemetry {
                     label: "CPU0".to_string(),
@@ -4725,6 +4737,7 @@ mod tests {
         let view = realtime_view_from_history(&history, true, "");
 
         assert!(view.streaming);
+        assert_eq!(view.cpu_summary, "Combined 12.5%, 48.2C");
         assert_eq!(view.cpu_history.len(), 1);
         assert_eq!(view.cpu0_path, "M 100.00 87.50");
         assert_eq!(view.cpu1_path, "M 100.00 75.00");
