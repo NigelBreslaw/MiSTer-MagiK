@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -21,6 +21,9 @@ MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE. By default it
 reboots to Home, quickly navigates to the Arcade tile, enters it, then starts
 the timed turbo scroll trace in that same launcher session.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
+--cpu-profile builds/deploys the profiling binary, runs the same boot-entry
+Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
+non-empty CPU SVG artifact.
 --skip-boot-prelude keeps the old direct-to-Arcade benchmark setup.
 Set MISTER_ARCADE_ENTRY_INPUT_SCRIPT to override the Home-to-Arcade input
 sequence. By default the script presses Right MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX
@@ -48,12 +51,16 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+cpu_profile="0"
+cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
 entry_open_gate_ms="${MISTER_ARCADE_ENTRY_OPEN_GATE_MS:-2000}"
 entry_gate_ms="${MISTER_ARCADE_ENTRY_GATE_MS:-100}"
 home_selected_index="${MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX:-7}"
 entry_input_script="${MISTER_ARCADE_ENTRY_INPUT_SCRIPT:-}"
 frame_pacing_p99_work_us="${MISTER_ARCADE_SCROLL_P99_WORK_US:-14500}"
+frame_pacing_p99_wall_us="${MISTER_ARCADE_SCROLL_P99_WALL_US:-16000}"
+frame_pacing_max_wall_us="${MISTER_ARCADE_SCROLL_MAX_WALL_US:-16667}"
 self_test="0"
 positionals=()
 
@@ -61,6 +68,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
+    --cpu-profile) cpu_profile="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --skip-boot-prelude|--direct-start-arcade) boot_prelude="0"; shift ;;
     --entry-open-gate-ms)
@@ -134,6 +142,9 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
+if [[ ! "$frame_pacing_p99_work_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_P99_WORK_US must be an integer" >&2; exit 2; fi
+if [[ ! "$frame_pacing_p99_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_P99_WALL_US must be an integer" >&2; exit 2; fi
+if [[ ! "$frame_pacing_max_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCROLL_MAX_WALL_US must be an integer" >&2; exit 2; fi
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
@@ -167,6 +178,7 @@ remote_log="$REMOTE_LOG"
 local_tsv="$OUT_DIR/${label}-arcade-scroll.tsv"
 local_log="$OUT_DIR/${label}-arcade-scroll.log"
 local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
+local_cpu_svg="$OUT_DIR/${label}-arcade-scroll-cpu.svg"
 local_stream_tsv="$OUT_DIR/${label}-framebuffer-stream.tsv"
 local_stream_log="$OUT_DIR/${label}-framebuffer-stream.log"
 remote_entry_tsv="/tmp/${label}-arcade-entry.tsv"
@@ -280,16 +292,19 @@ PY
 }
 
 check_frame_pacing_gate() {
-  local name="$1" trace="$2" p99_work_us="$3"
-  python3 - "$name" "$trace" "$p99_work_us" <<'PY'
+  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5"
+  python3 - "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" <<'PY'
 import csv
 import math
 import sys
 
-name, trace_path, p99_work_us_text = sys.argv[1:4]
+name, trace_path, p99_work_us_text, p99_wall_us_text, max_wall_us_text = sys.argv[1:6]
 p99_work_us = int(p99_work_us_text)
+p99_wall_us = int(p99_wall_us_text)
+max_wall_us = int(max_wall_us_text)
 required = {
     "frame",
+    "wall_us",
     "prepare_us",
     "slint_render_us",
     "custom_draw_us",
@@ -341,7 +356,11 @@ works = sorted(
 )
 p99_index = max(0, min(len(works) - 1, math.ceil(len(works) * 0.99) - 1))
 p99_work = works[p99_index]
+walls = sorted(int_field(row, "wall_us") for row in measured)
+p99_wall = walls[p99_index]
+max_wall = walls[-1]
 work_over = sum(1 for value in works if value > 16667)
+wall_over = sum(1 for value in walls if value > 16667)
 sources = {"vsync": 0, "fallback": 0, "timeout": 0, "error": 0, "other_source": 0}
 dropped_rows = 0
 max_miss = 0
@@ -360,7 +379,11 @@ for row in measured:
             examples.append(f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}")
 
 valid = (
-    p99_work < p99_work_us
+    p99_work <= p99_work_us
+    and work_over == 0
+    and p99_wall <= p99_wall_us
+    and max_wall <= max_wall_us
+    and wall_over == 0
     and sources["fallback"] == 0
     and sources["timeout"] == 0
     and sources["error"] == 0
@@ -368,8 +391,10 @@ valid = (
     and max_miss == 0
 )
 detail = (
-    f"frames_after_30={len(measured)} p99_work_us={p99_work} threshold={p99_work_us} "
-    f"work_gt_16667={work_over} dropped_rows={dropped_rows} vsync={sources['vsync']} "
+    f"frames_after_30={len(measured)} p99_work_us={p99_work} work_threshold={p99_work_us} "
+    f"p99_wall_us={p99_wall} wall_p99_threshold={p99_wall_us} max_wall_us={max_wall} "
+    f"wall_max_threshold={max_wall_us} work_gt_16667={work_over} wall_gt_16667={wall_over} "
+    f"dropped_rows={dropped_rows} vsync={sources['vsync']} "
     f"fallback={sources['fallback']} timeout={sources['timeout']} error={sources['error']} "
     f"other_source={sources['other_source']} max_miss_streak={max_miss}"
 )
@@ -514,19 +539,28 @@ EOF
     exit 1
   fi
   cat >"$tmpdir/pacing-good.tsv" <<'EOF'
-frame	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
-31	100	100	100	100	none	0
-32	1000	200	1200	900	vsync	0
-33	1100	200	1200	900	vsync	0
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	400	100	100	100	100	none	0
+32	15000	1000	200	1200	900	vsync	0
+33	15500	1100	200	1200	900	vsync	0
 EOF
-  check_frame_pacing_gate self-pacing "$tmpdir/pacing-good.tsv" 14500 >/dev/null
+  check_frame_pacing_gate self-pacing "$tmpdir/pacing-good.tsv" 14500 16000 16667 >/dev/null
   cat >"$tmpdir/pacing-fallback.tsv" <<'EOF'
-frame	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
-31	1000	200	1200	900	vsync	0
-32	1000	200	1200	900	fallback	1
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	15000	1000	200	1200	900	fallback	1
 EOF
-  if check_frame_pacing_gate self-pacing "$tmpdir/pacing-fallback.tsv" 14500 >/dev/null 2>&1; then
+  if check_frame_pacing_gate self-pacing "$tmpdir/pacing-fallback.tsv" 14500 16000 16667 >/dev/null 2>&1; then
     echo "self-test expected frame pacing failure" >&2
+    exit 1
+  fi
+  cat >"$tmpdir/pacing-wall.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	16668	1000	200	1200	900	vsync	0
+EOF
+  if check_frame_pacing_gate self-pacing "$tmpdir/pacing-wall.tsv" 14500 16000 16667 >/dev/null 2>&1; then
+    echo "self-test expected wall pacing failure" >&2
     exit 1
   fi
   printf 'startup_timing\tcatalog_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
@@ -567,6 +601,12 @@ run_boot_prelude() {
     printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=%q\n' "$remote_scenario"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_tsv"
+    if [[ "$cpu_profile" == "1" ]]; then
+      cpu_profile_remote_svg="/tmp/${label}-arcade-scroll-cpu.svg"
+      printf 'export MISTER_PPROF=1\n'
+      printf 'export MISTER_PPROF_OUT=%q\n' "$cpu_profile_remote_svg"
+      printf 'export MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE=1\n'
+    fi
     printf 'export MISTER_ARCADE_ENTRY_TRACE=%q\n' "$remote_entry_tsv"
     if [[ "$selection_invert" == "off" ]]; then
       printf 'export MISTER_ARCADE_SELECTION_INVERT=0\n'
@@ -581,7 +621,7 @@ run_boot_prelude() {
     fi
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG'; sync" >/dev/null
+  "$MISTER" run "rm -f '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
   "$MISTER" reboot-wait
   start_stream_consumer
   thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
@@ -606,6 +646,17 @@ run_boot_prelude() {
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
   cp "$local_log" "$local_entry_log" 2>/dev/null || true
   "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  if [[ "$cpu_profile" == "1" ]]; then
+    if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
+      echo "arcade scroll CPU profile failed or produced an empty SVG; see $local_log" >&2
+      exit 9
+    fi
+    if ! grep -q 'cpu_profile:' "$local_log"; then
+      echo "arcade scroll CPU profile log does not contain cpu_profile output; see $local_log" >&2
+      exit 9
+    fi
+    echo "wrote $local_cpu_svg"
+  fi
   echo "wrote $local_tsv"
   echo "wrote $local_log"
   echo "wrote $local_status_json"
@@ -672,6 +723,17 @@ case "$deploy" in
   skip) : ;;
 esac
 
+if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
+  profile_bin="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb"
+  echo "==> Build profiling binary for boot-entry Arcade CPU profile"
+  "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
+  echo "==> Deploy profiling binary for boot-entry Arcade CPU profile"
+  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null; then
+    echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
+    "$MISTER" deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+  fi
+fi
+
 if [[ "$boot_prelude" != "0" ]]; then
   run_boot_prelude
 else
@@ -699,7 +761,7 @@ else
     fi
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+  "$MISTER" run "rm -f '$remote_tsv' '$remote_log' '$cpu_profile_remote_svg'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
   start_stream_consumer
   thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
   sleep $((secs + 7))
@@ -714,6 +776,17 @@ else
   fi
   "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
   "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  if [[ "$cpu_profile" == "1" ]]; then
+    if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
+      echo "arcade scroll CPU profile failed or produced an empty SVG; see $local_log" >&2
+      exit 9
+    fi
+    if ! grep -q 'cpu_profile:' "$local_log"; then
+      echo "arcade scroll CPU profile log does not contain cpu_profile output; see $local_log" >&2
+      exit 9
+    fi
+    echo "wrote $local_cpu_svg"
+  fi
 
   echo "wrote $local_tsv"
   echo "wrote $local_log"
@@ -739,6 +812,6 @@ echo
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
-check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us"
+check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us"
 echo
 check_preview_exact_gate "$label" "$local_tsv"
