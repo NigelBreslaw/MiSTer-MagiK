@@ -1,6 +1,7 @@
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
-    LauncherPresentedFrame,
+    LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
+    LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
 use super::launcher_pacing::{
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
@@ -2962,11 +2963,13 @@ pub(super) fn run_launcher_loop(
             prepare_us,
             presentation.copied_rows,
         );
-        frame_accounting.finish_frame(
-            LauncherPresentedFrame {
+        let presented_frame = LauncherFrameSnapshotBuilder {
+            identity: LauncherFrameIdentity {
                 frames,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
+            },
+            timing: LauncherFrameTiming {
                 run_start,
                 loop_start,
                 frame_t0,
@@ -2976,41 +2979,37 @@ pub(super) fn run_launcher_loop(
                 frame_t4,
                 custom_draw_start,
                 custom_draw_done,
+                prepare_us,
+            },
+            render: LauncherFrameRenderData {
                 custom_draw_trace,
                 prepare_trace,
-                prepare_us,
                 dirty_rect: this_rect,
-                copied_rows: presentation.copied_rows,
-                direct_preview_rows: presentation.direct_preview_rows,
-                present_bytes: presentation.present_bytes,
-                wasted_present_bytes: presentation.wasted_present_bytes,
-                cached_present_us: presentation.cached_present_us,
-                direct_preview_present_us: presentation.direct_preview_present_us,
-                arcade_list_present_us: presentation.arcade_list_present_us,
-                vsync_source: pacing_trace.vsync_source,
-                vsync_period_us: pacing_trace.vsync_period_us,
-                vsync_miss_streak: pacing_trace.vsync_miss_streak,
-                vsync_stale_hits: pacing_trace.vsync_stale_hits,
-                vsync_wait_start_age_us: pacing_trace.vsync_wait_start_age_us,
-                vsync_accepted_hit_age_us: pacing_trace.vsync_accepted_hit_age_us,
-                frame_start_phase_us: pacing_trace.frame_start_phase_us,
-                present_phase_us: pacing_trace.present_phase_us,
-                arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 composition_status: composition_status.clone(),
+            },
+            pacing: pacing_trace,
+            presentation,
+            status: LauncherFrameStatusData {
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,
-                cpu_loop_start,
-                cpu_t0,
-                cpu_t1,
-                cpu_t2,
-                cpu_custom_draw_start,
-                cpu_custom_draw_done,
-                cpu_t3,
-                cpu_t4,
             },
+            cpu: LauncherFrameCpuTrace {
+                loop_start: cpu_loop_start,
+                t0: cpu_t0,
+                t1: cpu_t1,
+                t2: cpu_t2,
+                custom_draw_start: cpu_custom_draw_start,
+                custom_draw_done: cpu_custom_draw_done,
+                t3: cpu_t3,
+                t4: cpu_t4,
+            },
+        }
+        .build();
+        frame_accounting.finish_frame(
+            presented_frame,
             start,
             disp,
             &nav,
