@@ -1780,7 +1780,7 @@ fn write_sqlite_scan_with_sources_inner(
             game_key_id INTEGER NOT NULL,
             profile_string_id INTEGER,
             launch_kind_string_id INTEGER NOT NULL,
-            source_path_id INTEGER NOT NULL,
+            source_path_id INTEGER,
             launch_ref_kind_string_id INTEGER NOT NULL,
             launch_path_id INTEGER,
             launcher_path_id INTEGER,
@@ -1799,10 +1799,18 @@ fn write_sqlite_scan_with_sources_inner(
                    launch_target_rows.game_key_id,
                    profile_values.value AS profile_id,
                    launch_kind_values.value AS launch_kind,
-                   launch_target_rows.source_path_id,
+                   COALESCE(
+                       launch_target_rows.source_path_id,
+                       CASE launch_ref_kind_values.value
+                           WHEN 'payload' THEN launch_target_rows.payload_path_id
+                           WHEN 'archive' THEN launch_target_rows.source_path_id
+                           WHEN 'same-payload' THEN launch_target_rows.source_path_id
+                           ELSE launch_target_rows.launch_path_id
+                       END
+                   ) AS source_path_id,
                    launch_ref_kind_values.value AS launch_ref_kind,
                    launch_target_rows.launch_path_id,
-                   launch_target_rows.launcher_path_id,
+                   COALESCE(launch_target_rows.launcher_path_id, launch_target_rows.launch_path_id) AS launcher_path_id,
                    launch_target_rows.payload_path_id,
                    core_values.value AS core_id,
                    hardware_values.value AS hardware_id,
@@ -2368,8 +2376,6 @@ fn write_sqlite_scan_with_sources_inner(
                     .with_launch_id(launch_id),
                 );
             }
-            let source_path_id = path_interner.intern(discovery.source_path.as_str());
-            let launcher_path_id = path_interner.intern_optional(launcher_path);
             let payload_path_id = path_interner.intern_optional(payload_path);
             let launch_ref_storage = launch_ref_storage_for(
                 plan_launch_ref.as_str(),
@@ -2377,6 +2383,18 @@ fn write_sqlite_scan_with_sources_inner(
                 launch_kind_for_discovery(discovery),
             );
             let launch_path_id = path_interner.intern_optional(launch_ref_storage.path);
+            let source_path_id = if Some(discovery.source_path.as_str()) == payload_path
+                || Some(discovery.source_path.as_str()) == launch_ref_storage.path
+            {
+                None
+            } else {
+                Some(path_interner.intern(discovery.source_path.as_str()))
+            };
+            let launcher_path_id = if launcher_path == launch_ref_storage.path {
+                None
+            } else {
+                path_interner.intern_optional(launcher_path)
+            };
             let profile_id = profile_id_for_discovery(discovery);
             let mount = launch_target_mount_for_discovery(discovery, profile_id, &scan.profiles);
             let mount_kind = mount.map(|mount| mount_kind_str(mount.kind));
