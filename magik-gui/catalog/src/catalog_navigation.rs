@@ -13,8 +13,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 6;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB6\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 7;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB7\0";
 const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
@@ -999,6 +999,7 @@ mod tests {
             hydrated.games[2].preview_archive_path.as_ref(),
             "/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b"
         );
+        assert_eq!(hydrated.games[0].category.as_ref(), "Shooter");
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
         assert_eq!(hydrated.decade_option_count("arcade"), 1);
@@ -1037,6 +1038,31 @@ mod tests {
             .is_none());
         std::fs::write(&path, b"not-lz4").expect("write corrupt projection");
         assert!(read_catalog_navigation_projection(&path, &current_stamp).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn navigation_projection_rejects_previous_binary_schema() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-navigation-old-schema-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let db = root.join("library.sqlite3");
+        let path = navigation_path_for_sqlite(&db);
+        let stamp = stamp(&["root current"]);
+
+        write_catalog_navigation_projection_for_catalog(&db, &projection_catalog(), &stamp)
+            .expect("write projection");
+        let mut bytes = std::fs::read(&path).expect("read current projection");
+        let mut decoded =
+            lz4_flex::decompress_size_prepended(&bytes).expect("decompress current projection");
+        decoded[..8].copy_from_slice(b"MMNAVB6\0");
+        bytes = lz4_flex::compress_prepend_size(&decoded);
+        std::fs::write(&path, bytes).expect("write old schema projection");
+
+        assert!(read_catalog_navigation_projection(&path, &stamp).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 }
