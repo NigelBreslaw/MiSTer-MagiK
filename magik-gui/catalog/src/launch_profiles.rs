@@ -641,7 +641,7 @@ const RUNTIME_PROFILE_HINTS: &[RuntimeProfileHint] = &[
     RuntimeProfileHint {
         names: &["bbcmicro"],
         core_alias: None,
-        extensions: &["ssd"],
+        extensions: &["adl", "dsd", "sdd", "ssd", "uef"],
     },
     RuntimeProfileHint {
         names: &["Coleco"],
