@@ -109,6 +109,7 @@ use ui_display::UiDisplayPlan;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
+const DEFAULT_PROCESS_LOCK_PATH: &str = "/tmp/mister-magik/process.lock";
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
@@ -134,6 +135,29 @@ fn main() {
     }
 
     let command = command_args::find_command(&cmd).unwrap_or_else(|| unknown_command(&cmd));
+    let _process_lock = if command_args::requires_process_exclusive(&cmd) {
+        match MagikProcessLock::acquire_default() {
+            Ok(ProcessLockState::Acquired(lock)) => {
+                crate::ui_logln!("process_lock\tacquired\t{}", lock.path().display());
+                Some(lock)
+            }
+            Ok(ProcessLockState::Active { pid }) => {
+                if cmd == "library-refresh" {
+                    crate::ui_logln!("library_refresh\tskipped\tactive_pid={pid}");
+                    return;
+                }
+                crate::ui_errln!("process_lock\trefused\tactive_pid={pid}");
+                std::process::exit(13);
+            }
+            Err(error) => {
+                crate::ui_errln!("process_lock\tfailed\t{error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     if matches!(
         command.kind,
         command_args::CommandKind::PreFpga | command_args::CommandKind::ListOnly
@@ -166,6 +190,99 @@ fn main() {
     };
 
     dispatch_fpga(&cmd, &mut f);
+}
+
+enum ProcessLockState {
+    Acquired(MagikProcessLock),
+    Active { pid: u32 },
+}
+
+struct MagikProcessLock {
+    path: PathBuf,
+    pid: u32,
+}
+
+impl MagikProcessLock {
+    fn acquire_default() -> Result<ProcessLockState, String> {
+        let path = std::env::var("MISTER_MAGIK_PROCESS_LOCK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_PROCESS_LOCK_PATH));
+        Self::acquire(&path)
+    }
+
+    fn acquire(path: &Path) -> Result<ProcessLockState, String> {
+        let pid = std::process::id();
+        acquire_pid_lock(path, pid, process_is_mister_magik_fb).map(|state| match state {
+            PidLockDecision::Acquired => ProcessLockState::Acquired(Self {
+                path: path.to_path_buf(),
+                pid,
+            }),
+            PidLockDecision::Active { pid } => ProcessLockState::Active { pid },
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for MagikProcessLock {
+    fn drop(&mut self) {
+        remove_pid_lock_if_owner(&self.path, self.pid);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PidLockDecision {
+    Acquired,
+    Active { pid: u32 },
+}
+
+fn acquire_pid_lock<F>(path: &Path, pid: u32, is_active: F) -> Result<PidLockDecision, String>
+where
+    F: Fn(u32) -> bool,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    match create_lock_file(path, pid) {
+        Ok(()) => return Ok(PidLockDecision::Acquired),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("create {}: {e}", path.display())),
+    }
+    if let Some(active_pid) = read_lock_pid(path).filter(|locked_pid| is_active(*locked_pid)) {
+        return Ok(PidLockDecision::Active { pid: active_pid });
+    }
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove stale {}: {e}", path.display())),
+    }
+    match create_lock_file(path, pid) {
+        Ok(()) => Ok(PidLockDecision::Acquired),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            if let Some(active_pid) =
+                read_lock_pid(path).filter(|locked_pid| is_active(*locked_pid))
+            {
+                Ok(PidLockDecision::Active { pid: active_pid })
+            } else {
+                Err(format!(
+                    "lock appeared but owner is not active: {}",
+                    path.display()
+                ))
+            }
+        }
+        Err(e) => Err(format!("create {}: {e}", path.display())),
+    }
+}
+
+fn remove_pid_lock_if_owner(path: &Path, pid: u32) {
+    let should_remove = read_lock_pid(path)
+        .map(|locked_pid| locked_pid == pid)
+        .unwrap_or(false);
+    if should_remove {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
@@ -435,12 +552,7 @@ impl LibraryRefreshLock {
 
 impl Drop for LibraryRefreshLock {
     fn drop(&mut self) {
-        let should_remove = read_lock_pid(&self.path)
-            .map(|pid| pid == self.pid)
-            .unwrap_or(false);
-        if should_remove {
-            let _ = fs::remove_file(&self.path);
-        }
+        remove_pid_lock_if_owner(&self.path, self.pid);
     }
 }
 
@@ -458,40 +570,10 @@ fn acquire_library_refresh_lock<F>(
 where
     F: Fn(u32) -> bool,
 {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    }
-    match create_lock_file(path, pid) {
-        Ok(()) => return Ok(RefreshLockDecision::Acquired),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(format!("create {}: {e}", path.display())),
-    }
-    if let Some(active_pid) =
-        read_lock_pid(path).filter(|locked_pid| is_active_refresh(*locked_pid))
-    {
-        return Ok(RefreshLockDecision::Active { pid: active_pid });
-    }
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("remove stale {}: {e}", path.display())),
-    }
-    match create_lock_file(path, pid) {
-        Ok(()) => Ok(RefreshLockDecision::Acquired),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            if let Some(active_pid) =
-                read_lock_pid(path).filter(|locked_pid| is_active_refresh(*locked_pid))
-            {
-                Ok(RefreshLockDecision::Active { pid: active_pid })
-            } else {
-                Err(format!(
-                    "lock appeared but owner is not active: {}",
-                    path.display()
-                ))
-            }
-        }
-        Err(e) => Err(format!("create {}: {e}", path.display())),
-    }
+    acquire_pid_lock(path, pid, is_active_refresh).map(|decision| match decision {
+        PidLockDecision::Acquired => RefreshLockDecision::Acquired,
+        PidLockDecision::Active { pid } => RefreshLockDecision::Active { pid },
+    })
 }
 
 fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<()> {
@@ -507,16 +589,27 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
 }
 
 fn process_is_library_refresh(pid: u32) -> bool {
+    process_cmdline_parts(pid).is_some_and(|parts| {
+        parts.iter().any(|part| part.ends_with("mister-magik-fb"))
+            && parts.iter().any(|part| *part == "library-refresh")
+    })
+}
+
+fn process_is_mister_magik_fb(pid: u32) -> bool {
+    process_cmdline_parts(pid)
+        .is_some_and(|parts| parts.iter().any(|part| part.ends_with("mister-magik-fb")))
+}
+
+fn process_cmdline_parts(pid: u32) -> Option<Vec<String>> {
     let path = PathBuf::from(format!("/proc/{pid}/cmdline"));
-    let Ok(bytes) = fs::read(path) else {
-        return false;
-    };
-    let parts = bytes
-        .split(|byte| *byte == 0)
-        .filter_map(|part| std::str::from_utf8(part).ok())
-        .collect::<Vec<_>>();
-    parts.iter().any(|part| part.ends_with("mister-magik-fb"))
-        && parts.iter().any(|part| *part == "library-refresh")
+    let bytes = fs::read(path).ok()?;
+    Some(
+        bytes
+            .split(|byte| *byte == 0)
+            .filter_map(|part| std::str::from_utf8(part).ok())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn should_defer_parent_boot_library_refresh(
@@ -1021,6 +1114,49 @@ mod tests {
         fs::write(&db, b"not empty").expect("write nonempty db");
         assert!(usable_library_database_exists(&db));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn process_lock_acquires_and_cleans_up() {
+        let lock_path = unique_temp_path("process-lock-acquire").join("process.lock");
+        let state = MagikProcessLock::acquire(&lock_path).expect("acquire process lock");
+        let ProcessLockState::Acquired(lock) = state else {
+            panic!("expected acquired process lock");
+        };
+        assert_eq!(read_lock_pid(&lock_path), Some(std::process::id()));
+
+        drop(lock);
+
+        assert!(!lock_path.exists());
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn process_lock_skips_when_active_owner_exists() {
+        let lock_path = unique_temp_path("process-lock-active").join("process.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
+        create_lock_file(&lock_path, 7777).expect("seed lock");
+
+        let decision =
+            acquire_pid_lock(&lock_path, 8888, |pid| pid == 7777).expect("check process lock");
+
+        assert_eq!(decision, PidLockDecision::Active { pid: 7777 });
+        assert_eq!(read_lock_pid(&lock_path), Some(7777));
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
+    }
+
+    #[test]
+    fn process_lock_recovers_stale_owner() {
+        let lock_path = unique_temp_path("process-lock-stale").join("process.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).expect("create lock dir");
+        create_lock_file(&lock_path, 7777).expect("seed stale lock");
+
+        let decision =
+            acquire_pid_lock(&lock_path, 8888, |_| false).expect("replace stale process lock");
+
+        assert_eq!(decision, PidLockDecision::Acquired);
+        assert_eq!(read_lock_pid(&lock_path), Some(8888));
+        let _ = fs::remove_dir_all(lock_path.parent().unwrap());
     }
 
     #[test]

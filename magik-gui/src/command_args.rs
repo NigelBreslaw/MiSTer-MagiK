@@ -125,6 +125,28 @@ pub fn requires_display_owner(command: &str) -> bool {
     matches!(command, "early-black" | "ui" | "effect-bench")
 }
 
+pub fn requires_process_exclusive(command: &str) -> bool {
+    matches!(
+        command,
+        "early-black"
+            | "ui"
+            | "effect-bench"
+            | "library-refresh"
+            | "repair-catalog-projections"
+            | "request-library-rebuild"
+            | "toggle-simple-joystick-setting"
+            | "reset-delete-database"
+            | "reset-delete-screenshot-packs"
+            | "media-bench-download"
+            | "media-bench-save"
+            | "preview-pack-bench"
+            | "preview-index-refresh-bench"
+            | "hbmame-metadata-from-library"
+            | "library-scan-bench"
+            | "launch-prep-bench"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +205,19 @@ mod tests {
         assert!(!requires_display_owner("library-refresh"));
         assert!(!requires_display_owner("library-sql"));
         assert!(!requires_display_owner("read"));
+    }
+
+    #[test]
+    fn process_exclusive_guard_blocks_managed_commands_only() {
+        assert!(requires_process_exclusive("ui"));
+        assert!(requires_process_exclusive("early-black"));
+        assert!(requires_process_exclusive("library-refresh"));
+        assert!(requires_process_exclusive("repair-catalog-projections"));
+        assert!(requires_process_exclusive("reset-delete-database"));
+        assert!(!requires_process_exclusive("library-sql"));
+        assert!(!requires_process_exclusive("read"));
+        assert!(!requires_process_exclusive("vsync-probe"));
+        assert!(!requires_process_exclusive("cpu-profile-smoke"));
     }
 
     #[test]
