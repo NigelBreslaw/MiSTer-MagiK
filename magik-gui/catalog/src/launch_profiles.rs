@@ -573,13 +573,18 @@ fn runtime_profile_plan_for_game_dir_header_fast(
 ) -> RuntimeProfilePlan {
     let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
     let decision = match exact_or_alias_candidates.as_slice() {
-        [candidate]
-            if runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
-                .is_some() =>
-        {
+        [] => RuntimeProfileDecision::NoInstalledCore,
+        [candidate] => {
             runtime_profile_decision_for_named_candidate_without_payload_probe(&game_dir, candidate)
         }
-        _ => runtime_profile_plan_for_game_dir_header(game_dir.clone(), cores).decision,
+        candidates => RuntimeProfileDecision::Ambiguous {
+            core_ids: candidates
+                .iter()
+                .map(|candidate| candidate.core.core_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        },
     };
     RuntimeProfilePlan {
         game_dir_name: game_dir.name,
@@ -670,13 +675,7 @@ fn runtime_profile_decision_for_named_candidate_without_payload_probe(
                 )),
             }
         })
-        .unwrap_or_else(|| {
-            runtime_profile_plan_for_game_dir(
-                catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone()),
-                std::slice::from_ref(candidate.core),
-            )
-            .decision
-        })
+        .unwrap_or(RuntimeProfileDecision::NoKnownPayloadExtension)
 }
 
 struct RuntimeCoreCandidate<'a> {
@@ -718,8 +717,13 @@ const RUNTIME_PROFILE_HINTS: &[RuntimeProfileHint] = &[
         extensions: &["lnx"],
     },
     RuntimeProfileHint {
-        names: &["coleco"],
+        names: &["bbcmicro"],
         core_alias: None,
+        extensions: &["ssd"],
+    },
+    RuntimeProfileHint {
+        names: &["coleco"],
+        core_alias: Some("ColecoVision"),
         extensions: &["col", "rom"],
     },
     RuntimeProfileHint {
