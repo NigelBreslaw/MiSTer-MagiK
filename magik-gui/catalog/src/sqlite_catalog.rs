@@ -1843,10 +1843,13 @@ fn write_sqlite_scan_with_sources_inner(
             title TEXT NOT NULL,
             system_string_id INTEGER NOT NULL,
             manufacturer_string_id INTEGER,
-            genre_string_id INTEGER,
+            genre_string_id INTEGER
+        );
+        CREATE TABLE game_detail_rows (
+            game_key_id INTEGER PRIMARY KEY,
             year INTEGER,
             discovered_at_unix INTEGER
-        );
+        ) WITHOUT ROWID;
         CREATE TABLE path_chunks (
             chunk_id INTEGER PRIMARY KEY,
             uncompressed_len INTEGER NOT NULL,
@@ -1944,8 +1947,8 @@ fn write_sqlite_scan_with_sources_inner(
                    system_values.value AS system_id,
                    manufacturer_values.value AS manufacturer,
                    genre_values.value AS genre,
-                   game_rows.year,
-                   game_rows.discovered_at_unix
+                   game_detail_rows.year,
+                   game_detail_rows.discovered_at_unix
             FROM game_rows
             JOIN string_values game_id_kind_values
                  ON game_id_kind_values.string_id = game_rows.game_id_kind_string_id
@@ -1956,7 +1959,9 @@ fn write_sqlite_scan_with_sources_inner(
             LEFT JOIN string_values manufacturer_values
                  ON manufacturer_values.string_id = game_rows.manufacturer_string_id
             LEFT JOIN string_values genre_values
-                 ON genre_values.string_id = game_rows.genre_string_id;
+                 ON genre_values.string_id = game_rows.genre_string_id
+            LEFT JOIN game_detail_rows
+                 ON game_detail_rows.game_key_id = game_rows.game_key_id;
         CREATE VIEW launch_plans AS
             WITH expanded AS (
                 SELECT lt.*,
@@ -2099,14 +2104,15 @@ fn write_sqlite_scan_with_sources_inner(
                    launcher_catalog_rows.preview_asset_key,
                    launcher_catalog_rows.has_preview,
                    games.system_id,
-                   game_rows.year,
+                   game_detail_rows.year,
                    games.manufacturer,
                    games.genre AS category,
-                   game_rows.discovered_at_unix
+                   game_detail_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
             JOIN game_rows ON game_rows.game_key_id = launch_target_rows.launch_id
-            JOIN games ON games.game_key_id = launch_target_rows.launch_id;
+            JOIN games ON games.game_key_id = launch_target_rows.launch_id
+            LEFT JOIN game_detail_rows ON game_detail_rows.game_key_id = launch_target_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
@@ -2137,10 +2143,10 @@ fn write_sqlite_scan_with_sources_inner(
                    ui_arcade_variants.preview_asset_key,
                    ui_arcade_variants.has_preview,
                    games.system_id,
-                   COALESCE(i.year, game_rows.year) AS year,
+                   COALESCE(i.year, game_detail_rows.year) AS year,
                    COALESCE(i.manufacturer, games.manufacturer) AS manufacturer,
                    COALESCE(i.category, games.genre) AS category,
-                   game_rows.discovered_at_unix,
+                   game_detail_rows.discovered_at_unix,
                    i.identity_id,
                    CASE
                        WHEN i.identity_id IS NOT NULL
@@ -2161,6 +2167,8 @@ fn write_sqlite_scan_with_sources_inner(
             LEFT JOIN launchable_identities i
               ON i.game_key_id = lt.launch_id
              AND i.namespace = 'mame'
+            LEFT JOIN game_detail_rows
+              ON game_detail_rows.game_key_id = lt.launch_id
             JOIN launch_plans ON launch_plans.launch_id = ui_arcade_variants.launch_id;
         CREATE VIEW ui_arcade_preferred_text AS
             SELECT ui_arcade_preferred.ordinal,
@@ -2350,10 +2358,16 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,system_string_id,manufacturer_string_id,genre_string_id,year,discovered_at_unix)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,system_string_id,manufacturer_string_id,genre_string_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
+        let mut game_detail_stmt = tx
+            .prepare(
+                "INSERT INTO game_detail_rows(game_key_id,year,discovered_at_unix)
+                 VALUES (?1,?2,?3)",
+            )
+            .map_err(|e| format!("prepare game detail insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
                 "INSERT INTO launch_target_rows(launch_id,profile_string_id,launch_kind_string_id,source_path_id,launch_ref_kind_string_id,launch_path_id,launcher_path_id,payload_path_id,core_string_id,hardware_string_id,setname,parent,mount_kind_string_id,mount_index,delay_secs,confidence_string_id)
@@ -2427,11 +2441,18 @@ fn write_sqlite_scan_with_sources_inner(
                     discovery.title.as_str(),
                     string_interner.intern(system_id.as_str()),
                     string_interner.intern_optional(discovery.manufacturer.as_deref()),
-                    string_interner.intern_optional(discovery.genre.as_deref()),
-                    discovery.year.map(|n| n as i64),
-                    discovered_at_unix
+                    string_interner.intern_optional(discovery.genre.as_deref())
                 ])
                 .map_err(|e| format!("insert game: {e}"))?;
+            if discovery.year.is_some() || discovered_at_unix.is_some() {
+                game_detail_stmt
+                    .execute(params![
+                        game_key_id,
+                        discovery.year.map(|n| n as i64),
+                        discovered_at_unix
+                    ])
+                    .map_err(|e| format!("insert game detail: {e}"))?;
+            }
             let launcher_path = match discovery.source_kind {
                 DiscoverySourceKind::Mra | DiscoverySourceKind::Mgl => {
                     Some(discovery.launch_ref.as_str())
