@@ -724,6 +724,7 @@ impl LauncherIdleInput {
 }
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
+const CATALOG_BACKGROUND_IDLE_SETTLE: Duration = Duration::from_millis(2000);
 const HOME_SIDE_LABEL_W: usize = 56;
 const HOME_LAYOUT_PADDING: usize = 18;
 const HOME_HEADER_H: usize = 42;
@@ -782,6 +783,95 @@ fn expand_home_pan_dirty_rect(
 
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
     Duration::from_micros(pacer.period_us().max(1))
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CatalogBackgroundIdleInput {
+    first_visible_copy_done: bool,
+    startup_return_waiting_for_catalog: bool,
+    startup_input_enabled: bool,
+    launching: bool,
+    setup_active: bool,
+    benchmark_active: bool,
+    scripted_input_active: bool,
+    pad_changed: bool,
+    pad_active: bool,
+    catalog_messages_active: bool,
+    media_message_seen: bool,
+    nav_motion_active: bool,
+    preview_critical: bool,
+}
+
+impl CatalogBackgroundIdleInput {
+    fn is_idle(self) -> bool {
+        (self.first_visible_copy_done || self.startup_return_waiting_for_catalog)
+            && self.startup_input_enabled
+            && !self.launching
+            && !self.setup_active
+            && !self.benchmark_active
+            && !self.scripted_input_active
+            && !self.pad_changed
+            && !self.pad_active
+            && !self.catalog_messages_active
+            && !self.media_message_seen
+            && !self.nav_motion_active
+            && !self.preview_critical
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CatalogBackgroundIdleGate {
+    idle_since: Option<Instant>,
+    settle: Duration,
+}
+
+impl CatalogBackgroundIdleGate {
+    fn new(settle: Duration) -> Self {
+        Self {
+            idle_since: None,
+            settle,
+        }
+    }
+
+    fn allow(&mut self, input: CatalogBackgroundIdleInput, now: Instant) -> bool {
+        if !input.is_idle() {
+            self.idle_since = None;
+            return false;
+        }
+        let since = *self.idle_since.get_or_insert(now);
+        now.saturating_duration_since(since) >= self.settle
+    }
+}
+
+fn pad_state_has_active_input(state: &PadState) -> bool {
+    state.dpad_up
+        || state.dpad_down
+        || state.dpad_left
+        || state.dpad_right
+        || state.btn_a
+        || state.btn_b
+        || state.btn_x
+        || state.btn_y
+        || state.btn_l
+        || state.btn_r
+        || state.btn_zl
+        || state.btn_zr
+        || state.btn_select
+        || state.btn_start
+        || state.btn_l3
+        || state.btn_r3
+        || state.btn_home
+        || state.btn_capture
+        || state.left_x.abs() > 0.0
+        || state.left_y.abs() > 0.0
+        || state.right_x.abs() > 0.0
+        || state.right_y.abs() > 0.0
+}
+
+fn catalog_background_nav_motion_active(nav: &LauncherNav) -> bool {
+    nav.arcade.has_scroll_motion_or_queue()
+        || nav.arcade.is_scroll_active()
+        || (nav.arcade_filter.drawer_open && nav.arcade_filter.is_scroll_active())
 }
 
 fn catalog_from_summary(
@@ -946,6 +1036,8 @@ pub(super) fn run_launcher_loop(
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
     let mut catalog_ready_deferred_since: Option<Instant> = None;
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
+    let mut catalog_background_idle_gate =
+        CatalogBackgroundIdleGate::new(CATALOG_BACKGROUND_IDLE_SETTLE);
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
     let mut preview_systems_entered = BTreeSet::new();
@@ -1531,10 +1623,32 @@ pub(super) fn run_launcher_loop(
         let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
         let catalog_worker_delay =
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay());
+        let pad_changed_for_background = pad_changed_for_input.unwrap_or(false);
+        let catalog_background_allowed = catalog_background_idle_gate.allow(
+            CatalogBackgroundIdleInput {
+                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+                startup_return_waiting_for_catalog,
+                startup_input_enabled: lifecycle.startup_input_enabled(),
+                launching,
+                setup_active,
+                benchmark_active: launcher_bench_active,
+                scripted_input_active: launcher_input_script.active(),
+                pad_changed: pad_changed_for_background,
+                pad_active: pad_state_has_active_input(pad.state()),
+                catalog_messages_active: pending_catalog_ready.is_some()
+                    || !deferred_catalog_events.is_empty(),
+                media_message_seen: false,
+                nav_motion_active: catalog_background_nav_motion_active(&nav),
+                preview_critical: nav.screen == Screen::Arcade
+                    && selected_arcade_game_has_preview(&nav, &catalog)
+                    && !matches!(preview.trace_cache_state(), "exact" | "empty"),
+            },
+            loop_start,
+        );
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
-            catalog_background_work_allowed(&nav),
+            catalog_background_allowed,
             loop_start,
             catalog_worker_delay,
         ) {
@@ -3698,11 +3812,6 @@ fn summary_seed_catalog_worker_initial_cache(
     }
 }
 
-fn catalog_background_work_allowed(nav: &LauncherNav) -> bool {
-    nav.screen != Screen::Arcade
-        || (!nav.arcade.has_scroll_motion_or_queue() && !nav.arcade.is_scroll_active())
-}
-
 fn launcher_bench_initial_preview_ready(
     scenario: LauncherBenchScenario,
     preview_cache_state: &str,
@@ -4755,26 +4864,67 @@ mod tests {
         );
     }
 
-    #[test]
-    pub(super) fn catalog_background_work_waits_while_arcade_scrolls() {
-        let now = Instant::now();
-        let mut nav = LauncherNav::new();
-        assert!(catalog_background_work_allowed(&nav));
-
-        nav.screen = Screen::Arcade;
-        assert!(catalog_background_work_allowed(&nav));
-
-        nav.arcade.handle_direction_input(1, 0, now, 2);
-        assert!(!catalog_background_work_allowed(&nav));
+    fn idle_catalog_background_input() -> CatalogBackgroundIdleInput {
+        CatalogBackgroundIdleInput {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            ..CatalogBackgroundIdleInput::default()
+        }
     }
 
     #[test]
-    pub(super) fn catalog_background_work_runs_on_non_arcade_screens() {
+    pub(super) fn catalog_background_worker_requires_continuous_idle_settle() {
         let now = Instant::now();
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Home;
-        nav.arcade.handle_direction_input(1, 0, now, 2);
+        let mut gate = CatalogBackgroundIdleGate::new(Duration::from_secs(2));
+        let input = idle_catalog_background_input();
 
-        assert!(catalog_background_work_allowed(&nav));
+        assert!(!gate.allow(input, now));
+        assert!(!gate.allow(input, now + Duration::from_millis(500)));
+        assert!(gate.allow(input, now + Duration::from_millis(2000)));
+    }
+
+    #[test]
+    pub(super) fn catalog_background_worker_resets_on_human_sized_pause_activity() {
+        let now = Instant::now();
+        let mut gate = CatalogBackgroundIdleGate::new(Duration::from_secs(2));
+        let input = idle_catalog_background_input();
+
+        assert!(!gate.allow(input, now));
+        assert!(!gate.allow(input, now + Duration::from_millis(1900)));
+        assert!(!gate.allow(
+            CatalogBackgroundIdleInput {
+                pad_changed: true,
+                ..input
+            },
+            now + Duration::from_millis(1901)
+        ));
+        assert!(!gate.allow(input, now + Duration::from_millis(2401)));
+        assert!(gate.allow(input, now + Duration::from_millis(4401)));
+    }
+
+    #[test]
+    pub(super) fn catalog_background_worker_blocks_global_activity() {
+        let now = Instant::now();
+        for active in [
+            CatalogBackgroundIdleInput {
+                benchmark_active: true,
+                ..idle_catalog_background_input()
+            },
+            CatalogBackgroundIdleInput {
+                scripted_input_active: true,
+                ..idle_catalog_background_input()
+            },
+            CatalogBackgroundIdleInput {
+                nav_motion_active: true,
+                ..idle_catalog_background_input()
+            },
+            CatalogBackgroundIdleInput {
+                preview_critical: true,
+                ..idle_catalog_background_input()
+            },
+        ] {
+            let mut gate = CatalogBackgroundIdleGate::new(Duration::from_secs(2));
+            assert!(!gate.allow(active, now + Duration::from_secs(3)));
+        }
     }
 }
