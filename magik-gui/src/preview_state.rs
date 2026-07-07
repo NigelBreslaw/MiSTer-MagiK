@@ -480,20 +480,28 @@ impl PreviewState {
             || self.current_generation != 0
             || self.has_visible_preview
         {
+            let fade_raw_preview_to_empty =
+                self.has_visible_preview || !self.visible_preview_key.is_empty();
             self.selected_mra_path = None;
             self.selected_preview_key = None;
             self.current_generation = 0;
-            self.has_visible_preview = false;
-            self.visible_preview_key.clear();
-            self.visible_preview_load_source = "none";
-            self.previous_image = None;
-            self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-            self.raw_transition_duration_divisor = 1;
+            if fade_raw_preview_to_empty {
+                // The direct-preview backing is separate from Slint state; clearing
+                // the bridge alone would leave the previous screenshot pixels live.
+                self.begin_raw_transition_to_empty(PreviewTransitionPace::Normal);
+            } else {
+                self.has_visible_preview = false;
+                self.visible_preview_key.clear();
+                self.visible_preview_load_source = "none";
+                self.previous_image = None;
+                self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
+                self.raw_transition_duration_divisor = 1;
+                self.raw_dirty = false;
+            }
             self.window_preview_keys.clear();
             self.window_shape = None;
             self.pending_prefetch_keys.clear();
             self.ready_backlog.clear();
-            self.raw_dirty = false;
             self.last_prefetch_selected = None;
             self.prefetch_direction = 0;
             self.last_prefetch_window = None;
@@ -1903,6 +1911,12 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_runner::ui_platform::MisterPlatform;
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use slint::ComponentHandle;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Once;
 
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
@@ -2242,6 +2256,54 @@ mod tests {
         assert!(preview
             .pending_prefetch_keys
             .contains(&game_preview_key(&games[2]).unwrap()));
+    }
+
+    #[test]
+    fn selected_row_without_preview_fades_visible_raw_preview_to_empty() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let games = vec![
+            preview_game("With Preview", "with-preview.mra", "with-preview.png", true),
+            preview_game("No Preview", "no-preview.mra", "", false),
+            preview_game("Neighbor Preview", "neighbor.mra", "neighbor.png", true),
+        ];
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            game_preview_key(&games[0]).expect("visible preview key"),
+            preview_image(0xf800),
+            &[],
+            None,
+        );
+        preview.selected_mra_path = Some(games[0].mra_path.to_string());
+        preview.selected_preview_key = game_preview_key(&games[0]);
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = preview
+            .selected_preview_key
+            .clone()
+            .expect("selected preview key");
+
+        let changed = request_arcade_preview_window(
+            &bridge,
+            ArcadeGameView::contiguous(&games),
+            1,
+            &mut preview,
+            false,
+            false,
+        );
+
+        assert!(changed);
+        assert_eq!(preview.selected_mra_path.as_deref(), Some("no-preview.mra"));
+        assert_eq!(preview.selected_preview_key, None);
+        assert!(!preview.has_visible_preview);
+        assert!(preview.visible_preview_key.is_empty());
+        assert!(preview.raw_dirty());
+        assert_eq!(bridge.get_arcade_preview_status(), PreviewStatus::Empty);
+        let frame = preview
+            .raw_transition_frame()
+            .expect("empty raw transition frame");
+        assert!(frame.previous.is_some());
+        assert!(matches!(frame.current.pixels, PreviewRawPixels::Empty));
     }
 
     #[test]
@@ -2678,5 +2740,18 @@ mod tests {
             category: "".into(),
             is_new: false,
         }
+    }
+
+    fn init_test_slint_platform() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+            let _ = slint::platform::set_platform(Box::new(MisterPlatform {
+                window,
+                start: Instant::now(),
+                fixed_time,
+            }));
+        });
     }
 }
