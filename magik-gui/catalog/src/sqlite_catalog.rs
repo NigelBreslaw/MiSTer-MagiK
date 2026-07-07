@@ -2080,12 +2080,9 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE TABLE launcher_catalog_rows (
             ordinal INTEGER PRIMARY KEY,
             launch_id INTEGER NOT NULL,
-            preview_asset_key TEXT NOT NULL
-        );
-        CREATE TABLE launcher_preview_rows (
-            launch_id INTEGER PRIMARY KEY,
+            preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL
-        ) WITHOUT ROWID;
+        );
         CREATE VIEW launcher_catalog AS
             SELECT ui_arcade_preferred_text.ordinal,
                    ui_arcade_preferred_text.launch_id,
@@ -2105,7 +2102,7 @@ fn write_sqlite_scan_with_sources_inner(
                    game_rows.title,
                    lower(game_rows.title) AS sort_title,
                    launcher_catalog_rows.preview_asset_key,
-                   COALESCE(launcher_preview_rows.has_preview, 0) AS has_preview,
+                   launcher_catalog_rows.has_preview,
                    games.system_id,
                    game_detail_rows.year,
                    games.manufacturer,
@@ -2115,8 +2112,7 @@ fn write_sqlite_scan_with_sources_inner(
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
             JOIN game_rows ON game_rows.game_key_id = launch_target_rows.launch_id
             JOIN games ON games.game_key_id = launch_target_rows.launch_id
-            LEFT JOIN game_detail_rows ON game_detail_rows.game_key_id = launch_target_rows.launch_id
-            LEFT JOIN launcher_preview_rows ON launcher_preview_rows.launch_id = launcher_catalog_rows.launch_id;
+            LEFT JOIN game_detail_rows ON game_detail_rows.game_key_id = launch_target_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
@@ -2256,13 +2252,13 @@ fn write_sqlite_scan_with_sources_inner(
             PRIMARY KEY(list_name, file_path, size, mtime_secs)
         ) WITHOUT ROWID;
         CREATE TABLE catalog_stamp (
-            ordinal INTEGER PRIMARY KEY,
-            line TEXT NOT NULL
-        );
+            id INTEGER PRIMARY KEY CHECK (id=0),
+            bytes BLOB NOT NULL
+        ) WITHOUT ROWID;
         CREATE TABLE catalog_discovery_checkpoint (
-            ordinal INTEGER PRIMARY KEY,
-            line TEXT NOT NULL
-        );
+            id INTEGER PRIMARY KEY CHECK (id=0),
+            bytes BLOB NOT NULL
+        ) WITHOUT ROWID;
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
@@ -3070,16 +3066,14 @@ fn update_preview_candidates(
 ) -> Result<usize, String> {
     let sql = if has_index {
         if table == "launcher_catalog_rows" {
-            "INSERT INTO launcher_preview_rows(launch_id,has_preview)
-             SELECT launcher_catalog_rows.launch_id,
-                    CASE
+            "UPDATE launcher_catalog_rows
+             SET has_preview = CASE
                  WHEN EXISTS (
                      SELECT 1
                      FROM preview_index_keys k
                      WHERE k.asset_key = lower(launcher_catalog_rows.preview_asset_key)
                  )
                  THEN 1 ELSE 0 END
-             FROM launcher_catalog_rows
              WHERE launcher_catalog_rows.preview_asset_key != ''
                AND EXISTS (
                    SELECT 1
@@ -3087,8 +3081,7 @@ fn update_preview_candidates(
                    JOIN games ON games.game_key_id = launch_targets.game_key_id
                    WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
                      AND games.system_id=?1
-               )
-             ON CONFLICT(launch_id) DO UPDATE SET has_preview=excluded.has_preview"
+               )"
             .to_string()
         } else {
             format!(
@@ -3106,9 +3099,8 @@ fn update_preview_candidates(
         }
     } else {
         if table == "launcher_catalog_rows" {
-            "INSERT INTO launcher_preview_rows(launch_id,has_preview)
-             SELECT launcher_catalog_rows.launch_id, 0
-             FROM launcher_catalog_rows
+            "UPDATE launcher_catalog_rows
+             SET has_preview = 0
              WHERE launcher_catalog_rows.preview_asset_key != ''
                AND EXISTS (
                    SELECT 1
@@ -3116,8 +3108,7 @@ fn update_preview_candidates(
                    JOIN games ON games.game_key_id = launch_targets.game_key_id
                    WHERE launch_targets.launch_id = launcher_catalog_rows.launch_id
                      AND games.system_id=?1
-               )
-             ON CONFLICT(launch_id) DO UPDATE SET has_preview=excluded.has_preview"
+               )"
             .to_string()
         } else {
             format!(

@@ -441,30 +441,20 @@ pub(crate) fn insert_console_launcher_catalog(
     let launcher_games = collapse_catalog_variant_rows(rows);
     let mut launcher_stmt = tx
         .prepare(
-            "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key)
-             VALUES (?1,?2,?3)",
+            "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
+             VALUES (?1,?2,?3,?4)",
         )
         .map_err(|e| format!("prepare launcher catalog insert: {e}"))?;
-    let mut preview_stmt = tx
-        .prepare(
-            "INSERT INTO launcher_preview_rows(launch_id,has_preview)
-             VALUES (?1,?2)",
-        )
-        .map_err(|e| format!("prepare launcher preview insert: {e}"))?;
     for (idx, row) in launcher_games.iter().enumerate() {
         let game = &row.game;
         launcher_stmt
             .execute(params![
                 ordinal_offset + idx as i64,
                 row.launch_id,
-                game.preview_asset_key.as_ref()
+                game.preview_asset_key.as_ref(),
+                if game.has_preview { 1 } else { 0 }
             ])
             .map_err(|e| format!("insert launcher catalog: {e}"))?;
-        if !game.preview_asset_key.is_empty() {
-            preview_stmt
-                .execute(params![row.launch_id, if game.has_preview { 1 } else { 0 }])
-                .map_err(|e| format!("insert launcher preview: {e}"))?;
-        }
     }
     Ok(launcher_games.len())
 }
