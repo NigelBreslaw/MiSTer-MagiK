@@ -131,7 +131,9 @@ pub(crate) fn catalog_from_projection_rows(
     mut rows: Vec<CatalogProjectionRow>,
 ) -> ArcadeCatalog {
     rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-    let games = collapse_catalog_variants(rows);
+    let mut rows = collapse_catalog_variant_rows(rows);
+    sort_catalog_projection_rows(&mut rows);
+    let games: Vec<ArcadeGameEntry> = rows.into_iter().map(|row| row.game).collect();
     let systems = arcade_catalog::systems_from_games(&games);
     ArcadeCatalog::new(root.as_ref().to_path_buf(), games, systems)
 }
@@ -162,6 +164,15 @@ pub(crate) fn collapse_catalog_variant_rows(
     }
 
     out
+}
+
+fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
+    rows.sort_by_cached_key(|row| {
+        (
+            row.game.title.to_ascii_lowercase(),
+            row.game.mra_path.to_ascii_lowercase(),
+        )
+    });
 }
 
 fn catalog_variant_group_key(row: &CatalogProjectionRow) -> String {
@@ -438,7 +449,8 @@ pub(crate) fn insert_console_launcher_catalog(
         )
         .map_err(|e| format!("query launcher catalog offset: {e}"))?;
     rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-    let launcher_games = collapse_catalog_variant_rows(rows);
+    let mut launcher_games = collapse_catalog_variant_rows(rows);
+    sort_catalog_projection_rows(&mut launcher_games);
     let mut launcher_stmt = tx
         .prepare(
             "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
@@ -530,6 +542,30 @@ mod tests {
         assert!(games
             .iter()
             .any(|game| game.title.as_ref() == "Alien Breed"));
+    }
+
+    #[test]
+    fn collapsed_projection_rows_are_sorted_by_final_visible_title() {
+        let rows = vec![
+            CatalogProjectionRow {
+                family_key: Some("mame-software:megadrive:another-world".to_string()),
+                ..catalog_entry_row("Another World", "/z/Another World.md")
+            },
+            catalog_entry_row("Aq Renkan Awa", "/m/Aq Renkan Awa.md"),
+            CatalogProjectionRow {
+                family_key: Some("mame-software:megadrive:another-world".to_string()),
+                ..catalog_entry_row("Out of This World", "/a/Out of This World.md")
+            },
+        ];
+
+        let catalog = catalog_from_projection_rows("/media/fat/_Arcade", rows);
+        let titles = catalog
+            .system_games("amiga")
+            .into_iter()
+            .map(|game| game.title.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(titles, ["Aq Renkan Awa", "Out of This World"]);
     }
 
     #[test]
