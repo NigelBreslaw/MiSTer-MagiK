@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
+pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
+
 #[derive(Default)]
 pub(super) struct CatalogJobEventBuf {
     events: Vec<CatalogWorkerMessage>,
@@ -22,6 +25,11 @@ impl CatalogJobEventBuf {
 
     pub(super) fn drain(&mut self) -> impl Iterator<Item = CatalogWorkerMessage> + '_ {
         self.events.drain(..)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.events.len()
     }
 
     #[cfg(test)]
@@ -52,6 +60,11 @@ impl MediaJobEventBuf {
 
     pub(super) fn drain(&mut self) -> impl Iterator<Item = MediaWorkerMessage> + '_ {
         self.events.drain(..)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.events.len()
     }
 
     #[cfg(test)]
@@ -103,7 +116,10 @@ impl LauncherScheduler {
     pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {
         out.clear();
         if let CatalogJobState::Running(rx) = &self.catalog {
-            while let Ok(message) = rx.try_recv() {
+            for _ in 0..CATALOG_MESSAGES_PER_FRAME {
+                let Ok(message) = rx.try_recv() else {
+                    break;
+                };
                 out.push(message);
             }
         }
@@ -170,7 +186,10 @@ impl LauncherScheduler {
     pub(super) fn poll_media(&mut self, out: &mut MediaJobEventBuf) {
         out.clear();
         if let MediaJobState::Running(handle) = &self.media {
-            while let Some(message) = handle.try_recv() {
+            for _ in 0..MEDIA_MESSAGES_PER_FRAME {
+                let Some(message) = handle.try_recv() else {
+                    break;
+                };
                 out.push(message);
             }
         }
@@ -267,5 +286,26 @@ mod tests {
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
         assert!(!scheduler.launch_benchmark_enabled());
+    }
+
+    #[test]
+    fn catalog_poll_is_budgeted_per_frame() {
+        let (tx, rx) = mpsc::channel();
+        for idx in 0..3 {
+            tx.send(CatalogWorkerMessage::Timing {
+                name: format!("event-{idx}"),
+                detail: String::new(),
+            })
+            .unwrap();
+        }
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx);
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(&mut events);
+        assert_eq!(events.len(), CATALOG_MESSAGES_PER_FRAME);
+
+        scheduler.poll_catalog(&mut events);
+        assert_eq!(events.len(), 1);
     }
 }
