@@ -1958,20 +1958,9 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE TABLE ui_arcade_variants (
             family_id TEXT NOT NULL,
             variant_ordinal INTEGER NOT NULL,
-            launchable_id TEXT NOT NULL,
             launch_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            sort_title TEXT NOT NULL,
             preview_asset_key TEXT NOT NULL,
             has_preview INTEGER NOT NULL,
-            system_id TEXT NOT NULL,
-            year INTEGER,
-            manufacturer TEXT,
-            category TEXT,
-            discovered_at_unix INTEGER,
-            identity_id TEXT,
-            parent_setname TEXT,
-            asset_key TEXT,
             asset_link_reason TEXT NOT NULL,
             preferred INTEGER NOT NULL,
             preferred_reason TEXT NOT NULL,
@@ -2021,9 +2010,39 @@ fn write_sqlite_scan_with_sources_inner(
             LEFT JOIN profiles ON profiles.profile_id = profile_values.value
             WHERE launch_kind_values.value = 'virtual-mgl';
         CREATE VIEW ui_arcade_variants_text AS
-            SELECT ui_arcade_variants.*,
+            SELECT ui_arcade_variants.family_id,
+                   ui_arcade_variants.variant_ordinal,
+                   games.game_id AS launchable_id,
+                   ui_arcade_variants.launch_id,
+                   game_rows.title,
+                   lower(game_rows.title) AS sort_title,
+                   ui_arcade_variants.preview_asset_key,
+                   ui_arcade_variants.has_preview,
+                   game_rows.system_id,
+                   COALESCE(i.year, game_rows.year) AS year,
+                   COALESCE(i.manufacturer, game_rows.manufacturer) AS manufacturer,
+                   COALESCE(i.category, game_rows.genre) AS category,
+                   game_rows.discovered_at_unix,
+                   i.identity_id,
+                   CASE
+                       WHEN i.identity_id IS NOT NULL
+                        AND i.family_id IS NOT NULL
+                        AND i.identity_id != i.family_id
+                       THEN i.family_id
+                       ELSE NULL
+                   END AS parent_setname,
+                   ui_arcade_variants.preview_asset_key AS asset_key,
+                   ui_arcade_variants.asset_link_reason,
+                   ui_arcade_variants.preferred,
+                   ui_arcade_variants.preferred_reason,
                    launch_plans.launch_ref AS launch_ref
             FROM ui_arcade_variants
+            JOIN launch_target_rows lt ON lt.launch_id = ui_arcade_variants.launch_id
+            JOIN game_rows ON game_rows.game_key_id = lt.game_key_id
+            JOIN games ON games.game_key_id = lt.game_key_id
+            LEFT JOIN launchable_identities i
+              ON i.game_key_id = lt.game_key_id
+             AND i.namespace = 'mame'
             JOIN launch_plans ON launch_plans.launch_id = ui_arcade_variants.launch_id;
         CREATE VIEW ui_arcade_preferred_text AS
             SELECT ui_arcade_preferred.ordinal,
