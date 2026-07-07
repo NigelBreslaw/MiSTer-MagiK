@@ -79,6 +79,7 @@ mod launcher_compositor;
 mod launcher_frame_accounting;
 mod launcher_lifecycle;
 mod launcher_loop;
+mod launcher_pacing;
 mod launcher_scheduler;
 mod launcher_worker_intents;
 mod media_worker;

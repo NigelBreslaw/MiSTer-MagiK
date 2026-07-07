@@ -2,6 +2,7 @@ use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherPresentedFrame,
 };
+use super::launcher_pacing::{LauncherFramePacingInput, LauncherFramePacingPolicy};
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -25,7 +26,6 @@ const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200)
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
-const LAUNCHER_LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 fn launcher_input_script_wait_frames() -> usize {
@@ -786,16 +786,6 @@ fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
     Duration::from_micros(pacer.period_us().max(1))
 }
 
-fn launcher_should_wait_before_late_frame_render(
-    frame_start_phase_us: u64,
-    period_us: u64,
-) -> bool {
-    if period_us <= LAUNCHER_LATE_FRAME_START_HEADROOM_US {
-        return false;
-    }
-    frame_start_phase_us >= period_us - LAUNCHER_LATE_FRAME_START_HEADROOM_US
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct CatalogBackgroundIdleInput {
     first_visible_copy_done: bool,
@@ -1134,6 +1124,7 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
+    let pacing_policy = LauncherFramePacingPolicy::default();
     let present_timing = PresentTiming::from_env();
     if launcher_bench_scenario.is_some() && !preview_archive_warm_skip_enabled() {
         let warm_t = Instant::now();
@@ -2796,11 +2787,13 @@ pub(super) fn run_launcher_loop(
         }
 
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
-        let wait_before_render = frame_accounting.first_visible_copy_done()
-            && launcher_should_wait_before_late_frame_render(
+        let wait_before_render = pacing_policy
+            .decide(LauncherFramePacingInput {
+                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
                 frame_start_phase_us,
-                pacer.period_us(),
-            );
+                period_us: pacer.period_us(),
+            })
+            .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -3978,26 +3971,6 @@ mod tests {
             .map(|system_id| arcade_system(*system_id, 1))
             .collect();
         arcade_catalog(Vec::new(), systems)
-    }
-
-    #[test]
-    fn late_frame_start_waits_before_render() {
-        assert!(launcher_should_wait_before_late_frame_render(
-            10_667, 16_667
-        ));
-        assert!(launcher_should_wait_before_late_frame_render(
-            31_000, 16_667
-        ));
-    }
-
-    #[test]
-    fn early_frame_start_keeps_render_then_vsync_order() {
-        assert!(!launcher_should_wait_before_late_frame_render(
-            10_666, 16_667
-        ));
-        assert!(!launcher_should_wait_before_late_frame_render(
-            5_000, 20_000
-        ));
     }
 
     #[test]
