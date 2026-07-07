@@ -2436,6 +2436,7 @@ pub(super) fn run_launcher_loop(
                 &mut preview,
                 defer_selected_preview,
                 nav.arcade.is_scroll_active(),
+                nav.arcade.is_turbo_active(),
             ) {
                 request_launcher_redraw!();
             }
@@ -2451,7 +2452,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &mut preview,
                 defer_selected_preview,
-                nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+                nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
             )
         {
             request_launcher_redraw!();

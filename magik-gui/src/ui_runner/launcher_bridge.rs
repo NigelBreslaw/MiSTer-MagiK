@@ -441,6 +441,7 @@ pub(super) fn sync_bridge_launcher(
             preview,
             defer_selected_preview,
             nav.arcade.is_scroll_active(),
+            nav.arcade.is_turbo_active(),
         );
     } else {
         preview.clear(&bridge);
@@ -566,6 +567,7 @@ pub(super) fn sync_bridge_launcher_light(
             preview,
             defer_selected_preview,
             nav.arcade.is_scroll_active(),
+            nav.arcade.is_turbo_active(),
         );
     } else {
         preview.clear(&bridge);

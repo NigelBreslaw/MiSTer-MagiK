@@ -418,6 +418,10 @@ impl ArcadeNav {
         !self.is_settled() || self.scroll.held_dir != 0 || self.scroll.intent_queue != 0
     }
 
+    pub fn is_turbo_active(&self) -> bool {
+        self.scroll.turbo_active
+    }
+
     pub fn has_scroll_motion_or_queue(&self) -> bool {
         !self.is_settled() || self.scroll.intent_queue != 0
     }
@@ -4349,15 +4353,28 @@ mod tests {
 
         input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(120));
         assert!(!nav.scroll.turbo_active);
+        assert!(!nav.is_turbo_active());
         assert_eq!(nav.selected, 2);
 
         let visual_before_turbo = nav.scroll.visual_px;
         input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(360));
         assert!(nav.scroll.turbo_active);
+        assert!(nav.is_turbo_active());
         assert_eq!(
             nav.scroll.visual_px,
             visual_before_turbo + ARCADE_TURBO_PX_PER_FRAME
         );
+    }
+
+    #[test]
+    fn arcade_normal_scroll_is_active_but_not_turbo() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+
+        input(&mut nav, 1, 0, 10, t0);
+
+        assert!(nav.is_scroll_active());
+        assert!(!nav.is_turbo_active());
     }
 
     #[test]
@@ -4371,6 +4388,7 @@ mod tests {
 
         for frame in 0..160 {
             nav.bench_turbo_bounce_tick(5, t0 + Duration::from_millis(frame * 16));
+            assert!(nav.is_turbo_active());
             if nav.selected == 4 {
                 saw_bottom = true;
             }
