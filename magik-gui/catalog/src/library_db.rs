@@ -1493,6 +1493,35 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn sqlite_launcher_projection_order_sorts_after_variant_collapse() {
+        let launcher_rows = vec![
+            CatalogProjectionRow {
+                family_key: Some("mame-software:megadrive:another-world".to_string()),
+                ..catalog_entry_row("Another World", "/z/Another World.md")
+            },
+            catalog_entry_row("Aq Renkan Awa", "/m/Aq Renkan Awa.md"),
+            CatalogProjectionRow {
+                family_key: Some("mame-software:megadrive:another-world".to_string()),
+                ..catalog_entry_row("Out of This World", "/a/Out of This World.md")
+            },
+        ];
+
+        let catalog = catalog_from_sqlite_launcher_projection_order(
+            "/media/fat/_Arcade",
+            Vec::new(),
+            launcher_rows,
+            Vec::new(),
+        );
+        let titles = catalog
+            .system_game_view("amiga")
+            .iter()
+            .map(|game| game.title.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(titles, ["Aq Renkan Awa", "Out of This World"]);
+    }
+
     fn raw_arcade_zip_set(path: &str, setname: &str) -> GameDiscovery {
         GameDiscovery {
             source_path: path.to_string(),
