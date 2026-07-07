@@ -131,7 +131,7 @@ fn scan_library_with_progress_and_events(
 ) -> LibraryScan {
     let discover_t = Instant::now();
     let profiles_t = Instant::now();
-    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
+    let profiles = launch_profiles::active_profiles_for_roots_fast(&cfg.roots);
     library_db::report_library_scan_timing(
         "active_profiles",
         profiles_t.elapsed().as_micros() as u64,
