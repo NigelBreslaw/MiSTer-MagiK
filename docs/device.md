@@ -178,6 +178,12 @@ live `UIO_GET_VRES` and `UIO_GET_FB_PAR` FPGA values. It touches the HPS/FPGA
 SPI path, so the host wrapper requires `--unsafe-spi` when Main or Slint owns
 `/dev/mem`. Use it as a targeted incident probe, not as a polling loop.
 
+On the current MagiK launcher path, `UIO_GET_VRES` may normally report
+`529x240` even when HDMI output is visually correct and `UIO_GET_FB_PAR` reports
+the expected `960x540` RGB565 framebuffer. This was still true after a clean
+manual reboot during the 2026-07-07 HDMI bad-state investigation. Treat
+`529x240` as context, not as a bad-state detector.
+
 ## Process And Input Gotchas
 
 - Busybox has no `pkill`; use `pidof` and `kill` through scripts.

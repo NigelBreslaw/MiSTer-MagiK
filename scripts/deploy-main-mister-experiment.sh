@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and deploy the Main-as-parent experiment:
+# Build and deploy the Main-as-parent experiment without rebooting:
 #   - magik-gui Slint binary -> /media/fat/mister-magik/mister-magik-fb
 #   - external Main fork     -> /media/fat/MiSTer_MagiK
 #   - boot config            -> stock inittab + MiSTer.ini main=MiSTer_MagiK
@@ -124,5 +124,8 @@ cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true
 "$ROOT/scripts/mister" ini-repair-boot
 "$ROOT/scripts/mister" ini-repair-arcade-video
 
-echo "==> Installed. Reboot to let stock MiSTer hand off to MiSTer_MagiK via MiSTer.ini main=."
+echo "==> Installed without rebooting."
+echo "    Activate the deployed Main fork now with:"
+echo "      scripts/mister run \"printf 'load_core menu.rbf\\n' > /dev/MiSTer_cmd\""
+echo "    Or reboot later to let stock MiSTer hand off via MiSTer.ini main=MiSTer_MagiK."
 echo "    Restore stock with scripts/restore-stock-boot.sh."
