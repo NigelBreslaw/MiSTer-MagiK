@@ -326,23 +326,6 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
 }
 
 pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
-    active_profiles_for_roots_with_runtime_planning(roots, RuntimePlanningMode::Precise)
-}
-
-pub(crate) fn active_profiles_for_roots_fast(roots: &[String]) -> Vec<LaunchProfile> {
-    active_profiles_for_roots_with_runtime_planning(roots, RuntimePlanningMode::Fast)
-}
-
-#[derive(Clone, Copy)]
-enum RuntimePlanningMode {
-    Precise,
-    Fast,
-}
-
-fn active_profiles_for_roots_with_runtime_planning(
-    roots: &[String],
-    mode: RuntimePlanningMode,
-) -> Vec<LaunchProfile> {
     let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
     let installed = installed_cores
         .iter()
@@ -353,17 +336,9 @@ fn active_profiles_for_roots_with_runtime_planning(
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    let runtime_plans = match mode {
-        RuntimePlanningMode::Precise => {
-            runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
-        }
-        RuntimePlanningMode::Fast => runtime_profile_plans_for_roots_fast_with_cores(
-            roots,
-            &installed_cores,
-            &active_game_dirs,
-        ),
-    };
-    for plan in runtime_plans {
+    for plan in
+        runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
+    {
         let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
             continue;
         };
@@ -501,17 +476,6 @@ fn runtime_profile_plans_for_roots_with_cores(
         .collect()
 }
 
-fn runtime_profile_plans_for_roots_fast_with_cores(
-    roots: &[String],
-    cores: &[catalog_discovery::InstalledCore],
-    active_game_dirs: &BTreeSet<String>,
-) -> Vec<RuntimeProfilePlan> {
-    catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, active_game_dirs)
-        .into_iter()
-        .map(|game_dir| runtime_profile_plan_for_game_dir_header_fast(game_dir, cores))
-        .collect()
-}
-
 #[cfg(test)]
 fn runtime_profile_plans_for_roots(roots: &[String]) -> Vec<RuntimeProfilePlan> {
     let cores = catalog_discovery::installed_cores_for_roots(roots);
@@ -560,41 +524,6 @@ fn runtime_profile_plan_for_game_dir_header(
                 RuntimeProfileDecision::EmptyOrMediaOnly
             }
         }
-    };
-    RuntimeProfilePlan {
-        game_dir_name: game_dir.name,
-        decision,
-    }
-}
-
-fn runtime_profile_plan_for_game_dir_header_fast(
-    game_dir: catalog_discovery::GameDirHeader,
-    cores: &[catalog_discovery::InstalledCore],
-) -> RuntimeProfilePlan {
-    let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
-    let decision = match exact_or_alias_candidates.as_slice() {
-        [] => RuntimeProfileDecision::NoInstalledCore,
-        [candidate]
-            if runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
-                .is_some() =>
-        {
-            runtime_profile_decision_for_named_candidate_without_payload_probe(&game_dir, candidate)
-        }
-        [candidate] => {
-            runtime_profile_plan_for_game_dir(
-                catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone()),
-                std::slice::from_ref(candidate.core),
-            )
-            .decision
-        }
-        candidates => RuntimeProfileDecision::Ambiguous {
-            core_ids: candidates
-                .iter()
-                .map(|candidate| candidate.core.core_id.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect(),
-        },
     };
     RuntimeProfilePlan {
         game_dir_name: game_dir.name,
@@ -669,21 +598,6 @@ fn runtime_profile_decision_for_named_candidate(
                 }
             })
     }
-}
-
-fn runtime_profile_decision_for_named_candidate_without_payload_probe(
-    game_dir: &catalog_discovery::GameDirHeader,
-    candidate: &RuntimeCoreCandidate<'_>,
-) -> RuntimeProfileDecision {
-    runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
-        .map(|extensions| RuntimeProfileDecision::Catalogable {
-            profile: Box::new(runtime_profile_for_extensions(
-                game_dir,
-                candidate.core,
-                extensions,
-            )),
-        })
-        .unwrap_or(RuntimeProfileDecision::NoKnownPayloadExtension)
 }
 
 struct RuntimeCoreCandidate<'a> {
