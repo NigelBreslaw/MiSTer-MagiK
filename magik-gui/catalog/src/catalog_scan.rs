@@ -827,7 +827,7 @@ mod tests {
         save_sqlite_scan(&db, &scan).expect("save limited but usable sqlite catalog");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let duplicate_profiles: i64 = conn
             .query_row(
                 "SELECT count(*) FROM (
@@ -1232,7 +1232,7 @@ mod tests {
         }));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let systems: i64 = conn
             .query_row(
                 "SELECT count(*) FROM systems WHERE system_id='gameboy'",
@@ -1297,7 +1297,7 @@ mod tests {
             .all(|discovery| !discovery.launch_ref.ends_with("metadata.xml")));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let systems: i64 = conn
             .query_row(
                 "SELECT count(*) FROM systems WHERE system_id='bbcmicro'",
@@ -1344,7 +1344,7 @@ mod tests {
             .all(|profile| profile.id != "runtime-gameboy"));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let systems: i64 = conn
             .query_row(
                 "SELECT count(*) FROM systems WHERE system_id='gameboy'",
@@ -1394,7 +1394,7 @@ mod tests {
         }));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let systems: i64 = conn
             .query_row(
                 "SELECT count(*) FROM systems WHERE system_id='colecovision'",
@@ -1455,7 +1455,7 @@ mod tests {
             .all(|discovery| !discovery.launch_ref.ends_with("support.rom")));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let systems: i64 = conn
             .query_row(
                 "SELECT count(*) FROM systems WHERE system_id='zx-spectrum'",
@@ -1516,7 +1516,7 @@ mod tests {
         }));
 
         save_sqlite_scan(&db, &scan).expect("save sqlite");
-        let conn = rusqlite::Connection::open(&db).expect("open sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open sqlite");
         let launch_target: (String, i64, i64) = conn
             .query_row(
                 "SELECT launch_targets.mount_kind,

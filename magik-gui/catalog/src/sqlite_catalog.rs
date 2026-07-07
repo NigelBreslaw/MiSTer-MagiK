@@ -39,24 +39,24 @@ use crate::software_identity::{
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     PreviewArchivePaths, SoftwareHashCache,
 };
+use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
+const SQLITE_PATH_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Default)]
 struct SqlitePathInterner {
-    prefixes: HashMap<String, i64>,
     values: HashMap<String, i64>,
-    prefix_rows: Vec<(i64, String)>,
-    value_rows: Vec<(i64, i64, String)>,
-    next_prefix_id: i64,
+    rows: Vec<(i64, String)>,
     next_path_id: i64,
 }
 
@@ -107,49 +107,130 @@ impl SqlitePathInterner {
         if let Some(id) = self.values.get(value).copied() {
             return id;
         }
-        let (prefix, leaf) = split_path_for_storage(value);
-        let prefix_id = self.intern_prefix(prefix);
         self.next_path_id += 1;
         let path_id = self.next_path_id;
         self.values.insert(value.to_string(), path_id);
-        self.value_rows.push((path_id, prefix_id, leaf.to_string()));
+        self.rows.push((path_id, value.to_string()));
         path_id
     }
 
-    fn intern_prefix(&mut self, prefix: &str) -> i64 {
-        if let Some(id) = self.prefixes.get(prefix).copied() {
-            return id;
-        }
-        self.next_prefix_id += 1;
-        let prefix_id = self.next_prefix_id;
-        self.prefixes.insert(prefix.to_string(), prefix_id);
-        self.prefix_rows.push((prefix_id, prefix.to_string()));
-        prefix_id
-    }
-
     fn flush(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
-        let mut prefix_stmt = tx
-            .prepare("INSERT INTO path_prefixes(prefix_id,prefix) VALUES (?1,?2)")
-            .map_err(|e| format!("prepare path prefix insert: {e}"))?;
-        for (prefix_id, prefix) in &self.prefix_rows {
-            prefix_stmt
-                .execute(params![prefix_id, prefix])
-                .map_err(|e| format!("insert path prefix: {e}"))?;
-        }
-        drop(prefix_stmt);
-
         let mut value_stmt = tx
-            .prepare("INSERT INTO path_values(path_id,prefix_id,leaf) VALUES (?1,?2,?3)")
+            .prepare("INSERT INTO path_values(path_id,chunk_id,offset,len) VALUES (?1,?2,?3,?4)")
             .map_err(|e| format!("prepare path value insert: {e}"))?;
-        for (path_id, prefix_id, leaf) in &self.value_rows {
-            value_stmt
-                .execute(params![path_id, prefix_id, leaf])
-                .map_err(|e| format!("insert path value: {e}"))?;
+        let mut chunk_stmt = tx
+            .prepare("INSERT INTO path_chunks(chunk_id,uncompressed_len,bytes) VALUES (?1,?2,?3)")
+            .map_err(|e| format!("prepare path chunk insert: {e}"))?;
+        let mut chunk_id = 0_i64;
+        let mut chunk = Vec::with_capacity(SQLITE_PATH_CHUNK_BYTES);
+        let mut pending_values = Vec::new();
+        for (path_id, path) in &self.rows {
+            let bytes = path.as_bytes();
+            if !chunk.is_empty() && chunk.len() + bytes.len() > SQLITE_PATH_CHUNK_BYTES {
+                flush_path_chunk(
+                    &mut chunk_stmt,
+                    &mut value_stmt,
+                    chunk_id,
+                    &chunk,
+                    &pending_values,
+                )?;
+                chunk.clear();
+                pending_values.clear();
+            }
+            if chunk.is_empty() {
+                chunk_id += 1;
+            }
+            let offset =
+                i64::try_from(chunk.len()).map_err(|_| "path chunk offset overflow".to_string())?;
+            let len = i64::try_from(bytes.len()).map_err(|_| "path length overflow".to_string())?;
+            chunk.extend_from_slice(bytes);
+            pending_values.push((*path_id, chunk_id, offset, len));
+        }
+        if !chunk.is_empty() {
+            flush_path_chunk(
+                &mut chunk_stmt,
+                &mut value_stmt,
+                chunk_id,
+                &chunk,
+                &pending_values,
+            )?;
         }
         Ok(())
     }
 }
 
+fn flush_path_chunk(
+    chunk_stmt: &mut rusqlite::Statement<'_>,
+    value_stmt: &mut rusqlite::Statement<'_>,
+    chunk_id: i64,
+    chunk: &[u8],
+    values: &[(i64, i64, i64, i64)],
+) -> Result<(), String> {
+    let compressed = lz4_flex::compress_prepend_size(chunk);
+    let uncompressed_len =
+        i64::try_from(chunk.len()).map_err(|_| "path chunk length overflow".to_string())?;
+    chunk_stmt
+        .execute(params![chunk_id, uncompressed_len, compressed])
+        .map_err(|e| format!("insert path chunk: {e}"))?;
+    for (path_id, chunk_id, offset, len) in values {
+        value_stmt
+            .execute(params![path_id, chunk_id, offset, len])
+            .map_err(|e| format!("insert path value: {e}"))?;
+    }
+    Ok(())
+}
+
+fn register_sqlite_catalog_functions(conn: &Connection) -> rusqlite::Result<()> {
+    let cache: Mutex<HashMap<i64, Vec<u8>>> = Mutex::new(HashMap::new());
+    conn.create_scalar_function(
+        "magik_path",
+        5,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            let chunk_id: i64 = ctx.get(0)?;
+            let offset: i64 = ctx.get(1)?;
+            let len: i64 = ctx.get(2)?;
+            let expected_len: i64 = ctx.get(3)?;
+            let compressed = ctx.get_raw(4).as_blob()?;
+            let offset = usize::try_from(offset).map_err(sqlite_function_error)?;
+            let len = usize::try_from(len).map_err(sqlite_function_error)?;
+            let expected_len = usize::try_from(expected_len).map_err(sqlite_function_error)?;
+            let mut cache = cache
+                .lock()
+                .map_err(|_| sqlite_function_error("path chunk cache lock poisoned"))?;
+            let chunk = match cache.get(&chunk_id) {
+                Some(chunk) => chunk,
+                None => {
+                    let decoded = lz4_flex::decompress_size_prepended(compressed)
+                        .map_err(sqlite_function_error)?;
+                    if decoded.len() != expected_len {
+                        return Err(sqlite_function_error(format!(
+                            "path chunk {chunk_id} decoded to {} bytes, expected {expected_len}",
+                            decoded.len()
+                        )));
+                    }
+                    cache.insert(chunk_id, decoded);
+                    cache.get(&chunk_id).expect("inserted path chunk")
+                }
+            };
+            let end = offset
+                .checked_add(len)
+                .ok_or_else(|| sqlite_function_error("path slice overflow"))?;
+            let slice = chunk
+                .get(offset..end)
+                .ok_or_else(|| sqlite_function_error("path slice out of range"))?;
+            String::from_utf8(slice.to_vec()).map_err(sqlite_function_error)
+        },
+    )
+}
+
+fn sqlite_function_error(
+    error: impl Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+) -> rusqlite::Error {
+    rusqlite::Error::UserFunctionError(error.into())
+}
+
+#[cfg(test)]
 fn split_path_for_storage(value: &str) -> (&str, &str) {
     match value.rfind('/') {
         Some(idx) => value.split_at(idx + 1),
@@ -813,10 +894,12 @@ pub(crate) fn is_new_discovery(discovered_at_unix: Option<i64>, now_unix: i64) -
 
 pub(crate) fn open_sqlite_read_only(path: &Path) -> rusqlite::Result<Connection> {
     let uri = format!("file:{}?mode=ro&immutable=1", sqlite_uri_path(path));
-    Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         uri,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
+    )?;
+    register_sqlite_catalog_functions(&conn)?;
+    Ok(conn)
 }
 
 pub(crate) fn read_sqlite_catalog_stamp(
@@ -1716,6 +1799,8 @@ fn write_sqlite_scan_with_sources_inner(
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
+    register_sqlite_catalog_functions(&conn)
+        .map_err(|e| format!("register sqlite catalog functions: {e}"))?;
     let schema_t = Instant::now();
     conn.execute_batch(
         r#"
@@ -1762,14 +1847,16 @@ fn write_sqlite_scan_with_sources_inner(
             year INTEGER,
             discovered_at_unix INTEGER
         );
-        CREATE TABLE path_prefixes (
-            prefix_id INTEGER PRIMARY KEY,
-            prefix TEXT NOT NULL
+        CREATE TABLE path_chunks (
+            chunk_id INTEGER PRIMARY KEY,
+            uncompressed_len INTEGER NOT NULL,
+            bytes BLOB NOT NULL
         );
         CREATE TABLE path_values (
             path_id INTEGER PRIMARY KEY,
-            prefix_id INTEGER NOT NULL,
-            leaf TEXT NOT NULL
+            chunk_id INTEGER NOT NULL,
+            offset INTEGER NOT NULL,
+            len INTEGER NOT NULL
         );
         CREATE TABLE string_values (
             string_id INTEGER PRIMARY KEY,
@@ -1837,9 +1924,15 @@ fn write_sqlite_scan_with_sources_inner(
                    ON confidence_values.string_id = launch_target_rows.confidence_string_id;
         CREATE VIEW path_values_text AS
             SELECT path_values.path_id AS path_id,
-                   path_prefixes.prefix || path_values.leaf AS path
+                   magik_path(
+                       path_values.chunk_id,
+                       path_values.offset,
+                       path_values.len,
+                       path_chunks.uncompressed_len,
+                       path_chunks.bytes
+                   ) AS path
             FROM path_values
-            JOIN path_prefixes ON path_prefixes.prefix_id = path_values.prefix_id;
+            JOIN path_chunks ON path_chunks.chunk_id = path_values.chunk_id;
         CREATE VIEW games AS
             SELECT game_rows.game_key_id,
                    CASE game_id_kind_values.value
@@ -3164,7 +3257,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn discovered_at_for_title(db: &Path, title: &str) -> Option<i64> {
-        let conn = Connection::open(db).expect("open discovery db");
+        let conn = open_sqlite_read_only(db).expect("open discovery db");
         let mut stmt = conn
             .prepare("SELECT discovered_at_unix FROM games WHERE title=?1")
             .expect("prepare discovery query");
@@ -3649,7 +3742,7 @@ mod tests {
 
         save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
 
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let profile_rows: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM profiles
@@ -3909,7 +4002,7 @@ mod tests {
         }));
         save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
 
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM catalog_audit WHERE expected_game_dir='games/ChannelF' AND catalog_status='uncataloged'",
@@ -4574,7 +4667,7 @@ mod tests {
             &pack,
         )
         .expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let materialized_rows: i64 = conn
             .query_row("SELECT count(*) FROM launcher_catalog", [], |row| {
                 row.get(0)
@@ -4703,7 +4796,7 @@ mod tests {
 
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![console, arcade]))
             .expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let mut stmt = conn
             .prepare(
                 "SELECT ordinal,title,system_id
@@ -4741,7 +4834,7 @@ mod tests {
         let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
 
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn])).expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
 
         assert!(sqlite_column_exists(&conn, "launcher_catalog", "launch_id").expect("launch_id"));
         assert!(
@@ -4885,7 +4978,7 @@ mod tests {
 
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![arcade, console]))
             .expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
 
         for source in ["ui_arcade_preferred_text", "launcher_catalog_text"] {
             let sql = catalog_game_entry_select_sql(source, "", "ordinal");
@@ -4945,7 +5038,7 @@ mod tests {
         });
 
         save_sqlite_scan(&db, &scan).expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
 
         assert!(!sqlite_table_exists(&conn, "payloads").expect("payloads absent"));
         let payload_view_count: i64 = conn
@@ -5003,7 +5096,7 @@ mod tests {
         let saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
 
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn])).expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let materialized_plans: i64 = conn
             .query_row("SELECT count(*) FROM launcher_launch_plans", [], |row| {
                 row.get(0)
@@ -5051,7 +5144,7 @@ mod tests {
 
         save_sqlite_scan(&db, &sqlite_scan_with_discoveries(vec![saturn, snes]))
             .expect("write sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let plans = load_virtual_launch_plans_for_system_from_conn(&conn, "saturn", 8)
             .expect("load virtual launch plans");
 
@@ -5094,7 +5187,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open library sqlite");
         let preferred = conn
             .query_row(
                 "SELECT identity_id,family_id,preferred_reason,title,has_preview
@@ -5172,7 +5265,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open library sqlite");
         let preferred = conn
             .query_row(
                 "SELECT identity_id,family_id,preferred_reason,has_preview

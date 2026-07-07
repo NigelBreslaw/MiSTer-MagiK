@@ -961,7 +961,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row: (String, String, String, String, i64, String) = conn
             .query_row(
                 "SELECT i.namespace,i.identity_id,i.family_id,l.preview_asset_key,l.has_preview,r.confidence
@@ -1186,7 +1186,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row: (String, i64, String) = conn
             .query_row(
                 "SELECT preview_asset_key,has_preview,system_id FROM launcher_catalog",
@@ -1247,7 +1247,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row: (String, i64) = conn
             .query_row(
                 "SELECT l.preview_asset_key,l.has_preview
@@ -1302,7 +1302,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row: (String, i64) = conn
             .query_row(
                 "SELECT preview_asset_key,has_preview FROM launcher_catalog",
@@ -1361,7 +1361,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let identity: String = conn
             .query_row(
                 "SELECT identity_id FROM launchable_identities WHERE namespace='mame-software'",
@@ -1425,7 +1425,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let launcher: (i64, String, String) = conn
             .query_row(
                 "SELECT
@@ -1510,7 +1510,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row = conn
             .query_row(
                 "SELECT l.system_id,l.launch_kind,i.identity_id,i.family_id,i.metadata_title,i.year,i.manufacturer,i.source
@@ -1573,7 +1573,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let row = conn
             .query_row(
                 "SELECT identity_id,family_id,metadata_title,year,manufacturer,source
@@ -1617,7 +1617,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let launchable_count: i64 = conn
             .query_row("SELECT count(*) FROM launchables", [], |row| row.get(0))
             .expect("query launchable count");
@@ -1687,7 +1687,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let identity = conn
             .query_row(
                 "SELECT identity_id,family_id,metadata_title,manufacturer,source
@@ -1809,7 +1809,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let preferred_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM ui_arcade_preferred WHERE family_id='mvsc'",
@@ -1918,7 +1918,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let preferred_count: i64 = conn
             .query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
                 row.get(0)
@@ -1979,7 +1979,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let clone_identity = conn
             .query_row(
                 "SELECT identity_id,family_id,source
@@ -2070,7 +2070,7 @@ mod tests {
         )
         .expect("save sqlite");
 
-        let conn = Connection::open(&db).expect("open library sqlite");
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
         let mut stmt = conn
             .prepare(
                 "SELECT identity_id,asset_key,asset_link_reason,preview_asset_key,has_preview
