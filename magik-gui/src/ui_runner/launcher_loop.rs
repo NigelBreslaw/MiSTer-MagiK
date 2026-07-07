@@ -1389,6 +1389,11 @@ pub(super) fn run_launcher_loop(
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
+        let mut pad_changed_for_input = if !launching && lifecycle.startup_input_enabled() {
+            Some(pad.poll_with_debug_labels(setup_active))
+        } else {
+            None
+        };
         if let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -1504,6 +1509,7 @@ pub(super) fn run_launcher_loop(
             scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
 
+            let mut catalog_messages_processed = 0usize;
             if let Some(message) = pending_catalog_ready.take() {
                 catalog_ready_stationary_edge_since = update_catalog_ready_stationary_edge_since(
                     &nav,
@@ -1553,10 +1559,14 @@ pub(super) fn run_launcher_loop(
                         start,
                         ui.render_w(),
                     );
+                    catalog_messages_processed = catalog_messages_processed.saturating_add(1);
                 }
             }
 
-            while let Some(message) = deferred_catalog_events.pop_front() {
+            while catalog_messages_processed < CATALOG_MESSAGES_PER_FRAME {
+                let Some(message) = deferred_catalog_events.pop_front() else {
+                    break;
+                };
                 catalog_ready_stationary_edge_since = update_catalog_ready_stationary_edge_since(
                     &nav,
                     catalog_ready_stationary_edge_since,
@@ -1609,6 +1619,7 @@ pub(super) fn run_launcher_loop(
                     start,
                     ui.render_w(),
                 );
+                catalog_messages_processed = catalog_messages_processed.saturating_add(1);
             }
             prepare_trace.catalog_backlog = deferred_catalog_events
                 .len()
@@ -1810,7 +1821,9 @@ pub(super) fn run_launcher_loop(
         }
 
         if !launching && lifecycle.startup_input_enabled() {
-            let pad_changed = pad.poll_with_debug_labels(setup_active);
+            let pad_changed = pad_changed_for_input
+                .take()
+                .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
             let frame_now = Instant::now();
 
             if setup_active && setup.target_pad_idx >= pad.len() {
