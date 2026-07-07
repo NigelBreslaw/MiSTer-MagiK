@@ -1756,9 +1756,9 @@ fn write_sqlite_scan_with_sources_inner(
             game_id_path_id INTEGER,
             game_id_text TEXT,
             title TEXT NOT NULL,
-            system_id TEXT NOT NULL,
-            manufacturer TEXT,
-            genre TEXT,
+            system_string_id INTEGER NOT NULL,
+            manufacturer_string_id INTEGER,
+            genre_string_id INTEGER,
             year INTEGER,
             discovered_at_unix INTEGER
         );
@@ -1849,16 +1849,22 @@ fn write_sqlite_scan_with_sources_inner(
                    END AS game_id,
                    game_rows.title,
                    lower(game_rows.title) AS sort_title,
-                   game_rows.system_id,
-                   game_rows.manufacturer,
-                   game_rows.genre,
+                   system_values.value AS system_id,
+                   manufacturer_values.value AS manufacturer,
+                   genre_values.value AS genre,
                    game_rows.year,
                    game_rows.discovered_at_unix
             FROM game_rows
             JOIN string_values game_id_kind_values
                  ON game_id_kind_values.string_id = game_rows.game_id_kind_string_id
             LEFT JOIN path_values_text game_id_paths
-                 ON game_id_paths.path_id = game_rows.game_id_path_id;
+                 ON game_id_paths.path_id = game_rows.game_id_path_id
+            JOIN string_values system_values
+                 ON system_values.string_id = game_rows.system_string_id
+            LEFT JOIN string_values manufacturer_values
+                 ON manufacturer_values.string_id = game_rows.manufacturer_string_id
+            LEFT JOIN string_values genre_values
+                 ON genre_values.string_id = game_rows.genre_string_id;
         CREATE VIEW launch_plans AS
             WITH expanded AS (
                 SELECT lt.*,
@@ -2000,14 +2006,15 @@ fn write_sqlite_scan_with_sources_inner(
                    lower(game_rows.title) AS sort_title,
                    launcher_catalog_rows.preview_asset_key,
                    launcher_catalog_rows.has_preview,
-                   game_rows.system_id,
+                   games.system_id,
                    game_rows.year,
-                   game_rows.manufacturer,
-                   game_rows.genre AS category,
+                   games.manufacturer,
+                   games.genre AS category,
                    game_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
-            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id;
+            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id
+            JOIN games ON games.game_key_id = launch_target_rows.game_key_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
@@ -2037,10 +2044,10 @@ fn write_sqlite_scan_with_sources_inner(
                    lower(game_rows.title) AS sort_title,
                    ui_arcade_variants.preview_asset_key,
                    ui_arcade_variants.has_preview,
-                   game_rows.system_id,
+                   games.system_id,
                    COALESCE(i.year, game_rows.year) AS year,
-                   COALESCE(i.manufacturer, game_rows.manufacturer) AS manufacturer,
-                   COALESCE(i.category, game_rows.genre) AS category,
+                   COALESCE(i.manufacturer, games.manufacturer) AS manufacturer,
+                   COALESCE(i.category, games.genre) AS category,
                    game_rows.discovered_at_unix,
                    i.identity_id,
                    CASE
@@ -2251,7 +2258,7 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
-                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,system_id,manufacturer,genre,year,discovered_at_unix)
+                "INSERT INTO game_rows(game_key_id,game_id_kind_string_id,game_id_path_id,game_id_text,title,system_string_id,manufacturer_string_id,genre_string_id,year,discovered_at_unix)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             )
             .map_err(|e| format!("prepare game insert: {e}"))?;
@@ -2326,9 +2333,9 @@ fn write_sqlite_scan_with_sources_inner(
                     game_id_storage.path.map(|path| path_interner.intern(path)),
                     game_id_storage.text,
                     discovery.title.as_str(),
-                    system_id.as_str(),
-                    discovery.manufacturer.as_deref(),
-                    discovery.genre.as_deref(),
+                    string_interner.intern(system_id.as_str()),
+                    string_interner.intern_optional(discovery.manufacturer.as_deref()),
+                    string_interner.intern_optional(discovery.genre.as_deref()),
                     discovery.year.map(|n| n as i64),
                     discovered_at_unix
                 ])
