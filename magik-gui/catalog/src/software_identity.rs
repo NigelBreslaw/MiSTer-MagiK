@@ -2074,7 +2074,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 "SELECT identity_id,asset_key,asset_link_reason,preview_asset_key,has_preview
-                 FROM ui_arcade_variants
+                 FROM ui_arcade_variants_text
                  ORDER BY identity_id",
             )
             .expect("prepare variant asset query");
