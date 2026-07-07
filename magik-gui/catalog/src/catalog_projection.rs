@@ -429,15 +429,11 @@ pub(crate) fn materialize_arcade_ui_projections(
 }
 
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
-    tx.execute(
-        "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
-         SELECT ordinal,launch_id,preview_asset_key,has_preview
-         FROM ui_arcade_preferred_text
-         ORDER BY ordinal",
-        [],
-    )
+    tx.query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
+        row.get::<_, i64>(0)
+    })
     .map(|_| ())
-    .map_err(|e| format!("insert preferred launcher catalog: {e}"))
+    .map_err(|e| format!("count preferred launcher catalog: {e}"))
 }
 
 pub(crate) fn insert_console_launcher_catalog(
@@ -445,9 +441,13 @@ pub(crate) fn insert_console_launcher_catalog(
     mut rows: Vec<CatalogProjectionRow>,
 ) -> Result<usize, String> {
     let ordinal_offset = tx
-        .query_row("SELECT count(*) FROM launcher_catalog_rows", [], |row| {
-            row.get::<_, i64>(0)
-        })
+        .query_row(
+            "SELECT
+                (SELECT count(*) FROM ui_arcade_preferred)
+                + (SELECT count(*) FROM launcher_catalog_rows)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
         .map_err(|e| format!("query launcher catalog offset: {e}"))?;
     rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     let launcher_games = collapse_catalog_variant_rows(rows);
