@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeThreadRole {
+    LauncherUi,
     CatalogWorker,
     CatalogForeground,
     LibraryWalker,
@@ -21,6 +22,7 @@ pub enum RuntimeThreadRole {
 impl RuntimeThreadRole {
     pub fn label(self) -> &'static str {
         match self {
+            Self::LauncherUi => "launcher-ui",
             Self::CatalogWorker => "catalog-worker",
             Self::CatalogForeground => "catalog-foreground",
             Self::LibraryWalker => "library-walker",
@@ -38,6 +40,7 @@ impl RuntimeThreadRole {
 
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
+            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Any),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             Self::CatalogForeground | Self::LibraryWalkerForeground => {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
@@ -221,6 +224,14 @@ mod tests {
         assert_eq!(
             RuntimeThreadRole::PreviewPrefetch.default_policy(),
             RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
+        );
+    }
+
+    #[test]
+    fn launcher_ui_runs_above_default_interactive_priority() {
+        assert_eq!(
+            RuntimeThreadRole::LauncherUi.default_policy(),
+            RuntimeThreadPolicy::new(-10, ThreadAffinity::Any)
         );
     }
 

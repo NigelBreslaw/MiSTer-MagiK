@@ -13,6 +13,7 @@ const DEFAULT_VSYNC_FALLBACK_US: u64 = 16_667;
 const PAL_VSYNC_FALLBACK_US: u64 = 20_000;
 const VSYNC_GRACE_US: u64 = 1_500;
 const DEFAULT_FRESH_HIT_MAX_AGE_US: u64 = 500;
+const DIRECT_WAIT_ARM_MARGIN_US: u64 = 8_000;
 const PERIOD_ALPHA_NUM: u64 = 1;
 const PERIOD_ALPHA_DEN: u64 = 8;
 const VSYNC_WORKER_QUEUE_DEPTH: usize = 1;
@@ -411,8 +412,18 @@ impl VsyncPacer {
         wait_started_at: Instant,
         wait_start_age_us: u64,
     ) -> VsyncPace {
+        // The MiSTer fb ioctl can occasionally return one vblank late when it
+        // is armed very early in the period. Sleep in userspace until close to
+        // the predicted vblank, but keep the full wait in the trace timing.
+        if self.last_hit_at.is_some() {
+            if let Some(sleep_us) = direct_wait_pre_arm_sleep_us(wait_start_age_us, self.period_us)
+            {
+                thread::sleep(Duration::from_micros(sleep_us));
+            }
+        }
         match wait_vsync_fd(fd) {
-            VsyncWaitStatus::Hit { wait_us, at } => {
+            VsyncWaitStatus::Hit { at, .. } => {
+                let wait_us = wait_started_at.elapsed().as_micros() as u64;
                 let accepted_hit_age_us =
                     wait_started_at.saturating_duration_since(at).as_micros() as u64;
                 self.record_hit(at);
@@ -429,11 +440,13 @@ impl VsyncPacer {
                     message: None,
                 }
             }
-            VsyncWaitStatus::Timeout { wait_us } => {
+            VsyncWaitStatus::Timeout { .. } => {
+                let wait_us = wait_started_at.elapsed().as_micros() as u64;
                 self.timeouts += 1;
                 self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, wait_start_age_us, None)
             }
-            VsyncWaitStatus::Error { wait_us, message } => {
+            VsyncWaitStatus::Error { message, .. } => {
+                let wait_us = wait_started_at.elapsed().as_micros() as u64;
                 self.errors += 1;
                 self.fallback_after_miss(
                     VsyncPaceSource::Error,
@@ -443,6 +456,15 @@ impl VsyncPacer {
                 )
             }
         }
+    }
+}
+
+fn direct_wait_pre_arm_sleep_us(wait_start_age_us: u64, period_us: u64) -> Option<u64> {
+    let arm_age_us = period_us.checked_sub(DIRECT_WAIT_ARM_MARGIN_US)?;
+    if wait_start_age_us < arm_age_us {
+        Some(arm_age_us - wait_start_age_us)
+    } else {
+        None
     }
 }
 
@@ -678,6 +700,23 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn direct_wait_sleeps_until_arm_margin_when_called_early() {
+        assert_eq!(
+            direct_wait_pre_arm_sleep_us(3_000, DEFAULT_VSYNC_FALLBACK_US),
+            Some(5_667)
+        );
+    }
+
+    #[test]
+    fn direct_wait_does_not_pre_sleep_inside_arm_margin() {
+        assert_eq!(
+            direct_wait_pre_arm_sleep_us(9_000, DEFAULT_VSYNC_FALLBACK_US),
+            None
+        );
+        assert_eq!(direct_wait_pre_arm_sleep_us(1_000, 7_000), None);
     }
 
     #[test]

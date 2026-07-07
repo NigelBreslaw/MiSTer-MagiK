@@ -250,6 +250,9 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
     crate::ui_logln!("ui scene={scene} secs={secs}");
     crate::ui_logln!("ui_render_mode=cached");
+    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+        mister_magik_catalog::runtime_thread::RuntimeThreadRole::LauncherUi,
+    );
 
     mister_magik_fb::framebuffer::stream::start();
 
