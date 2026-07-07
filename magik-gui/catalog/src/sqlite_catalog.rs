@@ -1973,22 +1973,33 @@ fn write_sqlite_scan_with_sources_inner(
             has_preview INTEGER NOT NULL
         );
         CREATE VIEW launcher_catalog AS
+            SELECT ui_arcade_preferred_text.ordinal,
+                   ui_arcade_preferred_text.launch_id,
+                   ui_arcade_preferred_text.title,
+                   ui_arcade_preferred_text.sort_title,
+                   ui_arcade_preferred_text.preview_asset_key,
+                   ui_arcade_preferred_text.has_preview,
+                   ui_arcade_preferred_text.system_id,
+                   ui_arcade_preferred_text.year,
+                   ui_arcade_preferred_text.manufacturer,
+                   ui_arcade_preferred_text.category,
+                   ui_arcade_preferred_text.discovered_at_unix
+            FROM ui_arcade_preferred_text
+            UNION ALL
             SELECT launcher_catalog_rows.ordinal,
                    launcher_catalog_rows.launch_id,
-                   COALESCE(ui_arcade_preferred_text.title, game_rows.title) AS title,
-                   COALESCE(ui_arcade_preferred_text.sort_title, lower(game_rows.title)) AS sort_title,
+                   game_rows.title,
+                   lower(game_rows.title) AS sort_title,
                    launcher_catalog_rows.preview_asset_key,
                    launcher_catalog_rows.has_preview,
                    game_rows.system_id,
-                   COALESCE(ui_arcade_preferred_text.year, game_rows.year) AS year,
-                   COALESCE(ui_arcade_preferred_text.manufacturer, game_rows.manufacturer) AS manufacturer,
-                   COALESCE(ui_arcade_preferred_text.category, game_rows.genre) AS category,
-                   COALESCE(ui_arcade_preferred_text.discovered_at_unix, game_rows.discovered_at_unix) AS discovered_at_unix
+                   game_rows.year,
+                   game_rows.manufacturer,
+                   game_rows.genre AS category,
+                   game_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
-            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id
-            LEFT JOIN ui_arcade_preferred_text
-                   ON ui_arcade_preferred_text.launch_id = launcher_catalog_rows.launch_id;
+            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
