@@ -126,6 +126,25 @@ if [[ -n "$HBMAME_SQLITE" && ! -f "$HBMAME_SQLITE" ]]; then
   echo "       Build it with: scripts/mister mame-metadata-build --out '$HBMAME_SQLITE' --mame /path/to/hbmame [--category-ini /path/to/catver.ini]" >&2
   exit 1
 fi
+if [[ -n "$HBMAME_SQLITE" ]]; then
+  hbmame_bytes="$(stat -f%z "$HBMAME_SQLITE" 2>/dev/null || stat -c%s "$HBMAME_SQLITE")"
+  if [[ "$hbmame_bytes" -lt 1048576 ]]; then
+    echo "ERROR: HBMame metadata DB is suspiciously small: $HBMAME_SQLITE ($hbmame_bytes bytes)" >&2
+    exit 1
+  fi
+  if command -v sqlite3 >/dev/null 2>&1; then
+    hbmame_rows="$(sqlite3 "$HBMAME_SQLITE" "SELECT count(*) FROM mame_machines;" 2>/dev/null || true)"
+    if [[ "${hbmame_rows:-0}" -lt 5000 ]]; then
+      echo "ERROR: HBMame metadata DB has too few machine rows: ${hbmame_rows:-unreadable}" >&2
+      exit 1
+    fi
+    marpy_parent="$(sqlite3 "$HBMAME_SQLITE" "SELECT COALESCE(parent_setname, '') FROM mame_machines WHERE setname = 'marpy';" 2>/dev/null || true)"
+    if [[ "$marpy_parent" != "mappy" ]]; then
+      echo "ERROR: HBMame metadata sentinel failed: expected marpy parent mappy, got '${marpy_parent:-missing}'" >&2
+      exit 1
+    fi
+  fi
+fi
 if [[ -n "$MAIN_BIN" && ! -f "$MAIN_BIN" ]]; then
   echo "ERROR: Main fork binary not found: $MAIN_BIN" >&2
   exit 1
