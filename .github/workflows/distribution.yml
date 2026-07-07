@@ -26,6 +26,8 @@ env:
   MISTER_CARGO_TIMINGS: "0"
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
+  MAME_REF: mame0288
+  MAME_LISTXML_URL: https://github.com/mamedev/mame/releases/download/mame0288/mame0288lx.zip
 
 jobs:
   resolve-hbmame:
@@ -259,7 +261,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build/mame.sqlite3
-          key: mame-sqlite-${{ runner.os }}-v2-${{ hashFiles('tools/mister/src/main.rs', '.github/workflows/distribution.yml') }}
+          key: mame-sqlite-${{ runner.os }}-${{ env.MAME_REF }}-v3-${{ hashFiles('tools/mister/src/main.rs', '.github/workflows/distribution.yml') }}
 
       - name: Cache HBMAME metadata database
         id: hbmame-db-cache
@@ -273,30 +275,52 @@ jobs:
       - name: Install package tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y sqlite3 zip
+          sudo apt-get install -y curl sqlite3 unzip zip
 
-      - name: Install MAME for metadata
+      - name: Download MAME listxml
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        run: sudo apt-get install -y mame
+        run: |
+          mkdir -p build/mame-release
+          curl -fsSL "$MAME_LISTXML_URL" -o build/mame-release/mame-listxml.zip
+          unzip -p build/mame-release/mame-listxml.zip mame0288.xml > build/mame-listxml.xml
+
+      - name: Checkout MAME hash lists
+        if: steps.mame-db-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: mamedev/mame
+          ref: ${{ env.MAME_REF }}
+          path: mame-source
+          sparse-checkout: hash
 
       - name: Resolve MAME software lists
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
         id: mame-hash
         shell: bash
         run: |
-          hash_dir="$(dirname "$(find /usr/share /usr/local/share -path '*/hash/nes.xml' -print -quit)")"
+          hash_dir="$GITHUB_WORKSPACE/mame-source/hash"
           if [[ -z "$hash_dir" || ! -f "$hash_dir/saturn.xml" ]]; then
-            echo "MAME hash directory with target software lists was not found" >&2
+            echo "MAME $MAME_REF hash directory with target software lists was not found" >&2
             exit 1
           fi
           echo "dir=$hash_dir" >> "$GITHUB_OUTPUT"
 
       - name: Build MAME metadata database
         if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        run: scripts/mister mame-metadata-build --mame mame --software-dir "${{ steps.mame-hash.outputs.dir }}" --out build/mame.sqlite3
+        run: scripts/mister mame-metadata-build --listxml build/mame-listxml.xml --software-dir "${{ steps.mame-hash.outputs.dir }}" --out build/mame.sqlite3
 
       - name: Verify MAME software metadata
         run: |
+          source_version="$(sqlite3 build/mame.sqlite3 "SELECT DISTINCT source_version FROM mame_machines;")"
+          if [ "$source_version" != "0.288 (mame0288)" ]; then
+            echo "Expected MAME metadata source_version '0.288 (mame0288)', got '$source_version'" >&2
+            exit 1
+          fi
+          machine_rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_machines;")"
+          if [ "${machine_rows:-0}" -lt 50000 ]; then
+            echo "MAME metadata DB is suspiciously small: $machine_rows machine rows" >&2
+            exit 1
+          fi
           sqlite3 build/mame.sqlite3 "
             WITH expected(list_name) AS (
               VALUES ('megadriv'),('n64'),('nes'),('saturn'),('sms'),('snes')
@@ -315,6 +339,14 @@ jobs:
             exit 1
           fi
 
+      - name: Upload MAME metadata database
+        uses: actions/upload-artifact@v7
+        with:
+          name: mame-sqlite-${{ env.MAME_REF }}
+          path: build/mame.sqlite3
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Download HBMAME listxml
         if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
         uses: actions/download-artifact@v8
@@ -326,12 +358,33 @@ jobs:
         if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
         run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
 
+      - name: Verify HBMAME metadata
+        run: |
+          rows="$(sqlite3 build/hbmame.sqlite3 "SELECT count(*) FROM mame_machines;")"
+          if [ "${rows:-0}" -lt 5000 ]; then
+            echo "HBMAME metadata DB is suspiciously small: $rows machine rows" >&2
+            exit 1
+          fi
+          marpy_parent="$(sqlite3 build/hbmame.sqlite3 "SELECT COALESCE(parent_setname, '') FROM mame_machines WHERE setname = 'marpy';")"
+          if [ "$marpy_parent" != "mappy" ]; then
+            echo "HBMAME metadata sentinel failed: expected marpy parent mappy, got '${marpy_parent:-missing}'" >&2
+            exit 1
+          fi
+
       - name: Save HBMAME metadata database cache
         if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: build/hbmame.sqlite3
           key: ${{ steps.hbmame-db-cache.outputs.cache-primary-key }}
+
+      - name: Upload HBMAME metadata database
+        uses: actions/upload-artifact@v7
+        with:
+          name: hbmame-sqlite-${{ needs.resolve-hbmame.outputs.sha }}
+          path: build/hbmame.sqlite3
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Package distribution zip
         run: |

@@ -68,6 +68,51 @@ while IFS= read -r script; do
   bash -n "$script"
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 
+if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
+  package_tmp="$TMP/package-distribution"
+  mkdir -p "$package_tmp/out"
+  printf '#!/bin/sh\nexit 0\n' >"$package_tmp/mister-magik-fb"
+  chmod 755 "$package_tmp/mister-magik-fb"
+  sqlite3 "$package_tmp/mame.sqlite3" \
+    "CREATE TABLE release_check(name TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO release_check VALUES('kind','package-self-test');"
+  sqlite3 "$package_tmp/tiny-hbmame.sqlite3" \
+    "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY, parent_setname TEXT, title TEXT NOT NULL) WITHOUT ROWID; INSERT INTO mame_machines VALUES('mappyj','mappy','Mappy');"
+  if "$ROOT/scripts/package-distribution.sh" \
+      --binary "$package_tmp/mister-magik-fb" \
+      --mame-sqlite "$package_tmp/mame.sqlite3" \
+      --hbmame-sqlite "$package_tmp/tiny-hbmame.sqlite3" \
+      --name tiny-hbmame \
+      --out-dir "$package_tmp/out" >/dev/null 2>&1; then
+    echo "expected tiny HBMAME metadata DB package to fail" >&2
+    exit 1
+  fi
+
+  sqlite3 "$package_tmp/hbmame.sqlite3" <<'SQL'
+CREATE TABLE mame_machines(
+  setname TEXT PRIMARY KEY,
+  parent_setname TEXT,
+  title TEXT NOT NULL,
+  source_version TEXT NOT NULL
+) WITHOUT ROWID;
+WITH RECURSIVE seq(i) AS (
+  VALUES(1)
+  UNION ALL
+  SELECT i + 1 FROM seq WHERE i < 5000
+)
+INSERT INTO mame_machines
+SELECT 'dummy' || i, '', 'Dummy ' || i, 'self-test' FROM seq;
+INSERT INTO mame_machines VALUES('marpy', 'mappy', 'Marpy', 'self-test');
+CREATE TABLE package_padding(data BLOB NOT NULL);
+INSERT INTO package_padding VALUES(zeroblob(1048576));
+SQL
+  "$ROOT/scripts/package-distribution.sh" \
+    --binary "$package_tmp/mister-magik-fb" \
+    --mame-sqlite "$package_tmp/mame.sqlite3" \
+    --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
+    --name valid-hbmame \
+    --out-dir "$package_tmp/out" >/dev/null
+fi
+
 if grep -R -E 'scripts/(bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh|scripts/experiments/(profile-preview-transition-mega|bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \
   "$ROOT/AGENTS.md" "$ROOT/docs/benchmarking.md" "$ROOT/magik-gui/BUILD.md" "$ROOT/magik-gui/ui/bench/README.md" >/dev/null; then
   echo "old effect experiment script path found in current benchmark docs" >&2
