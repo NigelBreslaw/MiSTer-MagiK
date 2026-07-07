@@ -281,17 +281,9 @@ pub(crate) fn materialize_arcade_ui_projections(
             SELECT
                 COALESCE(
                     i.family_id,
-                    CASE game_id_kind_values.value
-                        WHEN 'payload' THEN 'payload:' || game_id_paths.path
-                        WHEN 'archive' THEN 'archive:' || game_id_paths.path
-                        ELSE g.game_id_text
-                    END
+                    g.game_id
                 ) AS family_id,
-                CASE game_id_kind_values.value
-                    WHEN 'payload' THEN 'payload:' || game_id_paths.path
-                    WHEN 'archive' THEN 'archive:' || game_id_paths.path
-                    ELSE g.game_id_text
-                END AS launchable_id,
+                g.game_id AS launchable_id,
                 lt.launch_id AS launch_id,
                 g.title AS title,
                 lower(g.title) AS sort_title,
@@ -322,13 +314,9 @@ pub(crate) fn materialize_arcade_ui_projections(
                     ELSE 0
                 END AS is_parent
             FROM launch_target_rows lt
-            JOIN game_rows g ON g.game_key_id = lt.game_key_id
-            JOIN string_values game_id_kind_values
-              ON game_id_kind_values.string_id = g.game_id_kind_string_id
+            JOIN games g ON g.game_key_id = lt.game_key_id
             JOIN string_values launch_ref_kind_values
               ON launch_ref_kind_values.string_id = lt.launch_ref_kind_string_id
-            LEFT JOIN path_values_text game_id_paths
-              ON game_id_paths.path_id = g.game_id_path_id
             LEFT JOIN path_values_text launch_paths
               ON launch_paths.path_id = lt.launch_path_id
             LEFT JOIN path_values_text payload_paths
