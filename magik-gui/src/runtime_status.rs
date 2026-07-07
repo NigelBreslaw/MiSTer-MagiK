@@ -99,6 +99,7 @@ pub struct FrameBudgetStatus {
     pub window_vsync_us: u64,
     pub window_present_us: u64,
     pub recent_frames: Vec<FrameBudgetRecentFrame>,
+    pub slow_frames: Vec<FrameBudgetSlowFrame>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -116,6 +117,39 @@ pub struct FrameBudgetRecentFrame {
     pub cpu_vsync_us: u64,
     pub cpu_present_us: u64,
     pub process_cpu_us: u64,
+    pub vsync_source: &'static str,
+    pub vsync_miss_streak: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameBudgetSlowFrame {
+    pub frame: u64,
+    pub wall_us: u64,
+    pub budget_us: u64,
+    pub over_budget_us: u64,
+    pub dominant_phase: &'static str,
+    pub prepare_us: u64,
+    pub render_us: u64,
+    pub custom_draw_us: u64,
+    pub vsync_us: u64,
+    pub present_us: u64,
+    pub present_bytes: u64,
+    pub wasted_present_bytes: u64,
+    pub copied_rows: u32,
+    pub direct_preview_rows: u32,
+    pub dirty_y0: u32,
+    pub dirty_y1: u32,
+    pub catalog_worker_us: u64,
+    pub catalog_message_count: u32,
+    pub catalog_backlog: u32,
+    pub catalog_ready_deferred: bool,
+    pub catalog_ready_deferred_age_us: u64,
+    pub media_worker_us: u64,
+    pub media_gate_us: u64,
+    pub preview_schedule_us: u64,
+    pub preview_apply_us: u64,
+    pub status_string_copy_us: u64,
+    pub status_string_copy_bytes: u64,
     pub vsync_source: &'static str,
     pub vsync_miss_streak: u32,
 }
@@ -286,6 +320,7 @@ fn frame_budget_status_value(status: &FrameBudgetStatus) -> Value {
         "window_vsync_us": status.window_vsync_us,
         "window_present_us": status.window_present_us,
         "recent_frames": status.recent_frames.iter().map(frame_budget_recent_frame_value).collect::<Vec<_>>(),
+        "slow_frames": status.slow_frames.iter().map(frame_budget_slow_frame_value).collect::<Vec<_>>(),
     })
 }
 
@@ -304,6 +339,40 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "cpu_vsync_us": frame.cpu_vsync_us,
         "cpu_present_us": frame.cpu_present_us,
         "process_cpu_us": frame.process_cpu_us,
+        "vsync_source": frame.vsync_source,
+        "vsync_miss_streak": frame.vsync_miss_streak,
+    })
+}
+
+fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
+    json!({
+        "frame": frame.frame,
+        "wall_us": frame.wall_us,
+        "budget_us": frame.budget_us,
+        "over_budget_us": frame.over_budget_us,
+        "dominant_phase": frame.dominant_phase,
+        "prepare_us": frame.prepare_us,
+        "render_us": frame.render_us,
+        "custom_draw_us": frame.custom_draw_us,
+        "vsync_us": frame.vsync_us,
+        "present_us": frame.present_us,
+        "present_bytes": frame.present_bytes,
+        "wasted_present_bytes": frame.wasted_present_bytes,
+        "copied_rows": frame.copied_rows,
+        "direct_preview_rows": frame.direct_preview_rows,
+        "dirty_y0": frame.dirty_y0,
+        "dirty_y1": frame.dirty_y1,
+        "catalog_worker_us": frame.catalog_worker_us,
+        "catalog_message_count": frame.catalog_message_count,
+        "catalog_backlog": frame.catalog_backlog,
+        "catalog_ready_deferred": frame.catalog_ready_deferred,
+        "catalog_ready_deferred_age_us": frame.catalog_ready_deferred_age_us,
+        "media_worker_us": frame.media_worker_us,
+        "media_gate_us": frame.media_gate_us,
+        "preview_schedule_us": frame.preview_schedule_us,
+        "preview_apply_us": frame.preview_apply_us,
+        "status_string_copy_us": frame.status_string_copy_us,
+        "status_string_copy_bytes": frame.status_string_copy_bytes,
         "vsync_source": frame.vsync_source,
         "vsync_miss_streak": frame.vsync_miss_streak,
     })
@@ -497,6 +566,37 @@ mod tests {
                         vsync_source: "vsync",
                         vsync_miss_streak: 1,
                     }],
+                    slow_frames: vec![FrameBudgetSlowFrame {
+                        frame: 41,
+                        wall_us: 22_000,
+                        budget_us: 16_667,
+                        over_budget_us: 5_333,
+                        dominant_phase: "custom-draw",
+                        prepare_us: 100,
+                        render_us: 2_000,
+                        custom_draw_us: 10_000,
+                        vsync_us: 8_000,
+                        present_us: 900,
+                        present_bytes: 640,
+                        wasted_present_bytes: 128,
+                        copied_rows: 10,
+                        direct_preview_rows: 4,
+                        dirty_y0: 12,
+                        dirty_y1: 22,
+                        catalog_worker_us: 77,
+                        catalog_message_count: 3,
+                        catalog_backlog: 2,
+                        catalog_ready_deferred: true,
+                        catalog_ready_deferred_age_us: 400,
+                        media_worker_us: 88,
+                        media_gate_us: 11,
+                        preview_schedule_us: 55,
+                        preview_apply_us: 66,
+                        status_string_copy_us: 7,
+                        status_string_copy_bytes: 96,
+                        vsync_source: "fallback",
+                        vsync_miss_streak: 2,
+                    }],
                 },
             },
             5678,
@@ -511,6 +611,19 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["process_cpu_us"],
             75
+        );
+        assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["dominant_phase"],
+            "custom-draw"
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["catalog_message_count"],
+            3
+        );
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["status_string_copy_bytes"],
+            96
         );
         assert_eq!(value["ts_unix_ms"], 5678);
         assert_eq!(value["pid"], 101);
