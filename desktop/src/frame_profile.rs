@@ -32,6 +32,7 @@ const HISTOGRAM_BUCKETS: &[(u64, u64, &str)] = &[
     (17_000, 30_000, "[17,30ms)"),
     (30_000, u64::MAX, "[30ms,+)"),
 ];
+const DEFAULT_ARCADE_TRACE_WIDTH: u64 = 960;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameProfile {
@@ -241,12 +242,11 @@ impl FrameProfile {
         }
         grid.into_iter()
             .enumerate()
-            .filter_map(|(index, hits)| {
-                (hits > 0).then(|| HeatmapCell {
-                    x: index as u32 % cols,
-                    y: index as u32 / cols,
-                    hits,
-                })
+            .filter(|(_, hits)| *hits > 0)
+            .map(|(index, hits)| HeatmapCell {
+                x: index as u32 % cols,
+                y: index as u32 / cols,
+                hits,
             })
             .collect()
     }
@@ -286,11 +286,7 @@ fn parse_row(columns: &[&str], cells: &[&str]) -> Result<FrameProfileRow, String
     let frame = value_from(&values, "frame");
     let wall_us = value_from(&values, "wall_us");
     let phases_us = value_from(&values, "phases_us");
-    let x0 = value_from(&values, "present_x0");
-    let y0 = value_from(&values, "present_y0");
-    let x1 = value_from(&values, "present_x1");
-    let y1 = value_from(&values, "present_y1");
-    let present_rect = (x1 > x0 && y1 > y0).then_some(PresentRect { x0, y0, x1, y1 });
+    let present_rect = explicit_present_rect(&values).or_else(|| dirty_band_rect(&values));
     let dominant = columns
         .iter()
         .position(|key| *key == "dominant")
@@ -324,6 +320,35 @@ fn int_value(value: &str) -> u64 {
 
 fn value_from(values: &HashMap<String, u64>, key: &str) -> u64 {
     values.get(key).copied().unwrap_or(0)
+}
+
+fn explicit_present_rect(values: &HashMap<String, u64>) -> Option<PresentRect> {
+    let x0 = value_from(values, "present_x0");
+    let y0 = value_from(values, "present_y0");
+    let x1 = value_from(values, "present_x1");
+    let y1 = value_from(values, "present_y1");
+    (x1 > x0 && y1 > y0).then_some(PresentRect { x0, y0, x1, y1 })
+}
+
+fn dirty_band_rect(values: &HashMap<String, u64>) -> Option<PresentRect> {
+    let y0 = value_from(values, "dirty_y0");
+    let y1 = value_from(values, "dirty_y1");
+    if y1 <= y0 {
+        return None;
+    }
+    let rows = y1 - y0;
+    let present_bytes = value_from(values, "present_bytes");
+    let inferred_width = if present_bytes > 0 {
+        (present_bytes / rows / 2).max(1)
+    } else {
+        DEFAULT_ARCADE_TRACE_WIDTH
+    };
+    Some(PresentRect {
+        x0: 0,
+        y0,
+        x1: inferred_width,
+        y1,
+    })
 }
 
 fn dominant_phase(values: &HashMap<String, u64>) -> &'static str {
@@ -457,5 +482,27 @@ mod tests {
         assert!(heatmap.iter().any(|cell| cell.x == 0 && cell.y == 0));
         assert!(heatmap.iter().any(|cell| cell.x == 3 && cell.y == 1));
         assert!(heatmap.iter().any(|cell| cell.hits >= 2));
+    }
+
+    #[test]
+    fn parses_arcade_dirty_band_as_full_width_present_rect() {
+        let profile = FrameProfile::parse_tsv(
+            "frame\twall_us\tdirty_y0\tdirty_y1\tpresent_bytes\n\
+0\t12000\t100\t140\t76800\n",
+        )
+        .expect("profile");
+
+        assert_eq!(
+            profile.rows[0].present_rect,
+            Some(PresentRect {
+                x0: 0,
+                y0: 100,
+                x1: 960,
+                y1: 140
+            })
+        );
+        assert_eq!(profile.rows[0].present_pixels, 0);
+        assert_eq!(profile.rows[0].present_bytes, 76_800);
+        assert!(profile.heatmap(4, 4).iter().any(|cell| cell.x == 3));
     }
 }

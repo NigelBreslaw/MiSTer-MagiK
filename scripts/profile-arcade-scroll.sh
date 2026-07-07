@@ -808,7 +808,7 @@ if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$local_st
   exit 13
 fi
 echo
-"$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv"
+"$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv" --status-json "$local_status_json"
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
