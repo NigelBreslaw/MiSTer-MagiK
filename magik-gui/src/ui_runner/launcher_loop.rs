@@ -4383,9 +4383,9 @@ mod tests {
         assert!(read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none());
 
         std::fs::write(&db, SQLITE_HEADER).expect("write sqlite header");
-        assert_eq!(
-            read_catalog_summary_seed(&db, &summary_path, Instant::now()),
-            Some(summary)
+        assert!(
+            read_catalog_summary_seed(&db, &summary_path, Instant::now()).is_none(),
+            "warm summary seed must require a current SQLite catalog stamp, not just a SQLite header"
         );
         let _ = std::fs::remove_dir_all(root);
     }

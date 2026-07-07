@@ -4104,16 +4104,8 @@ mod tests {
             !summary.hot_games.is_empty(),
             "warm summary must include Arcade hot rows"
         );
-        assert_eq!(
-            summary.hot_games[0].title,
-            saved
-                .catalog
-                .catalog
-                .system_game_at("arcade", 0)
-                .expect("first arcade row")
-                .title
-                .as_ref()
-        );
+        assert_summary_matches_sqlite_catalog(&summary, &loaded.catalog);
+        assert_navigation_catalog_matches_sqlite(&loaded.catalog, &navigation_catalog);
         assert_eq!(summary.systems.len(), saved.catalog.catalog.systems.len());
         for (summary_system, sqlite_system) in summary.systems.iter().zip(&loaded.catalog.systems) {
             assert_eq!(summary_system.id, sqlite_system.id);
@@ -4168,6 +4160,38 @@ mod tests {
             .iter()
             .map(|game| game.title.to_string())
             .collect()
+    }
+
+    fn assert_summary_matches_sqlite_catalog(
+        summary: &catalog_summary::CatalogSummaryProjection,
+        sqlite_catalog: &ArcadeCatalog,
+    ) {
+        assert_eq!(summary.total_game_count, sqlite_catalog.games.len());
+        let summary_arcade_titles = summary
+            .hot_games
+            .iter()
+            .map(|game| game.title.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary_arcade_titles,
+            catalog_titles_for_system(sqlite_catalog, "arcade"),
+            "summary hot_games must match materialized Arcade catalog order"
+        );
+
+        let summary_arcade_refs = summary
+            .hot_games
+            .iter()
+            .map(|game| game.launch_ref.clone())
+            .collect::<Vec<_>>();
+        let sqlite_arcade_refs = sqlite_catalog
+            .system_game_view("arcade")
+            .iter()
+            .map(|game| game.mra_path.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary_arcade_refs, sqlite_arcade_refs,
+            "summary hot_games must match materialized Arcade catalog membership"
+        );
     }
 
     fn category_options_as_set(catalog: &ArcadeCatalog, system_id: &str) -> BTreeSet<String> {
