@@ -8,7 +8,7 @@
 use crate::catalog_discovery;
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 pub const PROFILE_SET_VERSION: u32 = 6;
@@ -502,11 +502,14 @@ fn runtime_profile_plans_for_roots_with_cores(
 }
 
 fn runtime_profile_plans_for_roots_fast_with_cores(
-    _roots: &[String],
+    roots: &[String],
     cores: &[catalog_discovery::InstalledCore],
     active_game_dirs: &BTreeSet<String>,
 ) -> Vec<RuntimeProfilePlan> {
-    runtime_profile_plans_for_installed_cores_fast(cores, active_game_dirs)
+    catalog_discovery::top_level_game_dir_headers_for_roots_excluding(roots, active_game_dirs)
+        .into_iter()
+        .map(|game_dir| runtime_profile_plan_for_game_dir_header_fast(game_dir, cores))
+        .collect()
 }
 
 #[cfg(test)]
@@ -526,63 +529,6 @@ pub(crate) fn runtime_profile_plans_for_game_dirs_with_cores(
         .cloned()
         .map(|game_dir| runtime_profile_plan_for_game_dir(game_dir, cores))
         .collect()
-}
-
-fn runtime_profile_plans_for_installed_cores_fast(
-    cores: &[catalog_discovery::InstalledCore],
-    active_game_dirs: &BTreeSet<String>,
-) -> Vec<RuntimeProfilePlan> {
-    let mut plans = Vec::new();
-    let mut seen = BTreeSet::new();
-    for core in cores {
-        let hints = runtime_profile_hints_for_core(&core.core_id);
-        let has_alias_hint = hints.iter().any(|hint| {
-            hint.core_alias
-                .is_some_and(|alias| alias.eq_ignore_ascii_case(&core.core_id))
-        });
-        if !has_alias_hint {
-            push_fast_runtime_profile_plan(&mut plans, &mut seen, core.core_id.clone(), core);
-        }
-        for hint in hints {
-            for name in hint.names {
-                push_fast_runtime_profile_plan(&mut plans, &mut seen, (*name).to_string(), core);
-            }
-        }
-    }
-    plans
-        .into_iter()
-        .filter(|plan| !active_game_dirs.contains(&plan.game_dir_name.to_ascii_lowercase()))
-        .collect()
-}
-
-fn push_fast_runtime_profile_plan(
-    plans: &mut Vec<RuntimeProfilePlan>,
-    seen: &mut BTreeSet<String>,
-    game_dir_name: String,
-    core: &catalog_discovery::InstalledCore,
-) {
-    let key = format!(
-        "{}\t{}",
-        game_dir_name.to_ascii_lowercase(),
-        core.core_id.to_ascii_lowercase()
-    );
-    if !seen.insert(key) {
-        return;
-    }
-    let game_dir = catalog_discovery::GameDirHeader {
-        name: game_dir_name,
-        path: PathBuf::new(),
-    };
-    let candidate = RuntimeCoreCandidate {
-        core,
-        match_kind: RuntimeCoreMatchKind::Exact,
-    };
-    plans.push(RuntimeProfilePlan {
-        game_dir_name: game_dir.name.clone(),
-        decision: runtime_profile_decision_for_named_candidate_without_payload_probe(
-            &game_dir, &candidate,
-        ),
-    });
 }
 
 fn runtime_profile_plan_for_game_dir_header(
@@ -614,6 +560,41 @@ fn runtime_profile_plan_for_game_dir_header(
                 RuntimeProfileDecision::EmptyOrMediaOnly
             }
         }
+    };
+    RuntimeProfilePlan {
+        game_dir_name: game_dir.name,
+        decision,
+    }
+}
+
+fn runtime_profile_plan_for_game_dir_header_fast(
+    game_dir: catalog_discovery::GameDirHeader,
+    cores: &[catalog_discovery::InstalledCore],
+) -> RuntimeProfilePlan {
+    let exact_or_alias_candidates = runtime_core_candidates_by_dir_name(&game_dir.name, cores);
+    let decision = match exact_or_alias_candidates.as_slice() {
+        [] => RuntimeProfileDecision::NoInstalledCore,
+        [candidate]
+            if runtime_payload_extensions_for_core_or_dir(&candidate.core.core_id, &game_dir.name)
+                .is_some() =>
+        {
+            runtime_profile_decision_for_named_candidate_without_payload_probe(&game_dir, candidate)
+        }
+        [candidate] => {
+            runtime_profile_plan_for_game_dir(
+                catalog_discovery::game_dir_payload_facts_for_header(game_dir.clone()),
+                std::slice::from_ref(candidate.core),
+            )
+            .decision
+        }
+        candidates => RuntimeProfileDecision::Ambiguous {
+            core_ids: candidates
+                .iter()
+                .map(|candidate| candidate.core.core_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        },
     };
     RuntimeProfilePlan {
         game_dir_name: game_dir.name,
@@ -1107,17 +1088,6 @@ fn runtime_payload_extension_hints(name: &str) -> Vec<String> {
         })
         .flat_map(|hint| hint.extensions.iter().copied())
         .map(str::to_string)
-        .collect()
-}
-
-fn runtime_profile_hints_for_core(core_id: &str) -> Vec<&'static RuntimeProfileHint> {
-    RUNTIME_PROFILE_HINTS
-        .iter()
-        .filter(|hint| {
-            hint.core_alias
-                .is_some_and(|core_alias| core_alias.eq_ignore_ascii_case(core_id))
-                || hint_matches_name(hint, core_id)
-        })
         .collect()
 }
 
