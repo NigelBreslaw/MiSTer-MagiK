@@ -84,6 +84,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
     pub(super) vsync_stale_hits: u32,
+    pub(super) vsync_wait_start_age_us: u64,
+    pub(super) vsync_accepted_hit_age_us: u64,
+    pub(super) frame_start_phase_us: u64,
     pub(super) present_phase_us: u128,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
     pub(super) preview_cache_state: &'static str,
@@ -229,6 +232,9 @@ struct PreviewScrollTraceRow {
     vsync_period_us: u64,
     vsync_miss_streak: u32,
     vsync_stale_hits: u32,
+    vsync_wait_start_age_us: u64,
+    vsync_accepted_hit_age_us: u64,
+    frame_start_phase_us: u64,
     present_phase_us: u128,
     dirty_y0: usize,
     dirty_y1: usize,
@@ -262,7 +268,7 @@ impl PreviewScrollTrace {
             self.row_text.clear();
             let _ = write!(
                 self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 row.frame,
                 row.elapsed_us,
                 row.loop_delta_us,
@@ -300,6 +306,9 @@ impl PreviewScrollTrace {
                 row.vsync_period_us,
                 row.vsync_miss_streak,
                 row.vsync_stale_hits,
+                row.vsync_wait_start_age_us,
+                row.vsync_accepted_hit_age_us,
+                row.frame_start_phase_us,
                 row.present_phase_us,
                 row.dirty_y0,
                 row.dirty_y1,
@@ -776,6 +785,9 @@ impl LauncherFrameAccounting {
             vsync_period_us: frame.vsync_period_us,
             vsync_miss_streak: frame.vsync_miss_streak,
             vsync_stale_hits: frame.vsync_stale_hits,
+            vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+            vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+            frame_start_phase_us: frame.frame_start_phase_us,
             present_phase_us: frame.present_phase_us,
             dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
             dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
@@ -1043,6 +1055,11 @@ impl LauncherFrameAccounting {
                 analytics_mode: frame_analytics_mode_label(self.frame_analytics_mode),
                 vsync_source: vsync_source_label(frame.vsync_source),
                 vsync_miss_streak: frame.vsync_miss_streak,
+                vsync_stale_hits: frame.vsync_stale_hits,
+                vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+                vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+                frame_start_phase_us: frame.frame_start_phase_us,
+                present_phase_us: u128_to_u64_saturating(frame.present_phase_us),
             });
     }
 
@@ -1480,6 +1497,9 @@ mod tests {
             vsync_period_us: 16_667,
             vsync_miss_streak: 3,
             vsync_stale_hits: 0,
+            vsync_wait_start_age_us: 12_000,
+            vsync_accepted_hit_age_us: 500,
+            frame_start_phase_us: 8_000,
             present_phase_us: 0,
             arcade_update_label: ArcadeUpdateTrace::None,
             preview_cache_state: "exact",
@@ -1569,6 +1589,9 @@ mod tests {
         assert_eq!(status.slow_frames[31].preview_backlog, 6);
         assert_eq!(status.slow_frames[31].dirty_y0, 12);
         assert_eq!(status.slow_frames[31].dirty_y1, 24);
+        assert_eq!(status.slow_frames[31].vsync_wait_start_age_us, 12_000);
+        assert_eq!(status.slow_frames[31].vsync_accepted_hit_age_us, 500);
+        assert_eq!(status.slow_frames[31].frame_start_phase_us, 8_000);
 
         accounting.frame_analytics_samples.clear();
         let status_after_recent_clear = accounting.current_frame_budget_status();
@@ -1614,7 +1637,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
