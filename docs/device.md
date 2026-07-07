@@ -164,6 +164,20 @@ For one-shot evidence, capture framebuffer PNGs through the MagiK agent with
 useful only while the UI is running; after exit, fbcon can redraw the login
 console into `/dev/fb0`.
 
+When HDMI looks zoomed, cropped, banded, black, or otherwise different from the
+agent framebuffer capture, preserve the state and collect both sides before
+restarting anything:
+
+```bash
+scripts/mister agent framebuffer-capture OUT.png --json OUT.json
+scripts/mister display-read --unsafe-spi
+```
+
+`display-read` uses the production `mister-magik-fb read` command to read the
+live `UIO_GET_VRES` and `UIO_GET_FB_PAR` FPGA values. It touches the HPS/FPGA
+SPI path, so the host wrapper requires `--unsafe-spi` when Main or Slint owns
+`/dev/mem`. Use it as a targeted incident probe, not as a polling loop.
+
 ## Process And Input Gotchas
 
 - Busybox has no `pkill`; use `pidof` and `kill` through scripts.
