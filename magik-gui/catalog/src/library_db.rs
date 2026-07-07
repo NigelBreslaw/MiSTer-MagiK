@@ -1623,7 +1623,7 @@ mod tests {
         write_sqlite_scan_with_mame(&db, &scan, &mame_db).expect("save sqlite");
         let sqlite_catalog =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let stored_games: i64 = conn
             .query_row("SELECT count(*) FROM games", [], |row| row.get(0))
             .expect("count games");
@@ -1686,7 +1686,7 @@ mod tests {
             .expect("save sqlite");
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load sqlite");
-        let conn = Connection::open(&db).expect("open sqlite");
+        let conn = open_sqlite_read_only(&db).expect("open sqlite");
         let stored_games: i64 = conn
             .query_row("SELECT count(*) FROM games", [], |row| row.get(0))
             .expect("count games");
