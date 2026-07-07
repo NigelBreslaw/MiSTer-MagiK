@@ -11,6 +11,7 @@ const FRAME_BUDGET_33MS_US: u64 = 33_334;
 const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
+const FRAME_SLOW_SAMPLE_CAP: usize = 32;
 
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
@@ -51,6 +52,7 @@ pub(super) struct LauncherFrameAccounting {
     last_frame_budget_status: runtime_status::FrameBudgetStatus,
     frame_analytics_mode: FrameAnalyticsMode,
     frame_analytics_samples: VecDeque<runtime_status::FrameBudgetRecentFrame>,
+    slow_frame_samples: VecDeque<runtime_status::FrameBudgetSlowFrame>,
 }
 
 pub(super) struct LauncherPresentedFrame {
@@ -463,6 +465,7 @@ impl LauncherFrameAccounting {
             },
             frame_analytics_mode: FrameAnalyticsMode::Off,
             frame_analytics_samples: VecDeque::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
+            slow_frame_samples: VecDeque::with_capacity(FRAME_SLOW_SAMPLE_CAP),
         }
     }
 
@@ -885,6 +888,17 @@ impl LauncherFrameAccounting {
         };
         self.frame_budget_total.record(sample);
         self.frame_budget_window.record(sample);
+        if wall_us > FRAME_BUDGET_US {
+            self.push_slow_frame_sample(
+                frame,
+                wall_us,
+                prepare_us,
+                render_us,
+                custom_draw_us,
+                vsync_us,
+                present_us,
+            );
+        }
         if self.frame_analytics_mode.records_wall() {
             self.push_frame_analytics_sample(
                 frame,
@@ -937,6 +951,74 @@ impl LauncherFrameAccounting {
             });
     }
 
+    fn push_slow_frame_sample(
+        &mut self,
+        frame: &LauncherPresentedFrame,
+        wall_us: u64,
+        prepare_us: u64,
+        render_us: u64,
+        custom_draw_us: u64,
+        vsync_us: u64,
+        present_us: u64,
+    ) {
+        if self.slow_frame_samples.len() == FRAME_SLOW_SAMPLE_CAP {
+            self.slow_frame_samples.pop_front();
+        }
+        let (dirty_y0, dirty_y1) = frame
+            .dirty_rect
+            .map(|rect| {
+                (
+                    usize_to_u32_saturating(rect.y0),
+                    usize_to_u32_saturating(rect.y1),
+                )
+            })
+            .unwrap_or((0, 0));
+        self.slow_frame_samples
+            .push_back(runtime_status::FrameBudgetSlowFrame {
+                frame: frame.frames,
+                wall_us,
+                budget_us: FRAME_BUDGET_US,
+                over_budget_us: wall_us.saturating_sub(FRAME_BUDGET_US),
+                dominant_phase: dominant_frame_phase(
+                    prepare_us,
+                    render_us,
+                    custom_draw_us,
+                    vsync_us,
+                    present_us,
+                ),
+                prepare_us,
+                render_us,
+                custom_draw_us,
+                vsync_us,
+                present_us,
+                present_bytes: usize_to_u64_saturating(frame.present_bytes),
+                wasted_present_bytes: usize_to_u64_saturating(frame.wasted_present_bytes),
+                copied_rows: frame.copied_rows,
+                direct_preview_rows: frame.direct_preview_rows,
+                dirty_y0,
+                dirty_y1,
+                catalog_worker_us: u128_to_u64_saturating(frame.prepare_trace.catalog_worker_us),
+                catalog_message_count: frame.prepare_trace.catalog_message_count,
+                catalog_backlog: frame.prepare_trace.catalog_backlog,
+                catalog_ready_deferred: frame.prepare_trace.catalog_ready_deferred,
+                catalog_ready_deferred_age_us: u128_to_u64_saturating(
+                    frame.prepare_trace.catalog_ready_deferred_age_us,
+                ),
+                media_worker_us: u128_to_u64_saturating(frame.prepare_trace.media_worker_us),
+                media_gate_us: u128_to_u64_saturating(frame.prepare_trace.media_gate_us),
+                preview_schedule_us: u128_to_u64_saturating(
+                    frame.prepare_trace.preview_schedule_us,
+                ),
+                preview_apply_us: u128_to_u64_saturating(frame.prepare_trace.preview_apply_us),
+                status_string_copy_us: u128_to_u64_saturating(
+                    frame.prepare_trace.status_string_copy_us,
+                ),
+                status_string_copy_bytes: usize_to_u64_saturating(frame.status_string_copy_bytes),
+                vsync_source: vsync_source_label(frame.vsync_source),
+                vsync_miss_streak: frame.vsync_miss_streak,
+            });
+    }
+
     fn current_frame_budget_status(&self) -> runtime_status::FrameBudgetStatus {
         let total = self.frame_budget_total;
         let window = self.frame_budget_window;
@@ -969,6 +1051,7 @@ impl LauncherFrameAccounting {
             window_vsync_us: FrameBudgetAccumulator::avg_us(window.vsync_us, window.frames),
             window_present_us: FrameBudgetAccumulator::avg_us(window.present_us, window.frames),
             recent_frames: self.frame_analytics_samples.iter().copied().collect(),
+            slow_frames: self.slow_frame_samples.iter().copied().collect(),
         }
     }
 
@@ -1214,6 +1297,26 @@ fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
     }
 }
 
+fn dominant_frame_phase(
+    prepare_us: u64,
+    render_us: u64,
+    custom_draw_us: u64,
+    vsync_us: u64,
+    present_us: u64,
+) -> &'static str {
+    [
+        ("prepare", prepare_us),
+        ("slint-render", render_us),
+        ("custom-draw", custom_draw_us),
+        ("vsync", vsync_us),
+        ("fb-present", present_us),
+    ]
+    .into_iter()
+    .max_by_key(|(_, value)| *value)
+    .map(|(label, _)| label)
+    .unwrap_or("unknown")
+}
+
 #[cfg(target_os = "linux")]
 fn cpu_thread_us() -> Option<u64> {
     cpu_clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
@@ -1254,6 +1357,14 @@ fn u128_to_u64_saturating(value: u128) -> u64 {
     value.min(u128::from(u64::MAX)) as u64
 }
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    value.min(u64::MAX as usize) as u64
+}
+
+fn usize_to_u32_saturating(value: usize) -> u32 {
+    value.min(u32::MAX as usize) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1269,6 +1380,77 @@ mod tests {
             present_us: 500,
             vsync_source: Some(VsyncPaceSource::Vsync),
             vsync_miss_streak: 0,
+        }
+    }
+
+    fn presented_frame(frame: u64, loop_start: Instant, wall_us: u64) -> LauncherPresentedFrame {
+        let frame_t0 = loop_start;
+        let frame_t1 = loop_start + Duration::from_micros(100);
+        let frame_t2 = frame_t1 + Duration::from_micros(200);
+        let custom_draw_start = frame_t2;
+        let custom_draw_done = custom_draw_start + Duration::from_micros(300);
+        let frame_t3 = custom_draw_done + Duration::from_micros(400);
+        let frame_t4 = loop_start + Duration::from_micros(wall_us);
+        LauncherPresentedFrame {
+            frames: frame,
+            selected: 0,
+            visual_index: 0.0,
+            run_start: loop_start,
+            loop_start,
+            frame_t0,
+            frame_t1,
+            frame_t2,
+            frame_t3,
+            frame_t4,
+            custom_draw_start,
+            custom_draw_done,
+            custom_draw_trace: LauncherCustomDrawTrace::default(),
+            prepare_trace: LauncherPrepareTrace {
+                catalog_worker_us: 50,
+                catalog_message_count: 2,
+                catalog_backlog: 1,
+                catalog_ready_deferred: true,
+                catalog_ready_deferred_age_us: 700,
+                media_worker_us: 60,
+                media_gate_us: 7,
+                preview_schedule_us: 8,
+                preview_apply_us: 9,
+                status_string_copy_us: 10,
+            },
+            prepare_us: 1_000,
+            dirty_rect: Some(DirtyRect {
+                x0: 0,
+                y0: 12,
+                x1: 960,
+                y1: 24,
+            }),
+            copied_rows: 12,
+            direct_preview_rows: 4,
+            present_bytes: 23_040,
+            wasted_present_bytes: 1_280,
+            cached_present_us: 0,
+            direct_preview_present_us: 0,
+            arcade_list_present_us: 0,
+            vsync_source: Some(VsyncPaceSource::Timeout),
+            vsync_period_us: 16_667,
+            vsync_miss_streak: 3,
+            vsync_stale_hits: 0,
+            present_phase_us: 0,
+            arcade_update_label: ArcadeUpdateTrace::None,
+            preview_cache_state: "exact",
+            preview_transition: PreviewTransitionTrace::default(),
+            composition_status: UiCompositionStatus::default(),
+            status_write_due: false,
+            status_string_copy_us: 10,
+            status_string_copy_bytes: 128,
+            cpu_loop_start: FrameAnalyticsCpuStamp::default(),
+            cpu_t0: FrameAnalyticsCpuStamp::default(),
+            cpu_t1: FrameAnalyticsCpuStamp::default(),
+            cpu_t2: FrameAnalyticsCpuStamp::default(),
+            cpu_custom_draw_start: FrameAnalyticsCpuStamp::default(),
+            cpu_custom_draw_done: FrameAnalyticsCpuStamp::default(),
+            cpu_t3: FrameAnalyticsCpuStamp::default(),
+            cpu_t4: FrameAnalyticsCpuStamp::default(),
         }
     }
 
@@ -1316,6 +1498,38 @@ mod tests {
         assert_eq!(acc.timeout, 1);
         assert_eq!(acc.error, 1);
         assert_eq!(acc.max_vsync_miss_streak, 3);
+    }
+
+    #[test]
+    fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
+        let start = Instant::now();
+        let mut accounting = LauncherFrameAccounting::new(start);
+        for frame in 0..40 {
+            accounting.accumulate_frame_budget(&presented_frame(
+                frame,
+                start + Duration::from_micros(frame * 25_000),
+                22_000,
+            ));
+        }
+
+        let status = accounting.current_frame_budget_status();
+        assert_eq!(status.slow_frames.len(), FRAME_SLOW_SAMPLE_CAP);
+        assert_eq!(status.slow_frames[0].frame, 8);
+        assert_eq!(status.slow_frames[31].frame, 39);
+        assert_eq!(status.slow_frames[31].dominant_phase, "fb-present");
+        assert_eq!(status.slow_frames[31].catalog_message_count, 2);
+        assert_eq!(status.slow_frames[31].media_worker_us, 60);
+        assert_eq!(status.slow_frames[31].dirty_y0, 12);
+        assert_eq!(status.slow_frames[31].dirty_y1, 24);
+
+        accounting.frame_analytics_samples.clear();
+        let status_after_recent_clear = accounting.current_frame_budget_status();
+        assert!(status_after_recent_clear.recent_frames.is_empty());
+        assert_eq!(
+            status_after_recent_clear.slow_frames.len(),
+            FRAME_SLOW_SAMPLE_CAP
+        );
+        assert_eq!(status_after_recent_clear.slow_frames[0].frame, 8);
     }
 }
 
