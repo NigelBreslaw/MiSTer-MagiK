@@ -4,19 +4,19 @@
 
 use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
 use crate::catalog_stamp::CatalogStamp;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 pub fn create_catalog_stamp_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE catalog_stamp (
-            ordinal INTEGER PRIMARY KEY,
-            line TEXT NOT NULL
-        );
+            id INTEGER PRIMARY KEY CHECK (id=0),
+            bytes BLOB NOT NULL
+        ) WITHOUT ROWID;
         CREATE TABLE catalog_discovery_checkpoint (
-            ordinal INTEGER PRIMARY KEY,
-            line TEXT NOT NULL
-        );
+            id INTEGER PRIMARY KEY CHECK (id=0),
+            bytes BLOB NOT NULL
+        ) WITHOUT ROWID;
         "#,
     )
     .map_err(|e| format!("create catalog stamp schema: {e}"))
@@ -25,14 +25,8 @@ pub fn create_catalog_stamp_schema(conn: &Connection) -> Result<(), String> {
 pub fn write_catalog_stamp(conn: &Connection, stamp: &CatalogStamp) -> Result<(), String> {
     conn.execute("DELETE FROM catalog_stamp", [])
         .map_err(|e| format!("clear catalog stamp: {e}"))?;
-    let mut stmt = conn
-        .prepare("INSERT INTO catalog_stamp(ordinal,line) VALUES (?1,?2)")
-        .map_err(|e| format!("prepare catalog stamp insert: {e}"))?;
-    for (idx, line) in stamp.lines().iter().enumerate() {
-        stmt.execute(params![idx as i64, line.as_str()])
-            .map_err(|e| format!("insert catalog stamp: {e}"))?;
-    }
-    Ok(())
+    write_compressed_lines(conn, "catalog_stamp", stamp.lines())
+        .map_err(|e| format!("insert catalog stamp: {e}"))
 }
 
 pub fn write_catalog_discovery_checkpoint(
@@ -41,30 +35,16 @@ pub fn write_catalog_discovery_checkpoint(
 ) -> Result<(), String> {
     conn.execute("DELETE FROM catalog_discovery_checkpoint", [])
         .map_err(|e| format!("clear catalog discovery checkpoint: {e}"))?;
-    let mut stmt = conn
-        .prepare("INSERT INTO catalog_discovery_checkpoint(ordinal,line) VALUES (?1,?2)")
-        .map_err(|e| format!("prepare catalog discovery checkpoint insert: {e}"))?;
-    for (idx, line) in checkpoint.lines().iter().enumerate() {
-        stmt.execute(params![idx as i64, line.as_str()])
-            .map_err(|e| format!("insert catalog discovery checkpoint: {e}"))?;
-    }
-    Ok(())
+    write_compressed_lines(conn, "catalog_discovery_checkpoint", checkpoint.lines())
+        .map_err(|e| format!("insert catalog discovery checkpoint: {e}"))
 }
 
 pub fn read_catalog_stamp(conn: &Connection) -> Result<Option<CatalogStamp>, String> {
     if !sqlite_table_exists(conn, "catalog_stamp")? {
         return Ok(None);
     }
-    let mut stmt = conn
-        .prepare("SELECT line FROM catalog_stamp ORDER BY ordinal")
-        .map_err(|e| format!("prepare catalog stamp read: {e}"))?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("query catalog stamp: {e}"))?;
-    let mut lines = Vec::new();
-    for row in rows {
-        lines.push(row.map_err(|e| format!("read catalog stamp row: {e}"))?);
-    }
+    let lines = read_line_store(conn, "catalog_stamp")
+        .map_err(|e| format!("read catalog stamp row: {e}"))?;
     Ok((!lines.is_empty()).then(|| CatalogStamp::from_lines(lines)))
 }
 
@@ -74,17 +54,106 @@ pub fn read_catalog_discovery_checkpoint(
     if !sqlite_table_exists(conn, "catalog_discovery_checkpoint")? {
         return Ok(None);
     }
+    let lines = read_line_store(conn, "catalog_discovery_checkpoint")
+        .map_err(|e| format!("read catalog discovery checkpoint row: {e}"))?;
+    Ok((!lines.is_empty()).then(|| CatalogDiscoveryCheckpoint::from_lines(lines)))
+}
+
+fn write_compressed_lines(conn: &Connection, table: &str, lines: &[String]) -> Result<(), String> {
+    let encoded = encode_lines(lines)?;
+    let compressed = lz4_flex::compress_prepend_size(&encoded);
+    let sql = format!("INSERT INTO {table}(id,bytes) VALUES (0,?1)");
+    conn.execute(&sql, params![compressed])
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn read_line_store(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    if sqlite_table_has_column(conn, table, "bytes")? {
+        return read_compressed_lines(conn, table);
+    }
+    read_legacy_line_rows(conn, table)
+}
+
+fn read_compressed_lines(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let sql = format!("SELECT bytes FROM {table} WHERE id=0");
     let mut stmt = conn
-        .prepare("SELECT line FROM catalog_discovery_checkpoint ORDER BY ordinal")
-        .map_err(|e| format!("prepare catalog discovery checkpoint read: {e}"))?;
+        .prepare(&sql)
+        .map_err(|e| format!("prepare compressed line read: {e}"))?;
+    let bytes = stmt
+        .query_row([], |row| row.get::<_, Vec<u8>>(0))
+        .optional()
+        .map_err(|e| format!("query compressed line read: {e}"))?;
+    let Some(bytes) = bytes else {
+        return Ok(Vec::new());
+    };
+    let decoded = lz4_flex::decompress_size_prepended(&bytes)
+        .map_err(|e| format!("decompress compressed line store: {e}"))?;
+    decode_lines(&decoded)
+}
+
+fn read_legacy_line_rows(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let sql = format!("SELECT line FROM {table} ORDER BY ordinal");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("prepare legacy line read: {e}"))?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| format!("query catalog discovery checkpoint: {e}"))?;
+        .map_err(|e| format!("query legacy line read: {e}"))?;
     let mut lines = Vec::new();
     for row in rows {
-        lines.push(row.map_err(|e| format!("read catalog discovery checkpoint row: {e}"))?);
+        lines.push(row.map_err(|e| format!("read legacy line row: {e}"))?);
     }
-    Ok((!lines.is_empty()).then(|| CatalogDiscoveryCheckpoint::from_lines(lines)))
+    Ok(lines)
+}
+
+fn encode_lines(lines: &[String]) -> Result<Vec<u8>, String> {
+    let count = u32::try_from(lines.len()).map_err(|_| "too many catalog lines".to_string())?;
+    let mut out = Vec::new();
+    out.extend_from_slice(&count.to_le_bytes());
+    for line in lines {
+        let bytes = line.as_bytes();
+        let len = u32::try_from(bytes.len()).map_err(|_| "catalog line too long".to_string())?;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+    Ok(out)
+}
+
+fn decode_lines(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let mut pos = 0usize;
+    let count = read_u32(bytes, &mut pos)? as usize;
+    let mut lines = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = read_u32(bytes, &mut pos)? as usize;
+        let end = pos
+            .checked_add(len)
+            .ok_or_else(|| "catalog line length overflow".to_string())?;
+        if end > bytes.len() {
+            return Err("truncated catalog line store".to_string());
+        }
+        let line = std::str::from_utf8(&bytes[pos..end])
+            .map_err(|e| format!("catalog line store utf8: {e}"))?
+            .to_string();
+        lines.push(line);
+        pos = end;
+    }
+    if pos != bytes.len() {
+        return Err("trailing bytes in catalog line store".to_string());
+    }
+    Ok(lines)
+}
+
+fn read_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, String> {
+    let end = pos
+        .checked_add(4)
+        .ok_or_else(|| "catalog line offset overflow".to_string())?;
+    if end > bytes.len() {
+        return Err("truncated catalog line header".to_string());
+    }
+    let value = u32::from_le_bytes(bytes[*pos..end].try_into().unwrap());
+    *pos = end;
+    Ok(value)
 }
 
 fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
@@ -97,6 +166,22 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
     rows.next()
         .map(|row| row.is_some())
         .map_err(|e| format!("read sqlite table check: {e}"))
+}
+
+fn sqlite_table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("prepare sqlite column check: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("query sqlite column check: {e}"))?;
+    for row in rows {
+        if row.map_err(|e| format!("read sqlite column check: {e}"))? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
