@@ -135,7 +135,6 @@ struct FramebufferStreamState {
 pub struct DeviceTelemetrySample {
     pub seq: u64,
     pub combined_cpu_pct: f64,
-    pub cpu_temperature_millidegrees_c: Option<i64>,
     pub cores: Vec<CpuCoreTelemetry>,
     pub memory: MemoryTelemetry,
     pub frame_budget: FrameBudgetTelemetry,
@@ -936,7 +935,6 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
     Ok(DeviceTelemetrySample {
         seq: u64_at(&value, "/seq"),
         combined_cpu_pct: f64_at(&value, "/cpu/combined_busy_pct"),
-        cpu_temperature_millidegrees_c: i64_opt_at(&value, "/cpu/temperature_millidegrees_c"),
         cores: value
             .pointer("/cpu/cores")
             .and_then(Value::as_array)
@@ -1058,10 +1056,6 @@ fn f64_at(value: &Value, pointer: &str) -> f64 {
         .pointer(pointer)
         .and_then(Value::as_f64)
         .unwrap_or(0.0)
-}
-
-fn i64_opt_at(value: &Value, pointer: &str) -> Option<i64> {
-    value.pointer(pointer).and_then(Value::as_i64)
 }
 
 fn str_at(value: &Value, pointer: &str, fallback: &str) -> String {
@@ -1574,7 +1568,7 @@ mod tests {
             r#"{
                 "schema":"mister-magik-device-telemetry-v1",
                 "seq":7,
-                "cpu":{"combined_busy_pct":12.5,"temperature_millidegrees_c":48231,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
+                "cpu":{"combined_busy_pct":12.5,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
                 "memory":{"total_kb":1000,"magik_kb":100,"main_kb":20,"other_used_kb":600,"available_kb":300,"magik_pct":10.0,"other_used_pct":60.0,"available_pct":30.0},
                 "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500,"recent_frames":[{"frame":120,"wall_us":17000,"prepare_us":100,"render_us":200,"custom_draw_us":300,"vsync_us":400,"present_us":500,"cpu_prepare_us":10,"cpu_render_us":20,"cpu_custom_draw_us":30,"cpu_vsync_us":1,"cpu_present_us":5,"process_cpu_us":80,"vsync_source":"vsync","vsync_miss_streak":1}]}},
                 "processes":{"mister-magik-fb":{"pids":[42],"rss_kb":100,"threads":7},"MiSTer_MagiK":{"pids":[9],"rss_kb":20,"threads":1}},
@@ -1585,7 +1579,6 @@ mod tests {
         .expect("telemetry should parse");
 
         assert_eq!(sample.seq, 7);
-        assert_eq!(sample.cpu_temperature_millidegrees_c, Some(48231));
         assert_eq!(sample.cores.len(), 2);
         assert_eq!(sample.cores[0].label, "CPU0");
         assert_eq!(sample.memory.magik_pct, 10.0);
