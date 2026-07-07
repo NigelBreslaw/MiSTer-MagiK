@@ -18,7 +18,6 @@ impl CommandSpec {
 }
 
 pub const COMMANDS: &[CommandSpec] = &[
-    #[cfg(feature = "diagnostics")]
     CommandSpec::new("read", CommandKind::Fpga),
     CommandSpec::new("early-black", CommandKind::Fpga),
     CommandSpec::new("ui", CommandKind::Fpga),
@@ -190,8 +189,8 @@ mod tests {
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("library-sql"));
+        assert!(is_known_command("read"));
         for command in [
-            "read",
             "vsync-probe",
             "cpu-profile-smoke",
             "input",

@@ -213,7 +213,6 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
 
 fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
     match cmd {
-        #[cfg(feature = "diagnostics")]
         "read" => read_mode(f),
         "early-black" => early_black_route(f),
         "ui" => ui_runner::run_ui(f),
