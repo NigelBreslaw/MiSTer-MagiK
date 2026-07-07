@@ -381,11 +381,23 @@ p99_wall = walls[p99_index]
 max_wall = walls[-1]
 work_over = sum(1 for value in works if value > 16667)
 wall_over = sum(1 for value in walls if value > 16667)
+wall_over_18ms = sum(1 for value in walls if value > 18000)
+wall_over_20ms = sum(1 for value in walls if value > 20000)
+wall_over_33ms = sum(1 for value in walls if value > 33334)
+low_work_high_wall = 0
 sources = {"vsync": 0, "fallback": 0, "timeout": 0, "error": 0, "other_source": 0}
 dropped_rows = 0
 max_miss = 0
 examples = []
 for row in measured:
+    work = (
+        int_field(row, "prepare_us")
+        + int_field(row, "slint_render_us")
+        + int_field(row, "custom_draw_us")
+        + int_field(row, "fb_present_us")
+    )
+    if int_field(row, "wall_us") > 16667 and work <= 16667:
+        low_work_high_wall += 1
     source = row.get("vsync_source", "")
     if source in ("vsync", "fallback", "timeout", "error"):
         sources[source] += 1
@@ -414,6 +426,8 @@ detail = (
     f"frames_after_30={len(measured)} p99_work_us={p99_work} work_threshold={p99_work_us} "
     f"p99_wall_us={p99_wall} wall_p99_threshold={p99_wall_us} max_wall_us={max_wall} "
     f"wall_max_threshold={max_wall_us} work_gt_16667={work_over} wall_gt_16667={wall_over} "
+    f"wall_gt_18000={wall_over_18ms} wall_gt_20000={wall_over_20ms} "
+    f"wall_gt_33334={wall_over_33ms} low_work_high_wall={low_work_high_wall} "
     f"dropped_rows={dropped_rows} vsync={sources['vsync']} "
     f"fallback={sources['fallback']} timeout={sources['timeout']} error={sources['error']} "
     f"other_source={sources['other_source']} max_miss_streak={max_miss}"

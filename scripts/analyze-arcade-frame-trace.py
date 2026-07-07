@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import tempfile
 from pathlib import Path
 
 
@@ -57,6 +58,16 @@ INTERRUPTION_COLUMNS = [
     "runtime_status_write_us",
     "dirty_y0",
     "dirty_y1",
+]
+DOMINANT_DELTA_COLUMNS = [
+    "vsync_us",
+    "fb_present_us",
+    "direct_preview_present_us",
+    "arcade_list_present_us",
+    "runtime_status_write_us",
+    "preview_apply_us",
+    "preview_cache_inserts",
+    "preview_cache_evictions",
 ]
 
 
@@ -108,6 +119,53 @@ def work_us(row: dict[str, int | float | str]) -> int:
         + int(row.get("custom_draw_us", 0))
         + int(row.get("fb_present_us", 0))
     )
+
+
+def print_smaller_stutter_report(rows: list[dict[str, int | float | str]]) -> None:
+    print("smaller stutter buckets")
+    if not rows:
+        print("  unavailable")
+        return
+    counts = [
+        ("wall_gt_16_7ms", sum(1 for row in rows if int(row["wall_us"]) > 16_667)),
+        ("wall_gt_18ms", sum(1 for row in rows if int(row["wall_us"]) > 18_000)),
+        ("wall_gt_20ms", sum(1 for row in rows if int(row["wall_us"]) > 20_000)),
+        ("wall_gt_33ms", sum(1 for row in rows if int(row["wall_us"]) > 33_334)),
+        (
+            "low_work_high_wall",
+            sum(
+                1
+                for row in rows
+                if int(row["wall_us"]) > 16_667 and work_us(row) <= 16_667
+            ),
+        ),
+        ("work_gt_16_7ms", sum(1 for row in rows if work_us(row) > 16_667)),
+    ]
+    print("  " + " ".join(f"{name}={value}" for name, value in counts))
+    slow_rows = [row for row in rows if int(row["wall_us"]) > 16_667]
+    if not slow_rows:
+        print("  dominant_deltas: none")
+        return
+    medians = {
+        column: percentile([int(row.get(column, 0)) for row in rows], 50)
+        for column in DOMINANT_DELTA_COLUMNS
+        if column in rows[0]
+    }
+    dominant: dict[str, int] = {}
+    for row in slow_rows:
+        best_column = "none"
+        best_delta = 0
+        for column, median in medians.items():
+            delta = int(row.get(column, 0)) - median
+            if delta > best_delta:
+                best_column = column
+                best_delta = delta
+        dominant[best_column] = dominant.get(best_column, 0) + 1
+    ranked = sorted(dominant.items(), key=lambda item: (-item[1], item[0]))
+    print("  dominant_deltas: " + " ".join(f"{name}={count}" for name, count in ranked))
+    severe_rows = [row for row in rows if int(row["wall_us"]) > 20_000]
+    if severe_rows:
+        print_interruption_summary("  wall_gt_20ms correlation", severe_rows)
 
 
 def print_window_report(rows: list[dict[str, int | float | str]]) -> None:
@@ -202,9 +260,59 @@ def print_status_tombstones(rows: list[dict[str, object]]) -> None:
         print("  " + " ".join(fields))
 
 
+def run_self_test() -> int:
+    header = [
+        "frame",
+        "elapsed_us",
+        "selected",
+        "visual_index",
+        "arcade_update",
+        "rows",
+        "prepare_us",
+        "slint_render_us",
+        "custom_draw_us",
+        "fb_present_us",
+        "direct_preview_present_us",
+        "arcade_list_present_us",
+        "runtime_status_write_us",
+        "preview_apply_us",
+        "preview_cache_inserts",
+        "preview_cache_evictions",
+        "vsync_us",
+        "wall_us",
+    ]
+    rows = [
+        [1, 0, 0, 0, "none", 0, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 12000, 16000],
+        [2, 16667, 1, 1, "scroll", 8, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 14000, 17001],
+        [3, 33334, 2, 2, "scroll", 8, 2000, 1000, 1000, 2000, 1500, 800, 0, 900, 1, 1, 16000, 21000],
+        [4, 50001, 3, 3, "scroll", 8, 18000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 2000, 22000],
+    ]
+    parsed = [{key: parse_value(key, str(value)) for key, value in zip(header, row)} for row in rows]
+    assert sum(1 for row in parsed if int(row["wall_us"]) > 16_667) == 3
+    assert sum(1 for row in parsed if int(row["wall_us"]) > 18_000) == 2
+    assert sum(1 for row in parsed if int(row["wall_us"]) > 20_000) == 2
+    assert sum(1 for row in parsed if work_us(row) > 16_667) == 1
+    assert sum(1 for row in parsed if int(row["wall_us"]) > 16_667 and work_us(row) <= 16_667) == 2
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "trace.tsv"
+        with path.open("w", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(header)
+            writer.writerows(rows)
+        with path.open(newline="") as f:
+            reloaded = [
+                {key: parse_value(key, value) for key, value in row.items()}
+                for row in csv.DictReader(f, delimiter="\t")
+            ]
+        assert len(reloaded) == 4
+    print("analyze-arcade-frame-trace self-test ok")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("trace", type=Path)
+    parser.add_argument("trace", type=Path, nargs="?")
+    parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
         "--include-first",
         action="store_true",
@@ -217,6 +325,11 @@ def main() -> int:
         help="optional runtime status JSON with retained slow-frame tombstones",
     )
     args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+    if args.trace is None:
+        parser.error("trace is required unless --self-test is used")
 
     with args.trace.open(newline="") as f:
         rows = [
@@ -234,6 +347,8 @@ def main() -> int:
         rows = [row for row in rows if int(row["frame"]) != 0]
 
     print(f"{args.trace}: frames={len(rows)} include_first={args.include_first}")
+    print_smaller_stutter_report(rows)
+    print()
     print_window_report(rows)
     print()
     print_status_tombstones(status_slow_frames(args.status_json))
