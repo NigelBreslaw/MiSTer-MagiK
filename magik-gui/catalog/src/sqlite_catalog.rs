@@ -1864,7 +1864,6 @@ fn write_sqlite_scan_with_sources_inner(
         );
         CREATE TABLE launch_target_rows (
             launch_id INTEGER PRIMARY KEY,
-            game_key_id INTEGER NOT NULL,
             profile_string_id INTEGER,
             launch_kind_string_id INTEGER NOT NULL,
             source_path_id INTEGER,
@@ -1883,7 +1882,7 @@ fn write_sqlite_scan_with_sources_inner(
         );
         CREATE VIEW launch_targets AS
             SELECT launch_target_rows.launch_id,
-                   launch_target_rows.game_key_id,
+                   launch_target_rows.launch_id AS game_key_id,
                    profile_values.value AS profile_id,
                    launch_kind_values.value AS launch_kind,
                    COALESCE(
@@ -2010,7 +2009,7 @@ fn write_sqlite_scan_with_sources_inner(
                    lt.hardware_id AS hardware_id,
                    lt.confidence AS confidence
             FROM launch_targets lt
-            JOIN games ON games.game_key_id = lt.game_key_id
+            JOIN games ON games.game_key_id = lt.launch_id
             JOIN path_values_text source_paths ON source_paths.path_id = lt.source_path_id
             LEFT JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id
             LEFT JOIN path_values_text payload_paths ON payload_paths.path_id = lt.payload_path_id;
@@ -2106,8 +2105,8 @@ fn write_sqlite_scan_with_sources_inner(
                    game_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
-            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.game_key_id
-            JOIN games ON games.game_key_id = launch_target_rows.game_key_id;
+            JOIN game_rows ON game_rows.game_key_id = launch_target_rows.launch_id
+            JOIN games ON games.game_key_id = launch_target_rows.launch_id;
         CREATE VIEW launcher_launch_plans AS
             SELECT launcher_catalog.launch_id,
                    launcher_catalog.title,
@@ -2157,10 +2156,10 @@ fn write_sqlite_scan_with_sources_inner(
                    launch_plans.launch_ref AS launch_ref
             FROM ui_arcade_variants
             JOIN launch_target_rows lt ON lt.launch_id = ui_arcade_variants.launch_id
-            JOIN game_rows ON game_rows.game_key_id = lt.game_key_id
-            JOIN games ON games.game_key_id = lt.game_key_id
+            JOIN game_rows ON game_rows.game_key_id = lt.launch_id
+            JOIN games ON games.game_key_id = lt.launch_id
             LEFT JOIN launchable_identities i
-              ON i.game_key_id = lt.game_key_id
+              ON i.game_key_id = lt.launch_id
              AND i.namespace = 'mame'
             JOIN launch_plans ON launch_plans.launch_id = ui_arcade_variants.launch_id;
         CREATE VIEW ui_arcade_preferred_text AS
@@ -2357,8 +2356,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare game insert: {e}"))?;
         let mut target_stmt = tx
             .prepare(
-                "INSERT INTO launch_target_rows(launch_id,game_key_id,profile_string_id,launch_kind_string_id,source_path_id,launch_ref_kind_string_id,launch_path_id,launcher_path_id,payload_path_id,core_string_id,hardware_string_id,setname,parent,mount_kind_string_id,mount_index,delay_secs,confidence_string_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                "INSERT INTO launch_target_rows(launch_id,profile_string_id,launch_kind_string_id,source_path_id,launch_ref_kind_string_id,launch_path_id,launcher_path_id,payload_path_id,core_string_id,hardware_string_id,setname,parent,mount_kind_string_id,mount_index,delay_secs,confidence_string_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
         let mut identity_stmt = tx
@@ -2501,7 +2500,6 @@ fn write_sqlite_scan_with_sources_inner(
             target_stmt
                 .execute(params![
                     launch_id,
-                    game_key_id,
                     string_interner.intern_optional(profile_id),
                     string_interner.intern(launch_kind_for_discovery(discovery)),
                     source_path_id,
