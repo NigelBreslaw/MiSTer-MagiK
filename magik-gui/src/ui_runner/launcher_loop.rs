@@ -9,6 +9,7 @@ use super::launcher_worker_intents::{
 };
 use super::*;
 use crate::input_state::PadState;
+use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::framebuffer::ownership::{
@@ -2445,21 +2446,34 @@ pub(super) fn run_launcher_loop(
             prepare_trace.preview_schedule_us = trace_start.elapsed().as_micros();
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
-        if !launching
-            && !arcade_search_active
-            && !memory_guard.active()
-            && apply_ready_preview(
+        let mut preview_apply_trace = PreviewApplyTrace::default();
+        let preview_apply_dirty = if !launching && !arcade_search_active && !memory_guard.active() {
+            let dirty = apply_ready_preview(
                 &app,
                 &mut preview,
                 defer_selected_preview,
                 nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
-            )
-        {
+            );
+            preview_apply_trace = preview.last_apply_trace();
+            dirty
+        } else {
+            false
+        };
+        if preview_apply_dirty {
             request_launcher_redraw!();
         }
         if let Some(trace_start) = preview_apply_trace_start {
             prepare_trace.preview_apply_us = trace_start.elapsed().as_micros();
         }
+        prepare_trace.preview_worker_drained = preview_apply_trace.worker_drained;
+        prepare_trace.preview_ready_processed = preview_apply_trace.ready_processed;
+        prepare_trace.preview_selected_processed = preview_apply_trace.selected_processed;
+        prepare_trace.preview_prefetch_processed = preview_apply_trace.prefetch_processed;
+        prepare_trace.preview_stale_results = preview_apply_trace.stale_results;
+        prepare_trace.preview_cache_inserts = preview_apply_trace.cache_inserts;
+        prepare_trace.preview_cache_evictions = preview.take_frame_cache_evictions();
+        prepare_trace.preview_failed_results = preview_apply_trace.failed_results;
+        prepare_trace.preview_backlog = preview_apply_trace.backlog_len;
         arcade_entry_latency.record_preview_exact(
             start,
             Instant::now(),
