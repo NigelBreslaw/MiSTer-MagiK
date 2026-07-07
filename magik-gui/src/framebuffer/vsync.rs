@@ -1,7 +1,7 @@
 //! Vsync pacing policy and `/dev/fb0` wait worker.
 
 use crate::boot_analytics;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -131,6 +131,7 @@ pub struct VsyncPace {
 
 pub struct VsyncPacer {
     rx: Receiver<VsyncWaitStatus>,
+    direct_fb: Option<File>,
     period_us: u64,
     last_hit_at: Option<Instant>,
     last_frame_at: Instant,
@@ -174,14 +175,28 @@ impl VsyncPacer {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3);
+        let direct_fb = if configured_direct_wait_enabled() {
+            match OpenOptions::new().read(true).write(true).open("/dev/fb0") {
+                Ok(file) => Some(file),
+                Err(e) => {
+                    boot_analytics::event("vsync_direct_wait_unavailable", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
-        thread::Builder::new()
-            .name("mister-vsync".into())
-            .spawn(move || run_vsync_worker(tx, period_us))
-            .expect("spawn vsync worker");
+        if direct_fb.is_none() {
+            thread::Builder::new()
+                .name("mister-vsync".into())
+                .spawn(move || run_vsync_worker(tx, period_us))
+                .expect("spawn vsync worker");
+        }
 
         Self {
             rx,
+            direct_fb,
             period_us,
             last_hit_at: None,
             last_frame_at: Instant::now(),
@@ -233,6 +248,9 @@ impl VsyncPacer {
     pub fn wait(&mut self) -> VsyncPace {
         let wait_started_at = Instant::now();
         let wait_start_age_us = self.age_since_last_hit_us(wait_started_at);
+        if let Some(fd) = self.direct_fb.as_ref().map(AsRawFd::as_raw_fd) {
+            return self.wait_direct(fd, wait_started_at, wait_start_age_us);
+        }
         let deadline = Duration::from_micros(self.period_us + VSYNC_GRACE_US);
         let deadline_at = wait_started_at + deadline;
         let mut stale_hits = 0u32;
@@ -386,6 +404,46 @@ impl VsyncPacer {
             message,
         }
     }
+
+    fn wait_direct(
+        &mut self,
+        fd: std::os::unix::io::RawFd,
+        wait_started_at: Instant,
+        wait_start_age_us: u64,
+    ) -> VsyncPace {
+        match wait_vsync_fd(fd) {
+            VsyncWaitStatus::Hit { wait_us, at } => {
+                let accepted_hit_age_us =
+                    wait_started_at.saturating_duration_since(at).as_micros() as u64;
+                self.record_hit(at);
+                self.last_frame_at = at;
+                VsyncPace {
+                    source: VsyncPaceSource::Vsync,
+                    wait_us,
+                    period_us: self.period_us,
+                    miss_streak: self.miss_streak,
+                    hit_at: Some(at),
+                    wait_start_age_us,
+                    accepted_hit_age_us,
+                    stale_hits: 0,
+                    message: None,
+                }
+            }
+            VsyncWaitStatus::Timeout { wait_us } => {
+                self.timeouts += 1;
+                self.fallback_after_miss(VsyncPaceSource::Timeout, wait_us, wait_start_age_us, None)
+            }
+            VsyncWaitStatus::Error { wait_us, message } => {
+                self.errors += 1;
+                self.fallback_after_miss(
+                    VsyncPaceSource::Error,
+                    wait_us,
+                    wait_start_age_us,
+                    Some(message),
+                )
+            }
+        }
+    }
 }
 
 fn run_vsync_worker(tx: SyncSender<VsyncWaitStatus>, fallback_period_us: u64) {
@@ -441,6 +499,13 @@ fn configured_fresh_hit_max_age_us() -> u64 {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(DEFAULT_FRESH_HIT_MAX_AGE_US)
         .min(10_000)
+}
+
+fn configured_direct_wait_enabled() -> bool {
+    !matches!(
+        std::env::var("MISTER_VSYNC_DIRECT_WAIT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false") | Ok("no")
+    )
 }
 
 fn mister_ini_menu_pal_enabled() -> bool {
@@ -560,6 +625,7 @@ mod tests {
         let (_tx, rx) = mpsc::channel();
         VsyncPacer {
             rx,
+            direct_fb: None,
             period_us,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(period_us),
@@ -619,6 +685,7 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
         let mut pacer = VsyncPacer {
             rx,
+            direct_fb: None,
             period_us: DEFAULT_VSYNC_FALLBACK_US,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),
@@ -755,6 +822,7 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(VSYNC_WORKER_QUEUE_DEPTH);
         let mut pacer = VsyncPacer {
             rx,
+            direct_fb: None,
             period_us: DEFAULT_VSYNC_FALLBACK_US,
             last_hit_at: None,
             last_frame_at: Instant::now() - Duration::from_micros(DEFAULT_VSYNC_FALLBACK_US),
