@@ -3273,6 +3273,7 @@ mod tests {
     use crate::preview_worker;
     use crate::test_support::*;
     use rusqlite::Connection;
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     fn discovered_at_for_title(db: &Path, title: &str) -> Option<i64> {
@@ -4169,6 +4170,26 @@ mod tests {
             .collect()
     }
 
+    fn category_options_as_set(catalog: &ArcadeCatalog, system_id: &str) -> BTreeSet<String> {
+        catalog
+            .category_options(system_id)
+            .into_iter()
+            .map(|option| option.label)
+            .collect()
+    }
+
+    fn distinct_categories_from_view(conn: &Connection, view: &str) -> BTreeSet<String> {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT DISTINCT category FROM {view} WHERE system_id='arcade' ORDER BY category"
+            ))
+            .expect("prepare category query");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("query categories")
+            .map(|row| row.expect("category row"))
+            .collect()
+    }
+
     fn assert_navigation_catalog_matches_sqlite(
         sqlite_catalog: &ArcadeCatalog,
         navigation_catalog: &ArcadeCatalog,
@@ -4752,6 +4773,118 @@ mod tests {
                 &crate::arcade_catalog::ArcadeFilter::Category("Shooter / Vertical".to_string())
             ),
             1
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn arcade_category_metadata_survives_views_sqlite_load_and_navigation_projection() {
+        let root = unique_temp_dir("sqlite-many-filter-categories");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        let conn = Connection::open(&mame_db).expect("open mame db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT,
+                category TEXT
+            ) WITHOUT ROWID;
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
+            VALUES
+                ('catmaze',NULL,'Category Maze','1980','Namco','Maze'),
+                ('catshoot',NULL,'Category Shooter','1981','Capcom','Shooter / Vertical'),
+                ('catfight',NULL,'Category Fighter','1982','Irem','Fighter / 2D'),
+                ('catdrive',NULL,'Category Driver','1983','Sega','Driving / Race'),
+                ('catpuzzle',NULL,'Category Puzzle','1984','Taito','Puzzle / Drop');
+            "#,
+        )
+        .expect("write mame metadata");
+        drop(conn);
+
+        let discoveries = [
+            ("catmaze", "Category Maze"),
+            ("catshoot", "Category Shooter"),
+            ("catfight", "Category Fighter"),
+            ("catdrive", "Category Driver"),
+            ("catpuzzle", "Category Puzzle"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (setname, title))| {
+            let mut discovery = mra_discovery(idx + 1, title);
+            discovery.launch_ref = format!("/media/fat/_Arcade/{title}.mra");
+            discovery.source_path = discovery.launch_ref.clone();
+            discovery.setname = Some(setname.to_string());
+            discovery.genre = Some("Arcade".to_string());
+            discovery
+        })
+        .collect::<Vec<_>>();
+
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tmany-categories".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        write_sqlite_scan_with_sources(
+            &db,
+            &sqlite_scan_with_discoveries(discoveries),
+            SqliteScanSources {
+                mame_sqlite_path: &mame_db,
+                hbmame_sqlite_path: &PathBuf::new(),
+                preview_paths: &PreviewArchivePaths::default(),
+                software_hash_cache: SoftwareHashCache::load(&db),
+                discovery_history: DiscoveryHistory::load(&db),
+                stamp: Some(&stamp),
+            },
+            Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            None,
+        )
+        .expect("write sqlite");
+        let expected = BTreeSet::from([
+            "Driving / Race".to_string(),
+            "Fighter / 2D".to_string(),
+            "Maze".to_string(),
+            "Puzzle / Drop".to_string(),
+            "Shooter / Vertical".to_string(),
+        ]);
+        let conn = open_sqlite_read_only(&db).expect("open library sqlite");
+
+        assert_eq!(
+            distinct_categories_from_view(&conn, "ui_arcade_preferred_text"),
+            expected,
+            "preferred arcade view must preserve per-game metadata categories"
+        );
+        assert_eq!(
+            distinct_categories_from_view(&conn, "launcher_catalog_text"),
+            expected,
+            "launcher catalog view must preserve per-game metadata categories"
+        );
+
+        let loaded =
+            load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
+        assert_eq!(
+            category_options_as_set(&loaded.catalog, "arcade"),
+            expected,
+            "SQLite runtime load must expose all category filter options"
+        );
+
+        repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
+            .expect("repair navigation projection");
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&db);
+        let navigation =
+            catalog_navigation::read_catalog_navigation_projection(&navigation_path, &stamp)
+                .expect("read navigation projection")
+                .expect("current navigation projection");
+        let navigation_catalog =
+            ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", navigation);
+        assert_eq!(
+            category_options_as_set(&navigation_catalog, "arcade"),
+            expected,
+            "navigation projection must expose all category filter options"
         );
         let _ = std::fs::remove_dir_all(root);
     }
