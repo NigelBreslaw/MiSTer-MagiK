@@ -5,7 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
 OUT_DIR="$ROOT/build/fpga-vblank-latch"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
-MENU_DIR="${MISTER_MENU_DIR:-${ROOT}/../Menu_MiSTer}"
+if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
+  MENU_DIR="$MISTER_MENU_DIR"
+elif [[ -d "${ROOT}/../Menu_MiSTer" ]]; then
+  MENU_DIR="${ROOT}/../Menu_MiSTer"
+else
+  MENU_DIR="${ROOT}/reference/Menu_MiSTer"
+fi
 RBF_OUT="$OUT_DIR/menu-magik-vblank-latch.rbf"
 META_OUT="$OUT_DIR/menu-magik-vblank-latch.metadata.txt"
 LOG_OUT="$OUT_DIR/menu-magik-vblank-latch.build.log"
@@ -16,8 +22,8 @@ Usage:
   scripts/build-fpga-vblank-latch-core.sh
 
 Builds an experimental Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
-framebuffer patch. Set MISTER_MENU_DIR to a writable Menu_MiSTer checkout.
-The gitignored reference/Menu_MiSTer checkout is intentionally rejected.
+framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
+source checkout is copied to a disposable build workdir before patching.
 EOF
 }
 
@@ -41,16 +47,11 @@ abs_path() {
 
 if [[ ! -d "$MENU_DIR" ]]; then
   echo "missing Menu_MiSTer checkout: $MENU_DIR" >&2
-  echo "set MISTER_MENU_DIR to a writable Menu_MiSTer checkout" >&2
+  echo "set MISTER_MENU_DIR or populate reference/Menu_MiSTer" >&2
   exit 1
 fi
 
 MENU_ABS="$(abs_path "$MENU_DIR")"
-REFERENCE_ABS="$(abs_path "$ROOT/reference/Menu_MiSTer")"
-if [[ "$MENU_ABS" == "$REFERENCE_ABS" ]]; then
-  echo "refusing to build from read-only reference checkout: $MENU_ABS" >&2
-  exit 1
-fi
 
 if [[ ! -f "$MENU_ABS/menu.qsf" || ! -f "$MENU_ABS/sys/sys_top.v" ]]; then
   echo "not a Menu_MiSTer checkout: $MENU_ABS" >&2
@@ -71,6 +72,7 @@ rsync -a --delete \
   --exclude db \
   --exclude incremental_db \
   "$MENU_ABS"/ "$WORK_DIR"/
+git -C "$WORK_DIR" init -q
 
 if git -C "$WORK_DIR" apply --check "$PATCH" >/dev/null 2>&1; then
   git -C "$WORK_DIR" apply "$PATCH"
