@@ -27,6 +27,10 @@
 //!     plugin-presenter-report
 //!                        report plugin async-present mailbox capability
 //!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
+//!     fpga-latch-post-report
+//!                        fill one plugin hidden slot and post it through FPGA latch
+//!     fpga-latch-pattern
+//!                        fill plugin hidden slots and vblank-latch them in FPGA
 //!     plugin-present-pattern
 //!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
@@ -125,7 +129,7 @@ use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
-use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
+use mister_magik_fb::framebuffer::route::{FramebufferRouteMode, LauncherFramebufferRoute};
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
@@ -379,6 +383,10 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         "input" => run_input(),
         #[cfg(feature = "diagnostics")]
         "fpga-latch-report" => run_fpga_latch_report(),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "fpga-latch-post-report" => run_fpga_latch_post_report(f),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "fpga-latch-pattern" => run_fpga_latch_pattern(f),
         #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
         other => unknown_command(other),
@@ -1232,6 +1240,278 @@ fn run_fpga_latch_report() {
         status.active_height,
         status.active_stride
     );
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_fpga_latch_post_report(fpga: &mut Fpga) {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_post_report_failed\tstage=open_plugin_buffer\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base_addr = match buffer.physical_addr() {
+        Ok(base_addr) => base_addr,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_post_report_failed\tstage=physical_addr\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    fill_plugin_present_pattern(&mut source, width, height, 0, 1);
+
+    let copy_start = std::time::Instant::now();
+    if let Err(e) = buffer.copy_full_frame(&source, width) {
+        crate::ui_errln!("fpga_latch_post_report_failed\tstage=copy\terror={e}");
+        std::process::exit(1);
+    }
+    let copy_us = copy_start.elapsed().as_micros() as u64;
+
+    let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let post_start = std::time::Instant::now();
+    let post = fpga.post_magik_latched_fbuf_rgb565(
+        1,
+        base_addr,
+        width as u16,
+        height as u16,
+        route,
+        false,
+    );
+    let post_us = post_start.elapsed().as_micros() as u64;
+    let (ack_high, ack_low) = match post {
+        Ok(ack) => ack,
+        Err(e) => {
+            crate::ui_errln!(
+                "fpga_latch_post_report_failed\tstage=post\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+    };
+    let supported = ack_high == MAGIK_FBUF_LATCH_MAGIC || ack_low == MAGIK_FBUF_LATCH_MAGIC;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let status_start = std::time::Instant::now();
+    let status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_errln!(
+                "fpga_latch_post_report_failed\tstage=status\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+    };
+    let status_us = status_start.elapsed().as_micros() as u64;
+
+    crate::ui_logln!(
+        "fpga_latch_post_report_tsv\tsequence=1\tbuffer=1\tphys=0x{base_addr:08x}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tcopy_us={copy_us}\tpost_us={post_us}\tstatus_us={status_us}\tset_supported={}\tack_high=0x{:04x}\tack_low=0x{:04x}\tstatus_supported={}\tactive_sequence={}\tpending_sequence={}\tpending={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}",
+        bool_tsv(supported),
+        ack_high,
+        ack_low,
+        bool_tsv(status.supported()),
+        status.active_sequence,
+        status.pending_sequence,
+        bool_tsv(status.pending()),
+        bool_tsv(status.active_enabled()),
+        status.flip_count,
+        status.post_count,
+        status.drop_count,
+        status.active_base
+    );
+    if !supported || !status.supported() {
+        std::process::exit(1);
+    }
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_fpga_latch_pattern(fpga: &mut Fpga) {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_FPGA_LATCH_PATTERN_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(180)
+        .max(1);
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=open\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=open\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base1 = match buffer1.physical_addr() {
+        Ok(base) => base,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=physical_addr\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base2 = match buffer2.physical_addr() {
+        Ok(base) => base,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=physical_addr\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    let mut copy_samples = Vec::with_capacity(frames);
+    let mut post_samples = Vec::with_capacity(frames);
+    let mut status_samples = Vec::with_capacity(frames);
+    let mut unsupported_posts = 0usize;
+    let period = std::time::Duration::from_micros(16_667);
+    let mut next_deadline = std::time::Instant::now();
+
+    crate::ui_logln!(
+        "fpga_latch_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}\tbuffer1_phys=0x{base1:08x}\tbuffer2_phys=0x{base2:08x}",
+        stride_bytes * height
+    );
+    crate::ui_logln!(
+        "fpga_latch_pattern_frame_tsv\tframe\tsequence\tbuffer\tcopy_us\tpost_us\tstatus_us\tset_supported\tactive_sequence\tpending_sequence\tpending\tflip_count\tpost_count\tdrop_count\tactive_base"
+    );
+
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        let sequence = (frame as u16).wrapping_add(1).max(1);
+        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
+
+        let copy_start = std::time::Instant::now();
+        let copy_result = if buffer_index == 1 {
+            buffer1.copy_full_frame(&source, width)
+        } else {
+            buffer2.copy_full_frame(&source, width)
+        };
+        let copy_us = copy_start.elapsed().as_micros() as u64;
+        if let Err(e) = copy_result {
+            crate::ui_errln!(
+                "fpga_latch_pattern_failed\tstage=copy\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+
+        let base_addr = if buffer_index == 1 { base1 } else { base2 };
+        let post_start = std::time::Instant::now();
+        let post = fpga.post_magik_latched_fbuf_rgb565(
+            sequence,
+            base_addr,
+            width as u16,
+            height as u16,
+            route,
+            false,
+        );
+        let post_us = post_start.elapsed().as_micros() as u64;
+        let set_supported = match post {
+            Ok((ack_high, ack_low)) => {
+                ack_high == MAGIK_FBUF_LATCH_MAGIC || ack_low == MAGIK_FBUF_LATCH_MAGIC
+            }
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_latch_pattern_failed\tstage=post\tframe={frame}\tbuffer={buffer_index}\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        if !set_supported {
+            unsupported_posts += 1;
+        }
+
+        next_deadline += period;
+        let now = std::time::Instant::now();
+        if next_deadline > now {
+            std::thread::sleep(next_deadline - now);
+        } else {
+            next_deadline = now;
+        }
+
+        let status_start = std::time::Instant::now();
+        let status = match fpga.read_magik_latched_fbuf_status() {
+            Ok(status) => status,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_latch_pattern_failed\tstage=status\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let status_us = status_start.elapsed().as_micros() as u64;
+        copy_samples.push(copy_us);
+        post_samples.push(post_us);
+        status_samples.push(status_us);
+        crate::ui_logln!(
+            "fpga_latch_pattern_frame_tsv\t{frame}\t{sequence}\t{buffer_index}\t{copy_us}\t{post_us}\t{status_us}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0x{:08x}",
+            bool_tsv(set_supported),
+            status.active_sequence,
+            status.pending_sequence,
+            bool_tsv(status.pending()),
+            status.flip_count,
+            status.post_count,
+            status.drop_count,
+            status.active_base
+        );
+    }
+
+    let final_status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=final_status\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    crate::ui_logln!(
+        "fpga_latch_pattern_summary_tsv\tframes={}\tunsupported_posts={unsupported_posts}\tcopy_p50_us={}\tcopy_p95_us={}\tcopy_p99_us={}\tcopy_max_us={}\tpost_p50_us={}\tpost_p95_us={}\tpost_p99_us={}\tpost_max_us={}\tstatus_p50_us={}\tstatus_p95_us={}\tstatus_p99_us={}\tstatus_max_us={}\tfinal_active_sequence={}\tfinal_pending_sequence={}\tfinal_pending={}\tfinal_flip_count={}\tfinal_post_count={}\tfinal_drop_count={}",
+        copy_samples.len(),
+        percentile_u64(&copy_samples, 50),
+        percentile_u64(&copy_samples, 95),
+        percentile_u64(&copy_samples, 99),
+        copy_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&post_samples, 50),
+        percentile_u64(&post_samples, 95),
+        percentile_u64(&post_samples, 99),
+        post_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&status_samples, 50),
+        percentile_u64(&status_samples, 95),
+        percentile_u64(&status_samples, 99),
+        status_samples.iter().copied().max().unwrap_or_default(),
+        final_status.active_sequence,
+        final_status.pending_sequence,
+        bool_tsv(final_status.pending()),
+        final_status.flip_count,
+        final_status.post_count,
+        final_status.drop_count
+    );
+    if unsupported_posts != 0 || !final_status.supported() {
+        std::process::exit(1);
+    }
 }
 
 #[cfg(feature = "diagnostics")]
