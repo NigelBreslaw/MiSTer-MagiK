@@ -956,19 +956,37 @@ fn run_fb_map_bandwidth() {
     crate::ui_logln!(
         "fb_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
     );
-    match MappedRgb565Framebuffer::open_rgb565(width, height) {
-        Ok(mut fb0) => {
-            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                fb0.present_rows_565(src, 0, height)
-                    .map(|_| frame_bytes)
-                    .map_err(|e| e.to_string())
-            });
-            print_bandwidth_result("fb0-active", &result);
+    let raw = MappedRgb565Framebuffer::raw_diagnostics().ok();
+    let source_bytes_len = frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
+    if raw
+        .as_ref()
+        .map(|raw| raw.smem_len >= frame_bytes)
+        .unwrap_or(false)
+    {
+        match Fb0ByteRange::open(frame_bytes, 0, frame_bytes) {
+            Ok(mut fb0_range) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                    fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-active", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-active", &format!("open range: {e}")),
         }
-        Err(e) => print_bandwidth_error("fb0-active", &format!("open /dev/fb0: {e}")),
+    } else {
+        match MappedRgb565Framebuffer::open_rgb565(width, height) {
+            Ok(mut fb0) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    fb0.present_rows_565(src, 0, height)
+                        .map(|_| frame_bytes)
+                        .map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-active", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-active", &format!("open /dev/fb0: {e}")),
+        }
     }
 
-    let raw = MappedRgb565Framebuffer::raw_diagnostics().ok();
     if raw
         .as_ref()
         .map(|raw| raw.smem_len >= frame_bytes.saturating_mul(2))
@@ -979,8 +997,6 @@ fn run_fb_map_bandwidth() {
         );
         match Fb0ByteRange::open(frame_bytes.saturating_mul(2), frame_bytes, frame_bytes) {
             Ok(mut fb0_range) => {
-                let source_bytes_len =
-                    frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
                 let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
                     let src_bytes = rgb565_as_bytes(src, source_bytes_len);
                     fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
