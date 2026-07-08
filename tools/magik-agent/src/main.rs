@@ -24,7 +24,10 @@ fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+#[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
+    use quick_xml::events::{BytesStart, Event};
+    use quick_xml::Reader as XmlReader;
     use serde_json::{json, Value};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -32,6 +35,9 @@ mod sd_browse {
 
     pub const ROOT_PATH: &str = "/";
     pub const SD_ROOT: &str = "/media/fat";
+    pub const MRA_PARSE_LIMIT_BYTES: u64 = 512 * 1024;
+    pub const MRA_RAW_DISPLAY_LIMIT_BYTES: u64 = 256 * 1024;
+    pub const IMAGE_PREVIEW_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
 
     pub fn list_dir_at_root(
         root: &Path,
@@ -57,6 +63,133 @@ mod sd_browse {
             "path": relative_path,
             "show_hidden": show_hidden,
             "entries": entries,
+            "elapsed_ms": start.elapsed().as_millis() as u64,
+        }))
+    }
+
+    pub fn stat_item_at_root(root: &Path, requested_path: &str) -> Result<Value, String> {
+        let start = Instant::now();
+        let relative_path = normalize_sd_relative_path(requested_path)?;
+        let host_path = sd_host_path(root, &relative_path);
+        let metadata =
+            fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
+        let name = item_name(&relative_path);
+        let extension = file_extension(&name);
+        let kind = if metadata.is_dir() {
+            "directory"
+        } else {
+            "file"
+        };
+        Ok(json!({
+            "schema": "mister-magik-sd-stat-item-v1",
+            "path": relative_path,
+            "name": name,
+            "parent_path": parent_sd_path(requested_path),
+            "kind": kind,
+            "size": if metadata.is_dir() { 0 } else { metadata.len() },
+            "modified_unix_ms": modified_unix_ms(&metadata),
+            "readonly": metadata.permissions().readonly(),
+            "hidden": is_hidden_name(&name),
+            "extension": extension,
+            "capabilities": item_capabilities(kind, &extension),
+            "elapsed_ms": start.elapsed().as_millis() as u64,
+        }))
+    }
+
+    pub struct SdPreviewImage {
+        pub result: Value,
+        pub payload: Vec<u8>,
+    }
+
+    pub fn preview_image_at_root(
+        root: &Path,
+        requested_path: &str,
+    ) -> Result<SdPreviewImage, String> {
+        let start = Instant::now();
+        let relative_path = normalize_sd_relative_path(requested_path)?;
+        let host_path = sd_host_path(root, &relative_path);
+        let metadata =
+            fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
+        if !metadata.is_file() {
+            return Err(format!("preview target is not a file: {relative_path}"));
+        }
+        if metadata.len() > IMAGE_PREVIEW_LIMIT_BYTES {
+            return Err(format!(
+                "image {} bytes exceeds preview limit {}",
+                metadata.len(),
+                IMAGE_PREVIEW_LIMIT_BYTES
+            ));
+        }
+        let extension = file_extension(&item_name(&relative_path));
+        if !matches!(extension.as_str(), "png" | "jpg" | "jpeg") {
+            return Err(format!("unsupported preview extension: {extension}"));
+        }
+        let payload = fs::read(&host_path).map_err(|err| format!("read {relative_path}: {err}"))?;
+        let (format, width, height) = image_dimensions(&payload)
+            .ok_or_else(|| "could not identify PNG/JPEG dimensions".to_string())?;
+        Ok(SdPreviewImage {
+            result: json!({
+                "schema": "mister-magik-sd-preview-image-v1",
+                "path": relative_path,
+                "format": format,
+                "width": width,
+                "height": height,
+                "raw_bytes": payload.len() as u64,
+                "payload_bytes": payload.len() as u64,
+                "encoding": "identity",
+                "elapsed_ms": start.elapsed().as_millis() as u64,
+            }),
+            payload,
+        })
+    }
+
+    pub fn parse_mra_at_root(root: &Path, requested_path: &str) -> Result<Value, String> {
+        let start = Instant::now();
+        let relative_path = normalize_sd_relative_path(requested_path)?;
+        let host_path = sd_host_path(root, &relative_path);
+        let metadata =
+            fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
+        if !metadata.is_file() {
+            return Err(format!("MRA target is not a file: {relative_path}"));
+        }
+        if file_extension(&item_name(&relative_path)) != "mra" {
+            return Err(format!(
+                "MRA parser only accepts .mra files: {relative_path}"
+            ));
+        }
+        if metadata.len() > MRA_PARSE_LIMIT_BYTES {
+            return Ok(json!({
+                "schema": "mister-magik-sd-parse-mra-v1",
+                "path": relative_path,
+                "size": metadata.len(),
+                "parse_limit_bytes": MRA_PARSE_LIMIT_BYTES,
+                "raw_display_limit_bytes": MRA_RAW_DISPLAY_LIMIT_BYTES,
+                "truncated": true,
+                "summary": [],
+                "xml_rows": [],
+                "path_rows": [],
+                "warnings": [format!("MRA is {} bytes; parse limit is {}", metadata.len(), MRA_PARSE_LIMIT_BYTES)],
+                "raw_xml": "",
+                "raw_xml_truncated": true,
+                "elapsed_ms": start.elapsed().as_millis() as u64,
+            }));
+        }
+        let text =
+            fs::read_to_string(&host_path).map_err(|err| format!("read {relative_path}: {err}"))?;
+        let parsed = parse_mra_text(&text, metadata.len());
+        Ok(json!({
+            "schema": "mister-magik-sd-parse-mra-v1",
+            "path": relative_path,
+            "size": metadata.len(),
+            "parse_limit_bytes": MRA_PARSE_LIMIT_BYTES,
+            "raw_display_limit_bytes": MRA_RAW_DISPLAY_LIMIT_BYTES,
+            "truncated": false,
+            "summary": parsed.summary,
+            "xml_rows": parsed.xml_rows,
+            "path_rows": parsed.path_rows,
+            "warnings": parsed.warnings,
+            "raw_xml": if metadata.len() <= MRA_RAW_DISPLAY_LIMIT_BYTES { text } else { String::new() },
+            "raw_xml_truncated": metadata.len() > MRA_RAW_DISPLAY_LIMIT_BYTES,
             "elapsed_ms": start.elapsed().as_millis() as u64,
         }))
     }
@@ -111,12 +244,7 @@ mod sd_browse {
         } else {
             "file"
         };
-        let modified_unix_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0);
+        let modified_unix_ms = modified_unix_ms(&metadata);
         Ok(json!({
             "name": name,
             "path": entry_path,
@@ -130,6 +258,271 @@ mod sd_browse {
 
     fn is_hidden_name(name: &str) -> bool {
         name.starts_with('.')
+    }
+
+    fn modified_unix_ms(metadata: &fs::Metadata) -> u64 {
+        metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn item_name(path: &str) -> String {
+        if path == ROOT_PATH {
+            "SD Card".to_string()
+        } else {
+            path.rsplit('/').next().unwrap_or(path).to_string()
+        }
+    }
+
+    fn parent_sd_path(path: &str) -> String {
+        let normalized = normalize_sd_relative_path(path).unwrap_or_else(|_| ROOT_PATH.to_string());
+        if normalized == ROOT_PATH {
+            return ROOT_PATH.to_string();
+        }
+        match normalized.rsplit_once('/') {
+            Some(("", _)) | None => ROOT_PATH.to_string(),
+            Some((parent, _)) => parent.to_string(),
+        }
+    }
+
+    fn file_extension(name: &str) -> String {
+        name.rsplit_once('.')
+            .map(|(_, extension)| extension.to_ascii_lowercase())
+            .unwrap_or_default()
+    }
+
+    fn item_capabilities(kind: &str, extension: &str) -> Value {
+        json!({
+            "stat": true,
+            "image_preview": kind == "file" && matches!(extension, "png" | "jpg" | "jpeg"),
+            "mra_parse": kind == "file" && extension == "mra",
+            "raw_xml": kind == "file" && extension == "mra",
+            "folder_analysis": kind == "directory",
+            "ini_summary": kind == "file" && extension == "ini",
+            "rbf_summary": kind == "file" && extension == "rbf",
+            "save_hint": kind == "file" && matches!(extension, "sav" | "srm"),
+            "archive_summary": kind == "file" && matches!(extension, "zip" | "7z"),
+            "sqlite_summary": kind == "file" && matches!(extension, "sqlite" | "sqlite3" | "db"),
+        })
+    }
+
+    fn image_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+        if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+            let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+            return Some(("png", width, height));
+        }
+        if bytes.len() >= 4 && bytes[0..2] == [0xff, 0xd8] {
+            let mut i = 2usize;
+            while i + 9 < bytes.len() {
+                while i < bytes.len() && bytes[i] == 0xff {
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    break;
+                }
+                let marker = bytes[i];
+                i += 1;
+                if marker == 0xd9 || marker == 0xda {
+                    break;
+                }
+                if i + 2 > bytes.len() {
+                    break;
+                }
+                let len = u16::from_be_bytes([bytes[i], bytes[i + 1]]) as usize;
+                if len < 2 || i + len > bytes.len() {
+                    break;
+                }
+                if matches!(
+                    marker,
+                    0xc0 | 0xc1
+                        | 0xc2
+                        | 0xc3
+                        | 0xc5
+                        | 0xc6
+                        | 0xc7
+                        | 0xc9
+                        | 0xca
+                        | 0xcb
+                        | 0xcd
+                        | 0xce
+                        | 0xcf
+                ) && len >= 7
+                {
+                    let height = u16::from_be_bytes([bytes[i + 3], bytes[i + 4]]) as u32;
+                    let width = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                    return Some(("jpeg", width, height));
+                }
+                i += len;
+            }
+        }
+        None
+    }
+
+    struct ParsedMra {
+        summary: Vec<Value>,
+        xml_rows: Vec<Value>,
+        path_rows: Vec<Value>,
+        warnings: Vec<String>,
+    }
+
+    fn parse_mra_text(text: &str, source_size: u64) -> ParsedMra {
+        let mut reader = XmlReader::from_str(text);
+        reader.config_mut().trim_text(true);
+        let mut stack: Vec<String> = Vec::new();
+        let mut xml_rows = Vec::new();
+        let mut warnings = Vec::new();
+        let mut order = 0u64;
+
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => {
+                    push_start_row(&mut xml_rows, &mut stack, &e, &mut order, false);
+                    stack.push(xml_name(e.name().as_ref()));
+                }
+                Ok(Event::Empty(e)) => {
+                    push_start_row(&mut xml_rows, &mut stack, &e, &mut order, true);
+                }
+                Ok(Event::Text(e)) => {
+                    let text_value = e.xml10_content().unwrap_or_default().trim().to_string();
+                    if !text_value.is_empty() {
+                        let path = format!("/{}", stack.join("/"));
+                        xml_rows.push(json!({
+                            "order": order,
+                            "depth": stack.len(),
+                            "path": path,
+                            "kind": "text",
+                            "name": "",
+                            "value": text_value,
+                        }));
+                        order += 1;
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    stack.pop();
+                }
+                Ok(Event::Eof) => break,
+                Err(err) => {
+                    warnings.push(format!("XML parse warning: {err}"));
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let summary = mra_summary_rows(&xml_rows, source_size);
+        let path_rows = xml_rows
+            .iter()
+            .filter(|row| {
+                let value = row.get("value").and_then(Value::as_str).unwrap_or("");
+                looks_path_like(row.get("name").and_then(Value::as_str).unwrap_or(""))
+                    || looks_path_like(value)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        ParsedMra {
+            summary,
+            xml_rows,
+            path_rows,
+            warnings,
+        }
+    }
+
+    fn push_start_row(
+        rows: &mut Vec<Value>,
+        stack: &mut [String],
+        e: &BytesStart<'_>,
+        order: &mut u64,
+        empty: bool,
+    ) {
+        let name = xml_name(e.name().as_ref());
+        let path = if stack.is_empty() {
+            format!("/{name}")
+        } else {
+            format!("/{}/{}", stack.join("/"), name)
+        };
+        rows.push(json!({
+            "order": *order,
+            "depth": stack.len() + 1,
+            "path": path,
+            "kind": if empty { "empty-element" } else { "element" },
+            "name": name,
+            "value": "",
+        }));
+        *order += 1;
+        for attr in e.attributes().flatten() {
+            rows.push(json!({
+                "order": *order,
+                "depth": stack.len() + 1,
+                "path": path,
+                "kind": "attribute",
+                "name": format!("@{}", xml_name(attr.key.as_ref())),
+                "value": attr.unescape_value().unwrap_or_default().into_owned(),
+            }));
+            *order += 1;
+        }
+    }
+
+    fn xml_name(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).to_string()
+    }
+
+    fn mra_summary_rows(rows: &[Value], source_size: u64) -> Vec<Value> {
+        let mut out = vec![json!({"label": "MRA size", "value": format!("{source_size} bytes")})];
+        for (label, names) in [
+            ("Title", &["name", "title"][..]),
+            ("Set", &["setname", "set", "rom"][..]),
+            ("Year", &["year"][..]),
+            ("Manufacturer", &["manufacturer", "maker"][..]),
+            ("Core/RBF", &["rbf", "core"][..]),
+            ("Rotation", &["rotation", "rotate"][..]),
+            ("Buttons", &["buttons"][..]),
+        ] {
+            if let Some(value) = first_named_value(rows, names) {
+                out.push(json!({"label": label, "value": value}));
+            }
+        }
+        out
+    }
+
+    fn first_named_value(rows: &[Value], names: &[&str]) -> Option<String> {
+        rows.iter().find_map(|row| {
+            let kind = row.get("kind").and_then(Value::as_str).unwrap_or("");
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            let path_name = row
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(|path| path.rsplit('/').next())
+                .unwrap_or("");
+            let key = name.trim_start_matches('@').to_ascii_lowercase();
+            let path_key = path_name.to_ascii_lowercase();
+            if (kind == "attribute" && names.contains(&key.as_str()))
+                || (kind == "text" && names.contains(&path_key.as_str()))
+            {
+                let value = row
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+            None
+        })
+    }
+
+    fn looks_path_like(value: &str) -> bool {
+        let lowered = value.to_ascii_lowercase();
+        lowered.contains('/')
+            || lowered.ends_with(".rbf")
+            || lowered.ends_with(".rom")
+            || lowered.ends_with(".zip")
+            || lowered.ends_with(".bin")
+            || lowered.ends_with(".mra")
     }
 
     pub fn child_sd_path(parent_path: &str, name: &str) -> String {
@@ -686,6 +1079,9 @@ mod linux {
                     return;
                 }
                 if maybe_handle_library_database_snapshot_stream(&line, &token, &mut stream) {
+                    return;
+                }
+                if maybe_handle_sd_preview_image_stream(&line, &token, &mut stream) {
                     return;
                 }
                 handle_control_line(&line, &token, boot_id, started, &mut reader)
@@ -1310,6 +1706,47 @@ mod linux {
         true
     }
 
+    fn maybe_handle_sd_preview_image_stream(
+        line: &str,
+        token: &str,
+        stream: &mut TcpStream,
+    ) -> bool {
+        let parsed: Value = match serde_json::from_str(line.trim()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        if parsed.get("cmd").and_then(Value::as_str) != Some("sd_read_preview_image_v1") {
+            return false;
+        }
+        let id = parsed.get("id").cloned();
+        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
+            append_log_line("control_auth_failed".to_string());
+            let _ = writeln!(
+                stream,
+                "{}",
+                response(id, false, None, Some("unauthorized"))
+            );
+            return true;
+        }
+        let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        timeline_record_once("first_command", "cmd=sd_read_preview_image_v1".to_string());
+        match crate::sd_browse::preview_image_at_root(Path::new(crate::sd_browse::SD_ROOT), path) {
+            Ok(preview) => {
+                let response = response(id, true, Some(preview.result), None);
+                let _ = writeln!(stream, "{response}");
+                let _ = stream.write_all(&preview.payload);
+            }
+            Err(err) => {
+                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+            }
+        }
+        true
+    }
+
     fn handle_control_line<R: Read>(
         line: &str,
         token: &str,
@@ -1353,6 +1790,14 @@ mod linux {
                 Err(err) => response(id, false, None, Some(&err)),
             },
             "sd_list_dir" => match sd_list_dir(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
+            "sd_stat_item_v1" => match sd_stat_item(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
+            "sd_parse_mra_v1" => match sd_parse_mra(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
@@ -1468,6 +1913,22 @@ mod linux {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         crate::sd_browse::list_dir_at_root(Path::new(crate::sd_browse::SD_ROOT), path, show_hidden)
+    }
+
+    fn sd_stat_item(args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        crate::sd_browse::stat_item_at_root(Path::new(crate::sd_browse::SD_ROOT), path)
+    }
+
+    fn sd_parse_mra(args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        crate::sd_browse::parse_mra_at_root(Path::new(crate::sd_browse::SD_ROOT), path)
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3236,6 +3697,85 @@ mod tests {
 
         let err = sd_browse::list_dir_at_root(&root, "/missing", false).unwrap_err();
         assert!(err.contains("read_dir /missing"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_stat_item_reports_capabilities() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-sd-stat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("_Arcade")).unwrap();
+        std::fs::write(root.join("_Arcade/game.mra"), b"<misterromdescription/>").unwrap();
+
+        let stat = sd_browse::stat_item_at_root(&root, "/_Arcade/game.mra").unwrap();
+
+        assert_eq!(stat["schema"], "mister-magik-sd-stat-item-v1");
+        assert_eq!(stat["extension"], "mra");
+        assert_eq!(stat["capabilities"]["mra_parse"], true);
+        assert_eq!(stat["capabilities"]["image_preview"], false);
+        assert!(sd_browse::stat_item_at_root(&root, "/../escape").is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_parse_mra_extracts_all_rows_and_raw_xml() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-sd-mra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("_Arcade")).unwrap();
+        let xml = r#"<misterromdescription>
+  <name>Moon Patrol</name>
+  <setname>mpatrol</setname>
+  <rbf>_Arcade/MoonPatrol.rbf</rbf>
+  <buttons names="Start,Fire,Jump" default="A,B"/>
+  <rom index="0" zip="mpatrol.zip">roms/mpatrol.rom</rom>
+</misterromdescription>"#;
+        std::fs::write(root.join("_Arcade/Moon Patrol.mra"), xml).unwrap();
+
+        let parsed = sd_browse::parse_mra_at_root(&root, "/_Arcade/Moon Patrol.mra").unwrap();
+        let rows = parsed["xml_rows"].as_array().unwrap();
+        let path_rows = parsed["path_rows"].as_array().unwrap();
+
+        assert_eq!(parsed["schema"], "mister-magik-sd-parse-mra-v1");
+        assert!(parsed["raw_xml"].as_str().unwrap().contains("Moon Patrol"));
+        assert!(rows
+            .iter()
+            .any(|row| row["kind"] == "attribute" && row["name"] == "@zip"));
+        assert!(rows
+            .iter()
+            .any(|row| row["kind"] == "text" && row["value"] == "Moon Patrol"));
+        assert!(path_rows
+            .iter()
+            .any(|row| row["value"].as_str().unwrap_or("").contains("mpatrol.zip")));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_preview_image_reports_png_dimensions_and_payload() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-agent-sd-png-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        let png = [
+            0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', 0, 0, 0, 13, b'I', b'H', b'D', b'R',
+            0, 0, 0, 2, 0, 0, 0, 3, 8, 6, 0, 0, 0,
+        ];
+        std::fs::write(root.join("images/shot.png"), png).unwrap();
+
+        let preview = sd_browse::preview_image_at_root(&root, "/images/shot.png").unwrap();
+
+        assert_eq!(preview.result["schema"], "mister-magik-sd-preview-image-v1");
+        assert_eq!(preview.result["format"], "png");
+        assert_eq!(preview.result["width"], 2);
+        assert_eq!(preview.result["height"], 3);
+        assert_eq!(
+            preview.result["payload_bytes"],
+            preview.payload.len() as u64
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -10,7 +10,8 @@ mod sd_card;
 use agent_client::{
     connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
     drain_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
-    DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
+    fetch_sd_item_detail, DeviceTelemetrySample, DeviceTelemetryStreamControl,
+    FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -20,7 +21,6 @@ use sd_card::SdTreeRow;
 use slint::ComponentHandle;
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
-#[cfg(feature = "live-ui")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -1229,21 +1229,45 @@ fn create_live_instance(
                 show_hidden,
             );
         }
+        let detail_request = sd_toggle_browser
+            .lock()
+            .ok()
+            .map(|mut browser| browser.begin_detail_fetch_current(false));
         if let Some(instance) = sd_toggle_instance.upgrade() {
             apply_live_sd_state(&instance, &sd_toggle_browser);
+        }
+        if let Some(detail_request) = detail_request {
+            spawn_live_sd_detail_fetch(
+                sd_toggle_instance.clone(),
+                Arc::clone(&sd_toggle_browser),
+                sd_toggle_host.clone(),
+                detail_request,
+            );
         }
         Value::Void
     })?;
 
     let sd_current_instance = instance.as_weak();
+    let sd_current_host = host.to_string();
     let sd_current_browser = Arc::clone(&sd_browser);
     instance.set_global_callback("Actions", "sd-row-current", move |args| {
         if let Some(Value::String(path)) = args.first() {
-            if let Ok(mut browser) = sd_current_browser.lock() {
+            let detail_request = if let Ok(mut browser) = sd_current_browser.lock() {
                 browser.select_path(path.as_str());
-            }
+                Some(browser.begin_detail_fetch_current(false))
+            } else {
+                None
+            };
             if let Some(instance) = sd_current_instance.upgrade() {
                 apply_live_sd_state(&instance, &sd_current_browser);
+            }
+            if let Some(detail_request) = detail_request {
+                spawn_live_sd_detail_fetch(
+                    sd_current_instance.clone(),
+                    Arc::clone(&sd_current_browser),
+                    sd_current_host.clone(),
+                    detail_request,
+                );
             }
         }
         Value::Void
@@ -1272,6 +1296,28 @@ fn create_live_instance(
         }
         if let Some(instance) = sd_refresh_instance.upgrade() {
             apply_live_sd_state(&instance, &sd_refresh_browser);
+        }
+        Value::Void
+    })?;
+
+    let sd_detail_refresh_instance = instance.as_weak();
+    let sd_detail_refresh_host = host.to_string();
+    let sd_detail_refresh_browser = Arc::clone(&sd_browser);
+    instance.set_global_callback("Actions", "sd-refresh-details", move |_| {
+        let detail_request = sd_detail_refresh_browser
+            .lock()
+            .ok()
+            .map(|mut browser| browser.begin_detail_fetch_current(true));
+        if let Some(instance) = sd_detail_refresh_instance.upgrade() {
+            apply_live_sd_state(&instance, &sd_detail_refresh_browser);
+        }
+        if let Some(detail_request) = detail_request {
+            spawn_live_sd_detail_fetch(
+                sd_detail_refresh_instance.clone(),
+                Arc::clone(&sd_detail_refresh_browser),
+                sd_detail_refresh_host.clone(),
+                detail_request,
+            );
         }
         Value::Void
     })?;
@@ -1454,7 +1500,7 @@ fn apply_live_snapshot(
 
 #[cfg(feature = "live-ui")]
 fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser: &SharedSdBrowser) {
-    use slint::{ModelRc, SharedString, VecModel};
+    use slint::{Image, ModelRc, SharedString, VecModel};
     use slint_interpreter::Value;
 
     let Ok(browser) = browser.lock() else {
@@ -1482,6 +1528,113 @@ fn apply_live_sd_state(instance: &slint_interpreter::ComponentInstance, browser:
     );
     set(instance, "loading", Value::Bool(browser.loading()));
     set(instance, "show-hidden", Value::Bool(browser.show_hidden()));
+    let detail = browser.selected_detail();
+    set(
+        instance,
+        "detail-title",
+        Value::String(SharedString::from(detail.title.as_str())),
+    );
+    set(
+        instance,
+        "detail-subtitle",
+        Value::String(SharedString::from(detail.subtitle.as_str())),
+    );
+    set(
+        instance,
+        "detail-kind",
+        Value::String(SharedString::from(detail.kind.as_str())),
+    );
+    set(
+        instance,
+        "detail-icon-key",
+        Value::String(SharedString::from(detail.icon_key.as_str())),
+    );
+    set(
+        instance,
+        "detail-size",
+        Value::String(SharedString::from(detail.size_label.as_str())),
+    );
+    set(
+        instance,
+        "detail-modified",
+        Value::String(SharedString::from(detail.modified_label.as_str())),
+    );
+    set(
+        instance,
+        "detail-flags",
+        Value::String(SharedString::from(detail.flags_label.as_str())),
+    );
+    set(instance, "detail-loading", Value::Bool(detail.loading));
+    set(
+        instance,
+        "detail-error",
+        Value::String(SharedString::from(detail.error.as_str())),
+    );
+    set(
+        instance,
+        "detail-has-image",
+        Value::Bool(detail.has_image && !detail.image_path.is_empty()),
+    );
+    set(
+        instance,
+        "detail-image",
+        Value::Image(if detail.image_path.is_empty() {
+            Image::default()
+        } else {
+            Image::load_from_path(Path::new(&detail.image_path)).unwrap_or_default()
+        }),
+    );
+    set(
+        instance,
+        "detail-image-summary",
+        Value::String(SharedString::from(detail.image_summary.as_str())),
+    );
+    set(instance, "detail-is-mra", Value::Bool(detail.is_mra));
+    set(
+        instance,
+        "detail-overview-rows",
+        Value::Model(ModelRc::new(VecModel::from(live_sd_metadata_rows(
+            &detail.overview_rows,
+        )))),
+    );
+    set(
+        instance,
+        "detail-mra-summary-rows",
+        Value::Model(ModelRc::new(VecModel::from(live_sd_metadata_rows(
+            &detail.mra_summary_rows,
+        )))),
+    );
+    set(
+        instance,
+        "detail-mra-xml-rows",
+        Value::Model(ModelRc::new(VecModel::from(live_sd_metadata_rows(
+            &detail.mra_xml_rows,
+        )))),
+    );
+    set(
+        instance,
+        "detail-mra-path-rows",
+        Value::Model(ModelRc::new(VecModel::from(live_sd_metadata_rows(
+            &detail.mra_path_rows,
+        )))),
+    );
+    set(
+        instance,
+        "detail-mra-warnings",
+        Value::Model(ModelRc::new(VecModel::from(live_sd_metadata_rows(
+            &detail.mra_warnings,
+        )))),
+    );
+    set(
+        instance,
+        "detail-raw-xml",
+        Value::String(SharedString::from(detail.raw_xml.as_str())),
+    );
+    set(
+        instance,
+        "detail-raw-xml-truncated",
+        Value::Bool(detail.raw_xml_truncated),
+    );
 
     let rows = browser
         .rows()
@@ -1927,6 +2080,31 @@ fn live_tree_row_struct(row: &sd_card::SdTreeRow) -> slint_interpreter::Struct {
     ])
 }
 
+#[cfg(feature = "live-ui")]
+fn live_sd_metadata_rows(rows: &[sd_card::SdMetadataRow]) -> Vec<slint_interpreter::Value> {
+    use slint::SharedString;
+    use slint_interpreter::{Struct, Value};
+
+    rows.iter()
+        .map(|row| {
+            Value::Struct(Struct::from_iter([
+                (
+                    "label".to_string(),
+                    Value::String(SharedString::from(row.label.as_str())),
+                ),
+                (
+                    "value".to_string(),
+                    Value::String(SharedString::from(row.value.as_str())),
+                ),
+                (
+                    "kind".to_string(),
+                    Value::String(SharedString::from(row.kind.as_str())),
+                ),
+            ]))
+        })
+        .collect()
+}
+
 #[cfg(feature = "compiled-ui")]
 fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     use slint::ComponentHandle;
@@ -2088,19 +2266,43 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                 show_hidden,
             );
         }
+        let detail_request = sd_toggle_browser
+            .lock()
+            .ok()
+            .map(|mut browser| browser.begin_detail_fetch_current(false));
         if let Some(ui) = sd_toggle_ui.upgrade() {
             apply_compiled_sd_state(&ui, &sd_toggle_browser);
+        }
+        if let Some(detail_request) = detail_request {
+            spawn_compiled_sd_detail_fetch(
+                sd_toggle_ui.clone(),
+                Arc::clone(&sd_toggle_browser),
+                sd_toggle_host.clone(),
+                detail_request,
+            );
         }
     });
 
     let sd_current_ui = ui.as_weak();
+    let sd_current_host = host.clone();
     let sd_current_browser = Arc::clone(&sd_browser);
     ui.global::<Actions>().on_sd_row_current(move |path| {
-        if let Ok(mut browser) = sd_current_browser.lock() {
+        let detail_request = if let Ok(mut browser) = sd_current_browser.lock() {
             browser.select_path(path.as_str());
-        }
+            Some(browser.begin_detail_fetch_current(false))
+        } else {
+            None
+        };
         if let Some(ui) = sd_current_ui.upgrade() {
             apply_compiled_sd_state(&ui, &sd_current_browser);
+        }
+        if let Some(detail_request) = detail_request {
+            spawn_compiled_sd_detail_fetch(
+                sd_current_ui.clone(),
+                Arc::clone(&sd_current_browser),
+                sd_current_host.clone(),
+                detail_request,
+            );
         }
     });
 
@@ -2127,6 +2329,27 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
         }
         if let Some(ui) = sd_refresh_ui.upgrade() {
             apply_compiled_sd_state(&ui, &sd_refresh_browser);
+        }
+    });
+
+    let sd_detail_refresh_ui = ui.as_weak();
+    let sd_detail_refresh_host = host.clone();
+    let sd_detail_refresh_browser = Arc::clone(&sd_browser);
+    ui.global::<Actions>().on_sd_refresh_details(move || {
+        let detail_request = sd_detail_refresh_browser
+            .lock()
+            .ok()
+            .map(|mut browser| browser.begin_detail_fetch_current(true));
+        if let Some(ui) = sd_detail_refresh_ui.upgrade() {
+            apply_compiled_sd_state(&ui, &sd_detail_refresh_browser);
+        }
+        if let Some(detail_request) = detail_request {
+            spawn_compiled_sd_detail_fetch(
+                sd_detail_refresh_ui.clone(),
+                Arc::clone(&sd_detail_refresh_browser),
+                sd_detail_refresh_host.clone(),
+                detail_request,
+            );
         }
     });
 
@@ -3681,7 +3904,7 @@ fn format_byte_size(bytes: u64) -> String {
 
 #[cfg(feature = "compiled-ui")]
 fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
-    use slint::{ModelRc, VecModel};
+    use slint::{Image, ModelRc, VecModel};
 
     let Ok(browser) = browser.lock() else {
         return;
@@ -3692,6 +3915,41 @@ fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
     state.set_last_error(browser.last_error().into());
     state.set_loading(browser.loading());
     state.set_show_hidden(browser.show_hidden());
+    let detail = browser.selected_detail();
+    state.set_detail_title(detail.title.as_str().into());
+    state.set_detail_subtitle(detail.subtitle.as_str().into());
+    state.set_detail_kind(detail.kind.as_str().into());
+    state.set_detail_icon_key(detail.icon_key.as_str().into());
+    state.set_detail_size(detail.size_label.as_str().into());
+    state.set_detail_modified(detail.modified_label.as_str().into());
+    state.set_detail_flags(detail.flags_label.as_str().into());
+    state.set_detail_loading(detail.loading);
+    state.set_detail_error(detail.error.as_str().into());
+    state.set_detail_has_image(detail.has_image && !detail.image_path.is_empty());
+    state.set_detail_image(if detail.image_path.is_empty() {
+        Image::default()
+    } else {
+        Image::load_from_path(Path::new(&detail.image_path)).unwrap_or_default()
+    });
+    state.set_detail_image_summary(detail.image_summary.as_str().into());
+    state.set_detail_is_mra(detail.is_mra);
+    state.set_detail_overview_rows(ModelRc::new(VecModel::from(compiled_sd_metadata_rows(
+        &detail.overview_rows,
+    ))));
+    state.set_detail_mra_summary_rows(ModelRc::new(VecModel::from(compiled_sd_metadata_rows(
+        &detail.mra_summary_rows,
+    ))));
+    state.set_detail_mra_xml_rows(ModelRc::new(VecModel::from(compiled_sd_metadata_rows(
+        &detail.mra_xml_rows,
+    ))));
+    state.set_detail_mra_path_rows(ModelRc::new(VecModel::from(compiled_sd_metadata_rows(
+        &detail.mra_path_rows,
+    ))));
+    state.set_detail_mra_warnings(ModelRc::new(VecModel::from(compiled_sd_metadata_rows(
+        &detail.mra_warnings,
+    ))));
+    state.set_detail_raw_xml(detail.raw_xml.as_str().into());
+    state.set_detail_raw_xml_truncated(detail.raw_xml_truncated);
     state.set_rows(ModelRc::new(VecModel::from(
         browser
             .rows()
@@ -3699,6 +3957,17 @@ fn apply_compiled_sd_state(ui: &AppWindow, browser: &SharedSdBrowser) {
             .map(compiled_tree_row)
             .collect::<Vec<_>>(),
     )));
+}
+
+#[cfg(feature = "compiled-ui")]
+fn compiled_sd_metadata_rows(rows: &[sd_card::SdMetadataRow]) -> Vec<SdMetadataRow> {
+    rows.iter()
+        .map(|row| SdMetadataRow {
+            label: row.label.as_str().into(),
+            value: row.value.as_str().into(),
+            kind: row.kind.as_str().into(),
+        })
+        .collect()
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -3960,6 +4229,26 @@ fn spawn_live_sd_fetch(
         let _ = slint::invoke_from_event_loop(move || {
             if let Ok(mut browser) = browser.lock() {
                 browser.apply_listing_if_current_policy(&path, show_hidden, result);
+            }
+            if let Some(instance) = instance.upgrade() {
+                apply_live_sd_state(&instance, &browser);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "live-ui")]
+fn spawn_live_sd_detail_fetch(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    browser: SharedSdBrowser,
+    host: String,
+    request: sd_card::SdDetailRequest,
+) {
+    std::thread::spawn(move || {
+        let result = fetch_sd_item_detail(&host, &request.path).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_detail_result(&request.path, request.generation, result);
             }
             if let Some(instance) = instance.upgrade() {
                 apply_live_sd_state(&instance, &browser);
@@ -4280,6 +4569,26 @@ fn spawn_compiled_sd_fetch(
         let _ = slint::invoke_from_event_loop(move || {
             if let Ok(mut browser) = browser.lock() {
                 browser.apply_listing_if_current_policy(&path, show_hidden, result);
+            }
+            if let Some(ui) = ui.upgrade() {
+                apply_compiled_sd_state(&ui, &browser);
+            }
+        });
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_sd_detail_fetch(
+    ui: slint::Weak<AppWindow>,
+    browser: SharedSdBrowser,
+    host: String,
+    request: sd_card::SdDetailRequest,
+) {
+    std::thread::spawn(move || {
+        let result = fetch_sd_item_detail(&host, &request.path).map_err(|err| err.to_string());
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Ok(mut browser) = browser.lock() {
+                browser.apply_detail_result(&request.path, request.generation, result);
             }
             if let Some(ui) = ui.upgrade() {
                 apply_compiled_sd_state(&ui, &browser);

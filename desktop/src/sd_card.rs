@@ -33,6 +33,100 @@ pub struct SdDirectoryListing {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SdMetadataRow {
+    pub label: String,
+    pub value: String,
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SdItemDetail {
+    pub path: String,
+    pub title: String,
+    pub subtitle: String,
+    pub kind: String,
+    pub icon_key: String,
+    pub size_label: String,
+    pub modified_label: String,
+    pub flags_label: String,
+    pub loading: bool,
+    pub error: String,
+    pub has_image: bool,
+    pub image_path: String,
+    pub image_summary: String,
+    pub is_mra: bool,
+    pub overview_rows: Vec<SdMetadataRow>,
+    pub mra_summary_rows: Vec<SdMetadataRow>,
+    pub mra_xml_rows: Vec<SdMetadataRow>,
+    pub mra_path_rows: Vec<SdMetadataRow>,
+    pub mra_warnings: Vec<SdMetadataRow>,
+    pub raw_xml: String,
+    pub raw_xml_truncated: bool,
+}
+
+impl SdItemDetail {
+    pub fn empty() -> Self {
+        Self {
+            path: ROOT_PATH.to_string(),
+            title: "SD Card".to_string(),
+            subtitle: "Select a file or folder to inspect details.".to_string(),
+            kind: "directory".to_string(),
+            icon_key: "folder-base".to_string(),
+            size_label: "-".to_string(),
+            modified_label: "-".to_string(),
+            flags_label: "-".to_string(),
+            loading: false,
+            error: String::new(),
+            has_image: false,
+            image_path: String::new(),
+            image_summary: String::new(),
+            is_mra: false,
+            overview_rows: Vec::new(),
+            mra_summary_rows: Vec::new(),
+            mra_xml_rows: Vec::new(),
+            mra_path_rows: Vec::new(),
+            mra_warnings: Vec::new(),
+            raw_xml: String::new(),
+            raw_xml_truncated: false,
+        }
+    }
+
+    pub fn loading_for(path: &str) -> Self {
+        let name = item_name(path);
+        let kind = fallback_kind_for_path(path);
+        Self {
+            path: path.to_string(),
+            title: name.clone(),
+            subtitle: format!("Loading details for {path}..."),
+            kind: kind.to_string(),
+            icon_key: fallback_icon_key(kind, &name).to_string(),
+            loading: true,
+            ..Self::empty()
+        }
+    }
+
+    pub fn error_for(path: &str, error: String) -> Self {
+        let name = item_name(path);
+        let kind = fallback_kind_for_path(path);
+        Self {
+            path: path.to_string(),
+            title: name.clone(),
+            subtitle: "Could not load item details.".to_string(),
+            kind: kind.to_string(),
+            icon_key: fallback_icon_key(kind, &name).to_string(),
+            error,
+            ..Self::empty()
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SdDetailRequest {
+    pub path: String,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdTreeRow {
     pub id: String,
     pub label: String,
@@ -62,7 +156,10 @@ pub struct SdCardBrowser {
     current_path: String,
     loading_paths: HashSet<String>,
     directory_cache: HashMap<String, CachedDirectory>,
+    detail_cache: HashMap<String, SdItemDetail>,
     tree_rows: Vec<SdTreeRow>,
+    selected_detail: SdItemDetail,
+    detail_generation: u64,
     show_hidden: bool,
     status: String,
     last_error: String,
@@ -81,7 +178,10 @@ impl SdCardBrowser {
             current_path: ROOT_PATH.to_string(),
             loading_paths: HashSet::new(),
             directory_cache: HashMap::new(),
+            detail_cache: HashMap::new(),
             tree_rows: Vec::new(),
+            selected_detail: SdItemDetail::empty(),
+            detail_generation: 0,
             show_hidden: false,
             status: "Ready to browse /media/fat.".to_string(),
             last_error: String::new(),
@@ -92,6 +192,10 @@ impl SdCardBrowser {
 
     pub fn rows(&self) -> &[SdTreeRow] {
         &self.tree_rows
+    }
+
+    pub fn selected_detail(&self) -> &SdItemDetail {
+        &self.selected_detail
     }
 
     pub fn current_path(&self) -> &str {
@@ -168,9 +272,41 @@ impl SdCardBrowser {
         self.rebuild_rows();
     }
 
+    pub fn begin_detail_fetch_current(&mut self, force: bool) -> SdDetailRequest {
+        let path = normalize_ui_path(&self.current_path);
+        self.detail_generation = self.detail_generation.saturating_add(1);
+        let generation = self.detail_generation;
+        if !force {
+            if let Some(detail) = self.detail_cache.get(&path).cloned() {
+                self.selected_detail = detail;
+                return SdDetailRequest { path, generation };
+            }
+        }
+        self.selected_detail = SdItemDetail::loading_for(&path);
+        SdDetailRequest { path, generation }
+    }
+
+    pub fn apply_detail_result(
+        &mut self,
+        path: &str,
+        generation: u64,
+        result: Result<SdItemDetail, String>,
+    ) {
+        if generation != self.detail_generation || normalize_ui_path(path) != self.current_path {
+            return;
+        }
+        let detail = match result {
+            Ok(detail) => detail,
+            Err(err) => SdItemDetail::error_for(path, err),
+        };
+        self.detail_cache.insert(path.to_string(), detail.clone());
+        self.selected_detail = detail;
+    }
+
     pub fn refresh_current_folder(&mut self) -> Option<String> {
         let path = self.refresh_target();
         self.directory_cache.remove(&path);
+        self.detail_cache.remove(&path);
         self.expanded_paths.insert(path.clone());
         self.current_path = path.clone();
         self.last_error.clear();
@@ -436,6 +572,30 @@ fn parent_path(path: &str) -> String {
     match path.rsplit_once('/') {
         Some(("", _)) | None => ROOT_PATH.to_string(),
         Some((parent, _)) => parent.to_string(),
+    }
+}
+
+pub fn item_name(path: &str) -> String {
+    if path == ROOT_PATH {
+        "SD Card".to_string()
+    } else {
+        path.rsplit('/').next().unwrap_or(path).to_string()
+    }
+}
+
+fn fallback_kind_for_path(path: &str) -> &'static str {
+    if path == ROOT_PATH || !item_name(path).contains('.') {
+        "directory"
+    } else {
+        "file"
+    }
+}
+
+fn fallback_icon_key(kind: &str, name: &str) -> &'static str {
+    if kind == "directory" {
+        "folder-base"
+    } else {
+        material_icon_key_for_file_name(name)
     }
 }
 
@@ -715,5 +875,36 @@ mod tests {
         assert_eq!(parent_path(ROOT_PATH), ROOT_PATH);
         assert_eq!(parent_path("/MiSTer.ini"), ROOT_PATH);
         assert_eq!(parent_path("//games/NES/./game.nes"), "/games/NES");
+    }
+
+    #[test]
+    fn detail_results_ignore_stale_generation_and_wrong_path() {
+        let mut browser = SdCardBrowser::new();
+        browser.select_path("/ReadMe.txt");
+        let first = browser.begin_detail_fetch_current(false);
+        browser.select_path("/MiSTer.ini");
+        let second = browser.begin_detail_fetch_current(false);
+
+        let mut stale = SdItemDetail::empty();
+        stale.path = first.path.clone();
+        stale.title = "Stale".to_string();
+        browser.apply_detail_result(&first.path, first.generation, Ok(stale));
+        assert_eq!(browser.selected_detail().path, "/MiSTer.ini");
+        assert_ne!(browser.selected_detail().title, "Stale");
+
+        let mut current = SdItemDetail::empty();
+        current.path = second.path.clone();
+        current.title = "MiSTer.ini".to_string();
+        browser.apply_detail_result(&second.path, second.generation, Ok(current));
+        assert_eq!(browser.selected_detail().title, "MiSTer.ini");
+    }
+
+    #[test]
+    fn detail_errors_keep_file_fallback_shape() {
+        let detail = SdItemDetail::error_for("/ReadMe.txt", "unknown cmd".to_string());
+
+        assert_eq!(detail.kind, "file");
+        assert_eq!(detail.icon_key, "readme");
+        assert!(detail.error.contains("unknown cmd"));
     }
 }
