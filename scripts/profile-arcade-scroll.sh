@@ -312,8 +312,8 @@ PY
 }
 
 check_frame_pacing_gate() {
-  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5"
-  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us"
+  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5" gate_scenario="${6:-}"
+  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario"
 }
 
 gate_arcade_entry_trace() {
@@ -485,6 +485,22 @@ frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_sour
 EOF
   if check_frame_pacing_gate self-pacing "$tmpdir/pacing-wall.tsv" 14500 16000 16667 >/dev/null 2>&1; then
     echo "self-test expected wall pacing failure" >&2
+    exit 1
+  fi
+  check_frame_pacing_gate self-human-turbo-wall "$tmpdir/pacing-wall.tsv" 14500 16000 16667 human-turbo-hold >/dev/null
+  cat >"$tmpdir/pacing-human-turbo-wall.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	20001	1000	200	1200	900	vsync	0
+EOF
+  check_frame_pacing_gate self-human-turbo-wall-20ms "$tmpdir/pacing-human-turbo-wall.tsv" 14500 16000 16667 human-turbo-hold >/dev/null
+  cat >"$tmpdir/pacing-human-turbo-wall-33ms.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	33335	1000	200	1200	900	vsync	0
+EOF
+  if check_frame_pacing_gate self-human-turbo-wall-fail "$tmpdir/pacing-human-turbo-wall-33ms.tsv" 14500 16000 16667 human-turbo-hold >/dev/null 2>&1; then
+    echo "self-test expected human-turbo >33ms wall pacing failure" >&2
     exit 1
   fi
   cat >"$tmpdir/pacing-missing-column.tsv" <<'EOF'
@@ -760,6 +776,6 @@ echo
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
-check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us"
+check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario"
 echo
 check_preview_exact_gate "$label" "$local_tsv"
