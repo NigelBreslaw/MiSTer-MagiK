@@ -19,6 +19,8 @@
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
 //!     hidden-fb-copy-bench
 //!                        benchmark RGB565 copies into hidden framebuffer slots
+//!     fb-map-report      report framebuffer ioctl metadata and mmap reach
+//!     fb-map-bandwidth   compare fb0 and hidden-buffer write bandwidth
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -54,6 +56,8 @@
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(feature = "diagnostics")]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 mod arcade_button_overrides;
@@ -299,6 +303,10 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "cpu-profile-smoke" => run_cpu_profile_smoke(),
         #[cfg(feature = "diagnostics")]
         "hidden-fb-copy-bench" => run_hidden_fb_copy_bench(),
+        #[cfg(feature = "diagnostics")]
+        "fb-map-report" => run_fb_map_report(),
+        #[cfg(feature = "diagnostics")]
+        "fb-map-bandwidth" => run_fb_map_bandwidth(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -825,6 +833,425 @@ fn run_hidden_fb_copy_bench() {
         total_cpu_us / frames as u128,
         mb_per_second(total_bytes.min(usize::MAX as u128) as usize, elapsed_us as u64)
     );
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fb_map_report() {
+    let width = std::env::var("MISTER_FB_MAP_REPORT_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_FB_MAP_REPORT_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let frame_bytes = stride_bytes.saturating_mul(height);
+    let double_bytes = frame_bytes.saturating_mul(2);
+
+    let raw = match MappedRgb565Framebuffer::raw_diagnostics() {
+        Ok(raw) => raw,
+        Err(e) => {
+            crate::ui_errln!("fb_map_report\tfailed\tstage=ioctl\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    crate::ui_logln!(
+        "fb_map_report_fix_tsv\tid={}\tsmem_start=0x{:x}\tsmem_len={}\tline_length={}\ttype={}\ttype_aux={}\tvisual={}\txpanstep={}\typanstep={}\tywrapstep={}\tmmio_start=0x{:x}\tmmio_len={}\taccel={}\tcapabilities=0x{:x}",
+        raw.id,
+        raw.smem_start,
+        raw.smem_len,
+        raw.line_length,
+        raw.type_,
+        raw.type_aux,
+        raw.visual,
+        raw.xpanstep,
+        raw.ypanstep,
+        raw.ywrapstep,
+        raw.mmio_start,
+        raw.mmio_len,
+        raw.accel,
+        raw.capabilities
+    );
+    crate::ui_logln!(
+        "fb_map_report_var_tsv\txres={}\tyres={}\txres_virtual={}\tyres_virtual={}\txoffset={}\tyoffset={}\tbpp={}\tred={}:{}:{}\tgreen={}:{}:{}\tblue={}:{}:{}\ttransp={}:{}:{}\tvmode={}\trotate={}\tcolorspace={}",
+        raw.xres,
+        raw.yres,
+        raw.xres_virtual,
+        raw.yres_virtual,
+        raw.xoffset,
+        raw.yoffset,
+        raw.bits_per_pixel,
+        raw.red_offset,
+        raw.red_length,
+        raw.red_msb_right,
+        raw.green_offset,
+        raw.green_length,
+        raw.green_msb_right,
+        raw.blue_offset,
+        raw.blue_length,
+        raw.blue_msb_right,
+        raw.transp_offset,
+        raw.transp_length,
+        raw.transp_msb_right,
+        raw.vmode,
+        raw.rotate,
+        raw.colorspace
+    );
+    crate::ui_logln!(
+        "fb_map_report_expected_tsv\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tframe_bytes={frame_bytes}\tdouble_bytes={double_bytes}\thidden_slot_bytes={}",
+        mister_magik_fb::framebuffer::hidden::MISTER_FB_SLOT_BYTES
+    );
+
+    let full_reported = raw.smem_len;
+    let probes = [
+        ("active_frame", frame_bytes),
+        ("two_rgb565_frames", double_bytes),
+        ("reported_smem_len", full_reported),
+    ];
+    let mmap_probes = match MappedRgb565Framebuffer::probe_mmap_lengths(&probes) {
+        Ok(probes) => probes,
+        Err(e) => {
+            crate::ui_errln!("fb_map_report\tfailed\tstage=mmap_probe\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for probe in mmap_probes {
+        crate::ui_logln!(
+            "fb_map_report_mmap_tsv\tlabel={}\trequested_len={}\tok={}\terror={}",
+            probe.label,
+            probe.requested_len,
+            bool_tsv(probe.ok),
+            probe.error.unwrap_or_default()
+        );
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fb_map_bandwidth() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_FB_MAP_BANDWIDTH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(120)
+        .max(1);
+    let width = std::env::var("MISTER_FB_MAP_BANDWIDTH_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_FB_MAP_BANDWIDTH_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let frame_bytes = stride_bytes.saturating_mul(height);
+    let mut source = make_rgb565_bench_source(width, height);
+
+    crate::ui_logln!(
+        "fb_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
+    );
+    crate::ui_logln!(
+        "fb_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    match MappedRgb565Framebuffer::open_rgb565(width, height) {
+        Ok(mut fb0) => {
+            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                fb0.present_rows_565(src, 0, height)
+                    .map(|_| frame_bytes)
+                    .map_err(|e| e.to_string())
+            });
+            print_bandwidth_result("fb0-active", &result);
+        }
+        Err(e) => print_bandwidth_error("fb0-active", &format!("open /dev/fb0: {e}")),
+    }
+
+    let raw = MappedRgb565Framebuffer::raw_diagnostics().ok();
+    if raw
+        .as_ref()
+        .map(|raw| raw.smem_len >= frame_bytes.saturating_mul(2))
+        .unwrap_or(false)
+    {
+        crate::ui_logln!(
+            "fb_map_bandwidth_case_tsv\tcase=fb0-second-frame-range\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+        );
+        match Fb0ByteRange::open(frame_bytes.saturating_mul(2), frame_bytes, frame_bytes) {
+            Ok(mut fb0_range) => {
+                let source_bytes_len =
+                    frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                    fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-second-frame-range", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-second-frame-range", &format!("open range: {e}")),
+        }
+    } else {
+        let smem_len = raw.as_ref().map(|raw| raw.smem_len).unwrap_or_default();
+        print_bandwidth_skip(
+            "fb0-second-frame-range",
+            &format!(
+                "smem_len {smem_len} is smaller than required {}",
+                frame_bytes.saturating_mul(2)
+            ),
+        );
+    }
+
+    crate::ui_logln!(
+        "fb_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    match HiddenRgb565BufferIndex::new(1)
+        .map_err(|e| e.to_string())
+        .and_then(|index| {
+            HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                .map_err(|e| e.to_string())
+        }) {
+        Ok(mut hidden) => {
+            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                hidden
+                    .copy_full_frame(src, width)
+                    .map_err(|e| e.to_string())
+            });
+            print_bandwidth_result("hidden-dev-mem-buffer1", &result);
+        }
+        Err(e) => print_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}")),
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn bool_tsv(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn make_rgb565_bench_source(
+    width: usize,
+    height: usize,
+) -> Vec<slint::platform::software_renderer::Rgb565Pixel> {
+    use slint::platform::software_renderer::Rgb565Pixel;
+    let mut source = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+    for (i, pixel) in source.iter_mut().enumerate() {
+        let x = i % width.max(1);
+        let y = i / width.max(1);
+        pixel.0 = (((x as u16) & 0x1f) << 11)
+            | (((y as u16) & 0x3f) << 5)
+            | ((x as u16 ^ y as u16) & 0x1f);
+    }
+    source
+}
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Debug)]
+struct CopySamples {
+    frames: usize,
+    bytes_per_frame: usize,
+    total_bytes: usize,
+    wall_us: Vec<u64>,
+    cpu_us: Vec<u64>,
+    error: Option<String>,
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_copy_samples<F>(
+    frames: usize,
+    bytes_per_frame: usize,
+    source: &mut [slint::platform::software_renderer::Rgb565Pixel],
+    mut copy: F,
+) -> CopySamples
+where
+    F: FnMut(&[slint::platform::software_renderer::Rgb565Pixel]) -> Result<usize, String>,
+{
+    let mut wall_us = Vec::with_capacity(frames);
+    let mut cpu_us = Vec::with_capacity(frames);
+    let mut total_bytes = 0usize;
+    for frame in 0..frames {
+        if !source.is_empty() {
+            let source_index = frame % source.len();
+            source[source_index].0 ^= 0xffff;
+        }
+        let cpu_start = thread_cpu_us();
+        let start = std::time::Instant::now();
+        match copy(source) {
+            Ok(bytes) => {
+                wall_us.push(start.elapsed().as_micros() as u64);
+                cpu_us.push(elapsed_thread_cpu_us(cpu_start));
+                total_bytes = total_bytes.saturating_add(bytes);
+            }
+            Err(e) => {
+                return CopySamples {
+                    frames: wall_us.len(),
+                    bytes_per_frame,
+                    total_bytes,
+                    wall_us,
+                    cpu_us,
+                    error: Some(format!("frame={frame} {e}")),
+                };
+            }
+        }
+    }
+    CopySamples {
+        frames,
+        bytes_per_frame,
+        total_bytes,
+        wall_us,
+        cpu_us,
+        error: None,
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_result(case: &str, samples: &CopySamples) {
+    if let Some(error) = &samples.error {
+        print_bandwidth_error(case, error);
+        return;
+    }
+    crate::ui_logln!(
+        "fb_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
+        samples.frames,
+        samples.bytes_per_frame,
+        samples.total_bytes,
+        avg_u64(&samples.wall_us),
+        percentile_u64(&samples.wall_us, 50),
+        percentile_u64(&samples.wall_us, 95),
+        percentile_u64(&samples.wall_us, 99),
+        samples.wall_us.iter().copied().max().unwrap_or_default(),
+        avg_u64(&samples.cpu_us),
+        percentile_u64(&samples.cpu_us, 50),
+        percentile_u64(&samples.cpu_us, 95),
+        percentile_u64(&samples.cpu_us, 99),
+        samples.cpu_us.iter().copied().max().unwrap_or_default(),
+        mb_per_second(samples.total_bytes, samples.wall_us.iter().copied().sum())
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_error(case: &str, error: &str) {
+    crate::ui_logln!(
+        "fb_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_skip(case: &str, reason: &str) {
+    crate::ui_logln!("fb_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
+}
+
+#[cfg(feature = "diagnostics")]
+fn avg_u64(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.iter().sum::<u64>() / values.len() as u64
+}
+
+#[cfg(feature = "diagnostics")]
+fn percentile_u64(values: &[u64], percentile: usize) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    let index = values.len().saturating_mul(percentile).saturating_add(99) / 100;
+    values[index.saturating_sub(1).min(values.len() - 1)]
+}
+
+#[cfg(feature = "diagnostics")]
+fn rgb565_as_bytes(
+    pixels: &[slint::platform::software_renderer::Rgb565Pixel],
+    len: usize,
+) -> &[u8] {
+    let byte_len = len.min(std::mem::size_of_val(pixels));
+    // SAFETY: Rgb565Pixel is layout-compatible with u16 in framebuffer::mapped
+    // compile-time assertions, and the returned slice is read-only.
+    unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), byte_len) }
+}
+
+#[cfg(feature = "diagnostics")]
+struct Fb0ByteRange {
+    mem: *mut u8,
+    map_len: usize,
+    offset: usize,
+    len: usize,
+    _fb0: File,
+}
+
+#[cfg(feature = "diagnostics")]
+impl Fb0ByteRange {
+    fn open(map_len: usize, offset: usize, len: usize) -> std::io::Result<Self> {
+        if len == 0
+            || offset
+                .checked_add(len)
+                .map(|end| end > map_len)
+                .unwrap_or(true)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid fb0 byte range offset={offset} len={len} map_len={map_len}"),
+            ));
+        }
+        let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+        // SAFETY: fd refers to /dev/fb0; mapping length is validated above and unmapped in Drop.
+        let mem = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                map_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fb0.as_raw_fd(),
+                0,
+            )
+        };
+        if mem == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        if mem.is_null() {
+            // SAFETY: mem/map_len were just returned by mmap.
+            unsafe {
+                libc::munmap(mem, map_len);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "fb0 range mmap returned null",
+            ));
+        }
+        Ok(Self {
+            mem: mem.cast::<u8>(),
+            map_len,
+            offset,
+            len,
+            _fb0: fb0,
+        })
+    }
+
+    fn copy_from(&mut self, src: &[u8]) -> std::io::Result<usize> {
+        if src.len() < self.len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("source has {} bytes, need {}", src.len(), self.len),
+            ));
+        }
+        // SAFETY: offset/len were validated against map_len in open; &mut self prevents aliasing.
+        let dst = unsafe { std::slice::from_raw_parts_mut(self.mem.add(self.offset), self.len) };
+        dst.copy_from_slice(&src[..self.len]);
+        Ok(self.len)
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for Fb0ByteRange {
+    fn drop(&mut self) {
+        // SAFETY: mem/map_len come from successful mmap and are unmapped once here.
+        unsafe {
+            libc::munmap(self.mem.cast::<libc::c_void>(), self.map_len);
+        }
+    }
 }
 
 #[cfg(feature = "diagnostics")]

@@ -48,6 +48,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hidden-fb-copy-bench", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fb-map-report", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fb-map-bandwidth", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
     CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
     CommandSpec::new("repair-catalog-projections", CommandKind::PreFpga),
@@ -256,6 +260,8 @@ mod tests {
             "vsync-probe",
             "cpu-profile-smoke",
             "hidden-fb-copy-bench",
+            "fb-map-report",
+            "fb-map-bandwidth",
             "input",
             "library-sql",
             "hbmame-metadata-from-library",
@@ -270,6 +276,8 @@ mod tests {
         assert_command_kind("vsync-probe", CommandKind::PreFpga);
         assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
         assert_command_kind("hidden-fb-copy-bench", CommandKind::PreFpga);
+        assert_command_kind("fb-map-report", CommandKind::PreFpga);
+        assert_command_kind("fb-map-bandwidth", CommandKind::PreFpga);
         assert_command_kind("input", CommandKind::Fpga);
     }
 
