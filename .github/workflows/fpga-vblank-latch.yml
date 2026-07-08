@@ -21,6 +21,10 @@ on:
         description: "Optional URL for cyclonev-17.0.0.595.qdz; falls back to secret QUARTUS_17_0_CYCLONEV_QDZ_URL"
         required: false
         default: ""
+      apply_magik_patch:
+        description: "Apply the experimental MagiK vblank-latch patch before building"
+        required: true
+        default: "true"
 
 permissions:
   contents: read
@@ -106,6 +110,7 @@ jobs:
       - name: Build vblank-latched RBF
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
+          MISTER_FPGA_APPLY_PATCH: ${{ github.event.inputs.apply_magik_patch || 'true' }}
         run: scripts/build-fpga-vblank-latch-core.sh
 
       - name: Upload FPGA build evidence

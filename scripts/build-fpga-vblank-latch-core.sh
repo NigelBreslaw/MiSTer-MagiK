@@ -19,6 +19,7 @@ QUARTUS_DOCKER_IMAGE="${QUARTUS_DOCKER_IMAGE:-mister-magik-quartus-runtime:ubunt
 QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
 QUARTUS_DOCKER_MEMORY="${QUARTUS_DOCKER_MEMORY:-12g}"
 QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite-17.0/docker-intelFPGA_lite}"
+APPLY_PATCH="${MISTER_FPGA_APPLY_PATCH:-1}"
 
 usage() {
   cat <<'EOF'
@@ -95,20 +96,28 @@ rsync -a --delete \
   "$MENU_ABS"/ "$WORK_DIR"/
 git -C "$WORK_DIR" init -q
 
-if git -C "$WORK_DIR" apply --check "$PATCH" >/dev/null 2>&1; then
-  git -C "$WORK_DIR" apply "$PATCH"
-elif git -C "$WORK_DIR" apply --reverse --check "$PATCH" >/dev/null 2>&1; then
-  echo "patch already applied in work tree"
-else
-  echo "patch does not apply cleanly to $MENU_ABS" >&2
-  git -C "$WORK_DIR" apply --check "$PATCH"
-fi
+case "$APPLY_PATCH" in
+  0|false|False|FALSE|no|No|NO)
+    echo "skipping MagiK FPGA patch"
+    ;;
+  *)
+    if git -C "$WORK_DIR" apply --check "$PATCH" >/dev/null 2>&1; then
+      git -C "$WORK_DIR" apply --whitespace=nowarn "$PATCH"
+    elif git -C "$WORK_DIR" apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+      echo "patch already applied in work tree"
+    else
+      echo "patch does not apply cleanly to $MENU_ABS" >&2
+      git -C "$WORK_DIR" apply --check "$PATCH"
+    fi
+    ;;
+esac
 
 {
   echo "source_dir=$MENU_ABS"
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
+  echo "apply_patch=$APPLY_PATCH"
   echo "work_dir=$WORK_DIR"
   echo "quartus_mode=$QUARTUS_MODE"
   echo "quartus_sh=$QUARTUS_CMD"
