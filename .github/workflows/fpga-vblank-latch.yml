@@ -28,7 +28,8 @@ permissions:
 env:
   QUARTUS_ACCEPT_EULA: "1"
   QUARTUS_CACHE_DIR: ${{ github.workspace }}/build/quartus-lite-17.0
-  QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu20-amd64
+  QUARTUS_DOCKER_BASE_IMAGE: ubuntu:18.04
+  QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
   QUARTUS_DOCKER_CPUS: "4"
   QUARTUS_DOCKER_MEMORY: "0"
 
