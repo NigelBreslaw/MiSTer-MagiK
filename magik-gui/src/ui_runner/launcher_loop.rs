@@ -3221,7 +3221,13 @@ pub(super) fn run_launcher_loop(
                             wasted_present_bytes: 0,
                             cached_present_us: stats.copy_us,
                             direct_preview_present_us: 0,
-                            arcade_list_present_us: stats.request_us,
+                            arcade_list_present_us: 0,
+                            main_present_status: "ok",
+                            main_present_buffer: stats.buffer_index,
+                            main_present_hidden_copy_us: stats.copy_us,
+                            main_present_request_us: stats.request_us,
+                            main_present_wait_us: stats.wait_us,
+                            main_present_route_us: stats.route_us,
                             arcade_update_label: ArcadeUpdateTrace::None,
                         },
                         Err(e) => {
@@ -3259,6 +3265,12 @@ pub(super) fn run_launcher_loop(
                     cached_present_us: 0,
                     direct_preview_present_us: 0,
                     arcade_list_present_us: 0,
+                    main_present_status: "none",
+                    main_present_buffer: 0,
+                    main_present_hidden_copy_us: 0,
+                    main_present_request_us: 0,
+                    main_present_wait_us: 0,
+                    main_present_route_us: 0,
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
             };

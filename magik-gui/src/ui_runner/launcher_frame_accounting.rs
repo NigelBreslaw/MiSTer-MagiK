@@ -82,6 +82,12 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
+    pub(super) main_present_status: &'static str,
+    pub(super) main_present_buffer: u8,
+    pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_request_us: u128,
+    pub(super) main_present_wait_us: u64,
+    pub(super) main_present_route_us: u64,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
@@ -188,6 +194,12 @@ impl LauncherFrameSnapshotBuilder {
             cached_present_us: self.presentation.cached_present_us,
             direct_preview_present_us: self.presentation.direct_preview_present_us,
             arcade_list_present_us: self.presentation.arcade_list_present_us,
+            main_present_status: self.presentation.main_present_status,
+            main_present_buffer: self.presentation.main_present_buffer,
+            main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
+            main_present_request_us: self.presentation.main_present_request_us,
+            main_present_wait_us: self.presentation.main_present_wait_us,
+            main_present_route_us: self.presentation.main_present_route_us,
             vsync_source: self.pacing.vsync_source,
             vsync_period_us: self.pacing.vsync_period_us,
             vsync_miss_streak: self.pacing.vsync_miss_streak,
@@ -344,6 +356,12 @@ struct PreviewScrollTraceRow {
     cached_present_us: u128,
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
+    main_present_status: &'static str,
+    main_present_buffer: u8,
+    main_present_hidden_copy_us: u128,
+    main_present_request_us: u128,
+    main_present_wait_us: u64,
+    main_present_route_us: u64,
     vsync_source: &'static str,
     vsync_period_us: u64,
     vsync_miss_streak: u32,
@@ -394,7 +412,7 @@ impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
         let _ = write!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -434,6 +452,12 @@ impl PreviewScrollTraceRow {
             self.cached_present_us,
             self.direct_preview_present_us,
             self.arcade_list_present_us,
+            self.main_present_status,
+            self.main_present_buffer,
+            self.main_present_hidden_copy_us,
+            self.main_present_request_us,
+            self.main_present_wait_us,
+            self.main_present_route_us,
             self.vsync_source,
             self.vsync_period_us,
             self.vsync_miss_streak,
@@ -499,6 +523,12 @@ fn preview_scroll_trace_row_from_frame(
         cached_present_us: frame.cached_present_us,
         direct_preview_present_us: frame.direct_preview_present_us,
         arcade_list_present_us: frame.arcade_list_present_us,
+        main_present_status: frame.main_present_status,
+        main_present_buffer: frame.main_present_buffer,
+        main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+        main_present_request_us: frame.main_present_request_us,
+        main_present_wait_us: frame.main_present_wait_us,
+        main_present_route_us: frame.main_present_route_us,
         vsync_source: frame
             .vsync_source
             .map(VsyncPaceSource::label)
@@ -1638,6 +1668,12 @@ mod tests {
             cached_present_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
+            main_present_status: "none",
+            main_present_buffer: 0,
+            main_present_hidden_copy_us: 0,
+            main_present_request_us: 0,
+            main_present_wait_us: 0,
+            main_present_route_us: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
             vsync_period_us: 16_667,
             vsync_miss_streak: 3,
@@ -1709,6 +1745,12 @@ mod tests {
                 cached_present_us: frame.cached_present_us,
                 direct_preview_present_us: frame.direct_preview_present_us,
                 arcade_list_present_us: frame.arcade_list_present_us,
+                main_present_status: frame.main_present_status,
+                main_present_buffer: frame.main_present_buffer,
+                main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+                main_present_request_us: frame.main_present_request_us,
+                main_present_wait_us: frame.main_present_wait_us,
+                main_present_route_us: frame.main_present_route_us,
                 arcade_update_label: frame.arcade_update_label,
             },
             status: LauncherFrameStatusData {
@@ -1916,7 +1958,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
