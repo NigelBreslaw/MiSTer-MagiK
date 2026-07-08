@@ -26,6 +26,7 @@
 //!                        benchmark plugin probe mappings
 //!     plugin-presenter-report
 //!                        report plugin async-present mailbox capability
+//!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
 //!     plugin-present-pattern
 //!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
@@ -115,6 +116,8 @@ pub use mister_magik_fb::{
 };
 
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
+#[cfg(feature = "diagnostics")]
+use fpga::{MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
 #[cfg(feature = "diagnostics")]
 use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer};
@@ -374,6 +377,8 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         "effect-bench" => ui_effect_bench::run_effect_bench(f),
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
+        #[cfg(feature = "diagnostics")]
+        "fpga-latch-report" => run_fpga_latch_report(),
         #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
         other => unknown_command(other),
@@ -1168,6 +1173,65 @@ fn run_plugin_presenter_report() {
     }) {
         crate::ui_logln!("plugin_presenter_after_{line}");
     }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fpga_latch_report() {
+    let mut fpga = match Fpga::open() {
+        Ok(fpga) => fpga,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_report_failed\tstage=open_fpga\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    let set_probe = match fpga.probe_magik_latched_fbuf_set() {
+        Ok((hi, lo)) => (hi, lo, String::new()),
+        Err(e) => (0, 0, e.to_string()),
+    };
+    let set_supported =
+        set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC;
+    crate::ui_logln!(
+        "fpga_latch_set_probe_tsv\tcmd=0x43\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
+        bool_tsv(set_supported),
+        MAGIK_FBUF_LATCH_MAGIC,
+        set_probe.0,
+        set_probe.1,
+        set_probe.2
+    );
+
+    let status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_logln!(
+                "fpga_latch_status_tsv\tcmd=0x44\tsupported=0\tmagic_expected=0x{:04x}\terror={e}",
+                MAGIK_FBUF_STATUS_MAGIC
+            );
+            if set_supported {
+                std::process::exit(1);
+            }
+            return;
+        }
+    };
+    crate::ui_logln!(
+        "fpga_latch_status_tsv\tcmd=0x44\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpending_enabled={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}\tactive_width={}\tactive_height={}\tactive_stride={}",
+        bool_tsv(status.supported()),
+        MAGIK_FBUF_STATUS_MAGIC,
+        status.magic_hi,
+        status.magic_lo,
+        status.active_sequence,
+        status.pending_sequence,
+        bool_tsv(status.pending()),
+        bool_tsv(status.pending_enabled()),
+        bool_tsv(status.active_enabled()),
+        status.flip_count,
+        status.post_count,
+        status.drop_count,
+        status.active_base,
+        status.active_width,
+        status.active_height,
+        status.active_stride
+    );
 }
 
 #[cfg(feature = "diagnostics")]
