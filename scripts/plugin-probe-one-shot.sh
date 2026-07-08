@@ -9,7 +9,11 @@ REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
 LOCAL_REPORT="$ROOT/build/plugin-probe/plugin-map-report.log"
 LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/plugin-map-bandwidth.log"
+LOCAL_PATTERN="$ROOT/build/plugin-probe/plugin-present-pattern.log"
 FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
+PATTERN_FRAMES="${MISTER_PLUGIN_PRESENT_PATTERN_FRAMES:-180}"
+SCROLL_SECS="${MISTER_PLUGIN_LAUNCHER_SCROLL_SECS:-15}"
+SCROLL_LABEL="${MISTER_PLUGIN_LAUNCHER_LABEL:-PLUGIN-MAIN-VSYNC-$(date -u +%Y%m%dT%H%M%SZ)}"
 
 cleanup() {
   "$MISTER" run "rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
@@ -49,6 +53,18 @@ echo "==> Running plugin-map-report"
 echo "==> Running plugin-map-bandwidth ($FRAMES frames)"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
 
+echo "==> Starting launcher for plugin present pattern diagnostic"
+"$ROOT/scripts/run-rust.sh" launcher 0
+"$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1"
+
+echo "==> Running plugin-present-pattern ($PATTERN_FRAMES frames)"
+"$MISTER" run "'$REMOTE_BIN' plugin-present-pattern '$PATTERN_FRAMES'" | tee "$LOCAL_PATTERN"
+
+echo "==> Running plugin-backed launcher scroll profile ($SCROLL_LABEL, ${SCROLL_SECS}s)"
+MISTER_PRESENT_BACKEND=plugin-main-vsync-hidden \
+MISTER_ARCADE_SCROLL_BOOT_PRELUDE=1 \
+"$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --catalog-refresh off --stream-consumer none
+
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
 "$ROOT/scripts/deploy-rust.sh"
@@ -58,3 +74,5 @@ cleanup
 echo "==> Wrote:"
 echo "    $LOCAL_REPORT"
 echo "    $LOCAL_BANDWIDTH"
+echo "    $LOCAL_PATTERN"
+echo "    $ROOT/build/arcade-scroll-profiles/${SCROLL_LABEL}-arcade-scroll.tsv"
