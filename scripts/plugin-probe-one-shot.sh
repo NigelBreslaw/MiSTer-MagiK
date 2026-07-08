@@ -23,7 +23,7 @@ trap cleanup EXIT
 mkdir -p "$ROOT/build/plugin-probe"
 
 "$ROOT/scripts/build-plugin-probe-module.sh"
-"$ROOT/magik-gui/build-arm.sh" --diagnostics
+"$ROOT/magik-gui/build-arm.sh" --diagnostics --bench-tools
 
 test -f "$LOCAL_KO"
 if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/plugin-probe/modinfo.txt"; then
