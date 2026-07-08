@@ -46,6 +46,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("cpu-profile-smoke", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
+    CommandSpec::new("hidden-fb-copy-bench", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
     CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
     CommandSpec::new("repair-catalog-projections", CommandKind::PreFpga),
@@ -253,6 +255,7 @@ mod tests {
             "read",
             "vsync-probe",
             "cpu-profile-smoke",
+            "hidden-fb-copy-bench",
             "input",
             "library-sql",
             "hbmame-metadata-from-library",
@@ -266,6 +269,7 @@ mod tests {
         assert_command_kind("read", CommandKind::Fpga);
         assert_command_kind("vsync-probe", CommandKind::PreFpga);
         assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
+        assert_command_kind("hidden-fb-copy-bench", CommandKind::PreFpga);
         assert_command_kind("input", CommandKind::Fpga);
     }
 

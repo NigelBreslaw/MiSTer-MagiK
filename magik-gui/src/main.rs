@@ -17,6 +17,8 @@
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
+//!     hidden-fb-copy-bench
+//!                        benchmark RGB565 copies into hidden framebuffer slots
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -101,6 +103,8 @@ pub use mister_magik_fb::{
 
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
+#[cfg(feature = "diagnostics")]
+use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
@@ -291,6 +295,8 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "vsync-probe" => run_vsync_probe(),
         #[cfg(feature = "diagnostics")]
         "cpu-profile-smoke" => run_cpu_profile_smoke(),
+        #[cfg(feature = "diagnostics")]
+        "hidden-fb-copy-bench" => run_hidden_fb_copy_bench(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -728,6 +734,126 @@ fn run_cpu_profile_smoke() {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_hidden_fb_copy_bench() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(240)
+        .max(1);
+    let width = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let bytes_per_copy = stride_bytes.saturating_mul(height);
+    let mut source = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+    for (i, pixel) in source.iter_mut().enumerate() {
+        let x = i % width.max(1);
+        let y = i / width.max(1);
+        pixel.0 = (((x as u16) & 0x1f) << 11)
+            | (((y as u16) & 0x3f) << 5)
+            | ((x as u16 ^ y as u16) & 0x1f);
+    }
+
+    let index1 = HiddenRgb565BufferIndex::new(1).expect("hidden buffer 1 index");
+    let index2 = HiddenRgb565BufferIndex::new(2).expect("hidden buffer 2 index");
+    let mut buffer1 = match HiddenRgb565Framebuffer::open(index1, width, height, stride_bytes) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match HiddenRgb565Framebuffer::open(index2, width, height, stride_bytes) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    crate::ui_logln!("hidden_fb_copy_bench_header\tframe\tbuffer\tbytes\twall_us\tcpu_us\tmb_s");
+    let bench_start = std::time::Instant::now();
+    let mut total_wall_us = 0u128;
+    let mut total_cpu_us = 0u128;
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        let target = if buffer_index == 1 {
+            &mut buffer1
+        } else {
+            &mut buffer2
+        };
+        let source_index = frame % source.len();
+        source[source_index].0 ^= 0xffff;
+        let cpu_start = thread_cpu_us();
+        let copy_start = std::time::Instant::now();
+        let copied_bytes = match target.copy_full_frame(&source, width) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                crate::ui_errln!(
+                    "hidden_fb_copy_bench\tfailed\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let wall_us = copy_start.elapsed().as_micros() as u64;
+        let cpu_us = elapsed_thread_cpu_us(cpu_start);
+        total_wall_us += wall_us as u128;
+        total_cpu_us += cpu_us as u128;
+        let mb_s = mb_per_second(copied_bytes, wall_us);
+        crate::ui_logln!(
+            "hidden_fb_copy_bench_tsv\t{frame}\t{buffer_index}\t{copied_bytes}\t{wall_us}\t{cpu_us}\t{mb_s:.2}"
+        );
+    }
+    let elapsed_us = bench_start.elapsed().as_micros() as u128;
+    let total_bytes = (bytes_per_copy as u128).saturating_mul(frames as u128);
+    crate::ui_logln!(
+        "hidden_fb_copy_bench_summary\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\ttotal_bytes={total_bytes}\telapsed_us={elapsed_us}\tavg_wall_us={}\tavg_cpu_us={}\tavg_mb_s={:.2}",
+        total_wall_us / frames as u128,
+        total_cpu_us / frames as u128,
+        mb_per_second(total_bytes.min(usize::MAX as u128) as usize, elapsed_us as u64)
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn mb_per_second(bytes: usize, us: u64) -> f64 {
+    if us == 0 {
+        return 0.0;
+    }
+    (bytes as f64 / 1_048_576.0) / (us as f64 / 1_000_000.0)
+}
+
+#[cfg(all(feature = "diagnostics", target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let ts = unsafe { ts.assume_init() };
+    Some((ts.tv_sec as u64) * 1_000_000 + (ts.tv_nsec as u64) / 1_000)
+}
+
+#[cfg(all(feature = "diagnostics", not(target_os = "linux")))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+#[cfg(feature = "diagnostics")]
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or_default()
 }
 
 fn run_vsync_probe() {
