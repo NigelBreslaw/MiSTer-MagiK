@@ -507,6 +507,38 @@ fn preview_fade_fast_path_enabled_value(value: Option<&str>) -> bool {
     !matches!(value, Some("0" | "off" | "false" | "no" | "legacy"))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewFadeExperiment {
+    Baseline,
+    BucketShift,
+    RowsBlackNeon,
+    Neon8,
+    ScaledAffine,
+}
+
+impl PreviewFadeExperiment {
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value {
+            Some("bucket-shift") => Self::BucketShift,
+            Some("rows-black-neon") => Self::RowsBlackNeon,
+            Some("neon8") => Self::Neon8,
+            Some("scaled-affine") => Self::ScaledAffine,
+            _ => Self::Baseline,
+        }
+    }
+}
+
+fn preview_fade_experiment() -> PreviewFadeExperiment {
+    static EXPERIMENT: OnceLock<PreviewFadeExperiment> = OnceLock::new();
+    *EXPERIMENT.get_or_init(|| {
+        PreviewFadeExperiment::from_env_value(
+            std::env::var("MISTER_PREVIEW_FADE_EXPERIMENT")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
 #[inline]
 fn blend_565_row_platform(
@@ -1073,6 +1105,7 @@ fn blit_transition_565_fade(
 ) -> PreviewFadeTrace {
     let wall_start = Instant::now();
     let cpu_start = thread_cpu_us();
+    let _experiment = preview_fade_experiment();
     let current_empty = matches!(frame.current.pixels, PreviewRawPixels::Empty);
     let current = if current_empty {
         None
@@ -2216,6 +2249,38 @@ mod tests {
         assert!(preview_fade_fast_path_enabled_value(Some("1")));
         assert!(!preview_fade_fast_path_enabled_value(Some("0")));
         assert!(!preview_fade_fast_path_enabled_value(Some("legacy")));
+    }
+
+    #[test]
+    fn preview_fade_experiment_env_parser_accepts_supported_modes() {
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(None),
+            PreviewFadeExperiment::Baseline
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("baseline")),
+            PreviewFadeExperiment::Baseline
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("bucket-shift")),
+            PreviewFadeExperiment::BucketShift
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("rows-black-neon")),
+            PreviewFadeExperiment::RowsBlackNeon
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("neon8")),
+            PreviewFadeExperiment::Neon8
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("scaled-affine")),
+            PreviewFadeExperiment::ScaledAffine
+        );
+        assert_eq!(
+            PreviewFadeExperiment::from_env_value(Some("unknown")),
+            PreviewFadeExperiment::Baseline
+        );
     }
 
     #[test]
