@@ -14,7 +14,7 @@ source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--fade-mode default|legacy] [--fade-experiment MODE] [--replace-label]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--fade-mode default|legacy] [--replace-label]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -32,8 +32,6 @@ the requested system after navigation rows hydrate.
 --skip-preview-warm skips launcher benchmark archive preloading so first-preview
 measurement can exercise the .idx + pread fast lane.
 --fade-mode legacy disables the RGB565 preview fade fast path for A/B timing.
---fade-experiment selects an isolated RGB565 fade experiment:
-baseline, bucket-shift, rows-black-neon, neon8, or scaled-affine.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
 --replace-label removes existing local artifacts for LABEL before running.
@@ -58,7 +56,6 @@ selected_index=""
 start_system="arcade"
 defer_start_system="0"
 fade_mode="default"
-fade_experiment="baseline"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -95,11 +92,6 @@ while [[ $# -gt 0 ]]; do
     --fade-mode)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--fade-mode needs a value" >&2; usage >&2; exit 2; fi
       fade_mode="$2"
-      shift 2
-      ;;
-    --fade-experiment)
-      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--fade-experiment needs a value" >&2; usage >&2; exit 2; fi
-      fade_experiment="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -141,10 +133,6 @@ if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be 
 if [[ -n "$selected_index" && ! "$selected_index" =~ ^[0-9]+$ ]]; then echo "--selected-index must be an integer" >&2; exit 2; fi
 if [[ ! "$start_system" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "--start-system must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 case "$fade_mode" in default|legacy) ;; *) echo "--fade-mode must be default or legacy" >&2; exit 2 ;; esac
-case "$fade_experiment" in
-  baseline|bucket-shift|rows-black-neon|neon8|scaled-affine) ;;
-  *) echo "--fade-experiment must be baseline, bucket-shift, rows-black-neon, neon8, or scaled-affine" >&2; exit 2 ;;
-esac
 
 mkdir -p "$OUT_DIR"
 if [[ "$replace_label" == "1" ]]; then
@@ -284,15 +272,15 @@ emit_run_context_row() {
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
   binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type" "$deployment_state")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tfade_experiment=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$fade_experiment" "$started_at" "$binary_fields" "$thread_sample_enabled"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields" "$thread_sample_enabled"
   else
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tfade_experiment=%s\tstarted_at=%s\t%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$fade_experiment" "$started_at" "$binary_fields"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields"
   fi
 }
 
@@ -346,7 +334,6 @@ write_launcher_env() {
     if [[ "$fade_mode" == "legacy" ]]; then
       printf 'export MISTER_PREVIEW_FADE_P02=legacy\n'
     fi
-    printf 'export MISTER_PREVIEW_FADE_EXPERIMENT=%q\n' "$fade_experiment"
     if [[ "$cpu_profile" == "1" ]]; then
       printf 'export MISTER_PPROF=1\n'
       printf 'export MISTER_PPROF_OUT=%q\n' "$cpu_profile_remote_svg"
