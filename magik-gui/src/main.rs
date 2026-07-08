@@ -24,6 +24,8 @@
 //!     plugin-map-report  report stock-kernel plugin probe metadata
 //!     plugin-map-bandwidth
 //!                        benchmark plugin probe mappings
+//!     plugin-presenter-report
+//!                        report plugin async-present mailbox capability
 //!     plugin-present-pattern
 //!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
@@ -318,6 +320,8 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "plugin-map-report" => run_plugin_map_report(),
         #[cfg(feature = "diagnostics")]
         "plugin-map-bandwidth" => run_plugin_map_bandwidth(),
+        #[cfg(feature = "diagnostics")]
+        "plugin-presenter-report" => run_plugin_presenter_report(),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "plugin-present-pattern" => run_plugin_present_pattern(),
         "library-refresh" => run_library_refresh(),
@@ -1114,6 +1118,55 @@ fn run_plugin_map_report() {
             bool_tsv(probe.is_ok()),
             probe.err().map(|e| e.to_string()).unwrap_or_default()
         );
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_plugin_presenter_report() {
+    let before = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_before\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for line in before.lines().filter(|line| {
+        line.starts_with("plugin_presenter_capability_tsv\t")
+            || line.starts_with("plugin_presenter_status_tsv\t")
+    }) {
+        crate::ui_logln!("plugin_presenter_before_{line}");
+    }
+
+    let request = "plugin_present_async_v1 sequence=1 buffer=1 width=960 height=540 stride=1920\n";
+    let post_start = std::time::Instant::now();
+    let post_result = std::fs::OpenOptions::new()
+        .write(true)
+        .open(PLUGIN_PROBE_DEVICE)
+        .and_then(|mut file| file.write_all(request.as_bytes()));
+    let post_us = post_start.elapsed().as_micros();
+    match post_result {
+        Ok(()) => crate::ui_logln!(
+            "plugin_presenter_post_tsv\tok=1\tpost_us={post_us}\trequest={}",
+            request.trim()
+        ),
+        Err(e) => {
+            crate::ui_logln!("plugin_presenter_post_tsv\tok=0\tpost_us={post_us}\terror={e}");
+            std::process::exit(1);
+        }
+    }
+
+    let after = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_after\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for line in after.lines().filter(|line| {
+        line.starts_with("plugin_presenter_capability_tsv\t")
+            || line.starts_with("plugin_presenter_status_tsv\t")
+    }) {
+        crate::ui_logln!("plugin_presenter_after_{line}");
     }
 }
 

@@ -10,15 +10,18 @@
 #include <linux/dma-mapping.h>
 #include <linux/fs.h>
 #include <linux/io.h>
+#include <linux/ktime.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/uaccess.h>
 #include <generated/utsrelease.h>
 
 #define DEVICE_NAME "mister-magik-plugin-probe"
-#define PROBE_VERSION 2
+#define PROBE_VERSION 3
 
 #define FB_PHYS_BASE 0x22000000UL
 #define FB_CONTROL_BYTES 4096UL
@@ -44,11 +47,32 @@ struct probe_region {
 	bool dma_owned;
 };
 
+struct present_mailbox {
+	u32 posted_sequence;
+	u32 posted_buffer;
+	u32 posted_width;
+	u32 posted_height;
+	u32 posted_stride;
+	u64 posted_ns;
+	u32 active_sequence;
+	u32 active_buffer;
+	u32 pending_sequence;
+	u32 dropped_count;
+	u32 flip_count;
+	u32 post_count;
+	u32 reject_count;
+	char last_error[96];
+};
+
 static atomic_t open_count = ATOMIC_INIT(0);
 static atomic_t mmap_count = ATOMIC_INIT(0);
 static void *dma_virt;
 static dma_addr_t dma_handle;
 static struct probe_region regions[REGION_COUNT];
+static DEFINE_MUTEX(mailbox_lock);
+static struct present_mailbox mailbox = {
+	.last_error = "kernel-presenter-unsupported:no-uio-route-symbol",
+};
 
 static int probe_open(struct inode *inode, struct file *file)
 {
@@ -111,25 +135,41 @@ static ssize_t probe_read(struct file *file, char __user *buf, size_t len,
 	size_t used = 0;
 	int i;
 	ssize_t ret;
+	struct present_mailbox snapshot;
 
-	tmp = kzalloc(2048, GFP_KERNEL);
+	tmp = kzalloc(4096, GFP_KERNEL);
 	if (!tmp)
 		return -ENOMEM;
 
-	used += scnprintf(tmp + used, 2048 - used,
+	mutex_lock(&mailbox_lock);
+	snapshot = mailbox;
+	mutex_unlock(&mailbox_lock);
+
+	used += scnprintf(tmp + used, 4096 - used,
 			  "plugin_probe_header_tsv\tname=%s\tversion=%u\tuts_release=%s\topen_count=%d\tmmap_count=%d\tpage_size=%lu\tregion_offset_pages=%lu\tregion_offset_bytes=%lu\tcache_mode=writecombine\n",
 			  DEVICE_NAME, PROBE_VERSION, UTS_RELEASE,
 			  atomic_read(&open_count), atomic_read(&mmap_count),
 			  PAGE_SIZE, REGION_OFFSET_PAGES,
 			  REGION_OFFSET_PAGES * PAGE_SIZE);
-	used += scnprintf(tmp + used, 2048 - used,
+	used += scnprintf(tmp + used, 4096 - used,
 			  "plugin_probe_expected_tsv\twidth=%lu\theight=%lu\tstride_bytes=%lu\tframe_bytes=%lu\thidden_slot_bytes=%lu\tfb_phys_base=0x%08lx\tfb_active_phys=0x%08lx\n",
 			  RGB565_WIDTH, RGB565_HEIGHT, RGB565_STRIDE_BYTES,
 			  RGB565_FRAME_BYTES, HIDDEN_SLOT_BYTES, FB_PHYS_BASE,
 			  FB_PHYS_BASE + FB_CONTROL_BYTES);
+	used += scnprintf(tmp + used, 4096 - used,
+			  "plugin_presenter_capability_tsv\tsupported=0\treason=no-uio-route-symbol\tvblank_owner=unsupported\troute_owner=unsupported\n");
+	used += scnprintf(tmp + used, 4096 - used,
+			  "plugin_presenter_status_tsv\tposted_sequence=%u\tposted_buffer=%u\tposted_width=%u\tposted_height=%u\tposted_stride=%u\tposted_ns=%llu\tactive_sequence=%u\tactive_buffer=%u\tpending_sequence=%u\tdropped_count=%u\tflip_count=%u\tpost_count=%u\treject_count=%u\tlast_error=%s\n",
+			  snapshot.posted_sequence, snapshot.posted_buffer,
+			  snapshot.posted_width, snapshot.posted_height,
+			  snapshot.posted_stride, snapshot.posted_ns,
+			  snapshot.active_sequence, snapshot.active_buffer,
+			  snapshot.pending_sequence, snapshot.dropped_count,
+			  snapshot.flip_count, snapshot.post_count,
+			  snapshot.reject_count, snapshot.last_error);
 
 	for (i = 0; i < REGION_COUNT; i++) {
-		used += scnprintf(tmp + used, 2048 - used,
+		used += scnprintf(tmp + used, 4096 - used,
 				  "plugin_probe_region_tsv\tindex=%d\tname=%s\tavailable=%u\tphys=0x%08lx\tlen=%lu\tdma_owned=%u\n",
 				  i, regions[i].name, regions[i].available ? 1 : 0,
 				  regions[i].phys, regions[i].len,
@@ -141,11 +181,81 @@ static ssize_t probe_read(struct file *file, char __user *buf, size_t len,
 	return ret;
 }
 
+static bool parse_u32_field(const char *text, const char *name, u32 *out)
+{
+	char pattern[32];
+	char *pos;
+	unsigned int value;
+
+	snprintf(pattern, sizeof(pattern), "%s=", name);
+	pos = strstr(text, pattern);
+	if (!pos)
+		return false;
+	pos += strlen(pattern);
+	if (kstrtouint(pos, 10, &value))
+		return false;
+	*out = value;
+	return true;
+}
+
+static ssize_t probe_write(struct file *file, const char __user *buf, size_t len,
+			   loff_t *ppos)
+{
+	char tmp[192];
+	u32 sequence = 0;
+	u32 buffer = 0;
+	u32 width = 0;
+	u32 height = 0;
+	u32 stride = 0;
+
+	if (!len)
+		return 0;
+	if (len >= sizeof(tmp))
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, len))
+		return -EFAULT;
+	tmp[len] = '\0';
+
+	if (strncmp(tmp, "plugin_present_async_v1", 23) != 0)
+		return -EINVAL;
+	if (!parse_u32_field(tmp, "sequence", &sequence) ||
+	    !parse_u32_field(tmp, "buffer", &buffer) ||
+	    !parse_u32_field(tmp, "width", &width) ||
+	    !parse_u32_field(tmp, "height", &height) ||
+	    !parse_u32_field(tmp, "stride", &stride))
+		return -EINVAL;
+
+	mutex_lock(&mailbox_lock);
+	mailbox.post_count++;
+	if (!sequence || buffer < 1 || buffer > 2 ||
+	    width != RGB565_WIDTH || height != RGB565_HEIGHT ||
+	    stride != RGB565_STRIDE_BYTES) {
+		mailbox.reject_count++;
+		snprintf(mailbox.last_error, sizeof(mailbox.last_error),
+			 "rejected:bad-request");
+		mutex_unlock(&mailbox_lock);
+		return -EINVAL;
+	}
+
+	mailbox.posted_sequence = sequence;
+	mailbox.posted_buffer = buffer;
+	mailbox.posted_width = width;
+	mailbox.posted_height = height;
+	mailbox.posted_stride = stride;
+	mailbox.posted_ns = ktime_get_ns();
+	mailbox.pending_sequence = sequence;
+	snprintf(mailbox.last_error, sizeof(mailbox.last_error),
+		 "kernel-presenter-unsupported:no-uio-route-symbol");
+	mutex_unlock(&mailbox_lock);
+	return len;
+}
+
 static const struct file_operations probe_fops = {
 	.owner = THIS_MODULE,
 	.open = probe_open,
 	.release = probe_release,
 	.read = probe_read,
+	.write = probe_write,
 	.mmap = probe_mmap,
 	.llseek = no_llseek,
 };
