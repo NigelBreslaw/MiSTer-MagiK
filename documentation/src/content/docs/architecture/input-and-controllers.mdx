@@ -1,0 +1,20 @@
+---
+title: Input and Controllers
+description: Runtime input, controller setup, and simple joystick policy.
+sidebar:
+  order: 7
+---
+
+Input is routed through the Rust controller loop into launcher navigation and optional setup state. The setup flow handles new controller identities and known controllers that appear on a changed port.
+
+```mermaid
+flowchart TD
+  Evdev["evdev devices"] --> InputLoop["controller_loop"]
+  InputLoop --> PadState["PadState pool"]
+  PadState --> Setup["Controller setup session"]
+  PadState --> Launcher["Launcher navigation"]
+  Setup --> Db["controller database"]
+  Launcher --> Screen["Home, Arcade, Search, Settings"]
+```
+
+The UI exposes a Controller Test screen for live state inspection and a setup overlay for registration or rebinding.

@@ -1,0 +1,25 @@
+---
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
+interface Props {
+  src: string;
+  alt: string;
+}
+
+const { src, alt } = Astro.props;
+const relative = src.startsWith('/') ? src.slice(1) : src;
+const exists = existsSync(join(process.cwd(), 'public', relative));
+---
+
+{
+  exists ? (
+    <img class="magik-screenshot" src={src} alt={alt} />
+  ) : (
+    <aside class="screenshot-missing">
+      <strong>Screenshot pending:</strong> {alt}
+      <br />
+      <code>{src}</code>
+    </aside>
+  )
+}

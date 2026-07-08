@@ -1,0 +1,24 @@
+---
+title: Catalog and Preview
+description: Catalog V2, SQLite, warm projections, and screenshot media.
+sidebar:
+  order: 5
+---
+
+The catalog builder treats first usable RAM catalog readiness separately from durable SQLite persistence. This lets cold first scan reveal the launcher as soon as the catalog can be used, while the durable database finishes in the background.
+
+```mermaid
+flowchart TD
+  Roots["/media/fat roots"] --> Scan["Library scan"]
+  Scan --> Classify["Classify discoveries"]
+  Classify --> Ram["RAM catalog usable"]
+  Ram --> UI["Launcher ready"]
+  Ram --> SQLite["Persist SQLite in /tmp"]
+  SQLite --> Publish["Atomic publish to /media/fat"]
+  Publish --> Summary["library.summary.json"]
+  Publish --> Nav["library.nav.lz4b"]
+  Packs["Screenshot packs"] --> PreviewIndex["Preview archive indexes"]
+  PreviewIndex --> UI
+```
+
+Warm startup can use `library.summary.json` for Home counts before full rows hydrate. The Arcade screen must pause list and preview requests until the full navigation rows are available.

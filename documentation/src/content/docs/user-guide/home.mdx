@@ -1,0 +1,16 @@
+---
+title: Home
+description: Browse systems and reach settings from the launcher home screen.
+sidebar:
+  order: 2
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+<Screenshot src="/screenshots/home.png" alt="Home screen" />
+
+The Home screen is the launcher's system picker. Each tile represents a detected system and shows the current game count. Move left and right to choose a system, then confirm to enter the game list for that system.
+
+The top bar shows the MiSTer MagiK title, clock, and settings cog. Move focus to the cog to open Settings.
+
+When the library is available only as a warm summary, Home can appear before every game row has hydrated. Entering a system may briefly show an Arcade loading state until the full SQLite rows are ready.
