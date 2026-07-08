@@ -99,10 +99,25 @@ impl MainPresentClient {
         let _ = fs::remove_file(&self.ack_path);
         write_request_atomically(&self.request_path, &request.encode())?;
         let deadline = Instant::now() + self.timeout;
+        let mut last_parse_error = None;
         loop {
             match fs::read_to_string(&self.ack_path) {
                 Ok(text) => {
-                    let ack = parse_ack(&text).map_err(MainPresentError::AckParse)?;
+                    let ack = match parse_ack(&text) {
+                        Ok(ack) => ack,
+                        Err(e) => {
+                            last_parse_error = Some(e);
+                            if Instant::now() >= deadline {
+                                return Err(MainPresentError::AckParse(
+                                    last_parse_error.unwrap_or_else(|| {
+                                        "ack parse failed before timeout".to_string()
+                                    }),
+                                ));
+                            }
+                            thread::sleep(Duration::from_micros(250));
+                            continue;
+                        }
+                    };
                     if ack.sequence != request.sequence {
                         return Err(MainPresentError::AckSequenceMismatch {
                             expected: request.sequence,
@@ -118,6 +133,9 @@ impl MainPresentClient {
                 Err(e) => return Err(MainPresentError::Io(e)),
             }
             if Instant::now() >= deadline {
+                if let Some(error) = last_parse_error {
+                    return Err(MainPresentError::AckParse(error));
+                }
                 return Err(MainPresentError::AckTimeout {
                     sequence: request.sequence,
                 });
@@ -219,5 +237,51 @@ mod tests {
             "mister_magik_present_ack_v1 sequence=7 status=ok buffer=x wait_us=1 route_us=2"
         )
         .is_err());
+    }
+
+    #[test]
+    fn present_retries_transient_partial_ack_until_complete() {
+        let root =
+            std::env::temp_dir().join(format!("mister-magik-main-present-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let request_path = root.join("present-request-v1");
+        let ack_path = root.join("present-ack-v1");
+        let ack_path_for_thread = ack_path.clone();
+        let request_path_for_thread = request_path.clone();
+        let writer = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !request_path_for_thread.exists() {
+                assert!(Instant::now() < deadline, "request was not written");
+                thread::sleep(Duration::from_micros(250));
+            }
+            fs::write(&ack_path_for_thread, "mister_magik_present_ack_v1").unwrap();
+            thread::sleep(Duration::from_millis(2));
+            fs::write(
+                &ack_path_for_thread,
+                "mister_magik_present_ack_v1 sequence=9 status=ok buffer=1 wait_us=10 route_us=2\n",
+            )
+            .unwrap();
+        });
+        let client = MainPresentClient {
+            request_path,
+            ack_path,
+            timeout: Duration::from_millis(50),
+        };
+
+        let ack = client
+            .present(MainPresentRequest {
+                sequence: 9,
+                buffer_index: 1,
+                width: 960,
+                height: 540,
+                stride_bytes: 1920,
+            })
+            .unwrap();
+
+        writer.join().unwrap();
+        assert_eq!(ack.sequence, 9);
+        assert_eq!(ack.buffer_index, 1);
+        let _ = fs::remove_dir_all(root);
     }
 }
