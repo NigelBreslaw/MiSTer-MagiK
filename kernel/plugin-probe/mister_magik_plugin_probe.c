@@ -185,6 +185,8 @@ static bool parse_u32_field(const char *text, const char *name, u32 *out)
 {
 	char pattern[32];
 	char *pos;
+	char value_text[16];
+	size_t value_len = 0;
 	unsigned int value;
 
 	snprintf(pattern, sizeof(pattern), "%s=", name);
@@ -192,7 +194,17 @@ static bool parse_u32_field(const char *text, const char *name, u32 *out)
 	if (!pos)
 		return false;
 	pos += strlen(pattern);
-	if (kstrtouint(pos, 10, &value))
+	while (pos[value_len] && pos[value_len] != ' ' &&
+	       pos[value_len] != '\t' && pos[value_len] != '\n') {
+		if (value_len + 1 >= sizeof(value_text))
+			return false;
+		value_text[value_len] = pos[value_len];
+		value_len++;
+	}
+	if (!value_len)
+		return false;
+	value_text[value_len] = '\0';
+	if (kstrtouint(value_text, 10, &value))
 		return false;
 	*out = value;
 	return true;
