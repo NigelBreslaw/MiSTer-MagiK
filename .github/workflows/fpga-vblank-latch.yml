@@ -49,7 +49,6 @@ jobs:
           remove-haskell: true
           remove-codeql: true
           remove-docker-images: false
-          build-mount-path: ${{ github.workspace }}/build
 
       - name: Checkout MagiK repo
         uses: actions/checkout@v7
