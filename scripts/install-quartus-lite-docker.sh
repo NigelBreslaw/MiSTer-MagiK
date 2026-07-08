@@ -121,12 +121,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash ca-certificates file make perl python3 tar gzip xz-utils locales \
+    libc6-i386 lib32stdc++6 lib32z1 \
     libfontconfig1 libfreetype6 libglib2.0-0 libice6 libncurses5 libsm6 \
     libx11-6 libxau6 libxdmcp6 libxext6 libxft2 libxi6 libxrender1 libxt6 \
     libxtst6 \
+  && locale-gen en_US.UTF-8 \
   && rm -rf /var/lib/apt/lists/*
 
-ENV LC_ALL=C LANG=C PATH=/opt/intelFPGA_lite/17.0/quartus/bin:$PATH
+ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 PATH=/opt/intelFPGA_lite/17.0/quartus/bin:$PATH
 EOF
 
 docker build --platform linux/amd64 --file "$CONTAINERFILE" --tag "$IMAGE" "$CONTEXT_DIR"
