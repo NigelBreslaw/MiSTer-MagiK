@@ -442,6 +442,22 @@ fn blend_565_row_bucketed(
     current: &[Rgb565Pixel],
     alpha_bucket: u16,
 ) {
+    blend_565_row_bucketed_for_experiment(
+        dst,
+        previous,
+        current,
+        alpha_bucket,
+        preview_fade_experiment(),
+    );
+}
+
+fn blend_565_row_bucketed_for_experiment(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+    experiment: PreviewFadeExperiment,
+) {
     debug_assert!(previous.len() >= dst.len());
     debug_assert!(current.len() >= dst.len());
     let a = alpha_bucket.min(32);
@@ -451,6 +467,11 @@ fn blend_565_row_bucketed(
     }
     if a >= 32 {
         dst.copy_from_slice(&current[..dst.len()]);
+        return;
+    }
+    if experiment == PreviewFadeExperiment::BucketShift
+        && blend_565_row_bucket_shift(dst, previous, current, a)
+    {
         return;
     }
     let start = blend_565_row_platform(dst, previous, current, a);
@@ -464,6 +485,22 @@ fn blend_565_row_with_black(
     pixels: &[Rgb565Pixel],
     alpha_bucket: u16,
     fade_in: bool,
+) {
+    blend_565_row_with_black_for_experiment(
+        dst,
+        pixels,
+        alpha_bucket,
+        fade_in,
+        preview_fade_experiment(),
+    );
+}
+
+fn blend_565_row_with_black_for_experiment(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    alpha_bucket: u16,
+    fade_in: bool,
+    experiment: PreviewFadeExperiment,
 ) {
     debug_assert!(pixels.len() >= dst.len());
     let a = alpha_bucket.min(32);
@@ -483,6 +520,11 @@ fn blend_565_row_with_black(
         }
         return;
     }
+    if experiment == PreviewFadeExperiment::BucketShift
+        && blend_565_row_with_black_bucket_shift(dst, pixels, a, fade_in)
+    {
+        return;
+    }
     let start = blend_565_row_with_black_platform(dst, pixels, a, fade_in);
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
     for x in start..dst.len() {
@@ -492,6 +534,80 @@ fn blend_565_row_with_black(
             blend_565_bucket(pixels[x], black, a)
         };
     }
+}
+
+#[inline(always)]
+fn blend_component_bucket_shift(from: u32, to: u32, alpha_bucket: u16) -> u32 {
+    match alpha_bucket {
+        8 => (from + from + from + to) >> 2,
+        16 => (from + to) >> 1,
+        24 => (from + to + to + to) >> 2,
+        _ => unreachable!("bucket-shift only supports selected buckets"),
+    }
+}
+
+#[inline(always)]
+fn blend_565_bucket_shift(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
+    let f = from.0 as u32;
+    let t = to.0 as u32;
+    let rb = blend_component_bucket_shift(f & 0xf81f, t & 0xf81f, alpha_bucket) & 0xf81f;
+    let g = blend_component_bucket_shift(f & 0x07e0, t & 0x07e0, alpha_bucket) & 0x07e0;
+    Rgb565Pixel((rb | g) as u16)
+}
+
+fn blend_565_row_bucket_shift(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+) -> bool {
+    if !matches!(alpha_bucket, 8 | 16 | 24) {
+        return false;
+    }
+    let start = blend_565_row_bucket_shift_platform(dst, previous, current, alpha_bucket);
+    for x in start..dst.len() {
+        dst[x] = blend_565_bucket_shift(previous[x], current[x], alpha_bucket);
+    }
+    true
+}
+
+#[inline(always)]
+fn scale_component_bucket_shift(value: u32, factor_bucket: u16) -> u32 {
+    match factor_bucket {
+        8 => value >> 2,
+        16 => value >> 1,
+        24 => (value + value + value) >> 2,
+        _ => unreachable!("bucket-shift only supports selected factors"),
+    }
+}
+
+#[inline(always)]
+fn scale_565_bucket_shift(pixel: Rgb565Pixel, factor_bucket: u16) -> Rgb565Pixel {
+    let v = pixel.0 as u32;
+    let rb = scale_component_bucket_shift(v & 0xf81f, factor_bucket) & 0xf81f;
+    let g = scale_component_bucket_shift(v & 0x07e0, factor_bucket) & 0x07e0;
+    Rgb565Pixel((rb | g) as u16)
+}
+
+fn blend_565_row_with_black_bucket_shift(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    alpha_bucket: u16,
+    fade_in: bool,
+) -> bool {
+    let factor = if fade_in {
+        alpha_bucket
+    } else {
+        32 - alpha_bucket
+    };
+    if !matches!(factor, 8 | 16 | 24) {
+        return false;
+    }
+    let start = blend_565_row_with_black_bucket_shift_platform(dst, pixels, factor);
+    for x in start..dst.len() {
+        dst[x] = scale_565_bucket_shift(pixels[x], factor);
+    }
+    true
 }
 
 fn preview_fade_fast_path_enabled() -> bool {
@@ -537,6 +653,173 @@ fn preview_fade_experiment() -> PreviewFadeExperiment {
                 .as_deref(),
         )
     })
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+#[inline]
+fn blend_565_row_bucket_shift_platform(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+) -> usize {
+    let vector_len = dst.len().min(previous.len()).min(current.len()) & !3;
+    if vector_len == 0 {
+        return 0;
+    }
+    // SAFETY: vector_len is rounded down to a multiple of four within dst.len()
+    // and capped to source lengths; alpha_bucket is one of the supported shifts.
+    unsafe { blend_565_row_bucket_shift_neon(dst, previous, current, vector_len, alpha_bucket) };
+    vector_len
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_565_row_bucket_shift_neon(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    vector_len: usize,
+    alpha_bucket: u16,
+) {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vorrq_u32, vshrq_n_u32,
+        vst1_u16,
+    };
+
+    debug_assert!(matches!(alpha_bucket, 8 | 16 | 24));
+    let rb_mask = vdupq_n_u32(0xf81f);
+    let g_mask = vdupq_n_u32(0x07e0);
+    let previous = previous.as_ptr().cast::<u16>();
+    let current = current.as_ptr().cast::<u16>();
+    let dst = dst.as_mut_ptr().cast::<u16>();
+    let mut i = 0;
+    macro_rules! weighted {
+        ($prev:expr, $curr:expr) => {{
+            match alpha_bucket {
+                8 => vshrq_n_u32(
+                    vaddq_u32(vaddq_u32($prev, $prev), vaddq_u32($prev, $curr)),
+                    2,
+                ),
+                16 => vshrq_n_u32(vaddq_u32($prev, $curr), 1),
+                24 => vshrq_n_u32(
+                    vaddq_u32(vaddq_u32($prev, $curr), vaddq_u32($curr, $curr)),
+                    2,
+                ),
+                _ => unreachable!(),
+            }
+        }};
+    }
+    macro_rules! blend4 {
+        ($offset:expr) => {{
+            let prev = vmovl_u16(vld1_u16(previous.add($offset)));
+            let curr = vmovl_u16(vld1_u16(current.add($offset)));
+            let rb = vandq_u32(
+                weighted!(vandq_u32(prev, rb_mask), vandq_u32(curr, rb_mask)),
+                rb_mask,
+            );
+            let g = vandq_u32(
+                weighted!(vandq_u32(prev, g_mask), vandq_u32(curr, g_mask)),
+                g_mask,
+            );
+            vst1_u16(dst.add($offset), vmovn_u32(vorrq_u32(rb, g)));
+        }};
+    }
+    while i + 8 <= vector_len {
+        blend4!(i);
+        blend4!(i + 4);
+        i += 8;
+    }
+    while i + 4 <= vector_len {
+        blend4!(i);
+        i += 4;
+    }
+}
+
+#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+#[inline(always)]
+fn blend_565_row_bucket_shift_platform(
+    _dst: &mut [Rgb565Pixel],
+    _previous: &[Rgb565Pixel],
+    _current: &[Rgb565Pixel],
+    _alpha_bucket: u16,
+) -> usize {
+    0
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+#[inline]
+fn blend_565_row_with_black_bucket_shift_platform(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    factor_bucket: u16,
+) -> usize {
+    let vector_len = dst.len().min(pixels.len()) & !3;
+    if vector_len == 0 {
+        return 0;
+    }
+    // SAFETY: vector_len is rounded down to a multiple of four within dst.len()
+    // and capped to source length; factor_bucket is one of the supported shifts.
+    unsafe { blend_565_row_with_black_bucket_shift_neon(dst, pixels, vector_len, factor_bucket) };
+    vector_len
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_565_row_with_black_bucket_shift_neon(
+    dst: &mut [Rgb565Pixel],
+    pixels: &[Rgb565Pixel],
+    vector_len: usize,
+    factor_bucket: u16,
+) {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vorrq_u32, vshrq_n_u32,
+        vst1_u16,
+    };
+
+    debug_assert!(matches!(factor_bucket, 8 | 16 | 24));
+    let rb_mask = vdupq_n_u32(0xf81f);
+    let g_mask = vdupq_n_u32(0x07e0);
+    let pixels = pixels.as_ptr().cast::<u16>();
+    let dst = dst.as_mut_ptr().cast::<u16>();
+    let mut i = 0;
+    macro_rules! scaled {
+        ($src:expr) => {{
+            match factor_bucket {
+                8 => vshrq_n_u32($src, 2),
+                16 => vshrq_n_u32($src, 1),
+                24 => vshrq_n_u32(vaddq_u32(vaddq_u32($src, $src), $src), 2),
+                _ => unreachable!(),
+            }
+        }};
+    }
+    macro_rules! blend4 {
+        ($offset:expr) => {{
+            let src = vmovl_u16(vld1_u16(pixels.add($offset)));
+            let rb = vandq_u32(scaled!(vandq_u32(src, rb_mask)), rb_mask);
+            let g = vandq_u32(scaled!(vandq_u32(src, g_mask)), g_mask);
+            vst1_u16(dst.add($offset), vmovn_u32(vorrq_u32(rb, g)));
+        }};
+    }
+    while i + 16 <= vector_len {
+        blend4!(i);
+        blend4!(i + 4);
+        blend4!(i + 8);
+        blend4!(i + 12);
+        i += 16;
+    }
+    while i + 4 <= vector_len {
+        blend4!(i);
+        i += 4;
+    }
+}
+
+#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
+#[inline(always)]
+fn blend_565_row_with_black_bucket_shift_platform(
+    _dst: &mut [Rgb565Pixel],
+    _pixels: &[Rgb565Pixel],
+    _factor_bucket: u16,
+) -> usize {
+    0
 }
 
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
@@ -2244,6 +2527,56 @@ mod tests {
     }
 
     #[test]
+    fn rgb565_bucket_shift_experiment_matches_scalar_for_all_buckets() {
+        let previous = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xffe0),
+            Rgb565Pixel(0x7bef),
+        ];
+        let current = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x7bef),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0xffe0),
+        ];
+        for bucket in 0..=32 {
+            let alpha = (bucket * 8).min(255) as u8;
+            let mut optimized = [Rgb565Pixel(0); 12];
+            blend_565_row_bucketed_for_experiment(
+                &mut optimized,
+                &previous,
+                &current,
+                bucket,
+                PreviewFadeExperiment::BucketShift,
+            );
+            let expected: Vec<_> = previous
+                .iter()
+                .zip(current.iter())
+                .map(|(&prev, &curr)| blend_565(prev, curr, alpha))
+                .collect();
+
+            assert_eq!(optimized.as_slice(), expected.as_slice(), "bucket={bucket}");
+        }
+    }
+
+    #[test]
     fn preview_fade_fast_path_env_flag_defaults_on_and_accepts_legacy_off() {
         assert!(preview_fade_fast_path_enabled_value(None));
         assert!(preview_fade_fast_path_enabled_value(Some("1")));
@@ -2320,6 +2653,59 @@ mod tests {
                 fade_out.as_slice(),
                 expected_out.as_slice(),
                 "out alpha={alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn rgb565_bucket_shift_black_blend_matches_scalar_for_all_buckets() {
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        let pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+        ];
+        for bucket in 0..=32 {
+            let alpha = (bucket * 8).min(255) as u8;
+            let mut fade_in = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black_for_experiment(
+                &mut fade_in,
+                &pixels,
+                bucket,
+                true,
+                PreviewFadeExperiment::BucketShift,
+            );
+            let expected_in: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(black, pixel, alpha))
+                .collect();
+            assert_eq!(
+                fade_in.as_slice(),
+                expected_in.as_slice(),
+                "in bucket={bucket}"
+            );
+
+            let mut fade_out = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black_for_experiment(
+                &mut fade_out,
+                &pixels,
+                bucket,
+                false,
+                PreviewFadeExperiment::BucketShift,
+            );
+            let expected_out: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(pixel, black, alpha))
+                .collect();
+            assert_eq!(
+                fade_out.as_slice(),
+                expected_out.as_slice(),
+                "out bucket={bucket}"
             );
         }
     }
