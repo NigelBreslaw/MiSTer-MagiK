@@ -332,6 +332,12 @@ struct PreviewScrollTraceRow {
     custom_draw_us: u128,
     arcade_list_update_us: u128,
     preview_blit_us: u128,
+    preview_fade_wall_us: u64,
+    preview_fade_cpu_us: u64,
+    preview_fade_pixels: u32,
+    preview_fade_rows: u32,
+    preview_fade_path: &'static str,
+    preview_fade_alpha_bucket: u8,
     effect_label_us: u128,
     vsync_us: u128,
     fb_present_us: u128,
@@ -388,7 +394,7 @@ impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
         let _ = write!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -416,6 +422,12 @@ impl PreviewScrollTraceRow {
             self.custom_draw_us,
             self.arcade_list_update_us,
             self.preview_blit_us,
+            self.preview_fade_wall_us,
+            self.preview_fade_cpu_us,
+            self.preview_fade_pixels,
+            self.preview_fade_rows,
+            self.preview_fade_path,
+            self.preview_fade_alpha_bucket,
             self.effect_label_us,
             self.vsync_us,
             self.fb_present_us,
@@ -475,6 +487,12 @@ fn preview_scroll_trace_row_from_frame(
         custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
         arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
         preview_blit_us: frame.custom_draw_trace.preview_blit_us,
+        preview_fade_wall_us: frame.preview_transition.fade.wall_us,
+        preview_fade_cpu_us: frame.preview_transition.fade.cpu_us,
+        preview_fade_pixels: frame.preview_transition.fade.pixels,
+        preview_fade_rows: frame.preview_transition.fade.rows,
+        preview_fade_path: frame.preview_transition.fade.label(),
+        preview_fade_alpha_bucket: frame.preview_transition.fade.alpha_bucket,
         effect_label_us: frame.custom_draw_trace.effect_label_us,
         vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
         fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
@@ -1898,7 +1916,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

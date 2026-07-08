@@ -45,7 +45,8 @@ use crate::preview_state::{
 };
 use crate::runtime_status::{self, LauncherStatus};
 use crate::screenshot_transitions::{
-    PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
+    PreviewFadePath, PreviewFadeTrace, PreviewTransitionDemo, PreviewTransitionEffect,
+    PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
