@@ -15,6 +15,8 @@ const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analy
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
@@ -387,14 +389,14 @@ impl PreviewScrollTrace {
     fn new(writer: BufWriter<std::fs::File>) -> Self {
         Self {
             writer,
-            rows: Vec::with_capacity(4096),
+            rows: Vec::with_capacity(PREVIEW_SCROLL_TRACE_FLUSH_ROWS),
             row_text: String::with_capacity(384),
         }
     }
 
     fn push(&mut self, row: PreviewScrollTraceRow) {
         self.rows.push(row);
-        if self.rows.len() >= 4096 {
+        if self.rows.len() >= PREVIEW_SCROLL_TRACE_FLUSH_ROWS {
             self.flush_rows();
         }
     }
