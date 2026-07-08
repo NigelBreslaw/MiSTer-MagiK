@@ -24,6 +24,8 @@
 //!     plugin-map-report  report stock-kernel plugin probe metadata
 //!     plugin-map-bandwidth
 //!                        benchmark plugin probe mappings
+//!     plugin-present-pattern
+//!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -116,6 +118,8 @@ use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes
 use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
@@ -314,6 +318,8 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "plugin-map-report" => run_plugin_map_report(),
         #[cfg(feature = "diagnostics")]
         "plugin-map-bandwidth" => run_plugin_map_bandwidth(),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "plugin-present-pattern" => run_plugin_present_pattern(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -1209,6 +1215,157 @@ fn run_plugin_map_bandwidth() {
         }
         Err(e) => {
             print_plugin_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}"))
+        }
+    }
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_plugin_present_pattern() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_PLUGIN_PRESENT_PATTERN_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(180)
+        .max(1);
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    let client = main_present::MainPresentClient::default_paths();
+    let mut copy_samples = Vec::with_capacity(frames);
+    let mut request_samples = Vec::with_capacity(frames);
+    let mut wait_samples = Vec::with_capacity(frames);
+    let mut route_samples = Vec::with_capacity(frames);
+
+    crate::ui_logln!(
+        "plugin_present_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}",
+        stride_bytes * height
+    );
+    crate::ui_logln!(
+        "plugin_present_pattern_frame_tsv\tframe\tbuffer\tcopy_us\trequest_us\twait_us\troute_us\tstatus"
+    );
+
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
+
+        let copy_start = std::time::Instant::now();
+        let copy_result = if buffer_index == 1 {
+            buffer1.copy_full_frame(&source, width)
+        } else {
+            buffer2.copy_full_frame(&source, width)
+        };
+        let copy_us = copy_start.elapsed().as_micros() as u64;
+        if let Err(e) = copy_result {
+            crate::ui_errln!(
+                "plugin_present_pattern_failed\tstage=copy\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+
+        let sequence = (frame as u32).wrapping_add(1).max(1);
+        let request_start = std::time::Instant::now();
+        let present = client.present(main_present::MainPresentRequest {
+            sequence,
+            buffer_index,
+            width,
+            height,
+            stride_bytes,
+        });
+        let request_us = request_start.elapsed().as_micros() as u64;
+        match present {
+            Ok(ack) => {
+                copy_samples.push(copy_us);
+                request_samples.push(request_us);
+                wait_samples.push(ack.wait_us);
+                route_samples.push(ack.route_us);
+                crate::ui_logln!(
+                    "plugin_present_pattern_frame_tsv\t{frame}\t{buffer_index}\t{copy_us}\t{request_us}\t{}\t{}\t{}",
+                    ack.wait_us,
+                    ack.route_us,
+                    ack.status
+                );
+            }
+            Err(e) => {
+                crate::ui_errln!(
+                    "plugin_present_pattern_failed\tstage=present\tframe={frame}\tbuffer={buffer_index}\tcopy_us={copy_us}\trequest_us={request_us}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    crate::ui_logln!(
+        "plugin_present_pattern_summary_tsv\tframes={}\tcopy_p50_us={}\tcopy_p95_us={}\tcopy_p99_us={}\tcopy_max_us={}\trequest_p50_us={}\trequest_p95_us={}\trequest_p99_us={}\trequest_max_us={}\twait_p50_us={}\twait_p95_us={}\twait_p99_us={}\twait_max_us={}\troute_p50_us={}\troute_p95_us={}\troute_p99_us={}\troute_max_us={}",
+        copy_samples.len(),
+        percentile_u64(&copy_samples, 50),
+        percentile_u64(&copy_samples, 95),
+        percentile_u64(&copy_samples, 99),
+        copy_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&request_samples, 50),
+        percentile_u64(&request_samples, 95),
+        percentile_u64(&request_samples, 99),
+        request_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&wait_samples, 50),
+        percentile_u64(&wait_samples, 95),
+        percentile_u64(&wait_samples, 99),
+        wait_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&route_samples, 50),
+        percentile_u64(&route_samples, 95),
+        percentile_u64(&route_samples, 99),
+        route_samples.iter().copied().max().unwrap_or_default()
+    );
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn fill_plugin_present_pattern(
+    pixels: &mut [slint::platform::software_renderer::Rgb565Pixel],
+    width: usize,
+    height: usize,
+    frame: usize,
+    buffer_index: u8,
+) {
+    let bg = if buffer_index == 1 { 0x001f } else { 0xf800 };
+    let fg = if buffer_index == 1 { 0xffe0 } else { 0x07ff };
+    let phase = frame % 96;
+    for y in 0..height {
+        for x in 0..width {
+            let stripe = ((x + phase) / 48) & 1;
+            let band = ((y + frame / 2) / 36) & 1;
+            let border = x < 8 || y < 8 || x >= width - 8 || y >= height - 8;
+            let sequence_mark = y < 32 && x < ((frame % width).max(1));
+            let color = if border || sequence_mark || (stripe ^ band) != 0 {
+                fg
+            } else {
+                bg
+            };
+            pixels[y * width + x].0 = color;
         }
     }
 }
