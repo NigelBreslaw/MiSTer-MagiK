@@ -15,6 +15,10 @@ fi
 RBF_OUT="$OUT_DIR/menu-magik-vblank-latch.rbf"
 META_OUT="$OUT_DIR/menu-magik-vblank-latch.metadata.txt"
 LOG_OUT="$OUT_DIR/menu-magik-vblank-latch.build.log"
+QUARTUS_DOCKER_IMAGE="${QUARTUS_DOCKER_IMAGE:-mister-magik-quartus-runtime:ubuntu20-amd64}"
+QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
+QUARTUS_DOCKER_MEMORY="${QUARTUS_DOCKER_MEMORY:-12g}"
+QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite-17.0/docker-intelFPGA_lite}"
 
 usage() {
   cat <<'EOF'
@@ -24,6 +28,11 @@ Usage:
 Builds an experimental Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
 framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
 source checkout is copied to a disposable build workdir before patching.
+
+If quartus_sh is not on PATH, the script will try the Docker runtime image
+named by QUARTUS_DOCKER_IMAGE, defaulting to
+mister-magik-quartus-runtime:ubuntu20-amd64. Create that runtime plus the
+mounted Quartus install with scripts/install-quartus-lite-docker.sh.
 EOF
 }
 
@@ -58,8 +67,20 @@ if [[ ! -f "$MENU_ABS/menu.qsf" || ! -f "$MENU_ABS/sys/sys_top.v" ]]; then
   exit 1
 fi
 
-if ! command -v quartus_sh >/dev/null 2>&1; then
-  echo "missing quartus_sh; install Quartus 17.x or put quartus_sh on PATH" >&2
+QUARTUS_MODE=local
+if command -v quartus_sh >/dev/null 2>&1; then
+  QUARTUS_CMD="$(command -v quartus_sh)"
+elif [[ -x "$QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]] &&
+  command -v docker >/dev/null 2>&1 && docker image inspect "$QUARTUS_DOCKER_IMAGE" >/dev/null 2>&1; then
+  QUARTUS_MODE=docker
+  QUARTUS_CMD="docker:$QUARTUS_DOCKER_IMAGE"
+else
+  if [[ ! -x "$QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
+    echo "missing mounted Quartus install: $QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" >&2
+  else
+    echo "missing Quartus Docker image: $QUARTUS_DOCKER_IMAGE" >&2
+  fi
+  echo "install it with: QUARTUS_ACCEPT_EULA=1 scripts/install-quartus-lite-docker.sh" >&2
   exit 1
 fi
 
@@ -89,13 +110,25 @@ fi
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
   echo "work_dir=$WORK_DIR"
-  echo "quartus_sh=$(command -v quartus_sh)"
+  echo "quartus_mode=$QUARTUS_MODE"
+  echo "quartus_sh=$QUARTUS_CMD"
 } > "$META_OUT"
 
-(
-  cd "$WORK_DIR"
-  quartus_sh --flow compile menu
-) 2>&1 | tee "$LOG_OUT"
+if [[ "$QUARTUS_MODE" = "docker" ]]; then
+  docker run --platform linux/amd64 --rm \
+    --cpus "$QUARTUS_DOCKER_CPUS" \
+    --memory "$QUARTUS_DOCKER_MEMORY" \
+    --volume "$QUARTUS_HOST_INSTALL_ROOT:/opt/intelFPGA_lite:ro" \
+    --volume "$WORK_DIR:/work" \
+    --workdir /work \
+    "$QUARTUS_DOCKER_IMAGE" \
+    quartus_sh --flow compile menu 2>&1 | tee "$LOG_OUT"
+else
+  (
+    cd "$WORK_DIR"
+    quartus_sh --flow compile menu
+  ) 2>&1 | tee "$LOG_OUT"
+fi
 
 RBF_CANDIDATE="$WORK_DIR/output_files/menu.rbf"
 if [[ ! -f "$RBF_CANDIDATE" ]]; then
