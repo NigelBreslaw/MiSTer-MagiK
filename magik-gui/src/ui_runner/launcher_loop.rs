@@ -39,6 +39,7 @@ enum LauncherPresentBackend {
     Fb0Dirty,
     MainFlipV1 { buffer_index: u8 },
     MainVsyncHidden,
+    PluginMainVsyncHidden,
 }
 
 impl LauncherPresentBackend {
@@ -52,6 +53,7 @@ impl LauncherPresentBackend {
                 Self::MainFlipV1 { buffer_index }
             }
             Some("main-vsync-hidden") => Self::MainVsyncHidden,
+            Some("plugin-main-vsync-hidden") => Self::PluginMainVsyncHidden,
             _ => Self::Fb0Dirty,
         }
     }
@@ -80,6 +82,10 @@ impl LauncherPresentBackend {
             Self::MainVsyncHidden => {
                 crate::ui_logln!("launcher_present_backend=main-vsync-hidden");
                 boot_analytics::event("launcher_present_backend", "main-vsync-hidden");
+            }
+            Self::PluginMainVsyncHidden => {
+                crate::ui_logln!("launcher_present_backend=plugin-main-vsync-hidden");
+                boot_analytics::event("launcher_present_backend", "plugin-main-vsync-hidden");
             }
         }
     }
@@ -131,16 +137,80 @@ fn maybe_present_with_main_flip_v1(presentation: &mut LauncherPresentResult) {
 
 struct MainVsyncHiddenPresenter {
     client: crate::main_present::MainPresentClient,
-    buffer1: HiddenRgb565Framebuffer,
-    buffer2: HiddenRgb565Framebuffer,
+    buffer1: MainVsyncHiddenBuffer,
+    buffer2: MainVsyncHiddenBuffer,
     next_buffer_index: u8,
     sequence: u32,
     width: usize,
     height: usize,
     stride_bytes: usize,
+    backend_label: &'static str,
+}
+
+enum MainVsyncHiddenBuffer {
+    DevMem(HiddenRgb565Framebuffer),
+    Plugin(PluginHiddenRgb565Framebuffer),
+}
+
+impl MainVsyncHiddenBuffer {
+    fn open(
+        mapping: MainVsyncHiddenMapping,
+        index: HiddenRgb565BufferIndex,
+        width: usize,
+        height: usize,
+        stride_bytes: usize,
+    ) -> Result<Self, String> {
+        match mapping {
+            MainVsyncHiddenMapping::DevMem => {
+                HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                    .map(Self::DevMem)
+                    .map_err(|e| e.to_string())
+            }
+            MainVsyncHiddenMapping::PluginProbe => {
+                PluginHiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                    .map(Self::Plugin)
+                    .map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    fn copy_full_frame(&mut self, cached: &[Rgb565Pixel], width: usize) -> Result<usize, String> {
+        match self {
+            Self::DevMem(buffer) => buffer
+                .copy_full_frame(cached, width)
+                .map_err(|e| e.to_string()),
+            Self::Plugin(buffer) => buffer
+                .copy_full_frame(cached, width)
+                .map_err(|e| e.to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainVsyncHiddenMapping {
+    DevMem,
+    PluginProbe,
+}
+
+impl MainVsyncHiddenMapping {
+    fn from_backend(backend: LauncherPresentBackend) -> Option<Self> {
+        match backend {
+            LauncherPresentBackend::MainVsyncHidden => Some(Self::DevMem),
+            LauncherPresentBackend::PluginMainVsyncHidden => Some(Self::PluginProbe),
+            _ => None,
+        }
+    }
+
+    fn backend_label(self) -> &'static str {
+        match self {
+            Self::DevMem => "main-vsync-hidden",
+            Self::PluginProbe => "plugin-main-vsync-hidden",
+        }
+    }
 }
 
 struct MainVsyncHiddenPresentStats {
+    backend_label: &'static str,
     copied_bytes: usize,
     buffer_index: u8,
     copy_us: u128,
@@ -151,13 +221,12 @@ struct MainVsyncHiddenPresentStats {
 
 impl MainVsyncHiddenPresenter {
     fn open(ui: &UiDisplay) -> Option<Self> {
-        if launcher_present_backend() != LauncherPresentBackend::MainVsyncHidden {
-            return None;
-        }
+        let mapping = MainVsyncHiddenMapping::from_backend(launcher_present_backend())?;
         let width = ui.render_w();
         let height = ui.render_h();
         let stride_bytes = rgb565_stride_bytes(width);
-        let buffer1 = match HiddenRgb565Framebuffer::open(
+        let buffer1 = match MainVsyncHiddenBuffer::open(
+            mapping,
             HiddenRgb565BufferIndex::new(1).ok()?,
             width,
             height,
@@ -165,11 +234,15 @@ impl MainVsyncHiddenPresenter {
         ) {
             Ok(buffer) => buffer,
             Err(e) => {
-                crate::ui_errln!("main_vsync_hidden_open_failed buffer=1 error={e}");
+                crate::ui_errln!(
+                    "main_vsync_hidden_open_failed backend={} buffer=1 error={e}",
+                    mapping.backend_label()
+                );
                 return None;
             }
         };
-        let buffer2 = match HiddenRgb565Framebuffer::open(
+        let buffer2 = match MainVsyncHiddenBuffer::open(
+            mapping,
             HiddenRgb565BufferIndex::new(2).ok()?,
             width,
             height,
@@ -177,7 +250,10 @@ impl MainVsyncHiddenPresenter {
         ) {
             Ok(buffer) => buffer,
             Err(e) => {
-                crate::ui_errln!("main_vsync_hidden_open_failed buffer=2 error={e}");
+                crate::ui_errln!(
+                    "main_vsync_hidden_open_failed backend={} buffer=2 error={e}",
+                    mapping.backend_label()
+                );
                 return None;
             }
         };
@@ -190,6 +266,7 @@ impl MainVsyncHiddenPresenter {
             width,
             height,
             stride_bytes,
+            backend_label: mapping.backend_label(),
         })
     }
 
@@ -225,6 +302,7 @@ impl MainVsyncHiddenPresenter {
         let request_us = request_start.elapsed().as_micros();
         self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
         Ok(MainVsyncHiddenPresentStats {
+            backend_label: self.backend_label,
             copied_bytes,
             buffer_index,
             copy_us,
@@ -3222,6 +3300,7 @@ pub(super) fn run_launcher_loop(
                             cached_present_us: stats.copy_us,
                             direct_preview_present_us: 0,
                             arcade_list_present_us: 0,
+                            main_present_backend: stats.backend_label,
                             main_present_status: "ok",
                             main_present_buffer: stats.buffer_index,
                             main_present_hidden_copy_us: stats.copy_us,
@@ -3265,6 +3344,7 @@ pub(super) fn run_launcher_loop(
                     cached_present_us: 0,
                     direct_preview_present_us: 0,
                     arcade_list_present_us: 0,
+                    main_present_backend: "none",
                     main_present_status: "none",
                     main_present_buffer: 0,
                     main_present_hidden_copy_us: 0,
@@ -4589,6 +4669,10 @@ mod tests {
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
             LauncherPresentBackend::MainVsyncHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("plugin-main-vsync-hidden"), Some("2")),
+            LauncherPresentBackend::PluginMainVsyncHidden
         );
     }
 
