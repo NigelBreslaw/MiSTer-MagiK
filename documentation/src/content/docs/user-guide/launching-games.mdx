@@ -1,0 +1,29 @@
+---
+title: Launching Games
+description: How MiSTer MagiK hands game launch back to Main.
+sidebar:
+  order: 8
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+<Screenshot src="/screenshots/launch-loading.png" alt="Game launch loading overlay" />
+
+Launch is two phase. MiSTer MagiK first presents a loading frame, then starts the Main-owned handoff. Slint does not directly load cores and does not call external `rbf_load`.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Slint as Slint UI
+  participant Rust as Rust lifecycle
+  participant Main as MiSTer_MagiK
+  participant Core as MiSTer core
+  User->>Slint: Confirm selected game
+  Slint->>Rust: Launch request
+  Rust->>Slint: Present loading frame
+  Rust->>Main: mister_magik_launch path
+  Main->>Core: Normal MiSTer loader path
+  Core-->>User: Game visible on HDMI
+```
+
+If launch handoff fails, the launcher should reassert the framebuffer route, present recovery UI, and return to idle instead of leaving HDMI wedged.

@@ -1,0 +1,33 @@
+---
+title: Launcher Lifecycle
+description: Startup reveal, catalog readiness, input enablement, and launch states.
+sidebar:
+  order: 3
+---
+
+The lifecycle code owns startup readiness, reveal timing, launch staging, and recovery transitions. Input is accepted only after the first intended launcher frame has been presented and the lifecycle reaches `InputEnabled`.
+
+```mermaid
+stateDiagram-v2
+  [*] --> ClassifyEntry
+  ClassifyEntry --> ColdNoCatalog: no valid catalog
+  ClassifyEntry --> WarmCatalog: valid catalog
+  ClassifyEntry --> ReturnFromGame: Main return flag
+  ColdNoCatalog --> SplashVisible
+  SplashVisible --> CatalogProgressVisible: after 2000ms
+  CatalogProgressVisible --> RevealLauncher: catalog ready + first frame
+  WarmCatalog --> HoldBlack
+  HoldBlack --> RevealLauncher: catalog loaded + bridge synced
+  ReturnFromGame --> HoldBlackReturn
+  HoldBlackReturn --> RestoreContext
+  RestoreContext --> WaitRelevantPreview
+  WaitRelevantPreview --> RevealLauncher: exact preview or timeout
+  RevealLauncher --> InputEnabled
+  InputEnabled --> Idle
+  Idle --> Launching
+  Launching --> Handoff
+  Launching --> Recovered: failure
+  Recovered --> Idle
+```
+
+Cold boot without a valid catalog shows the splash for at least two seconds. Warm boot and return-from-game keep HDMI black until a deliberate launcher frame is ready.

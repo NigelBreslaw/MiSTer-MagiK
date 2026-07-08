@@ -1,0 +1,25 @@
+---
+title: Device Rules
+description: Safe MiSTer communication and capture rules.
+sidebar:
+  order: 2
+---
+
+Use `scripts/mister` for all device communication. Do not use raw SSH or raw SCP unless explicitly doing recovery work.
+
+For one-shot documentation screenshots:
+
+```bash
+cd documentation
+corepack pnpm capture:screenshots
+```
+
+The capture script calls:
+
+```bash
+scripts/mister agent framebuffer-capture OUT.png --json OUT.json
+```
+
+Do not add raw `/dev/fb0` dumps or host-side raw-to-PNG paths. Agent captures are useful while the UI is running, but they are not proof of HDMI visibility because the FPGA may scan a different buffer.
+
+For any reset-fault or direct-reset-no-sync experiment, follow the boot-loop safety policy in `AGENTS.md` before running anything.

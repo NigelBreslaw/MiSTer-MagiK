@@ -1,0 +1,20 @@
+---
+title: Settings
+description: Exit, controller tools, joystick policy, database reset, and restart.
+sidebar:
+  order: 5
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+<Screenshot src="/screenshots/settings.png" alt="Settings screen" />
+
+Settings contains device-level actions:
+
+- `Exit to MiSTer` leaves MiSTer MagiK and returns to the stock MiSTer menu until reboot.
+- `Controller Test` opens the live controller tester.
+- `Simple joystick handling` toggles the simplified input policy.
+- `Reset Database` deletes the library database, adjacent projections, screenshot pack state, recognized screenshot packs, and reboots.
+- `Restart` reboots the MiSTer.
+
+Database reset is intentionally broad enough to force a clean rebuild, but it should leave unrelated asset files alone.

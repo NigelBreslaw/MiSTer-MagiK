@@ -1,0 +1,26 @@
+---
+title: Framebuffer and HDMI
+description: RGB565 render contract, cached RAM, dirty copies, and HDMI scan-out.
+sidebar:
+  order: 2
+---
+
+Rust owns framebuffer setup while the launcher is active. Slint renders into cached RAM, then Rust copies dirty regions into the small write-combined `/dev/fb0`. The FPGA route selects which buffer is visible on HDMI.
+
+```mermaid
+flowchart LR
+  Slint["Slint scene"] --> Cache["Cached RGB565 render target"]
+  Cache --> Dirty["Dirty rectangle tracker"]
+  Dirty --> Fb0["/dev/fb0 buffer 0"]
+  Fb0 --> Route["FPGA SET_FBUF route"]
+  Route --> HDMI["HDMI output"]
+  Cache --> Stream["framebuffer_stream_v1"]
+  Stream --> Desktop["Desktop Analytics"]
+```
+
+Important contracts:
+
+- Production rendering is RGB565 only.
+- Slint does not render directly into live framebuffer memory.
+- `/dev/fb0` pixels are not proof of HDMI visibility.
+- The desktop live stream comes from the producer-side cached frame, not repeated `/dev/fb0` polling.
