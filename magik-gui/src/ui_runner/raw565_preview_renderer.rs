@@ -292,6 +292,26 @@ struct Raw565ScreenRow<'a> {
     x1: usize,
 }
 
+struct ScaledRaw565RowCursor<'a> {
+    row: &'a [Rgb565Pixel],
+    source_w: usize,
+    display_w: usize,
+    src_x: usize,
+    rem: usize,
+}
+
+impl ScaledRaw565RowCursor<'_> {
+    fn next_pixel(&mut self) -> Rgb565Pixel {
+        let pixel = self.row[self.src_x.min(self.source_w - 1)];
+        self.rem += self.source_w;
+        while self.rem >= self.display_w {
+            self.rem -= self.display_w;
+            self.src_x += 1;
+        }
+        pixel
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct FadeWorkStats {
     path: PreviewFadePath,
@@ -363,6 +383,30 @@ fn raw565_screen_bounds_for_y(
         .min((view.x + view.display_w as isize).max(0) as usize)
         .min(render_w);
     (row_x1 > row_x0).then_some((row_x0, row_x1))
+}
+
+fn scaled_raw565_row_cursor_for_y<'a>(
+    view: &'a Raw565View<'a>,
+    y: usize,
+    x: usize,
+) -> Option<ScaledRaw565RowCursor<'a>> {
+    let sx = x as isize - view.x;
+    let sy = y as isize - view.y;
+    if sx < 0 || sy < 0 || sx >= view.display_w as isize || sy >= view.display_h as isize {
+        return None;
+    }
+    let src_y = ((sy as usize * view.source_h) / view.display_h).min(view.source_h - 1);
+    let numerator = sx as usize * view.source_w;
+    let src_x = (numerator / view.display_w).min(view.source_w - 1);
+    let rem = numerator % view.display_w;
+    let start = src_y * view.stride_pixels;
+    Some(ScaledRaw565RowCursor {
+        row: &view.pixels[start..start + view.source_w],
+        source_w: view.source_w,
+        display_w: view.display_w,
+        src_x,
+        rem,
+    })
 }
 
 fn raw565_view_screen_rect(
@@ -608,6 +652,30 @@ fn blend_565_row_with_black_bucket_shift(
         dst[x] = scale_565_bucket_shift(pixels[x], factor);
     }
     true
+}
+
+fn blend_scaled_sample_segment_affine(
+    dst: &mut [Rgb565Pixel],
+    previous: Option<&Raw565View<'_>>,
+    current: Option<&Raw565View<'_>>,
+    seg_x0: usize,
+    y: usize,
+    alpha_bucket: u16,
+    black: Rgb565Pixel,
+) {
+    let mut previous = previous.and_then(|view| scaled_raw565_row_cursor_for_y(view, y, seg_x0));
+    let mut current = current.and_then(|view| scaled_raw565_row_cursor_for_y(view, y, seg_x0));
+    for pixel in dst {
+        let prev = previous
+            .as_mut()
+            .map(|cursor| cursor.next_pixel())
+            .unwrap_or(black);
+        let curr = current
+            .as_mut()
+            .map(|cursor| cursor.next_pixel())
+            .unwrap_or(black);
+        *pixel = blend_565_bucket(prev, curr, alpha_bucket);
+    }
 }
 
 fn preview_fade_fast_path_enabled() -> bool {
@@ -1709,29 +1777,67 @@ fn blit_transition_565_fade_rows(
                             stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
                             let current = current.expect("current bounds require view");
-                            for x in 0..dst.len() {
-                                let screen_x = seg_x0 + x;
-                                let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
-                                let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(prev, curr, alpha_bucket);
+                            if preview_fade_experiment() == PreviewFadeExperiment::ScaledAffine {
+                                blend_scaled_sample_segment_affine(
+                                    dst,
+                                    Some(previous),
+                                    Some(current),
+                                    seg_x0,
+                                    y,
+                                    alpha_bucket,
+                                    black,
+                                );
+                            } else {
+                                for x in 0..dst.len() {
+                                    let screen_x = seg_x0 + x;
+                                    let prev =
+                                        sample_raw565(previous, screen_x, y).unwrap_or(black);
+                                    let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
+                                    dst[x] = blend_565_bucket(prev, curr, alpha_bucket);
+                                }
                             }
                         }
                         (true, false) => {
                             stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
-                            for x in 0..dst.len() {
-                                let screen_x = seg_x0 + x;
-                                let prev = sample_raw565(previous, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(prev, black, alpha_bucket);
+                            if preview_fade_experiment() == PreviewFadeExperiment::ScaledAffine {
+                                blend_scaled_sample_segment_affine(
+                                    dst,
+                                    Some(previous),
+                                    None,
+                                    seg_x0,
+                                    y,
+                                    alpha_bucket,
+                                    black,
+                                );
+                            } else {
+                                for x in 0..dst.len() {
+                                    let screen_x = seg_x0 + x;
+                                    let prev =
+                                        sample_raw565(previous, screen_x, y).unwrap_or(black);
+                                    dst[x] = blend_565_bucket(prev, black, alpha_bucket);
+                                }
                             }
                         }
                         (false, true) => {
                             stats.path = PreviewFadePath::ScaledSample;
                             let current = current.expect("current bounds require view");
-                            for x in 0..dst.len() {
-                                let screen_x = seg_x0 + x;
-                                let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
-                                dst[x] = blend_565_bucket(black, curr, alpha_bucket);
+                            if preview_fade_experiment() == PreviewFadeExperiment::ScaledAffine {
+                                blend_scaled_sample_segment_affine(
+                                    dst,
+                                    None,
+                                    Some(current),
+                                    seg_x0,
+                                    y,
+                                    alpha_bucket,
+                                    black,
+                                );
+                            } else {
+                                for x in 0..dst.len() {
+                                    let screen_x = seg_x0 + x;
+                                    let curr = sample_raw565(current, screen_x, y).unwrap_or(black);
+                                    dst[x] = blend_565_bucket(black, curr, alpha_bucket);
+                                }
                             }
                         }
                         (false, false) => dst.fill(black),
@@ -2888,6 +2994,75 @@ mod tests {
                 expected_out.as_slice(),
                 "out bucket={bucket}"
             );
+        }
+    }
+
+    #[test]
+    fn rgb565_scaled_affine_experiment_matches_scalar_for_scaled_frames() {
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        let previous_pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+        ];
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+        ];
+        let previous = Raw565View {
+            pixels: &previous_pixels,
+            stride_pixels: 3,
+            source_w: 3,
+            source_h: 2,
+            display_w: 7,
+            display_h: 5,
+            x: 11,
+            y: 17,
+        };
+        let current = Raw565View {
+            pixels: &current_pixels,
+            stride_pixels: 3,
+            source_w: 3,
+            source_h: 2,
+            display_w: 7,
+            display_h: 5,
+            x: 11,
+            y: 17,
+        };
+
+        for bucket in 0..=32 {
+            for y in previous.y as usize..(previous.y as usize + previous.display_h) {
+                let mut optimized = [Rgb565Pixel(0); 7];
+                blend_scaled_sample_segment_affine(
+                    &mut optimized,
+                    Some(&previous),
+                    Some(&current),
+                    previous.x as usize,
+                    y,
+                    bucket,
+                    black,
+                );
+                let expected: Vec<_> = (0..previous.display_w)
+                    .map(|x| {
+                        let screen_x = previous.x as usize + x;
+                        let prev = sample_raw565(&previous, screen_x, y).unwrap_or(black);
+                        let curr = sample_raw565(&current, screen_x, y).unwrap_or(black);
+                        blend_565_bucket(prev, curr, bucket)
+                    })
+                    .collect();
+                assert_eq!(
+                    optimized.as_slice(),
+                    expected.as_slice(),
+                    "bucket={bucket} y={y}"
+                );
+            }
         }
     }
 
