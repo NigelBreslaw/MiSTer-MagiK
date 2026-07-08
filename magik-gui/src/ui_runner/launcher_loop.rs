@@ -40,6 +40,7 @@ enum LauncherPresentBackend {
     MainFlipV1 { buffer_index: u8 },
     MainVsyncHidden,
     PluginMainVsyncHidden,
+    FpgaVblankLatchHidden,
 }
 
 impl LauncherPresentBackend {
@@ -54,6 +55,7 @@ impl LauncherPresentBackend {
             }
             Some("main-vsync-hidden") => Self::MainVsyncHidden,
             Some("plugin-main-vsync-hidden") => Self::PluginMainVsyncHidden,
+            Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
             _ => Self::Fb0Dirty,
         }
     }
@@ -86,6 +88,10 @@ impl LauncherPresentBackend {
             Self::PluginMainVsyncHidden => {
                 crate::ui_logln!("launcher_present_backend=plugin-main-vsync-hidden");
                 boot_analytics::event("launcher_present_backend", "plugin-main-vsync-hidden");
+            }
+            Self::FpgaVblankLatchHidden => {
+                crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
+                boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
             }
         }
     }
@@ -217,6 +223,146 @@ struct MainVsyncHiddenPresentStats {
     request_us: u128,
     wait_us: u64,
     route_us: u64,
+}
+
+struct FpgaVblankLatchHiddenPresenter {
+    buffer1: PluginHiddenRgb565Framebuffer,
+    buffer2: PluginHiddenRgb565Framebuffer,
+    base1: u32,
+    base2: u32,
+    next_buffer_index: u8,
+    sequence: u16,
+    width: usize,
+    height: usize,
+    route: LauncherFramebufferRoute,
+}
+
+struct FpgaVblankLatchHiddenPresentStats {
+    copied_bytes: usize,
+    buffer_index: u8,
+    copy_us: u128,
+    post_us: u128,
+    status_us: u64,
+    set_supported: bool,
+    status_supported: bool,
+    flip_count: u16,
+}
+
+impl FpgaVblankLatchHiddenPresenter {
+    fn open(ui: &UiDisplay) -> Option<Self> {
+        if launcher_present_backend() != LauncherPresentBackend::FpgaVblankLatchHidden {
+            return None;
+        }
+        let width = ui.render_w();
+        let height = ui.render_h();
+        let stride_bytes = rgb565_stride_bytes(width);
+        let buffer1 = match PluginHiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(1).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("fpga_vblank_latch_hidden_open_failed buffer=1 error={e}");
+                return None;
+            }
+        };
+        let buffer2 = match PluginHiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(2).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("fpga_vblank_latch_hidden_open_failed buffer=2 error={e}");
+                return None;
+            }
+        };
+        let base1 = match buffer1.physical_addr() {
+            Ok(base) => base,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_vblank_latch_hidden_open_failed buffer=1 stage=physical_addr error={e}"
+                );
+                return None;
+            }
+        };
+        let base2 = match buffer2.physical_addr() {
+            Ok(base) => base,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_vblank_latch_hidden_open_failed buffer=2 stage=physical_addr error={e}"
+                );
+                return None;
+            }
+        };
+        Some(Self {
+            buffer1,
+            buffer2,
+            base1,
+            base2,
+            next_buffer_index: 1,
+            sequence: 1,
+            width,
+            height,
+            route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
+        })
+    }
+
+    fn present_cached_full_frame(
+        &mut self,
+        cached: &[Rgb565Pixel],
+        fpga: &mut Fpga,
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
+        let buffer_index = self.next_buffer_index;
+        let (buffer, base_addr) = if buffer_index == 1 {
+            (&mut self.buffer1, self.base1)
+        } else {
+            (&mut self.buffer2, self.base2)
+        };
+        let copy_start = Instant::now();
+        let copied_bytes = buffer
+            .copy_full_frame(cached, self.width)
+            .map_err(|e| e.to_string())?;
+        let copy_us = copy_start.elapsed().as_micros();
+
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let post_start = Instant::now();
+        let ack = fpga
+            .post_magik_latched_fbuf_rgb565(
+                sequence,
+                base_addr,
+                self.width as u16,
+                self.height as u16,
+                self.route.mode(),
+                self.route.set_vga_fb(),
+            )
+            .map_err(|e| e.to_string())?;
+        let post_us = post_start.elapsed().as_micros();
+        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+            || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
+
+        let status_start = Instant::now();
+        let status = fpga
+            .read_magik_latched_fbuf_status()
+            .map_err(|e| e.to_string())?;
+        let status_us = status_start.elapsed().as_micros() as u64;
+
+        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
+        Ok(FpgaVblankLatchHiddenPresentStats {
+            copied_bytes,
+            buffer_index,
+            copy_us,
+            post_us,
+            status_us,
+            set_supported,
+            status_supported: status.supported(),
+            flip_count: status.flip_count,
+        })
+    }
 }
 
 impl MainVsyncHiddenPresenter {
@@ -1343,6 +1489,7 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let mut frames = 0u64;
     let mut main_vsync_hidden_presenter = MainVsyncHiddenPresenter::open(ui);
+    let mut fpga_vblank_latch_hidden_presenter = FpgaVblankLatchHiddenPresenter::open(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
@@ -3290,7 +3437,45 @@ pub(super) fn run_launcher_loop(
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4, cpu_t4) = {
             let mut presentation = if startup_can_present {
-                if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
+                if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
+                    match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
+                        Ok(stats) => LauncherPresentResult {
+                            copied_rows: ui.render_h() as u32,
+                            direct_preview_rows: 0,
+                            present_bytes: stats.copied_bytes,
+                            wasted_present_bytes: 0,
+                            cached_present_us: stats.copy_us,
+                            direct_preview_present_us: 0,
+                            arcade_list_present_us: 0,
+                            main_present_backend: "fpga-vblank-latch-hidden",
+                            main_present_status: if stats.set_supported && stats.status_supported {
+                                "ok"
+                            } else {
+                                "unsupported"
+                            },
+                            main_present_buffer: stats.buffer_index,
+                            main_present_hidden_copy_us: stats.copy_us,
+                            main_present_request_us: stats.post_us,
+                            main_present_wait_us: stats.status_us,
+                            main_present_route_us: stats.flip_count as u64,
+                            arcade_update_label: ArcadeUpdateTrace::None,
+                        },
+                        Err(e) => {
+                            static WARNED: OnceLock<()> = OnceLock::new();
+                            WARNED.get_or_init(|| {
+                                crate::ui_errln!("fpga_vblank_latch_hidden_present_failed: {e}");
+                            });
+                            LauncherCompositor::present(LauncherPresentRequest {
+                                layer_target: &mut layer_target,
+                                full_frame_present,
+                                slint_dirty: this_rect,
+                                raw_preview,
+                                arcade_list_rect,
+                                arcade_list_renderer: &mut arcade_list_renderer,
+                            })
+                        }
+                    }
+                } else if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
                     match presenter.present_cached_full_frame(layer_target.cached_565()) {
                         Ok(stats) => LauncherPresentResult {
                             copied_rows: ui.render_h() as u32,
@@ -4673,6 +4858,10 @@ mod tests {
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("plugin-main-vsync-hidden"), Some("2")),
             LauncherPresentBackend::PluginMainVsyncHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden"), Some("2")),
+            LauncherPresentBackend::FpgaVblankLatchHidden
         );
     }
 

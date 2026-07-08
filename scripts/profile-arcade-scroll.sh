@@ -156,8 +156,8 @@ if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms mu
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
 case "$present_backend" in
-  ""|main-flip-v1|main-vsync-hidden|plugin-main-vsync-hidden) ;;
-  *) echo "MISTER_PRESENT_BACKEND must be main-flip-v1, main-vsync-hidden, or plugin-main-vsync-hidden when set" >&2; exit 2 ;;
+  ""|main-flip-v1|main-vsync-hidden|plugin-main-vsync-hidden|fpga-vblank-latch-hidden) ;;
+  *) echo "MISTER_PRESENT_BACKEND must be main-flip-v1, main-vsync-hidden, plugin-main-vsync-hidden, or fpga-vblank-latch-hidden when set" >&2; exit 2 ;;
 esac
 if [[ ! "$present_flip_buffer_index" =~ ^[0-9]+$ || "$present_flip_buffer_index" -lt 1 || "$present_flip_buffer_index" -gt 2 ]]; then echo "MISTER_PRESENT_FLIP_BUFFER_INDEX must be 1 or 2" >&2; exit 2; fi
 if [[ ! "$human_turbo_idle_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_IDLE_FRAMES must be an integer" >&2; exit 2; fi
