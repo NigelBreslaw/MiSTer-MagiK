@@ -94,6 +94,12 @@ pub(super) struct LauncherPresentResult {
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
+    pub(super) main_present_status: &'static str,
+    pub(super) main_present_buffer: u8,
+    pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_request_us: u128,
+    pub(super) main_present_wait_us: u64,
+    pub(super) main_present_route_us: u64,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
 
@@ -169,6 +175,12 @@ impl LauncherCompositor {
             cached_present_us,
             direct_preview_present_us,
             arcade_list_present_us,
+            main_present_status: "none",
+            main_present_buffer: 0,
+            main_present_hidden_copy_us: 0,
+            main_present_request_us: 0,
+            main_present_wait_us: 0,
+            main_present_route_us: 0,
             arcade_update_label,
         }
     }
