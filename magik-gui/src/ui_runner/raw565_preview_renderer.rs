@@ -1603,22 +1603,24 @@ fn blit_transition_565_fade_rows(
                 }
                 (Some(previous_row), None) => {
                     let previous_start = seg_x0 - previous_row.x0;
-                    for x in 0..dst.len() {
-                        dst[x] = blend_565_bucket(
-                            previous_row.row[previous_start + x],
-                            black,
-                            alpha_bucket,
-                        );
+                    let previous = &previous_row.row[previous_start..previous_start + dst.len()];
+                    if preview_fade_experiment() == PreviewFadeExperiment::RowsBlackNeon {
+                        blend_565_row_with_black(dst, previous, alpha_bucket, false);
+                    } else {
+                        for x in 0..dst.len() {
+                            dst[x] = blend_565_bucket(previous[x], black, alpha_bucket);
+                        }
                     }
                 }
                 (None, Some(current_row)) => {
                     let current_start = seg_x0 - current_row.x0;
-                    for x in 0..dst.len() {
-                        dst[x] = blend_565_bucket(
-                            black,
-                            current_row.row[current_start + x],
-                            alpha_bucket,
-                        );
+                    let current = &current_row.row[current_start..current_start + dst.len()];
+                    if preview_fade_experiment() == PreviewFadeExperiment::RowsBlackNeon {
+                        blend_565_row_with_black(dst, current, alpha_bucket, true);
+                    } else {
+                        for x in 0..dst.len() {
+                            dst[x] = blend_565_bucket(black, current[x], alpha_bucket);
+                        }
                     }
                 }
                 (None, None) => {
@@ -2697,6 +2699,59 @@ mod tests {
                 bucket,
                 false,
                 PreviewFadeExperiment::BucketShift,
+            );
+            let expected_out: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(pixel, black, alpha))
+                .collect();
+            assert_eq!(
+                fade_out.as_slice(),
+                expected_out.as_slice(),
+                "out bucket={bucket}"
+            );
+        }
+    }
+
+    #[test]
+    fn rgb565_rows_black_neon_experiment_matches_scalar_for_all_buckets() {
+        let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+        let pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+        ];
+        for bucket in 0..=32 {
+            let alpha = (bucket * 8).min(255) as u8;
+            let mut fade_in = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black_for_experiment(
+                &mut fade_in,
+                &pixels,
+                bucket,
+                true,
+                PreviewFadeExperiment::RowsBlackNeon,
+            );
+            let expected_in: Vec<_> = pixels
+                .iter()
+                .map(|&pixel| blend_565(black, pixel, alpha))
+                .collect();
+            assert_eq!(
+                fade_in.as_slice(),
+                expected_in.as_slice(),
+                "in bucket={bucket}"
+            );
+
+            let mut fade_out = [Rgb565Pixel(0); 8];
+            blend_565_row_with_black_for_experiment(
+                &mut fade_out,
+                &pixels,
+                bucket,
+                false,
+                PreviewFadeExperiment::RowsBlackNeon,
             );
             let expected_out: Vec<_> = pixels
                 .iter()
