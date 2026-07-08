@@ -74,6 +74,13 @@ verify_sha1() {
 }
 
 patch_qenv_for_orbstack() {
+  local patch="${QUARTUS_PATCH_QENV_FOR_ORBSTACK:-}"
+  if [[ -z "$patch" && "${OSTYPE:-}" == darwin* ]]; then
+    patch=1
+  fi
+  if [[ "$patch" != "1" ]]; then
+    return 0
+  fi
   local qenv="$INSTALL_ROOT/17.0/quartus/adm/qenv.sh"
   [[ -f "$qenv" ]] || return 1
   if grep -q 'orbstack-amd64-emulation' "$qenv"; then
