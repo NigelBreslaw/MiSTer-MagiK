@@ -129,6 +129,12 @@ export struct RealtimeHealthTile {
     state: string,
 }
 
+export struct SdMetadataRow {
+    label: string,
+    value: string,
+    kind: string,
+}
+
 export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <int> framebuffer-width: 0;
@@ -193,6 +199,26 @@ export global SdCardState {
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
     in-out property <bool> show-hidden: false;
+    in-out property <string> detail-title: "SD Card";
+    in-out property <string> detail-subtitle: "Select a file or folder to inspect details.";
+    in-out property <string> detail-kind: "directory";
+    in-out property <string> detail-icon-key: "folder-base";
+    in-out property <string> detail-size: "-";
+    in-out property <string> detail-modified: "-";
+    in-out property <string> detail-flags: "-";
+    in-out property <bool> detail-loading: false;
+    in-out property <string> detail-error: "";
+    in-out property <bool> detail-has-image: false;
+    in-out property <image> detail-image;
+    in-out property <string> detail-image-summary: "";
+    in-out property <bool> detail-is-mra: false;
+    in-out property <[SdMetadataRow]> detail-overview-rows: [];
+    in-out property <[SdMetadataRow]> detail-mra-summary-rows: [];
+    in-out property <[SdMetadataRow]> detail-mra-xml-rows: [];
+    in-out property <[SdMetadataRow]> detail-mra-path-rows: [];
+    in-out property <[SdMetadataRow]> detail-mra-warnings: [];
+    in-out property <string> detail-raw-xml: "";
+    in-out property <bool> detail-raw-xml-truncated: false;
     in-out property <[TreeViewRow]> rows: [
         {
             id: "/",
@@ -277,6 +303,7 @@ export global Actions {
     callback sd-row-toggle(string);
     callback sd-row-current(string);
     callback sd-refresh-folder();
+    callback sd-refresh-details();
     callback sd-show-hidden-changed(bool);
     callback sync-library();
     callback library-query-changed(string);

@@ -1,40 +1,229 @@
 import {
     Banner,
     BannerVariant,
-    Button,
     ButtonVariant,
-    DataTable,
-    DataTableCell,
-    DataTableCellAlign,
-    DataTableCellKind,
-    DataTableCellPadding,
-    DataTableColumn,
-    DataTableIconTint,
-    DataTableRow,
-    DataTableSortDirection,
     Icons,
-    LabelSize,
-    LabelVariant,
-    Pagination,
     PrimerTreeView,
-    PrimerTextInput,
-    SegmentedControl,
-    SegmentedControlSegment,
-    SegmentedControlSize,
-    Select,
-    SelectOption,
     Size,
     Spinner,
     TableContainer,
     ToggleSwitch,
     ToggleSwitchSize,
     ToggleSwitchStatusLabelPosition,
-    TreeViewRow,
-    TreeViewTrailingVisual,
 } from "../../vendor/github-app/packages/primer-slint/primer.slint";
 import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
-import { Actions, SdCardState } from "../api.slint";
+import { Actions, SdCardState, SdMetadataRow } from "../api.slint";
 import { ViewTitle } from "../components/chrome.slint";
+
+component MetadataSection inherits VerticalLayout {
+    in property <string> title;
+    in property <[SdMetadataRow]> rows;
+    in property <bool> monospace: false;
+
+    spacing: root.rows.length > 0 ? 8px : 0px;
+    alignment: start;
+    horizontal-stretch: 1;
+
+    if rows.length > 0: Text {
+        text: root.title;
+        color: PrimerColors.fgColor-default;
+        font-size: LayoutTokens.text-body-size-small;
+        font-weight: LayoutTokens.base-text-weight-semibold;
+    }
+
+    if rows.length > 0: VerticalLayout {
+        width: 100%;
+        spacing: 0px;
+
+        for row[index] in rows : Rectangle {
+            width: 100%;
+            min-height: 38px;
+            background: Math.mod(index, 2) == 0 ? PrimerColors.bgColor-muted : PrimerColors.bgColor-default;
+            border-width: 0px;
+
+            HorizontalLayout {
+                width: 100%;
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 7px;
+                padding-bottom: 7px;
+                spacing: 12px;
+                cross-axis-alignment: start;
+
+                Text {
+                    width: 170px;
+                    text: row.label;
+                    color: row.kind == "warning" ? PrimerColors.fgColor-attention : PrimerColors.fgColor-muted;
+                    font-size: LayoutTokens.text-body-size-small;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: row.value;
+                    color: row.kind == "warning" ? PrimerColors.fgColor-attention : PrimerColors.fgColor-default;
+                    font-size: LayoutTokens.text-body-size-small;
+                    font-family: root.monospace ? "Menlo" : "";
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+component RawXmlSection inherits VerticalLayout {
+    in property <string> text;
+    in property <bool> truncated;
+
+    spacing: root.text != "" ? 8px : 0px;
+    alignment: start;
+    horizontal-stretch: 1;
+
+    if root.text != "": Text {
+        text: root.truncated ? "Raw XML (truncated)" : "Raw XML";
+        color: PrimerColors.fgColor-default;
+        font-size: LayoutTokens.text-body-size-small;
+        font-weight: LayoutTokens.base-text-weight-semibold;
+    }
+
+    if root.text != "": Rectangle {
+        width: 100%;
+        min-height: raw-text.preferred-height + 20px;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-default;
+        border-radius: LayoutTokens.borderRadius-medium;
+        background: PrimerColors.bgColor-muted;
+
+        raw-text := Text {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            text: root.text;
+            color: PrimerColors.fgColor-default;
+            font-size: LayoutTokens.text-body-size-small;
+            font-family: "Menlo";
+            wrap: word-wrap;
+        }
+    }
+}
+
+component SdInspectorPanel {
+    TableContainer {
+        width: 100%;
+        vertical-stretch: 1;
+        title: SdCardState.detail-title;
+        subtitle: SdCardState.detail-subtitle;
+        primary-action-label: "Refresh details";
+        primary-action-variant: ButtonVariant.default;
+        primary-action => { Actions.sd-refresh-details(); }
+
+        Rectangle {
+            width: 100%;
+            vertical-stretch: 1;
+            min-height: 440px;
+            border-width: 1px;
+            border-color: PrimerColors.borderColor-default;
+            border-radius: LayoutTokens.borderRadius-medium;
+            background: PrimerColors.bgColor-default;
+            clip: true;
+
+            Flickable {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.width;
+                viewport-height: detail-content.preferred-height;
+
+                detail-content := VerticalLayout {
+                    width: parent.width;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 16px;
+                    alignment: start;
+
+                    if SdCardState.detail-loading: HorizontalLayout {
+                        width: 100%;
+                        height: 32px;
+                        spacing: 8px;
+                        cross-axis-alignment: center;
+
+                        Spinner { size: Size.small; }
+
+                        Text {
+                            text: "Loading selected item details.";
+                            color: PrimerColors.fgColor-muted;
+                            font-size: LayoutTokens.text-body-size-small;
+                        }
+                    }
+
+                    if SdCardState.detail-error != "": Banner {
+                        title: "Item details unavailable";
+                        description: SdCardState.detail-error;
+                        variant: BannerVariant.warning;
+                    }
+
+                    if SdCardState.detail-has-image: Rectangle {
+                        width: 100%;
+                        height: 220px;
+                        border-width: 1px;
+                        border-color: PrimerColors.borderColor-default;
+                        border-radius: LayoutTokens.borderRadius-medium;
+                        background: PrimerColors.bgColor-muted;
+                        clip: true;
+
+                        Image {
+                            x: 8px;
+                            y: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height - 16px;
+                            source: SdCardState.detail-image;
+                            image-fit: contain;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: 16px;
+
+                        MetadataSection {
+                            horizontal-stretch: 1;
+                            title: "Overview";
+                            rows: SdCardState.detail-overview-rows;
+                        }
+                    }
+
+                    if SdCardState.detail-is-mra: MetadataSection {
+                        title: "MRA Summary";
+                        rows: SdCardState.detail-mra-summary-rows;
+                    }
+
+                    if SdCardState.detail-is-mra: MetadataSection {
+                        title: "Path-like XML Fields";
+                        rows: SdCardState.detail-mra-path-rows;
+                        monospace: true;
+                    }
+
+                    if SdCardState.detail-is-mra: MetadataSection {
+                        title: "Full Parsed XML";
+                        rows: SdCardState.detail-mra-xml-rows;
+                        monospace: true;
+                    }
+
+                    if SdCardState.detail-is-mra: MetadataSection {
+                        title: "MRA Warnings";
+                        rows: SdCardState.detail-mra-warnings;
+                    }
+
+                    if SdCardState.detail-is-mra: RawXmlSection {
+                        text: SdCardState.detail-raw-xml;
+                        truncated: SdCardState.detail-raw-xml-truncated;
+                    }
+                }
+            }
+        }
+    }
+}
 
 export component SdCardPage {
     VerticalLayout {
@@ -82,38 +271,49 @@ export component SdCardPage {
                 }
             }
 
-            TableContainer {
+            HorizontalLayout {
+                width: 100%;
                 vertical-stretch: 1;
-                title: "/media/fat";
-                subtitle: "Browse-only session cache. Visited folders are reused until refreshed.";
-                primary-action-label: "Refresh folder";
-                primary-action-variant: ButtonVariant.default;
-                primary-action => { Actions.sd-refresh-folder(); }
+                spacing: 16px;
 
-                Rectangle {
-                    width: 100%;
+                TableContainer {
+                    width: 38%;
                     vertical-stretch: 1;
-                    min-height: 360px;
-                    border-width: 1px;
-                    border-color: PrimerColors.borderColor-default;
-                    border-radius: LayoutTokens.borderRadius-medium;
-                    background: PrimerColors.bgColor-default;
+                    title: "/media/fat";
+                    subtitle: "Browse-only session cache. Select an item to inspect it.";
+                    primary-action-label: "Refresh folder";
+                    primary-action-variant: ButtonVariant.default;
+                    primary-action => { Actions.sd-refresh-folder(); }
 
-                    PrimerTreeView {
-                        x: LayoutTokens.base-size-8;
-                        y: LayoutTokens.base-size-8;
-                        width: parent.width - 2 * LayoutTokens.base-size-8;
-                        height: parent.height - 2 * LayoutTokens.base-size-8;
-                        rows: SdCardState.rows;
-                        virtualized: true;
-                        suppress-current-for-directories: true;
-                        accessible-name: "SD Card files";
-                        row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
-                        row-current-requested(id) => { Actions.sd-row-current(id); }
+                    Rectangle {
+                        width: 100%;
+                        vertical-stretch: 1;
+                        min-height: 440px;
+                        border-width: 1px;
+                        border-color: PrimerColors.borderColor-default;
+                        border-radius: LayoutTokens.borderRadius-medium;
+                        background: PrimerColors.bgColor-default;
+
+                        PrimerTreeView {
+                            x: LayoutTokens.base-size-8;
+                            y: LayoutTokens.base-size-8;
+                            width: parent.width - 2 * LayoutTokens.base-size-8;
+                            height: parent.height - 2 * LayoutTokens.base-size-8;
+                            rows: SdCardState.rows;
+                            virtualized: true;
+                            suppress-current-for-directories: true;
+                            accessible-name: "SD Card files";
+                            row-toggle-requested(id) => { Actions.sd-row-toggle(id); }
+                            row-current-requested(id) => { Actions.sd-row-current(id); }
+                        }
                     }
+                }
+
+                SdInspectorPanel {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
                 }
             }
         }
     }
 }
-

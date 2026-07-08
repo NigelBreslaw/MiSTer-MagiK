@@ -2,7 +2,9 @@ use crate::app_state::{
     catalog_summary, input_summary, process_summary, screen_summary, string_at, uptime_label,
     ConnectionOutcome, DashboardSnapshot,
 };
-use crate::sd_card::{SdDirectoryListing, SdEntry, SdEntryKind};
+use crate::sd_card::{
+    item_name, SdDirectoryListing, SdEntry, SdEntryKind, SdItemDetail, SdMetadataRow,
+};
 use mister_magik_framebuffer_stream::{
     read_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
 };
@@ -326,6 +328,39 @@ pub fn fetch_sd_directory(
         json!({ "path": path, "show_hidden": show_hidden }),
     )?;
     parse_sd_directory(&value)
+}
+
+pub fn fetch_sd_item_detail(host: &str, path: &str) -> Result<SdItemDetail, AgentError> {
+    let (token, _) = read_token();
+    let client = AgentClient::new(host.to_string(), token);
+    let stat = client.request("sd_stat_item_v1", json!({ "path": path }))?;
+    let mut detail = parse_sd_item_detail(&stat)?;
+
+    if detail.has_image {
+        match client.request_binary("sd_read_preview_image_v1", json!({ "path": path })) {
+            Ok((image_meta, payload)) => {
+                apply_sd_preview_image(&mut detail, &image_meta, &payload)?
+            }
+            Err(err) => detail.overview_rows.push(metadata_row(
+                "Preview warning",
+                &err.to_string(),
+                "warning",
+            )),
+        }
+    }
+
+    if detail.is_mra {
+        match client.request("sd_parse_mra_v1", json!({ "path": path })) {
+            Ok(mra) => apply_sd_mra_detail(&mut detail, &mra)?,
+            Err(err) => detail.mra_warnings.push(metadata_row(
+                "MRA parse warning",
+                &err.to_string(),
+                "warning",
+            )),
+        }
+    }
+
+    Ok(detail)
 }
 
 pub fn fetch_framebuffer_capture(host: &str) -> Result<FramebufferCapture, AgentError> {
@@ -1134,6 +1169,164 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
     })
 }
 
+fn parse_sd_item_detail(value: &Value) -> Result<SdItemDetail, AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-sd-stat-item-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected sd_stat_item response schema".to_string(),
+        ));
+    }
+    let path = string_at(value, "/path")
+        .ok_or_else(|| AgentError::Protocol("missing sd item path".to_string()))?
+        .to_string();
+    let fallback_name = item_name(&path);
+    let name = string_at(value, "/name").unwrap_or(fallback_name.as_str());
+    let kind = string_at(value, "/kind").unwrap_or("file");
+    let extension = string_at(value, "/extension").unwrap_or("");
+    let size = value.pointer("/size").and_then(Value::as_u64).unwrap_or(0);
+    let modified_unix_ms = value
+        .pointer("/modified_unix_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let readonly = value
+        .pointer("/readonly")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let hidden = value
+        .pointer("/hidden")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let has_image = value
+        .pointer("/capabilities/image_preview")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let is_mra = value
+        .pointer("/capabilities/mra_parse")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut overview_rows = vec![
+        metadata_row("Path", &path, "path"),
+        metadata_row("Type", kind, "text"),
+        metadata_row(
+            "Extension",
+            if extension.is_empty() { "-" } else { extension },
+            "text",
+        ),
+        metadata_row("Size", &format_file_size(size), "text"),
+        metadata_row("Modified", &format_unix_ms(modified_unix_ms), "text"),
+        metadata_row(
+            "Readonly",
+            yes_no(readonly),
+            if readonly { "warning" } else { "text" },
+        ),
+        metadata_row(
+            "Hidden",
+            yes_no(hidden),
+            if hidden { "warning" } else { "text" },
+        ),
+    ];
+    add_planned_capability_rows(value, &mut overview_rows);
+    Ok(SdItemDetail {
+        path,
+        title: name.to_string(),
+        subtitle: if kind == "directory" {
+            "Folder on /media/fat".to_string()
+        } else {
+            format!("{} file on /media/fat", extension.to_uppercase())
+        },
+        kind: kind.to_string(),
+        icon_key: if kind == "directory" {
+            "folder-base".to_string()
+        } else {
+            crate::sd_card::material_icon_key_for_file_name(name).to_string()
+        },
+        size_label: format_file_size(size),
+        modified_label: format_unix_ms(modified_unix_ms),
+        flags_label: flags_label(readonly, hidden),
+        loading: false,
+        error: String::new(),
+        has_image,
+        image_path: String::new(),
+        image_summary: String::new(),
+        is_mra,
+        overview_rows,
+        mra_summary_rows: Vec::new(),
+        mra_xml_rows: Vec::new(),
+        mra_path_rows: Vec::new(),
+        mra_warnings: Vec::new(),
+        raw_xml: String::new(),
+        raw_xml_truncated: false,
+    })
+}
+
+fn apply_sd_preview_image(
+    detail: &mut SdItemDetail,
+    value: &Value,
+    payload: &[u8],
+) -> Result<(), AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-sd-preview-image-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected sd preview image schema".to_string(),
+        ));
+    }
+    let expected = value
+        .pointer("/payload_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(payload.len() as u64);
+    if payload.len() as u64 != expected {
+        return Err(AgentError::Protocol(format!(
+            "preview payload size mismatch expected={expected} actual={}",
+            payload.len()
+        )));
+    }
+    let format = string_at(value, "/format").unwrap_or("image");
+    let width = value.pointer("/width").and_then(Value::as_u64).unwrap_or(0);
+    let height = value
+        .pointer("/height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let image_path = local_sd_preview_path(&detail.path, format);
+    fs::write(&image_path, payload)
+        .map_err(|err| AgentError::Unreachable(format!("write preview image: {err}")))?;
+    detail.image_path = image_path.to_string_lossy().to_string();
+    detail.image_summary = format!("{format} {width}x{height}, {}", format_file_size(expected));
+    detail
+        .overview_rows
+        .push(metadata_row("Image", &detail.image_summary, "success"));
+    Ok(())
+}
+
+fn apply_sd_mra_detail(detail: &mut SdItemDetail, value: &Value) -> Result<(), AgentError> {
+    if string_at(value, "/schema") != Some("mister-magik-sd-parse-mra-v1") {
+        return Err(AgentError::Protocol(
+            "unexpected sd_parse_mra response schema".to_string(),
+        ));
+    }
+    detail.mra_summary_rows = parse_metadata_array(value.pointer("/summary"), "text");
+    detail.mra_xml_rows = parse_xml_row_array(value.pointer("/xml_rows"));
+    detail.mra_path_rows = parse_xml_row_array(value.pointer("/path_rows"));
+    detail.mra_warnings = value
+        .pointer("/warnings")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(Value::as_str)
+                .map(|warning| metadata_row("Warning", warning, "warning"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    detail.raw_xml = string_at(value, "/raw_xml").unwrap_or("").to_string();
+    detail.raw_xml_truncated = value
+        .pointer("/raw_xml_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    detail.overview_rows.push(metadata_row(
+        "MRA XML rows",
+        &detail.mra_xml_rows.len().to_string(),
+        "success",
+    ));
+    Ok(())
+}
+
 #[cfg(test)]
 fn parse_framebuffer_capture(value: &Value) -> Result<FramebufferCapture, AgentError> {
     if string_at(value, "/schema") != Some("mister-magik-framebuffer-capture-v1") {
@@ -1486,6 +1679,144 @@ fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+fn metadata_row(label: &str, value: &str, kind: &str) -> SdMetadataRow {
+    SdMetadataRow {
+        label: label.to_string(),
+        value: if value.is_empty() {
+            "-".to_string()
+        } else {
+            value.to_string()
+        },
+        kind: kind.to_string(),
+    }
+}
+
+fn parse_metadata_array(value: Option<&Value>, default_kind: &str) -> Vec<SdMetadataRow> {
+    value
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    metadata_row(
+                        string_at(row, "/label").unwrap_or("-"),
+                        string_at(row, "/value").unwrap_or("-"),
+                        string_at(row, "/kind").unwrap_or(default_kind),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_xml_row_array(value: Option<&Value>) -> Vec<SdMetadataRow> {
+    value
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let order = row.pointer("/order").and_then(Value::as_u64).unwrap_or(0);
+                    let depth = row.pointer("/depth").and_then(Value::as_u64).unwrap_or(0);
+                    let kind = string_at(row, "/kind").unwrap_or("xml");
+                    let path = string_at(row, "/path").unwrap_or("-");
+                    let name = string_at(row, "/name").unwrap_or("");
+                    let value = string_at(row, "/value").unwrap_or("");
+                    let label = if name.is_empty() {
+                        format!("{order:04} d{depth} {kind}")
+                    } else {
+                        format!("{order:04} d{depth} {kind} {name}")
+                    };
+                    let display = if value.is_empty() {
+                        path.to_string()
+                    } else {
+                        format!("{path} = {value}")
+                    };
+                    metadata_row(&label, &display, kind)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn add_planned_capability_rows(value: &Value, rows: &mut Vec<SdMetadataRow>) {
+    for (label, pointer) in [
+        ("PNG/JPEG preview", "/capabilities/image_preview"),
+        ("MRA full XML parse", "/capabilities/mra_parse"),
+        ("INI summary", "/capabilities/ini_summary"),
+        ("RBF summary", "/capabilities/rbf_summary"),
+        ("Save-file hint", "/capabilities/save_hint"),
+        ("Archive summary", "/capabilities/archive_summary"),
+        ("SQLite summary", "/capabilities/sqlite_summary"),
+        ("Folder analysis", "/capabilities/folder_analysis"),
+    ] {
+        if value
+            .pointer(pointer)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            rows.push(metadata_row(label, "Available", "success"));
+        }
+    }
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const UNITS: &[(&str, u64)] = &[
+        ("GiB", 1024 * 1024 * 1024),
+        ("MiB", 1024 * 1024),
+        ("KiB", 1024),
+    ];
+    for (unit, factor) in UNITS {
+        if bytes >= *factor {
+            let value = bytes as f64 / *factor as f64;
+            return format!("{value:.1} {unit} ({bytes} bytes)");
+        }
+    }
+    format!("{bytes} bytes")
+}
+
+fn format_unix_ms(ms: u64) -> String {
+    if ms == 0 {
+        "-".to_string()
+    } else {
+        format!("{ms} ms since Unix epoch")
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn flags_label(readonly: bool, hidden: bool) -> String {
+    let mut flags = Vec::new();
+    if readonly {
+        flags.push("readonly");
+    }
+    if hidden {
+        flags.push("hidden");
+    }
+    if flags.is_empty() {
+        "normal".to_string()
+    } else {
+        flags.join(", ")
+    }
+}
+
+fn local_sd_preview_path(path: &str, format: &str) -> PathBuf {
+    let safe = path
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    env::temp_dir().join(format!(
+        "mister-magik-sd-preview-{}-{}.{}",
+        std::process::id(),
+        safe,
+        if format == "jpeg" { "jpg" } else { format }
+    ))
 }
 
 impl std::fmt::Display for AgentError {
