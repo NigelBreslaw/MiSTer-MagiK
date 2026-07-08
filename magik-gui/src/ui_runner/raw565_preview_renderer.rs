@@ -5,6 +5,7 @@ use mister_magik_fb::framebuffer::target::blend_565;
 use mister_magik_fb::framebuffer::target::brighten_565;
 use mister_magik_fb::framebuffer::target::DirtyRect;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 pub(super) struct Raw565PreviewRenderer;
 
@@ -291,6 +292,31 @@ struct Raw565ScreenRow<'a> {
     x1: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FadeWorkStats {
+    path: PreviewFadePath,
+    pixels: usize,
+    rows: usize,
+}
+
+impl FadeWorkStats {
+    fn new(path: PreviewFadePath, rect: DirtyRect) -> Self {
+        Self {
+            path,
+            pixels: rect.width().saturating_mul(rect.rows() as usize),
+            rows: rect.rows() as usize,
+        }
+    }
+
+    fn empty(path: PreviewFadePath) -> Self {
+        Self {
+            path,
+            pixels: 0,
+            rows: 0,
+        }
+    }
+}
+
 fn raw565_screen_row_for_y<'a>(
     view: &'a Raw565View<'a>,
     y: usize,
@@ -355,6 +381,28 @@ fn raw565_view_screen_rect(
         .min((view.y + view.display_h as isize).max(0) as usize)
         .min(ui.render_h());
     (x1 > x0 && y1 > y0).then_some(DirtyRect { x0, y0, x1, y1 })
+}
+
+#[cfg(target_os = "linux")]
+fn thread_cpu_us() -> Option<u64> {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let ts = unsafe { ts.assume_init() };
+    Some((ts.tv_sec as u64).saturating_mul(1_000_000) + (ts.tv_nsec as u64 / 1_000))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or(0)
 }
 
 #[inline(always)]
@@ -1022,7 +1070,9 @@ fn blit_transition_565_fade(
     surface: PreviewSurface,
     frame: &PreviewRawTransitionFrame<'_>,
     progress: f32,
-) {
+) -> PreviewFadeTrace {
+    let wall_start = Instant::now();
+    let cpu_start = thread_cpu_us();
     let current_empty = matches!(frame.current.pixels, PreviewRawPixels::Empty);
     let current = if current_empty {
         None
@@ -1034,23 +1084,39 @@ fn blit_transition_565_fade(
         .as_ref()
         .and_then(|prev| raw565_view(prev, screen, 0));
     let alpha = (progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32) as u8;
+    let finish = |stats: FadeWorkStats| PreviewFadeTrace {
+        wall_us: wall_start.elapsed().as_micros().min(u64::MAX as u128) as u64,
+        cpu_us: elapsed_thread_cpu_us(cpu_start),
+        pixels: stats.pixels.min(u32::MAX as usize) as u32,
+        rows: stats.rows.min(u32::MAX as usize) as u32,
+        path: stats.path,
+        alpha_bucket,
+    };
+    if previous.is_none() && current.is_none() {
+        clear_preview_screen(cached, ui, screen, surface);
+        return finish(FadeWorkStats::new(PreviewFadePath::Empty, screen));
+    }
     if alpha == 0 {
         if let Some(previous) = frame.previous.as_ref() {
             if blit_preview_frame_565_cut(cached, ui, screen, surface, previous).is_some() {
-                return;
+                let rect = raw_preview_scaled_rect(ui, previous).unwrap_or(screen);
+                return finish(FadeWorkStats::new(PreviewFadePath::Cut, rect));
             }
         }
         clear_preview_screen(cached, ui, screen, surface);
-        return;
+        return finish(FadeWorkStats::new(PreviewFadePath::Cut, screen));
     }
     if alpha == 255 {
         if blit_preview_frame_565_cut(cached, ui, screen, surface, &frame.current).is_none() {
             clear_preview_screen(cached, ui, screen, surface);
+            return finish(FadeWorkStats::new(PreviewFadePath::Cut, screen));
         }
-        return;
+        let rect = raw_preview_scaled_rect(ui, &frame.current).unwrap_or(screen);
+        return finish(FadeWorkStats::new(PreviewFadePath::Cut, rect));
     }
-    if preview_fade_fast_path_enabled()
-        && blit_transition_565_fade_same_geometry(
+    if preview_fade_fast_path_enabled() {
+        if let Some(stats) = blit_transition_565_fade_same_geometry(
             cached,
             ui,
             screen,
@@ -1058,13 +1124,12 @@ fn blit_transition_565_fade(
             previous.as_ref(),
             current.as_ref(),
             alpha,
-        )
-        .is_some()
-    {
-        return;
+        ) {
+            return finish(stats);
+        }
     }
-    if preview_fade_fast_path_enabled()
-        && blit_transition_565_fade_single_geometry(
+    if preview_fade_fast_path_enabled() {
+        if let Some(stats) = blit_transition_565_fade_single_geometry(
             cached,
             ui,
             screen,
@@ -1072,12 +1137,11 @@ fn blit_transition_565_fade(
             previous.as_ref(),
             current.as_ref(),
             alpha,
-        )
-        .is_some()
-    {
-        return;
+        ) {
+            return finish(stats);
+        }
     }
-    blit_transition_565_fade_rows(
+    let stats = blit_transition_565_fade_rows(
         cached,
         ui,
         screen,
@@ -1086,6 +1150,7 @@ fn blit_transition_565_fade(
         current.as_ref(),
         alpha,
     );
+    finish(stats)
 }
 
 fn blit_transition_565_fade_same_geometry(
@@ -1096,7 +1161,7 @@ fn blit_transition_565_fade_same_geometry(
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
-) -> Option<()> {
+) -> Option<FadeWorkStats> {
     let previous = previous?;
     let current = current?;
     if previous.x != current.x
@@ -1121,7 +1186,7 @@ fn blit_transition_565_fade_same_geometry(
         let dst = &mut cached[surface.row_range(y, rect.x0, rect.x1)];
         blend_565_row_bucketed(dst, previous_row.row, current_row.row, alpha_bucket);
     }
-    Some(())
+    Some(FadeWorkStats::new(PreviewFadePath::SameGeometry, rect))
 }
 
 fn blit_transition_565_fade_single_geometry(
@@ -1132,7 +1197,7 @@ fn blit_transition_565_fade_single_geometry(
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
-) -> Option<()> {
+) -> Option<FadeWorkStats> {
     let (view, fade_in) = match (previous, current) {
         (None, Some(current)) => (current, true),
         (Some(previous), None) => (previous, false),
@@ -1148,7 +1213,7 @@ fn blit_transition_565_fade_single_geometry(
         let dst = &mut cached[surface.row_range(y, rect.x0, rect.x1)];
         blend_565_row_with_black(dst, src_row.row, alpha_bucket, fade_in);
     }
-    Some(())
+    Some(FadeWorkStats::new(PreviewFadePath::SingleBlack, rect))
 }
 
 fn blit_transition_565_fade_rows(
@@ -1159,7 +1224,7 @@ fn blit_transition_565_fade_rows(
     previous: Option<&Raw565View<'_>>,
     current: Option<&Raw565View<'_>>,
     alpha: u8,
-) {
+) -> FadeWorkStats {
     let mut fade_rect: Option<DirtyRect> = None;
     for view in [previous, current].into_iter().flatten() {
         if let Some(rect) = raw565_view_screen_rect(view, ui, screen) {
@@ -1170,6 +1235,7 @@ fn blit_transition_565_fade_rows(
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
     let alpha_bucket = ((alpha as u16 + 4) >> 3).min(32);
     let x1 = fade_rect.x1.min(ui.render_w());
+    let mut stats = FadeWorkStats::new(PreviewFadePath::Rows, fade_rect);
     for y in fade_rect.y0..fade_rect.y1.min(ui.render_h()) {
         let previous_bounds = previous.as_ref().and_then(|view| {
             raw565_screen_bounds_for_y(view, y, fade_rect.x0, fade_rect.x1, ui.render_w())
@@ -1246,6 +1312,7 @@ fn blit_transition_565_fade_rows(
                         current_bounds.is_some_and(|(x0, x1)| seg_x0 >= x0 && seg_x1 <= x1);
                     match (previous_covers, current_covers) {
                         (true, true) => {
+                            stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
                             let current = current.expect("current bounds require view");
                             for x in 0..dst.len() {
@@ -1256,6 +1323,7 @@ fn blit_transition_565_fade_rows(
                             }
                         }
                         (true, false) => {
+                            stats.path = PreviewFadePath::ScaledSample;
                             let previous = previous.expect("previous bounds require view");
                             for x in 0..dst.len() {
                                 let screen_x = seg_x0 + x;
@@ -1264,6 +1332,7 @@ fn blit_transition_565_fade_rows(
                             }
                         }
                         (false, true) => {
+                            stats.path = PreviewFadePath::ScaledSample;
                             let current = current.expect("current bounds require view");
                             for x in 0..dst.len() {
                                 let screen_x = seg_x0 + x;
@@ -1277,6 +1346,7 @@ fn blit_transition_565_fade_rows(
             }
         }
     }
+    stats
 }
 
 fn push_sorted_unique_bound(bounds: &mut [usize; 6], len: &mut usize, bound: usize) {
@@ -1935,7 +2005,7 @@ impl Raw565PreviewRenderer {
         frame: &PreviewRawTransitionFrame<'_>,
         effect: PreviewTransitionEffect,
         progress: f32,
-    ) -> DirtyRect {
+    ) -> (DirtyRect, PreviewFadeTrace) {
         Self::compose_transition_strided(
             cached,
             ui,
@@ -1953,9 +2023,9 @@ impl Raw565PreviewRenderer {
         effect: PreviewTransitionEffect,
         progress: f32,
         surface: PreviewSurface,
-    ) -> DirtyRect {
+    ) -> (DirtyRect, PreviewFadeTrace) {
         let screen = preview_screen_rect(ui);
-        match effect {
+        let fade = match effect {
             PreviewTransitionEffect::Fade => {
                 blit_transition_565_fade(cached, ui, screen, surface, frame, progress)
             }
@@ -1966,7 +2036,7 @@ impl Raw565PreviewRenderer {
                 )
                 .is_some()
                 {
-                    return screen;
+                    return (screen, PreviewFadeTrace::default());
                 }
                 for y in screen.y0..screen.y1.min(ui.render_h()) {
                     let row = y * ui.render_w();
@@ -1978,9 +2048,10 @@ impl Raw565PreviewRenderer {
                             <Rgb565Pixel as TargetPixel>::from_rgb(rgb.0, rgb.1, rgb.2);
                     }
                 }
+                PreviewFadeTrace::default()
             }
-        }
-        screen
+        };
+        (screen, fade)
     }
 }
 
@@ -2266,6 +2337,53 @@ mod tests {
     }
 
     #[test]
+    fn rgb565_same_geometry_fade_reports_cpu_trace_shape() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let previous_pixels = [Rgb565Pixel(0xf800); 4];
+        let current_pixels = [Rgb565Pixel(0x001f); 4];
+        let previous = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &previous_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+        let frame = PreviewRawTransitionFrame {
+            previous: Some(previous),
+            current,
+            transition_id: 1,
+            duration_divisor: 1,
+        };
+        let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
+
+        let (_rect, trace) = Raw565PreviewRenderer::compose_transition(
+            &mut cached,
+            &ui,
+            &frame,
+            PreviewTransitionEffect::Fade,
+            128.0 / 255.0,
+        );
+
+        assert_eq!(trace.path, PreviewFadePath::SameGeometry);
+        assert_eq!(trace.alpha_bucket, 16);
+        assert_eq!(trace.pixels, 4);
+        assert_eq!(trace.rows, 2);
+    }
+
+    #[test]
     fn rgb565_legacy_fade_rows_match_scalar_reference() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
         let screen = preview_screen_rect(&ui);
@@ -2441,6 +2559,62 @@ mod tests {
         paint_scalar_fade_reference(&mut expected, &ui, screen, &frame, alpha);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rgb565_scaled_fade_reports_scaled_sample_path() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let previous_pixels = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0xffff),
+        ];
+        let current_pixels = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x0000),
+        ];
+        let previous = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &previous_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 4,
+            display_h: 4,
+        };
+        let current = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &current_pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 4,
+            display_h: 4,
+        };
+        let frame = PreviewRawTransitionFrame {
+            previous: Some(previous),
+            current,
+            transition_id: 1,
+            duration_divisor: 1,
+        };
+        let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
+
+        let (_rect, trace) = Raw565PreviewRenderer::compose_transition(
+            &mut cached,
+            &ui,
+            &frame,
+            PreviewTransitionEffect::Fade,
+            128.0 / 255.0,
+        );
+
+        assert_eq!(trace.path, PreviewFadePath::ScaledSample);
+        assert_eq!(trace.pixels, 16);
+        assert_eq!(trace.rows, 4);
     }
 
     fn paint_scalar_fade_reference(
