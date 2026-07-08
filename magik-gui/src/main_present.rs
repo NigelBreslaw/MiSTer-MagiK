@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_PRESENT_REQUEST_PATH: &str = "/tmp/mister-magik/present-request-v1";
 pub const DEFAULT_PRESENT_ACK_PATH: &str = "/tmp/mister-magik/present-ack-v1";
+const DEFAULT_PRESENT_ACK_TIMEOUT: Duration = Duration::from_millis(80);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MainPresentRequest {
@@ -91,7 +92,7 @@ impl MainPresentClient {
         Self {
             request_path: PathBuf::from(DEFAULT_PRESENT_REQUEST_PATH),
             ack_path: PathBuf::from(DEFAULT_PRESENT_ACK_PATH),
-            timeout: Duration::from_millis(40),
+            timeout: DEFAULT_PRESENT_ACK_TIMEOUT,
         }
     }
 
