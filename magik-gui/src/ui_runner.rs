@@ -64,6 +64,7 @@ use mister_magik_fb::framebuffer::target::{
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,
     hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer},
+    plugin_probe::PluginHiddenRgb565Framebuffer,
 };
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;

@@ -2035,8 +2035,9 @@ mod tests {
     #[cfg(feature = "diagnostics")]
     fn plugin_probe_region_parser_reads_module_metadata() {
         let metadata = "\
-plugin_probe_header_tsv\tname=mister-magik-plugin-probe\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\n\
+plugin_probe_header_tsv\tname=mister-magik-plugin-probe\tversion=2\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
 plugin_probe_region_tsv\tindex=0\tname=adjacent-fb-resource\tavailable=1\tphys=0x220fd200\tlen=1036800\tdma_owned=0\n\
+plugin_probe_region_tsv\tindex=1\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
 plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x00000000\tlen=1036800\tdma_owned=1\n";
 
         let regions = parse_plugin_probe_regions(metadata);
@@ -2049,6 +2050,14 @@ plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x000
                     name: "adjacent-fb-resource".to_string(),
                     available: true,
                     phys: "0x220fd200".to_string(),
+                    len: 1_036_800,
+                    dma_owned: false,
+                },
+                PluginProbeRegion {
+                    index: 1,
+                    name: "hidden-slot-1".to_string(),
+                    available: true,
+                    phys: "0x22800000".to_string(),
                     len: 1_036_800,
                     dma_owned: false,
                 },

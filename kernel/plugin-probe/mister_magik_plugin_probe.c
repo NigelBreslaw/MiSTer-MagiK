@@ -18,7 +18,7 @@
 #include <generated/utsrelease.h>
 
 #define DEVICE_NAME "mister-magik-plugin-probe"
-#define PROBE_VERSION 1
+#define PROBE_VERSION 2
 
 #define FB_PHYS_BASE 0x22000000UL
 #define FB_CONTROL_BYTES 4096UL
@@ -117,10 +117,11 @@ static ssize_t probe_read(struct file *file, char __user *buf, size_t len,
 		return -ENOMEM;
 
 	used += scnprintf(tmp + used, 2048 - used,
-			  "plugin_probe_header_tsv\tname=%s\tversion=%u\tuts_release=%s\topen_count=%d\tmmap_count=%d\tpage_size=%lu\tregion_offset_pages=%lu\n",
+			  "plugin_probe_header_tsv\tname=%s\tversion=%u\tuts_release=%s\topen_count=%d\tmmap_count=%d\tpage_size=%lu\tregion_offset_pages=%lu\tregion_offset_bytes=%lu\tcache_mode=writecombine\n",
 			  DEVICE_NAME, PROBE_VERSION, UTS_RELEASE,
 			  atomic_read(&open_count), atomic_read(&mmap_count),
-			  PAGE_SIZE, REGION_OFFSET_PAGES);
+			  PAGE_SIZE, REGION_OFFSET_PAGES,
+			  REGION_OFFSET_PAGES * PAGE_SIZE);
 	used += scnprintf(tmp + used, 2048 - used,
 			  "plugin_probe_expected_tsv\twidth=%lu\theight=%lu\tstride_bytes=%lu\tframe_bytes=%lu\thidden_slot_bytes=%lu\tfb_phys_base=0x%08lx\tfb_active_phys=0x%08lx\n",
 			  RGB565_WIDTH, RGB565_HEIGHT, RGB565_STRIDE_BYTES,
@@ -168,14 +169,14 @@ static int __init probe_init(void)
 		.dma_owned = false,
 	};
 	regions[REGION_HIDDEN_SLOT1] = (struct probe_region) {
-		.name = "hidden-slot1",
+		.name = "hidden-slot-1",
 		.phys = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
 		.len = RGB565_MAP_BYTES,
 		.available = true,
 		.dma_owned = false,
 	};
 	regions[REGION_HIDDEN_SLOT2] = (struct probe_region) {
-		.name = "hidden-slot2",
+		.name = "hidden-slot-2",
 		.phys = FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL),
 		.len = RGB565_MAP_BYTES,
 		.available = true,

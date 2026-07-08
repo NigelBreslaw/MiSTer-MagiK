@@ -7,6 +7,8 @@ pub mod mapped;
 #[cfg(feature = "ui")]
 pub mod mode;
 pub mod ownership;
+#[cfg(feature = "ui")]
+pub mod plugin_probe;
 pub mod route;
 #[cfg(feature = "ui")]
 pub mod sample;
