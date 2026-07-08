@@ -62,8 +62,7 @@ echo "==> Running plugin-present-pattern ($PATTERN_FRAMES frames)"
 
 echo "==> Running plugin-backed launcher scroll profile ($SCROLL_LABEL, ${SCROLL_SECS}s)"
 MISTER_PRESENT_BACKEND=plugin-main-vsync-hidden \
-MISTER_ARCADE_SCROLL_BOOT_PRELUDE=1 \
-"$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --catalog-refresh off --stream-consumer none
+"$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --skip-boot-prelude --catalog-refresh off --stream-consumer none
 
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
