@@ -57,6 +57,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plugin-map-bandwidth", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("plugin-presenter-report", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
     CommandSpec::new("plugin-present-pattern", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -245,6 +247,7 @@ mod tests {
             "input",
             "hbmame-metadata-from-library",
             "library-scan-bench",
+            "fpga-latch-report",
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
@@ -273,7 +276,7 @@ mod tests {
             "plugin-map-report",
             "plugin-map-bandwidth",
             "plugin-presenter-report",
-            "plugin-present-pattern",
+            "fpga-latch-report",
             "input",
             "library-sql",
             "hbmame-metadata-from-library",
@@ -293,6 +296,8 @@ mod tests {
         assert_command_kind("plugin-map-report", CommandKind::PreFpga);
         assert_command_kind("plugin-map-bandwidth", CommandKind::PreFpga);
         assert_command_kind("plugin-presenter-report", CommandKind::PreFpga);
+        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
+        #[cfg(feature = "ui")]
         assert_command_kind("plugin-present-pattern", CommandKind::PreFpga);
         assert_command_kind("input", CommandKind::Fpga);
     }

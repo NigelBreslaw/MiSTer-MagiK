@@ -1,0 +1,120 @@
+diff --git a/sys/sys_top.v b/sys/sys_top.v
+--- a/sys/sys_top.v
++++ b/sys/sys_top.v
+@@ -357,6 +357,27 @@
+ 	reg        vs_d0,vs_d1,vs_d2;
+ 	reg  [4:0] acx_att;
+ 	reg  [7:0] fb_crc;
++
++	magik_vbl_meta <= hdmi_vbl;
++	magik_vbl_sys <= magik_vbl_meta;
++	magik_vbl_old <= magik_vbl_sys;
++
++	if(MAGIK_LFB_PENDING && magik_vbl_rise) begin
++		LFB_EN     <= MAGIK_LFB_EN;
++		LFB_FLT    <= MAGIK_LFB_FLT;
++		LFB_FMT    <= MAGIK_LFB_FMT;
++		LFB_WIDTH  <= MAGIK_LFB_WIDTH;
++		LFB_HEIGHT <= MAGIK_LFB_HEIGHT;
++		LFB_HMIN   <= MAGIK_LFB_HMIN;
++		LFB_HMAX   <= MAGIK_LFB_HMAX;
++		LFB_VMIN   <= MAGIK_LFB_VMIN;
++		LFB_VMAX   <= MAGIK_LFB_VMAX;
++		LFB_BASE   <= MAGIK_LFB_BASE;
++		LFB_STRIDE <= MAGIK_LFB_STRIDE;
++		MAGIK_LFB_ACTIVE_SEQ <= MAGIK_LFB_PENDING_SEQ;
++		MAGIK_LFB_FLIP_COUNT <= MAGIK_LFB_FLIP_COUNT + 1'd1;
++		MAGIK_LFB_PENDING <= 0;
++	end
+ 
+ 	coef_wr <= 0;
+ 
+@@ -396,6 +417,8 @@
+ 			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
+ `endif
+ 			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
++			if(io_din[7:0] == MAGIK_UIO_SET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_LATCH_MAGIC;
++			if(io_din[7:0] == MAGIK_UIO_GET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_STATUS_MAGIC;
+ 		end
+ 		else begin
+ 			cnt <= cnt + 1'd1;
+@@ -450,6 +473,41 @@
+ 					9: LFB_STRIDE      <= io_din[13:0];
+ 				endcase
+ 			end
++			if(cmd == MAGIK_UIO_SET_FBUF_LATCH) begin
++				case(cnt[3:0])
++					0: {MAGIK_LFB_EN,MAGIK_LFB_FLT,MAGIK_LFB_FMT} <= {io_din[15], io_din[14], io_din[5:0]};
++					1: MAGIK_LFB_BASE[15:0]  <= io_din[15:0];
++					2: MAGIK_LFB_BASE[31:16] <= io_din[15:0];
++					3: MAGIK_LFB_WIDTH       <= io_din[11:0];
++					4: MAGIK_LFB_HEIGHT      <= io_din[11:0];
++					5: MAGIK_LFB_HMIN        <= io_din[11:0];
++					6: MAGIK_LFB_HMAX        <= io_din[11:0];
++					7: MAGIK_LFB_VMIN        <= io_din[11:0];
++					8: MAGIK_LFB_VMAX        <= io_din[11:0];
++					9: begin
++						MAGIK_LFB_STRIDE <= io_din[13:0];
++						MAGIK_LFB_PENDING <= 1;
++						MAGIK_LFB_POST_COUNT <= MAGIK_LFB_POST_COUNT + 1'd1;
++						if(MAGIK_LFB_PENDING) MAGIK_LFB_DROP_COUNT <= MAGIK_LFB_DROP_COUNT + 1'd1;
++					end
++					10: MAGIK_LFB_PENDING_SEQ <= io_din;
++				endcase
++			end
++			if(cmd == MAGIK_UIO_GET_FBUF_LATCH) begin
++				case(cnt[3:0])
++					0: io_dout_sys <= MAGIK_LFB_ACTIVE_SEQ;
++					1: io_dout_sys <= MAGIK_LFB_PENDING_SEQ;
++					2: io_dout_sys <= {13'd0, MAGIK_LFB_PENDING, MAGIK_LFB_EN, LFB_EN};
++					3: io_dout_sys <= MAGIK_LFB_FLIP_COUNT;
++					4: io_dout_sys <= MAGIK_LFB_POST_COUNT;
++					5: io_dout_sys <= MAGIK_LFB_DROP_COUNT;
++					6: io_dout_sys <= LFB_BASE[15:0];
++					7: io_dout_sys <= LFB_BASE[31:16];
++					8: io_dout_sys <= LFB_WIDTH;
++					9: io_dout_sys <= LFB_HEIGHT;
++					10: io_dout_sys <= LFB_STRIDE;
++				endcase
++			end
+ 			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
+ 			if(cmd == 'h26) vol_att <= io_din[4:0];
+ 			if(cmd == 'h27) VSET <= io_din[11:0];
+@@ -829,6 +887,37 @@
+ reg [11:0] LFB_VMAX   = 0;
+ reg [31:0] LFB_BASE   = 0;
+ reg [13:0] LFB_STRIDE = 0;
++
++// MiSTer MagiK experiment: queue an HPS framebuffer route and apply it only
++// on HDMI vblank. This keeps the existing UIO_SET_FBUF path unchanged while
++// adding a diagnostics-only command for a vblank-latched presenter.
++localparam MAGIK_UIO_SET_FBUF_LATCH = 8'h43;
++localparam MAGIK_UIO_GET_FBUF_LATCH = 8'h44;
++localparam MAGIK_FBUF_LATCH_MAGIC   = 16'h4D47; // "MG"
++localparam MAGIK_FBUF_STATUS_MAGIC  = 16'h4D48; // "MH"
++
++reg        MAGIK_LFB_PENDING = 0;
++reg        MAGIK_LFB_EN      = 0;
++reg        MAGIK_LFB_FLT     = 0;
++reg  [5:0] MAGIK_LFB_FMT     = 0;
++reg [11:0] MAGIK_LFB_WIDTH   = 0;
++reg [11:0] MAGIK_LFB_HEIGHT  = 0;
++reg [11:0] MAGIK_LFB_HMIN    = 0;
++reg [11:0] MAGIK_LFB_HMAX    = 0;
++reg [11:0] MAGIK_LFB_VMIN    = 0;
++reg [11:0] MAGIK_LFB_VMAX    = 0;
++reg [31:0] MAGIK_LFB_BASE    = 0;
++reg [13:0] MAGIK_LFB_STRIDE  = 0;
++reg [15:0] MAGIK_LFB_PENDING_SEQ = 0;
++reg [15:0] MAGIK_LFB_ACTIVE_SEQ  = 0;
++reg [15:0] MAGIK_LFB_POST_COUNT  = 0;
++reg [15:0] MAGIK_LFB_FLIP_COUNT  = 0;
++reg [15:0] MAGIK_LFB_DROP_COUNT  = 0;
++
++reg magik_vbl_meta = 0;
++reg magik_vbl_sys = 0;
++reg magik_vbl_old = 0;
++wire magik_vbl_rise = ~magik_vbl_old & magik_vbl_sys;
+ 
+ reg        FB_EN     = 0;
+ reg  [5:0] FB_FMT    = 0;
