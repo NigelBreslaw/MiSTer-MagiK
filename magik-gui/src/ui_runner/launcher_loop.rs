@@ -36,27 +36,49 @@ const MAIN_FLIP_PRESENT_BYTES: usize = 960 * 540 * 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LauncherPresentBackend {
-    Cached,
+    Fb0Dirty,
     MainFlipV1 { buffer_index: u8 },
 }
 
-fn launcher_present_backend() -> LauncherPresentBackend {
-    static VALUE: OnceLock<LauncherPresentBackend> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        if std::env::var("MISTER_PRESENT_BACKEND").as_deref() != Ok("main-flip-v1") {
-            return LauncherPresentBackend::Cached;
+impl LauncherPresentBackend {
+    fn from_env_values(backend: Option<&str>, flip_buffer_index: Option<&str>) -> Self {
+        if backend != Some("main-flip-v1") {
+            return Self::Fb0Dirty;
         }
-        let buffer_index = std::env::var("MISTER_PRESENT_FLIP_BUFFER_INDEX")
-            .ok()
+        let buffer_index = flip_buffer_index
             .and_then(|value| value.parse::<u8>().ok())
             .filter(|index| (1..=2).contains(index))
             .unwrap_or(1);
+        Self::MainFlipV1 { buffer_index }
+    }
+
+    fn from_env() -> Self {
+        Self::from_env_values(
+            std::env::var("MISTER_PRESENT_BACKEND").ok().as_deref(),
+            std::env::var("MISTER_PRESENT_FLIP_BUFFER_INDEX")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn log_if_experimental(self) {
+        let Self::MainFlipV1 { buffer_index } = self else {
+            return;
+        };
         crate::ui_logln!("launcher_present_backend=main-flip-v1 buffer_index={buffer_index}");
         boot_analytics::event(
             "launcher_present_backend",
             format!("main-flip-v1 buffer_index={buffer_index}"),
         );
-        LauncherPresentBackend::MainFlipV1 { buffer_index }
+    }
+}
+
+fn launcher_present_backend() -> LauncherPresentBackend {
+    static VALUE: OnceLock<LauncherPresentBackend> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let backend = LauncherPresentBackend::from_env();
+        backend.log_if_experimental();
+        backend
     })
 }
 
@@ -4372,6 +4394,38 @@ mod tests {
 
         assert!(!should_draw_arcade_overlay(&nav, true, false));
         assert!(!should_draw_arcade_overlay(&nav, false, true));
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_defaults_to_fb0_dirty() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(None, None),
+            LauncherPresentBackend::Fb0Dirty
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some(""), Some("2")),
+            LauncherPresentBackend::Fb0Dirty
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
+            LauncherPresentBackend::Fb0Dirty
+        );
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_parses_legacy_main_flip_experiment() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), None),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("2")),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 2 }
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("3")),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+        );
     }
 
     #[test]
