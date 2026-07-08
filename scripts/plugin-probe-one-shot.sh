@@ -8,6 +8,7 @@ REMOTE_KO="$REMOTE_DIR/mister_magik_plugin_probe.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
 LOCAL_REPORT="$ROOT/build/plugin-probe/plugin-map-report.log"
+LOCAL_PRESENTER="$ROOT/build/plugin-probe/plugin-presenter-report.log"
 LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/plugin-map-bandwidth.log"
 LOCAL_PATTERN="$ROOT/build/plugin-probe/plugin-present-pattern.log"
 FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
@@ -50,6 +51,9 @@ echo "==> Loading module"
 echo "==> Running plugin-map-report"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-report" | tee "$LOCAL_REPORT"
 
+echo "==> Running plugin-presenter-report"
+"$MISTER" run "'$REMOTE_BIN' plugin-presenter-report" | tee "$LOCAL_PRESENTER"
+
 echo "==> Running plugin-map-bandwidth ($FRAMES frames)"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
 
@@ -72,6 +76,7 @@ cleanup
 
 echo "==> Wrote:"
 echo "    $LOCAL_REPORT"
+echo "    $LOCAL_PRESENTER"
 echo "    $LOCAL_BANDWIDTH"
 echo "    $LOCAL_PATTERN"
 echo "    $ROOT/build/arcade-scroll-profiles/${SCROLL_LABEL}-arcade-scroll.tsv"
