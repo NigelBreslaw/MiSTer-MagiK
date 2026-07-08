@@ -72,6 +72,8 @@ mod frame_profile;
 mod input;
 mod launch_preparation;
 mod launcher;
+#[cfg(feature = "ui")]
+mod main_present;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
