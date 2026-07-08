@@ -392,6 +392,50 @@ impl Fpga {
         res
     }
 
+    pub fn post_magik_latched_fbuf_rgb565(
+        &mut self,
+        sequence: u16,
+        base_addr: u32,
+        fb_width: u16,
+        fb_height: u16,
+        mode: FramebufferRouteMode,
+        set_vga_fb: bool,
+    ) -> io::Result<(u16, u16)> {
+        let xoff = mode.hbp as i32 - FB_DV_LBRD;
+        let yoff = mode.vbp as i32 - FB_DV_UBRD;
+        let right_guard_cols = std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1)
+            .clamp(0, mode.hact.saturating_sub(1) as i32);
+        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
+        let bottom = yoff + mode.vact as i32 - 1;
+
+        self.disable_io();
+        let support = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH)?;
+        let stream_res: io::Result<()> = (|| {
+            let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB;
+            self.spi_w(fpga_format)?;
+            self.spi_w(base_addr as u16)?;
+            self.spi_w((base_addr >> 16) as u16)?;
+            self.spi_w(fb_width)?;
+            self.spi_w(fb_height)?;
+            self.spi_w(xoff as u16)?;
+            self.spi_w(right as u16)?;
+            self.spi_w(yoff as u16)?;
+            self.spi_w(bottom as u16)?;
+            self.spi_w(rgb565_stride_bytes(fb_width as usize) as u16)?;
+            self.spi_w(sequence)?;
+            Ok(())
+        })();
+        self.disable_io();
+        stream_res?;
+        if set_vga_fb {
+            self.set_vga_fb(true)?;
+        }
+        Ok(support)
+    }
+
     /// Port of `video_fb_enable(1, n)`, replicating the SET_FBUF sequence in
     /// video.cpp:3290-3321. Routes HPS buffer `n` to scan-out. `mode` is the
     /// active video mode (for positioning); the fb itself is

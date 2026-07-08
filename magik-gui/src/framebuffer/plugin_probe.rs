@@ -76,6 +76,10 @@ pub enum PluginProbeError {
     },
     MmapFailed(String),
     MmapReturnedNull,
+    InvalidPhysicalAddress {
+        name: String,
+        phys: String,
+    },
 }
 
 impl std::fmt::Display for PluginProbeError {
@@ -120,6 +124,9 @@ impl std::fmt::Display for PluginProbeError {
             }
             Self::MmapFailed(e) => write!(f, "plugin probe mmap failed: {e}"),
             Self::MmapReturnedNull => write!(f, "plugin probe mmap returned a null address"),
+            Self::InvalidPhysicalAddress { name, phys } => {
+                write!(f, "plugin probe region {name} has invalid physical address {phys}")
+            }
         }
     }
 }
@@ -313,6 +320,10 @@ impl PluginHiddenRgb565Framebuffer {
         &self.region
     }
 
+    pub fn physical_addr(&self) -> Result<u32, PluginProbeError> {
+        parse_region_phys_u32(&self.region)
+    }
+
     fn buffer_mut(&mut self) -> &mut [Rgb565Pixel] {
         unsafe {
             std::slice::from_raw_parts_mut(
@@ -321,6 +332,18 @@ impl PluginHiddenRgb565Framebuffer {
             )
         }
     }
+}
+
+pub fn parse_region_phys_u32(region: &PluginProbeRegion) -> Result<u32, PluginProbeError> {
+    let raw = region.phys.trim();
+    let hex = raw
+        .strip_prefix("0x")
+        .or_else(|| raw.strip_prefix("0X"))
+        .unwrap_or(raw);
+    u32::from_str_radix(hex, 16).map_err(|_| PluginProbeError::InvalidPhysicalAddress {
+        name: region.name.clone(),
+        phys: region.phys.clone(),
+    })
 }
 
 impl Drop for PluginHiddenRgb565Framebuffer {
