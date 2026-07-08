@@ -5,6 +5,7 @@ CROSS_COMPILE ?= arm-linux-gnueabihf-
 LOCALVERSION ?= -MiSTer
 
 obj-m += mister_magik_plugin_probe.o
+ccflags-y += -fno-stack-protector
 
 .PHONY: all clean
 
