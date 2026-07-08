@@ -474,7 +474,7 @@ fn blend_565_row_bucketed_for_experiment(
     {
         return;
     }
-    let start = blend_565_row_platform(dst, previous, current, a);
+    let start = blend_565_row_platform_for_experiment(dst, previous, current, a, experiment);
     for x in start..dst.len() {
         dst[x] = blend_565_bucket(previous[x], current[x], a);
     }
@@ -824,12 +824,24 @@ fn blend_565_row_with_black_bucket_shift_platform(
 
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
 #[inline]
-fn blend_565_row_platform(
+fn blend_565_row_platform_for_experiment(
     dst: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
     current: &[Rgb565Pixel],
     alpha_bucket: u16,
+    experiment: PreviewFadeExperiment,
 ) -> usize {
+    if experiment == PreviewFadeExperiment::Neon8 {
+        let vector_len = dst.len().min(previous.len()).min(current.len()) & !7;
+        if vector_len == 0 {
+            return 0;
+        }
+        // SAFETY: vector_len is rounded down to a multiple of eight within
+        // dst.len(), capped to previous/current lengths, and alpha is clamped
+        // to the 1..=31 bucket range before reaching this platform helper.
+        unsafe { blend_565_row_neon8_u32rb(dst, previous, current, vector_len, alpha_bucket) };
+        return vector_len;
+    }
     let vector_len = dst.len().min(previous.len()).min(current.len()) & !3;
     if vector_len == 0 {
         return 0;
@@ -839,6 +851,69 @@ fn blend_565_row_platform(
     // to the 1..=31 bucket range before reaching this platform helper.
     unsafe { blend_565_row_neon_u32rb(dst, previous, current, vector_len, alpha_bucket) };
     vector_len
+}
+
+#[cfg(all(target_arch = "arm", target_feature = "neon"))]
+unsafe fn blend_565_row_neon8_u32rb(
+    dst: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    vector_len: usize,
+    alpha_bucket: u16,
+) {
+    use core::arch::arm::{
+        vaddq_u32, vandq_u32, vcombine_u16, vdupq_n_u32, vget_high_u16, vget_low_u16, vld1q_u16,
+        vmovl_u16, vmovn_u32, vmulq_n_u32, vorrq_u32, vshrq_n_u32, vst1q_u16,
+    };
+
+    debug_assert!(vector_len <= dst.len());
+    debug_assert!(vector_len <= previous.len());
+    debug_assert!(vector_len <= current.len());
+    debug_assert_eq!(vector_len % 8, 0);
+    debug_assert!(alpha_bucket <= 32);
+    let rb_mask = vdupq_n_u32(0xf81f);
+    let g_mask = vdupq_n_u32(0x07e0);
+    let alpha = alpha_bucket as u32;
+    let inv_alpha = 32 - alpha;
+    let previous = previous.as_ptr().cast::<u16>();
+    let current = current.as_ptr().cast::<u16>();
+    let dst = dst.as_mut_ptr().cast::<u16>();
+    let mut i = 0;
+    macro_rules! blend4 {
+        ($prev:expr, $curr:expr) => {{
+            let prev = vmovl_u16($prev);
+            let curr = vmovl_u16($curr);
+            let rb = vandq_u32(
+                vshrq_n_u32(
+                    vaddq_u32(
+                        vmulq_n_u32(vandq_u32(prev, rb_mask), inv_alpha),
+                        vmulq_n_u32(vandq_u32(curr, rb_mask), alpha),
+                    ),
+                    5,
+                ),
+                rb_mask,
+            );
+            let g = vandq_u32(
+                vshrq_n_u32(
+                    vaddq_u32(
+                        vmulq_n_u32(vandq_u32(prev, g_mask), inv_alpha),
+                        vmulq_n_u32(vandq_u32(curr, g_mask), alpha),
+                    ),
+                    5,
+                ),
+                g_mask,
+            );
+            vmovn_u32(vorrq_u32(rb, g))
+        }};
+    }
+    while i + 8 <= vector_len {
+        let prev = vld1q_u16(previous.add(i));
+        let curr = vld1q_u16(current.add(i));
+        let lo = blend4!(vget_low_u16(prev), vget_low_u16(curr));
+        let hi = blend4!(vget_high_u16(prev), vget_high_u16(curr));
+        vst1q_u16(dst.add(i), vcombine_u16(lo, hi));
+        i += 8;
+    }
 }
 
 #[cfg(all(target_arch = "arm", target_feature = "neon"))]
@@ -907,11 +982,12 @@ unsafe fn blend_565_row_neon_u32rb(
 
 #[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
 #[inline(always)]
-fn blend_565_row_platform(
+fn blend_565_row_platform_for_experiment(
     _dst: &mut [Rgb565Pixel],
     _previous: &[Rgb565Pixel],
     _current: &[Rgb565Pixel],
     _alpha_bucket: u16,
+    _experiment: PreviewFadeExperiment,
 ) -> usize {
     0
 }
@@ -2567,6 +2643,56 @@ mod tests {
                 &current,
                 bucket,
                 PreviewFadeExperiment::BucketShift,
+            );
+            let expected: Vec<_> = previous
+                .iter()
+                .zip(current.iter())
+                .map(|(&prev, &curr)| blend_565(prev, curr, alpha))
+                .collect();
+
+            assert_eq!(optimized.as_slice(), expected.as_slice(), "bucket={bucket}");
+        }
+    }
+
+    #[test]
+    fn rgb565_neon8_experiment_matches_scalar_for_all_buckets() {
+        let previous = [
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xffe0),
+            Rgb565Pixel(0x7bef),
+        ];
+        let current = [
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x0000),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x7bef),
+            Rgb565Pixel(0x1234),
+            Rgb565Pixel(0x39e7),
+            Rgb565Pixel(0x07ff),
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x8410),
+            Rgb565Pixel(0xffe0),
+        ];
+        for bucket in 0..=32 {
+            let alpha = (bucket * 8).min(255) as u8;
+            let mut optimized = [Rgb565Pixel(0); 12];
+            blend_565_row_bucketed_for_experiment(
+                &mut optimized,
+                &previous,
+                &current,
+                bucket,
+                PreviewFadeExperiment::Neon8,
             );
             let expected: Vec<_> = previous
                 .iter()
