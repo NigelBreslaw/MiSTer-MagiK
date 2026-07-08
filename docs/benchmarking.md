@@ -171,6 +171,12 @@ a bench-tools MagiK binary, so use `--deploy-device` when collecting pacing
 regression evidence from a fresh commit.
 The script emits and enforces `frame_pacing_gate_tsv` for the 60fps/drop-frame
 contract and `preview_exact_gate_tsv` for the no-skipped-preview contract.
+For `human-turbo-hold`, the pacing gate treats small wall-time jitter above one
+60 Hz period as diagnostic rather than failing evidence because the scenario
+intentionally mixes bursts, pauses, reversals, and real entry flow. It still
+hard-fails any work frame over budget, any wall frame over 33 ms, any
+fallback/timeout/error/unknown vsync source, and any non-zero max miss streak.
+For other arcade scenarios, the strict wall gate remains unchanged.
 The turbo preview runway defaults to 32 previews ahead; use
 `MISTER_PREVIEW_TURBO_LOOKAHEAD=64` to reproduce the old aggressive prefetch
 behavior, or `MISTER_PREVIEW_TURBO_RUNWAY=0` only as a diagnostic because it
