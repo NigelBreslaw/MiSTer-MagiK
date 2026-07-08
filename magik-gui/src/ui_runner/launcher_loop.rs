@@ -38,18 +38,22 @@ const MAIN_FLIP_PRESENT_BYTES: usize = 960 * 540 * 2;
 enum LauncherPresentBackend {
     Fb0Dirty,
     MainFlipV1 { buffer_index: u8 },
+    MainVsyncHidden,
 }
 
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>, flip_buffer_index: Option<&str>) -> Self {
-        if backend != Some("main-flip-v1") {
-            return Self::Fb0Dirty;
+        match backend {
+            Some("main-flip-v1") => {
+                let buffer_index = flip_buffer_index
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|index| (1..=2).contains(index))
+                    .unwrap_or(1);
+                Self::MainFlipV1 { buffer_index }
+            }
+            Some("main-vsync-hidden") => Self::MainVsyncHidden,
+            _ => Self::Fb0Dirty,
         }
-        let buffer_index = flip_buffer_index
-            .and_then(|value| value.parse::<u8>().ok())
-            .filter(|index| (1..=2).contains(index))
-            .unwrap_or(1);
-        Self::MainFlipV1 { buffer_index }
     }
 
     fn from_env() -> Self {
@@ -62,14 +66,22 @@ impl LauncherPresentBackend {
     }
 
     fn log_if_experimental(self) {
-        let Self::MainFlipV1 { buffer_index } = self else {
-            return;
-        };
-        crate::ui_logln!("launcher_present_backend=main-flip-v1 buffer_index={buffer_index}");
-        boot_analytics::event(
-            "launcher_present_backend",
-            format!("main-flip-v1 buffer_index={buffer_index}"),
-        );
+        match self {
+            Self::Fb0Dirty => {}
+            Self::MainFlipV1 { buffer_index } => {
+                crate::ui_logln!(
+                    "launcher_present_backend=main-flip-v1 buffer_index={buffer_index}"
+                );
+                boot_analytics::event(
+                    "launcher_present_backend",
+                    format!("main-flip-v1 buffer_index={buffer_index}"),
+                );
+            }
+            Self::MainVsyncHidden => {
+                crate::ui_logln!("launcher_present_backend=main-vsync-hidden");
+                boot_analytics::event("launcher_present_backend", "main-vsync-hidden");
+            }
+        }
     }
 }
 
@@ -114,6 +126,112 @@ fn maybe_present_with_main_flip_v1(presentation: &mut LauncherPresentResult) {
                 crate::ui_errln!("main_flip_v1_present_failed: {e}");
             });
         }
+    }
+}
+
+struct MainVsyncHiddenPresenter {
+    client: crate::main_present::MainPresentClient,
+    buffer1: HiddenRgb565Framebuffer,
+    buffer2: HiddenRgb565Framebuffer,
+    next_buffer_index: u8,
+    sequence: u32,
+    width: usize,
+    height: usize,
+    stride_bytes: usize,
+}
+
+struct MainVsyncHiddenPresentStats {
+    copied_bytes: usize,
+    buffer_index: u8,
+    copy_us: u128,
+    request_us: u128,
+    wait_us: u64,
+    route_us: u64,
+}
+
+impl MainVsyncHiddenPresenter {
+    fn open(ui: &UiDisplay) -> Option<Self> {
+        if launcher_present_backend() != LauncherPresentBackend::MainVsyncHidden {
+            return None;
+        }
+        let width = ui.render_w();
+        let height = ui.render_h();
+        let stride_bytes = rgb565_stride_bytes(width);
+        let buffer1 = match HiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(1).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("main_vsync_hidden_open_failed buffer=1 error={e}");
+                return None;
+            }
+        };
+        let buffer2 = match HiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(2).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("main_vsync_hidden_open_failed buffer=2 error={e}");
+                return None;
+            }
+        };
+        Some(Self {
+            client: crate::main_present::MainPresentClient::default_paths(),
+            buffer1,
+            buffer2,
+            next_buffer_index: 1,
+            sequence: 1,
+            width,
+            height,
+            stride_bytes,
+        })
+    }
+
+    fn present_cached_full_frame(
+        &mut self,
+        cached: &[Rgb565Pixel],
+    ) -> Result<MainVsyncHiddenPresentStats, String> {
+        let buffer_index = self.next_buffer_index;
+        let buffer = if buffer_index == 1 {
+            &mut self.buffer1
+        } else {
+            &mut self.buffer2
+        };
+        let copy_start = Instant::now();
+        let copied_bytes = buffer
+            .copy_full_frame(cached, self.width)
+            .map_err(|e| e.to_string())?;
+        let copy_us = copy_start.elapsed().as_micros();
+
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let request_start = Instant::now();
+        let ack = self
+            .client
+            .present(crate::main_present::MainPresentRequest {
+                sequence,
+                buffer_index,
+                width: self.width,
+                height: self.height,
+                stride_bytes: self.stride_bytes,
+            })
+            .map_err(|e| e.to_string())?;
+        let request_us = request_start.elapsed().as_micros();
+        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
+        Ok(MainVsyncHiddenPresentStats {
+            copied_bytes,
+            buffer_index,
+            copy_us,
+            request_us,
+            wait_us: ack.wait_us,
+            route_us: ack.route_us,
+        })
     }
 }
 
@@ -1146,6 +1264,7 @@ pub(super) fn run_launcher_loop(
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
+    let mut main_vsync_hidden_presenter = MainVsyncHiddenPresenter::open(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
@@ -3093,14 +3212,43 @@ pub(super) fn run_launcher_loop(
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4, cpu_t4) = {
             let mut presentation = if startup_can_present {
-                LauncherCompositor::present(LauncherPresentRequest {
-                    layer_target: &mut layer_target,
-                    full_frame_present,
-                    slint_dirty: this_rect,
-                    raw_preview,
-                    arcade_list_rect,
-                    arcade_list_renderer: &mut arcade_list_renderer,
-                })
+                if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
+                    match presenter.present_cached_full_frame(layer_target.cached_565()) {
+                        Ok(stats) => LauncherPresentResult {
+                            copied_rows: ui.render_h() as u32,
+                            direct_preview_rows: 0,
+                            present_bytes: stats.copied_bytes,
+                            wasted_present_bytes: 0,
+                            cached_present_us: stats.copy_us,
+                            direct_preview_present_us: 0,
+                            arcade_list_present_us: stats.request_us,
+                            arcade_update_label: ArcadeUpdateTrace::None,
+                        },
+                        Err(e) => {
+                            static WARNED: OnceLock<()> = OnceLock::new();
+                            WARNED.get_or_init(|| {
+                                crate::ui_errln!("main_vsync_hidden_present_failed: {e}");
+                            });
+                            LauncherCompositor::present(LauncherPresentRequest {
+                                layer_target: &mut layer_target,
+                                full_frame_present,
+                                slint_dirty: this_rect,
+                                raw_preview,
+                                arcade_list_rect,
+                                arcade_list_renderer: &mut arcade_list_renderer,
+                            })
+                        }
+                    }
+                } else {
+                    LauncherCompositor::present(LauncherPresentRequest {
+                        layer_target: &mut layer_target,
+                        full_frame_present,
+                        slint_dirty: this_rect,
+                        raw_preview,
+                        arcade_list_rect,
+                        arcade_list_renderer: &mut arcade_list_renderer,
+                    })
+                }
             } else {
                 let _ = disp.wait_vsync();
                 LauncherPresentResult {
@@ -4406,10 +4554,6 @@ mod tests {
             LauncherPresentBackend::from_env_values(Some(""), Some("2")),
             LauncherPresentBackend::Fb0Dirty
         );
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
-            LauncherPresentBackend::Fb0Dirty
-        );
     }
 
     #[test]
@@ -4425,6 +4569,14 @@ mod tests {
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("3")),
             LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+        );
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_parses_main_vsync_hidden_experiment() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
+            LauncherPresentBackend::MainVsyncHidden
         );
     }
 

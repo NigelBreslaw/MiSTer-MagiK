@@ -71,6 +71,10 @@ impl<'a> LayerTarget<'a> {
     ) -> PresentCopyStats {
         copy_arcade_list_update(self.target, self.disp, renderer, update)
     }
+
+    pub(super) fn cached_565(&self) -> &[Rgb565Pixel] {
+        self.target.cached_565()
+    }
 }
 
 pub(super) struct LauncherPresentRequest<'a, 'b> {

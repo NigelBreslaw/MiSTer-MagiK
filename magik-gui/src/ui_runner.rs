@@ -61,6 +61,10 @@ use mister_magik_fb::framebuffer::target::{
     build_launcher_present_plan, copy_cached_rect_565, dirty_rect, format_dirty_rect, DirtyRect,
     DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
+use mister_magik_fb::framebuffer::{
+    format::rgb565_stride_bytes,
+    hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer},
+};
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
 use std::path::PathBuf;
