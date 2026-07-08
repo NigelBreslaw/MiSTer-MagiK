@@ -15,6 +15,7 @@ FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
 PATTERN_FRAMES="${MISTER_PLUGIN_PRESENT_PATTERN_FRAMES:-180}"
 SCROLL_SECS="${MISTER_PLUGIN_LAUNCHER_SCROLL_SECS:-15}"
 SCROLL_LABEL="${MISTER_PLUGIN_LAUNCHER_LABEL:-PLUGIN-MAIN-VSYNC-$(date -u +%Y%m%dT%H%M%SZ)}"
+SKIP_FULL_UI="${MISTER_PLUGIN_SKIP_FULL_UI:-0}"
 
 cleanup() {
   "$MISTER" run "rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
@@ -64,9 +65,13 @@ echo "==> Starting launcher for plugin present pattern diagnostic"
 echo "==> Running plugin-present-pattern ($PATTERN_FRAMES frames)"
 "$MISTER" run "'$REMOTE_BIN' plugin-present-pattern '$PATTERN_FRAMES'" | tee "$LOCAL_PATTERN"
 
-echo "==> Running plugin-backed launcher scroll profile ($SCROLL_LABEL, ${SCROLL_SECS}s)"
-MISTER_PRESENT_BACKEND=plugin-main-vsync-hidden \
-"$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --skip-boot-prelude --catalog-refresh off --stream-consumer none
+if [[ "$SKIP_FULL_UI" == "1" ]]; then
+  echo "==> Skipping plugin-backed launcher scroll profile (MISTER_PLUGIN_SKIP_FULL_UI=1)"
+else
+  echo "==> Running plugin-backed launcher scroll profile ($SCROLL_LABEL, ${SCROLL_SECS}s)"
+  MISTER_PRESENT_BACKEND=plugin-main-vsync-hidden \
+  "$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --skip-boot-prelude --catalog-refresh off --stream-consumer none
+fi
 
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
@@ -79,4 +84,6 @@ echo "    $LOCAL_REPORT"
 echo "    $LOCAL_PRESENTER"
 echo "    $LOCAL_BANDWIDTH"
 echo "    $LOCAL_PATTERN"
-echo "    $ROOT/build/arcade-scroll-profiles/${SCROLL_LABEL}-arcade-scroll.tsv"
+if [[ "$SKIP_FULL_UI" != "1" ]]; then
+  echo "    $ROOT/build/arcade-scroll-profiles/${SCROLL_LABEL}-arcade-scroll.tsv"
+fi
