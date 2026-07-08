@@ -23,6 +23,7 @@ STRING_COLUMNS = {
     "arcade_update",
     "cache_state",
     "transition_effect",
+    "preview_fade_path",
     "vsync_source",
 }
 PHASES = [

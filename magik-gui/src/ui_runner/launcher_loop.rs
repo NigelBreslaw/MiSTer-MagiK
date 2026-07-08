@@ -21,6 +21,7 @@ use mister_magik_fb::framebuffer::ownership::{
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write as _};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -30,6 +31,69 @@ const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+const MISTER_CMD_FIFO: &str = "/dev/MiSTer_cmd";
+const MAIN_FLIP_PRESENT_BYTES: usize = 960 * 540 * 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherPresentBackend {
+    Cached,
+    MainFlipV1 { buffer_index: u8 },
+}
+
+fn launcher_present_backend() -> LauncherPresentBackend {
+    static VALUE: OnceLock<LauncherPresentBackend> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        if std::env::var("MISTER_PRESENT_BACKEND").as_deref() != Ok("main-flip-v1") {
+            return LauncherPresentBackend::Cached;
+        }
+        let buffer_index = std::env::var("MISTER_PRESENT_FLIP_BUFFER_INDEX")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|index| (1..=2).contains(index))
+            .unwrap_or(1);
+        crate::ui_logln!("launcher_present_backend=main-flip-v1 buffer_index={buffer_index}");
+        boot_analytics::event(
+            "launcher_present_backend",
+            format!("main-flip-v1 buffer_index={buffer_index}"),
+        );
+        LauncherPresentBackend::MainFlipV1 { buffer_index }
+    })
+}
+
+fn present_with_main_flip_v1(buffer_index: u8) -> Result<(), String> {
+    let command = format!("mister_magik_present_flip_v1 {buffer_index}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(MISTER_CMD_FIFO)
+        .map_err(|e| format!("failed to open {MISTER_CMD_FIFO}: {e}"))?;
+    file.write_all(command.as_bytes())
+        .map_err(|e| format!("failed to write {MISTER_CMD_FIFO}: {e}"))
+}
+
+fn maybe_present_with_main_flip_v1(presentation: &mut LauncherPresentResult) {
+    let LauncherPresentBackend::MainFlipV1 { buffer_index } = launcher_present_backend() else {
+        return;
+    };
+    if presentation.copied_rows == 0 {
+        return;
+    }
+    let start = Instant::now();
+    match present_with_main_flip_v1(buffer_index) {
+        Ok(()) => {
+            presentation.cached_present_us += start.elapsed().as_micros();
+            presentation.present_bytes = presentation
+                .present_bytes
+                .saturating_add(MAIN_FLIP_PRESENT_BYTES);
+        }
+        Err(e) => {
+            static WARNED: OnceLock<()> = OnceLock::new();
+            WARNED.get_or_init(|| {
+                crate::ui_errln!("main_flip_v1_present_failed: {e}");
+            });
+        }
+    }
+}
 
 fn launcher_input_script_wait_frames() -> usize {
     static VALUE: OnceLock<usize> = OnceLock::new();
@@ -3006,7 +3070,7 @@ pub(super) fn run_launcher_loop(
         }
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4, cpu_t4) = {
-            let presentation = if startup_can_present {
+            let mut presentation = if startup_can_present {
                 LauncherCompositor::present(LauncherPresentRequest {
                     layer_target: &mut layer_target,
                     full_frame_present,
@@ -3028,6 +3092,7 @@ pub(super) fn run_launcher_loop(
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
             };
+            maybe_present_with_main_flip_v1(&mut presentation);
             (
                 presentation,
                 Instant::now(),

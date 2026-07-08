@@ -57,6 +57,8 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+present_backend="${MISTER_PRESENT_BACKEND:-}"
+present_flip_buffer_index="${MISTER_PRESENT_FLIP_BUFFER_INDEX:-1}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
@@ -153,6 +155,8 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
+if [[ -n "$present_backend" && "$present_backend" != "main-flip-v1" ]]; then echo "MISTER_PRESENT_BACKEND must be main-flip-v1 when set" >&2; exit 2; fi
+if [[ ! "$present_flip_buffer_index" =~ ^[0-9]+$ || "$present_flip_buffer_index" -lt 1 || "$present_flip_buffer_index" -gt 2 ]]; then echo "MISTER_PRESENT_FLIP_BUFFER_INDEX must be 1 or 2" >&2; exit 2; fi
 if [[ ! "$human_turbo_idle_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_IDLE_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$human_turbo_normal_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_NORMAL_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$human_turbo_pause_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_PAUSE_FRAMES must be an integer" >&2; exit 2; fi
@@ -548,6 +552,10 @@ run_boot_prelude() {
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
+    if [[ -n "$present_backend" ]]; then
+      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+      printf 'export MISTER_PRESENT_FLIP_BUFFER_INDEX=%q\n' "$present_flip_buffer_index"
+    fi
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
@@ -703,6 +711,10 @@ else
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
+    if [[ -n "$present_backend" ]]; then
+      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+      printf 'export MISTER_PRESENT_FLIP_BUFFER_INDEX=%q\n' "$present_flip_buffer_index"
+    fi
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
