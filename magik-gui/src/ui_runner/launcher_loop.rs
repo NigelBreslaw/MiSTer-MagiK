@@ -3452,7 +3452,7 @@ pub(super) fn run_launcher_loop(
             .map(|(_, _, wait_us)| *wait_us)
             .unwrap_or(0);
         update_slint_animations(animation_clock);
-        let mut layer_target = LayerTarget::new(target, disp, ui);
+        let mut layer_target = LayerTarget::new(target, ui);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         let this_rect = expand_home_pan_dirty_rect(
@@ -3728,11 +3728,12 @@ pub(super) fn run_launcher_loop(
                         pacer.period_us(),
                         frame_t3,
                     );
-                    let presentation = LauncherCompositor::present(LauncherPresentRequest {
-                        layer_target: &mut layer_target,
+                    let presentation = present_fb0_dirty(
+                        &layer_target,
                         frame_plan,
-                        arcade_list_renderer: &mut arcade_list_renderer,
-                    });
+                        disp,
+                        &mut arcade_list_renderer,
+                    );
                     (
                         presentation,
                         frame_t3,
@@ -3771,11 +3772,7 @@ pub(super) fn run_launcher_loop(
                     frame_t3,
                 );
                 let presentation = if startup_can_present {
-                    LauncherCompositor::present(LauncherPresentRequest {
-                        layer_target: &mut layer_target,
-                        frame_plan,
-                        arcade_list_renderer: &mut arcade_list_renderer,
-                    })
+                    present_fb0_dirty(&layer_target, frame_plan, disp, &mut arcade_list_renderer)
                 } else {
                     let _ = disp.wait_vsync();
                     LauncherPresentResult {

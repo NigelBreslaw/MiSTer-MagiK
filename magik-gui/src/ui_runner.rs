@@ -63,7 +63,7 @@ use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
 use mister_magik_fb::framebuffer::target::{
     build_launcher_present_plan_from_layers, dirty_rect, format_dirty_rect, CachedFrameView,
-    DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
+    DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes, hidden::HiddenRgb565BufferIndex,
@@ -90,6 +90,7 @@ mod launcher_latch_state;
 mod launcher_lifecycle;
 mod launcher_loop;
 mod launcher_pacing;
+mod launcher_present;
 mod launcher_scheduler;
 mod launcher_worker_intents;
 mod media_worker;
@@ -120,6 +121,7 @@ use launcher_frame_accounting::*;
 use launcher_latch_state::*;
 use launcher_lifecycle::*;
 use launcher_loop::*;
+use launcher_present::*;
 use launcher_scheduler::*;
 use media_worker::*;
 use raw565_preview_renderer::*;
