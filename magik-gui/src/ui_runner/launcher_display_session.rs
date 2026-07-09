@@ -153,6 +153,15 @@ impl LauncherDisplaySession {
         Ok(start.elapsed().as_micros())
     }
 
+    pub(in crate::ui_runner) fn activate_fb0_route_with_hardware(
+        &mut self,
+        hardware: &mut impl LauncherDisplayHardware,
+    ) -> io::Result<u16> {
+        let support = self.enable_route(hardware)?;
+        self.latch_route_armed = false;
+        Ok(support)
+    }
+
     pub(super) fn note_latch_route_lost(&mut self) {
         self.latch_route_armed = false;
     }
@@ -329,6 +338,36 @@ mod tests {
             .arm_latch_route_with_hardware(&mut hardware)
             .unwrap();
         assert_eq!(hardware.set_vga_fb_calls, 2);
+    }
+
+    #[test]
+    fn fb0_fallback_reenables_base_route_and_requires_future_latch_rearm() {
+        let mut session = session(0);
+        let mut hardware = FakeHardware::default();
+        session
+            .arm_latch_route_with_hardware(&mut hardware)
+            .unwrap();
+
+        let support = session
+            .activate_fb0_route_with_hardware(&mut hardware)
+            .unwrap();
+        session
+            .arm_latch_route_with_hardware(&mut hardware)
+            .unwrap();
+
+        assert_eq!(support, 1);
+        assert_eq!(hardware.enable_calls, 1);
+        assert_eq!(hardware.set_vga_fb_calls, 2);
+        assert_eq!(
+            hardware.last_enable_args,
+            Some((
+                session.route.mode().hact,
+                session.route.mode().vact,
+                session.route.set_vga_fb(),
+                session.fb_width,
+                session.fb_height,
+            ))
+        );
     }
 
     #[test]

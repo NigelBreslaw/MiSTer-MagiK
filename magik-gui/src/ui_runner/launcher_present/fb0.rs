@@ -20,7 +20,7 @@ pub(in crate::ui_runner) struct Fb0DirtyPresentStats {
 
 pub(in crate::ui_runner) struct Fb0DirtyPresenter;
 
-trait Fb0DirtyCopySink {
+pub(in crate::ui_runner) trait Fb0DirtyCopySink {
     fn copy_cached(&mut self, view: CachedFrameView<'_>, rect: DirtyRect) -> u32;
     fn copy_direct_preview(&mut self, view: DirectPreviewView<'_>, rect: DirtyRect) -> u32;
     fn copy_arcade_list(&mut self, update: ArcadeListUpdate) -> PresentCopyStats;
@@ -61,7 +61,7 @@ impl Fb0DirtyPresenter {
         )
     }
 
-    fn present_to(
+    pub(in crate::ui_runner) fn present_to(
         frame_plan: LauncherFramePlan,
         cached_frame: CachedFrameView<'_>,
         direct_preview: Option<DirectPreviewView<'_>>,

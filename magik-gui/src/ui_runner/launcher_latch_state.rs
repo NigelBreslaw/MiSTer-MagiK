@@ -67,6 +67,17 @@ impl LauncherFramePlan {
         self.arcade_dirty
     }
 
+    pub(super) fn for_fb0_recovery(self, full_rect: DirtyRect) -> Self {
+        Self {
+            cached_damage: DirtyRectList::from_one(full_rect),
+            preview_dirty: self.preview_desired.map(|layer| layer.rect),
+            arcade_dirty: self
+                .arcade_desired
+                .map(|layer| ArcadeListUpdate::Full(layer.rect)),
+            ..self
+        }
+    }
+
     #[cfg(test)]
     fn from_rects(
         cached_damage: Option<DirtyRect>,
@@ -792,6 +803,28 @@ mod tests {
         assert_eq!(
             state.restore_bytes_for_slot(plan.slot_index),
             WIDTH * HEIGHT * std::mem::size_of::<Rgb565Pixel>()
+        );
+    }
+
+    #[test]
+    fn fb0_recovery_forces_full_cached_restore_and_both_direct_layers() {
+        let preview = rect(1, 0, 3, 2);
+        let arcade = rect(0, 1, 2, 3);
+        let original = input(
+            Some(rect(0, 0, 1, 1)),
+            Some(layer(preview, 7)),
+            None,
+            Some(layer(arcade, 9)),
+            None,
+        );
+
+        let recovered = original.for_fb0_recovery(full());
+
+        assert_eq!(recovered.cached_damage(), DirtyRectList::from_one(full()));
+        assert_eq!(recovered.preview_dirty(), Some(preview));
+        assert_eq!(
+            recovered.arcade_dirty(),
+            Some(ArcadeListUpdate::Full(arcade))
         );
     }
 }
