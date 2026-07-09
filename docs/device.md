@@ -145,6 +145,37 @@ repo with GitHub CLI auth:
 gh workflow run fpga-vblank-latch.yml --repo NigelBreslaw/MiSTer-MagiK --ref main
 ```
 
+The built RBF is only one part of the fast hidden-buffer path. Seeing
+`menu-magik-vblank-latch.rbf` on `/media/fat` does not mean MagiK is using it.
+The known-good activation sequence is:
+
+1. Copy the CI artifact to
+   `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`.
+2. Load that RBF through Main's command path, not with an external loader:
+
+   ```bash
+   scripts/mister run "printf 'load_core /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
+   ```
+
+3. Load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
+
+   ```bash
+   scripts/mister run "insmod /tmp/mister-magik-plugin-probe/mister_magik_plugin_probe.ko"
+   ```
+
+4. Start the launcher with the surviving fast backend:
+
+   ```bash
+   MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden scripts/run-rust.sh launcher 0
+   ```
+
+5. Verify support with `fpga-latch-report` or `fpga-latch-post-report`. The
+   MagiK latch commands `0x46` and `0x47` should report supported status/magic.
+
+If `/tmp/mister-magik/status.json` reports `composition_state=full-slint`, or
+if `mister_magik_plugin_probe` is absent from `/proc/modules`, the launcher is
+running the normal fallback path even if the experimental RBF file is present.
+
 The launcher path relies on Rust-owned framebuffer setup:
 
 - Set the Linux framebuffer mode.
