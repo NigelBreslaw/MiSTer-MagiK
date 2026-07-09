@@ -155,6 +155,10 @@ pub(super) struct LauncherFrameTiming {
     pub(super) custom_draw_start: Instant,
     pub(super) custom_draw_done: Instant,
     pub(super) prepare_us: u128,
+    pub(super) home_pan_present_active: bool,
+    pub(super) home_horizontal_input_held: bool,
+    pub(super) redraw_pending: bool,
+    pub(super) wake_reasons_bits: u64,
 }
 
 pub(super) struct LauncherFrameRenderData {
