@@ -41,6 +41,10 @@ METRICS = [
     "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
+    "main_present_hidden_invalid_bytes",
+    "main_present_hidden_rect_count",
+    "main_present_hidden_catchup_bytes",
+    "main_present_hidden_full_copy",
     "main_present_set_vga_fb_us",
 ]
 
@@ -120,6 +124,10 @@ def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 9
             row.setdefault("hidden_arcade_compose_us", "0")
             row.setdefault("direct_preview_present_us", "0")
             row.setdefault("direct_preview_rows", "0")
+            row.setdefault("main_present_hidden_invalid_bytes", "0")
+            row.setdefault("main_present_hidden_rect_count", "0")
+            row.setdefault("main_present_hidden_catchup_bytes", "0")
+            row.setdefault("main_present_hidden_full_copy", "0")
             row.setdefault("main_present_set_vga_fb_us", "0")
             if "present_bytes" not in row or not row.get("present_bytes"):
                 row["present_bytes"] = str(int_field(row, "rows") * present_width * 2)
