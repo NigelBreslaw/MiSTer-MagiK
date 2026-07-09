@@ -32,8 +32,8 @@ pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
 pub const UIO_BUT_SW: u16 = 0x01;
 pub const UIO_AUDVOL: u16 = 0x26;
-pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x46;
-pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x47;
+pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x43;
+pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x45;
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = 0x4d47;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
 
@@ -362,7 +362,8 @@ impl Fpga {
 
     pub fn read_magik_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
         let res = (|| {
-            let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
+            self.cmd_cont(MAGIK_UIO_GET_FBUF_LATCH)?;
+            let (magic_hi, magic_lo) = self.spi_capture(0)?;
             let mut words = [0u16; 11];
             for word in words.iter_mut() {
                 *word = self.spi_capture(0)?.1;
@@ -387,7 +388,10 @@ impl Fpga {
     }
 
     pub fn probe_magik_latched_fbuf_set(&mut self) -> io::Result<(u16, u16)> {
-        let res = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH);
+        let res = (|| {
+            self.cmd_cont(MAGIK_UIO_SET_FBUF_LATCH)?;
+            self.spi_capture(0)
+        })();
         self.disable_io();
         res
     }
@@ -412,10 +416,10 @@ impl Fpga {
         let bottom = yoff + mode.vact as i32 - 1;
 
         self.disable_io();
-        let support = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH)?;
-        let stream_res: io::Result<()> = (|| {
+        self.cmd_cont(MAGIK_UIO_SET_FBUF_LATCH)?;
+        let stream_res: io::Result<(u16, u16)> = (|| {
             let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB;
-            self.spi_w(fpga_format)?;
+            let support = self.spi_capture(fpga_format)?;
             self.spi_w(base_addr as u16)?;
             self.spi_w((base_addr >> 16) as u16)?;
             self.spi_w(fb_width)?;
@@ -426,10 +430,10 @@ impl Fpga {
             self.spi_w(bottom as u16)?;
             self.spi_w(rgb565_stride_bytes(fb_width as usize) as u16)?;
             self.spi_w(sequence)?;
-            Ok(())
+            Ok(support)
         })();
         self.disable_io();
-        stream_res?;
+        let support = stream_res?;
         if set_vga_fb {
             self.set_vga_fb(true)?;
         }
