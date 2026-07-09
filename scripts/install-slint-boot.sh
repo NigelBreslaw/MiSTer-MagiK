@@ -16,6 +16,16 @@ if [ ! -x /media/fat/MiSTer_MagiK ]; then
   echo "Run scripts/deploy-main-mister-experiment.sh first."
   exit 1
 fi
+if [ ! -f /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf ]; then
+  echo "ERROR: production latch RBF is missing"
+  echo "Run scripts/deploy-main-mister-experiment.sh to install the CI-built latch RBF."
+  exit 1
+fi
+if [ ! -f /media/fat/mister-magik/mister_magik_plugin_probe.ko ]; then
+  echo "ERROR: production latch plugin module is missing"
+  echo "Run scripts/deploy-main-mister-experiment.sh to install the plugin module."
+  exit 1
+fi
 
 INI=/media/fat/MiSTer.ini
 STAMP=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)
