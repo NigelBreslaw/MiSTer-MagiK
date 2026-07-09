@@ -132,6 +132,7 @@ jobs:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
           MISTER_FPGA_APPLY_PATCH: ${{ github.event.inputs.apply_magik_patch || 'true' }}
           QUARTUS_DOCKER_PRIVILEGED: "1"
+          QUARTUS_STRACE: "1"
         run: scripts/build-fpga-vblank-latch-core.sh
 
       - name: Upload FPGA build evidence
@@ -143,4 +144,5 @@ jobs:
             build/fpga-vblank-latch/menu-magik-vblank-latch.rbf
             build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
             build/fpga-vblank-latch/menu-magik-vblank-latch.build.log
+            build/fpga-vblank-latch/quartus-flow.strace*.log
           if-no-files-found: warn
