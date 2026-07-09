@@ -292,6 +292,12 @@ impl PluginHiddenRgb565Framebuffer {
         src: &[Rgb565Pixel],
         src_stride_pixels: usize,
     ) -> Result<usize, PluginProbeError> {
+        if src_stride_pixels < self.width {
+            return Err(PluginProbeError::InvalidGeometry(format!(
+                "source stride {src_stride_pixels} is smaller than width {}",
+                self.width
+            )));
+        }
         let needed =
             src_stride_pixels
                 .checked_mul(self.height)
@@ -308,11 +314,7 @@ impl PluginHiddenRgb565Framebuffer {
         let height = self.height;
         let stride_pixels = self.stride_pixels;
         let dst = self.buffer_mut();
-        for y in 0..height {
-            let src_start = y * src_stride_pixels;
-            let dst_start = y * stride_pixels;
-            dst[dst_start..dst_start + width].copy_from_slice(&src[src_start..src_start + width]);
-        }
+        copy_full_frame_pixels(dst, stride_pixels, src, src_stride_pixels, width, height);
         Ok(stride_pixels * height * std::mem::size_of::<Rgb565Pixel>())
     }
 
@@ -331,6 +333,26 @@ impl PluginHiddenRgb565Framebuffer {
                 self.stride_pixels * self.height,
             )
         }
+    }
+}
+
+fn copy_full_frame_pixels(
+    dst: &mut [Rgb565Pixel],
+    dst_stride_pixels: usize,
+    src: &[Rgb565Pixel],
+    src_stride_pixels: usize,
+    width: usize,
+    height: usize,
+) {
+    if src_stride_pixels == width && dst_stride_pixels == width {
+        let len = width * height;
+        dst[..len].copy_from_slice(&src[..len]);
+        return;
+    }
+    for y in 0..height {
+        let src_start = y * src_stride_pixels;
+        let dst_start = y * dst_stride_pixels;
+        dst[dst_start..dst_start + width].copy_from_slice(&src[src_start..src_start + width]);
     }
 }
 
@@ -506,5 +528,44 @@ plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x000
             ),
             Err(PluginProbeError::MissingRegion { .. })
         ));
+    }
+
+    #[test]
+    fn full_frame_copy_uses_contiguous_geometry() {
+        let src: Vec<Rgb565Pixel> = (0..12).map(Rgb565Pixel).collect();
+        let mut dst = vec![Rgb565Pixel(0); 12];
+
+        copy_full_frame_pixels(&mut dst, 4, &src, 4, 4, 3);
+
+        assert_eq!(dst, src);
+    }
+
+    #[test]
+    fn full_frame_copy_preserves_padded_destination_rows() {
+        let src = vec![
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(99),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(98),
+        ];
+        let mut dst = vec![Rgb565Pixel(0); 8];
+
+        copy_full_frame_pixels(&mut dst, 4, &src, 3, 2, 2);
+
+        assert_eq!(
+            dst,
+            vec![
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(0),
+                Rgb565Pixel(0),
+            ]
+        );
     }
 }

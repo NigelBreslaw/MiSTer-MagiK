@@ -1560,6 +1560,32 @@ fn run_plugin_map_bandwidth() {
             print_plugin_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}"))
         }
     }
+
+    #[cfg(feature = "ui")]
+    {
+        crate::ui_logln!(
+            "plugin_map_bandwidth_case_tsv\tcase=plugin-hidden-copy-full-frame-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+        );
+        match HiddenRgb565BufferIndex::new(1)
+            .map_err(|e| e.to_string())
+            .and_then(|index| {
+                PluginHiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                    .map_err(|e| e.to_string())
+            }) {
+            Ok(mut hidden) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    hidden
+                        .copy_full_frame(src, width)
+                        .map_err(|e| e.to_string())
+                });
+                print_plugin_bandwidth_result("plugin-hidden-copy-full-frame-buffer1", &result);
+            }
+            Err(e) => print_plugin_bandwidth_error(
+                "plugin-hidden-copy-full-frame-buffer1",
+                &format!("open plugin hidden: {e}"),
+            ),
+        }
+    }
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
