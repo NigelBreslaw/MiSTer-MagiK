@@ -135,6 +135,16 @@ framebuffer has multiple buffers, and the FPGA scans whichever buffer is
 selected by the framebuffer route command. At the stock menu, `/dev/fb0` can be
 correct while HDMI still shows another buffer.
 
+The experimental vblank-latched Menu RBF is built only by manually starting the
+`FPGA Vblank Latch RBF` GitHub Actions workflow. Do not run this workflow on
+every push or pull request; Quartus builds are heavyweight and should be kicked
+off only when a new shared RBF artifact is actually needed. From a checked-out
+repo with GitHub CLI auth:
+
+```bash
+gh workflow run fpga-vblank-latch.yml --repo NigelBreslaw/MiSTer-MagiK --ref main
+```
+
 The launcher path relies on Rust-owned framebuffer setup:
 
 - Set the Linux framebuffer mode.
