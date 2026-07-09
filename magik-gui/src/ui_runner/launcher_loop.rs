@@ -3185,45 +3185,13 @@ pub(super) fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
-        let pace = if frame_accounting.first_visible_copy_done() {
-            let (pace, vsync_done) = match pre_render_pace {
-                Some((pace, vsync_done)) => (pace, vsync_done),
-                None => {
-                    let pace = pacer.wait();
-                    (pace, Instant::now())
-                }
-            };
-            present_timing.wait_until_present_time(vsync_done);
-            let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
-            let frame_t3 = Instant::now();
-            (Some(pace), frame_t3, cpu_t3)
-        } else {
-            (
-                None,
-                Instant::now(),
-                FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-            )
-        };
-        let frame_t3 = pace.1;
-        let cpu_t3 = pace.2;
-        let pacing_trace = LauncherPacingTrace::from_pace(
-            pace.0.as_ref(),
-            frame_start_phase_us,
-            pacer.period_us(),
-            frame_t3,
-        );
-        if !first_vsync_logged
-            && pace
-                .0
-                .as_ref()
-                .is_some_and(|p| p.source == VsyncPaceSource::Vsync)
-        {
-            first_vsync_logged = true;
-            boot_analytics::event("first_vsync", format!("frame={frames}"));
-        }
         let startup_can_present = lifecycle.startup_can_present_frame();
-        let (presentation, frame_t4, cpu_t4) = {
-            let presentation = if startup_can_present {
+        let (presentation, frame_t3, frame_t4, cpu_t3, cpu_t4, pacing_trace) =
+            if startup_can_present && fpga_vblank_latch_hidden_presenter.is_some() {
+                let frame_t3 = Instant::now();
+                let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+                let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
+                let mut latch_presentation = None;
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
                     let hidden_compose_start = Instant::now();
                     let direct_preview_rows = raw_preview
@@ -3240,43 +3208,142 @@ pub(super) fn run_launcher_loop(
                         .unwrap_or_default();
                     let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
                     match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
-                        Ok(stats) => LauncherPresentResult {
-                            copied_rows: ui.render_h() as u32,
-                            direct_preview_rows,
-                            present_bytes: stats.copied_bytes,
-                            wasted_present_bytes: 0,
-                            cached_present_us: stats.copy_us,
-                            direct_preview_present_us: hidden_compose_us,
-                            arcade_list_present_us: hidden_compose_us,
-                            main_present_backend: "fpga-vblank-latch-hidden",
-                            main_present_status: if stats.set_supported && stats.status_supported {
-                                "ok"
-                            } else {
-                                "unsupported"
-                            },
-                            main_present_buffer: stats.buffer_index,
-                            main_present_hidden_copy_us: stats.copy_us,
-                            main_present_request_us: stats.post_us,
-                            main_present_wait_us: stats.status_us,
-                            main_present_route_us: stats.flip_count as u64,
-                            arcade_update_label,
-                        },
+                        Ok(stats) => {
+                            let present_us =
+                                stats.copy_us + stats.post_us + u128::from(stats.status_us);
+                            latch_presentation = Some(LauncherPresentResult {
+                                copied_rows: ui.render_h() as u32,
+                                direct_preview_rows,
+                                present_bytes: stats.copied_bytes,
+                                wasted_present_bytes: 0,
+                                fb_present_us_override: Some(present_us),
+                                vsync_us_override: None,
+                                cached_present_us: stats.copy_us,
+                                direct_preview_present_us: hidden_compose_us,
+                                arcade_list_present_us: hidden_compose_us,
+                                main_present_backend: "fpga-vblank-latch-hidden",
+                                main_present_status: if stats.set_supported
+                                    && stats.status_supported
+                                {
+                                    "ok"
+                                } else {
+                                    "unsupported"
+                                },
+                                main_present_buffer: stats.buffer_index,
+                                main_present_hidden_copy_us: stats.copy_us,
+                                main_present_request_us: stats.post_us,
+                                main_present_wait_us: stats.status_us,
+                                main_present_route_us: stats.flip_count as u64,
+                                arcade_update_label,
+                            });
+                        }
                         Err(e) => {
                             static WARNED: OnceLock<()> = OnceLock::new();
                             WARNED.get_or_init(|| {
                                 crate::ui_errln!("fpga_vblank_latch_hidden_present_failed: {e}");
                             });
-                            LauncherCompositor::present(LauncherPresentRequest {
-                                layer_target: &mut layer_target,
-                                full_frame_present,
-                                slint_dirty: this_rect,
-                                raw_preview,
-                                arcade_list_rect,
-                                arcade_list_renderer: &mut arcade_list_renderer,
-                            })
                         }
                     }
+                }
+                if let Some(mut presentation) = latch_presentation {
+                    let present_done = Instant::now();
+                    let pace = if frame_accounting.first_visible_copy_done() {
+                        let pace = pacer.wait();
+                        Some((pace, Instant::now()))
+                    } else {
+                        None
+                    };
+                    let frame_t4 = pace.as_ref().map(|(_, done)| *done).unwrap_or(present_done);
+                    presentation.vsync_us_override =
+                        Some(frame_t4.saturating_duration_since(present_done).as_micros());
+                    let pacing_trace = LauncherPacingTrace::from_pace_with_present_phase(
+                        pace.as_ref().map(|(pace, _)| pace),
+                        frame_start_phase_us,
+                        pacer.period_us(),
+                        present_phase_us,
+                    );
+                    (
+                        presentation,
+                        frame_t3,
+                        frame_t4,
+                        cpu_t3,
+                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+                        pacing_trace,
+                    )
                 } else {
+                    let pace = if frame_accounting.first_visible_copy_done() {
+                        let (pace, vsync_done) = match pre_render_pace {
+                            Some((pace, vsync_done)) => (pace, vsync_done),
+                            None => {
+                                let pace = pacer.wait();
+                                (pace, Instant::now())
+                            }
+                        };
+                        present_timing.wait_until_present_time(vsync_done);
+                        let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+                        let frame_t3 = Instant::now();
+                        (Some(pace), frame_t3, cpu_t3)
+                    } else {
+                        (
+                            None,
+                            Instant::now(),
+                            FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+                        )
+                    };
+                    let frame_t3 = pace.1;
+                    let cpu_t3 = pace.2;
+                    let pacing_trace = LauncherPacingTrace::from_pace(
+                        pace.0.as_ref(),
+                        frame_start_phase_us,
+                        pacer.period_us(),
+                        frame_t3,
+                    );
+                    let presentation = LauncherCompositor::present(LauncherPresentRequest {
+                        layer_target: &mut layer_target,
+                        full_frame_present,
+                        slint_dirty: this_rect,
+                        raw_preview,
+                        arcade_list_rect,
+                        arcade_list_renderer: &mut arcade_list_renderer,
+                    });
+                    (
+                        presentation,
+                        frame_t3,
+                        Instant::now(),
+                        cpu_t3,
+                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+                        pacing_trace,
+                    )
+                }
+            } else {
+                let pace = if frame_accounting.first_visible_copy_done() {
+                    let (pace, vsync_done) = match pre_render_pace {
+                        Some((pace, vsync_done)) => (pace, vsync_done),
+                        None => {
+                            let pace = pacer.wait();
+                            (pace, Instant::now())
+                        }
+                    };
+                    present_timing.wait_until_present_time(vsync_done);
+                    let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+                    let frame_t3 = Instant::now();
+                    (Some(pace), frame_t3, cpu_t3)
+                } else {
+                    (
+                        None,
+                        Instant::now(),
+                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+                    )
+                };
+                let frame_t3 = pace.1;
+                let cpu_t3 = pace.2;
+                let pacing_trace = LauncherPacingTrace::from_pace(
+                    pace.0.as_ref(),
+                    frame_start_phase_us,
+                    pacer.period_us(),
+                    frame_t3,
+                );
+                let presentation = if startup_can_present {
                     LauncherCompositor::present(LauncherPresentRequest {
                         layer_target: &mut layer_target,
                         full_frame_present,
@@ -3285,33 +3352,41 @@ pub(super) fn run_launcher_loop(
                         arcade_list_rect,
                         arcade_list_renderer: &mut arcade_list_renderer,
                     })
-                }
-            } else {
-                let _ = disp.wait_vsync();
-                LauncherPresentResult {
-                    copied_rows: 0,
-                    direct_preview_rows: 0,
-                    present_bytes: 0,
-                    wasted_present_bytes: 0,
-                    cached_present_us: 0,
-                    direct_preview_present_us: 0,
-                    arcade_list_present_us: 0,
-                    main_present_backend: "none",
-                    main_present_status: "none",
-                    main_present_buffer: 0,
-                    main_present_hidden_copy_us: 0,
-                    main_present_request_us: 0,
-                    main_present_wait_us: 0,
-                    main_present_route_us: 0,
-                    arcade_update_label: ArcadeUpdateTrace::None,
-                }
+                } else {
+                    let _ = disp.wait_vsync();
+                    LauncherPresentResult {
+                        copied_rows: 0,
+                        direct_preview_rows: 0,
+                        present_bytes: 0,
+                        wasted_present_bytes: 0,
+                        fb_present_us_override: None,
+                        vsync_us_override: None,
+                        cached_present_us: 0,
+                        direct_preview_present_us: 0,
+                        arcade_list_present_us: 0,
+                        main_present_backend: "none",
+                        main_present_status: "none",
+                        main_present_buffer: 0,
+                        main_present_hidden_copy_us: 0,
+                        main_present_request_us: 0,
+                        main_present_wait_us: 0,
+                        main_present_route_us: 0,
+                        arcade_update_label: ArcadeUpdateTrace::None,
+                    }
+                };
+                (
+                    presentation,
+                    frame_t3,
+                    Instant::now(),
+                    cpu_t3,
+                    FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
+                    pacing_trace,
+                )
             };
-            (
-                presentation,
-                Instant::now(),
-                FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-            )
-        };
+        if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
+            first_vsync_logged = true;
+            boot_analytics::event("first_vsync", format!("frame={frames}"));
+        }
         if presentation.copied_rows > 0 {
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
