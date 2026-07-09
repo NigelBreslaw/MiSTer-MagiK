@@ -236,6 +236,11 @@ scripts/profile-preview-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-first-preview.sh LABEL --skip-build
 ```
 
+`profile-arcade-scroll.sh` defaults to `fpga-vblank-latch-hidden`; pass
+`--present-backend fb0-dirty` for an explicit fallback comparison. Latch
+counter evidence is required only for latch runs, while both modes verify the
+requested backend in the frame trace.
+
 `profile-arcade-scroll.sh` is the reproduction gate for boot-entry stutter. Its
 default path reboots the MiSTer, starts the launcher on Home, quickly navigates
 to Arcade using `MISTER_ARCADE_ENTRY_INPUT_SCRIPT` or the default Right...A

@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -62,7 +62,7 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
-present_backend="${MISTER_PRESENT_BACKEND:-}"
+present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
@@ -82,6 +82,11 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --present-backend)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--present-backend needs fpga-vblank-latch-hidden or fb0-dirty" >&2; usage >&2; exit 2; fi
+      present_backend="$2"
+      shift 2
+      ;;
     --skip-boot-prelude|--direct-start-arcade) boot_prelude="0"; shift ;;
     --entry-open-gate-ms)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--entry-open-gate-ms needs a value" >&2; usage >&2; exit 2; fi
@@ -160,8 +165,8 @@ if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms mu
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
 case "$present_backend" in
-  ""|fpga-vblank-latch-hidden) ;;
-  *) echo "MISTER_PRESENT_BACKEND must be fpga-vblank-latch-hidden when set" >&2; exit 2 ;;
+  fpga-vblank-latch-hidden|fb0-dirty) ;;
+  *) echo "--present-backend must be fpga-vblank-latch-hidden or fb0-dirty" >&2; exit 2 ;;
 esac
 if [[ ! "$human_turbo_idle_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_IDLE_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$human_turbo_normal_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_NORMAL_FRAMES must be an integer" >&2; exit 2; fi
@@ -226,7 +231,7 @@ if [[ "$ui_fb_size" == "1280x720" ]]; then
   present_width="1280"
 fi
 latch_reports_enabled="0"
-if [[ "$present_backend" == "" || "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
   latch_reports_enabled="1"
 fi
 
@@ -578,9 +583,7 @@ run_boot_prelude() {
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
-    if [[ -n "$present_backend" ]]; then
-      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
-    fi
+    printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
@@ -738,9 +741,7 @@ else
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
-    if [[ -n "$present_backend" ]]; then
-      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
-    fi
+    printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
@@ -818,8 +819,8 @@ echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
 analyze_args=(--label "$label" --status-json "$local_status_json" --ignore-elapsed-zero)
+analyze_args+=(--expect-backend "$present_backend")
 if [[ "$latch_reports_enabled" == "1" ]]; then
-  analyze_args+=(--expect-backend fpga-vblank-latch-hidden)
   analyze_args+=(--fpga-latch-report-before "$local_latch_before")
   analyze_args+=(--fpga-latch-report-after "$local_latch_after")
 fi

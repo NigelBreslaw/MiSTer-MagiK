@@ -18,13 +18,13 @@ device_index=0
 device_name=""
 size="1920x1080"
 fps="25"
-present_backend="${MISTER_PRESENT_BACKEND:-}"
+present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/capture-launcher-home-pan-video.sh [LABEL] [--secs N] [--capture-secs N] [--strip-start N] [--device-index N|--device-name NAME] [--size WxH] [--fps N] [--present-backend fpga-vblank-latch-hidden] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N]
+Usage: scripts/capture-launcher-home-pan-video.sh [LABEL] [--secs N] [--capture-secs N] [--strip-start N] [--device-index N|--device-name NAME] [--size WxH] [--fps N] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N]
 
 Starts the native macOS AVFoundation USB capture, then runs the real launcher
 Home-row home-repeat-hold benchmark. That scenario holds left/right through the
@@ -68,8 +68,8 @@ if [[ ! "$strip_start" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 case "$present_backend" in
-  ""|fpga-vblank-latch-hidden) ;;
-  *) echo "--present-backend must be fpga-vblank-latch-hidden when set" >&2; exit 2 ;;
+  fpga-vblank-latch-hidden|fb0-dirty) ;;
+  *) echo "--present-backend must be fpga-vblank-latch-hidden or fb0-dirty" >&2; exit 2 ;;
 esac
 case "$ui_fb_size" in
   auto|960x540|1280x720) ;;
@@ -94,7 +94,7 @@ strip="$OUT_DIR/${label}.strip.png"
 tear_strip="$OUT_DIR/${label}.tear-strip.png"
 
 echo "==> recording $video"
-echo "==> requested capture ${size}@${fps}; backend=${present_backend:-fb0-dirty}; ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us"
+echo "==> requested capture ${size}@${fps}; backend=$present_backend; ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us"
 camera_selector=(--device-index "$device_index")
 if [[ -n "$device_name" ]]; then
   camera_selector=(--device-name "$device_name")
@@ -120,10 +120,7 @@ trap cleanup EXIT
 
 sleep 1
 set +e
-present_env=""
-if [[ -n "$present_backend" ]]; then
-  present_env="MISTER_PRESENT_BACKEND='$present_backend'"
-fi
+present_env="MISTER_PRESENT_BACKEND='$present_backend'"
 mister_suspend_launcher
 "$MISTER" run "
 set -e
@@ -145,7 +142,9 @@ mister_restart_launcher >/dev/null 2>&1 || true
 {
   printf 'requested_size=%s\n' "$size"
   printf 'requested_fps=%s\n' "$fps"
-  printf 'present_backend=%s\n' "${present_backend:-fb0-dirty}"
+  printf 'requested_present_backend=%s\n' "$present_backend"
+  printf 'observed_present_backend=unverified\n'
+  printf 'observed_present_backend_source=not-sampled\n'
   printf 'ui_fb_size=%s\n' "$ui_fb_size"
   printf 'present_delay_us=%s\n' "$present_delay_us"
   ffprobe -hide_banner -v error \

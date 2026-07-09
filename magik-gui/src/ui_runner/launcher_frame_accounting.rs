@@ -1,4 +1,6 @@
-use super::launcher_compositor::LauncherPresentResult;
+use super::launcher_compositor::{
+    LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
+};
 use super::launcher_pacing::LauncherPacingTrace;
 use super::*;
 use std::collections::VecDeque;
@@ -96,8 +98,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
-    pub(super) main_present_backend: &'static str,
-    pub(super) main_present_status: &'static str,
+    pub(super) main_present_backend: LauncherPresentBackend,
+    pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_hidden_invalid_bytes: usize,
@@ -640,8 +642,8 @@ fn preview_scroll_trace_row_from_frame(
         hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
         direct_preview_present_us: frame.direct_preview_present_us,
         arcade_list_present_us: frame.arcade_list_present_us,
-        main_present_backend: frame.main_present_backend,
-        main_present_status: frame.main_present_status,
+        main_present_backend: frame.main_present_backend.trace_label(),
+        main_present_status: frame.main_present_status.trace_label(),
         main_present_buffer: frame.main_present_buffer,
         main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
         main_present_hidden_invalid_bytes: frame.main_present_hidden_invalid_bytes,
@@ -1795,7 +1797,7 @@ fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
 }
 
 fn should_defer_runtime_status_write(frame: &LauncherPresentedFrame) -> bool {
-    frame.status_write_due && frame.main_present_backend == "fpga-vblank-latch-hidden"
+    frame.status_write_due && frame.main_present_backend.is_latch()
 }
 
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
@@ -1957,8 +1959,8 @@ mod tests {
             hidden_arcade_compose_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
-            main_present_backend: "fb0-dirty",
-            main_present_status: "none",
+            main_present_backend: LauncherPresentBackend::Fb0Dirty,
+            main_present_status: LauncherPresentStatus::None,
             main_present_buffer: 0,
             main_present_hidden_copy_us: 0,
             main_present_hidden_invalid_bytes: 0,
@@ -2233,25 +2235,68 @@ mod tests {
         assert_eq!(row.wake_reasons_bits, 0x40);
     }
 
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[test]
+    fn preview_trace_serializes_typed_presentation_labels_at_the_accounting_edge() {
+        let start = Instant::now();
+        let cases = [
+            (
+                LauncherPresentBackend::None,
+                LauncherPresentStatus::None,
+                "none",
+                "none",
+            ),
+            (
+                LauncherPresentBackend::Fb0Dirty,
+                LauncherPresentStatus::None,
+                "fb0-dirty",
+                "none",
+            ),
+            (
+                LauncherPresentBackend::FpgaVblankLatchHidden,
+                LauncherPresentStatus::Ok,
+                "fpga-vblank-latch-hidden",
+                "ok",
+            ),
+            (
+                LauncherPresentBackend::FpgaVblankLatchHidden,
+                LauncherPresentStatus::Unsupported,
+                "fpga-vblank-latch-hidden",
+                "unsupported",
+            ),
+        ];
+
+        for (backend, status, expected_backend, expected_status) in cases {
+            let mut frame = presented_frame(45, start, 22_000);
+            frame.main_present_backend = backend;
+            frame.main_present_status = status;
+
+            let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
+
+            assert_eq!(row.main_present_backend, expected_backend);
+            assert_eq!(row.main_present_status, expected_status);
+        }
+    }
+
     #[test]
     fn low_slack_latch_frames_defer_runtime_status_writes() {
         let start = Instant::now();
         let mut low_slack = presented_frame(46, start, 15_500);
         low_slack.status_write_due = true;
-        low_slack.main_present_backend = "fpga-vblank-latch-hidden";
+        low_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
 
         assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
         assert!(should_defer_runtime_status_write(&low_slack));
 
         let mut enough_slack = presented_frame(47, start, 14_000);
         enough_slack.status_write_due = true;
-        enough_slack.main_present_backend = "fpga-vblank-latch-hidden";
+        enough_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
         assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
         assert!(should_defer_runtime_status_write(&enough_slack));
 
         let mut non_latch = presented_frame(48, start, 15_500);
         non_latch.status_write_due = true;
-        non_latch.main_present_backend = "fb0-dirty";
+        non_latch.main_present_backend = LauncherPresentBackend::Fb0Dirty;
         assert!(!should_defer_runtime_status_write(&non_latch));
     }
 

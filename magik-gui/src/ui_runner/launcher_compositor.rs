@@ -1,5 +1,43 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LauncherPresentBackend {
+    None,
+    Fb0Dirty,
+    FpgaVblankLatchHidden,
+}
+
+impl LauncherPresentBackend {
+    pub(super) const fn trace_label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Fb0Dirty => "fb0-dirty",
+            Self::FpgaVblankLatchHidden => "fpga-vblank-latch-hidden",
+        }
+    }
+
+    pub(super) const fn is_latch(self) -> bool {
+        matches!(self, Self::FpgaVblankLatchHidden)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LauncherPresentStatus {
+    None,
+    Ok,
+    Unsupported,
+}
+
+impl LauncherPresentStatus {
+    pub(super) const fn trace_label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Ok => "ok",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
     disp: &'a mut MappedRgb565Framebuffer,
@@ -128,8 +166,8 @@ pub(super) struct LauncherPresentResult {
     pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
-    pub(super) main_present_backend: &'static str,
-    pub(super) main_present_status: &'static str,
+    pub(super) main_present_backend: LauncherPresentBackend,
+    pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_hidden_invalid_bytes: usize,
@@ -220,8 +258,8 @@ impl LauncherCompositor {
             hidden_arcade_compose_us: 0,
             direct_preview_present_us,
             arcade_list_present_us,
-            main_present_backend: "fb0-dirty",
-            main_present_status: "none",
+            main_present_backend: LauncherPresentBackend::Fb0Dirty,
+            main_present_status: LauncherPresentStatus::None,
             main_present_buffer: 0,
             main_present_hidden_copy_us: 0,
             main_present_hidden_invalid_bytes: 0,
