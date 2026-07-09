@@ -17,7 +17,7 @@ The script runs the app with:
 
 - `SLINT_BACKEND=winit-skia` for Skia rendering.
 - `SLINT_EMIT_DEBUG_INFO=1` for useful Slint debug metadata.
-- Cargo feature `live-ui`.
+- Cargo features `live-ui,skia-renderer`.
 
 Enable the embedded Slint MCP server only when needed:
 
@@ -25,7 +25,8 @@ Enable the embedded Slint MCP server only when needed:
 scripts/dev-live-mcp.sh
 ```
 
-That adds Cargo features `slint/mcp,live-ui` and sets `SLINT_MCP_PORT=9315`.
+That adds Cargo features `slint/mcp,live-ui,skia-renderer` and sets
+`SLINT_MCP_PORT=9315`.
 Slint 1.17's MCP feature currently pulls in the testing backend and software
 renderer, so the default live loop keeps MCP off for faster Skia-only builds.
 
@@ -94,6 +95,8 @@ scripts/check-ui.sh
 
 The `compiled-ui` feature keeps a build-time Slint path available for future
 packaging, but V1 defaults to runtime-loaded UI for iteration speed.
+Tests and coverage use Slint's software renderer by default so cold sandboxed
+runs do not need the Skia prebuilt binary fetch.
 
 For MCP smoke testing, run the app with `scripts/dev-live-mcp.sh` in one
 terminal and then run `scripts/mcp-smoke.sh` in another.
