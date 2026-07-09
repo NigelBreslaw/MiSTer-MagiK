@@ -130,6 +130,24 @@ left and right movement.
 scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --launcher-scenario home-repeat-hold --ui-scope launcher
 ```
 
+Use the strict zero-drop gate when the symptom is visible missed frames while
+holding left/right across the Home system row:
+
+```bash
+scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
+```
+
+The gate writes `build/launcher-home-scroll-profiles/*-launcher-home-scroll.tsv`
+and a matching `*-launcher-home-scroll-drops.tsv` report. It fails if any
+warmed-up frame has `wall_us > 16667`, and the report lists the worst frames,
+present backend/status, vsync state, and the timing phase most likely to explain
+each miss. The shared trace schema predates the Home-row gate, so the `selected`
+and `visual_index` columns still describe the Arcade list, not the Home system
+index; use the log/status `bench_scenario=home-repeat-hold` fields to confirm
+the Home benchmark path. The default `MISTER_CATALOG_REFRESH=off` isolates
+Home-row pacing from catalog refresh noise; pass `--catalog-refresh default`
+when deliberately measuring the normal startup mix.
+
 Use `home-nav` only for synthetic fixed-period Home-row stepping; it does not
 model the real d-pad repeat gate.
 
