@@ -1150,6 +1150,10 @@ fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active:
     !(latch_backend_active && home_motion_active)
 }
 
+fn home_repeat_benchmark_active(scenario: Option<LauncherBenchScenario>) -> bool {
+    scenario == Some(LauncherBenchScenario::HomeRepeatHold)
+}
+
 fn catalog_background_nav_motion_active(nav: &LauncherNav) -> bool {
     nav.arcade.has_scroll_motion_or_queue()
         || nav.arcade.is_scroll_active()
@@ -3004,8 +3008,9 @@ pub(super) fn run_launcher_loop(
             &mut home_pan_present_until,
             loop_start,
         );
-        let home_horizontal_input_held =
-            nav.screen == Screen::Home && pad_state_home_horizontal_held(pad.state());
+        let home_repeat_bench_active = home_repeat_benchmark_active(launcher_bench_scenario);
+        let home_horizontal_input_held = nav.screen == Screen::Home
+            && (pad_state_home_horizontal_held(pad.state()) || home_repeat_bench_active);
         if home_frame_driven_redraw_active(
             nav.screen,
             home_pan_present_active,
@@ -5360,6 +5365,17 @@ mod tests {
         assert!(latch_late_start_wait_enabled(false, true));
         assert!(latch_late_start_wait_enabled(true, false));
         assert!(!latch_late_start_wait_enabled(true, true));
+    }
+
+    #[test]
+    pub(super) fn home_repeat_benchmark_counts_as_active_home_motion() {
+        assert!(home_repeat_benchmark_active(Some(
+            LauncherBenchScenario::HomeRepeatHold
+        )));
+        assert!(!home_repeat_benchmark_active(Some(
+            LauncherBenchScenario::HomeNav
+        )));
+        assert!(!home_repeat_benchmark_active(None));
     }
 
     #[test]
