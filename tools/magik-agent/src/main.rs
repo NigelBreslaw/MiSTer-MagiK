@@ -723,7 +723,7 @@ mod linux {
     const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
     const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
     const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
-    const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x47;
+    const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
     const FPGA_MGR_LEN: usize = 0x1000;
