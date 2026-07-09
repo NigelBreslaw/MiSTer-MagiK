@@ -7,6 +7,7 @@ REMOTE_DIR="/tmp/mister-magik-plugin-probe"
 REMOTE_KO="$REMOTE_DIR/mister_magik_plugin_probe.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
+REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
 LOCAL_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 LOCAL_DIR="$ROOT/build/fpga-vblank-latch"
@@ -18,37 +19,36 @@ CAPTURE="${MISTER_FPGA_LATCH_CAPTURE:-0}"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/fpga-vblank-latch-real-ui-one-shot.sh
+  scripts/fpga-vblank-latch-real-ui-one-shot.sh [--capture] [--label LABEL] [--scroll-secs N]
 
 Builds/deploys the diagnostics binary, plugin probe module, and experimental
 vblank-latched Menu RBF; loads the RBF once through Main's command path; runs
 FPGA latch diagnostics; then profiles the real launcher with
-MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden.
+MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden. Existing local RBF and plugin
+artifacts are reused; the Rust diagnostics binary is rebuilt because normal
+deploys overwrite the same target path.
 
 Set MISTER_MENU_DIR to a writable Menu_MiSTer checkout if the RBF has not been
-built yet. Set MISTER_FPGA_LATCH_CAPTURE=1 to record HDMI capture evidence.
+built yet. Use --capture or MISTER_FPGA_LATCH_CAPTURE=1 to record HDMI capture
+evidence for the Home-row repeat-hold pan.
 EOF
 }
 
-case "${1:-}" in
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  "")
-    ;;
-  *)
-    echo "unknown argument: $1" >&2
-    usage >&2
-    exit 2
-    ;;
-esac
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --capture) CAPTURE=1; shift ;;
+    --label) LABEL="${2:?}"; shift 2 ;;
+    --scroll-secs) SCROLL_SECS="${2:?}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 
 mkdir -p "$LOCAL_DIR"
 
 restore_normal() {
   set +e
-  "$MISTER" run "rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1
+  "$MISTER" run "rm -f '$REMOTE_ENV'; rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1
   "$MISTER" reboot-wait >/dev/null 2>&1
   "$ROOT/scripts/deploy-rust.sh" >/dev/null 2>&1
   "$ROOT/scripts/run-rust.sh" launcher 0 >/dev/null 2>&1
@@ -59,10 +59,18 @@ trap restore_normal EXIT
 
 if [[ ! -f "$LOCAL_RBF" ]]; then
   "$ROOT/scripts/build-fpga-vblank-latch-core.sh"
+else
+  echo "==> Reusing existing experimental RBF: $LOCAL_RBF"
 fi
 test -f "$LOCAL_RBF"
 
-"$ROOT/scripts/build-plugin-probe-module.sh"
+if [[ ! -f "$LOCAL_KO" ]]; then
+  "$ROOT/scripts/build-plugin-probe-module.sh"
+else
+  echo "==> Reusing existing plugin module: $LOCAL_KO"
+fi
+
+echo "==> Building Rust diagnostics binary"
 "$ROOT/magik-gui/build-arm.sh" --diagnostics --bench-tools
 
 test -f "$LOCAL_KO"
@@ -83,14 +91,25 @@ echo "==> Uploading diagnostics binary, plugin module, and experimental RBF"
 "$MISTER" put "$LOCAL_RBF" "$REMOTE_RBF"
 "$MISTER" run "chmod +x '$REMOTE_BIN'; chmod 600 '$REMOTE_KO'; sync"
 
-echo "==> Loading plugin module"
-"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-plugin-probe; grep '^mister_magik_plugin_probe ' /proc/modules"
-
 echo "==> Loading experimental Menu core through Main command path"
 "$MISTER" run "printf 'load_core $REMOTE_RBF\n' > /dev/MiSTer_cmd; sleep 2"
 
+echo "==> Loading plugin module"
+"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-plugin-probe; grep '^mister_magik_plugin_probe ' /proc/modules"
+
+echo "==> Restarting Main-supervised launcher with FPGA latch backend"
+MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden MISTER_LAUNCHER_START_SCREEN=home \
+  "$ROOT/scripts/run-rust.sh" launcher 0
+"$MISTER" run "set -e; for i in \$(seq 1 30); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; test -s /tmp/mister-magik/status.json && sed -n '1,80p' /tmp/mister-magik/status.json || true"
+
 echo "==> Running FPGA latch capability report"
 "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" | tee "$LOCAL_DIR/${LABEL}-fpga-latch-report.log"
+if ! grep -q $'\tsupported=1\t' "$LOCAL_DIR/${LABEL}-fpga-latch-report.log"; then
+  echo "FPGA latch commands are not supported after activation; collecting evidence and stopping before capture." >&2
+  "$MISTER" get /tmp/mister-magik-slint.log "$LOCAL_DIR/${LABEL}-mister-magik-slint.log" >/dev/null 2>&1 || true
+  "$MISTER" get /tmp/mister-magik/status.json "$LOCAL_DIR/${LABEL}-status.json" >/dev/null 2>&1 || true
+  exit 1
+fi
 
 echo "==> Running single-post latch report"
 "$MISTER" run "'$REMOTE_BIN' fpga-latch-post-report" | tee "$LOCAL_DIR/${LABEL}-fpga-latch-post-report.log"
@@ -99,9 +118,13 @@ echo "==> Running visible latch pattern ($PATTERN_FRAMES frames)"
 "$MISTER" run "'$REMOTE_BIN' fpga-latch-pattern '$PATTERN_FRAMES'" | tee "$LOCAL_DIR/${LABEL}-fpga-latch-pattern.log"
 
 if [[ "$CAPTURE" == "1" ]]; then
-  echo "==> Capturing real launcher scroll with FPGA latch backend"
-  MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden \
-    "$ROOT/scripts/capture-arcade-scroll-video.sh" "$LABEL" --secs "$SCROLL_SECS" --capture-secs "$((SCROLL_SECS + 8))" --fps 25
+  echo "==> Capturing real launcher Home pan with FPGA latch backend"
+  "$ROOT/scripts/capture-launcher-home-pan-video.sh" "$LABEL" \
+    --secs "$SCROLL_SECS" \
+    --capture-secs "$((SCROLL_SECS + 10))" \
+    --strip-start 15 \
+    --fps 25 \
+    --present-backend fpga-vblank-latch-hidden
 else
   echo "==> Profiling real launcher scroll with FPGA latch backend"
   MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden \
@@ -118,5 +141,6 @@ echo "    $LOCAL_DIR/${LABEL}-fpga-latch-post-report.log"
 echo "    $LOCAL_DIR/${LABEL}-fpga-latch-pattern.log"
 echo "    $ROOT/build/arcade-scroll-profiles/${LABEL}-arcade-scroll.tsv"
 if [[ "$CAPTURE" == "1" ]]; then
-  echo "    $ROOT/build/arcade-scroll-captures/${LABEL}.mov"
+  echo "    $ROOT/build/launcher-home-pan-captures/${LABEL}.mov"
+  echo "    $ROOT/build/launcher-home-pan-captures/${LABEL}.tear-strip.png"
 fi

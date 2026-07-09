@@ -170,7 +170,7 @@ The known-good activation sequence is:
    ```
 
 5. Verify support with `fpga-latch-report` or `fpga-latch-post-report`. The
-   MagiK latch commands `0x46` and `0x47` should report supported status/magic.
+   MagiK latch commands `0x43` and `0x45` should report supported status/magic.
 
 If `/tmp/mister-magik/status.json` reports `composition_state=full-slint`, or
 if `mister_magik_plugin_probe` is absent from `/proc/modules`, the launcher is

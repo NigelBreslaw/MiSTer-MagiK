@@ -18,6 +18,7 @@ SECS="${2:-0}"
 LOG="/tmp/mister-magik-${SCENE}.log"
 REMOTE_SCENE="$SCENE"
 EXTRA_ENV=""
+REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 
 usage() {
   cat <<'EOF'
@@ -55,7 +56,28 @@ esac
 
 if [[ "$SCENE" == "launcher" ]]; then
   echo "==> Restarting Main-supervised launcher"
-  "$MISTER" run "rm -f /media/fat/mister-magik/launcher.env; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  env_exports=()
+  for name in \
+    MISTER_PRESENT_BACKEND \
+    MISTER_UI_FB_SIZE \
+    MISTER_FB_PRESENT_DELAY_US \
+    MISTER_LAUNCHER_START_SCREEN \
+    MISTER_LAUNCHER_LOCK_SCREEN \
+    MISTER_LAUNCHER_BENCH_SCENARIO
+  do
+    if [[ -n "${!name:-}" ]]; then
+      env_exports+=("export $name=$(printf '%q' "${!name}")")
+    fi
+  done
+  if [[ "${#env_exports[@]}" -eq 0 ]]; then
+    "$MISTER" run "rm -f '$REMOTE_ENV'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  else
+    tmp_env="$(mktemp "${TMPDIR:-/tmp}/mister-magik-launcher-env.XXXXXX")"
+    printf '%s\n' "${env_exports[@]}" >"$tmp_env"
+    "$MISTER" put "$tmp_env" "$REMOTE_ENV" >/dev/null
+    rm -f "$tmp_env"
+    "$MISTER" run "if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  fi
   exit 0
 fi
 
