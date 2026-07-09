@@ -124,10 +124,16 @@ echo "wrote $trace"
 echo "wrote $log"
 echo "wrote $status_json"
 
+analyze_args=()
+if [[ -n "$present_backend" ]]; then
+  analyze_args+=(--expect-backend "$present_backend")
+fi
+
 set +e
 "$HERE/scripts/analyze-max-scroll-drops.py" "$trace" \
   --label "$label" \
-  --status-json "$status_json" | tee "$drop_report"
+  --status-json "$status_json" \
+  "${analyze_args[@]}" | tee "$drop_report"
 drop_status=${PIPESTATUS[0]}
 set -e
 
