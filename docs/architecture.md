@@ -49,6 +49,9 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   `MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden`, which copies complete
   cached RGB565 frames into plugin-exposed hidden slots and posts the selected
   physical address to the experimental FPGA vblank latch.
+  This path requires the experimental Menu RBF to be loaded through Main's
+  `load_core` command path and the stock-kernel plugin probe module to be
+  loaded. A copied RBF artifact alone does not activate the fast path.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer
   fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.
@@ -68,6 +71,10 @@ Important policy:
   Main's vblank wait or put present ownership in the wrong process. Do not add
   new launcher paths that depend on Main request/ack present files or FIFO
   present commands.
+- Diagnose the fast path by checking the runtime state, not just the files on
+  disk: `composition_state=full-slint` means MagiK is on the fallback renderer,
+  and absence of `mister_magik_plugin_probe` means hidden plugin slots are not
+  available.
 
 ## Framebuffer Stream
 
