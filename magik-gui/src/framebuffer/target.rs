@@ -73,7 +73,7 @@ const EMPTY_DIRTY_RECT: DirtyRect = DirtyRect {
     y1: 0,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirtyRectList {
     rects: [DirtyRect; DIRTY_RECT_LIST_CAP],
     len: usize,
@@ -109,15 +109,19 @@ impl DirtyRectList {
         self.rects[..self.len].iter().copied()
     }
 
-    fn clear(&mut self) {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn clear(&mut self) {
         self.len = 0;
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    fn push(&mut self, rect: DirtyRect) {
+    pub fn push(&mut self, rect: DirtyRect) {
         if self.len < DIRTY_RECT_LIST_CAP {
             self.rects[self.len] = rect;
             self.len += 1;
@@ -126,6 +130,12 @@ impl DirtyRectList {
             let last = DIRTY_RECT_LIST_CAP - 1;
             self.rects[last] = self.rects[last].union(rect);
         }
+    }
+
+    pub fn total_rgb565_bytes(&self) -> usize {
+        self.iter()
+            .map(|rect| rect.width() * rect.rows() as usize * std::mem::size_of::<Rgb565Pixel>())
+            .sum()
     }
 
     #[cfg(test)]

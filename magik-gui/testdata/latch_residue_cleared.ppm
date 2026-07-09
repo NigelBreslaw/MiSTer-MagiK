@@ -1,0 +1,8 @@
+P3
+# 4x3 deterministic latch residue-cleared fixture:
+# old direct preview/list pixels must be restored to cached base.
+4 3
+255
+0 0 0   0 0 0   0 0 0   0 0 0
+0 0 0   0 0 0   0 0 0   0 0 0
+0 0 0   0 0 0   0 0 0   0 0 0
