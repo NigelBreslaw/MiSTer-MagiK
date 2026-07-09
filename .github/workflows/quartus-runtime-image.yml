@@ -68,6 +68,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$BUILD_CONTEXT"
           cp docker/quartus-lite-17.0/Dockerfile "$BUILD_CONTEXT/Dockerfile"
+          cp docker/quartus-lite-17.0/install-quartus-in-image.sh "$BUILD_CONTEXT/install-quartus-in-image.sh"
 
           download_payload() {
             local url="$1"
