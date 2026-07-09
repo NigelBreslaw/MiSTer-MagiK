@@ -7,11 +7,13 @@ import argparse
 import csv
 import json
 import math
+import sys
 from collections import Counter
 from pathlib import Path
 
 
 FRAME_BUDGET_US = 16_667
+LATCH_BACKEND = "fpga-vblank-latch-hidden"
 PHASE_COLUMNS = [
     "prepare_us",
     "slint_render_us",
@@ -73,6 +75,24 @@ def work_us(row: dict[str, str]) -> int:
     )
 
 
+def latch_post_done_phase_us(row: dict[str, str]) -> int:
+    return (
+        int_field(row, "present_phase_us")
+        + int_field(row, "main_present_hidden_copy_us")
+        + int_field(row, "main_present_request_us")
+        + int_field(row, "main_present_wait_us")
+    )
+
+
+def latch_deadline_margin_us(row: dict[str, str]) -> int:
+    period = int_field(row, "vsync_period_us") or FRAME_BUDGET_US
+    return period - latch_post_done_phase_us(row)
+
+
+def is_latch_row(row: dict[str, str]) -> bool:
+    return row.get("main_present_backend", "") == LATCH_BACKEND
+
+
 def dominant_phase(row: dict[str, str], medians: dict[str, int]) -> str:
     best_column = "none"
     best_delta = 0
@@ -119,6 +139,7 @@ def print_summary(
     rows: list[dict[str, str]],
     slow_frames: list[dict[str, object]],
     worst_count: int,
+    expect_backend: str | None,
 ) -> int:
     if not rows:
         print(
@@ -130,6 +151,12 @@ def print_summary(
     works = [work_us(row) for row in rows]
     over = [row for row in rows if int_field(row, "wall_us") > FRAME_BUDGET_US]
     near = [row for row in rows if int_field(row, "wall_us") >= 16_000]
+    latch_rows = [row for row in rows if is_latch_row(row)]
+    latch_misses = [row for row in latch_rows if latch_deadline_margin_us(row) < 0]
+    latch_margins = [latch_deadline_margin_us(row) for row in latch_rows]
+    latch_copy = [int_field(row, "main_present_hidden_copy_us") for row in latch_rows]
+    latch_post = [int_field(row, "main_present_request_us") for row in latch_rows]
+    latch_status = [int_field(row, "main_present_wait_us") for row in latch_rows]
     medians = {
         column: percentile([int_field(row, column) for row in rows], 50)
         for column in PHASE_COLUMNS
@@ -139,6 +166,12 @@ def print_summary(
     source_counts = Counter(row.get("vsync_source", "") or "blank" for row in rows)
     backend_counts = Counter(row.get("main_present_backend", "") or "blank" for row in rows)
     status_counts = Counter(row.get("main_present_status", "") or "blank" for row in rows)
+    backend_valid = expect_backend is None or backend_counts == Counter({expect_backend: len(rows)})
+    latch_valid = not latch_rows or (
+        len(latch_misses) == 0
+        and status_counts == Counter({"ok": len(rows)})
+        and backend_valid
+    )
     over_work = sum(1 for row in rows if work_us(row) > FRAME_BUDGET_US)
     low_work_high_wall = sum(
         1
@@ -157,12 +190,30 @@ def print_summary(
         f"vsync_sources={dict(sorted(source_counts.items()))} "
         f"present_backends={dict(sorted(backend_counts.items()))} "
         f"present_status={dict(sorted(status_counts.items()))} "
+        f"expect_backend={expect_backend or ''} "
+        f"backend_valid={1 if backend_valid else 0} "
+        f"latch_frames={len(latch_rows)} "
+        f"latch_deadline_misses={len(latch_misses)} "
+        f"latch_margin_p50={percentile(latch_margins, 50)} "
+        f"latch_margin_p95={percentile(latch_margins, 95)} "
+        f"latch_margin_p99={percentile(latch_margins, 99)} "
+        f"latch_margin_min={min(latch_margins) if latch_margins else 0} "
+        f"latch_copy_p50={percentile(latch_copy, 50)} "
+        f"latch_copy_p95={percentile(latch_copy, 95)} "
+        f"latch_copy_p99={percentile(latch_copy, 99)} "
+        f"latch_post_p99={percentile(latch_post, 99)} "
+        f"latch_status_p99={percentile(latch_status, 99)} "
         f"dominant_over_budget={dict(phase_counts.most_common())}"
     )
-    valid = len(over) == 0
+    if expect_backend == LATCH_BACKEND or latch_rows:
+        valid = latch_valid
+        invalid_reason = "ok" if valid else "latch_deadline_or_backend"
+    else:
+        valid = len(over) == 0 and backend_valid
+        invalid_reason = "ok" if valid else "over_budget_frames"
     print(
         f"max_scroll_gate_tsv\tlabel={label}\tvalid={1 if valid else 0}"
-        f"\tinvalid_reason={'ok' if valid else 'over_budget_frames'}\t{detail}"
+        f"\tinvalid_reason={invalid_reason}\t{detail}"
     )
 
     print("max_scroll_worst_frames_tsv")
@@ -177,6 +228,8 @@ def print_summary(
             "wall_us": int_field(row, "wall_us"),
             "work_us": work_us(row),
             "over_budget_us": max(0, int_field(row, "wall_us") - FRAME_BUDGET_US),
+            "latch_post_done_phase_us": latch_post_done_phase_us(row),
+            "latch_deadline_margin_us": latch_deadline_margin_us(row),
             "dominant_delta": dominant_phase(row, medians),
         }
         for column in PHASE_COLUMNS + CONTEXT_COLUMNS:
@@ -213,14 +266,56 @@ def print_summary(
     return 0 if valid else 9
 
 
+def run_self_test() -> int:
+    base = {
+        "frame": "31",
+        "elapsed_us": "1000",
+        "prepare_us": "100",
+        "slint_render_us": "200",
+        "custom_draw_us": "10",
+        "vsync_us": "15000",
+        "fb_present_us": "1300",
+        "wall_us": "16300",
+        "vsync_period_us": "16667",
+        "present_phase_us": "1000",
+        "main_present_backend": LATCH_BACKEND,
+        "main_present_status": "ok",
+        "main_present_hidden_copy_us": "1200",
+        "main_present_request_us": "20",
+        "main_present_wait_us": "10",
+    }
+    missed = dict(base)
+    missed["present_phase_us"] = "16000"
+    if latch_deadline_margin_us(base) <= 0:
+        print("self-test expected positive latch margin", file=sys.stderr)
+        return 1
+    if latch_deadline_margin_us(missed) >= 0:
+        print("self-test expected negative latch margin", file=sys.stderr)
+        return 1
+    if print_summary("self-latch-pass", [base], [], 1, LATCH_BACKEND) != 0:
+        print("self-test expected latch pass", file=sys.stderr)
+        return 1
+    if print_summary("self-latch-fail", [missed], [], 1, LATCH_BACKEND) == 0:
+        print("self-test expected latch failure", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("trace", type=Path)
+    parser.add_argument("trace", type=Path, nargs="?")
     parser.add_argument("--label", default="max-scroll")
     parser.add_argument("--status-json", type=Path)
     parser.add_argument("--ignore-frames-through", type=int, default=30)
     parser.add_argument("--worst", type=int, default=12)
+    parser.add_argument("--expect-backend", choices=[LATCH_BACKEND, "fb0-dirty"])
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
+    if args.trace is None:
+        parser.error("trace is required unless --self-test is used")
 
     rows = read_rows(args.trace, args.ignore_frames_through)
     return print_summary(
@@ -228,6 +323,7 @@ def main() -> int:
         rows,
         status_slow_frames(args.status_json),
         args.worst,
+        args.expect_backend,
     )
 
 
