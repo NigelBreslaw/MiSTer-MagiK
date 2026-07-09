@@ -118,14 +118,20 @@ impl DirtyRectList {
     }
 
     pub fn push(&mut self, rect: DirtyRect) {
-        if self.len < DIRTY_RECT_LIST_CAP {
-            self.rects[self.len] = rect;
-            self.len += 1;
-        } else {
+        if !self.try_push(rect) {
             debug_assert!(false, "dirty rect list capacity exceeded");
             let last = DIRTY_RECT_LIST_CAP - 1;
             self.rects[last] = self.rects[last].union(rect);
         }
+    }
+
+    fn try_push(&mut self, rect: DirtyRect) -> bool {
+        if self.len == DIRTY_RECT_LIST_CAP {
+            return false;
+        }
+        self.rects[self.len] = rect;
+        self.len += 1;
+        true
     }
 
     pub fn total_rgb565_bytes(&self) -> usize {
@@ -146,52 +152,63 @@ impl Default for DirtyRectList {
     }
 }
 
-fn subtract_rect_into(rect: DirtyRect, cut: DirtyRect, out: &mut DirtyRectList) {
+fn subtract_rect_into(rect: DirtyRect, cut: DirtyRect, out: &mut DirtyRectList) -> bool {
     let Some(overlap) = rect.intersection(cut) else {
-        out.push(rect);
-        return;
+        return out.try_push(rect);
     };
     if rect.y0 < overlap.y0 {
-        out.push(DirtyRect {
+        if !out.try_push(DirtyRect {
             x0: rect.x0,
             y0: rect.y0,
             x1: rect.x1,
             y1: overlap.y0,
-        });
+        }) {
+            return false;
+        }
     }
     if overlap.y1 < rect.y1 {
-        out.push(DirtyRect {
+        if !out.try_push(DirtyRect {
             x0: rect.x0,
             y0: overlap.y1,
             x1: rect.x1,
             y1: rect.y1,
-        });
+        }) {
+            return false;
+        }
     }
     if rect.x0 < overlap.x0 {
-        out.push(DirtyRect {
+        if !out.try_push(DirtyRect {
             x0: rect.x0,
             y0: overlap.y0,
             x1: overlap.x0,
             y1: overlap.y1,
-        });
+        }) {
+            return false;
+        }
     }
     if overlap.x1 < rect.x1 {
-        out.push(DirtyRect {
+        if !out.try_push(DirtyRect {
             x0: overlap.x1,
             y0: overlap.y0,
             x1: rect.x1,
             y1: overlap.y1,
-        });
+        }) {
+            return false;
+        }
     }
+    true
 }
 
-fn subtract_rects(rects: DirtyRectList, cuts: &DirtyRectList) -> DirtyRectList {
+pub fn subtract_dirty_rects(rects: DirtyRectList, cuts: &DirtyRectList) -> DirtyRectList {
+    let original = rects;
     let mut current = rects;
     let mut next = DirtyRectList::new();
     for cut in cuts.iter() {
         next.clear();
         for rect in current.iter() {
-            subtract_rect_into(rect, cut, &mut next);
+            if !subtract_rect_into(rect, cut, &mut next) {
+                return original;
+            }
         }
         std::mem::swap(&mut current, &mut next);
         if current.is_empty() {
@@ -227,7 +244,7 @@ pub fn build_launcher_present_plan_from_layers(
             cuts.push(layers.rects[later_idx]);
         }
         cuts.extend_from(direct_overlays);
-        plan.extend_from(&subtract_rects(
+        plan.extend_from(&subtract_dirty_rects(
             DirtyRectList::from_one(layers.rects[idx]),
             &cuts,
         ));
@@ -643,6 +660,20 @@ mod tests {
         let plan = build_launcher_present_plan(None, &cached_overlays, &direct_overlays).to_vec();
 
         assert_eq!(plan, vec![cached_overlay]);
+    }
+
+    #[test]
+    fn subtraction_falls_back_to_original_rects_when_fragments_exceed_capacity() {
+        let source = rect(0, 0, 10, 10);
+        let mut rects = DirtyRectList::new();
+        for _ in 0..DIRTY_RECT_LIST_CAP {
+            rects.push(source);
+        }
+        let cuts = DirtyRectList::from_one(rect(2, 2, 8, 8));
+
+        let result = subtract_dirty_rects(rects, &cuts);
+
+        assert_eq!(result, rects);
     }
 
     #[test]
