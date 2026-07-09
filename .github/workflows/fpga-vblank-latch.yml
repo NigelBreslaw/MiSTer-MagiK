@@ -89,8 +89,28 @@ jobs:
             exit 2
           fi
 
-          curl --fail --location --show-error --retry 5 --retry-all-errors --retry-delay 10 --retry-max-time 900 --connect-timeout 30 --speed-time 120 --speed-limit 102400 --output "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run" "$quartus_url"
-          curl --fail --location --show-error --retry 5 --retry-all-errors --retry-delay 10 --retry-max-time 900 --connect-timeout 30 --speed-time 120 --speed-limit 102400 --output "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz" "$cyclonev_url"
+          download_payload() {
+            local url="$1"
+            local output="$2"
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --continue-at - \
+              --retry 5 \
+              --retry-all-errors \
+              --retry-delay 10 \
+              --retry-max-time 900 \
+              --connect-timeout 30 \
+              --max-time 900 \
+              --speed-time 120 \
+              --speed-limit 1048576 \
+              --output "$output" \
+              "$url"
+          }
+
+          download_payload "$quartus_url" "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run"
+          download_payload "$cyclonev_url" "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz"
 
           shasum -a 1 "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run"
           shasum -a 1 "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz"
