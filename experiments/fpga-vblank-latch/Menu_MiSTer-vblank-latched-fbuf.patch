@@ -1,7 +1,7 @@
 diff --git a/sys/sys_top.v b/sys/sys_top.v
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,3 +351,33 @@ reg [15:0] io_dout_sys;
+@@ -352,3 +352,33 @@ reg [15:0] io_dout_sys;
  reg [15:0] io_dout_sys;
  
 +// MiSTer MagiK experiment: queue an HPS framebuffer route and apply it only
@@ -35,8 +35,9 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +reg magik_vbl_old = 0;
 +wire magik_vbl_rise = ~magik_vbl_old & magik_vbl_sys;
  always@(posedge clk_sys) begin
-@@ -359,3 +389,23 @@ always@(posedge clk_sys) begin
+@@ -360,4 +390,24 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
+ 	reg  [1:0] sl_r;
  
 +	magik_vbl_meta <= hdmi_vbl;
 +	magik_vbl_sys <= magik_vbl_meta;
@@ -59,13 +60,13 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +		MAGIK_LFB_PENDING <= 0;
 +	end
  	coef_wr <= 0;
-@@ -397,3 +449,5 @@ always@(posedge clk_sys) begin
- `endif
+@@ -409,3 +459,5 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
+ 			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
 +			if(io_din[7:0] == MAGIK_UIO_SET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_LATCH_MAGIC;
 +			if(io_din[7:0] == MAGIK_UIO_GET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_STATUS_MAGIC;
  		end
-@@ -451,3 +505,38 @@ always@(posedge clk_sys) begin
+@@ -463,3 +515,38 @@ always@(posedge clk_sys) begin
  				endcase
  			end
 +			if(cmd == MAGIK_UIO_SET_FBUF_LATCH) begin
