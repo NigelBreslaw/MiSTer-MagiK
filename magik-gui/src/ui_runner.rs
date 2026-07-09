@@ -58,8 +58,8 @@ use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
 use mister_magik_fb::framebuffer::target::{
-    build_launcher_present_plan, copy_cached_rect_565, dirty_rect, format_dirty_rect, DirtyRect,
-    DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
+    build_launcher_present_plan_from_layers, copy_cached_rect_565, dirty_rect, format_dirty_rect,
+    DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes, hidden::HiddenRgb565BufferIndex,

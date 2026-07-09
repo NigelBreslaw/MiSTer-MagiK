@@ -214,6 +214,15 @@ pub fn build_launcher_present_plan(
     layers.push_if_some(base);
     layers.extend_from(cached_overlays);
 
+    build_launcher_present_plan_from_layers(&layers, direct_overlays)
+}
+
+pub fn build_launcher_present_plan_from_layers(
+    cached_layers: &DirtyRectList,
+    direct_overlays: &DirtyRectList,
+) -> DirtyRectList {
+    let layers = cached_layers;
+
     let mut plan = DirtyRectList::new();
     let layer_count = layers.len;
     for idx in 0..layer_count {

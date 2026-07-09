@@ -202,7 +202,7 @@ impl FpgaVblankLatchHiddenPresenter {
     fn present_cached_full_frame<F>(
         &mut self,
         cached: &[Rgb565Pixel],
-        input: LatchFramePlanInput,
+        input: LauncherFramePlan,
         fpga: &mut Fpga,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
@@ -1694,8 +1694,8 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = ArcadeListRenderer::new();
-    let mut latch_preview_version = 1u64;
-    let mut latch_arcade_version = 1u64;
+    let mut launcher_preview_version = 1u64;
+    let mut launcher_arcade_version = 1u64;
     let mut arcade_filter_items_cache = ArcadeFilterListItemCache::default();
     let mut composition = UiCompositionController::new();
     let cpu = cpu_profile::start();
@@ -3514,6 +3514,54 @@ pub(super) fn run_launcher_loop(
                 format!("frame={frames} dirty_rect={}", format_dirty_rect(this_rect)),
             );
         }
+        let full_rect = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: ui.render_w(),
+            y1: ui.render_h(),
+        };
+        let base_damage = if full_frame_present {
+            Some(full_rect)
+        } else {
+            this_rect
+        };
+        let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
+        let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
+        if raw_preview_direct_rect.is_some() {
+            launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
+        }
+        if arcade_list_rect.is_some() {
+            launcher_arcade_version = launcher_arcade_version.wrapping_add(1).max(1);
+        }
+        let preview_desired = if composition_decision.allow_preview_blit
+            && preview_direct_present_enabled()
+            && preview_frame_status == PreviewRawFrameStatus::Ready
+        {
+            Some(DirectLayerState::new(
+                preview_screen_rect(ui),
+                launcher_preview_version,
+            ))
+        } else {
+            None
+        };
+        let arcade_desired = if composition_decision.allow_arcade_list_blit {
+            Some(DirectLayerState::new(
+                arcade_list_renderer.dirty_rect(),
+                launcher_arcade_version,
+            ))
+        } else {
+            None
+        };
+        let mut cached_damage = DirtyRectList::new();
+        cached_damage.push_if_some(base_damage);
+        cached_damage.push_if_some(raw_preview_cached_rect);
+        let frame_plan = LauncherFramePlan::new(
+            cached_damage,
+            preview_desired,
+            raw_preview_direct_rect,
+            arcade_desired,
+            arcade_list_rect,
+        );
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t3, frame_t4, cpu_t3, cpu_t4, pacing_trace) =
             if startup_can_present && fpga_vblank_latch_hidden_presenter.is_some() {
@@ -3522,56 +3570,6 @@ pub(super) fn run_launcher_loop(
                 let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
                 let mut latch_presentation = None;
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
-                    let full_rect = DirtyRect {
-                        x0: 0,
-                        y0: 0,
-                        x1: ui.render_w(),
-                        y1: ui.render_h(),
-                    };
-                    let base_damage = if full_frame_present {
-                        Some(full_rect)
-                    } else {
-                        this_rect
-                    };
-                    let raw_preview_cached_rect =
-                        raw_preview.and_then(RawPreviewPresent::cached_rect);
-                    let raw_preview_direct_rect =
-                        raw_preview.and_then(RawPreviewPresent::direct_rect);
-                    if raw_preview_direct_rect.is_some() {
-                        latch_preview_version = latch_preview_version.wrapping_add(1).max(1);
-                    }
-                    if arcade_list_rect.is_some() {
-                        latch_arcade_version = latch_arcade_version.wrapping_add(1).max(1);
-                    }
-                    let preview_desired = if composition_decision.allow_preview_blit
-                        && preview_direct_present_enabled()
-                        && preview_frame_status == PreviewRawFrameStatus::Ready
-                    {
-                        Some(DirectLayerState::new(
-                            preview_screen_rect(ui),
-                            latch_preview_version,
-                        ))
-                    } else {
-                        None
-                    };
-                    let arcade_desired = if composition_decision.allow_arcade_list_blit {
-                        Some(DirectLayerState::new(
-                            arcade_list_renderer.dirty_rect(),
-                            latch_arcade_version,
-                        ))
-                    } else {
-                        None
-                    };
-                    let mut cached_damage = DirtyRectList::new();
-                    cached_damage.push_if_some(base_damage);
-                    cached_damage.push_if_some(raw_preview_cached_rect);
-                    let hidden_damage = LatchFramePlanInput::new(
-                        cached_damage,
-                        preview_desired,
-                        raw_preview_direct_rect,
-                        arcade_desired,
-                        arcade_list_rect,
-                    );
                     let mut hidden_preview_compose_us = 0u128;
                     let mut hidden_arcade_compose_us = 0u128;
                     let mut direct_preview_rows = 0u32;
@@ -3580,7 +3578,7 @@ pub(super) fn run_launcher_loop(
                     let mut arcade_redraw_update = None;
                     match presenter.present_cached_full_frame(
                         layer_target.cached_565(),
-                        hidden_damage,
+                        frame_plan,
                         f,
                         |hidden, plan| {
                             preview_redraw_rect = plan.preview_redraw;
@@ -3717,10 +3715,7 @@ pub(super) fn run_launcher_loop(
                     );
                     let presentation = LauncherCompositor::present(LauncherPresentRequest {
                         layer_target: &mut layer_target,
-                        full_frame_present,
-                        slint_dirty: this_rect,
-                        raw_preview,
-                        arcade_list_rect,
+                        frame_plan,
                         arcade_list_renderer: &mut arcade_list_renderer,
                     });
                     (
@@ -3763,10 +3758,7 @@ pub(super) fn run_launcher_loop(
                 let presentation = if startup_can_present {
                     LauncherCompositor::present(LauncherPresentRequest {
                         layer_target: &mut layer_target,
-                        full_frame_present,
-                        slint_dirty: this_rect,
-                        raw_preview,
-                        arcade_list_rect,
+                        frame_plan,
                         arcade_list_renderer: &mut arcade_list_renderer,
                     })
                 } else {
@@ -5299,7 +5291,7 @@ mod tests {
             sync.pending_sequence,
         );
         let plan = state
-            .plan_next(LatchFramePlanInput::new(
+            .plan_next(LauncherFramePlan::new(
                 DirtyRectList::new(),
                 None,
                 None,
@@ -5350,7 +5342,7 @@ mod tests {
             sync.pending_sequence,
         );
         let plan = state
-            .plan_next(LatchFramePlanInput::new(
+            .plan_next(LauncherFramePlan::new(
                 DirtyRectList::new(),
                 None,
                 None,
@@ -5393,7 +5385,7 @@ mod tests {
             sync.pending_sequence,
         );
         assert!(state
-            .plan_next(LatchFramePlanInput::new(
+            .plan_next(LauncherFramePlan::new(
                 DirtyRectList::new(),
                 None,
                 None,
