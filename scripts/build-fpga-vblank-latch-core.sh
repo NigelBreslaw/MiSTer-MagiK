@@ -124,7 +124,12 @@ esac
 } > "$META_OUT"
 
 if [[ "$QUARTUS_MODE" = "docker" ]]; then
+  docker_security_args=()
+  if [[ "${QUARTUS_DOCKER_PRIVILEGED:-}" = "1" ]]; then
+    docker_security_args=(--privileged --security-opt seccomp=unconfined)
+  fi
   docker run --platform linux/amd64 --rm \
+    "${docker_security_args[@]}" \
     --cpus "$QUARTUS_DOCKER_CPUS" \
     --memory "$QUARTUS_DOCKER_MEMORY" \
     --volume "$QUARTUS_HOST_INSTALL_ROOT:/opt/intelFPGA_lite:ro" \
