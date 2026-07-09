@@ -246,8 +246,8 @@ impl LauncherScheduler {
         self.launch_handoff.poll_completion(result_received)
     }
 
-    pub(super) fn recover_launcher_ui(&mut self, f: &mut Fpga, ui: &UiDisplay) {
-        self.launch_handoff.recover_launcher_ui(f, ui);
+    pub(super) fn stop_spawned_mister_for_recovery(&mut self) -> bool {
+        self.launch_handoff.stop_spawned_mister_for_recovery()
     }
 
     pub(super) fn finish_launch_failure_recovery(&mut self, recovery_presented: Instant) {

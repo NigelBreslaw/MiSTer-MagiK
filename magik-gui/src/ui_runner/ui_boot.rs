@@ -1,6 +1,5 @@
 use super::*;
 use mister_magik_fb::framebuffer::mode::{fb_mode_action, FbModeAction, FbModeGuard};
-use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 
 const DEFAULT_BOOT_BLACK_SETTLE_FRAMES: u32 = 4;
 const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;
@@ -8,6 +7,7 @@ const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;
 pub(crate) struct UiBootFramebufferSession {
     pub(crate) ui: UiDisplay,
     pub(crate) disp: MappedRgb565Framebuffer,
+    pub(crate) display_session: LauncherDisplaySession,
     pub(crate) _fb_mode_guard: Option<FbModeGuard>,
 }
 
@@ -91,7 +91,8 @@ impl UiBootFramebufferSession {
             crate::ui_logln!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
-        let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+        let mut display_session = LauncherDisplaySession::new(&ui);
+        let route = display_session.route();
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",
             format!(
@@ -103,14 +104,13 @@ impl UiBootFramebufferSession {
                 route.set_vga_fb()
             ),
         );
-        let support_flag =
-            match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
-                Ok(flag) => flag,
-                Err(e) => {
-                    crate::ui_errln!("failed to route framebuffer for Slint UI: {e}");
-                    std::process::exit(1);
-                }
-            };
+        let support_flag = match display_session.enable_initial(f) {
+            Ok(flag) => flag,
+            Err(e) => {
+                crate::ui_errln!("failed to route framebuffer for Slint UI: {e}");
+                std::process::exit(1);
+            }
+        };
         boot_analytics::event(
             "initial_fb_enable_direct_done",
             format!("support_flag={support_flag}"),
@@ -129,7 +129,7 @@ impl UiBootFramebufferSession {
             ),
         );
         if fb_mode_action == FbModeAction::WriteMode {
-            settle_boot_black_frame("ui-startup", &mut disp, f, route);
+            settle_boot_black_frame("ui-startup", &mut disp, f, &mut display_session);
         }
         disp.record_visual_sample("after_initial_route_before_slint_draw");
         crate::ui_logln!(
@@ -139,6 +139,7 @@ impl UiBootFramebufferSession {
         Self {
             ui,
             disp,
+            display_session,
             _fb_mode_guard: fb_mode_guard,
         }
     }
@@ -148,7 +149,7 @@ pub(crate) fn settle_boot_black_frame(
     label: &str,
     disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
-    route: LauncherFramebufferRoute,
+    display_session: &mut LauncherDisplaySession,
 ) {
     let frames = boot_black_settle_frames();
     if frames == 0 {
@@ -163,7 +164,7 @@ pub(crate) fn settle_boot_black_frame(
     let mut last_flag = 0u16;
     for _ in 0..frames {
         disp.clear_black();
-        match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
+        match display_session.enable_boot_settle(f) {
             Ok(flag) => {
                 routed += 1;
                 last_flag = flag;
@@ -189,8 +190,8 @@ pub(crate) fn settle_boot_black_frame(
             production_label(),
             disp.width(),
             disp.height(),
-            route.mode().hact,
-            route.mode().vact
+            display_session.route().mode().hact,
+            display_session.route().mode().vact
         ),
     );
 }
@@ -246,8 +247,8 @@ fn boot_black_settle_frames() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::ui_display::UiDisplayPlan;
+    use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 
     #[test]
     fn launcher_framebuffer_route_for_plan_uses_scan_dimensions_and_direct_video() {

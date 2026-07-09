@@ -367,17 +367,13 @@ impl LaunchHandoffSession {
         }
     }
 
-    pub(super) fn recover_launcher_ui(&mut self, f: &mut Fpga, ui: &UiDisplay) {
+    pub(super) fn stop_spawned_mister_for_recovery(&mut self) -> bool {
         if self.spawned_mister {
             launcher::stop_mister();
-            let route =
-                LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
-            if let Err(e) = f.enable_launcher_framebuffer_route(route, ui.fb_w(), ui.fb_h()) {
-                crate::ui_errln!(
-                    "failed to recover Slint framebuffer route after launch failure: {e}"
-                );
-            }
             self.spawned_mister = false;
+            true
+        } else {
+            false
         }
     }
 
