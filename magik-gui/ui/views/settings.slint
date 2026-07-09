@@ -76,11 +76,22 @@ export component SettingsScreen inherits Rectangle {
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
-            Text {
-                text: MisterBridge.build-label;
-                color: #6f8198;
-                font-size: 8px;
-                horizontal-alignment: left;
+            HorizontalLayout {
+                Text {
+                    text: MisterBridge.build-label;
+                    color: #6f8198;
+                    font-size: 8px;
+                    horizontal-alignment: left;
+                }
+
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+
+                Text {
+                    text: MisterBridge.present-mode-label;
+                    color: #6f8198;
+                    font-size: 8px;
+                    horizontal-alignment: right;
+                }
             }
         }
     }
