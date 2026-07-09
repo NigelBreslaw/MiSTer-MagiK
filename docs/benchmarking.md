@@ -147,16 +147,21 @@ scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
 The gate writes `build/launcher-home-scroll-profiles/*-launcher-home-scroll.tsv`
 and a matching `*-launcher-home-scroll-drops.tsv` report. The default `/dev/fb0`
 gate fails if any warmed-up frame has `wall_us > 16667`. The FPGA latch gate
-requires the requested backend on every measured frame and fails if any latch
-post misses the vblank deadline. The report lists the worst frames, present
-backend/status, vsync state, latch copy/post/status timings, and latch deadline
-margin. In latch mode, wall-time outliers can still include the intentional
-post-present pacing wait; the acceptance signal is zero latch deadline misses,
-not the legacy copy-after-vsync wall gate. Use passive `fpga-latch-report` for
-before/after FPGA counters; `fpga-latch-post-report` posts a diagnostic latch
-request and can change the counters it reports. The shared trace schema predates
-the Home-row gate, so the `selected` and `visual_index` columns still describe
-the Arcade list, not the Home system index; use the log/status
+requires the requested backend on every measured frame and now has two zero
+tolerance checks: no latch post may miss the vblank deadline, and no visual
+cadence sample may exceed one 60 Hz frame (`wall_us > 16667` or
+`loop_delta_us > 16667`). The report lists the worst frames, whether each is a
+deadline miss, a cadence miss, or both, plus present backend/status, vsync state,
+latch copy/post/status timings, and latch deadline margin.
+
+`drop_count=0` from passive `fpga-latch-report` proves that the FPGA accepted
+the posted buffers; it does not prove the TV saw a new visual frame every
+refresh. Strict cadence in the Home-row trace is the TV-visible smoothness
+signal. Use passive `fpga-latch-report` for before/after FPGA counters;
+`fpga-latch-post-report` posts a diagnostic latch request and can change the
+counters it reports. The shared trace schema predates the Home-row gate, so the
+`selected` and `visual_index` columns still describe the Arcade list, not the
+Home system index; use the log/status
 `bench_scenario=home-repeat-hold` fields to confirm the Home benchmark path. The
 default `MISTER_CATALOG_REFRESH=off` isolates Home-row pacing from catalog
 refresh noise; pass `--catalog-refresh default` when deliberately measuring the
