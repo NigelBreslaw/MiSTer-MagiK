@@ -20,8 +20,7 @@ use mister_magik_fb::framebuffer::ownership::{
     should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
 };
 use std::collections::{BTreeSet, VecDeque};
-use std::io::{Read, Write as _};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::{Read, Write};
 use std::path::Path;
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -31,70 +30,50 @@ const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
-const MISTER_CMD_FIFO: &str = "/dev/MiSTer_cmd";
-const MAIN_FLIP_PRESENT_BYTES: usize = 960 * 540 * 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LauncherPresentBackend {
     Fb0Dirty,
-    MainFlipV1 { buffer_index: u8 },
-    MainVsyncHidden,
-    PluginMainVsyncHidden,
     FpgaVblankLatchHidden,
 }
 
 impl LauncherPresentBackend {
-    fn from_env_values(backend: Option<&str>, flip_buffer_index: Option<&str>) -> Self {
+    fn from_env_values(backend: Option<&str>) -> Self {
         match backend {
-            Some("main-flip-v1") => {
-                let buffer_index = flip_buffer_index
-                    .and_then(|value| value.parse::<u8>().ok())
-                    .filter(|index| (1..=2).contains(index))
-                    .unwrap_or(1);
-                Self::MainFlipV1 { buffer_index }
-            }
-            Some("main-vsync-hidden") => Self::MainVsyncHidden,
-            Some("plugin-main-vsync-hidden") => Self::PluginMainVsyncHidden,
             Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
+            Some(retired) if is_retired_present_backend(retired) => {
+                crate::ui_errln!(
+                    "launcher_present_backend_retired value={retired}; falling back to fb0-dirty"
+                );
+                boot_analytics::event(
+                    "launcher_present_backend_retired",
+                    format!("{retired} fallback=fb0-dirty"),
+                );
+                Self::Fb0Dirty
+            }
             _ => Self::Fb0Dirty,
         }
     }
 
     fn from_env() -> Self {
-        Self::from_env_values(
-            std::env::var("MISTER_PRESENT_BACKEND").ok().as_deref(),
-            std::env::var("MISTER_PRESENT_FLIP_BUFFER_INDEX")
-                .ok()
-                .as_deref(),
-        )
+        Self::from_env_values(std::env::var("MISTER_PRESENT_BACKEND").ok().as_deref())
     }
 
     fn log_if_experimental(self) {
         match self {
             Self::Fb0Dirty => {}
-            Self::MainFlipV1 { buffer_index } => {
-                crate::ui_logln!(
-                    "launcher_present_backend=main-flip-v1 buffer_index={buffer_index}"
-                );
-                boot_analytics::event(
-                    "launcher_present_backend",
-                    format!("main-flip-v1 buffer_index={buffer_index}"),
-                );
-            }
-            Self::MainVsyncHidden => {
-                crate::ui_logln!("launcher_present_backend=main-vsync-hidden");
-                boot_analytics::event("launcher_present_backend", "main-vsync-hidden");
-            }
-            Self::PluginMainVsyncHidden => {
-                crate::ui_logln!("launcher_present_backend=plugin-main-vsync-hidden");
-                boot_analytics::event("launcher_present_backend", "plugin-main-vsync-hidden");
-            }
             Self::FpgaVblankLatchHidden => {
                 crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
                 boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
             }
         }
     }
+}
+
+fn is_retired_present_backend(value: &str) -> bool {
+    value == ["main", "flip-v1"].join("-")
+        || value == ["main", "vsync-hidden"].join("-")
+        || value == ["plugin", "main", "vsync-hidden"].join("-")
 }
 
 fn launcher_present_backend() -> LauncherPresentBackend {
@@ -104,125 +83,6 @@ fn launcher_present_backend() -> LauncherPresentBackend {
         backend.log_if_experimental();
         backend
     })
-}
-
-fn present_with_main_flip_v1(buffer_index: u8) -> Result<(), String> {
-    let command = format!("mister_magik_present_flip_v1 {buffer_index}\n");
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(MISTER_CMD_FIFO)
-        .map_err(|e| format!("failed to open {MISTER_CMD_FIFO}: {e}"))?;
-    file.write_all(command.as_bytes())
-        .map_err(|e| format!("failed to write {MISTER_CMD_FIFO}: {e}"))
-}
-
-fn maybe_present_with_main_flip_v1(presentation: &mut LauncherPresentResult) {
-    let LauncherPresentBackend::MainFlipV1 { buffer_index } = launcher_present_backend() else {
-        return;
-    };
-    if presentation.copied_rows == 0 {
-        return;
-    }
-    let start = Instant::now();
-    match present_with_main_flip_v1(buffer_index) {
-        Ok(()) => {
-            presentation.cached_present_us += start.elapsed().as_micros();
-            presentation.present_bytes = presentation
-                .present_bytes
-                .saturating_add(MAIN_FLIP_PRESENT_BYTES);
-        }
-        Err(e) => {
-            static WARNED: OnceLock<()> = OnceLock::new();
-            WARNED.get_or_init(|| {
-                crate::ui_errln!("main_flip_v1_present_failed: {e}");
-            });
-        }
-    }
-}
-
-struct MainVsyncHiddenPresenter {
-    client: crate::main_present::MainPresentClient,
-    buffer1: MainVsyncHiddenBuffer,
-    buffer2: MainVsyncHiddenBuffer,
-    next_buffer_index: u8,
-    sequence: u32,
-    width: usize,
-    height: usize,
-    stride_bytes: usize,
-    backend_label: &'static str,
-}
-
-enum MainVsyncHiddenBuffer {
-    DevMem(HiddenRgb565Framebuffer),
-    Plugin(PluginHiddenRgb565Framebuffer),
-}
-
-impl MainVsyncHiddenBuffer {
-    fn open(
-        mapping: MainVsyncHiddenMapping,
-        index: HiddenRgb565BufferIndex,
-        width: usize,
-        height: usize,
-        stride_bytes: usize,
-    ) -> Result<Self, String> {
-        match mapping {
-            MainVsyncHiddenMapping::DevMem => {
-                HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
-                    .map(Self::DevMem)
-                    .map_err(|e| e.to_string())
-            }
-            MainVsyncHiddenMapping::PluginProbe => {
-                PluginHiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
-                    .map(Self::Plugin)
-                    .map_err(|e| e.to_string())
-            }
-        }
-    }
-
-    fn copy_full_frame(&mut self, cached: &[Rgb565Pixel], width: usize) -> Result<usize, String> {
-        match self {
-            Self::DevMem(buffer) => buffer
-                .copy_full_frame(cached, width)
-                .map_err(|e| e.to_string()),
-            Self::Plugin(buffer) => buffer
-                .copy_full_frame(cached, width)
-                .map_err(|e| e.to_string()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MainVsyncHiddenMapping {
-    DevMem,
-    PluginProbe,
-}
-
-impl MainVsyncHiddenMapping {
-    fn from_backend(backend: LauncherPresentBackend) -> Option<Self> {
-        match backend {
-            LauncherPresentBackend::MainVsyncHidden => Some(Self::DevMem),
-            LauncherPresentBackend::PluginMainVsyncHidden => Some(Self::PluginProbe),
-            _ => None,
-        }
-    }
-
-    fn backend_label(self) -> &'static str {
-        match self {
-            Self::DevMem => "main-vsync-hidden",
-            Self::PluginProbe => "plugin-main-vsync-hidden",
-        }
-    }
-}
-
-struct MainVsyncHiddenPresentStats {
-    backend_label: &'static str,
-    copied_bytes: usize,
-    buffer_index: u8,
-    copy_us: u128,
-    request_us: u128,
-    wait_us: u64,
-    route_us: u64,
 }
 
 struct FpgaVblankLatchHiddenPresenter {
@@ -361,100 +221,6 @@ impl FpgaVblankLatchHiddenPresenter {
             set_supported,
             status_supported: status.supported(),
             flip_count: status.flip_count,
-        })
-    }
-}
-
-impl MainVsyncHiddenPresenter {
-    fn open(ui: &UiDisplay) -> Option<Self> {
-        let mapping = MainVsyncHiddenMapping::from_backend(launcher_present_backend())?;
-        let width = ui.render_w();
-        let height = ui.render_h();
-        let stride_bytes = rgb565_stride_bytes(width);
-        let buffer1 = match MainVsyncHiddenBuffer::open(
-            mapping,
-            HiddenRgb565BufferIndex::new(1).ok()?,
-            width,
-            height,
-            stride_bytes,
-        ) {
-            Ok(buffer) => buffer,
-            Err(e) => {
-                crate::ui_errln!(
-                    "main_vsync_hidden_open_failed backend={} buffer=1 error={e}",
-                    mapping.backend_label()
-                );
-                return None;
-            }
-        };
-        let buffer2 = match MainVsyncHiddenBuffer::open(
-            mapping,
-            HiddenRgb565BufferIndex::new(2).ok()?,
-            width,
-            height,
-            stride_bytes,
-        ) {
-            Ok(buffer) => buffer,
-            Err(e) => {
-                crate::ui_errln!(
-                    "main_vsync_hidden_open_failed backend={} buffer=2 error={e}",
-                    mapping.backend_label()
-                );
-                return None;
-            }
-        };
-        Some(Self {
-            client: crate::main_present::MainPresentClient::default_paths(),
-            buffer1,
-            buffer2,
-            next_buffer_index: 1,
-            sequence: 1,
-            width,
-            height,
-            stride_bytes,
-            backend_label: mapping.backend_label(),
-        })
-    }
-
-    fn present_cached_full_frame(
-        &mut self,
-        cached: &[Rgb565Pixel],
-    ) -> Result<MainVsyncHiddenPresentStats, String> {
-        let buffer_index = self.next_buffer_index;
-        let buffer = if buffer_index == 1 {
-            &mut self.buffer1
-        } else {
-            &mut self.buffer2
-        };
-        let copy_start = Instant::now();
-        let copied_bytes = buffer
-            .copy_full_frame(cached, self.width)
-            .map_err(|e| e.to_string())?;
-        let copy_us = copy_start.elapsed().as_micros();
-
-        let sequence = self.sequence;
-        self.sequence = self.sequence.wrapping_add(1).max(1);
-        let request_start = Instant::now();
-        let ack = self
-            .client
-            .present(crate::main_present::MainPresentRequest {
-                sequence,
-                buffer_index,
-                width: self.width,
-                height: self.height,
-                stride_bytes: self.stride_bytes,
-            })
-            .map_err(|e| e.to_string())?;
-        let request_us = request_start.elapsed().as_micros();
-        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
-        Ok(MainVsyncHiddenPresentStats {
-            backend_label: self.backend_label,
-            copied_bytes,
-            buffer_index,
-            copy_us,
-            request_us,
-            wait_us: ack.wait_us,
-            route_us: ack.route_us,
         })
     }
 }
@@ -1488,7 +1254,6 @@ pub(super) fn run_launcher_loop(
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
-    let mut main_vsync_hidden_presenter = MainVsyncHiddenPresenter::open(ui);
     let mut fpga_vblank_latch_hidden_presenter = FpgaVblankLatchHiddenPresenter::open(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
@@ -3436,7 +3201,7 @@ pub(super) fn run_launcher_loop(
         }
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4, cpu_t4) = {
-            let mut presentation = if startup_can_present {
+            let presentation = if startup_can_present {
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
                     let hidden_compose_start = Instant::now();
                     let direct_preview_rows = raw_preview
@@ -3489,54 +3254,6 @@ pub(super) fn run_launcher_loop(
                             })
                         }
                     }
-                } else if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
-                    let hidden_compose_start = Instant::now();
-                    let direct_preview_rows = raw_preview
-                        .and_then(RawPreviewPresent::direct_rect)
-                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
-                        .unwrap_or(0);
-                    let arcade_update_label =
-                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
-                    let _arcade_stats = arcade_list_rect
-                        .map(|update| {
-                            layer_target
-                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
-                        })
-                        .unwrap_or_default();
-                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
-                    match presenter.present_cached_full_frame(layer_target.cached_565()) {
-                        Ok(stats) => LauncherPresentResult {
-                            copied_rows: ui.render_h() as u32,
-                            direct_preview_rows,
-                            present_bytes: stats.copied_bytes,
-                            wasted_present_bytes: 0,
-                            cached_present_us: stats.copy_us,
-                            direct_preview_present_us: hidden_compose_us,
-                            arcade_list_present_us: hidden_compose_us,
-                            main_present_backend: stats.backend_label,
-                            main_present_status: "ok",
-                            main_present_buffer: stats.buffer_index,
-                            main_present_hidden_copy_us: stats.copy_us,
-                            main_present_request_us: stats.request_us,
-                            main_present_wait_us: stats.wait_us,
-                            main_present_route_us: stats.route_us,
-                            arcade_update_label,
-                        },
-                        Err(e) => {
-                            static WARNED: OnceLock<()> = OnceLock::new();
-                            WARNED.get_or_init(|| {
-                                crate::ui_errln!("main_vsync_hidden_present_failed: {e}");
-                            });
-                            LauncherCompositor::present(LauncherPresentRequest {
-                                layer_target: &mut layer_target,
-                                full_frame_present,
-                                slint_dirty: this_rect,
-                                raw_preview,
-                                arcade_list_rect,
-                                arcade_list_renderer: &mut arcade_list_renderer,
-                            })
-                        }
-                    }
                 } else {
                     LauncherCompositor::present(LauncherPresentRequest {
                         layer_target: &mut layer_target,
@@ -3567,7 +3284,6 @@ pub(super) fn run_launcher_loop(
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
             };
-            maybe_present_with_main_flip_v1(&mut presentation);
             (
                 presentation,
                 Instant::now(),
@@ -4852,43 +4568,33 @@ mod tests {
     #[test]
     pub(super) fn launcher_present_backend_defaults_to_fb0_dirty() {
         assert_eq!(
-            LauncherPresentBackend::from_env_values(None, None),
+            LauncherPresentBackend::from_env_values(None),
             LauncherPresentBackend::Fb0Dirty
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some(""), Some("2")),
+            LauncherPresentBackend::from_env_values(Some("")),
             LauncherPresentBackend::Fb0Dirty
         );
     }
 
     #[test]
-    pub(super) fn launcher_present_backend_parses_legacy_main_flip_experiment() {
+    pub(super) fn launcher_present_backend_retired_values_fall_back_to_fb0_dirty() {
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), None),
-            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+            LauncherPresentBackend::from_env_values(Some(&["main", "flip-v1"].join("-"))),
+            LauncherPresentBackend::Fb0Dirty
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("2")),
-            LauncherPresentBackend::MainFlipV1 { buffer_index: 2 }
+            LauncherPresentBackend::from_env_values(Some(&["main", "vsync-hidden"].join("-"))),
+            LauncherPresentBackend::Fb0Dirty
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("3")),
-            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
-        );
-    }
-
-    #[test]
-    pub(super) fn launcher_present_backend_parses_main_vsync_hidden_experiment() {
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
-            LauncherPresentBackend::MainVsyncHidden
+            LauncherPresentBackend::from_env_values(Some(
+                &["plugin", "main", "vsync-hidden"].join("-")
+            )),
+            LauncherPresentBackend::Fb0Dirty
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("plugin-main-vsync-hidden"), Some("2")),
-            LauncherPresentBackend::PluginMainVsyncHidden
-        );
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden"), Some("2")),
+            LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden")),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
     }

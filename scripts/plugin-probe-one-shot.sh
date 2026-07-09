@@ -8,14 +8,8 @@ REMOTE_KO="$REMOTE_DIR/mister_magik_plugin_probe.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
 LOCAL_REPORT="$ROOT/build/plugin-probe/plugin-map-report.log"
-LOCAL_PRESENTER="$ROOT/build/plugin-probe/plugin-presenter-report.log"
 LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/plugin-map-bandwidth.log"
-LOCAL_PATTERN="$ROOT/build/plugin-probe/plugin-present-pattern.log"
 FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
-PATTERN_FRAMES="${MISTER_PLUGIN_PRESENT_PATTERN_FRAMES:-180}"
-SCROLL_SECS="${MISTER_PLUGIN_LAUNCHER_SCROLL_SECS:-15}"
-SCROLL_LABEL="${MISTER_PLUGIN_LAUNCHER_LABEL:-PLUGIN-MAIN-VSYNC-$(date -u +%Y%m%dT%H%M%SZ)}"
-SKIP_FULL_UI="${MISTER_PLUGIN_SKIP_FULL_UI:-0}"
 
 cleanup() {
   "$MISTER" run "rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
@@ -52,26 +46,8 @@ echo "==> Loading module"
 echo "==> Running plugin-map-report"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-report" | tee "$LOCAL_REPORT"
 
-echo "==> Running plugin-presenter-report"
-"$MISTER" run "'$REMOTE_BIN' plugin-presenter-report" | tee "$LOCAL_PRESENTER"
-
 echo "==> Running plugin-map-bandwidth ($FRAMES frames)"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
-
-echo "==> Starting launcher for plugin present pattern diagnostic"
-"$ROOT/scripts/run-rust.sh" launcher 0
-"$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1"
-
-echo "==> Running plugin-present-pattern ($PATTERN_FRAMES frames)"
-"$MISTER" run "'$REMOTE_BIN' plugin-present-pattern '$PATTERN_FRAMES'" | tee "$LOCAL_PATTERN"
-
-if [[ "$SKIP_FULL_UI" == "1" ]]; then
-  echo "==> Skipping plugin-backed launcher scroll profile (MISTER_PLUGIN_SKIP_FULL_UI=1)"
-else
-  echo "==> Running plugin-backed launcher scroll profile ($SCROLL_LABEL, ${SCROLL_SECS}s)"
-  MISTER_PRESENT_BACKEND=plugin-main-vsync-hidden \
-  "$ROOT/scripts/profile-arcade-scroll.sh" "$SCROLL_LABEL" --skip-build --secs "$SCROLL_SECS" --scenario turbo-hold --skip-boot-prelude --catalog-refresh off --stream-consumer none
-fi
 
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
@@ -81,9 +57,4 @@ cleanup
 
 echo "==> Wrote:"
 echo "    $LOCAL_REPORT"
-echo "    $LOCAL_PRESENTER"
 echo "    $LOCAL_BANDWIDTH"
-echo "    $LOCAL_PATTERN"
-if [[ "$SKIP_FULL_UI" != "1" ]]; then
-  echo "    $ROOT/build/arcade-scroll-profiles/${SCROLL_LABEL}-arcade-scroll.tsv"
-fi

@@ -44,6 +44,11 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
 - The Rust frame loop copies dirty regions into the write-combined `/dev/fb0`.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
   to the output mode.
+- The single-frame `/dev/fb0` dirty-copy path remains the fallback renderer.
+  The only current hidden-buffer present experiment is
+  `MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden`, which copies complete
+  cached RGB565 frames into plugin-exposed hidden slots and posts the selected
+  physical address to the experimental FPGA vblank latch.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer
   fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.
@@ -58,6 +63,11 @@ Important policy:
 - RGB888/8888 UI support and color-route smoke tooling have been removed from
   the app. Do not add framebuffer format selection back to rendering,
   diagnostics, experiments, or benchmarks.
+- Main-mediated present experiments (`main-flip-v1`, `main-vsync-hidden`, and
+  `plugin-main-vsync-hidden`) are retired. They either blocked the UI frame on
+  Main's vblank wait or put present ownership in the wrong process. Do not add
+  new launcher paths that depend on Main request/ack present files or FIFO
+  present commands.
 
 ## Framebuffer Stream
 
