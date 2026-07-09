@@ -40,6 +40,10 @@ Desktop-specific notes for agents working in this folder. The root
   different command shape.
 - For compiled UI validation use:
   `cargo check --manifest-path desktop/Cargo.toml --no-default-features --features compiled-ui`
+- Desktop tests and coverage intentionally use Slint's software renderer by
+  default so they do not trigger `skia-bindings` network fetches in cold or
+  sandboxed environments. Use `desktop/scripts/dev-live.sh` for the live Skia
+  app path instead of adding `skia-renderer` to test/coverage commands.
 
 ## Primer Dependency
 
@@ -73,7 +77,7 @@ Run the focused checks before committing desktop UI work:
 ```bash
 cargo test --manifest-path desktop/Cargo.toml
 cargo check --manifest-path desktop/Cargo.toml --no-default-features --features compiled-ui
-cargo check --manifest-path desktop/Cargo.toml --features slint/mcp,live-ui
+cargo check --manifest-path desktop/Cargo.toml --features slint/mcp,live-ui,skia-renderer
 ```
 
 If you change the vendored Primer package, also run the relevant check there,

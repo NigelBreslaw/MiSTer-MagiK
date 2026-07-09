@@ -848,7 +848,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if std::env::var_os("SLINT_BACKEND").is_none() {
-        std::env::set_var("SLINT_BACKEND", "winit-skia");
+        std::env::set_var("SLINT_BACKEND", default_slint_backend());
     }
     select_backend()?;
 
@@ -865,6 +865,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(all(not(feature = "live-ui"), not(feature = "compiled-ui")))]
     {
         compile_error!("enable either live-ui or compiled-ui");
+    }
+}
+
+fn default_slint_backend() -> &'static str {
+    if cfg!(feature = "skia-renderer") {
+        "winit-skia"
+    } else {
+        "winit-software"
     }
 }
 

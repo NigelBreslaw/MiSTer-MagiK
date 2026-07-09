@@ -1802,6 +1802,7 @@ version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54e6cb54b264cac4aa4968d6b5d4f4240a89ae8d9153659391ac57b6e4757a9f"
 dependencies = [
+ "bytemuck",
  "calloop 0.14.4",
  "cfg_aliases",
  "drm",
@@ -1810,6 +1811,7 @@ dependencies = [
  "i-slint-common",
  "i-slint-core",
  "i-slint-renderer-skia",
+ "i-slint-renderer-software",
  "input",
  "memmap2",
  "nix",
@@ -1858,6 +1860,7 @@ dependencies = [
  "i-slint-common",
  "i-slint-core",
  "i-slint-renderer-skia",
+ "i-slint-renderer-software",
  "vtable",
 ]
 
@@ -1870,6 +1873,7 @@ dependencies = [
  "accesskit",
  "accesskit_winit",
  "block2 0.6.2",
+ "bytemuck",
  "cfg-if",
  "cfg_aliases",
  "copypasta",
@@ -1881,6 +1885,8 @@ dependencies = [
  "i-slint-core",
  "i-slint-core-macros",
  "i-slint-renderer-skia",
+ "i-slint-renderer-software",
+ "imgref",
  "lyon_path",
  "muda",
  "objc2 0.6.4",
@@ -1890,6 +1896,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "pin-weak",
  "raw-window-handle",
+ "rgb",
  "scoped-tls-hkt",
  "scopeguard",
  "softbuffer",
