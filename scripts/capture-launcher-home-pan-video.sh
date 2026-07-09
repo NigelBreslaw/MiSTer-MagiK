@@ -7,6 +7,7 @@ OUT_DIR="$HERE/build/launcher-home-pan-captures"
 MISTER="$HERE/scripts/mister"
 REMOTE="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_LOG="/tmp/mister-magik-home-pan-capture.log"
+REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 source "$HERE/scripts/mister-supervision-lib.sh"
 
 label="launcher-home-pan-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -112,6 +113,7 @@ cleanup() {
     kill "$camera_pid" >/dev/null 2>&1 || true
     wait "$camera_pid" >/dev/null 2>&1 || true
   fi
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
   mister_restart_launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -136,6 +138,7 @@ profile_status=${PIPESTATUS[0]}
 set -e
 wait "$camera_pid"
 trap - EXIT
+"$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
 mister_restart_launcher >/dev/null 2>&1 || true
 "$MISTER" get "$REMOTE_LOG" "$remote_log" >/dev/null 2>&1 || true
 

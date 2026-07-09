@@ -90,6 +90,7 @@ struct FpgaVblankLatchHiddenPresenter {
     buffer2: PluginHiddenRgb565Framebuffer,
     base1: u32,
     base2: u32,
+    disabled: bool,
     next_buffer_index: u8,
     sequence: u16,
     width: usize,
@@ -163,6 +164,7 @@ impl FpgaVblankLatchHiddenPresenter {
             buffer2,
             base1,
             base2,
+            disabled: false,
             next_buffer_index: 1,
             sequence: 1,
             width,
@@ -176,6 +178,12 @@ impl FpgaVblankLatchHiddenPresenter {
         cached: &[Rgb565Pixel],
         fpga: &mut Fpga,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
+        if self.disabled {
+            return Err(
+                "fpga latch presenter disabled after unsupported command response".to_string(),
+            );
+        }
+
         let buffer_index = self.next_buffer_index;
         let (buffer, base_addr) = if buffer_index == 1 {
             (&mut self.buffer1, self.base1)
@@ -210,6 +218,20 @@ impl FpgaVblankLatchHiddenPresenter {
             .read_magik_latched_fbuf_status()
             .map_err(|e| e.to_string())?;
         let status_us = status_start.elapsed().as_micros() as u64;
+        let status_supported = status.supported();
+
+        if !set_supported || !status_supported {
+            self.disabled = true;
+            return Err(format!(
+                "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
+                u8::from(set_supported),
+                u8::from(status_supported),
+                ack.0,
+                ack.1,
+                status.magic_hi,
+                status.magic_lo
+            ));
+        }
 
         self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
         Ok(FpgaVblankLatchHiddenPresentStats {
@@ -219,7 +241,7 @@ impl FpgaVblankLatchHiddenPresenter {
             post_us,
             status_us,
             set_supported,
-            status_supported: status.supported(),
+            status_supported,
             flip_count: status.flip_count,
         })
     }
