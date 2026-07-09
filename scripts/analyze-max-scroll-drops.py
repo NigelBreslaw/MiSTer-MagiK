@@ -63,6 +63,10 @@ CONTEXT_COLUMNS = [
     "hidden_compose_us",
     "hidden_preview_compose_us",
     "hidden_arcade_compose_us",
+    "main_present_hidden_invalid_bytes",
+    "main_present_hidden_rect_count",
+    "main_present_hidden_catchup_bytes",
+    "main_present_hidden_full_copy",
     "main_present_set_vga_fb_us",
     "main_present_route_us",
 ]

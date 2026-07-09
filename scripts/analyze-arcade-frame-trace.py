@@ -40,6 +40,10 @@ PHASES = [
     "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
+    "main_present_hidden_invalid_bytes",
+    "main_present_hidden_rect_count",
+    "main_present_hidden_catchup_bytes",
+    "main_present_hidden_full_copy",
     "main_present_set_vga_fb_us",
     "present_bytes",
     "wasted_present_bytes",
@@ -114,6 +118,10 @@ def normalize_row(row: dict[str, int | float | str]) -> None:
         "hidden_arcade_compose_us",
         "direct_preview_present_us",
         "arcade_list_present_us",
+        "main_present_hidden_invalid_bytes",
+        "main_present_hidden_rect_count",
+        "main_present_hidden_catchup_bytes",
+        "main_present_hidden_full_copy",
         "main_present_set_vga_fb_us",
     ):
         row.setdefault(key, 0)

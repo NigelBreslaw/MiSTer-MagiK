@@ -318,6 +318,45 @@ impl PluginHiddenRgb565Framebuffer {
         Ok(stride_pixels * height * std::mem::size_of::<Rgb565Pixel>())
     }
 
+    pub fn copy_rect(
+        &mut self,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        rect: crate::framebuffer::target::DirtyRect,
+    ) -> Result<usize, PluginProbeError> {
+        if rect.x1 > self.width || rect.y1 > self.height {
+            return Err(PluginProbeError::InvalidGeometry(format!(
+                "rect x0={} y0={} x1={} y1={} exceeds {}x{}",
+                rect.x0, rect.y0, rect.x1, rect.y1, self.width, self.height
+            )));
+        }
+        if src_stride_pixels < self.width {
+            return Err(PluginProbeError::InvalidGeometry(format!(
+                "source stride {src_stride_pixels} is smaller than width {}",
+                self.width
+            )));
+        }
+        let needed =
+            src_stride_pixels
+                .checked_mul(self.height)
+                .ok_or(PluginProbeError::InvalidGeometry(
+                    "source size overflow".to_string(),
+                ))?;
+        if src.len() < needed {
+            return Err(PluginProbeError::SourceTooShort {
+                needed,
+                actual: src.len(),
+            });
+        }
+        if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+            return Ok(0);
+        }
+        let stride_pixels = self.stride_pixels;
+        let dst = self.buffer_mut();
+        copy_rect_pixels(dst, stride_pixels, src, src_stride_pixels, rect);
+        Ok(rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
+    }
+
     pub fn region(&self) -> &PluginProbeRegion {
         &self.region
     }
@@ -353,6 +392,21 @@ fn copy_full_frame_pixels(
         let src_start = y * src_stride_pixels;
         let dst_start = y * dst_stride_pixels;
         dst[dst_start..dst_start + width].copy_from_slice(&src[src_start..src_start + width]);
+    }
+}
+
+fn copy_rect_pixels(
+    dst: &mut [Rgb565Pixel],
+    dst_stride_pixels: usize,
+    src: &[Rgb565Pixel],
+    src_stride_pixels: usize,
+    rect: crate::framebuffer::target::DirtyRect,
+) {
+    for y in rect.y0..rect.y1 {
+        let src_start = y * src_stride_pixels + rect.x0;
+        let dst_start = y * dst_stride_pixels + rect.x0;
+        dst[dst_start..dst_start + rect.width()]
+            .copy_from_slice(&src[src_start..src_start + rect.width()]);
     }
 }
 
@@ -446,6 +500,8 @@ fn plugin_hidden_region(
 
 #[cfg(test)]
 mod tests {
+    use crate::framebuffer::target::DirtyRect;
+
     use super::*;
 
     fn metadata() -> PluginProbeMetadata {
@@ -565,6 +621,47 @@ plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x000
                 Rgb565Pixel(4),
                 Rgb565Pixel(0),
                 Rgb565Pixel(0),
+            ]
+        );
+    }
+
+    #[test]
+    fn rect_copy_updates_only_requested_region() {
+        let src: Vec<Rgb565Pixel> = (0..16).map(Rgb565Pixel).collect();
+        let mut dst = vec![Rgb565Pixel(99); 16];
+
+        copy_rect_pixels(
+            &mut dst,
+            4,
+            &src,
+            4,
+            DirtyRect {
+                x0: 1,
+                y0: 1,
+                x1: 3,
+                y1: 3,
+            },
+        );
+
+        assert_eq!(
+            dst,
+            vec![
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(9),
+                Rgb565Pixel(10),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
             ]
         );
     }

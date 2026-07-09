@@ -109,6 +109,8 @@ struct FpgaVblankLatchHiddenPresenter {
     route: LauncherFramebufferRoute,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     route_armed: bool,
+    invalid1: Option<DirtyRect>,
+    invalid2: Option<DirtyRect>,
     status_probe_countdown: u16,
     status_probe_interval: u16,
     last_status_supported: bool,
@@ -117,6 +119,10 @@ struct FpgaVblankLatchHiddenPresenter {
 
 struct FpgaVblankLatchHiddenPresentStats {
     copied_bytes: usize,
+    invalid_bytes: usize,
+    rect_count: u32,
+    catchup_bytes: usize,
+    full_copy: bool,
     buffer_index: u8,
     copy_us: u128,
     post_us: u128,
@@ -183,6 +189,12 @@ impl FpgaVblankLatchHiddenPresenter {
             route.mode(),
             configured_fpga_latch_right_guard_cols(),
         );
+        let full_rect = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+        };
         Some(Self {
             buffer1,
             buffer2,
@@ -196,6 +208,8 @@ impl FpgaVblankLatchHiddenPresenter {
             route,
             latch_geometry,
             route_armed: false,
+            invalid1: Some(full_rect),
+            invalid2: Some(full_rect),
             status_probe_countdown: 0,
             status_probe_interval: configured_fpga_latch_status_interval(),
             last_status_supported: false,
@@ -206,6 +220,7 @@ impl FpgaVblankLatchHiddenPresenter {
     fn present_cached_full_frame(
         &mut self,
         cached: &[Rgb565Pixel],
+        damage: Option<DirtyRect>,
         fpga: &mut Fpga,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
         if self.disabled {
@@ -220,11 +235,30 @@ impl FpgaVblankLatchHiddenPresenter {
         } else {
             (&mut self.buffer2, self.base2)
         };
+        let invalid = if buffer_index == 1 {
+            self.invalid1
+        } else {
+            self.invalid2
+        };
         let copy_start = Instant::now();
-        let copied_bytes = buffer
-            .copy_full_frame(cached, self.width)
-            .map_err(|e| e.to_string())?;
+        let copied_bytes = match invalid {
+            Some(rect) => buffer
+                .copy_rect(cached, self.width, rect)
+                .map_err(|e| e.to_string())?,
+            None => 0,
+        };
         let copy_us = copy_start.elapsed().as_micros();
+        let full_rect = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.width,
+            y1: self.height,
+        };
+        let invalid_bytes = invalid
+            .map(|rect| rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
+            .unwrap_or(0);
+        let rect_count = u32::from(invalid.is_some());
+        let full_copy = invalid == Some(full_rect);
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
@@ -286,8 +320,19 @@ impl FpgaVblankLatchHiddenPresenter {
         }
 
         self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
+        if buffer_index == 1 {
+            self.invalid1 = None;
+            self.invalid2 = union_dirty_rect(self.invalid2, damage);
+        } else {
+            self.invalid2 = None;
+            self.invalid1 = union_dirty_rect(self.invalid1, damage);
+        }
         Ok(FpgaVblankLatchHiddenPresentStats {
             copied_bytes,
+            invalid_bytes,
+            rect_count,
+            catchup_bytes: copied_bytes,
+            full_copy,
             buffer_index,
             copy_us,
             post_us,
@@ -297,6 +342,14 @@ impl FpgaVblankLatchHiddenPresenter {
             status_supported,
             flip_count,
         })
+    }
+}
+
+fn union_dirty_rect(current: Option<DirtyRect>, next: Option<DirtyRect>) -> Option<DirtyRect> {
+    match (current, next) {
+        (Some(a), Some(b)) => Some(a.union(b)),
+        (Some(rect), None) | (None, Some(rect)) => Some(rect),
+        (None, None) => None,
     }
 }
 
@@ -3356,7 +3409,29 @@ pub(super) fn run_launcher_loop(
                     let hidden_arcade_compose_us =
                         hidden_arcade_compose_start.elapsed().as_micros();
                     let hidden_compose_us = hidden_preview_compose_us + hidden_arcade_compose_us;
-                    match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
+                    let full_rect = DirtyRect {
+                        x0: 0,
+                        y0: 0,
+                        x1: ui.render_w(),
+                        y1: ui.render_h(),
+                    };
+                    let base_damage = if full_frame_present {
+                        Some(full_rect)
+                    } else {
+                        this_rect
+                    };
+                    let raw_preview_damage = raw_preview
+                        .and_then(|present| present.cached_rect().or(present.direct_rect()));
+                    let arcade_damage = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
+                    let hidden_damage = union_dirty_rect(
+                        union_dirty_rect(base_damage, raw_preview_damage),
+                        arcade_damage,
+                    );
+                    match presenter.present_cached_full_frame(
+                        layer_target.cached_565(),
+                        hidden_damage,
+                        f,
+                    ) {
                         Ok(stats) => {
                             let present_us = stats.copy_us
                                 + stats.post_us
@@ -3385,6 +3460,10 @@ pub(super) fn run_launcher_loop(
                                 },
                                 main_present_buffer: stats.buffer_index,
                                 main_present_hidden_copy_us: stats.copy_us,
+                                main_present_hidden_invalid_bytes: stats.invalid_bytes,
+                                main_present_hidden_rect_count: stats.rect_count,
+                                main_present_hidden_catchup_bytes: stats.catchup_bytes,
+                                main_present_hidden_full_copy: stats.full_copy,
                                 main_present_request_us: stats.post_us + stats.set_vga_fb_us,
                                 main_present_set_vga_fb_us: stats.set_vga_fb_us,
                                 main_present_wait_us: stats.status_us,
@@ -3519,6 +3598,10 @@ pub(super) fn run_launcher_loop(
                         main_present_status: "none",
                         main_present_buffer: 0,
                         main_present_hidden_copy_us: 0,
+                        main_present_hidden_invalid_bytes: 0,
+                        main_present_hidden_rect_count: 0,
+                        main_present_hidden_catchup_bytes: 0,
+                        main_present_hidden_full_copy: false,
                         main_present_request_us: 0,
                         main_present_set_vga_fb_us: 0,
                         main_present_wait_us: 0,
