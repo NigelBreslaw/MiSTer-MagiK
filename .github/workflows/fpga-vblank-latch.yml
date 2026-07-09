@@ -1,20 +1,9 @@
 name: FPGA Vblank Latch RBF
 
+# This workflow is intentionally manual-only. Quartus/RBF builds are heavyweight
+# and should be started with workflow_dispatch when a new core artifact is
+# actually needed.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/fpga-vblank-latch.yml"
-      - "experiments/fpga-vblank-latch/**"
-      - "scripts/build-fpga-vblank-latch-core.sh"
-      - "scripts/install-quartus-lite-docker.sh"
-  pull_request:
-    paths:
-      - ".github/workflows/fpga-vblank-latch.yml"
-      - "experiments/fpga-vblank-latch/**"
-      - "scripts/build-fpga-vblank-latch-core.sh"
-      - "scripts/install-quartus-lite-docker.sh"
   workflow_dispatch:
     inputs:
       menu_ref:
