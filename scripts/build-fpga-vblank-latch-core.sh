@@ -87,6 +87,7 @@ else
 fi
 
 mkdir -p "$OUT_DIR"
+rm -f "$RBF_OUT" "$META_OUT" "$LOG_OUT" "$OUT_DIR"/"$STRACE_PREFIX"*.log
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 rsync -a --delete \

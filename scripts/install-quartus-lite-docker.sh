@@ -106,14 +106,6 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 mkdir -p "$CACHE_DIR"
-require_file "$CACHE_DIR/$QUARTUS_RUN"
-require_file "$CACHE_DIR/$CYCLONEV_QDZ"
-
-verify_sha1 "$CACHE_DIR/$QUARTUS_RUN" "99ccfb15962febceba64de2dc9b28c47e5a3b8df"
-verify_sha1 "$CACHE_DIR/$CYCLONEV_QDZ" "2198dedb99866f38d43ff6c029d4bd668e2bbb59"
-if [[ -f "$CACHE_DIR/$UPDATE2_RUN" ]]; then
-  verify_sha1 "$CACHE_DIR/$UPDATE2_RUN" "cdc0389947ba6d3fb3206ac9840549c9fb38b093"
-fi
 
 mkdir -p "$CONTEXT_DIR"
 cat > "$CONTAINERFILE" <<EOF
@@ -138,6 +130,12 @@ docker build --platform linux/amd64 --file "$CONTAINERFILE" --tag "$IMAGE" "$CON
 
 mkdir -p "$INSTALL_ROOT"
 if [[ ! -x "$INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
+  require_file "$CACHE_DIR/$QUARTUS_RUN"
+  require_file "$CACHE_DIR/$CYCLONEV_QDZ"
+
+  verify_sha1 "$CACHE_DIR/$QUARTUS_RUN" "99ccfb15962febceba64de2dc9b28c47e5a3b8df"
+  verify_sha1 "$CACHE_DIR/$CYCLONEV_QDZ" "2198dedb99866f38d43ff6c029d4bd668e2bbb59"
+
   echo "Installing Quartus Lite 17.0 into $INSTALL_ROOT with timeout $INSTALL_TIMEOUT"
   set +e
   docker run --platform linux/amd64 --rm \
@@ -181,6 +179,7 @@ timeout '$INSTALL_TIMEOUT' bash -lc '
 fi
 
 if [[ -f "$CACHE_DIR/$UPDATE2_RUN" ]]; then
+  verify_sha1 "$CACHE_DIR/$UPDATE2_RUN" "cdc0389947ba6d3fb3206ac9840549c9fb38b093"
   docker run --platform linux/amd64 --rm \
     --volume "$CACHE_DIR:/quartus-cache" \
     --volume "$INSTALL_ROOT:/opt/intelFPGA_lite" \
