@@ -3353,18 +3353,9 @@ pub(super) fn run_launcher_loop(
                 }
                 if let Some(mut presentation) = latch_presentation {
                     let present_done = Instant::now();
-                    // Once a hidden-buffer latch is posted, wait for the FPGA to consume it before
-                    // starting the next frame. The first visible frame is included here; otherwise
-                    // startup can post a second pending buffer before the first vblank.
-                    let pace = {
-                        let pace = pacer.wait();
-                        Some((pace, Instant::now()))
-                    };
-                    let frame_t4 = pace.as_ref().map(|(_, done)| *done).unwrap_or(present_done);
-                    presentation.vsync_us_override =
-                        Some(frame_t4.saturating_duration_since(present_done).as_micros());
+                    presentation.vsync_us_override = Some(0);
                     let pacing_trace = LauncherPacingTrace::from_pace_with_present_phase(
-                        pace.as_ref().map(|(pace, _)| pace),
+                        None,
                         frame_start_phase_us,
                         pacer.period_us(),
                         present_phase_us,
@@ -3372,7 +3363,7 @@ pub(super) fn run_launcher_loop(
                     (
                         presentation,
                         frame_t3,
-                        frame_t4,
+                        present_done,
                         cpu_t3,
                         FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
                         pacing_trace,
@@ -3496,6 +3487,8 @@ pub(super) fn run_launcher_loop(
             } else {
                 0
             };
+        let latch_trace_flush_deferred =
+            presentation.main_present_backend == "fpga-vblank-latch-hidden";
         if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
@@ -3515,7 +3508,7 @@ pub(super) fn run_launcher_loop(
             prepare_us,
             presentation.copied_rows,
         );
-        let presented_frame = LauncherFrameSnapshotBuilder {
+        let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames,
                 selected: nav.arcade.selected,
@@ -3566,55 +3559,136 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
-        frame_accounting.finish_frame(
-            presented_frame,
-            start,
-            disp,
-            &nav,
-            &pad,
-            &catalog,
-            catalog_ready,
-            catalog_session.refresh_done(),
-            launching,
-            scheduler.visible_loading_title(&loading_title),
-            catalog_scan_visible,
-            status_text
-                .as_ref()
-                .map(|text| text.catalog_scan_title.as_str())
-                .unwrap_or(""),
-            status_text
-                .as_ref()
-                .map(|text| text.catalog_scan_detail.as_str())
-                .unwrap_or(""),
-            catalog_scan_percent,
-            catalog_background_scan_visible,
-            status_text
-                .as_ref()
-                .map(|text| text.catalog_scan_message.as_str())
-                .unwrap_or(""),
-            confirm_visible,
-            status_text
-                .as_ref()
-                .map(|text| text.confirm_title.as_str())
-                .unwrap_or(""),
-            confirm_selected,
-            status_text
-                .as_ref()
-                .map(|text| text.confirm_left_label.as_str())
-                .unwrap_or(""),
-            status_text
-                .as_ref()
-                .map(|text| text.confirm_right_label.as_str())
-                .unwrap_or(""),
-            launcher_bench_scenario,
-            start_screen,
-            lock_screen,
-            route_reassert_count,
-            last_route_reassert_frame,
-            last_route_reassert_ok,
-            &last_route_reassert_error,
-            lifecycle.startup_status(),
-        );
+        if latch_trace_flush_deferred {
+            let finish_timing = frame_accounting.finish_frame_before_trace(
+                &presented_frame,
+                start,
+                disp,
+                &nav,
+                &pad,
+                &catalog,
+                catalog_ready,
+                catalog_session.refresh_done(),
+                launching,
+                scheduler.visible_loading_title(&loading_title),
+                catalog_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_title.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_detail.as_str())
+                    .unwrap_or(""),
+                catalog_scan_percent,
+                catalog_background_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_message.as_str())
+                    .unwrap_or(""),
+                confirm_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_title.as_str())
+                    .unwrap_or(""),
+                confirm_selected,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_left_label.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_right_label.as_str())
+                    .unwrap_or(""),
+                launcher_bench_scenario,
+                start_screen,
+                lock_screen,
+                route_reassert_count,
+                last_route_reassert_frame,
+                last_route_reassert_ok,
+                &last_route_reassert_error,
+                lifecycle.startup_status(),
+            );
+            // Latch mode posts the hidden buffer first, then spends the slack before
+            // vblank on normal per-frame accounting. The final wait is only the
+            // pacing boundary for the next frame.
+            let wait_start = Instant::now();
+            let pace = pacer.wait();
+            let wait_done = Instant::now();
+            let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
+            let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
+                Some(&pace),
+                presented_frame.frame_start_phase_us,
+                pacer.period_us(),
+                presented_frame.present_phase_us,
+            );
+            presented_frame.frame_t4 = wait_done;
+            presented_frame.post_present_wait_us = post_wait_us;
+            presented_frame.vsync_us_override = Some(post_wait_us);
+            presented_frame.cpu_t4 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
+            presented_frame.vsync_source = wait_trace.vsync_source;
+            presented_frame.vsync_period_us = wait_trace.vsync_period_us;
+            presented_frame.vsync_miss_streak = wait_trace.vsync_miss_streak;
+            presented_frame.vsync_stale_hits = wait_trace.vsync_stale_hits;
+            presented_frame.vsync_wait_start_age_us = wait_trace.vsync_wait_start_age_us;
+            presented_frame.vsync_accepted_hit_age_us = wait_trace.vsync_accepted_hit_age_us;
+            frame_accounting.write_finished_frame_trace(
+                &presented_frame,
+                finish_timing,
+                latch_trace_flush_deferred,
+            );
+        } else {
+            frame_accounting.finish_frame(
+                presented_frame,
+                start,
+                disp,
+                &nav,
+                &pad,
+                &catalog,
+                catalog_ready,
+                catalog_session.refresh_done(),
+                launching,
+                scheduler.visible_loading_title(&loading_title),
+                catalog_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_title.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_detail.as_str())
+                    .unwrap_or(""),
+                catalog_scan_percent,
+                catalog_background_scan_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.catalog_scan_message.as_str())
+                    .unwrap_or(""),
+                confirm_visible,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_title.as_str())
+                    .unwrap_or(""),
+                confirm_selected,
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_left_label.as_str())
+                    .unwrap_or(""),
+                status_text
+                    .as_ref()
+                    .map(|text| text.confirm_right_label.as_str())
+                    .unwrap_or(""),
+                launcher_bench_scenario,
+                start_screen,
+                lock_screen,
+                route_reassert_count,
+                last_route_reassert_frame,
+                last_route_reassert_ok,
+                &last_route_reassert_error,
+                lifecycle.startup_status(),
+                latch_trace_flush_deferred,
+            );
+        }
         frames += 1;
     }
     let elapsed = run_start.elapsed().as_secs_f64();
