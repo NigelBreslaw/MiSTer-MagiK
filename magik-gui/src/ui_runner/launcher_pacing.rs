@@ -79,6 +79,23 @@ impl LauncherPacingTrace {
                 .unwrap_or(0),
         }
     }
+
+    #[inline]
+    pub(super) fn from_pace_with_present_phase(
+        pace: Option<&VsyncPace>,
+        frame_start_phase_us: u64,
+        fallback_period_us: u64,
+        present_phase_us: u128,
+    ) -> Self {
+        let mut trace = Self::from_pace(
+            pace,
+            frame_start_phase_us,
+            fallback_period_us,
+            Instant::now(),
+        );
+        trace.present_phase_us = present_phase_us;
+        trace
+    }
 }
 
 #[cfg(test)]

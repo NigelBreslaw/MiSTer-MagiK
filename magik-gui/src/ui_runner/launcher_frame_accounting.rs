@@ -81,6 +81,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) direct_preview_rows: u32,
     pub(super) present_bytes: usize,
     pub(super) wasted_present_bytes: usize,
+    pub(super) fb_present_us_override: Option<u128>,
+    pub(super) vsync_us_override: Option<u128>,
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
@@ -194,6 +196,8 @@ impl LauncherFrameSnapshotBuilder {
             direct_preview_rows: self.presentation.direct_preview_rows,
             present_bytes: self.presentation.present_bytes,
             wasted_present_bytes: self.presentation.wasted_present_bytes,
+            fb_present_us_override: self.presentation.fb_present_us_override,
+            vsync_us_override: self.presentation.vsync_us_override,
             cached_present_us: self.presentation.cached_present_us,
             direct_preview_present_us: self.presentation.direct_preview_present_us,
             arcade_list_present_us: self.presentation.arcade_list_present_us,
@@ -524,8 +528,12 @@ fn preview_scroll_trace_row_from_frame(
         preview_fade_path: frame.preview_transition.fade.label(),
         preview_fade_alpha_bucket: frame.preview_transition.fade.alpha_bucket,
         effect_label_us: frame.custom_draw_trace.effect_label_us,
-        vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
-        fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
+        vsync_us: frame
+            .vsync_us_override
+            .unwrap_or_else(|| (frame.frame_t3 - frame.custom_draw_done).as_micros()),
+        fb_present_us: frame
+            .fb_present_us_override
+            .unwrap_or_else(|| (frame.frame_t4 - frame.frame_t3).as_micros()),
         cached_present_us: frame.cached_present_us,
         direct_preview_present_us: frame.direct_preview_present_us,
         arcade_list_present_us: frame.arcade_list_present_us,
@@ -1672,6 +1680,8 @@ mod tests {
             direct_preview_rows: 4,
             present_bytes: 23_040,
             wasted_present_bytes: 1_280,
+            fb_present_us_override: None,
+            vsync_us_override: None,
             cached_present_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
@@ -1750,6 +1760,8 @@ mod tests {
                 direct_preview_rows: frame.direct_preview_rows,
                 present_bytes: frame.present_bytes,
                 wasted_present_bytes: frame.wasted_present_bytes,
+                fb_present_us_override: frame.fb_present_us_override,
+                vsync_us_override: frame.vsync_us_override,
                 cached_present_us: frame.cached_present_us,
                 direct_preview_present_us: frame.direct_preview_present_us,
                 arcade_list_present_us: frame.arcade_list_present_us,
@@ -1847,6 +1859,22 @@ mod tests {
             .write_tsv(&mut built_row);
 
         assert_eq!(built_row, expected_row);
+    }
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[test]
+    fn preview_trace_uses_present_timing_overrides_when_present_happens_before_vsync() {
+        let start = Instant::now();
+        let frame = presented_frame(45, start, 22_000);
+        let mut builder = builder_from_frame(&frame);
+        builder.presentation.fb_present_us_override = Some(1_700);
+        builder.presentation.vsync_us_override = Some(8_200);
+        let built = builder.build();
+
+        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 0);
+
+        assert_eq!(row.fb_present_us, 1_700);
+        assert_eq!(row.vsync_us, 8_200);
     }
 
     #[test]
