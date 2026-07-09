@@ -36,6 +36,7 @@ env:
   QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
   QUARTUS_DOCKER_CPUS: "4"
   QUARTUS_DOCKER_MEMORY: "0"
+  QUARTUS_DOCKER_PRIVILEGED: "1"
 
 jobs:
   build-rbf:
