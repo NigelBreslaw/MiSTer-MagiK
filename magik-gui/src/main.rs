@@ -114,7 +114,7 @@ pub use mister_magik_fb::{
 };
 
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
-#[cfg(feature = "diagnostics")]
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use fpga::{MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
 #[cfg(feature = "diagnostics")]
@@ -373,7 +373,7 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         "effect-bench" => ui_effect_bench::run_effect_bench(f),
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
-        #[cfg(feature = "diagnostics")]
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "fpga-latch-report" => run_fpga_latch_report(),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),
@@ -1126,7 +1126,7 @@ fn run_plugin_map_report() {
     }
 }
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn run_fpga_latch_report() {
     let mut fpga = match Fpga::open() {
         Ok(fpga) => fpga,
@@ -1635,7 +1635,7 @@ fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
     })
 }
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 fn bool_tsv(value: bool) -> &'static str {
     if value {
         "1"

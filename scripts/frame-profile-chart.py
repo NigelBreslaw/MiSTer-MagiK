@@ -31,6 +31,7 @@ PHASES = [
     ("audio_resample_us", "audio-resample", "#fb7185"),
     ("audio_write_us", "audio-write", "#b45309"),
     ("cached_present_us", "cached-present", "#06b6d4"),
+    ("hidden_compose_us", "hidden-compose", "#f43f5e"),
     ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
 ]
 
@@ -52,6 +53,8 @@ DETAIL_PHASES = [
     ("audio_resample_us", "audio-resample", "#fb7185"),
     ("audio_write_us", "audio-write", "#b45309"),
     ("cached_present_us", "cached-present", "#06b6d4"),
+    ("hidden_preview_compose_us", "hidden-preview", "#fb7185"),
+    ("hidden_arcade_compose_us", "hidden-arcade", "#e11d48"),
     ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
     ("fb_present_other_us", "present-other", "#94a3b8"),
 ]
@@ -94,7 +97,15 @@ def phase_value(row: dict[str, str], key: str) -> int:
         )
         return max(0, int_field(row, "custom_draw_us") - known)
     if key == "fb_present_other_us":
-        known = int_field(row, "cached_present_us") + int_field(row, "arcade_list_present_us")
+        hidden_compose = int_field(row, "hidden_compose_us")
+        compose_present = hidden_compose or (
+            int_field(row, "direct_preview_present_us")
+            + int_field(row, "arcade_list_present_us")
+        )
+        known = (
+            int_field(row, "cached_present_us")
+            + compose_present
+        )
         return max(0, int_field(row, "fb_present_us") - known)
     return int_field(row, key)
 

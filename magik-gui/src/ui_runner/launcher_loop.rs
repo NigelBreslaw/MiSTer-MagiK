@@ -3308,20 +3308,25 @@ pub(super) fn run_launcher_loop(
                 let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
                 let mut latch_presentation = None;
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
-                    let hidden_compose_start = Instant::now();
+                    let hidden_preview_compose_start = Instant::now();
                     let direct_preview_rows = raw_preview
                         .and_then(RawPreviewPresent::direct_rect)
                         .map(|rect| layer_target.compose_direct_preview_rect(rect))
                         .unwrap_or(0);
+                    let hidden_preview_compose_us =
+                        hidden_preview_compose_start.elapsed().as_micros();
                     let arcade_update_label =
                         ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
+                    let hidden_arcade_compose_start = Instant::now();
                     let _arcade_stats = arcade_list_rect
                         .map(|update| {
                             layer_target
                                 .compose_arcade_list_update(&mut arcade_list_renderer, update)
                         })
                         .unwrap_or_default();
-                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
+                    let hidden_arcade_compose_us =
+                        hidden_arcade_compose_start.elapsed().as_micros();
+                    let hidden_compose_us = hidden_preview_compose_us + hidden_arcade_compose_us;
                     match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
                         Ok(stats) => {
                             let present_us =
@@ -3334,8 +3339,11 @@ pub(super) fn run_launcher_loop(
                                 fb_present_us_override: Some(present_us),
                                 vsync_us_override: None,
                                 cached_present_us: stats.copy_us,
-                                direct_preview_present_us: hidden_compose_us,
-                                arcade_list_present_us: hidden_compose_us,
+                                hidden_compose_us,
+                                hidden_preview_compose_us,
+                                hidden_arcade_compose_us,
+                                direct_preview_present_us: hidden_preview_compose_us,
+                                arcade_list_present_us: hidden_arcade_compose_us,
                                 main_present_backend: "fpga-vblank-latch-hidden",
                                 main_present_status: if stats.set_supported
                                     && stats.status_supported
@@ -3470,6 +3478,9 @@ pub(super) fn run_launcher_loop(
                         fb_present_us_override: None,
                         vsync_us_override: None,
                         cached_present_us: 0,
+                        hidden_compose_us: 0,
+                        hidden_preview_compose_us: 0,
+                        hidden_arcade_compose_us: 0,
                         direct_preview_present_us: 0,
                         arcade_list_present_us: 0,
                         main_present_backend: "none",

@@ -558,6 +558,9 @@ summarize_custom_draw_phases() {
       phase["preview_blit_us", n] = $(col["preview_blit_us"]) + 0
       phase["effect_label_us", n] = $(col["effect_label_us"]) + 0
       phase["cached_present_us", n] = $(col["cached_present_us"]) + 0
+      phase["hidden_compose_us", n] = ("hidden_compose_us" in col) ? $(col["hidden_compose_us"]) + 0 : 0
+      phase["hidden_preview_compose_us", n] = ("hidden_preview_compose_us" in col) ? $(col["hidden_preview_compose_us"]) + 0 : 0
+      phase["hidden_arcade_compose_us", n] = ("hidden_arcade_compose_us" in col) ? $(col["hidden_arcade_compose_us"]) + 0 : 0
       phase["direct_preview_present_us", n] = ("direct_preview_present_us" in col) ? $(col["direct_preview_present_us"]) + 0 : 0
       phase["arcade_list_present_us", n] = $(col["arcade_list_present_us"]) + 0
       sum["custom_draw_us"] += phase["custom_draw_us", n]
@@ -565,6 +568,9 @@ summarize_custom_draw_phases() {
       sum["preview_blit_us"] += phase["preview_blit_us", n]
       sum["effect_label_us"] += phase["effect_label_us", n]
       sum["cached_present_us"] += phase["cached_present_us", n]
+      sum["hidden_compose_us"] += phase["hidden_compose_us", n]
+      sum["hidden_preview_compose_us"] += phase["hidden_preview_compose_us", n]
+      sum["hidden_arcade_compose_us"] += phase["hidden_arcade_compose_us", n]
       sum["direct_preview_present_us"] += phase["direct_preview_present_us", n]
       sum["arcade_list_present_us"] += phase["arcade_list_present_us", n]
     }
@@ -578,9 +584,12 @@ summarize_custom_draw_phases() {
       fields[3] = "preview_blit_us"
       fields[4] = "effect_label_us"
       fields[5] = "cached_present_us"
-      fields[6] = "direct_preview_present_us"
-      fields[7] = "arcade_list_present_us"
-      for (field_i = 1; field_i <= 7; field_i++) {
+      fields[6] = "hidden_compose_us"
+      fields[7] = "hidden_preview_compose_us"
+      fields[8] = "hidden_arcade_compose_us"
+      fields[9] = "direct_preview_present_us"
+      fields[10] = "arcade_list_present_us"
+      for (field_i = 1; field_i <= 10; field_i++) {
         field = fields[field_i]
         for (i = 1; i <= n; i++) sorted[i] = phase[field, i]
         for (i = 1; i <= n; i++) {
@@ -1255,8 +1264,8 @@ EOF
 
   local work_slow_attributed="$tmp/work-slow-attributed.tsv"
   cat >"$work_slow_attributed" <<'EOF'
-frame	prepare_us	catalog_worker_us	media_worker_us	media_gate_us	preview_schedule_us	preview_apply_us	slint_render_us	custom_draw_us	arcade_list_update_us	preview_blit_us	effect_label_us	vsync_us	fb_present_us	cached_present_us	direct_preview_present_us	arcade_list_present_us	status_write_due	status_string_copy_us	status_string_copy_bytes	runtime_status_write_us	wall_us
-31	1000	0	0	0	0	900	1000	14000	0	3000	0	500	1000	500	0	500	1	12	4	200	17500
+frame	prepare_us	catalog_worker_us	media_worker_us	media_gate_us	preview_schedule_us	preview_apply_us	slint_render_us	custom_draw_us	arcade_list_update_us	preview_blit_us	effect_label_us	vsync_us	fb_present_us	cached_present_us	hidden_compose_us	hidden_preview_compose_us	hidden_arcade_compose_us	direct_preview_present_us	arcade_list_present_us	status_write_due	status_string_copy_us	status_string_copy_bytes	runtime_status_write_us	wall_us
+31	1000	0	0	0	0	900	1000	14000	0	3000	0	500	1000	500	0	0	0	0	500	1	12	4	200	17500
 EOF
   report_slow_work_attribution selftest "$work_slow_attributed" >/dev/null
 

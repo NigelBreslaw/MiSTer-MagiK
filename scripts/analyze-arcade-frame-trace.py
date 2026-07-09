@@ -35,6 +35,9 @@ PHASES = [
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
+    "hidden_compose_us",
+    "hidden_preview_compose_us",
+    "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
     "present_bytes",
@@ -70,6 +73,9 @@ INTERRUPTION_COLUMNS = [
 DOMINANT_DELTA_COLUMNS = [
     "vsync_us",
     "fb_present_us",
+    "hidden_compose_us",
+    "hidden_preview_compose_us",
+    "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
     "runtime_status_write_us",
@@ -88,6 +94,23 @@ def parse_value(key: str, value: str) -> int | float | str:
     if key in FLOAT_COLUMNS:
         return float(value)
     return int(value)
+
+
+def normalize_row(row: dict[str, int | float | str]) -> None:
+    if "arcade_update" in row and "update" not in row:
+        row["update"] = row["arcade_update"]
+    if "arcade_draw_us" in row and "custom_draw_us" not in row:
+        row["custom_draw_us"] = row["arcade_draw_us"]
+    if "overlay_present_us" in row and "arcade_list_present_us" not in row:
+        row["arcade_list_present_us"] = row["overlay_present_us"]
+    for key in (
+        "hidden_compose_us",
+        "hidden_preview_compose_us",
+        "hidden_arcade_compose_us",
+        "direct_preview_present_us",
+        "arcade_list_present_us",
+    ):
+        row.setdefault(key, 0)
 
 
 def percentile(values: list[int], pct: int) -> int:
@@ -283,6 +306,9 @@ def run_self_test() -> int:
         "slint_render_us",
         "custom_draw_us",
         "fb_present_us",
+        "hidden_compose_us",
+        "hidden_preview_compose_us",
+        "hidden_arcade_compose_us",
         "direct_preview_present_us",
         "arcade_list_present_us",
         "runtime_status_write_us",
@@ -293,17 +319,21 @@ def run_self_test() -> int:
         "wall_us",
     ]
     rows = [
-        [1, 0, 0, 0, "none", 0, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 12000, 16000],
-        [2, 16667, 1, 1, "scroll", 8, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 14000, 17001],
-        [3, 33334, 2, 2, "scroll", 8, 2000, 1000, 1000, 2000, 1500, 800, 0, 900, 1, 1, 16000, 21000],
-        [4, 50001, 3, 3, "scroll", 8, 18000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 2000, 22000],
+        [1, 0, 0, 0, "none", 0, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12000, 16000],
+        [2, 16667, 1, 1, "scroll", 8, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14000, 17001],
+        [3, 33334, 2, 2, "scroll", 8, 2000, 1000, 1000, 2000, 2300, 1500, 800, 1500, 800, 0, 900, 1, 1, 16000, 21000],
+        [4, 50001, 3, 3, "scroll", 8, 18000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2000, 22000],
     ]
     parsed = [{key: parse_value(key, str(value)) for key, value in zip(header, row)} for row in rows]
+    for row in parsed:
+        normalize_row(row)
     assert sum(1 for row in parsed if int(row["wall_us"]) > 16_667) == 3
     assert sum(1 for row in parsed if int(row["wall_us"]) > 18_000) == 2
     assert sum(1 for row in parsed if int(row["wall_us"]) > 20_000) == 2
     assert sum(1 for row in parsed if work_us(row) > 16_667) == 1
     assert sum(1 for row in parsed if int(row["wall_us"]) > 16_667 and work_us(row) <= 16_667) == 2
+    assert parsed[2]["hidden_compose_us"] == 2300
+    assert parsed[2]["hidden_preview_compose_us"] + parsed[2]["hidden_arcade_compose_us"] == 2300
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "trace.tsv"
         with path.open("w", newline="") as f:
@@ -315,6 +345,8 @@ def run_self_test() -> int:
                 {key: parse_value(key, value) for key, value in row.items()}
                 for row in csv.DictReader(f, delimiter="\t")
             ]
+        for row in reloaded:
+            normalize_row(row)
         assert len(reloaded) == 4
     print("analyze-arcade-frame-trace self-test ok")
     return 0
@@ -348,12 +380,7 @@ def main() -> int:
             for row in csv.DictReader(f, delimiter="\t")
         ]
     for row in rows:
-        if "arcade_update" in row and "update" not in row:
-            row["update"] = row["arcade_update"]
-        if "arcade_draw_us" in row and "custom_draw_us" not in row:
-            row["custom_draw_us"] = row["arcade_draw_us"]
-        if "overlay_present_us" in row and "arcade_list_present_us" not in row:
-            row["arcade_list_present_us"] = row["overlay_present_us"]
+        normalize_row(row)
     if not args.include_first:
         rows = [row for row in rows if int(row["frame"]) != 0]
 
