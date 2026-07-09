@@ -120,6 +120,54 @@ pub struct FbInfo {
     pub transp_offset: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FbRawDiagnostics {
+    pub id: String,
+    pub smem_start: usize,
+    pub smem_len: usize,
+    pub type_: u32,
+    pub type_aux: u32,
+    pub visual: u32,
+    pub xpanstep: u16,
+    pub ypanstep: u16,
+    pub ywrapstep: u16,
+    pub line_length: usize,
+    pub mmio_start: usize,
+    pub mmio_len: usize,
+    pub accel: u32,
+    pub capabilities: u16,
+    pub xres: usize,
+    pub yres: usize,
+    pub xres_virtual: usize,
+    pub yres_virtual: usize,
+    pub xoffset: usize,
+    pub yoffset: usize,
+    pub bits_per_pixel: u32,
+    pub red_offset: u32,
+    pub red_length: u32,
+    pub red_msb_right: u32,
+    pub green_offset: u32,
+    pub green_length: u32,
+    pub green_msb_right: u32,
+    pub blue_offset: u32,
+    pub blue_length: u32,
+    pub blue_msb_right: u32,
+    pub transp_offset: u32,
+    pub transp_length: u32,
+    pub transp_msb_right: u32,
+    pub vmode: u32,
+    pub rotate: u32,
+    pub colorspace: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FbMmapProbe {
+    pub label: &'static str,
+    pub requested_len: usize,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
 impl FbInfo {
     pub fn log_line(self) -> String {
         format!(
@@ -595,6 +643,111 @@ impl MappedRgb565Framebuffer {
 
     pub fn current_info() -> io::Result<FbInfo> {
         Self::read_fb_info()
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn raw_diagnostics() -> io::Result<FbRawDiagnostics> {
+        let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+        let fd = fb0.as_raw_fd();
+        let mut var = FbVarScreeninfo::zeroed();
+        let mut fix = FbFixScreeninfo::zeroed();
+        // SAFETY: fd refers to /dev/fb0 and var/fix are repr(C) framebuffer structs.
+        if unsafe { libc::ioctl(fd, FBIOGET_VSCREENINFO, &mut var as *mut _) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd refers to /dev/fb0 and fix is a repr(C) framebuffer struct.
+        if unsafe { libc::ioctl(fd, FBIOGET_FSCREENINFO, &mut fix as *mut _) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let nul = fix.id.iter().position(|b| *b == 0).unwrap_or(fix.id.len());
+        let id = String::from_utf8_lossy(&fix.id[..nul]).to_string();
+        Ok(FbRawDiagnostics {
+            id,
+            smem_start: fix.smem_start as usize,
+            smem_len: fix.smem_len as usize,
+            type_: fix.type_,
+            type_aux: fix.type_aux,
+            visual: fix.visual,
+            xpanstep: fix.xpanstep,
+            ypanstep: fix.ypanstep,
+            ywrapstep: fix.ywrapstep,
+            line_length: fix.line_length as usize,
+            mmio_start: fix.mmio_start as usize,
+            mmio_len: fix.mmio_len as usize,
+            accel: fix.accel,
+            capabilities: fix.capabilities,
+            xres: var.xres as usize,
+            yres: var.yres as usize,
+            xres_virtual: var.xres_virtual as usize,
+            yres_virtual: var.yres_virtual as usize,
+            xoffset: var.xoffset as usize,
+            yoffset: var.yoffset as usize,
+            bits_per_pixel: var.bits_per_pixel,
+            red_offset: var.red.offset,
+            red_length: var.red.length,
+            red_msb_right: var.red.msb_right,
+            green_offset: var.green.offset,
+            green_length: var.green.length,
+            green_msb_right: var.green.msb_right,
+            blue_offset: var.blue.offset,
+            blue_length: var.blue.length,
+            blue_msb_right: var.blue.msb_right,
+            transp_offset: var.transp.offset,
+            transp_length: var.transp.length,
+            transp_msb_right: var.transp.msb_right,
+            vmode: var.vmode,
+            rotate: var.rotate,
+            colorspace: var.colorspace,
+        })
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn probe_mmap_lengths(probes: &[(&'static str, usize)]) -> io::Result<Vec<FbMmapProbe>> {
+        let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+        let fd = fb0.as_raw_fd();
+        let mut out = Vec::with_capacity(probes.len());
+        for (label, requested_len) in probes {
+            if *requested_len == 0 {
+                out.push(FbMmapProbe {
+                    label,
+                    requested_len: *requested_len,
+                    ok: false,
+                    error: Some("zero-length mmap skipped".to_string()),
+                });
+                continue;
+            }
+            // SAFETY: fd refers to /dev/fb0; the mapping is read-only and is unmapped immediately.
+            let mem = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    *requested_len,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                )
+            };
+            if mem == libc::MAP_FAILED {
+                out.push(FbMmapProbe {
+                    label,
+                    requested_len: *requested_len,
+                    ok: false,
+                    error: Some(io::Error::last_os_error().to_string()),
+                });
+            } else {
+                // SAFETY: mem/requested_len came from a successful mmap above.
+                unsafe {
+                    libc::munmap(mem, *requested_len);
+                }
+                out.push(FbMmapProbe {
+                    label,
+                    requested_len: *requested_len,
+                    ok: true,
+                    error: None,
+                });
+            }
+        }
+        Ok(out)
     }
 
     pub fn open_rgb565(w: usize, h: usize) -> io::Result<Self> {

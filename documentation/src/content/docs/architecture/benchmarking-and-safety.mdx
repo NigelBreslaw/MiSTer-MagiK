@@ -1,0 +1,22 @@
+---
+title: Benchmarking and Safety
+description: Performance gates, device command rules, and reset-fault safety.
+sidebar:
+  order: 8
+---
+
+Performance claims should come from documented benchmark scenarios, not ad hoc row jumps or visual impressions. Use the scenario scripts in the repository and read `docs/benchmarking.md` before drawing conclusions.
+
+```mermaid
+flowchart TD
+  Work["Device experiment"] --> Reset{"Can it reboot?"}
+  Reset -- "No" --> Run["Run normal wrapper"]
+  Reset -- "Yes" --> Token["Use volatile /tmp session token"]
+  Token --> Cleanup["Install cleanup traps"]
+  Cleanup --> Bounded["Use bounded host wait loops"]
+  Bounded --> Verify["Verify no arming files remain"]
+  Verify --> Done["Experiment complete"]
+  Verify --> Recover["Remove stale files or mount SD card"]
+```
+
+The highest safety rule is never leaving the MiSTer in a persistent reboot loop. Destructive reset-fault tests must use volatile arming, cleanup traps, bounded waits, and post-test verification.

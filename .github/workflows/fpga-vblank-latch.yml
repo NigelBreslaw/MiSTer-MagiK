@@ -1,0 +1,239 @@
+name: FPGA Vblank Latch RBF
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fpga-vblank-latch.yml"
+      - "experiments/fpga-vblank-latch/**"
+      - "scripts/build-fpga-vblank-latch-core.sh"
+      - "scripts/install-quartus-lite-docker.sh"
+  workflow_dispatch:
+    inputs:
+      menu_ref:
+        description: "MiSTer-devel/Menu_MiSTer ref to build"
+        required: true
+        default: "master"
+      quartus_run_url:
+        description: "Optional URL for QuartusLiteSetup-17.0.0.595-linux.run; falls back to secret QUARTUS_17_0_RUN_URL"
+        required: false
+        default: "https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/QuartusLiteSetup-17.0.0.595-linux.run"
+      cyclonev_qdz_url:
+        description: "Optional URL for cyclonev-17.0.0.595.qdz; falls back to secret QUARTUS_17_0_CYCLONEV_QDZ_URL"
+        required: false
+        default: "https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/cyclonev-17.0.0.595.qdz"
+      apply_magik_patch:
+        description: "Apply the experimental MagiK vblank-latch patch before building"
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+env:
+  QUARTUS_ACCEPT_EULA: "1"
+  QUARTUS_CACHE_DIR: ${{ github.workspace }}/build/quartus-lite-17.0
+  QUARTUS_DOCKER_BASE_IMAGE: ubuntu:18.04
+  QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
+  QUARTUS_DOCKER_CPUS: "4"
+  QUARTUS_DOCKER_MEMORY: "0"
+
+jobs:
+  prepare-quartus:
+    name: Prepare cached Quartus runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Maximize runner build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 1024
+          remove-dotnet: false
+          remove-android: false
+          remove-haskell: false
+          remove-codeql: false
+          remove-docker-images: true
+          build-mount-path: ${{ github.workspace }}
+
+      - name: Checkout MagiK repo
+        uses: actions/checkout@v4
+
+      - name: Bind runner temp to build volume
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.runner-temp"
+          sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"
+          df -h "$RUNNER_TEMP"
+
+      - name: Move Docker data root to build volume
+        run: |
+          set -euo pipefail
+          sudo systemctl stop docker
+          mkdir -p "$GITHUB_WORKSPACE/.docker-data"
+          printf '{"data-root":"%s/.docker-data"}\n' "$GITHUB_WORKSPACE" | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker info --format 'DockerRootDir={{.DockerRootDir}}'
+
+      - name: Restore installed Quartus cache
+        id: quartus-install-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/quartus-lite-17.0/docker-intelFPGA_lite
+          key: quartus-lite-17.0.0.595-cyclonev-${{ runner.os }}-${{ env.QUARTUS_DOCKER_BASE_IMAGE }}-${{ hashFiles('scripts/install-quartus-lite-docker.sh', '.github/workflows/fpga-vblank-latch.yml') }}
+          restore-keys: |
+            quartus-lite-17.0.0.595-cyclonev-${{ runner.os }}-${{ env.QUARTUS_DOCKER_BASE_IMAGE }}-
+
+      - name: Download Quartus 17.0 installer payloads
+        if: steps.quartus-install-cache.outputs.cache-hit != 'true'
+        env:
+          QUARTUS_RUN_URL_INPUT: ${{ github.event.inputs.quartus_run_url }}
+          CYCLONEV_QDZ_URL_INPUT: ${{ github.event.inputs.cyclonev_qdz_url }}
+          QUARTUS_RUN_URL_SECRET: ${{ secrets.QUARTUS_17_0_RUN_URL }}
+          CYCLONEV_QDZ_URL_SECRET: ${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$QUARTUS_CACHE_DIR"
+
+          quartus_url="${QUARTUS_RUN_URL_INPUT:-$QUARTUS_RUN_URL_SECRET}"
+          cyclonev_url="${CYCLONEV_QDZ_URL_INPUT:-$CYCLONEV_QDZ_URL_SECRET}"
+          if [ -z "$quartus_url" ] || [ -z "$cyclonev_url" ]; then
+            echo "Set workflow inputs quartus_run_url/cyclonev_qdz_url or repo secrets QUARTUS_17_0_RUN_URL/QUARTUS_17_0_CYCLONEV_QDZ_URL." >&2
+            exit 2
+          fi
+
+          download_payload() {
+            local url="$1"
+            local output="$2"
+            curl \
+              --fail \
+              --location \
+              --show-error \
+              --continue-at - \
+              --retry 5 \
+              --retry-all-errors \
+              --retry-delay 10 \
+              --retry-max-time 900 \
+              --connect-timeout 30 \
+              --max-time 900 \
+              --speed-time 120 \
+              --speed-limit 1048576 \
+              --output "$output" \
+              "$url"
+          }
+
+          download_payload "$quartus_url" "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run"
+          download_payload "$cyclonev_url" "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz"
+
+          shasum -a 1 "$QUARTUS_CACHE_DIR/QuartusLiteSetup-17.0.0.595-linux.run"
+          shasum -a 1 "$QUARTUS_CACHE_DIR/cyclonev-17.0.0.595.qdz"
+
+      - name: Install or verify Quartus Docker runtime
+        run: scripts/install-quartus-lite-docker.sh
+
+      - name: Normalize Quartus cache ownership
+        if: steps.quartus-install-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo chown -R "$USER:$USER" build/quartus-lite-17.0/docker-intelFPGA_lite
+          chmod -R u+rwX build/quartus-lite-17.0/docker-intelFPGA_lite
+          test -x build/quartus-lite-17.0/docker-intelFPGA_lite/17.0/quartus/bin/quartus_sh
+
+      - name: Save installed Quartus cache
+        if: steps.quartus-install-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/quartus-lite-17.0/docker-intelFPGA_lite
+          key: ${{ steps.quartus-install-cache.outputs.cache-primary-key }}
+
+      - name: Report cached Quartus disk state
+        if: always()
+        run: |
+          set -euo pipefail
+          df -h /
+          df -h "$GITHUB_WORKSPACE"
+          du -sh build/quartus-lite-17.0/docker-intelFPGA_lite || true
+          docker system df || true
+
+  build-rbf:
+    name: Build vblank-latched Menu RBF
+    runs-on: ubuntu-24.04
+    needs: prepare-quartus
+    timeout-minutes: 180
+
+    steps:
+      - name: Maximize runner build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 1024
+          remove-dotnet: false
+          remove-android: false
+          remove-haskell: false
+          remove-codeql: false
+          remove-docker-images: true
+          build-mount-path: ${{ github.workspace }}
+
+      - name: Checkout MagiK repo
+        uses: actions/checkout@v4
+
+      - name: Bind runner temp to build volume
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.runner-temp"
+          sudo mount --bind "$GITHUB_WORKSPACE/.runner-temp" "$RUNNER_TEMP"
+          df -h "$RUNNER_TEMP"
+
+      - name: Move Docker data root to build volume
+        run: |
+          set -euo pipefail
+          sudo systemctl stop docker
+          mkdir -p "$GITHUB_WORKSPACE/.docker-data"
+          printf '{"data-root":"%s/.docker-data"}\n' "$GITHUB_WORKSPACE" | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          docker info --format 'DockerRootDir={{.DockerRootDir}}'
+
+      - name: Restore installed Quartus cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/quartus-lite-17.0/docker-intelFPGA_lite
+          key: quartus-lite-17.0.0.595-cyclonev-${{ runner.os }}-${{ env.QUARTUS_DOCKER_BASE_IMAGE }}-${{ hashFiles('scripts/install-quartus-lite-docker.sh', '.github/workflows/fpga-vblank-latch.yml') }}
+          fail-on-cache-miss: true
+
+      - name: Verify Quartus Docker runtime
+        run: scripts/install-quartus-lite-docker.sh
+
+      - name: Checkout Menu_MiSTer
+        uses: actions/checkout@v4
+        with:
+          repository: MiSTer-devel/Menu_MiSTer
+          ref: ${{ github.event.inputs.menu_ref || 'master' }}
+          path: build/Menu_MiSTer
+
+      - name: Report pre-build disk state
+        if: always()
+        run: |
+          set -euo pipefail
+          df -h /
+          df -h "$GITHUB_WORKSPACE"
+          du -sh build/quartus-lite-17.0/docker-intelFPGA_lite || true
+          docker system df || true
+
+      - name: Build vblank-latched RBF
+        env:
+          MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
+          MISTER_FPGA_APPLY_PATCH: ${{ github.event.inputs.apply_magik_patch || 'true' }}
+          QUARTUS_DOCKER_EMPTY_SYS: "1"
+          QUARTUS_STRACE: "0"
+        run: scripts/build-fpga-vblank-latch-core.sh
+
+      - name: Upload FPGA build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpga-vblank-latch-build
+          path: |
+            build/fpga-vblank-latch/menu-magik-vblank-latch.rbf
+            build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
+            build/fpga-vblank-latch/menu-magik-vblank-latch.build.log
+          if-no-files-found: warn

@@ -64,12 +64,28 @@ impl<'a> LayerTarget<'a> {
         self.target.present_direct_preview_rect(self.disp, rect)
     }
 
+    pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
+        self.target.compose_direct_preview_rect(rect)
+    }
+
     fn present_arcade_list_update(
         &mut self,
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
         copy_arcade_list_update(self.target, self.disp, renderer, update)
+    }
+
+    pub(super) fn compose_arcade_list_update(
+        &mut self,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+    ) -> PresentCopyStats {
+        compose_arcade_list_update(self.target, renderer, update)
+    }
+
+    pub(super) fn cached_565(&self) -> &[Rgb565Pixel] {
+        self.target.cached_565()
     }
 }
 
@@ -90,6 +106,13 @@ pub(super) struct LauncherPresentResult {
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
+    pub(super) main_present_backend: &'static str,
+    pub(super) main_present_status: &'static str,
+    pub(super) main_present_buffer: u8,
+    pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_request_us: u128,
+    pub(super) main_present_wait_us: u64,
+    pub(super) main_present_route_us: u64,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
 }
 
@@ -165,6 +188,13 @@ impl LauncherCompositor {
             cached_present_us,
             direct_preview_present_us,
             arcade_list_present_us,
+            main_present_backend: "fb0-dirty",
+            main_present_status: "none",
+            main_present_buffer: 0,
+            main_present_hidden_copy_us: 0,
+            main_present_request_us: 0,
+            main_present_wait_us: 0,
+            main_present_route_us: 0,
             arcade_update_label,
         }
     }

@@ -1,0 +1,21 @@
+---
+title: Dialogs and Recovery
+description: Confirmation dialogs, safe reboot behavior, and recovery expectations.
+sidebar:
+  order: 9
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+<Screenshot src="/screenshots/confirm-dialog.png" alt="Confirmation dialog" />
+
+Dialogs appear for actions that need confirmation, such as resetting the database or responding to library drift. While a dialog is open, the underlying screen remains context but input belongs to the dialog.
+
+Recovery rules are conservative:
+
+- Launcher display recovery should restore the route and present a full frame.
+- Return-from-game restores screen, system, selection, and filters from volatile state.
+- Stale return-state files without Main's return flag are treated as normal startup.
+- Direct reset fault experiments must never leave a persistent boot loop.
+
+If HDMI differs from a framebuffer capture, preserve state before restarting and collect both agent capture and display route information.

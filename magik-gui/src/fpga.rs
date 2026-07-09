@@ -32,6 +32,10 @@ pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
 pub const UIO_BUT_SW: u16 = 0x01;
 pub const UIO_AUDVOL: u16 = 0x26;
+pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x46;
+pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x47;
+pub const MAGIK_FBUF_LATCH_MAGIC: u16 = 0x4d47;
+pub const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
 
 // user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
 pub const CONF_VGA_SCALER: u16 = 0x0004;
@@ -356,6 +360,82 @@ impl Fpga {
         res
     }
 
+    pub fn read_magik_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
+        let res = (|| {
+            let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
+            let mut words = [0u16; 11];
+            for word in words.iter_mut() {
+                *word = self.spi_capture(0)?.1;
+            }
+            Ok(LatchedFbufStatus {
+                magic_hi,
+                magic_lo,
+                active_sequence: words[0],
+                pending_sequence: words[1],
+                flags: words[2],
+                flip_count: words[3],
+                post_count: words[4],
+                drop_count: words[5],
+                active_base: words[6] as u32 | ((words[7] as u32) << 16),
+                active_width: words[8],
+                active_height: words[9],
+                active_stride: words[10],
+            })
+        })();
+        self.disable_io();
+        res
+    }
+
+    pub fn probe_magik_latched_fbuf_set(&mut self) -> io::Result<(u16, u16)> {
+        let res = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH);
+        self.disable_io();
+        res
+    }
+
+    pub fn post_magik_latched_fbuf_rgb565(
+        &mut self,
+        sequence: u16,
+        base_addr: u32,
+        fb_width: u16,
+        fb_height: u16,
+        mode: FramebufferRouteMode,
+        set_vga_fb: bool,
+    ) -> io::Result<(u16, u16)> {
+        let xoff = mode.hbp as i32 - FB_DV_LBRD;
+        let yoff = mode.vbp as i32 - FB_DV_UBRD;
+        let right_guard_cols = std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1)
+            .clamp(0, mode.hact.saturating_sub(1) as i32);
+        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
+        let bottom = yoff + mode.vact as i32 - 1;
+
+        self.disable_io();
+        let support = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH)?;
+        let stream_res: io::Result<()> = (|| {
+            let fpga_format = FB_EN | FB_FMT_565 | FB_FMT_RXB;
+            self.spi_w(fpga_format)?;
+            self.spi_w(base_addr as u16)?;
+            self.spi_w((base_addr >> 16) as u16)?;
+            self.spi_w(fb_width)?;
+            self.spi_w(fb_height)?;
+            self.spi_w(xoff as u16)?;
+            self.spi_w(right as u16)?;
+            self.spi_w(yoff as u16)?;
+            self.spi_w(bottom as u16)?;
+            self.spi_w(rgb565_stride_bytes(fb_width as usize) as u16)?;
+            self.spi_w(sequence)?;
+            Ok(())
+        })();
+        self.disable_io();
+        stream_res?;
+        if set_vga_fb {
+            self.set_vga_fb(true)?;
+        }
+        Ok(support)
+    }
+
     /// Port of `video_fb_enable(1, n)`, replicating the SET_FBUF sequence in
     /// video.cpp:3290-3321. Routes HPS buffer `n` to scan-out. `mode` is the
     /// active video mode (for positioning); the fb itself is
@@ -435,6 +515,40 @@ impl Fpga {
             route.mode(),
             route.set_vga_fb(),
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LatchedFbufStatus {
+    pub magic_hi: u16,
+    pub magic_lo: u16,
+    pub active_sequence: u16,
+    pub pending_sequence: u16,
+    pub flags: u16,
+    pub flip_count: u16,
+    pub post_count: u16,
+    pub drop_count: u16,
+    pub active_base: u32,
+    pub active_width: u16,
+    pub active_height: u16,
+    pub active_stride: u16,
+}
+
+impl LatchedFbufStatus {
+    pub fn supported(self) -> bool {
+        self.magic_hi == MAGIK_FBUF_STATUS_MAGIC || self.magic_lo == MAGIK_FBUF_STATUS_MAGIC
+    }
+
+    pub fn pending(self) -> bool {
+        (self.flags & 0x0004) != 0
+    }
+
+    pub fn pending_enabled(self) -> bool {
+        (self.flags & 0x0002) != 0
+    }
+
+    pub fn active_enabled(self) -> bool {
+        (self.flags & 0x0001) != 0
     }
 }
 

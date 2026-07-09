@@ -45,7 +45,8 @@ use crate::preview_state::{
 };
 use crate::runtime_status::{self, LauncherStatus};
 use crate::screenshot_transitions::{
-    PreviewTransitionDemo, PreviewTransitionEffect, PreviewTransitionTrace,
+    PreviewFadePath, PreviewFadeTrace, PreviewTransitionDemo, PreviewTransitionEffect,
+    PreviewTransitionTrace,
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_UI_SCALE};
@@ -59,6 +60,11 @@ use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
 use mister_magik_fb::framebuffer::target::{
     build_launcher_present_plan, copy_cached_rect_565, dirty_rect, format_dirty_rect, DirtyRect,
     DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
+};
+use mister_magik_fb::framebuffer::{
+    format::rgb565_stride_bytes,
+    hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer},
+    plugin_probe::PluginHiddenRgb565Framebuffer,
 };
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
@@ -79,6 +85,7 @@ mod launcher_compositor;
 mod launcher_frame_accounting;
 mod launcher_lifecycle;
 mod launcher_loop;
+mod launcher_pacing;
 mod launcher_scheduler;
 mod launcher_worker_intents;
 mod media_worker;

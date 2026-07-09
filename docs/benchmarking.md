@@ -14,6 +14,9 @@ This document defines current benchmark policy. Dated measurement logs live in
   the labels and the metric that changed.
 - Prefer short targeted benchmarks over broad soak runs. Scroll-path changes use
   one 30s `turbo-hold` run unless the code path needs a different scenario.
+  Launcher pacing and frame-timing refactors use one 30s `human-turbo-hold` run
+  because it exercises human-like bursts, pauses, and reversals while preserving
+  the real Arcade entry flow.
   Avoid duplicate long scroll and turbo-scroll runs for the same claim.
 - "Still 60fps" is not evidence by itself. Report the metric owned by the
   change: for example preview decode latency, catalog apply time/backlog,
@@ -136,6 +139,8 @@ Approved arcade scroll scenarios:
 
 - `held-scroll` - normal continuous movement.
 - `turbo-hold` - fast synthetic movement that reverses at list edges.
+- `human-turbo-hold` - bursty human-like turbo movement with short pauses; use
+  this as the pacing regression gate for launcher frame-timing refactors.
 - `velocity-scroll` - alias for `held-scroll`.
 
 Deprecated for arcade performance conclusions:
@@ -161,8 +166,17 @@ to Arcade using `MISTER_ARCADE_ENTRY_INPUT_SCRIPT` or the default Right...A
 sequence, then starts the timed `turbo-hold` trace in that same launcher
 session. Use `--skip-boot-prelude` only for old direct-to-Arcade comparisons;
 do not use that shortcut as evidence for the user-visible boot-to-Arcade flow.
+`human-turbo-hold` uses the same Main-supervised Arcade entry path and requires
+a bench-tools MagiK binary, so use `--deploy-device` when collecting pacing
+regression evidence from a fresh commit.
 The script emits and enforces `frame_pacing_gate_tsv` for the 60fps/drop-frame
 contract and `preview_exact_gate_tsv` for the no-skipped-preview contract.
+For `human-turbo-hold`, the pacing gate treats small wall-time jitter above one
+60 Hz period as diagnostic rather than failing evidence because the scenario
+intentionally mixes bursts, pauses, reversals, and real entry flow. It still
+hard-fails any work frame over budget, any wall frame over 33 ms, any
+fallback/timeout/error/unknown vsync source, and any non-zero max miss streak.
+For other arcade scenarios, the strict wall gate remains unchanged.
 The turbo preview runway defaults to 32 previews ahead; use
 `MISTER_PREVIEW_TURBO_LOOKAHEAD=64` to reproduce the old aggressive prefetch
 behavior, or `MISTER_PREVIEW_TURBO_RUNWAY=0` only as a diagnostic because it

@@ -1,0 +1,27 @@
+{
+  "bpp": 16,
+  "elapsed_ms": 89,
+  "height": 540,
+  "png_bytes": 21434,
+  "png_hex_bytes": 42868,
+  "png_path": "documentation/public/screenshots/home.png",
+  "raw_bytes": 1036800,
+  "request_ms": 152,
+  "rgba_bytes": 2074140,
+  "schema": "mister-magik-framebuffer-capture-v1",
+  "stride": 1920,
+  "timings": {
+    "dispatch_us": 167,
+    "geometry_us": 374,
+    "hex_encode_us": 521,
+    "png_total_us": 80059,
+    "png_wrap_us": 630,
+    "raw_read_us": 8564,
+    "request_received_uptime_ms": 104646,
+    "rgba_convert_us": 42401,
+    "total_us": 89586,
+    "zlib_encode_us": 36014
+  },
+  "transport": "agent",
+  "width": 960
+}

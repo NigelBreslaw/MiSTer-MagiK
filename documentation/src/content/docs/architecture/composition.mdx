@@ -1,0 +1,29 @@
+---
+title: Composition
+description: Full Slint, mixed Arcade direct layers, modals, and recovery.
+sidebar:
+  order: 4
+---
+
+Slint owns the cached full frame in every state. Rust direct-blitted Arcade layers are valid only in `MixedArcade`. Full-screen overlays and recovery clear direct-layer assumptions and force a full Slint present.
+
+```mermaid
+stateDiagram-v2
+  [*] --> FullSlint
+  FullSlint --> MixedArcade: enter Arcade
+  MixedArcade --> FullSlint: leave Arcade
+  MixedArcade --> ModalOverArcade: open Arcade dialog
+  ModalOverArcade --> MixedArcade: close dialog
+  MixedArcade --> ModalFullSlint: full-screen scan overlay
+  ModalFullSlint --> MixedArcade: hide overlay
+  FullSlint --> ModalFullSlint: non-Arcade dialog
+  ModalFullSlint --> FullSlint: close overlay
+  FullSlint --> Recovering: invariant failed
+  MixedArcade --> Recovering: invariant failed
+  ModalFullSlint --> Recovering: invariant failed
+  ModalOverArcade --> Recovering: invariant failed
+  Recovering --> FullSlint: full frame restored
+  Recovering --> MixedArcade: Arcade layers repainted
+```
+
+Unexpected composition recovery is a gate failure. It records status details under `/tmp/mister-magik/status.json` for diagnostics.

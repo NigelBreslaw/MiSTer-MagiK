@@ -132,6 +132,7 @@ pub(crate) struct PreviewTransitionTrace {
     pub(crate) effect: PreviewTransitionEffect,
     pub(crate) progress: f32,
     pub(crate) active: bool,
+    pub(crate) fade: PreviewFadeTrace,
 }
 
 impl Default for PreviewTransitionTrace {
@@ -140,6 +141,61 @@ impl Default for PreviewTransitionTrace {
             effect: PreviewTransitionEffect::Fade,
             progress: 1.0,
             active: false,
+            fade: PreviewFadeTrace::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreviewFadeTrace {
+    pub(crate) wall_us: u64,
+    pub(crate) cpu_us: u64,
+    pub(crate) pixels: u32,
+    pub(crate) rows: u32,
+    pub(crate) path: PreviewFadePath,
+    pub(crate) alpha_bucket: u8,
+}
+
+impl Default for PreviewFadeTrace {
+    fn default() -> Self {
+        Self {
+            wall_us: 0,
+            cpu_us: 0,
+            pixels: 0,
+            rows: 0,
+            path: PreviewFadePath::None,
+            alpha_bucket: 0,
+        }
+    }
+}
+
+impl PreviewFadeTrace {
+    pub(crate) fn label(self) -> &'static str {
+        self.path.label()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreviewFadePath {
+    None,
+    Cut,
+    SameGeometry,
+    SingleBlack,
+    Rows,
+    ScaledSample,
+    Empty,
+}
+
+impl PreviewFadePath {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Cut => "cut",
+            Self::SameGeometry => "same_geometry",
+            Self::SingleBlack => "single_black",
+            Self::Rows => "rows",
+            Self::ScaledSample => "scaled_sample",
+            Self::Empty => "empty",
         }
     }
 }
@@ -276,6 +332,7 @@ impl PreviewTransitionDemo {
                 effect: scheduled_effect,
                 progress: 1.0,
                 active: false,
+                fade: PreviewFadeTrace::default(),
             };
         };
 
@@ -303,6 +360,7 @@ impl PreviewTransitionDemo {
                         effect: active.effect,
                         progress,
                         active: true,
+                        fade: PreviewFadeTrace::default(),
                     };
                 }
                 self.active = None;
@@ -310,6 +368,7 @@ impl PreviewTransitionDemo {
                     effect: active.effect,
                     progress: 1.0,
                     active: true,
+                    fade: PreviewFadeTrace::default(),
                 };
             }
             self.active = None;
@@ -319,6 +378,7 @@ impl PreviewTransitionDemo {
             effect: scheduled_effect,
             progress: 1.0,
             active: false,
+            fade: PreviewFadeTrace::default(),
         }
     }
 }

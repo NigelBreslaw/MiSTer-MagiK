@@ -46,6 +46,26 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("cpu-profile-smoke", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
+    CommandSpec::new("hidden-fb-copy-bench", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fb-map-report", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fb-map-bandwidth", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("plugin-map-report", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("plugin-map-bandwidth", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("plugin-presenter-report", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
+    CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
+    #[cfg(all(feature = "diagnostics", feature = "ui"))]
+    CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
+    #[cfg(all(feature = "diagnostics", feature = "ui"))]
+    CommandSpec::new("fpga-latch-pattern", CommandKind::Fpga),
+    #[cfg(all(feature = "diagnostics", feature = "ui"))]
+    CommandSpec::new("plugin-present-pattern", CommandKind::PreFpga),
+    #[cfg(feature = "diagnostics")]
     CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
     CommandSpec::new("repair-catalog-projections", CommandKind::PreFpga),
@@ -231,6 +251,7 @@ mod tests {
             "input",
             "hbmame-metadata-from-library",
             "library-scan-bench",
+            "fpga-latch-report",
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
@@ -253,6 +274,15 @@ mod tests {
             "read",
             "vsync-probe",
             "cpu-profile-smoke",
+            "hidden-fb-copy-bench",
+            "fb-map-report",
+            "fb-map-bandwidth",
+            "plugin-map-report",
+            "plugin-map-bandwidth",
+            "plugin-presenter-report",
+            "fpga-latch-report",
+            "fpga-latch-post-report",
+            "fpga-latch-pattern",
             "input",
             "library-sql",
             "hbmame-metadata-from-library",
@@ -266,6 +296,19 @@ mod tests {
         assert_command_kind("read", CommandKind::Fpga);
         assert_command_kind("vsync-probe", CommandKind::PreFpga);
         assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
+        assert_command_kind("hidden-fb-copy-bench", CommandKind::PreFpga);
+        assert_command_kind("fb-map-report", CommandKind::PreFpga);
+        assert_command_kind("fb-map-bandwidth", CommandKind::PreFpga);
+        assert_command_kind("plugin-map-report", CommandKind::PreFpga);
+        assert_command_kind("plugin-map-bandwidth", CommandKind::PreFpga);
+        assert_command_kind("plugin-presenter-report", CommandKind::PreFpga);
+        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
+        #[cfg(feature = "ui")]
+        assert_command_kind("fpga-latch-post-report", CommandKind::Fpga);
+        #[cfg(feature = "ui")]
+        assert_command_kind("fpga-latch-pattern", CommandKind::Fpga);
+        #[cfg(feature = "ui")]
+        assert_command_kind("plugin-present-pattern", CommandKind::PreFpga);
         assert_command_kind("input", CommandKind::Fpga);
     }
 

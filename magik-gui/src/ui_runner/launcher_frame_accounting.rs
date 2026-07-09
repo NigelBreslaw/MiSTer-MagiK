@@ -1,3 +1,5 @@
+use super::launcher_compositor::LauncherPresentResult;
+use super::launcher_pacing::LauncherPacingTrace;
 use super::*;
 use std::collections::VecDeque;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -13,6 +15,8 @@ const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analy
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
 pub(super) struct LauncherFrameAccounting {
     fps_window_start: Instant,
@@ -80,6 +84,13 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) cached_present_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
+    pub(super) main_present_backend: &'static str,
+    pub(super) main_present_status: &'static str,
+    pub(super) main_present_buffer: u8,
+    pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_request_us: u128,
+    pub(super) main_present_wait_us: u64,
+    pub(super) main_present_route_us: u64,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
@@ -103,6 +114,121 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) cpu_custom_draw_done: FrameAnalyticsCpuStamp,
     pub(super) cpu_t3: FrameAnalyticsCpuStamp,
     pub(super) cpu_t4: FrameAnalyticsCpuStamp,
+}
+
+pub(super) struct LauncherFrameSnapshotBuilder {
+    pub(super) identity: LauncherFrameIdentity,
+    pub(super) timing: LauncherFrameTiming,
+    pub(super) render: LauncherFrameRenderData,
+    pub(super) pacing: LauncherPacingTrace,
+    pub(super) presentation: LauncherPresentResult,
+    pub(super) status: LauncherFrameStatusData,
+    pub(super) cpu: LauncherFrameCpuTrace,
+}
+
+pub(super) struct LauncherFrameIdentity {
+    pub(super) frames: u64,
+    pub(super) selected: usize,
+    pub(super) visual_index: f32,
+}
+
+pub(super) struct LauncherFrameTiming {
+    pub(super) run_start: Instant,
+    pub(super) loop_start: Instant,
+    pub(super) frame_t0: Instant,
+    pub(super) frame_t1: Instant,
+    pub(super) frame_t2: Instant,
+    pub(super) frame_t3: Instant,
+    pub(super) frame_t4: Instant,
+    pub(super) custom_draw_start: Instant,
+    pub(super) custom_draw_done: Instant,
+    pub(super) prepare_us: u128,
+}
+
+pub(super) struct LauncherFrameRenderData {
+    pub(super) custom_draw_trace: LauncherCustomDrawTrace,
+    pub(super) prepare_trace: LauncherPrepareTrace,
+    pub(super) dirty_rect: Option<DirtyRect>,
+    pub(super) preview_cache_state: &'static str,
+    pub(super) preview_transition: PreviewTransitionTrace,
+    pub(super) composition_status: UiCompositionStatus,
+}
+
+pub(super) struct LauncherFrameStatusData {
+    pub(super) status_write_due: bool,
+    pub(super) status_string_copy_us: u128,
+    pub(super) status_string_copy_bytes: usize,
+}
+
+pub(super) struct LauncherFrameCpuTrace {
+    pub(super) loop_start: FrameAnalyticsCpuStamp,
+    pub(super) t0: FrameAnalyticsCpuStamp,
+    pub(super) t1: FrameAnalyticsCpuStamp,
+    pub(super) t2: FrameAnalyticsCpuStamp,
+    pub(super) custom_draw_start: FrameAnalyticsCpuStamp,
+    pub(super) custom_draw_done: FrameAnalyticsCpuStamp,
+    pub(super) t3: FrameAnalyticsCpuStamp,
+    pub(super) t4: FrameAnalyticsCpuStamp,
+}
+
+impl LauncherFrameSnapshotBuilder {
+    pub(super) fn build(self) -> LauncherPresentedFrame {
+        LauncherPresentedFrame {
+            frames: self.identity.frames,
+            selected: self.identity.selected,
+            visual_index: self.identity.visual_index,
+            run_start: self.timing.run_start,
+            loop_start: self.timing.loop_start,
+            frame_t0: self.timing.frame_t0,
+            frame_t1: self.timing.frame_t1,
+            frame_t2: self.timing.frame_t2,
+            frame_t3: self.timing.frame_t3,
+            frame_t4: self.timing.frame_t4,
+            custom_draw_start: self.timing.custom_draw_start,
+            custom_draw_done: self.timing.custom_draw_done,
+            custom_draw_trace: self.render.custom_draw_trace,
+            prepare_trace: self.render.prepare_trace,
+            prepare_us: self.timing.prepare_us,
+            dirty_rect: self.render.dirty_rect,
+            copied_rows: self.presentation.copied_rows,
+            direct_preview_rows: self.presentation.direct_preview_rows,
+            present_bytes: self.presentation.present_bytes,
+            wasted_present_bytes: self.presentation.wasted_present_bytes,
+            cached_present_us: self.presentation.cached_present_us,
+            direct_preview_present_us: self.presentation.direct_preview_present_us,
+            arcade_list_present_us: self.presentation.arcade_list_present_us,
+            main_present_backend: self.presentation.main_present_backend,
+            main_present_status: self.presentation.main_present_status,
+            main_present_buffer: self.presentation.main_present_buffer,
+            main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
+            main_present_request_us: self.presentation.main_present_request_us,
+            main_present_wait_us: self.presentation.main_present_wait_us,
+            main_present_route_us: self.presentation.main_present_route_us,
+            vsync_source: self.pacing.vsync_source,
+            vsync_period_us: self.pacing.vsync_period_us,
+            vsync_miss_streak: self.pacing.vsync_miss_streak,
+            vsync_stale_hits: self.pacing.vsync_stale_hits,
+            vsync_wait_start_age_us: self.pacing.vsync_wait_start_age_us,
+            vsync_accepted_hit_age_us: self.pacing.vsync_accepted_hit_age_us,
+            frame_start_phase_us: self.pacing.frame_start_phase_us,
+            present_phase_us: self.pacing.present_phase_us,
+            arcade_update_label: self.presentation.arcade_update_label,
+            preview_cache_state: self.render.preview_cache_state,
+            preview_transition: self.render.preview_transition,
+            composition_status: self.render.composition_status,
+            status_write_due: self.status.status_write_due,
+            status_string_copy_us: self.status.status_string_copy_us,
+            status_string_copy_bytes: self.status.status_string_copy_bytes,
+            cpu_loop_start: self.cpu.loop_start,
+            cpu_t0: self.cpu.t0,
+            cpu_t1: self.cpu.t1,
+            cpu_t2: self.cpu.t2,
+            cpu_custom_draw_start: self.cpu.custom_draw_start,
+            cpu_custom_draw_done: self.cpu.custom_draw_done,
+            cpu_t3: self.cpu.t3,
+            cpu_t4: self.cpu.t4,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -222,12 +348,25 @@ struct PreviewScrollTraceRow {
     custom_draw_us: u128,
     arcade_list_update_us: u128,
     preview_blit_us: u128,
+    preview_fade_wall_us: u64,
+    preview_fade_cpu_us: u64,
+    preview_fade_pixels: u32,
+    preview_fade_rows: u32,
+    preview_fade_path: &'static str,
+    preview_fade_alpha_bucket: u8,
     effect_label_us: u128,
     vsync_us: u128,
     fb_present_us: u128,
     cached_present_us: u128,
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
+    main_present_backend: &'static str,
+    main_present_status: &'static str,
+    main_present_buffer: u8,
+    main_present_hidden_copy_us: u128,
+    main_present_request_us: u128,
+    main_present_wait_us: u64,
+    main_present_route_us: u64,
     vsync_source: &'static str,
     vsync_period_us: u64,
     vsync_miss_streak: u32,
@@ -250,14 +389,14 @@ impl PreviewScrollTrace {
     fn new(writer: BufWriter<std::fs::File>) -> Self {
         Self {
             writer,
-            rows: Vec::with_capacity(4096),
+            rows: Vec::with_capacity(PREVIEW_SCROLL_TRACE_FLUSH_ROWS),
             row_text: String::with_capacity(384),
         }
     }
 
     fn push(&mut self, row: PreviewScrollTraceRow) {
         self.rows.push(row);
-        if self.rows.len() >= 4096 {
+        if self.rows.len() >= PREVIEW_SCROLL_TRACE_FLUSH_ROWS {
             self.flush_rows();
         }
     }
@@ -266,61 +405,155 @@ impl PreviewScrollTrace {
         let rows = std::mem::take(&mut self.rows);
         for row in rows {
             self.row_text.clear();
-            let _ = write!(
-                self.row_text,
-                "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                row.frame,
-                row.elapsed_us,
-                row.loop_delta_us,
-                row.selected,
-                row.visual_index,
-                row.cache_state,
-                row.transition_effect,
-                row.transition_progress,
-                row.arcade_update,
-                row.copied_rows,
-                row.direct_preview_rows,
-                row.present_bytes,
-                row.wasted_present_bytes,
-                row.prepare_us,
-                row.catalog_worker_us,
-                row.catalog_message_count,
-                row.catalog_backlog,
-                row.catalog_ready_deferred,
-                row.catalog_ready_deferred_age_us,
-                row.media_worker_us,
-                row.media_gate_us,
-                row.preview_schedule_us,
-                row.preview_apply_us,
-                row.slint_render_us,
-                row.custom_draw_us,
-                row.arcade_list_update_us,
-                row.preview_blit_us,
-                row.effect_label_us,
-                row.vsync_us,
-                row.fb_present_us,
-                row.cached_present_us,
-                row.direct_preview_present_us,
-                row.arcade_list_present_us,
-                row.vsync_source,
-                row.vsync_period_us,
-                row.vsync_miss_streak,
-                row.vsync_stale_hits,
-                row.vsync_wait_start_age_us,
-                row.vsync_accepted_hit_age_us,
-                row.frame_start_phase_us,
-                row.present_phase_us,
-                row.dirty_y0,
-                row.dirty_y1,
-                row.status_write_due,
-                row.status_string_copy_us,
-                row.status_string_copy_bytes,
-                row.runtime_status_write_us,
-                row.wall_us
-            );
+            row.write_tsv(&mut self.row_text);
             let _ = self.writer.write_all(self.row_text.as_bytes());
         }
         let _ = self.writer.flush();
+    }
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+impl PreviewScrollTraceRow {
+    fn write_tsv(&self, out: &mut String) {
+        let _ = write!(
+            out,
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            self.frame,
+            self.elapsed_us,
+            self.loop_delta_us,
+            self.selected,
+            self.visual_index,
+            self.cache_state,
+            self.transition_effect,
+            self.transition_progress,
+            self.arcade_update,
+            self.copied_rows,
+            self.direct_preview_rows,
+            self.present_bytes,
+            self.wasted_present_bytes,
+            self.prepare_us,
+            self.catalog_worker_us,
+            self.catalog_message_count,
+            self.catalog_backlog,
+            self.catalog_ready_deferred,
+            self.catalog_ready_deferred_age_us,
+            self.media_worker_us,
+            self.media_gate_us,
+            self.preview_schedule_us,
+            self.preview_apply_us,
+            self.slint_render_us,
+            self.custom_draw_us,
+            self.arcade_list_update_us,
+            self.preview_blit_us,
+            self.preview_fade_wall_us,
+            self.preview_fade_cpu_us,
+            self.preview_fade_pixels,
+            self.preview_fade_rows,
+            self.preview_fade_path,
+            self.preview_fade_alpha_bucket,
+            self.effect_label_us,
+            self.vsync_us,
+            self.fb_present_us,
+            self.cached_present_us,
+            self.direct_preview_present_us,
+            self.arcade_list_present_us,
+            self.main_present_backend,
+            self.main_present_status,
+            self.main_present_buffer,
+            self.main_present_hidden_copy_us,
+            self.main_present_request_us,
+            self.main_present_wait_us,
+            self.main_present_route_us,
+            self.vsync_source,
+            self.vsync_period_us,
+            self.vsync_miss_streak,
+            self.vsync_stale_hits,
+            self.vsync_wait_start_age_us,
+            self.vsync_accepted_hit_age_us,
+            self.frame_start_phase_us,
+            self.present_phase_us,
+            self.dirty_y0,
+            self.dirty_y1,
+            self.status_write_due,
+            self.status_string_copy_us,
+            self.status_string_copy_bytes,
+            self.runtime_status_write_us,
+            self.wall_us
+        );
+    }
+}
+
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+fn preview_scroll_trace_row_from_frame(
+    frame: &LauncherPresentedFrame,
+    loop_delta_us: u128,
+    runtime_status_write_us: u128,
+) -> PreviewScrollTraceRow {
+    PreviewScrollTraceRow {
+        frame: frame.frames,
+        elapsed_us: frame.loop_start.duration_since(frame.run_start).as_micros(),
+        loop_delta_us,
+        selected: frame.selected,
+        visual_index: frame.visual_index,
+        cache_state: frame.preview_cache_state,
+        transition_effect: frame.preview_transition.effect.label(),
+        transition_progress: frame.preview_transition.progress,
+        arcade_update: frame.arcade_update_label,
+        copied_rows: frame.copied_rows,
+        direct_preview_rows: frame.direct_preview_rows,
+        present_bytes: frame.present_bytes,
+        wasted_present_bytes: frame.wasted_present_bytes,
+        prepare_us: frame.prepare_us,
+        catalog_worker_us: frame.prepare_trace.catalog_worker_us,
+        catalog_message_count: frame.prepare_trace.catalog_message_count,
+        catalog_backlog: frame.prepare_trace.catalog_backlog,
+        catalog_ready_deferred: u8::from(frame.prepare_trace.catalog_ready_deferred),
+        catalog_ready_deferred_age_us: frame.prepare_trace.catalog_ready_deferred_age_us,
+        media_worker_us: frame.prepare_trace.media_worker_us,
+        media_gate_us: frame.prepare_trace.media_gate_us,
+        preview_schedule_us: frame.prepare_trace.preview_schedule_us,
+        preview_apply_us: frame.prepare_trace.preview_apply_us,
+        slint_render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
+        custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
+        arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
+        preview_blit_us: frame.custom_draw_trace.preview_blit_us,
+        preview_fade_wall_us: frame.preview_transition.fade.wall_us,
+        preview_fade_cpu_us: frame.preview_transition.fade.cpu_us,
+        preview_fade_pixels: frame.preview_transition.fade.pixels,
+        preview_fade_rows: frame.preview_transition.fade.rows,
+        preview_fade_path: frame.preview_transition.fade.label(),
+        preview_fade_alpha_bucket: frame.preview_transition.fade.alpha_bucket,
+        effect_label_us: frame.custom_draw_trace.effect_label_us,
+        vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
+        fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
+        cached_present_us: frame.cached_present_us,
+        direct_preview_present_us: frame.direct_preview_present_us,
+        arcade_list_present_us: frame.arcade_list_present_us,
+        main_present_backend: frame.main_present_backend,
+        main_present_status: frame.main_present_status,
+        main_present_buffer: frame.main_present_buffer,
+        main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+        main_present_request_us: frame.main_present_request_us,
+        main_present_wait_us: frame.main_present_wait_us,
+        main_present_route_us: frame.main_present_route_us,
+        vsync_source: frame
+            .vsync_source
+            .map(VsyncPaceSource::label)
+            .unwrap_or("none"),
+        vsync_period_us: frame.vsync_period_us,
+        vsync_miss_streak: frame.vsync_miss_streak,
+        vsync_stale_hits: frame.vsync_stale_hits,
+        vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+        vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+        frame_start_phase_us: frame.frame_start_phase_us,
+        present_phase_us: frame.present_phase_us,
+        dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
+        dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
+        status_write_due: u8::from(frame.status_write_due),
+        status_string_copy_us: frame.prepare_trace.status_string_copy_us,
+        status_string_copy_bytes: frame.status_string_copy_bytes,
+        runtime_status_write_us,
+        wall_us: (frame.frame_t4 - frame.loop_start).as_micros(),
     }
 }
 
@@ -744,59 +977,8 @@ impl LauncherFrameAccounting {
             .unwrap_or(0);
         self.last_preview_trace_loop_start = Some(frame.loop_start);
 
-        let row = PreviewScrollTraceRow {
-            frame: frame.frames,
-            elapsed_us: frame.loop_start.duration_since(frame.run_start).as_micros(),
-            loop_delta_us,
-            selected: frame.selected,
-            visual_index: frame.visual_index,
-            cache_state: frame.preview_cache_state,
-            transition_effect: frame.preview_transition.effect.label(),
-            transition_progress: frame.preview_transition.progress,
-            arcade_update: frame.arcade_update_label,
-            copied_rows: frame.copied_rows,
-            direct_preview_rows: frame.direct_preview_rows,
-            present_bytes: frame.present_bytes,
-            wasted_present_bytes: frame.wasted_present_bytes,
-            prepare_us: frame.prepare_us,
-            catalog_worker_us: frame.prepare_trace.catalog_worker_us,
-            catalog_message_count: frame.prepare_trace.catalog_message_count,
-            catalog_backlog: frame.prepare_trace.catalog_backlog,
-            catalog_ready_deferred: u8::from(frame.prepare_trace.catalog_ready_deferred),
-            catalog_ready_deferred_age_us: frame.prepare_trace.catalog_ready_deferred_age_us,
-            media_worker_us: frame.prepare_trace.media_worker_us,
-            media_gate_us: frame.prepare_trace.media_gate_us,
-            preview_schedule_us: frame.prepare_trace.preview_schedule_us,
-            preview_apply_us: frame.prepare_trace.preview_apply_us,
-            slint_render_us: (frame.frame_t2 - frame.frame_t1).as_micros(),
-            custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
-            arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
-            preview_blit_us: frame.custom_draw_trace.preview_blit_us,
-            effect_label_us: frame.custom_draw_trace.effect_label_us,
-            vsync_us: (frame.frame_t3 - frame.custom_draw_done).as_micros(),
-            fb_present_us: (frame.frame_t4 - frame.frame_t3).as_micros(),
-            cached_present_us: frame.cached_present_us,
-            direct_preview_present_us: frame.direct_preview_present_us,
-            arcade_list_present_us: frame.arcade_list_present_us,
-            vsync_source: frame
-                .vsync_source
-                .map(VsyncPaceSource::label)
-                .unwrap_or("none"),
-            vsync_period_us: frame.vsync_period_us,
-            vsync_miss_streak: frame.vsync_miss_streak,
-            vsync_stale_hits: frame.vsync_stale_hits,
-            vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
-            vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
-            frame_start_phase_us: frame.frame_start_phase_us,
-            present_phase_us: frame.present_phase_us,
-            dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
-            dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
-            status_write_due: u8::from(frame.status_write_due),
-            status_string_copy_us: frame.prepare_trace.status_string_copy_us,
-            status_string_copy_bytes: frame.status_string_copy_bytes,
-            runtime_status_write_us,
-            wall_us: (frame.frame_t4 - frame.loop_start).as_micros(),
-        };
+        let row =
+            preview_scroll_trace_row_from_frame(frame, loop_delta_us, runtime_status_write_us);
         if let Some(trace) = self.preview_scroll_trace.as_mut() {
             trace.push(row);
         }
@@ -1493,6 +1675,13 @@ mod tests {
             cached_present_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
+            main_present_backend: "fb0-dirty",
+            main_present_status: "none",
+            main_present_buffer: 0,
+            main_present_hidden_copy_us: 0,
+            main_present_request_us: 0,
+            main_present_wait_us: 0,
+            main_present_route_us: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
             vsync_period_us: 16_667,
             vsync_miss_streak: 3,
@@ -1517,6 +1706,147 @@ mod tests {
             cpu_t3: FrameAnalyticsCpuStamp::default(),
             cpu_t4: FrameAnalyticsCpuStamp::default(),
         }
+    }
+
+    fn builder_from_frame(frame: &LauncherPresentedFrame) -> LauncherFrameSnapshotBuilder {
+        LauncherFrameSnapshotBuilder {
+            identity: LauncherFrameIdentity {
+                frames: frame.frames,
+                selected: frame.selected,
+                visual_index: frame.visual_index,
+            },
+            timing: LauncherFrameTiming {
+                run_start: frame.run_start,
+                loop_start: frame.loop_start,
+                frame_t0: frame.frame_t0,
+                frame_t1: frame.frame_t1,
+                frame_t2: frame.frame_t2,
+                frame_t3: frame.frame_t3,
+                frame_t4: frame.frame_t4,
+                custom_draw_start: frame.custom_draw_start,
+                custom_draw_done: frame.custom_draw_done,
+                prepare_us: frame.prepare_us,
+            },
+            render: LauncherFrameRenderData {
+                custom_draw_trace: frame.custom_draw_trace,
+                prepare_trace: frame.prepare_trace,
+                dirty_rect: frame.dirty_rect,
+                preview_cache_state: frame.preview_cache_state,
+                preview_transition: frame.preview_transition,
+                composition_status: frame.composition_status.clone(),
+            },
+            pacing: LauncherPacingTrace {
+                vsync_source: frame.vsync_source,
+                vsync_period_us: frame.vsync_period_us,
+                vsync_miss_streak: frame.vsync_miss_streak,
+                vsync_stale_hits: frame.vsync_stale_hits,
+                vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+                vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+                frame_start_phase_us: frame.frame_start_phase_us,
+                present_phase_us: frame.present_phase_us,
+            },
+            presentation: LauncherPresentResult {
+                copied_rows: frame.copied_rows,
+                direct_preview_rows: frame.direct_preview_rows,
+                present_bytes: frame.present_bytes,
+                wasted_present_bytes: frame.wasted_present_bytes,
+                cached_present_us: frame.cached_present_us,
+                direct_preview_present_us: frame.direct_preview_present_us,
+                arcade_list_present_us: frame.arcade_list_present_us,
+                main_present_backend: frame.main_present_backend,
+                main_present_status: frame.main_present_status,
+                main_present_buffer: frame.main_present_buffer,
+                main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+                main_present_request_us: frame.main_present_request_us,
+                main_present_wait_us: frame.main_present_wait_us,
+                main_present_route_us: frame.main_present_route_us,
+                arcade_update_label: frame.arcade_update_label,
+            },
+            status: LauncherFrameStatusData {
+                status_write_due: frame.status_write_due,
+                status_string_copy_us: frame.status_string_copy_us,
+                status_string_copy_bytes: frame.status_string_copy_bytes,
+            },
+            cpu: LauncherFrameCpuTrace {
+                loop_start: frame.cpu_loop_start,
+                t0: frame.cpu_t0,
+                t1: frame.cpu_t1,
+                t2: frame.cpu_t2,
+                custom_draw_start: frame.cpu_custom_draw_start,
+                custom_draw_done: frame.cpu_custom_draw_done,
+                t3: frame.cpu_t3,
+                t4: frame.cpu_t4,
+            },
+        }
+    }
+
+    #[test]
+    fn frame_snapshot_builder_populates_existing_fields() {
+        let start = Instant::now();
+        let expected = presented_frame(42, start, 21_000);
+
+        let built = builder_from_frame(&expected).build();
+
+        assert_eq!(built.frames, expected.frames);
+        assert_eq!(built.selected, expected.selected);
+        assert_eq!(built.visual_index, expected.visual_index);
+        assert_eq!(built.frame_t0, expected.frame_t0);
+        assert_eq!(built.frame_t4, expected.frame_t4);
+        assert_eq!(built.prepare_trace.catalog_message_count, 2);
+        assert_eq!(built.copied_rows, 12);
+        assert_eq!(built.present_bytes, 23_040);
+        assert_eq!(built.vsync_source, Some(VsyncPaceSource::Timeout));
+        assert_eq!(built.vsync_miss_streak, 3);
+        assert_eq!(built.frame_start_phase_us, 8_000);
+        assert_eq!(built.preview_cache_state, "exact");
+        assert_eq!(built.status_string_copy_bytes, 128);
+    }
+
+    #[test]
+    fn frame_snapshot_builder_keeps_default_pacing_values_when_missing() {
+        let start = Instant::now();
+        let frame = presented_frame(43, start, 16_500);
+        let mut builder = builder_from_frame(&frame);
+        builder.pacing = LauncherPacingTrace {
+            vsync_source: None,
+            vsync_period_us: 20_000,
+            vsync_miss_streak: 0,
+            vsync_stale_hits: 0,
+            vsync_wait_start_age_us: 0,
+            vsync_accepted_hit_age_us: 0,
+            frame_start_phase_us: 1_234,
+            present_phase_us: 0,
+        };
+
+        let built = builder.build();
+
+        assert_eq!(built.vsync_source, None);
+        assert_eq!(built.vsync_period_us, 20_000);
+        assert_eq!(built.vsync_miss_streak, 0);
+        assert_eq!(built.vsync_stale_hits, 0);
+        assert_eq!(built.vsync_wait_start_age_us, 0);
+        assert_eq!(built.vsync_accepted_hit_age_us, 0);
+        assert_eq!(built.frame_start_phase_us, 1_234);
+        assert_eq!(built.present_phase_us, 0);
+    }
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[test]
+    fn frame_snapshot_builder_preserves_preview_trace_row_output() {
+        let start = Instant::now();
+        let expected = presented_frame(44, start, 22_000);
+        let built = builder_from_frame(&expected).build();
+        let loop_delta_us = 16_667;
+        let runtime_status_write_us = 321;
+        let mut expected_row = String::new();
+        let mut built_row = String::new();
+
+        preview_scroll_trace_row_from_frame(&expected, loop_delta_us, runtime_status_write_us)
+            .write_tsv(&mut expected_row);
+        preview_scroll_trace_row_from_frame(&built, loop_delta_us, runtime_status_write_us)
+            .write_tsv(&mut built_row);
+
+        assert_eq!(built_row, expected_row);
     }
 
     #[test]
@@ -1637,7 +1967,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
