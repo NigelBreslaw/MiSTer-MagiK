@@ -205,12 +205,12 @@ impl FpgaVblankLatchHiddenPresenter {
     fn present_cached_full_frame<F>(
         &mut self,
         cached: &[Rgb565Pixel],
-        damage: LatchFrameDamage,
+        input: LatchFramePlanInput,
         fpga: &mut Fpga,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
     where
-        F: FnOnce(&mut PluginHiddenRgb565Framebuffer) -> Result<(), String>,
+        F: FnOnce(&mut PluginHiddenRgb565Framebuffer, LatchPresentPlan) -> Result<(), String>,
     {
         if self.disabled {
             return Err(
@@ -227,7 +227,7 @@ impl FpgaVblankLatchHiddenPresenter {
 
         let plan = self
             .latch_state
-            .plan_next(damage)
+            .plan_next(input)
             .ok_or_else(|| "no writable hidden latch buffer".to_string())?;
         let buffer_index = plan.slot_index;
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
@@ -256,7 +256,7 @@ impl FpgaVblankLatchHiddenPresenter {
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
-        if let Err(e) = apply_overlays(buffer) {
+        if let Err(e) = apply_overlays(buffer, plan) {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(e);
         }
@@ -1697,6 +1697,8 @@ pub(super) fn run_launcher_loop(
     let mut transition_picker_prev_left = false;
     let mut transition_picker_prev_right = false;
     let mut arcade_list_renderer = ArcadeListRenderer::new();
+    let mut latch_preview_version = 1u64;
+    let mut latch_arcade_version = 1u64;
     let mut arcade_filter_items_cache = ArcadeFilterListItemCache::default();
     let mut composition = UiCompositionController::new();
     let cpu = cpu_profile::start();
@@ -3523,8 +3525,6 @@ pub(super) fn run_launcher_loop(
                 let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
                 let mut latch_presentation = None;
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
-                    let arcade_update_label =
-                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
                     let full_rect = DirtyRect {
                         x0: 0,
                         y0: 0,
@@ -3540,32 +3540,62 @@ pub(super) fn run_launcher_loop(
                         raw_preview.and_then(RawPreviewPresent::cached_rect);
                     let raw_preview_direct_rect =
                         raw_preview.and_then(RawPreviewPresent::direct_rect);
-                    let arcade_damage = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
+                    if raw_preview_direct_rect.is_some() {
+                        latch_preview_version = latch_preview_version.wrapping_add(1).max(1);
+                    }
+                    if arcade_list_rect.is_some() {
+                        latch_arcade_version = latch_arcade_version.wrapping_add(1).max(1);
+                    }
+                    let preview_desired = if composition_decision.allow_preview_blit
+                        && preview_direct_present_enabled()
+                        && preview_frame_status == PreviewRawFrameStatus::Ready
+                    {
+                        Some(DirectLayerState::new(
+                            preview_screen_rect(ui),
+                            latch_preview_version,
+                        ))
+                    } else {
+                        None
+                    };
+                    let arcade_desired = if composition_decision.allow_arcade_list_blit {
+                        Some(DirectLayerState::new(
+                            arcade_list_renderer.dirty_rect(),
+                            latch_arcade_version,
+                        ))
+                    } else {
+                        None
+                    };
                     let mut cached_damage = DirtyRectList::new();
                     cached_damage.push_if_some(base_damage);
                     cached_damage.push_if_some(raw_preview_cached_rect);
-                    let hidden_damage = LatchFrameDamage::new(
+                    let hidden_damage = LatchFramePlanInput::new(
                         cached_damage,
+                        preview_desired,
                         raw_preview_direct_rect,
-                        arcade_damage,
+                        arcade_desired,
+                        arcade_list_rect,
                     );
                     let mut hidden_preview_compose_us = 0u128;
                     let mut hidden_arcade_compose_us = 0u128;
                     let mut direct_preview_rows = 0u32;
                     let mut arcade_stats = PresentCopyStats::default();
+                    let mut preview_redraw_rect = None;
+                    let mut arcade_redraw_update = None;
                     match presenter.present_cached_full_frame(
                         layer_target.cached_565(),
                         hidden_damage,
                         f,
-                        |hidden| {
-                            if let Some(rect) = raw_preview_direct_rect {
+                        |hidden, plan| {
+                            preview_redraw_rect = plan.preview_redraw;
+                            arcade_redraw_update = plan.arcade_redraw;
+                            if let Some(rect) = plan.preview_redraw {
                                 let hidden_preview_compose_start = Instant::now();
                                 direct_preview_rows =
                                     layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
                                 hidden_preview_compose_us =
                                     hidden_preview_compose_start.elapsed().as_micros();
                             }
-                            if let Some(update) = arcade_list_rect {
+                            if let Some(update) = plan.arcade_redraw {
                                 let hidden_arcade_compose_start = Instant::now();
                                 arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
                                     hidden,
@@ -3585,7 +3615,7 @@ pub(super) fn run_launcher_loop(
                                 + u128::from(stats.status_us);
                             let hidden_compose_us =
                                 hidden_preview_compose_us + hidden_arcade_compose_us;
-                            let preview_present_bytes = raw_preview_direct_rect
+                            let preview_present_bytes = preview_redraw_rect
                                 .map(|rect| {
                                     rect.width()
                                         .saturating_mul(rect.rows() as usize)
@@ -3594,6 +3624,8 @@ pub(super) fn run_launcher_loop(
                                         )
                                 })
                                 .unwrap_or(0);
+                            let arcade_update_label =
+                                ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref());
                             latch_presentation = Some(LauncherPresentResult {
                                 copied_rows: stats.copied_rows
                                     + direct_preview_rows
@@ -5260,7 +5292,13 @@ mod tests {
             sync.pending_sequence,
         );
         let plan = state
-            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .plan_next(LatchFramePlanInput::new(
+                DirtyRectList::new(),
+                None,
+                None,
+                None,
+                None,
+            ))
             .expect("slot 1 should be writable");
         assert_eq!(plan.slot_index, 1);
     }
@@ -5305,7 +5343,13 @@ mod tests {
             sync.pending_sequence,
         );
         let plan = state
-            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .plan_next(LatchFramePlanInput::new(
+                DirtyRectList::new(),
+                None,
+                None,
+                None,
+                None,
+            ))
             .expect("other slot should be writable");
         assert_eq!(plan.slot_index, 2);
     }
@@ -5342,7 +5386,13 @@ mod tests {
             sync.pending_sequence,
         );
         assert!(state
-            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .plan_next(LatchFramePlanInput::new(
+                DirtyRectList::new(),
+                None,
+                None,
+                None,
+                None,
+            ))
             .is_none());
     }
 

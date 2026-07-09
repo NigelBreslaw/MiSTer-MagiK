@@ -1,3 +1,4 @@
+use super::ArcadeListUpdate;
 use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,51 +10,68 @@ pub(super) enum LatchSlotHardwareState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DirectLayerState {
+    pub(super) rect: DirtyRect,
+    pub(super) version: u64,
+}
+
+impl DirectLayerState {
+    pub(super) fn new(rect: DirtyRect, version: u64) -> Self {
+        Self { rect, version }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LatchSlotCoherency {
     base_invalid: DirtyRectList,
-    direct_residue: DirtyRectList,
+    preview_present: Option<DirectLayerState>,
+    arcade_present: Option<DirectLayerState>,
     hardware: LatchSlotHardwareState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LatchFrameDamage {
+pub(super) struct LatchFramePlanInput {
     cached_damage: DirtyRectList,
-    direct_damage: DirtyRectList,
+    preview_desired: Option<DirectLayerState>,
+    preview_dirty: Option<DirtyRect>,
+    arcade_desired: Option<DirectLayerState>,
+    arcade_dirty: Option<ArcadeListUpdate>,
 }
 
-impl LatchFrameDamage {
+impl LatchFramePlanInput {
     pub(super) fn new(
         cached_damage: DirtyRectList,
-        preview_direct_rect: Option<DirtyRect>,
-        arcade_list_rect: Option<DirtyRect>,
+        preview_desired: Option<DirectLayerState>,
+        preview_dirty: Option<DirtyRect>,
+        arcade_desired: Option<DirectLayerState>,
+        arcade_dirty: Option<ArcadeListUpdate>,
     ) -> Self {
-        let mut direct = DirtyRectList::new();
-        direct.push_if_some(preview_direct_rect);
-        direct.push_if_some(arcade_list_rect);
-
         Self {
             cached_damage,
-            direct_damage: direct,
+            preview_desired,
+            preview_dirty,
+            arcade_desired,
+            arcade_dirty,
         }
     }
 
     #[cfg(test)]
     fn from_rects(
         cached_damage: Option<DirtyRect>,
-        preview_direct_rect: Option<DirtyRect>,
-        arcade_list_rect: Option<DirtyRect>,
+        preview_desired: Option<DirectLayerState>,
+        preview_dirty: Option<DirtyRect>,
+        arcade_desired: Option<DirectLayerState>,
+        arcade_dirty: Option<ArcadeListUpdate>,
     ) -> Self {
         let mut cached = DirtyRectList::new();
         cached.push_if_some(cached_damage);
-        Self::new(cached, preview_direct_rect, arcade_list_rect)
-    }
-
-    fn cached_damage(self) -> DirtyRectList {
-        self.cached_damage
-    }
-
-    fn direct_damage(self) -> DirtyRectList {
-        self.direct_damage
+        Self::new(
+            cached,
+            preview_desired,
+            preview_dirty,
+            arcade_desired,
+            arcade_dirty,
+        )
     }
 }
 
@@ -61,8 +79,11 @@ impl LatchFrameDamage {
 pub(super) struct LatchPresentPlan {
     pub(super) slot_index: u8,
     pub(super) restore_rects: DirtyRectList,
+    pub(super) preview_redraw: Option<DirtyRect>,
+    pub(super) arcade_redraw: Option<ArcadeListUpdate>,
     cached_damage: DirtyRectList,
-    direct_residue_after: DirtyRectList,
+    preview_after: Option<DirectLayerState>,
+    arcade_after: Option<DirectLayerState>,
 }
 
 #[derive(Clone, Debug)]
@@ -85,12 +106,14 @@ impl TwoBufferLatchState {
             slots: [
                 LatchSlotCoherency {
                     base_invalid: full_invalid,
-                    direct_residue: DirtyRectList::new(),
+                    preview_present: None,
+                    arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
                 },
                 LatchSlotCoherency {
                     base_invalid: full_invalid,
-                    direct_residue: DirtyRectList::new(),
+                    preview_present: None,
+                    arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
                 },
             ],
@@ -102,7 +125,8 @@ impl TwoBufferLatchState {
     pub(super) fn invalidate_all(&mut self) {
         for slot in &mut self.slots {
             slot.base_invalid = DirtyRectList::from_one(self.full_rect);
-            slot.direct_residue.clear();
+            slot.preview_present = None;
+            slot.arcade_present = None;
             slot.hardware = LatchSlotHardwareState::Unknown;
         }
         self.next_slot_index = 1;
@@ -130,9 +154,9 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub(super) fn plan_next(&self, damage: LatchFrameDamage) -> Option<LatchPresentPlan> {
+    pub(super) fn plan_next(&self, input: LatchFramePlanInput) -> Option<LatchPresentPlan> {
         let slot_index = self.select_writable_slot()?;
-        Some(self.plan_for_slot(slot_index, damage))
+        Some(self.plan_for_slot(slot_index, input))
     }
 
     pub(super) fn mark_post_success(&mut self, plan: LatchPresentPlan) {
@@ -141,7 +165,8 @@ impl TwoBufferLatchState {
 
         let selected = self.slot_mut(slot_index);
         selected.base_invalid.clear();
-        selected.direct_residue = plan.direct_residue_after;
+        selected.preview_present = plan.preview_after;
+        selected.arcade_present = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
 
         self.slot_mut(other_index)
@@ -154,13 +179,21 @@ impl TwoBufferLatchState {
         let full_rect = self.full_rect;
         let slot = self.slot_mut(slot_index);
         slot.base_invalid = DirtyRectList::from_one(full_rect);
-        slot.direct_residue.clear();
+        slot.preview_present = None;
+        slot.arcade_present = None;
         slot.hardware = LatchSlotHardwareState::Unknown;
     }
 
     pub(super) fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
-        slot.base_invalid.total_rgb565_bytes() + slot.direct_residue.total_rgb565_bytes()
+        let mut bytes = slot.base_invalid.total_rgb565_bytes();
+        if let Some(preview) = slot.preview_present {
+            bytes = bytes.saturating_add(rect_bytes(preview.rect));
+        }
+        if let Some(arcade) = slot.arcade_present {
+            bytes = bytes.saturating_add(rect_bytes(arcade.rect));
+        }
+        bytes
     }
 
     fn select_writable_slot(&self) -> Option<u8> {
@@ -175,18 +208,52 @@ impl TwoBufferLatchState {
         }
     }
 
-    fn plan_for_slot(&self, slot_index: u8, damage: LatchFrameDamage) -> LatchPresentPlan {
+    fn plan_for_slot(&self, slot_index: u8, input: LatchFramePlanInput) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
         let mut restore_rects = DirtyRectList::new();
         extend_without_covered_rects(&mut restore_rects, &slot.base_invalid);
-        extend_without_covered_rects(&mut restore_rects, &slot.direct_residue);
-        extend_without_covered_rects(&mut restore_rects, &damage.cached_damage());
+        extend_without_covered_rects(&mut restore_rects, &input.cached_damage);
+
+        let restore_preview =
+            direct_layer_needs_restore(slot.preview_present, input.preview_desired);
+        let restore_arcade = direct_layer_needs_restore(slot.arcade_present, input.arcade_desired);
+        if restore_preview {
+            if let Some(preview) = slot.preview_present {
+                push_without_covered_rect(&mut restore_rects, preview.rect);
+            }
+        }
+        if restore_arcade {
+            if let Some(arcade) = slot.arcade_present {
+                push_without_covered_rect(&mut restore_rects, arcade.rect);
+            }
+        }
+
+        let preview_intersects_restore =
+            layer_intersects_restore(input.preview_desired, &restore_rects);
+        let arcade_intersects_restore =
+            layer_intersects_restore(input.arcade_desired, &restore_rects);
+
+        let preview_redraw = direct_layer_redraw_rect(
+            slot.preview_present,
+            input.preview_desired,
+            input.preview_dirty,
+            preview_intersects_restore,
+        );
+        let arcade_redraw = direct_layer_redraw_update(
+            slot.arcade_present,
+            input.arcade_desired,
+            input.arcade_dirty,
+            arcade_intersects_restore,
+        );
 
         LatchPresentPlan {
             slot_index,
             restore_rects,
-            cached_damage: damage.cached_damage(),
-            direct_residue_after: damage.direct_damage(),
+            preview_redraw,
+            arcade_redraw,
+            cached_damage: input.cached_damage,
+            preview_after: input.preview_desired,
+            arcade_after: input.arcade_desired,
         }
     }
 
@@ -197,6 +264,55 @@ impl TwoBufferLatchState {
     fn slot_mut(&mut self, slot_index: u8) -> &mut LatchSlotCoherency {
         &mut self.slots[slot_offset(slot_index)]
     }
+}
+
+fn direct_layer_needs_restore(
+    current: Option<DirectLayerState>,
+    desired: Option<DirectLayerState>,
+) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    !matches!(desired, Some(desired) if desired == current)
+}
+
+fn direct_layer_redraw_rect(
+    current: Option<DirectLayerState>,
+    desired: Option<DirectLayerState>,
+    dirty: Option<DirtyRect>,
+    intersects_restore: bool,
+) -> Option<DirtyRect> {
+    let desired = desired?;
+    if current != Some(desired) || intersects_restore {
+        Some(desired.rect)
+    } else {
+        dirty
+    }
+}
+
+fn direct_layer_redraw_update(
+    current: Option<DirectLayerState>,
+    desired: Option<DirectLayerState>,
+    dirty: Option<ArcadeListUpdate>,
+    intersects_restore: bool,
+) -> Option<ArcadeListUpdate> {
+    let desired = desired?;
+    if current != Some(desired) || intersects_restore {
+        Some(ArcadeListUpdate::Full(desired.rect))
+    } else {
+        dirty
+    }
+}
+
+fn layer_intersects_restore(
+    layer: Option<DirectLayerState>,
+    restore_rects: &DirtyRectList,
+) -> bool {
+    layer.is_some_and(|layer| {
+        restore_rects
+            .iter()
+            .any(|restore| restore.intersection(layer.rect).is_some())
+    })
 }
 
 fn slot_offset(slot_index: u8) -> usize {
@@ -217,10 +333,20 @@ fn other_slot(slot_index: u8) -> u8 {
 
 fn extend_without_covered_rects(target: &mut DirtyRectList, source: &DirtyRectList) {
     for rect in source.iter() {
-        if !target.iter().any(|existing| existing.contains(rect)) {
-            target.push(rect);
-        }
+        push_without_covered_rect(target, rect);
     }
+}
+
+fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) {
+    if !target.iter().any(|existing| existing.contains(rect)) {
+        target.push(rect);
+    }
+}
+
+fn rect_bytes(rect: DirtyRect) -> usize {
+    rect.width()
+        .saturating_mul(rect.rows() as usize)
+        .saturating_mul(mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL)
 }
 
 #[cfg(test)]
@@ -238,8 +364,26 @@ mod tests {
         DirtyRect { x0, y0, x1, y1 }
     }
 
+    fn layer(rect: DirtyRect, version: u64) -> DirectLayerState {
+        DirectLayerState::new(rect, version)
+    }
+
+    fn full() -> DirtyRect {
+        rect(0, 0, WIDTH, HEIGHT)
+    }
+
     fn all_writable(state: &mut TwoBufferLatchState) {
         state.sync_hardware(None, 0, false, 0);
+    }
+
+    fn input(
+        cached_damage: Option<DirtyRect>,
+        preview: Option<DirectLayerState>,
+        preview_dirty: Option<DirtyRect>,
+        arcade: Option<DirectLayerState>,
+        arcade_dirty: Option<ArcadeListUpdate>,
+    ) -> LatchFramePlanInput {
+        LatchFramePlanInput::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
     }
 
     fn copy_restore(buffer: &mut [Rgb565Pixel], cached: &[Rgb565Pixel], plan: LatchPresentPlan) {
@@ -250,6 +394,22 @@ mod tests {
                     buffer[row + x] = cached[row + x];
                 }
             }
+        }
+    }
+
+    fn apply_plan(buffer: &mut [Rgb565Pixel], cached: &[Rgb565Pixel], plan: LatchPresentPlan) {
+        copy_restore(buffer, cached, plan);
+        if let Some(rect) = plan.preview_redraw {
+            fill_rect(buffer, rect, PREVIEW);
+        }
+        if let Some(update) = plan.arcade_redraw {
+            fill_rect(buffer, arcade_update_rect(update), ARCADE);
+        }
+    }
+
+    fn arcade_update_rect(update: ArcadeListUpdate) -> DirtyRect {
+        match update {
+            ArcadeListUpdate::Full(rect) | ArcadeListUpdate::Scroll { rect, .. } => rect,
         }
     }
 
@@ -289,29 +449,111 @@ mod tests {
 
     #[test]
     fn first_posts_restore_full_frames_before_direct_layers() {
-        let full = rect(0, 0, WIDTH, HEIGHT);
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         all_writable(&mut state);
 
         let first = state
-            .plan_next(LatchFrameDamage::from_rects(Some(full), None, None))
+            .plan_next(input(Some(full()), None, None, None, None))
             .expect("first slot");
         assert_eq!(first.slot_index, 1);
-        assert_eq!(first.restore_rects, DirtyRectList::from_one(full));
+        assert_eq!(first.restore_rects, DirtyRectList::from_one(full()));
         state.mark_post_success(first);
 
         all_writable(&mut state);
         let second = state
-            .plan_next(LatchFrameDamage::from_rects(None, None, None))
+            .plan_next(input(None, None, None, None, None))
             .expect("second slot");
         assert_eq!(second.slot_index, 2);
-        assert_eq!(second.restore_rects, DirtyRectList::from_one(full));
+        assert_eq!(second.restore_rects, DirtyRectList::from_one(full()));
+    }
+
+    #[test]
+    fn idle_mixed_arcade_reuse_keeps_direct_layers_visible() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_layer = layer(arcade, 1);
+        let cached = vec![BASE; WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        let mut slot1 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut slot2 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                Some(arcade_layer),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("first plan");
+        apply_plan(&mut slot1, &cached, first);
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        let second = state
+            .plan_next(input(
+                None,
+                Some(preview_layer),
+                None,
+                Some(arcade_layer),
+                None,
+            ))
+            .expect("second plan");
+        apply_plan(&mut slot2, &cached, second);
+        state.mark_post_success(second);
+
+        all_writable(&mut state);
+        let third = state
+            .plan_next(input(
+                None,
+                Some(preview_layer),
+                None,
+                Some(arcade_layer),
+                None,
+            ))
+            .expect("third plan");
+        assert_eq!(third.slot_index, 1);
+        assert_eq!(third.preview_redraw, None);
+        assert_eq!(third.arcade_redraw, None);
+        apply_plan(&mut slot1, &cached, third);
+
+        assert_eq!(
+            slot1,
+            parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn desired_layer_redraws_when_selected_slot_lacks_it() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_layer = layer(arcade, 1);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        all_writable(&mut state);
+        let plan = state
+            .plan_next(input(
+                None,
+                Some(preview_layer),
+                None,
+                Some(arcade_layer),
+                None,
+            ))
+            .expect("plan");
+
+        assert_eq!(plan.preview_redraw, Some(preview));
+        assert_eq!(plan.arcade_redraw, Some(ArcadeListUpdate::Full(arcade)));
     }
 
     #[test]
     fn direct_residue_is_restored_when_overlay_disappears_on_reused_slot() {
         let preview = rect(1, 0, 4, 2);
         let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_layer = layer(arcade, 1);
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         let cached = vec![BASE; WIDTH * HEIGHT];
         let mut slot1 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
@@ -319,31 +561,27 @@ mod tests {
 
         all_writable(&mut state);
         let first = state
-            .plan_next(LatchFrameDamage::new(
-                DirtyRectList::from_one(rect(0, 0, WIDTH, HEIGHT)),
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
                 Some(preview),
-                Some(arcade),
+                Some(arcade_layer),
+                Some(ArcadeListUpdate::Full(arcade)),
             ))
             .expect("first plan");
-        copy_restore(&mut slot1, &cached, first);
-        fill_rect(&mut slot1, preview, PREVIEW);
-        fill_rect(&mut slot1, arcade, ARCADE);
-        assert_eq!(
-            slot1,
-            parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
-        );
+        apply_plan(&mut slot1, &cached, first);
         state.mark_post_success(first);
 
         all_writable(&mut state);
         let second = state
-            .plan_next(LatchFrameDamage::from_rects(None, None, None))
+            .plan_next(input(None, None, None, None, None))
             .expect("second plan");
         copy_restore(&mut slot2, &cached, second);
         state.mark_post_success(second);
 
         all_writable(&mut state);
         let third = state
-            .plan_next(LatchFrameDamage::from_rects(None, None, None))
+            .plan_next(input(None, None, None, None, None))
             .expect("third plan");
         assert_eq!(third.slot_index, 1);
         copy_restore(&mut slot1, &cached, third);
@@ -355,12 +593,165 @@ mod tests {
     }
 
     #[test]
+    fn same_rect_new_content_version_forces_redraw() {
+        let preview = rect(1, 0, 4, 2);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(layer(preview, 1)),
+                Some(preview),
+                None,
+                None,
+            ))
+            .expect("first plan");
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        state.mark_post_success(
+            state
+                .plan_next(input(None, None, None, None, None))
+                .expect("second plan"),
+        );
+
+        all_writable(&mut state);
+        let third = state
+            .plan_next(input(None, Some(layer(preview, 2)), None, None, None))
+            .expect("third plan");
+
+        assert_eq!(third.preview_redraw, Some(preview));
+    }
+
+    #[test]
+    fn moved_layer_restores_old_rect_and_redraws_new_rect() {
+        let old_preview = rect(0, 0, 2, 2);
+        let new_preview = rect(2, 0, 4, 2);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(layer(old_preview, 1)),
+                Some(old_preview),
+                None,
+                None,
+            ))
+            .expect("first plan");
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        state.mark_post_success(
+            state
+                .plan_next(input(None, None, None, None, None))
+                .expect("second plan"),
+        );
+
+        all_writable(&mut state);
+        let third = state
+            .plan_next(input(None, Some(layer(new_preview, 2)), None, None, None))
+            .expect("third plan");
+
+        assert!(third.restore_rects.iter().any(|rect| rect == old_preview));
+        assert_eq!(third.preview_redraw, Some(new_preview));
+    }
+
+    #[test]
+    fn cached_damage_intersecting_desired_layer_forces_redraw() {
+        let preview = rect(1, 0, 4, 2);
+        let preview_layer = layer(preview, 1);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                None,
+                None,
+            ))
+            .expect("first plan");
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        state.mark_post_success(
+            state
+                .plan_next(input(None, None, None, None, None))
+                .expect("second plan"),
+        );
+
+        all_writable(&mut state);
+        let third = state
+            .plan_next(input(
+                Some(rect(0, 0, 2, 1)),
+                Some(preview_layer),
+                None,
+                None,
+                None,
+            ))
+            .expect("third plan");
+
+        assert_eq!(third.preview_redraw, Some(preview));
+    }
+
+    #[test]
+    fn overlapping_preview_and_arcade_preserve_layer_order() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let cached = vec![BASE; WIDTH * HEIGHT];
+        let mut slot = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+
+        let plan = state
+            .plan_next(input(
+                Some(full()),
+                Some(layer(preview, 1)),
+                Some(preview),
+                Some(layer(arcade, 1)),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("plan");
+        apply_plan(&mut slot, &cached, plan);
+
+        assert_eq!(
+            slot,
+            parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn failed_attempt_does_not_mark_direct_layers_valid() {
+        let preview = rect(1, 0, 4, 2);
+        let preview_layer = layer(preview, 1);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let plan = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                None,
+                None,
+            ))
+            .expect("plan");
+
+        state.mark_attempt_failed(plan.slot_index);
+
+        all_writable(&mut state);
+        let retry = state
+            .plan_next(input(None, Some(preview_layer), None, None, None))
+            .expect("retry");
+        assert_eq!(retry.preview_redraw, Some(preview));
+    }
+
+    #[test]
     fn pending_status_blocks_writes_to_both_slots() {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         state.sync_hardware(None, 0, true, 7);
 
         assert!(state
-            .plan_next(LatchFrameDamage::from_rects(None, None, None))
+            .plan_next(input(None, None, None, None, None))
             .is_none());
     }
 
@@ -370,7 +761,7 @@ mod tests {
         state.sync_hardware(Some(1), 3, false, 0);
 
         let plan = state
-            .plan_next(LatchFrameDamage::from_rects(None, None, None))
+            .plan_next(input(None, None, None, None, None))
             .expect("other slot should be writable");
 
         assert_eq!(plan.slot_index, 2);
@@ -381,11 +772,7 @@ mod tests {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         all_writable(&mut state);
         let plan = state
-            .plan_next(LatchFrameDamage::from_rects(
-                Some(rect(0, 0, WIDTH, HEIGHT)),
-                None,
-                None,
-            ))
+            .plan_next(input(Some(full()), None, None, None, None))
             .expect("plan");
 
         state.mark_attempt_failed(plan.slot_index);
