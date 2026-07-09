@@ -131,7 +131,7 @@ jobs:
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
           MISTER_FPGA_APPLY_PATCH: ${{ github.event.inputs.apply_magik_patch || 'true' }}
-          QUARTUS_DOCKER_PRIVILEGED: "1"
+          QUARTUS_DOCKER_EMPTY_SYS: "1"
           QUARTUS_STRACE: "1"
         run: scripts/build-fpga-vblank-latch-core.sh
 
