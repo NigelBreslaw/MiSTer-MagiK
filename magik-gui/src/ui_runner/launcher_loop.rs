@@ -41,6 +41,8 @@ enum LauncherPresentBackend {
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>) -> Self {
         match backend {
+            None | Some("") => Self::FpgaVblankLatchHidden,
+            Some("fb0-dirty") => Self::Fb0Dirty,
             Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
             Some(retired) if is_retired_present_backend(retired) => {
                 crate::ui_errln!(
@@ -4856,13 +4858,17 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn launcher_present_backend_defaults_to_fb0_dirty() {
+    pub(super) fn launcher_present_backend_defaults_to_fpga_latch() {
         assert_eq!(
             LauncherPresentBackend::from_env_values(None),
-            LauncherPresentBackend::Fb0Dirty
+            LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("")),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("fb0-dirty")),
             LauncherPresentBackend::Fb0Dirty
         );
     }

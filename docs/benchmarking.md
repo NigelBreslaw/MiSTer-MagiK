@@ -137,19 +137,21 @@ holding left/right across the Home system row:
 scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
 ```
 
-For the FPGA latch path, first prove `fpga-latch-report` support, then run the
-same Home-row gate with the backend pinned:
+The default gate follows the production renderer,
+`fpga-vblank-latch-hidden`, and collects passive `fpga-latch-report` samples
+before and after the run. To force the legacy fallback path for comparison, pass
+`--present-backend fb0-dirty`:
 
 ```bash
-scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build --present-backend fpga-vblank-latch-hidden
+scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build --present-backend fb0-dirty
 ```
 
 The gate writes `build/launcher-home-scroll-profiles/*-launcher-home-scroll.tsv`
-and a matching `*-launcher-home-scroll-drops.tsv` report. The default `/dev/fb0`
-gate still treats `wall_us > 16667` or `loop_delta_us > 16667` as visual cadence
-failure because userspace copies to the scanned framebuffer after vblank. The
-FPGA latch gate uses latch-visible evidence instead: every measured frame must
-use the latch backend with status `ok`, post before the latch deadline,
+and a matching `*-launcher-home-scroll-drops.tsv` report. The `/dev/fb0`
+fallback gate treats `wall_us > 16667` or `loop_delta_us > 16667` as visual
+cadence failure because userspace copies to the scanned framebuffer after
+vblank. The FPGA latch gate uses latch-visible evidence instead: every measured
+frame must use the latch backend with status `ok`, post before the latch deadline,
 alternate hidden buffers, keep sampled FPGA flip counters consistent when they
 are present, and finish with passive `fpga-latch-report drop_count=0`.
 `wall_us` and `loop_delta_us` remain in the latch report as
