@@ -25,6 +25,12 @@ home-repeat-hold scenario for 30s by default. The scenario holds left/right
 through the normal launcher input path, including the real repeat delay and
 80ms repeat cadence, and reverses at the ends of the system row.
 
+Use this gate for Home render/pan latch claims and for normal launcher hidden
+copy-path claims. Report the generated latch/drop row fields that match the
+claim, such as latch_copy_p50/p95/p99, latch margin, latch deadline misses,
+visual latch misses, passive FPGA drop_count, and frame_finish/post-tail timing.
+Use Arcade turbo/human-turbo instead for Arcade list or preview claims.
+
 The default backend is fpga-vblank-latch-hidden. For /dev/fb0 the gate fails if
 any measured frame after warmup has wall_us > 16667 or loop_delta_us > 16667.
 For the FPGA latch backend, the gate fails on latch-visible evidence: deadline
