@@ -146,21 +146,24 @@ scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
 
 The gate writes `build/launcher-home-scroll-profiles/*-launcher-home-scroll.tsv`
 and a matching `*-launcher-home-scroll-drops.tsv` report. The default `/dev/fb0`
-gate fails if any warmed-up frame has `wall_us > 16667`. The FPGA latch gate
-requires the requested backend on every measured frame and now has two zero
-tolerance checks: no latch post may miss the vblank deadline, and no visual
-cadence sample may exceed one 60 Hz frame (`wall_us > 16667` or
-`loop_delta_us > 16667`). The report lists the worst frames, whether each is a
-deadline miss, a cadence miss, or both, plus present backend/status, vsync state,
-latch copy/post/status timings, latch deadline margin, and finalization timing
-(`frame_finish_us` plus `post_finish_tail_us`). In latch mode, benchmark trace
-rows are buffered during the hot path so periodic TSV flushes do not masquerade
-as TV-visible frame skips.
+gate still treats `wall_us > 16667` or `loop_delta_us > 16667` as visual cadence
+failure because userspace copies to the scanned framebuffer after vblank. The
+FPGA latch gate uses latch-visible evidence instead: every measured frame must
+use the latch backend with status `ok`, post before the latch deadline,
+alternate hidden buffers, keep sampled FPGA flip counters consistent when they
+are present, and finish with passive `fpga-latch-report drop_count=0`.
+`wall_us` and `loop_delta_us` remain in the latch report as
+`scheduler_wake_jitter_misses`, but they are not latch visual misses by
+themselves because the FPGA consumes the already-posted hidden buffer at vblank.
+The report also includes latch copy/post/status timings, latch deadline margin,
+and finalization timing (`frame_finish_us` plus `post_finish_tail_us`). In latch
+mode, benchmark trace rows are buffered during the hot path so periodic TSV
+flushes do not masquerade as TV-visible frame skips.
 
 `drop_count=0` from passive `fpga-latch-report` proves that the FPGA accepted
-the posted buffers; it does not prove the TV saw a new visual frame every
-refresh. Strict cadence in the Home-row trace is the TV-visible smoothness
-signal. Use passive `fpga-latch-report` for before/after FPGA counters;
+the posted buffers. Combined with zero latch deadline misses, alternating
+buffers, and consistent sampled flip-counter deltas, it is the latch visual
+smoothness signal. Use passive `fpga-latch-report` for before/after FPGA counters;
 `fpga-latch-post-report` posts a diagnostic latch request and can change the
 counters it reports. The shared trace schema predates the Home-row gate, so the
 `selected` and `visual_index` columns still describe the Arcade list, not the

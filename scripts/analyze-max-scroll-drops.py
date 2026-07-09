@@ -9,11 +9,13 @@ import json
 import math
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 
 FRAME_BUDGET_US = 16_667
 LATCH_BACKEND = "fpga-vblank-latch-hidden"
+FPGA_COUNTER_MODULUS = 65_536
 PHASE_COLUMNS = [
     "prepare_us",
     "slint_render_us",
@@ -50,6 +52,8 @@ CONTEXT_COLUMNS = [
     "present_phase_us",
     "main_present_backend",
     "main_present_status",
+    "main_present_buffer",
+    "main_present_route_us",
 ]
 
 
@@ -136,12 +140,97 @@ def status_slow_frames(path: Path | None) -> list[dict[str, object]]:
     return []
 
 
+@dataclass(frozen=True)
+class FpgaLatchReport:
+    supported: bool
+    flip_count: int
+    post_count: int
+    drop_count: int
+
+
+def parse_key_value_tsv(line: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for part in line.rstrip().split("\t")[1:]:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            values[key] = value
+    return values
+
+
+def fpga_latch_report(path: Path | None) -> FpgaLatchReport | None:
+    if path is None or not path.exists() or path.stat().st_size == 0:
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("fpga_latch_status_tsv\t"):
+            continue
+        fields = parse_key_value_tsv(line)
+        return FpgaLatchReport(
+            supported=fields.get("supported") == "1",
+            flip_count=int(fields.get("flip_count", "0") or 0),
+            post_count=int(fields.get("post_count", "0") or 0),
+            drop_count=int(fields.get("drop_count", "0") or 0),
+        )
+    return None
+
+
+def counter_delta(before: int, after: int) -> int:
+    return (after - before) % FPGA_COUNTER_MODULUS
+
+
+def buffer_alternation_failures(rows: list[dict[str, str]]) -> int:
+    failures = 0
+    previous: int | None = None
+    for row in rows:
+        buffer_index = int_field(row, "main_present_buffer")
+        if buffer_index not in (1, 2):
+            failures += 1
+        elif previous is not None and buffer_index == previous:
+            failures += 1
+        previous = buffer_index
+    return failures
+
+
+def flip_counter_sample_failures(rows: list[dict[str, str]]) -> tuple[int, int, int]:
+    previous_value: int | None = None
+    previous_index: int | None = None
+    samples = 0
+    failures = 0
+    observed = 0
+    baseline_established = False
+    for index, row in enumerate(rows):
+        value = int_field(row, "main_present_route_us")
+        if value <= 0:
+            continue
+        if previous_value is None:
+            previous_value = value
+            previous_index = index
+            continue
+        if value == previous_value:
+            continue
+        observed = 1
+        if not baseline_established:
+            previous_value = value
+            previous_index = index
+            baseline_established = True
+            continue
+        samples += 1
+        row_delta = index - (previous_index or 0)
+        value_delta = counter_delta(previous_value, value)
+        if value_delta != row_delta:
+            failures += 1
+        previous_value = value
+        previous_index = index
+    return observed, samples, failures
+
+
 def print_summary(
     label: str,
     rows: list[dict[str, str]],
     slow_frames: list[dict[str, object]],
     worst_count: int,
     expect_backend: str | None,
+    fpga_before: FpgaLatchReport | None = None,
+    fpga_after: FpgaLatchReport | None = None,
 ) -> int:
     if not rows:
         print(
@@ -182,10 +271,44 @@ def print_summary(
     backend_counts = Counter(row.get("main_present_backend", "") or "blank" for row in rows)
     status_counts = Counter(row.get("main_present_status", "") or "blank" for row in rows)
     backend_valid = expect_backend is None or backend_counts == Counter({expect_backend: len(rows)})
+    buffer_failures = buffer_alternation_failures(latch_rows)
+    flip_observed, flip_samples, flip_failures = flip_counter_sample_failures(latch_rows)
+    fpga_report_required = expect_backend == LATCH_BACKEND
+    fpga_report_present = fpga_after is not None
+    fpga_report_supported = fpga_after.supported if fpga_after is not None else False
+    fpga_drop_count_max = max(
+        [report.drop_count for report in (fpga_before, fpga_after) if report is not None],
+        default=0,
+    )
+    fpga_flip_delta = (
+        counter_delta(fpga_before.flip_count, fpga_after.flip_count)
+        if fpga_before is not None and fpga_after is not None
+        else 0
+    )
+    fpga_post_delta = (
+        counter_delta(fpga_before.post_count, fpga_after.post_count)
+        if fpga_before is not None and fpga_after is not None
+        else 0
+    )
+    fpga_counters_advanced = (
+        fpga_before is None
+        or fpga_after is None
+        or (fpga_flip_delta > 0 and fpga_post_delta > 0)
+    )
+    fpga_report_valid = (
+        (not fpga_report_required or fpga_report_present)
+        and (not fpga_report_present or fpga_report_supported)
+        and fpga_drop_count_max == 0
+        and fpga_counters_advanced
+    )
+    visual_latch_misses = len(latch_misses) + buffer_failures + flip_failures
+    scheduler_wake_jitter_misses = len(cadence_misses)
     latch_valid = not latch_rows or (
         len(latch_misses) == 0
-        and len(cadence_misses) == 0
+        and buffer_failures == 0
+        and flip_failures == 0
         and status_counts == Counter({"ok": len(rows)})
+        and fpga_report_valid
         and backend_valid
     )
     over_work = sum(1 for row in rows if work_us(row) > FRAME_BUDGET_US)
@@ -212,6 +335,18 @@ def print_summary(
         f"backend_valid={1 if backend_valid else 0} "
         f"latch_frames={len(latch_rows)} "
         f"latch_deadline_misses={len(latch_misses)} "
+        f"visual_latch_misses={visual_latch_misses} "
+        f"scheduler_wake_jitter_misses={scheduler_wake_jitter_misses} "
+        f"buffer_alternation_failures={buffer_failures} "
+        f"flip_counter_observed={flip_observed} "
+        f"flip_counter_samples={flip_samples} "
+        f"flip_counter_gaps={flip_failures} "
+        f"fpga_latch_report_present={1 if fpga_report_present else 0} "
+        f"fpga_latch_report_supported={1 if fpga_report_supported else 0} "
+        f"fpga_drop_count_max={fpga_drop_count_max} "
+        f"fpga_flip_delta={fpga_flip_delta} "
+        f"fpga_post_delta={fpga_post_delta} "
+        f"fpga_counters_advanced={1 if fpga_counters_advanced else 0} "
         f"latch_margin_p50={percentile(latch_margins, 50)} "
         f"latch_margin_p95={percentile(latch_margins, 95)} "
         f"latch_margin_p99={percentile(latch_margins, 99)} "
@@ -235,11 +370,11 @@ def print_summary(
             missed_deadline = len(latch_misses) > 0 or not backend_valid
             missed_cadence = len(cadence_misses) > 0
             invalid_reason = (
-                "latch_deadline_and_cadence"
+                "latch_visual_and_scheduler"
                 if missed_deadline and missed_cadence
-                else "strict_cadence"
-                if missed_cadence
-                else "latch_deadline_or_backend"
+                else "scheduler_wake_jitter"
+                if missed_cadence and visual_latch_misses == 0 and backend_valid and fpga_report_valid
+                else "latch_visual_or_backend"
             )
     else:
         valid = len(cadence_misses) == 0 and backend_valid
@@ -272,6 +407,11 @@ def print_summary(
                 int_field(row, "wall_us") > FRAME_BUDGET_US
                 or int_field(row, "loop_delta_us") > FRAME_BUDGET_US
             ),
+            "scheduler_wake_jitter_miss": int(
+                int_field(row, "wall_us") > FRAME_BUDGET_US
+                or int_field(row, "loop_delta_us") > FRAME_BUDGET_US
+            ),
+            "visual_latch_miss": int(latch_deadline_margin_us(row) < 0),
             "dominant_delta": dominant_phase(row, medians),
         }
         for column in PHASE_COLUMNS + CONTEXT_COLUMNS:
@@ -326,31 +466,61 @@ def run_self_test() -> int:
         "main_present_hidden_copy_us": "1200",
         "main_present_request_us": "20",
         "main_present_wait_us": "10",
+        "main_present_buffer": "1",
+        "main_present_route_us": "100",
     }
+    next_frame = dict(base)
+    next_frame["frame"] = "32"
+    next_frame["main_present_buffer"] = "2"
+    next_frame["main_present_route_us"] = "101"
+    report_before = FpgaLatchReport(True, 100, 100, 0)
+    report_after = FpgaLatchReport(True, 102, 102, 0)
     missed = dict(base)
     missed["present_phase_us"] = "16000"
     cadence_missed = dict(base)
     cadence_missed["wall_us"] = "17000"
     cadence_missed["loop_delta_us"] = "17000"
+    cadence_next = dict(cadence_missed)
+    cadence_next["frame"] = "32"
+    cadence_next["main_present_buffer"] = "2"
+    cadence_next["main_present_route_us"] = "101"
+    repeated_buffer = dict(next_frame)
+    repeated_buffer["main_present_buffer"] = "1"
+    flip_gap = dict(next_frame)
+    flip_gap["main_present_route_us"] = "103"
+    flip_gap_later = dict(base)
+    flip_gap_later["frame"] = "33"
+    flip_gap_later["main_present_buffer"] = "1"
+    flip_gap_later["main_present_route_us"] = "106"
     if latch_deadline_margin_us(base) <= 0:
         print("self-test expected positive latch margin", file=sys.stderr)
         return 1
     if latch_deadline_margin_us(missed) >= 0:
         print("self-test expected negative latch margin", file=sys.stderr)
         return 1
-    if print_summary("self-latch-pass", [base], [], 1, LATCH_BACKEND) != 0:
+    if print_summary("self-latch-pass", [base, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
         print("self-test expected latch pass", file=sys.stderr)
         return 1
-    if print_summary("self-latch-fail", [missed], [], 1, LATCH_BACKEND) == 0:
+    if print_summary("self-latch-fail", [missed, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
         print("self-test expected latch failure", file=sys.stderr)
         return 1
-    if print_summary("self-latch-cadence-fail", [cadence_missed], [], 1, LATCH_BACKEND) == 0:
-        print("self-test expected latch cadence failure", file=sys.stderr)
+    if print_summary("self-latch-jitter-pass", [cadence_missed, cadence_next], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
+        print("self-test expected latch scheduler-jitter pass", file=sys.stderr)
+        return 1
+    if print_summary("self-latch-buffer-fail", [base, repeated_buffer], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+        print("self-test expected latch buffer failure", file=sys.stderr)
+        return 1
+    if print_summary("self-latch-flip-gap-fail", [base, flip_gap, flip_gap_later], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+        print("self-test expected latch flip gap failure", file=sys.stderr)
+        return 1
+    dropped_report = FpgaLatchReport(True, 102, 102, 1)
+    if print_summary("self-latch-fpga-drop-fail", [base, next_frame], [], 1, LATCH_BACKEND, report_before, dropped_report) == 0:
+        print("self-test expected latch FPGA drop failure", file=sys.stderr)
         return 1
     deadline_only = dict(missed)
     deadline_only["wall_us"] = "16300"
     deadline_only["loop_delta_us"] = "16300"
-    if print_summary("self-latch-deadline-only-fail", [deadline_only], [], 1, LATCH_BACKEND) == 0:
+    if print_summary("self-latch-deadline-only-fail", [deadline_only, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
         print("self-test expected latch deadline-only failure", file=sys.stderr)
         return 1
     return 0
@@ -361,6 +531,8 @@ def main() -> int:
     parser.add_argument("trace", type=Path, nargs="?")
     parser.add_argument("--label", default="max-scroll")
     parser.add_argument("--status-json", type=Path)
+    parser.add_argument("--fpga-latch-report-before", type=Path)
+    parser.add_argument("--fpga-latch-report-after", type=Path)
     parser.add_argument("--ignore-frames-through", type=int, default=30)
     parser.add_argument("--worst", type=int, default=12)
     parser.add_argument("--expect-backend", choices=[LATCH_BACKEND, "fb0-dirty"])
@@ -379,6 +551,8 @@ def main() -> int:
         status_slow_frames(args.status_json),
         args.worst,
         args.expect_backend,
+        fpga_latch_report(args.fpga_latch_report_before),
+        fpga_latch_report(args.fpga_latch_report_after),
     )
 
 

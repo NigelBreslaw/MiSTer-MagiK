@@ -25,9 +25,11 @@ home-repeat-hold scenario for 30s by default. The scenario holds left/right
 through the normal launcher input path, including the real repeat delay and
 80ms repeat cadence, and reverses at the ends of the system row.
 
-The gate fails if any measured frame after warmup has wall_us > 16667. It writes
-a compact report with the worst frames and likely dominant phase for each
-over-budget frame.
+For /dev/fb0 the gate fails if any measured frame after warmup has
+wall_us > 16667 or loop_delta_us > 16667. For the FPGA latch backend, the gate
+fails on latch-visible evidence: deadline misses, repeated buffers, sampled
+flip-counter gaps, unsupported status, or passive FPGA drop_count > 0. It still
+reports wall/loop overages as scheduler wake jitter.
 
 Default: --skip-build, useful when a bench-tools MagiK binary is already
 deployed. Use --deploy-device to build and deploy one first.
@@ -76,6 +78,8 @@ trace="$OUT_DIR/${label}-launcher-home-scroll.tsv"
 log="$OUT_DIR/${label}-launcher-home-scroll.log"
 status_json="$OUT_DIR/${label}-launcher-home-scroll.status.json"
 drop_report="$OUT_DIR/${label}-launcher-home-scroll-drops.tsv"
+fpga_latch_before="$OUT_DIR/${label}-fpga-latch-before.log"
+fpga_latch_after="$OUT_DIR/${label}-fpga-latch-after.log"
 
 cleanup() {
   rm -f "$env_file"
@@ -84,7 +88,7 @@ cleanup() {
 trap cleanup EXIT
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
+  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools --diagnostics ;;
   skip) : ;;
 esac
 
@@ -102,8 +106,12 @@ esac
   printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_trace"
 } >"$env_file"
 
-rm -f "$trace" "$log" "$status_json" "$drop_report"
+rm -f "$trace" "$log" "$status_json" "$drop_report" "$fpga_latch_before" "$fpga_latch_after"
 echo "==> Capture supervised launcher Home system-row home-repeat-hold secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us catalog_refresh=$catalog_refresh"
+if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+  "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$fpga_latch_before"
+  echo "wrote $fpga_latch_before"
+fi
 "$MISTER" run "rm -f '$remote_trace' '$REMOTE_LOG'; sync" >/dev/null
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 "$MISTER" run "if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
@@ -119,6 +127,10 @@ if ! "$MISTER" get "$remote_trace" "$trace" >/dev/null; then
 fi
 "$MISTER" get "$REMOTE_LOG" "$log" >/dev/null || true
 "$MISTER" status --json >"$status_json" 2>/dev/null || true
+if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+  "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$fpga_latch_after" || true
+  echo "wrote $fpga_latch_after"
+fi
 
 echo "wrote $trace"
 echo "wrote $log"
@@ -127,6 +139,10 @@ echo "wrote $status_json"
 analyze_args=()
 if [[ -n "$present_backend" ]]; then
   analyze_args+=(--expect-backend "$present_backend")
+fi
+if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+  analyze_args+=(--fpga-latch-report-before "$fpga_latch_before")
+  analyze_args+=(--fpga-latch-report-after "$fpga_latch_after")
 fi
 
 set +e
