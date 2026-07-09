@@ -312,7 +312,7 @@ mod linux {
     use std::io::{self, BufRead, BufReader, Read, Write};
     use std::mem;
     use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
-    use std::os::fd::RawFd;
+    use std::os::fd::{AsRawFd, RawFd};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -327,6 +327,20 @@ mod linux {
     const AGENT_PORT: u16 = 7498;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
+    const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
+    const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
+    const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
+    const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x47;
+    const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
+    const FPGA_MGR_BASE: i64 = 0xFF70_6000;
+    const FPGA_MGR_LEN: usize = 0x1000;
+    const FPGA_GPO_OFF: usize = 0x10;
+    const FPGA_GPI_OFF: usize = 0x14;
+    const FPGA_STROBE: u32 = 1 << 17;
+    const FPGA_ACK: u32 = FPGA_STROBE;
+    const FPGA_IO_EN: u32 = 1 << 20;
+    const FPGA_BIT31: u32 = 0x8000_0000;
+    const FPGA_SPIN_LIMIT: u32 = 2_000_000;
     // Temporary while the host/device file-transfer auth flow is being reworked.
     const CONTROL_AUTH_DISABLED: bool = true;
     const LOG: &str = "/tmp/mister-magik-agent.log";
@@ -1489,21 +1503,78 @@ mod linux {
         payload: Vec<u8>,
     }
 
+    struct FramebufferRead {
+        raw: Vec<u8>,
+        geometry: FramebufferGeometry,
+        source: FramebufferCaptureSource,
+    }
+
+    enum FramebufferCaptureSource {
+        Fb0,
+        FpgaLatchedPlugin {
+            active_base: u32,
+            active_sequence: u16,
+            pending_sequence: u16,
+            flags: u16,
+            flip_count: u16,
+            post_count: u16,
+            drop_count: u16,
+            region_index: usize,
+            region_name: String,
+        },
+    }
+
+    impl FramebufferCaptureSource {
+        fn label(&self) -> &'static str {
+            match self {
+                Self::Fb0 => "fb0",
+                Self::FpgaLatchedPlugin { .. } => "fpga-latched-plugin",
+            }
+        }
+
+        fn json(&self) -> Value {
+            match self {
+                Self::Fb0 => json!({"kind": self.label()}),
+                Self::FpgaLatchedPlugin {
+                    active_base,
+                    active_sequence,
+                    pending_sequence,
+                    flags,
+                    flip_count,
+                    post_count,
+                    drop_count,
+                    region_index,
+                    region_name,
+                } => json!({
+                    "kind": self.label(),
+                    "active_base": format!("0x{active_base:08x}"),
+                    "active_sequence": active_sequence,
+                    "pending_sequence": pending_sequence,
+                    "flags": format!("0x{flags:04x}"),
+                    "flip_count": flip_count,
+                    "post_count": post_count,
+                    "drop_count": drop_count,
+                    "region_index": region_index,
+                    "region_name": region_name,
+                }),
+            }
+        }
+    }
+
     fn framebuffer_capture(request_received: Instant, started: Instant) -> Result<Value, String> {
         let start = Instant::now();
         let request_received_uptime_ms =
             request_received.duration_since(started).as_millis() as u64;
         let dispatch_us = elapsed_us(request_received);
-        let geometry_t = Instant::now();
-        let geometry = framebuffer_geometry()?;
-        let geometry_us = elapsed_us(geometry_t);
-        let expected = geometry.bytes()?;
-        let mut raw = vec![0u8; expected];
         let read_t = Instant::now();
-        let mut fb0 = File::open("/dev/fb0").map_err(|err| format!("open /dev/fb0: {err}"))?;
-        fb0.read_exact(&mut raw)
-            .map_err(|err| format!("read /dev/fb0: {err}"))?;
+        let capture = read_framebuffer_capture()?;
         let raw_read_us = elapsed_us(read_t);
+        let geometry = capture.geometry;
+        let raw = capture.raw;
+        let source = capture.source;
+        let geometry_us = 0;
+        let source_json = source.json();
+        let source_label = source.label();
         let png_t = Instant::now();
         let png = framebuffer_png(&raw, geometry)?;
         let png_total_us = elapsed_us(png_t);
@@ -1513,6 +1584,8 @@ mod linux {
         let total_us = elapsed_us(start);
         Ok(json!({
             "schema": "mister-magik-framebuffer-capture-v1",
+            "source": source_label,
+            "capture_source": source_json,
             "width": geometry.width,
             "height": geometry.height,
             "stride": geometry.stride,
@@ -1538,6 +1611,352 @@ mod linux {
         }))
     }
 
+    fn read_framebuffer_capture() -> Result<FramebufferRead, String> {
+        read_fpga_latched_plugin_capture().or_else(|_| read_fb0_capture())
+    }
+
+    fn read_fb0_capture() -> Result<FramebufferRead, String> {
+        let geometry = framebuffer_geometry()?;
+        let expected = geometry.bytes()?;
+        let mut raw = vec![0u8; expected];
+        let mut fb0 = File::open("/dev/fb0").map_err(|err| format!("open /dev/fb0: {err}"))?;
+        fb0.read_exact(&mut raw)
+            .map_err(|err| format!("read /dev/fb0: {err}"))?;
+        Ok(FramebufferRead {
+            raw,
+            geometry,
+            source: FramebufferCaptureSource::Fb0,
+        })
+    }
+
+    #[derive(Clone, Debug)]
+    struct PluginProbeRegion {
+        index: usize,
+        name: String,
+        available: bool,
+        phys: u32,
+        len: usize,
+        dma_owned: bool,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct LatchedFbufStatus {
+        active_sequence: u16,
+        pending_sequence: u16,
+        flags: u16,
+        flip_count: u16,
+        post_count: u16,
+        drop_count: u16,
+        active_base: u32,
+        active_width: u16,
+        active_height: u16,
+        active_stride: u16,
+    }
+
+    impl LatchedFbufStatus {
+        fn supported(self) -> bool {
+            self.active_width > 0
+                && self.active_height > 0
+                && self.active_stride >= self.active_width.saturating_mul(2)
+        }
+    }
+
+    fn read_fpga_latched_plugin_capture() -> Result<FramebufferRead, String> {
+        if !Path::new(PLUGIN_PROBE_DEVICE).exists() {
+            return Err("plugin probe device is not present".to_string());
+        }
+        let mut fpga = FpgaIo::open().map_err(|err| format!("open FPGA IO: {err}"))?;
+        let status = fpga
+            .read_latched_fbuf_status()
+            .map_err(|err| format!("read latched fbuf status: {err}"))?;
+        if !status.supported() {
+            return Err("latched framebuffer status is not active".to_string());
+        }
+        let geometry = FramebufferGeometry {
+            width: status.active_width as usize,
+            height: status.active_height as usize,
+            stride: status.active_stride as usize,
+            bpp: 16,
+        };
+        let expected = geometry.bytes()?;
+        let region = plugin_region_for_phys(status.active_base, expected)?;
+        let raw = read_plugin_region_raw(&region, expected)?;
+        Ok(FramebufferRead {
+            raw,
+            geometry,
+            source: FramebufferCaptureSource::FpgaLatchedPlugin {
+                active_base: status.active_base,
+                active_sequence: status.active_sequence,
+                pending_sequence: status.pending_sequence,
+                flags: status.flags,
+                flip_count: status.flip_count,
+                post_count: status.post_count,
+                drop_count: status.drop_count,
+                region_index: region.index,
+                region_name: region.name,
+            },
+        })
+    }
+
+    fn plugin_region_for_phys(
+        active_base: u32,
+        required_len: usize,
+    ) -> Result<PluginProbeRegion, String> {
+        let text = fs::read_to_string(PLUGIN_PROBE_DEVICE)
+            .map_err(|err| format!("read {PLUGIN_PROBE_DEVICE}: {err}"))?;
+        validate_plugin_probe_header(&text)?;
+        for line in text.lines() {
+            let Some(region) = parse_plugin_probe_region(line) else {
+                continue;
+            };
+            if region.phys != active_base {
+                continue;
+            }
+            if !region.available {
+                return Err(format!("plugin region {} is unavailable", region.name));
+            }
+            if region.dma_owned {
+                return Err(format!("plugin region {} is DMA-owned", region.name));
+            }
+            if region.len < required_len {
+                return Err(format!(
+                    "plugin region {} has {} bytes, need {required_len}",
+                    region.name, region.len
+                ));
+            }
+            return Ok(region);
+        }
+        Err(format!(
+            "no plugin probe region matches active base 0x{active_base:08x}"
+        ))
+    }
+
+    fn validate_plugin_probe_header(text: &str) -> Result<(), String> {
+        let header = text
+            .lines()
+            .find(|line| line.starts_with("plugin_probe_header_tsv\t"))
+            .ok_or_else(|| "plugin probe header is missing".to_string())?;
+        let version = plugin_tsv_field(header, "version")
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| "plugin probe header version is missing".to_string())?;
+        if version < PLUGIN_PROBE_MIN_VERSION {
+            return Err(format!(
+                "plugin probe version {version} is older than {PLUGIN_PROBE_MIN_VERSION}"
+            ));
+        }
+        let region_offset_bytes = plugin_tsv_field(header, "region_offset_bytes")
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or_else(|| "plugin probe region offset is missing".to_string())?;
+        if region_offset_bytes != PLUGIN_PROBE_REGION_OFFSET_BYTES {
+            return Err(format!(
+                "plugin probe region offset {region_offset_bytes} is not {PLUGIN_PROBE_REGION_OFFSET_BYTES}"
+            ));
+        }
+        let cache_mode = plugin_tsv_field(header, "cache_mode")
+            .ok_or_else(|| "plugin probe cache mode is missing".to_string())?;
+        if cache_mode != "writecombine" {
+            return Err(format!("plugin probe cache mode is {cache_mode}"));
+        }
+        Ok(())
+    }
+
+    fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
+        if !line.starts_with("plugin_probe_region_tsv\t") {
+            return None;
+        }
+        Some(PluginProbeRegion {
+            index: plugin_tsv_field(line, "index")?.parse().ok()?,
+            name: plugin_tsv_field(line, "name")?.to_string(),
+            available: plugin_tsv_field(line, "available")? == "1",
+            phys: parse_hex_u32(plugin_tsv_field(line, "phys")?)?,
+            len: plugin_tsv_field(line, "len")?.parse().ok()?,
+            dma_owned: plugin_tsv_field(line, "dma_owned")? == "1",
+        })
+    }
+
+    fn plugin_tsv_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        line.split('\t').skip(1).find_map(|field| {
+            let (field_key, value) = field.split_once('=')?;
+            (field_key == key).then_some(value)
+        })
+    }
+
+    fn parse_hex_u32(raw: &str) -> Option<u32> {
+        let hex = raw
+            .trim()
+            .strip_prefix("0x")
+            .or_else(|| raw.trim().strip_prefix("0X"))
+            .unwrap_or(raw.trim());
+        u32::from_str_radix(hex, 16).ok()
+    }
+
+    fn read_plugin_region_raw(region: &PluginProbeRegion, len: usize) -> Result<Vec<u8>, String> {
+        let device = File::open(PLUGIN_PROBE_DEVICE)
+            .map_err(|err| format!("open {PLUGIN_PROBE_DEVICE}: {err}"))?;
+        let offset = region
+            .index
+            .checked_mul(PLUGIN_PROBE_REGION_OFFSET_BYTES)
+            .ok_or_else(|| "plugin region offset overflow".to_string())?;
+        let mem = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                device.as_raw_fd(),
+                offset as libc::off_t,
+            )
+        };
+        if mem == libc::MAP_FAILED {
+            return Err(format!(
+                "mmap plugin region {}: {}",
+                region.name,
+                io::Error::last_os_error()
+            ));
+        }
+        if mem.is_null() {
+            return Err(format!("mmap plugin region {} returned null", region.name));
+        }
+        let raw = unsafe { std::slice::from_raw_parts(mem.cast::<u8>(), len).to_vec() };
+        unsafe {
+            libc::munmap(mem, len);
+        }
+        Ok(raw)
+    }
+
+    struct FpgaIo {
+        base: *mut u8,
+        _file: File,
+        gpo: u32,
+    }
+
+    impl FpgaIo {
+        fn open() -> io::Result<Self> {
+            let file = OpenOptions::new().read(true).write(true).open("/dev/mem")?;
+            let base = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    FPGA_MGR_LEN,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    file.as_raw_fd(),
+                    FPGA_MGR_BASE as libc::off_t,
+                )
+            };
+            if base == libc::MAP_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self {
+                base: base.cast::<u8>(),
+                _file: file,
+                gpo: FPGA_BIT31,
+            })
+        }
+
+        fn read_latched_fbuf_status(&mut self) -> io::Result<LatchedFbufStatus> {
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH)?;
+                if magic_hi != MAGIK_FBUF_STATUS_MAGIC && magic_lo != MAGIK_FBUF_STATUS_MAGIC {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("latched framebuffer status unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"),
+                    ));
+                }
+                let mut words = [0u16; 11];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                Ok(LatchedFbufStatus {
+                    active_sequence: words[0],
+                    pending_sequence: words[1],
+                    flags: words[2],
+                    flip_count: words[3],
+                    post_count: words[4],
+                    drop_count: words[5],
+                    active_base: words[6] as u32 | ((words[7] as u32) << 16),
+                    active_width: words[8],
+                    active_height: words[9],
+                    active_stride: words[10],
+                })
+            })();
+            self.disable_io();
+            result
+        }
+
+        fn cmd_capture(&mut self, cmd: u16) -> io::Result<(u16, u16)> {
+            self.enable_io();
+            match self.spi_capture(cmd) {
+                Ok(res) => Ok(res),
+                Err(err) => {
+                    self.disable_io();
+                    Err(err)
+                }
+            }
+        }
+
+        fn enable_io(&mut self) {
+            self.spi_en(FPGA_IO_EN, true);
+        }
+
+        fn disable_io(&mut self) {
+            self.spi_en(FPGA_IO_EN, false);
+        }
+
+        fn spi_en(&mut self, mask: u32, en: bool) {
+            let gpo = self.gpo | FPGA_BIT31;
+            self.write(if en { gpo | mask } else { gpo & !mask });
+        }
+
+        fn spi_capture(&mut self, word: u16) -> io::Result<(u16, u16)> {
+            let gpo = (self.gpo & !(0xffff | FPGA_STROBE)) | word as u32;
+            self.write(gpo);
+            self.write(gpo | FPGA_STROBE);
+
+            let hi = self.wait_ack(word, true, gpo)?;
+            self.write(gpo);
+            let lo = self.wait_ack(word, false, gpo)?;
+            Ok((hi, lo))
+        }
+
+        fn wait_ack(&mut self, word: u16, high: bool, gpo: u32) -> io::Result<u16> {
+            for _ in 0..FPGA_SPIN_LIMIT {
+                let g = self.read();
+                if (g & FPGA_ACK != 0) == high {
+                    return Ok(g as u16);
+                }
+            }
+            if high {
+                self.write(gpo);
+            }
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "FPGA SPI timeout waiting for ACK {} on word 0x{word:04x}",
+                    if high { "high" } else { "low" }
+                ),
+            ))
+        }
+
+        fn write(&mut self, value: u32) {
+            self.gpo = value;
+            unsafe {
+                std::ptr::write_volatile(self.base.add(FPGA_GPO_OFF).cast::<u32>(), value);
+            }
+        }
+
+        fn read(&self) -> u32 {
+            unsafe { std::ptr::read_volatile(self.base.add(FPGA_GPI_OFF).cast::<u32>()) }
+        }
+    }
+
+    impl Drop for FpgaIo {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.base.cast::<libc::c_void>(), FPGA_MGR_LEN);
+            }
+        }
+    }
+
     fn framebuffer_capture_raw(
         request_received: Instant,
         started: Instant,
@@ -1548,16 +1967,14 @@ mod linux {
         let request_received_uptime_ms =
             request_received.duration_since(started).as_millis() as u64;
         let dispatch_us = elapsed_us(request_received);
-        let geometry_t = Instant::now();
-        let geometry = framebuffer_geometry()?;
-        let geometry_us = elapsed_us(geometry_t);
-        let expected = geometry.bytes()?;
-        let mut raw = vec![0u8; expected];
         let read_t = Instant::now();
-        let mut fb0 = File::open("/dev/fb0").map_err(|err| format!("open /dev/fb0: {err}"))?;
-        fb0.read_exact(&mut raw)
-            .map_err(|err| format!("read /dev/fb0: {err}"))?;
+        let capture = read_framebuffer_capture()?;
         let raw_read_us = elapsed_us(read_t);
+        let geometry = capture.geometry;
+        let raw = capture.raw;
+        let source_json = capture.source.json();
+        let source_label = capture.source.label();
+        let geometry_us = 0;
         let lz4_t = Instant::now();
         let payload = if lz4 {
             lz4_flex::compress_prepend_size(&raw)
@@ -1570,6 +1987,8 @@ mod linux {
             result: json!({
                 "schema": "mister-magik-framebuffer-raw-stream-v1",
                 "boot_id": boot_id,
+                "source": source_label,
+                "capture_source": source_json,
                 "width": geometry.width,
                 "height": geometry.height,
                 "stride": geometry.stride,
