@@ -32,12 +32,6 @@ const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LauncherPresentBackend {
-    Fb0Dirty,
-    FpgaVblankLatchHidden,
-}
-
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>) -> Self {
         match backend {
@@ -64,7 +58,7 @@ impl LauncherPresentBackend {
 
     fn log_if_experimental(self) {
         match self {
-            Self::Fb0Dirty => {}
+            Self::None | Self::Fb0Dirty => {}
             Self::FpgaVblankLatchHidden => {
                 crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
                 boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
@@ -88,8 +82,11 @@ fn launcher_present_backend() -> LauncherPresentBackend {
     })
 }
 
-fn present_mode_label_for_backend_status(backend: &str, status: &str) -> &'static str {
-    if backend == "fpga-vblank-latch-hidden" && status == "ok" {
+fn present_mode_label_for_backend_status(
+    backend: LauncherPresentBackend,
+    status: LauncherPresentStatus,
+) -> &'static str {
+    if backend.is_latch() && status == LauncherPresentStatus::Ok {
         "Mode=latch"
     } else {
         "Mode=/dev/fb0"
@@ -3643,13 +3640,13 @@ pub(super) fn run_launcher_loop(
                                 hidden_arcade_compose_us,
                                 direct_preview_present_us: hidden_preview_compose_us,
                                 arcade_list_present_us: hidden_arcade_compose_us,
-                                main_present_backend: "fpga-vblank-latch-hidden",
+                                main_present_backend: LauncherPresentBackend::FpgaVblankLatchHidden,
                                 main_present_status: if stats.set_supported
                                     && stats.status_supported
                                 {
-                                    "ok"
+                                    LauncherPresentStatus::Ok
                                 } else {
-                                    "unsupported"
+                                    LauncherPresentStatus::Unsupported
                                 },
                                 main_present_buffer: stats.buffer_index,
                                 main_present_hidden_copy_us: stats.copy_us,
@@ -3787,8 +3784,8 @@ pub(super) fn run_launcher_loop(
                         hidden_arcade_compose_us: 0,
                         direct_preview_present_us: 0,
                         arcade_list_present_us: 0,
-                        main_present_backend: "none",
-                        main_present_status: "none",
+                        main_present_backend: LauncherPresentBackend::None,
+                        main_present_status: LauncherPresentStatus::None,
                         main_present_buffer: 0,
                         main_present_hidden_copy_us: 0,
                         main_present_hidden_invalid_bytes: 0,
@@ -3819,14 +3816,12 @@ pub(super) fn run_launcher_loop(
                 )
                 .into(),
             );
-        let post_present_wait_us =
-            if presentation.main_present_backend == "fpga-vblank-latch-hidden" {
-                presentation.vsync_us_override.unwrap_or(0)
-            } else {
-                0
-            };
-        let latch_trace_flush_deferred =
-            presentation.main_present_backend == "fpga-vblank-latch-hidden";
+        let post_present_wait_us = if presentation.main_present_backend.is_latch() {
+            presentation.vsync_us_override.unwrap_or(0)
+        } else {
+            0
+        };
+        let latch_trace_flush_deferred = presentation.main_present_backend.is_latch();
         if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
@@ -5234,19 +5229,31 @@ mod tests {
     #[test]
     pub(super) fn present_mode_label_reports_only_proven_latch_as_latch() {
         assert_eq!(
-            present_mode_label_for_backend_status("fpga-vblank-latch-hidden", "ok"),
+            present_mode_label_for_backend_status(
+                LauncherPresentBackend::FpgaVblankLatchHidden,
+                LauncherPresentStatus::Ok,
+            ),
             "Mode=latch"
         );
         assert_eq!(
-            present_mode_label_for_backend_status("fpga-vblank-latch-hidden", "unsupported"),
+            present_mode_label_for_backend_status(
+                LauncherPresentBackend::FpgaVblankLatchHidden,
+                LauncherPresentStatus::Unsupported,
+            ),
             "Mode=/dev/fb0"
         );
         assert_eq!(
-            present_mode_label_for_backend_status("fb0-dirty", "none"),
+            present_mode_label_for_backend_status(
+                LauncherPresentBackend::Fb0Dirty,
+                LauncherPresentStatus::None,
+            ),
             "Mode=/dev/fb0"
         );
         assert_eq!(
-            present_mode_label_for_backend_status("none", "none"),
+            present_mode_label_for_backend_status(
+                LauncherPresentBackend::None,
+                LauncherPresentStatus::None,
+            ),
             "Mode=/dev/fb0"
         );
     }
