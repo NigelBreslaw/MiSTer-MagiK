@@ -32,8 +32,8 @@ pub const UIO_GET_FB_PAR: u16 = 0x40;
 pub const UIO_SET_FBUF: u16 = 0x2F;
 pub const UIO_BUT_SW: u16 = 0x01;
 pub const UIO_AUDVOL: u16 = 0x26;
-pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x43;
-pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x45;
+pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x46;
+pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x47;
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = 0x4d47;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
 
