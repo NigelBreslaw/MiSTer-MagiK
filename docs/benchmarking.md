@@ -152,7 +152,10 @@ tolerance checks: no latch post may miss the vblank deadline, and no visual
 cadence sample may exceed one 60 Hz frame (`wall_us > 16667` or
 `loop_delta_us > 16667`). The report lists the worst frames, whether each is a
 deadline miss, a cadence miss, or both, plus present backend/status, vsync state,
-latch copy/post/status timings, and latch deadline margin.
+latch copy/post/status timings, latch deadline margin, and finalization timing
+(`frame_finish_us` plus `post_finish_tail_us`). In latch mode, benchmark trace
+rows are buffered during the hot path so periodic TSV flushes do not masquerade
+as TV-visible frame skips.
 
 `drop_count=0` from passive `fpga-latch-report` proves that the FPGA accepted
 the posted buffers; it does not prove the TV saw a new visual frame every

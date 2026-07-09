@@ -40,6 +40,8 @@ CONTEXT_COLUMNS = [
     "preview_cache_evictions",
     "status_write_due",
     "runtime_status_write_us",
+    "frame_finish_us",
+    "post_finish_tail_us",
     "vsync_source",
     "vsync_miss_streak",
     "vsync_wait_start_age_us",
@@ -164,6 +166,12 @@ def print_summary(
     latch_copy = [int_field(row, "main_present_hidden_copy_us") for row in latch_rows]
     latch_post = [int_field(row, "main_present_request_us") for row in latch_rows]
     latch_status = [int_field(row, "main_present_wait_us") for row in latch_rows]
+    frame_finish = [int_field(row, "frame_finish_us") for row in rows]
+    post_finish_tail = [int_field(row, "post_finish_tail_us") for row in rows]
+    latch_miss_frame_finish = [int_field(row, "frame_finish_us") for row in latch_misses]
+    latch_miss_post_finish_tail = [
+        int_field(row, "post_finish_tail_us") for row in latch_misses
+    ]
     medians = {
         column: percentile([int_field(row, column) for row in rows], 50)
         for column in PHASE_COLUMNS
@@ -213,6 +221,10 @@ def print_summary(
         f"latch_copy_p99={percentile(latch_copy, 99)} "
         f"latch_post_p99={percentile(latch_post, 99)} "
         f"latch_status_p99={percentile(latch_status, 99)} "
+        f"frame_finish_p99={percentile(frame_finish, 99)} "
+        f"post_finish_tail_p99={percentile(post_finish_tail, 99)} "
+        f"latch_miss_frame_finish_p50={percentile(latch_miss_frame_finish, 50)} "
+        f"latch_miss_post_finish_tail_p50={percentile(latch_miss_post_finish_tail, 50)} "
         f"dominant_over_budget={dict(phase_counts.most_common())}"
     )
     if expect_backend == LATCH_BACKEND or latch_rows:
