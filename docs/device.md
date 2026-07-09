@@ -151,8 +151,21 @@ The known-good activation sequence is:
 
 1. Copy the CI artifact to
    `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`.
-2. Load that RBF through Main's MagiK launch command path, not with an
-   external loader and not with `load_core` while the launcher is active:
+2. Install the stock-kernel plugin probe module at
+   `/media/fat/mister-magik/mister_magik_plugin_probe.ko`.
+3. Deploy a MagiK Main fork that owns production latch startup. On boot or
+   return to menu, the fork redirects `menu.rbf` to the persistent latch RBF,
+   re-execs itself on that core, loads the plugin module, then starts the
+   launcher.
+
+   `scripts/deploy-main-mister-experiment.sh` installs all three production
+   pieces: `MiSTer_MagiK`, `mister_magik_plugin_probe.ko`, and the CI-built
+   latch RBF. `scripts/install-slint-boot.sh` refuses to arm MagiK boot if the
+   persistent latch RBF or plugin module is missing.
+
+For one-shot diagnosis only, load that RBF through Main's MagiK launch command
+path, not with an external loader and not with `load_core` while the launcher is
+active:
 
    ```bash
    scripts/mister run "printf 'mister_magik_launch /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
@@ -169,10 +182,10 @@ The known-good activation sequence is:
    experiments used `load_core` from the launcher state; Main stayed on the
    stock Menu path, so `supported=0` only proved the patched RBF was not active.
 
-3. Load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
+Then load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
 
    ```bash
-   scripts/mister run "insmod /tmp/mister-magik-plugin-probe/mister_magik_plugin_probe.ko"
+   scripts/mister run "insmod /media/fat/mister-magik/mister_magik_plugin_probe.ko"
    ```
 
 4. Start the launcher. The FPGA latch backend is the default when the RBF and

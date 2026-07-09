@@ -52,6 +52,10 @@ done
 
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik-fb"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
+PLUGIN_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
+LATCH_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
+PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_plugin_probe.ko"
+LATCH_RBF_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 
 if [[ ! -d "$MAIN_DIR" || ! -f "$MAIN_DIR/Makefile" ]]; then
   cat >&2 <<EOF
@@ -63,6 +67,17 @@ Create or clone the external fork at ../Main_MiSTer, or set:
 
   MISTER_MAIN_DIR=/path/to/Main_MiSTer $0
 EOF
+  exit 1
+fi
+
+if [[ ! -f "$PLUGIN_KO" ]]; then
+  echo "ERROR: missing plugin probe module: $PLUGIN_KO" >&2
+  echo "Build it with scripts/build-plugin-probe-module.sh before deploying production latch boot." >&2
+  exit 1
+fi
+if [[ ! -f "$LATCH_RBF" ]]; then
+  echo "ERROR: missing CI-built latch RBF: $LATCH_RBF" >&2
+  echo "Download it from the fpga-vblank-latch GitHub Actions workflow; do not build it locally." >&2
   exit 1
 fi
 
@@ -105,8 +120,11 @@ python3 "$ROOT/scripts/png-to-slint-rgba.py" "$GUI_DIR/ui/art/arcade-cabinet-pre
 rm -f "$GUI_ART_RAW"
 
 "$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
+"$ROOT/scripts/mister" run "mkdir -p /media/fat/mister-magik/experiments"
+"$ROOT/scripts/mister" put "$PLUGIN_KO" "$PLUGIN_REMOTE.upload"
+"$ROOT/scripts/mister" put "$LATCH_RBF" "$LATCH_RBF_REMOTE.upload"
 
-"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'"
+"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$LATCH_RBF_REMOTE'"
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 "$ROOT/scripts/mister" run '
@@ -128,4 +146,7 @@ echo "==> Installed without rebooting."
 echo "    Activate the deployed Main fork now with:"
 echo "      scripts/mister run \"printf 'load_core menu.rbf\\n' > /dev/MiSTer_cmd\""
 echo "    Or reboot later to let stock MiSTer hand off via MiSTer.ini main=MiSTer_MagiK."
+echo "    Production latch boot files:"
+echo "      $PLUGIN_REMOTE"
+echo "      $LATCH_RBF_REMOTE"
 echo "    Restore stock with scripts/restore-stock-boot.sh."
