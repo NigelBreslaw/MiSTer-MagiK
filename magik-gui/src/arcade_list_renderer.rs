@@ -8,6 +8,7 @@ use crate::arcade_catalog::{
 };
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
+use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -600,6 +601,19 @@ impl ArcadeListRenderer {
         }
     }
 
+    pub(crate) fn copy_layer_to_hidden(
+        &mut self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        redraw_selection_frame: bool,
+    ) {
+        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
+            self.copy_viewport_band_to_hidden(hidden, viewport_y, h);
+        }
+        if redraw_selection_frame {
+            self.copy_selection_frame_to_hidden(hidden);
+        }
+    }
+
     fn copy_viewport_band_to_target(
         &mut self,
         target: &mut UiFrameTarget,
@@ -798,6 +812,30 @@ impl ArcadeListRenderer {
         });
     }
 
+    fn copy_viewport_band_to_hidden(
+        &mut self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        viewport_y: usize,
+        h: usize,
+    ) {
+        if h == 0 || viewport_y >= ARCADE_LIST_H {
+            return;
+        }
+        let h = h.min(ARCADE_LIST_H - viewport_y);
+        for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
+            ArcadeListPresentKind::Normal => {
+                self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
+            }
+            ArcadeListPresentKind::Inverted => {
+                if arcade_selection_inversion_enabled() {
+                    self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
+                } else {
+                    self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
+                }
+            }
+        });
+    }
+
     fn compose_surface_rect_to_cached(
         &mut self,
         target: &mut UiFrameTarget,
@@ -824,6 +862,34 @@ impl ArcadeListRenderer {
         }
     }
 
+    fn copy_surface_rect_to_hidden(
+        &mut self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            if let Err(e) = hidden.copy_rect_565_strided(
+                self.geometry.x + x,
+                self.geometry.y + viewport_y + copied,
+                w,
+                copy_h,
+                &self.surface,
+                ARCADE_LIST_W,
+                x,
+                src_y,
+            ) {
+                crate::ui_errln!("arcade_list_hidden_copy_failed: {e}");
+            }
+            copied += copy_h;
+        }
+    }
+
     fn compose_inverted_surface_rect_to_cached(
         &mut self,
         target: &mut UiFrameTarget,
@@ -840,6 +906,30 @@ impl ArcadeListRenderer {
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
             target.compose_rect_565(target_x, target_y, w, copy_h, inverted);
+            copied += copy_h;
+        }
+    }
+
+    fn copy_inverted_surface_rect_to_hidden(
+        &mut self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let target_x = self.geometry.x + x;
+            let target_y = self.geometry.y + viewport_y + copied;
+            let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
+            if let Err(e) =
+                hidden.copy_rect_565_strided(target_x, target_y, w, copy_h, inverted, w, 0, 0)
+            {
+                crate::ui_errln!("arcade_list_hidden_inverted_copy_failed: {e}");
+            }
             copied += copy_h;
         }
     }
@@ -876,6 +966,66 @@ impl ArcadeListRenderer {
             h,
             &self.selection_vertical,
         );
+    }
+
+    fn copy_selection_frame_to_hidden(&mut self, hidden: &mut PluginHiddenRgb565Framebuffer) {
+        let rect = self.selection_rect();
+        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
+        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        self.selection_horizontal
+            .resize(ARCADE_LIST_W * thickness, color);
+        self.selection_horizontal.fill(color);
+        if let Err(e) = hidden.copy_rect_565_strided(
+            rect.x0,
+            rect.y0,
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+            ARCADE_LIST_W,
+            0,
+            0,
+        ) {
+            crate::ui_errln!("arcade_list_hidden_selection_copy_failed: {e}");
+        }
+        if let Err(e) = hidden.copy_rect_565_strided(
+            rect.x0,
+            rect.y1.saturating_sub(thickness),
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+            ARCADE_LIST_W,
+            0,
+            0,
+        ) {
+            crate::ui_errln!("arcade_list_hidden_selection_copy_failed: {e}");
+        }
+        self.selection_vertical.resize(thickness * h, color);
+        self.selection_vertical.fill(color);
+        if let Err(e) = hidden.copy_rect_565_strided(
+            rect.x0,
+            rect.y0,
+            thickness,
+            h,
+            &self.selection_vertical,
+            thickness,
+            0,
+            0,
+        ) {
+            crate::ui_errln!("arcade_list_hidden_selection_copy_failed: {e}");
+        }
+        if let Err(e) = hidden.copy_rect_565_strided(
+            rect.x1.saturating_sub(thickness),
+            rect.y0,
+            thickness,
+            h,
+            &self.selection_vertical,
+            thickness,
+            0,
+            0,
+        ) {
+            crate::ui_errln!("arcade_list_hidden_selection_copy_failed: {e}");
+        }
     }
 
     fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {

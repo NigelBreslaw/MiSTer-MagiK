@@ -1,5 +1,6 @@
 use crate::framebuffer::format::production_label;
 use crate::framebuffer::mapped::MappedRgb565Framebuffer;
+use crate::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
 use crate::framebuffer::stream;
 use mister_magik_framebuffer_stream::{FrameGeometry, FrameRect};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
@@ -663,6 +664,33 @@ impl UiFrameTarget {
             rect.x0 - backing_rect.x0,
             rect.y0 - backing_rect.y0,
         );
+        rect.rows()
+    }
+
+    pub fn copy_direct_preview_rect_to_hidden(
+        &self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        rect: DirtyRect,
+    ) -> u32 {
+        let Some(backing_rect) = self.direct_preview_rect else {
+            return 0;
+        };
+        if !backing_rect.contains(rect) {
+            return 0;
+        }
+        if let Err(e) = hidden.copy_rect_565_strided(
+            rect.x0,
+            rect.y0,
+            rect.x1 - rect.x0,
+            rect.y1 - rect.y0,
+            &self.direct_preview,
+            backing_rect.width(),
+            rect.x0 - backing_rect.x0,
+            rect.y0 - backing_rect.y0,
+        ) {
+            log_present_error("hidden direct preview rect", &e);
+            return 0;
+        }
         rect.rows()
     }
 

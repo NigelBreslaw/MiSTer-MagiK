@@ -217,12 +217,16 @@ impl FpgaVblankLatchHiddenPresenter {
         })
     }
 
-    fn present_cached_full_frame(
+    fn present_cached_full_frame<F>(
         &mut self,
         cached: &[Rgb565Pixel],
         damage: Option<DirtyRect>,
         fpga: &mut Fpga,
-    ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
+        apply_overlays: F,
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
+    where
+        F: FnOnce(&mut PluginHiddenRgb565Framebuffer) -> Result<(), String>,
+    {
         if self.disabled {
             return Err(
                 "fpga latch presenter disabled after unsupported command response".to_string(),
@@ -248,6 +252,7 @@ impl FpgaVblankLatchHiddenPresenter {
             None => 0,
         };
         let copy_us = copy_start.elapsed().as_micros();
+        apply_overlays(buffer)?;
         let full_rect = DirtyRect {
             x0: 0,
             y0: 0,
@@ -3390,25 +3395,8 @@ pub(super) fn run_launcher_loop(
                 let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
                 let mut latch_presentation = None;
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
-                    let hidden_preview_compose_start = Instant::now();
-                    let direct_preview_rows = raw_preview
-                        .and_then(RawPreviewPresent::direct_rect)
-                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
-                        .unwrap_or(0);
-                    let hidden_preview_compose_us =
-                        hidden_preview_compose_start.elapsed().as_micros();
                     let arcade_update_label =
                         ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
-                    let hidden_arcade_compose_start = Instant::now();
-                    let _arcade_stats = arcade_list_rect
-                        .map(|update| {
-                            layer_target
-                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
-                        })
-                        .unwrap_or_default();
-                    let hidden_arcade_compose_us =
-                        hidden_arcade_compose_start.elapsed().as_micros();
-                    let hidden_compose_us = hidden_preview_compose_us + hidden_arcade_compose_us;
                     let full_rect = DirtyRect {
                         x0: 0,
                         y0: 0,
@@ -3427,20 +3415,61 @@ pub(super) fn run_launcher_loop(
                         union_dirty_rect(base_damage, raw_preview_damage),
                         arcade_damage,
                     );
+                    let raw_preview_direct_rect =
+                        raw_preview.and_then(RawPreviewPresent::direct_rect);
+                    let mut hidden_preview_compose_us = 0u128;
+                    let mut hidden_arcade_compose_us = 0u128;
+                    let mut direct_preview_rows = 0u32;
+                    let mut arcade_stats = PresentCopyStats::default();
                     match presenter.present_cached_full_frame(
                         layer_target.cached_565(),
                         hidden_damage,
                         f,
+                        |hidden| {
+                            if let Some(rect) = raw_preview_direct_rect {
+                                let hidden_preview_compose_start = Instant::now();
+                                direct_preview_rows =
+                                    layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                                hidden_preview_compose_us =
+                                    hidden_preview_compose_start.elapsed().as_micros();
+                            }
+                            if let Some(update) = arcade_list_rect {
+                                let hidden_arcade_compose_start = Instant::now();
+                                arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
+                                    hidden,
+                                    &mut arcade_list_renderer,
+                                    update,
+                                );
+                                hidden_arcade_compose_us =
+                                    hidden_arcade_compose_start.elapsed().as_micros();
+                            }
+                            Ok(())
+                        },
                     ) {
                         Ok(stats) => {
                             let present_us = stats.copy_us
                                 + stats.post_us
                                 + stats.set_vga_fb_us
                                 + u128::from(stats.status_us);
+                            let hidden_compose_us =
+                                hidden_preview_compose_us + hidden_arcade_compose_us;
+                            let preview_present_bytes = raw_preview_direct_rect
+                                .map(|rect| {
+                                    rect.width()
+                                        .saturating_mul(rect.rows() as usize)
+                                        .saturating_mul(
+                                            mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+                                        )
+                                })
+                                .unwrap_or(0);
                             latch_presentation = Some(LauncherPresentResult {
-                                copied_rows: ui.render_h() as u32,
+                                copied_rows: ui.render_h() as u32
+                                    + direct_preview_rows
+                                    + arcade_stats.rows,
                                 direct_preview_rows,
-                                present_bytes: stats.copied_bytes,
+                                present_bytes: stats.copied_bytes
+                                    + preview_present_bytes
+                                    + arcade_stats.bytes,
                                 wasted_present_bytes: 0,
                                 fb_present_us_override: Some(present_us),
                                 vsync_us_override: None,

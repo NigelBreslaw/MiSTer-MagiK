@@ -357,6 +357,73 @@ impl PluginHiddenRgb565Framebuffer {
         Ok(rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<usize, PluginProbeError> {
+        if w == 0 || h == 0 {
+            return Ok(0);
+        }
+        let x1 = x
+            .checked_add(w)
+            .ok_or_else(|| PluginProbeError::InvalidGeometry("target x overflow".to_string()))?;
+        let y1 = y
+            .checked_add(h)
+            .ok_or_else(|| PluginProbeError::InvalidGeometry("target y overflow".to_string()))?;
+        if x1 > self.width || y1 > self.height {
+            return Err(PluginProbeError::InvalidGeometry(format!(
+                "target x={x} y={y} w={w} h={h} exceeds {}x{}",
+                self.width, self.height
+            )));
+        }
+        let src_x1 = src_x
+            .checked_add(w)
+            .ok_or_else(|| PluginProbeError::InvalidGeometry("source x overflow".to_string()))?;
+        let src_y1 = src_y
+            .checked_add(h)
+            .ok_or_else(|| PluginProbeError::InvalidGeometry("source y overflow".to_string()))?;
+        if src_stride_pixels < src_x1 {
+            return Err(PluginProbeError::InvalidGeometry(format!(
+                "source stride {src_stride_pixels} is smaller than source x+w {src_x1}"
+            )));
+        }
+        let needed =
+            src_stride_pixels
+                .checked_mul(src_y1)
+                .ok_or(PluginProbeError::InvalidGeometry(
+                    "source size overflow".to_string(),
+                ))?;
+        if src.len() < needed {
+            return Err(PluginProbeError::SourceTooShort {
+                needed,
+                actual: src.len(),
+            });
+        }
+        let dst_stride_pixels = self.stride_pixels;
+        let dst = self.buffer_mut();
+        copy_rect_565_strided_pixels(
+            dst,
+            dst_stride_pixels,
+            x,
+            y,
+            w,
+            h,
+            src,
+            src_stride_pixels,
+            src_x,
+            src_y,
+        );
+        Ok(w * h * std::mem::size_of::<Rgb565Pixel>())
+    }
+
     pub fn region(&self) -> &PluginProbeRegion {
         &self.region
     }
@@ -407,6 +474,26 @@ fn copy_rect_pixels(
         let dst_start = y * dst_stride_pixels + rect.x0;
         dst[dst_start..dst_start + rect.width()]
             .copy_from_slice(&src[src_start..src_start + rect.width()]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rect_565_strided_pixels(
+    dst: &mut [Rgb565Pixel],
+    dst_stride_pixels: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Rgb565Pixel],
+    src_stride_pixels: usize,
+    src_x: usize,
+    src_y: usize,
+) {
+    for row in 0..h {
+        let src_start = (src_y + row) * src_stride_pixels + src_x;
+        let dst_start = (y + row) * dst_stride_pixels + x;
+        dst[dst_start..dst_start + w].copy_from_slice(&src[src_start..src_start + w]);
     }
 }
 
@@ -657,6 +744,44 @@ plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x000
                 Rgb565Pixel(99),
                 Rgb565Pixel(9),
                 Rgb565Pixel(10),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+            ]
+        );
+    }
+
+    #[test]
+    fn strided_rect_copy_updates_destination_offset() {
+        let src: Vec<Rgb565Pixel> = (0..30).map(Rgb565Pixel).collect();
+        let mut dst = vec![Rgb565Pixel(99); 24];
+
+        copy_rect_565_strided_pixels(&mut dst, 6, 2, 1, 3, 2, &src, 5, 1, 3);
+
+        assert_eq!(
+            dst,
+            vec![
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(16),
+                Rgb565Pixel(17),
+                Rgb565Pixel(18),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
+                Rgb565Pixel(21),
+                Rgb565Pixel(22),
+                Rgb565Pixel(23),
+                Rgb565Pixel(99),
+                Rgb565Pixel(99),
                 Rgb565Pixel(99),
                 Rgb565Pixel(99),
                 Rgb565Pixel(99),
