@@ -955,6 +955,7 @@ impl LauncherWakeReasons {
     const PREVIEW_SCHEDULED_THIS_LOOP: Self = Self(1 << 20);
     const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
+    const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -966,6 +967,11 @@ impl LauncherWakeReasons {
     #[inline]
     fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    #[inline]
+    fn bits(self) -> u64 {
+        self.0
     }
 }
 
@@ -1126,6 +1132,10 @@ fn pad_state_has_active_input(state: &PadState) -> bool {
         || state.left_y.abs() > 0.0
         || state.right_x.abs() > 0.0
         || state.right_y.abs() > 0.0
+}
+
+fn pad_state_home_horizontal_held(state: &PadState) -> bool {
+    state.dpad_left || state.dpad_right
 }
 
 fn catalog_background_nav_motion_active(nav: &LauncherNav) -> bool {
@@ -2982,6 +2992,8 @@ pub(super) fn run_launcher_loop(
             &mut home_pan_present_until,
             loop_start,
         );
+        let home_horizontal_input_held =
+            nav.screen == Screen::Home && pad_state_home_horizontal_held(pad.state());
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
@@ -3032,6 +3044,10 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(
             LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
             home_pan_present_active,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD,
+            home_horizontal_input_held,
         );
         // Arcade list motion lives outside Slint's bridge key, so the final
         // visual tick still has to present before the launcher can idle.
@@ -3132,6 +3148,8 @@ pub(super) fn run_launcher_loop(
         }
 
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
+        let redraw_pending_for_trace = launcher_redraw_pending;
+        let wake_reasons_bits = wake_reasons.bits();
         let late_frame_start_headroom_us = if fpga_vblank_latch_hidden_presenter.is_some() {
             FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
         } else {
@@ -3149,9 +3167,19 @@ pub(super) fn run_launcher_loop(
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
         let pre_render_pace = wait_before_render.then(|| {
+            let wait_start = Instant::now();
             let pace = pacer.wait();
-            (pace, Instant::now())
+            let wait_done = Instant::now();
+            (
+                pace,
+                wait_done,
+                wait_done.saturating_duration_since(wait_start).as_micros(),
+            )
         });
+        let pre_render_wait_us = pre_render_pace
+            .as_ref()
+            .map(|(_, _, wait_us)| *wait_us)
+            .unwrap_or(0);
         update_slint_animations(animation_clock);
         let mut layer_target = LayerTarget::new(target, disp, ui);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -3320,7 +3348,7 @@ pub(super) fn run_launcher_loop(
                 } else {
                     let pace = if frame_accounting.first_visible_copy_done() {
                         let (pace, vsync_done) = match pre_render_pace {
-                            Some((pace, vsync_done)) => (pace, vsync_done),
+                            Some((pace, vsync_done, _)) => (pace, vsync_done),
                             None => {
                                 let pace = pacer.wait();
                                 (pace, Instant::now())
@@ -3365,7 +3393,7 @@ pub(super) fn run_launcher_loop(
             } else {
                 let pace = if frame_accounting.first_visible_copy_done() {
                     let (pace, vsync_done) = match pre_render_pace {
-                        Some((pace, vsync_done)) => (pace, vsync_done),
+                        Some((pace, vsync_done, _)) => (pace, vsync_done),
                         None => {
                             let pace = pacer.wait();
                             (pace, Instant::now())
@@ -3430,6 +3458,12 @@ pub(super) fn run_launcher_loop(
                     pacing_trace,
                 )
             };
+        let post_present_wait_us =
+            if presentation.main_present_backend == "fpga-vblank-latch-hidden" {
+                presentation.vsync_us_override.unwrap_or(0)
+            } else {
+                0
+            };
         if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
@@ -3463,9 +3497,15 @@ pub(super) fn run_launcher_loop(
                 frame_t2,
                 frame_t3,
                 frame_t4,
+                pre_render_wait_us,
+                post_present_wait_us,
                 custom_draw_start,
                 custom_draw_done,
                 prepare_us,
+                home_pan_present_active,
+                home_horizontal_input_held,
+                redraw_pending: redraw_pending_for_trace,
+                wake_reasons_bits,
             },
             render: LauncherFrameRenderData {
                 custom_draw_trace,
