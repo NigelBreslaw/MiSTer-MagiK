@@ -205,6 +205,9 @@ local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
 local_cpu_svg="$OUT_DIR/${label}-arcade-scroll-cpu.svg"
 local_stream_tsv="$OUT_DIR/${label}-framebuffer-stream.tsv"
 local_stream_log="$OUT_DIR/${label}-framebuffer-stream.log"
+local_latch_before="$OUT_DIR/${label}-fpga-latch-before.log"
+local_latch_after="$OUT_DIR/${label}-fpga-latch-after.log"
+local_latch_drop_report="$OUT_DIR/${label}-arcade-latch-drops.tsv"
 remote_entry_tsv="/tmp/${label}-arcade-entry.tsv"
 local_entry_tsv="$OUT_DIR/${label}-arcade-entry.tsv"
 local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
@@ -217,6 +220,23 @@ present_width="960"
 if [[ "$ui_fb_size" == "1280x720" ]]; then
   present_width="1280"
 fi
+latch_reports_enabled="0"
+if [[ "$present_backend" == "" || "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+  latch_reports_enabled="1"
+fi
+
+capture_latch_report() {
+  local phase="$1" out="$2"
+  if [[ "$latch_reports_enabled" != "1" ]]; then
+    return 0
+  fi
+  if "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$out"; then
+    echo "wrote $out"
+    return 0
+  fi
+  echo "failed to capture FPGA latch report phase=$phase path=$out" >&2
+  return 1
+}
 
 check_composition_recovery_gate() {
   local status_json="$1"
@@ -586,11 +606,12 @@ run_boot_prelude() {
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
   } >"$env_file"
-  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log"
+  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   "$MISTER" run "rm -f '$REMOTE_ENV' '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   echo "==> Armed fresh boot-entry run_id=$run_id entry_before_a_wait_frames=$entry_before_a_wait_frames human_idle_frames=$human_turbo_idle_frames human_normal_frames=$human_turbo_normal_frames human_pause_frames=$human_turbo_pause_frames"
   "$MISTER" reboot-wait
+  capture_latch_report before "$local_latch_before"
   start_stream_consumer
   thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
   sleep $((secs + 10))
@@ -615,6 +636,7 @@ run_boot_prelude() {
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true
   cp "$local_log" "$local_entry_log" 2>/dev/null || true
   "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  capture_latch_report after "$local_latch_after"
   if [[ "$cpu_profile" == "1" ]]; then
     if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
       echo "arcade scroll CPU profile failed or produced an empty SVG; see $local_log" >&2
@@ -735,6 +757,8 @@ else
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
   } >"$env_file"
+  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
+  capture_latch_report before "$local_latch_before"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   "$MISTER" run "rm -f '$remote_tsv' '$remote_log' '$cpu_profile_remote_svg'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
   start_stream_consumer
@@ -751,6 +775,7 @@ else
   fi
   "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
   "$MISTER" status --json >"$local_status_json" 2>/dev/null || true
+  capture_latch_report after "$local_latch_after"
   if [[ "$cpu_profile" == "1" ]]; then
     if ! "$MISTER" get "$cpu_profile_remote_svg" "$local_cpu_svg" >/dev/null || [[ ! -s "$local_cpu_svg" ]]; then
       echo "arcade scroll CPU profile failed or produced an empty SVG; see $local_log" >&2
@@ -786,6 +811,22 @@ echo
 "$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv" --status-json "$local_status_json"
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
+echo
+analyze_args=(--label "$label" --status-json "$local_status_json" --ignore-elapsed-zero)
+if [[ "$latch_reports_enabled" == "1" ]]; then
+  analyze_args+=(--expect-backend fpga-vblank-latch-hidden)
+  analyze_args+=(--fpga-latch-report-before "$local_latch_before")
+  analyze_args+=(--fpga-latch-report-after "$local_latch_after")
+fi
+set +e
+"$HERE/scripts/analyze-max-scroll-drops.py" "$local_tsv" "${analyze_args[@]}" | tee "$local_latch_drop_report"
+latch_drop_status=${PIPESTATUS[0]}
+set -e
+echo "wrote $local_latch_drop_report"
+if [[ "$latch_drop_status" -ne 0 ]]; then
+  echo "arcade latch drop analysis failed; see $local_latch_drop_report" >&2
+  exit "$latch_drop_status"
+fi
 echo
 check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario"
 echo
