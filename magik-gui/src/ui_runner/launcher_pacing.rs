@@ -6,6 +6,7 @@ pub(super) struct LauncherFramePacingInput {
     pub(super) first_visible_copy_done: bool,
     pub(super) frame_start_phase_us: u64,
     pub(super) period_us: u64,
+    pub(super) late_frame_start_headroom_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,7 +26,8 @@ pub(super) struct LauncherPacingTrace {
     pub(super) present_phase_us: u128,
 }
 
-const LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
+pub(super) const FB0_LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
+pub(super) const FPGA_LATCH_LATE_FRAME_START_HEADROOM_US: u64 = 12_000;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct LauncherFramePacingPolicy;
@@ -38,6 +40,7 @@ impl LauncherFramePacingPolicy {
                 && self.should_wait_before_late_frame_render(
                     input.frame_start_phase_us,
                     input.period_us,
+                    input.late_frame_start_headroom_us,
                 ),
         }
     }
@@ -47,11 +50,12 @@ impl LauncherFramePacingPolicy {
         self,
         frame_start_phase_us: u64,
         period_us: u64,
+        late_frame_start_headroom_us: u64,
     ) -> bool {
-        if period_us <= LATE_FRAME_START_HEADROOM_US {
+        if period_us <= late_frame_start_headroom_us {
             return false;
         }
-        frame_start_phase_us >= period_us - LATE_FRAME_START_HEADROOM_US
+        frame_start_phase_us >= period_us - late_frame_start_headroom_us
     }
 }
 
@@ -106,45 +110,63 @@ mod tests {
         first_visible_copy_done: bool,
         frame_start_phase_us: u64,
         period_us: u64,
+        late_frame_start_headroom_us: u64,
     ) -> bool {
         LauncherFramePacingPolicy::default()
             .decide(LauncherFramePacingInput {
                 first_visible_copy_done,
                 frame_start_phase_us,
                 period_us,
+                late_frame_start_headroom_us,
             })
             .wait_before_render
     }
 
     #[test]
     fn first_visible_copy_must_be_done_before_waiting() {
-        assert!(!should_wait(false, 10_667, 16_667));
+        assert!(!should_wait(false, 10_667, 16_667, 6_000));
     }
 
     #[test]
     fn exact_threshold_waits_before_render() {
-        assert!(should_wait(true, 10_667, 16_667));
-        assert!(!should_wait(true, 10_666, 16_667));
+        assert!(should_wait(true, 10_667, 16_667, 6_000));
+        assert!(!should_wait(true, 10_666, 16_667, 6_000));
     }
 
     #[test]
     fn short_period_never_waits_before_render() {
-        assert!(!should_wait(true, 6_000, 6_000));
-        assert!(!should_wait(true, 6_001, 6_000));
+        assert!(!should_wait(true, 6_000, 6_000, 6_000));
+        assert!(!should_wait(true, 6_001, 6_000, 6_000));
     }
 
     #[test]
     fn normal_60hz_period_waits_in_final_headroom_window() {
-        assert!(should_wait(true, 31_000, 16_667));
-        assert!(should_wait(true, 15_000, 16_667));
-        assert!(!should_wait(true, 10_000, 16_667));
+        assert!(should_wait(true, 31_000, 16_667, 6_000));
+        assert!(should_wait(true, 15_000, 16_667, 6_000));
+        assert!(!should_wait(true, 10_000, 16_667, 6_000));
     }
 
     #[test]
     fn pal_50hz_period_waits_in_final_headroom_window() {
-        assert!(should_wait(true, 14_000, 20_000));
-        assert!(!should_wait(true, 13_999, 20_000));
-        assert!(!should_wait(true, 5_000, 20_000));
+        assert!(should_wait(true, 14_000, 20_000, 6_000));
+        assert!(!should_wait(true, 13_999, 20_000, 6_000));
+        assert!(!should_wait(true, 5_000, 20_000, 6_000));
+    }
+
+    #[test]
+    fn latch_headroom_waits_before_render_earlier_than_fb0() {
+        assert!(should_wait(
+            true,
+            5_000,
+            16_667,
+            FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
+        ));
+        assert!(!should_wait(
+            true,
+            5_000,
+            16_667,
+            FB0_LATE_FRAME_START_HEADROOM_US
+        ));
     }
 
     fn test_pace(source: VsyncPaceSource, hit_at: Option<Instant>) -> VsyncPace {

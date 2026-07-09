@@ -185,11 +185,16 @@ The known-good activation sequence is:
    frame into an alternating plugin hidden slot, posts that physical address to
    the FPGA latch before vblank, then waits for vblank only to pace the next
    frame. The default `/dev/fb0` fallback still waits for vblank before copying
-   dirty rows into the live framebuffer.
+   dirty rows into the live framebuffer. Latch mode keeps a larger late-frame
+   headroom window: if the frame loop starts too late in the current refresh,
+   it waits for the next vblank before rendering rather than posting after the
+   latch deadline.
 
-5. Verify support with `fpga-latch-report` or `fpga-latch-post-report`. The
-   MagiK latch commands `0x57` and `0x58` should report supported status/magic:
-   `0x57` acks `0x4d47`, and `0x58` acks `0x4d48`.
+5. Verify support with passive `fpga-latch-report`. The MagiK latch commands
+   `0x57` and `0x58` should report supported status/magic: `0x57` acks
+   `0x4d47`, and `0x58` acks `0x4d48`. `fpga-latch-post-report` is an active
+   smoke test that posts a latch request; do not use it as a passive before/after
+   counter sample.
 
 Do not use `/tmp/mister-magik/status.json` `composition_state=full-slint` as the
 fast-path proof; the launcher can still be a full-Slint composition while the
@@ -197,8 +202,8 @@ final present goes through hidden buffers. The reliable proof signals are:
 
 - Main's cmdline contains the experimental RBF path.
 - `mister_magik_plugin_probe` is present in `/proc/modules`.
-- `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with `0x4d47` and
-  `0x4d48` acks.
+- Passive `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with
+  `0x4d47` and `0x4d48` acks.
 - `flip_count` and `post_count` advance during a launcher run, with
   `drop_count=0`.
 - Home-row benchmark traces show `main_present_backend=fpga-vblank-latch-hidden`

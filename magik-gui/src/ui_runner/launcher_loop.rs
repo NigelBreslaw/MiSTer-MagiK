@@ -5,6 +5,7 @@ use super::launcher_frame_accounting::{
 };
 use super::launcher_pacing::{
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
+    FB0_LATE_FRAME_START_HEADROOM_US, FPGA_LATCH_LATE_FRAME_START_HEADROOM_US,
 };
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
@@ -3131,11 +3132,17 @@ pub(super) fn run_launcher_loop(
         }
 
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
+        let late_frame_start_headroom_us = if fpga_vblank_latch_hidden_presenter.is_some() {
+            FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
+        } else {
+            FB0_LATE_FRAME_START_HEADROOM_US
+        };
         let wait_before_render = pacing_policy
             .decide(LauncherFramePacingInput {
                 first_visible_copy_done: frame_accounting.first_visible_copy_done(),
                 frame_start_phase_us,
                 period_us: pacer.period_us(),
+                late_frame_start_headroom_us,
             })
             .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -3286,11 +3293,12 @@ pub(super) fn run_launcher_loop(
                 }
                 if let Some(mut presentation) = latch_presentation {
                     let present_done = Instant::now();
-                    let pace = if frame_accounting.first_visible_copy_done() {
+                    // Once a hidden-buffer latch is posted, wait for the FPGA to consume it before
+                    // starting the next frame. The first visible frame is included here; otherwise
+                    // startup can post a second pending buffer before the first vblank.
+                    let pace = {
                         let pace = pacer.wait();
                         Some((pace, Instant::now()))
-                    } else {
-                        None
                     };
                     let frame_t4 = pace.as_ref().map(|(_, done)| *done).unwrap_or(present_done);
                     presentation.vsync_us_override =

@@ -150,12 +150,17 @@ gate fails if any warmed-up frame has `wall_us > 16667`. The FPGA latch gate
 requires the requested backend on every measured frame and fails if any latch
 post misses the vblank deadline. The report lists the worst frames, present
 backend/status, vsync state, latch copy/post/status timings, and latch deadline
-margin. The shared trace schema predates the Home-row gate, so the `selected`
-and `visual_index` columns still describe the Arcade list, not the Home system
-index; use the log/status `bench_scenario=home-repeat-hold` fields to confirm
-the Home benchmark path. The default `MISTER_CATALOG_REFRESH=off` isolates
-Home-row pacing from catalog refresh noise; pass `--catalog-refresh default`
-when deliberately measuring the normal startup mix.
+margin. In latch mode, wall-time outliers can still include the intentional
+post-present pacing wait; the acceptance signal is zero latch deadline misses,
+not the legacy copy-after-vsync wall gate. Use passive `fpga-latch-report` for
+before/after FPGA counters; `fpga-latch-post-report` posts a diagnostic latch
+request and can change the counters it reports. The shared trace schema predates
+the Home-row gate, so the `selected` and `visual_index` columns still describe
+the Arcade list, not the Home system index; use the log/status
+`bench_scenario=home-repeat-hold` fields to confirm the Home benchmark path. The
+default `MISTER_CATALOG_REFRESH=off` isolates Home-row pacing from catalog
+refresh noise; pass `--catalog-refresh default` when deliberately measuring the
+normal startup mix.
 
 Use `home-nav` only for synthetic fixed-period Home-row stepping; it does not
 model the real d-pad repeat gate.
