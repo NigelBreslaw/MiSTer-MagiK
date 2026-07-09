@@ -84,15 +84,6 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
-    fn full_rect(&self) -> DirtyRect {
-        DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.ui.render_w(),
-            y1: self.ui.render_h(),
-        }
-    }
-
     fn present_cached_rect(&mut self, rect: DirtyRect) -> u32 {
         self.target
             .present_rect(self.disp, frame_target_geometry(self.ui), rect)
@@ -146,10 +137,7 @@ impl<'a> LayerTarget<'a> {
 
 pub(super) struct LauncherPresentRequest<'a, 'b> {
     pub(super) layer_target: &'a mut LayerTarget<'b>,
-    pub(super) full_frame_present: bool,
-    pub(super) slint_dirty: Option<DirtyRect>,
-    pub(super) raw_preview: Option<RawPreviewPresent>,
-    pub(super) arcade_list_rect: Option<ArcadeListUpdate>,
+    pub(super) frame_plan: LauncherFramePlan,
     pub(super) arcade_list_renderer: &'a mut ArcadeListRenderer,
 }
 
@@ -185,42 +173,22 @@ pub(super) struct LauncherCompositor;
 
 impl LauncherCompositor {
     pub(super) fn present(request: LauncherPresentRequest<'_, '_>) -> LauncherPresentResult {
-        let arcade_update_label = ArcadeUpdateTrace::from_update(request.arcade_list_rect.as_ref());
-        let full_rect = request.layer_target.full_rect();
-        let cached_base_rect = if request.full_frame_present {
-            Some(full_rect)
-        } else {
-            request.slint_dirty
-        };
-        let arcade_overlay_rect = request
-            .arcade_list_rect
-            .as_ref()
-            .map(arcade_update_dirty_rect);
-        let raw_preview_cached_rect = request.raw_preview.and_then(RawPreviewPresent::cached_rect);
-        let raw_preview_direct_rect = request.raw_preview.and_then(RawPreviewPresent::direct_rect);
-        let cached_present_rects = Self::cached_present_plan(
-            full_rect,
-            request.full_frame_present,
-            request.slint_dirty,
-            raw_preview_cached_rect,
-            raw_preview_direct_rect,
-            arcade_overlay_rect,
-        );
+        let cached_damage = request.frame_plan.cached_damage();
+        let raw_preview_direct_rect = request.frame_plan.preview_dirty();
+        let arcade_list_update = request.frame_plan.arcade_dirty();
+        let arcade_update_label = ArcadeUpdateTrace::from_update(arcade_list_update.as_ref());
+        let arcade_overlay_rect = arcade_list_update.as_ref().map(arcade_update_dirty_rect);
+        let cached_present_rects =
+            Self::cached_present_plan(cached_damage, raw_preview_direct_rect, arcade_overlay_rect);
 
         let mut copied_rows = 0u32;
         let mut present_bytes = 0usize;
-        let mut wasted_present_bytes = 0usize;
         let mut cached_present_us = 0u128;
         for rect in cached_present_rects.iter() {
             let copy_start = Instant::now();
             copied_rows += request.layer_target.present_cached_rect(rect);
             let bytes = present_bytes_for_rect(rect);
             present_bytes += bytes;
-            wasted_present_bytes += bytes.saturating_sub(covered_cached_bytes(
-                rect,
-                cached_base_rect,
-                raw_preview_cached_rect,
-            ));
             cached_present_us += copy_start.elapsed().as_micros();
         }
 
@@ -235,7 +203,7 @@ impl LauncherCompositor {
         }
 
         let mut arcade_list_present_us = 0u128;
-        if let Some(update) = request.arcade_list_rect {
+        if let Some(update) = arcade_list_update {
             let copy_start = Instant::now();
             let stats = request
                 .layer_target
@@ -249,7 +217,7 @@ impl LauncherCompositor {
             copied_rows,
             direct_preview_rows,
             present_bytes,
-            wasted_present_bytes,
+            wasted_present_bytes: 0,
             fb_present_us_override: None,
             vsync_us_override: None,
             cached_present_us,
@@ -275,24 +243,14 @@ impl LauncherCompositor {
     }
 
     fn cached_present_plan(
-        full_rect: DirtyRect,
-        full_frame_present: bool,
-        slint_dirty: Option<DirtyRect>,
-        raw_preview_rect: Option<DirtyRect>,
+        cached_damage: DirtyRectList,
         raw_preview_direct_rect: Option<DirtyRect>,
         arcade_overlay_rect: Option<DirtyRect>,
     ) -> DirtyRectList {
-        let cached_base_rect = if full_frame_present {
-            Some(full_rect)
-        } else {
-            slint_dirty
-        };
-        let mut cached_overlays = DirtyRectList::new();
-        cached_overlays.push_if_some(raw_preview_rect);
         let mut direct_overlays = DirtyRectList::new();
         direct_overlays.push_if_some(raw_preview_direct_rect);
         direct_overlays.push_if_some(arcade_overlay_rect);
-        build_launcher_present_plan(cached_base_rect, &cached_overlays, &direct_overlays)
+        build_launcher_present_plan_from_layers(&cached_damage, &direct_overlays)
     }
 }
 
@@ -300,28 +258,6 @@ fn present_bytes_for_rect(rect: DirtyRect) -> usize {
     rect.width()
         .saturating_mul(rect.rows() as usize)
         .saturating_mul(mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL)
-}
-
-fn covered_cached_bytes(
-    rect: DirtyRect,
-    base_rect: Option<DirtyRect>,
-    raw_preview_rect: Option<DirtyRect>,
-) -> usize {
-    let base = base_rect
-        .and_then(|base| rect.intersection(base))
-        .map(present_bytes_for_rect)
-        .unwrap_or_default();
-    let preview = raw_preview_rect
-        .and_then(|preview| rect.intersection(preview))
-        .map(present_bytes_for_rect)
-        .unwrap_or_default();
-    let overlap = base_rect
-        .zip(raw_preview_rect)
-        .and_then(|(base, preview)| base.intersection(preview))
-        .and_then(|overlap| rect.intersection(overlap))
-        .map(present_bytes_for_rect)
-        .unwrap_or_default();
-    base + preview - overlap
 }
 
 #[cfg(test)]
@@ -339,18 +275,27 @@ mod tests {
         raw_preview_direct_rect: Option<DirtyRect>,
         arcade_overlay_rect: Option<DirtyRect>,
     ) -> Vec<DirtyRect> {
-        let full_rect = if full_frame_present {
-            rect(0, 0, 960, 540)
+        let mut cached_damage = DirtyRectList::new();
+        cached_damage.push_if_some(if full_frame_present {
+            Some(rect(0, 0, 960, 540))
         } else {
-            rect(0, 0, 0, 0)
-        };
-        LauncherCompositor::cached_present_plan(
-            full_rect,
-            full_frame_present,
-            slint_dirty,
-            raw_preview_rect,
+            slint_dirty
+        });
+        cached_damage.push_if_some(raw_preview_rect);
+        let frame_plan = LauncherFramePlan::new(
+            cached_damage,
+            None,
             raw_preview_direct_rect,
-            arcade_overlay_rect,
+            None,
+            arcade_overlay_rect.map(ArcadeListUpdate::Full),
+        );
+        LauncherCompositor::cached_present_plan(
+            frame_plan.cached_damage(),
+            frame_plan.preview_dirty(),
+            frame_plan
+                .arcade_dirty()
+                .as_ref()
+                .map(arcade_update_dirty_rect),
         )
         .iter()
         .collect()

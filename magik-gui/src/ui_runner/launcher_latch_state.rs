@@ -30,7 +30,7 @@ struct LatchSlotCoherency {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LatchFramePlanInput {
+pub(super) struct LauncherFramePlan {
     cached_damage: DirtyRectList,
     preview_desired: Option<DirectLayerState>,
     preview_dirty: Option<DirtyRect>,
@@ -38,7 +38,7 @@ pub(super) struct LatchFramePlanInput {
     arcade_dirty: Option<ArcadeListUpdate>,
 }
 
-impl LatchFramePlanInput {
+impl LauncherFramePlan {
     pub(super) fn new(
         cached_damage: DirtyRectList,
         preview_desired: Option<DirectLayerState>,
@@ -53,6 +53,18 @@ impl LatchFramePlanInput {
             arcade_desired,
             arcade_dirty,
         }
+    }
+
+    pub(super) fn cached_damage(self) -> DirtyRectList {
+        self.cached_damage
+    }
+
+    pub(super) fn preview_dirty(self) -> Option<DirtyRect> {
+        self.preview_dirty
+    }
+
+    pub(super) fn arcade_dirty(self) -> Option<ArcadeListUpdate> {
+        self.arcade_dirty
     }
 
     #[cfg(test)]
@@ -154,7 +166,7 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub(super) fn plan_next(&self, input: LatchFramePlanInput) -> Option<LatchPresentPlan> {
+    pub(super) fn plan_next(&self, input: LauncherFramePlan) -> Option<LatchPresentPlan> {
         let slot_index = self.select_writable_slot()?;
         Some(self.plan_for_slot(slot_index, input))
     }
@@ -208,7 +220,7 @@ impl TwoBufferLatchState {
         }
     }
 
-    fn plan_for_slot(&self, slot_index: u8, input: LatchFramePlanInput) -> LatchPresentPlan {
+    fn plan_for_slot(&self, slot_index: u8, input: LauncherFramePlan) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
         let mut restore_rects = DirtyRectList::new();
         extend_without_covered_rects(&mut restore_rects, &slot.base_invalid);
@@ -382,8 +394,8 @@ mod tests {
         preview_dirty: Option<DirtyRect>,
         arcade: Option<DirectLayerState>,
         arcade_dirty: Option<ArcadeListUpdate>,
-    ) -> LatchFramePlanInput {
-        LatchFramePlanInput::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
+    ) -> LauncherFramePlan {
+        LauncherFramePlan::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
     }
 
     fn copy_restore(buffer: &mut [Rgb565Pixel], cached: &[Rgb565Pixel], plan: LatchPresentPlan) {
