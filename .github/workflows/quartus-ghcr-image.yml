@@ -1,0 +1,88 @@
+name: Quartus GHCR Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/nigelbreslaw/mister-magik-quartus-lite
+
+jobs:
+  build:
+    name: Build and publish Quartus image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout MagiK repo
+        uses: actions/checkout@v4
+
+      - name: Verify installer URL secrets are present
+        env:
+          QUARTUS_RUN_URL: ${{ secrets.QUARTUS_17_0_RUN_URL }}
+          CYCLONEV_QDZ_URL: ${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$QUARTUS_RUN_URL"
+          test -n "$CYCLONEV_QDZ_URL"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: containers/quartus-lite-17.0
+          file: containers/quartus-lite-17.0/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:17.0.0.595-cyclonev-ubuntu18
+            ${{ env.IMAGE_NAME }}:17.0-cyclonev-ubuntu18
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          secrets: |
+            quartus_run_url=${{ secrets.QUARTUS_17_0_RUN_URL }}
+            cyclonev_qdz_url=${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
+
+      - name: Pull pushed digest for smoke test
+        run: docker pull "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+
+      - name: Smoke test Quartus tools
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+          docker run --platform linux/amd64 --rm "$image" test -x /opt/intelFPGA_lite/17.0/quartus/bin/quartus_sh
+          docker run --platform linux/amd64 --rm "$image" quartus_sh --version
+          docker run --platform linux/amd64 --rm "$image" quartus_map --version
+
+      - name: Report image details
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+          size_bytes="$(docker image inspect "$image" --format '{{.Size}}')"
+          size_human="$(numfmt --to=iec --suffix=B "$size_bytes")"
+          {
+            echo "### Quartus GHCR image"
+            echo
+            echo "- Image: \`$IMAGE_NAME\`"
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- Digest pull: \`$image\`"
+            echo "- Tags:"
+            echo "  - \`17.0.0.595-cyclonev-ubuntu18\`"
+            echo "  - \`17.0-cyclonev-ubuntu18\`"
+            echo "  - \`sha-${{ github.sha }}\`"
+            echo "- Local pulled size: \`$size_human\` (\`$size_bytes\` bytes)"
+            echo
+            echo "Manual release gate: confirm the GHCR package visibility is Private before wiring other workflows to this image."
+          } >> "$GITHUB_STEP_SUMMARY"
