@@ -7,8 +7,8 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +// MiSTer MagiK experiment: queue an HPS framebuffer route and apply it only
 +// on HDMI vblank. This keeps the existing UIO_SET_FBUF path unchanged while
 +// adding a diagnostics-only command for a vblank-latched presenter.
-+localparam MAGIK_UIO_SET_FBUF_LATCH = 8'h43;
-+localparam MAGIK_UIO_GET_FBUF_LATCH = 8'h45;
++localparam MAGIK_UIO_SET_FBUF_LATCH = 8'h46;
++localparam MAGIK_UIO_GET_FBUF_LATCH = 8'h47;
 +localparam MAGIK_FBUF_LATCH_MAGIC   = 16'h4D47; // "MG"
 +localparam MAGIK_FBUF_STATUS_MAGIC  = 16'h4D48; // "MH"
 +

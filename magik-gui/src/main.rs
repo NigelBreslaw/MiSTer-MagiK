@@ -129,7 +129,9 @@ use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
-use mister_magik_fb::framebuffer::route::{FramebufferRouteMode, LauncherFramebufferRoute};
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
+use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
@@ -1200,7 +1202,7 @@ fn run_fpga_latch_report() {
     let set_supported =
         set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC;
     crate::ui_logln!(
-        "fpga_latch_set_probe_tsv\tcmd=0x43\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
+        "fpga_latch_set_probe_tsv\tcmd=0x46\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
         bool_tsv(set_supported),
         MAGIK_FBUF_LATCH_MAGIC,
         set_probe.0,
@@ -1212,7 +1214,7 @@ fn run_fpga_latch_report() {
         Ok(status) => status,
         Err(e) => {
             crate::ui_logln!(
-                "fpga_latch_status_tsv\tcmd=0x45\tsupported=0\tmagic_expected=0x{:04x}\terror={e}",
+                "fpga_latch_status_tsv\tcmd=0x47\tsupported=0\tmagic_expected=0x{:04x}\terror={e}",
                 MAGIK_FBUF_STATUS_MAGIC
             );
             if set_supported {
@@ -1222,7 +1224,7 @@ fn run_fpga_latch_report() {
         }
     };
     crate::ui_logln!(
-        "fpga_latch_status_tsv\tcmd=0x45\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpending_enabled={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}\tactive_width={}\tactive_height={}\tactive_stride={}",
+        "fpga_latch_status_tsv\tcmd=0x47\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpending_enabled={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}\tactive_width={}\tactive_height={}\tactive_stride={}",
         bool_tsv(status.supported()),
         MAGIK_FBUF_STATUS_MAGIC,
         status.magic_hi,
