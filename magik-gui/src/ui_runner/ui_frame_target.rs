@@ -308,14 +308,13 @@ fn preview_dirty_for_present(
 }
 
 pub(super) fn copy_arcade_list_update(
-    target: &mut UiFrameTarget,
     disp: &mut MappedRgb565Framebuffer,
     renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,
 ) -> PresentCopyStats {
     match update {
         ArcadeListUpdate::Full(rect) => {
-            renderer.copy_layer_to_target(target, disp, true);
+            renderer.copy_layer_to_fb0(disp, true);
             PresentCopyStats {
                 rows: rect.rows(),
                 bytes: arcade_list_present_pixels(&update, true)
@@ -327,7 +326,7 @@ pub(super) fn copy_arcade_list_update(
             // prior live-framebuffer scroll-present path was visually correct
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
-            renderer.copy_layer_to_target(target, disp, false);
+            renderer.copy_layer_to_fb0(disp, false);
             PresentCopyStats {
                 rows: rect.rows(),
                 bytes: arcade_list_present_pixels(&update, false)

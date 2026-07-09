@@ -1,8 +1,4 @@
 use crate::framebuffer::format::production_label;
-use crate::framebuffer::mapped::MappedRgb565Framebuffer;
-use crate::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
-use crate::framebuffer::stream;
-use mister_magik_framebuffer_stream::{FrameGeometry, FrameRect};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
@@ -254,19 +250,6 @@ pub fn dirty_rect_is_broad(rect: DirtyRect, render_w: usize) -> bool {
     rect.width() * 100 >= render_w * dirty_rect_broad_pct()
 }
 
-fn cached_present_rect(rect: DirtyRect, geometry: FramebufferTargetGeometry) -> DirtyRect {
-    if rect.is_full_width(geometry.render_w()) || dirty_rect_is_broad(rect, geometry.render_w()) {
-        DirtyRect {
-            x0: 0,
-            y0: rect.y0,
-            x1: geometry.render_w(),
-            y1: rect.y1,
-        }
-    } else {
-        rect
-    }
-}
-
 pub fn format_dirty_rect(rect: Option<DirtyRect>) -> String {
     match rect {
         Some(rect) => format!(
@@ -338,68 +321,80 @@ impl FramebufferTargetGeometry {
             y1: self.render_h,
         }
     }
+}
 
-    fn stream_geometry(self) -> FrameGeometry {
-        FrameGeometry {
-            width: self.render_w as u32,
-            height: self.render_h as u32,
-            stride_pixels: self.render_w as u32,
+#[derive(Clone, Copy)]
+pub struct CachedFrameView<'a> {
+    pixels: &'a [Rgb565Pixel],
+    stride: usize,
+    height: usize,
+}
+
+impl<'a> CachedFrameView<'a> {
+    pub fn new(pixels: &'a [Rgb565Pixel], stride: usize, height: usize) -> Self {
+        debug_assert!(pixels.len() >= stride.saturating_mul(height));
+        Self {
+            pixels,
+            stride,
+            height,
         }
     }
-}
 
-fn stream_rect(rect: DirtyRect) -> FrameRect {
-    FrameRect {
-        x: rect.x0 as u32,
-        y: rect.y0 as u32,
-        width: (rect.x1 - rect.x0) as u32,
-        height: (rect.y1 - rect.y0) as u32,
+    pub fn pixels(self) -> &'a [Rgb565Pixel] {
+        self.pixels
+    }
+
+    pub fn stride(self) -> usize {
+        self.stride
+    }
+
+    pub fn width(self) -> usize {
+        self.stride
+    }
+
+    pub fn height(self) -> usize {
+        self.height
     }
 }
 
-#[cold]
-#[inline(never)]
-fn log_present_error(context: &str, err: &dyn std::fmt::Display) {
-    crate::ui_errln!("framebuffer present {context} failed: {err}");
-}
-
-pub fn copy_cached_rows_565(
-    disp: &mut MappedRgb565Framebuffer,
-    cached: &[Rgb565Pixel],
-    y0: usize,
-    y1: usize,
-) {
-    if let Err(e) = disp.present_rows_565(cached, y0, y1) {
-        log_present_error("rows", &e);
-    }
-}
-
-pub fn copy_cached_rect_565(
-    disp: &mut MappedRgb565Framebuffer,
-    geometry: FramebufferTargetGeometry,
-    cached: &[Rgb565Pixel],
+#[derive(Clone, Copy)]
+pub struct DirectPreviewView<'a> {
+    pixels: &'a [Rgb565Pixel],
     rect: DirtyRect,
-) -> DirtyRect {
-    let copied_rect = cached_present_rect(rect, geometry);
-    if copied_rect.is_full_width(geometry.render_w()) {
-        copy_cached_rows_565(disp, cached, rect.y0, rect.y1);
-        stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(copied_rect), cached);
-        return copied_rect;
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct StridedFrameRegion<'a> {
+    pub(crate) pixels: &'a [Rgb565Pixel],
+    pub(crate) stride: usize,
+    pub(crate) src_x: usize,
+    pub(crate) src_y: usize,
+}
+
+impl<'a> DirectPreviewView<'a> {
+    pub fn pixels(self) -> &'a [Rgb565Pixel] {
+        self.pixels
     }
-    if let Err(e) = disp.present_rect_565_strided(
-        rect.x0,
-        rect.y0,
-        rect.x1 - rect.x0,
-        rect.y1 - rect.y0,
-        cached,
-        geometry.render_w(),
-        rect.x0,
-        rect.y0,
-    ) {
-        log_present_error("rect", &e);
+
+    pub fn rect(self) -> DirtyRect {
+        self.rect
     }
-    stream::publish_cached_rect(geometry.stream_geometry(), stream_rect(copied_rect), cached);
-    copied_rect
+
+    pub fn stride(self) -> usize {
+        self.rect.width()
+    }
+
+    pub(crate) fn region(self, rect: DirtyRect) -> Option<StridedFrameRegion<'a>> {
+        if !self.rect.contains(rect) {
+            return None;
+        }
+        Some(StridedFrameRegion {
+            pixels: self.pixels,
+            stride: self.stride(),
+            src_x: rect.x0 - self.rect.x0,
+            src_y: rect.y0 - self.rect.y0,
+        })
+    }
 }
 
 pub fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -498,46 +493,6 @@ impl UiFrameTarget {
         "cached-565"
     }
 
-    pub fn present_rect(
-        &mut self,
-        disp: &mut MappedRgb565Framebuffer,
-        geometry: FramebufferTargetGeometry,
-        rect: DirtyRect,
-    ) -> u32 {
-        let copied_rect = copy_cached_rect_565(disp, geometry, &self.cached, rect);
-        copied_rect.rows()
-    }
-
-    pub fn present_rect_565(
-        &mut self,
-        disp: &mut MappedRgb565Framebuffer,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Rgb565Pixel],
-    ) {
-        if let Err(e) = disp.present_rect_565(x, y, w, h, src) {
-            log_present_error("dense rect", &e);
-            return;
-        }
-        let geometry = FrameGeometry {
-            width: disp.width() as u32,
-            height: disp.height() as u32,
-            stride_pixels: disp.width() as u32,
-        };
-        stream::publish_dense_rect(
-            geometry,
-            FrameRect {
-                x: x as u32,
-                y: y as u32,
-                width: w as u32,
-                height: h as u32,
-            },
-            src,
-        );
-    }
-
     pub fn compose_rect_565(
         &mut self,
         x: usize,
@@ -578,43 +533,6 @@ impl UiFrameTarget {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn present_rect_565_strided(
-        &mut self,
-        disp: &mut MappedRgb565Framebuffer,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        src: &[Rgb565Pixel],
-        src_stride: usize,
-        src_x: usize,
-        src_y: usize,
-    ) {
-        if let Err(e) = disp.present_rect_565_strided(x, y, w, h, src, src_stride, src_x, src_y) {
-            log_present_error("strided rect", &e);
-            return;
-        }
-        let geometry = FrameGeometry {
-            width: disp.width() as u32,
-            height: disp.height() as u32,
-            stride_pixels: disp.width() as u32,
-        };
-        stream::publish_strided_rect(
-            geometry,
-            FrameRect {
-                x: x as u32,
-                y: y as u32,
-                width: w as u32,
-                height: h as u32,
-            },
-            src,
-            src_stride,
-            src_x,
-            src_y,
-        );
-    }
-
     pub fn direct_preview_565_rect_mut(&mut self, rect: DirtyRect) -> (&mut [Rgb565Pixel], usize) {
         let stride = rect.width();
         let len = stride * (rect.y1 - rect.y0);
@@ -647,91 +565,20 @@ impl UiFrameTarget {
         rect.rows()
     }
 
-    pub fn present_direct_preview_rect(
-        &mut self,
-        disp: &mut MappedRgb565Framebuffer,
-        rect: DirtyRect,
-    ) -> u32 {
-        let Some(backing_rect) = self.direct_preview_rect else {
-            return 0;
+    pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
+        let height = if self.cached_stride == 0 {
+            0
+        } else {
+            self.cached.len() / self.cached_stride
         };
-        if !backing_rect.contains(rect) {
-            return 0;
-        }
-        if let Err(e) = disp.present_rect_565_strided(
-            rect.x0,
-            rect.y0,
-            rect.x1 - rect.x0,
-            rect.y1 - rect.y0,
-            &self.direct_preview,
-            backing_rect.width(),
-            rect.x0 - backing_rect.x0,
-            rect.y0 - backing_rect.y0,
-        ) {
-            log_present_error("direct preview rect", &e);
-            return 0;
-        }
-        stream::publish_strided_rect(
-            FrameGeometry {
-                width: disp.width() as u32,
-                height: disp.height() as u32,
-                stride_pixels: disp.width() as u32,
-            },
-            stream_rect(rect),
-            &self.direct_preview,
-            backing_rect.width(),
-            rect.x0 - backing_rect.x0,
-            rect.y0 - backing_rect.y0,
-        );
-        rect.rows()
+        CachedFrameView::new(&self.cached, self.cached_stride, height)
     }
 
-    pub fn copy_direct_preview_rect_to_hidden(
-        &self,
-        hidden: &mut PluginHiddenRgb565Framebuffer,
-        rect: DirtyRect,
-    ) -> u32 {
-        let Some(backing_rect) = self.direct_preview_rect else {
-            return 0;
-        };
-        if !backing_rect.contains(rect) {
-            return 0;
-        }
-        if let Err(e) = hidden.copy_rect_565_strided(
-            rect.x0,
-            rect.y0,
-            rect.x1 - rect.x0,
-            rect.y1 - rect.y0,
-            &self.direct_preview,
-            backing_rect.width(),
-            rect.x0 - backing_rect.x0,
-            rect.y0 - backing_rect.y0,
-        ) {
-            log_present_error("hidden direct preview rect", &e);
-            return 0;
-        }
-        rect.rows()
-    }
-
-    pub fn present_rows(
-        &mut self,
-        disp: &mut MappedRgb565Framebuffer,
-        y0: usize,
-        y1: usize,
-    ) -> u32 {
-        copy_cached_rows_565(disp, &self.cached, y0, y1);
-        let geometry = FramebufferTargetGeometry::new(disp.width(), disp.height());
-        stream::publish_cached_rect(
-            geometry.stream_geometry(),
-            stream_rect(DirtyRect {
-                x0: 0,
-                y0,
-                x1: disp.width(),
-                y1,
-            }),
-            &self.cached,
-        );
-        y1.saturating_sub(y0) as u32
+    pub fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
+        self.direct_preview_rect.map(|rect| DirectPreviewView {
+            pixels: &self.direct_preview,
+            rect,
+        })
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
@@ -799,20 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn cached_present_rect_reports_full_rows_for_broad_rects() {
-        let geometry = FramebufferTargetGeometry::new(100, 50);
-
-        assert_eq!(
-            cached_present_rect(rect(15, 10, 100, 12), geometry),
-            rect(0, 10, 100, 12)
-        );
-        assert_eq!(
-            cached_present_rect(rect(20, 10, 40, 12), geometry),
-            rect(20, 10, 40, 12)
-        );
-    }
-
-    #[test]
     fn direct_preview_can_be_composed_into_cached_frame() {
         let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(6, 4));
         target.cached_565_mut().fill(Rgb565Pixel(0x0001));
@@ -837,6 +670,30 @@ mod tests {
         assert_eq!(cached[2 * 6 + 3], Rgb565Pixel(0x1004));
         assert_eq!(cached[2 * 6 + 4], Rgb565Pixel(0x1005));
         assert_eq!(cached[2 * 6 + 5], Rgb565Pixel(0x0001));
+    }
+
+    #[test]
+    fn frame_views_expose_surface_geometry_without_output_ownership() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(8, 4));
+        let preview_rect = rect(2, 1, 6, 3);
+        target
+            .direct_preview_565_rect_mut(preview_rect)
+            .0
+            .fill(Rgb565Pixel(7));
+
+        let cached = target.cached_frame_view();
+        assert_eq!(
+            (cached.width(), cached.height(), cached.stride()),
+            (8, 4, 8)
+        );
+        assert_eq!(cached.pixels().len(), 32);
+
+        let preview = target.direct_preview_view().expect("preview view");
+        assert_eq!(preview.rect(), preview_rect);
+        assert_eq!(preview.stride(), 4);
+        assert_eq!(preview.pixels(), &[Rgb565Pixel(7); 8]);
+        assert!(preview.region(rect(3, 1, 5, 2)).is_some());
+        assert!(preview.region(rect(1, 1, 5, 2)).is_none());
     }
 
     #[test]

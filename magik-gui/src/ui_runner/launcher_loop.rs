@@ -201,7 +201,7 @@ impl FpgaVblankLatchHiddenPresenter {
 
     fn present_cached_full_frame<F>(
         &mut self,
-        cached: &[Rgb565Pixel],
+        cached: CachedFrameView<'_>,
         input: LauncherFramePlan,
         fpga: &mut Fpga,
         apply_overlays: F,
@@ -244,7 +244,7 @@ impl FpgaVblankLatchHiddenPresenter {
         let copy_start = Instant::now();
         let mut copied_bytes = 0usize;
         for rect in plan.restore_rects.iter() {
-            match buffer.copy_rect(cached, self.width, rect) {
+            match buffer.copy_rect(cached.pixels(), cached.stride(), rect) {
                 Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
@@ -2386,9 +2386,9 @@ pub(super) fn run_launcher_loop(
                         recovery_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
                     });
                     if let Some(rect) = recovery_rect {
-                        let _ = target.present_rect(disp, frame_target_geometry(ui), rect);
+                        let _ = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     } else {
-                        target.present_rows(disp, 0, ui.render_h());
+                        copy_cached_rows_565(disp, target.cached_frame_view(), 0, ui.render_h());
                     }
                     let recovery_presented = Instant::now();
                     request_launcher_redraw!();
@@ -2675,7 +2675,12 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(disp, 0, ui.render_h());
+                                copy_cached_rows_565(
+                                    disp,
+                                    target.cached_frame_view(),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 match launcher::exit_to_mister() {
                                     Ok(()) => std::process::exit(0),
                                     Err(e) => {
@@ -2716,7 +2721,12 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(disp, 0, ui.render_h());
+                                copy_cached_rows_565(
+                                    disp,
+                                    target.cached_frame_view(),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reset_database_and_reboot() {
                                     Ok(()) => continue,
@@ -2749,7 +2759,12 @@ pub(super) fn run_launcher_loop(
                                     let _ = region;
                                 });
                                 let _pace = pacer.wait();
-                                target.present_rows(disp, 0, ui.render_h());
+                                copy_cached_rows_565(
+                                    disp,
+                                    target.cached_frame_view(),
+                                    0,
+                                    ui.render_h(),
+                                );
                                 std::thread::sleep(Duration::from_millis(250));
                                 match launcher::reboot_mister() {
                                     Ok(()) => continue,
@@ -2866,7 +2881,7 @@ pub(super) fn run_launcher_loop(
                             let _ = region;
                         });
                         let _pace = pacer.wait();
-                        target.present_rows(disp, 0, ui.render_h());
+                        copy_cached_rows_565(disp, target.cached_frame_view(), 0, ui.render_h());
                         let loading_presented = Instant::now();
                         lifecycle
                             .loading_frame_presented(loading_presented, &mut lifecycle_effects);
@@ -3577,7 +3592,7 @@ pub(super) fn run_launcher_loop(
                     let mut preview_redraw_rect = None;
                     let mut arcade_redraw_update = None;
                     match presenter.present_cached_full_frame(
-                        layer_target.cached_565(),
+                        layer_target.cached_frame_view(),
                         frame_plan,
                         f,
                         |hidden, plan| {

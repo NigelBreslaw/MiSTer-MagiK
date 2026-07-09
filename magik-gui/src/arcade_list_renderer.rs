@@ -9,6 +9,7 @@ use crate::arcade_catalog::{
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
 use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
+use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -574,17 +575,16 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn copy_layer_to_target(
+    pub(crate) fn copy_layer_to_fb0(
         &mut self,
-        target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
         redraw_selection_frame: bool,
     ) {
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
-            self.copy_viewport_band_to_target(target, disp, viewport_y, h);
+            self.copy_viewport_band_to_fb0(disp, viewport_y, h);
         }
         if redraw_selection_frame {
-            self.copy_selection_frame_to_target(target, disp);
+            self.copy_selection_frame_to_fb0(disp);
         }
     }
 
@@ -614,9 +614,8 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn copy_viewport_band_to_target(
+    fn copy_viewport_band_to_fb0(
         &mut self,
-        target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
         viewport_y: usize,
         h: usize,
@@ -627,21 +626,20 @@ impl ArcadeListRenderer {
         let h = h.min(ARCADE_LIST_H - viewport_y);
         for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
             ArcadeListPresentKind::Normal => {
-                self.copy_surface_rect_to_target(target, disp, x, y, w, h);
+                self.copy_surface_rect_to_fb0(disp, x, y, w, h);
             }
             ArcadeListPresentKind::Inverted => {
                 if arcade_selection_inversion_enabled() {
-                    self.copy_inverted_surface_rect_to_target(target, disp, x, y, w, h);
+                    self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
                 } else {
-                    self.copy_surface_rect_to_target(target, disp, x, y, w, h);
+                    self.copy_surface_rect_to_fb0(disp, x, y, w, h);
                 }
             }
         });
     }
 
-    fn copy_surface_rect_to_target(
+    fn copy_surface_rect_to_fb0(
         &mut self,
-        target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
         x: usize,
         viewport_y: usize,
@@ -652,14 +650,13 @@ impl ArcadeListRenderer {
         while copied < h {
             let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
             let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
-            self.copy_surface_chunk_to_target(target, disp, x, viewport_y + copied, w, copy_h);
+            self.copy_surface_chunk_to_fb0(disp, x, viewport_y + copied, w, copy_h);
             copied += copy_h;
         }
     }
 
-    fn copy_surface_chunk_to_target(
+    fn copy_surface_chunk_to_fb0(
         &mut self,
-        target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
         x: usize,
         viewport_y: usize,
@@ -672,7 +669,7 @@ impl ArcadeListRenderer {
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         if x == 0 && w == ARCADE_LIST_W {
             let src = src_y * ARCADE_LIST_W;
-            target.present_rect_565(
+            copy_dense_rect_565(
                 disp,
                 self.geometry.x,
                 self.geometry.y + viewport_y,
@@ -682,7 +679,7 @@ impl ArcadeListRenderer {
             );
             return;
         }
-        target.present_rect_565_strided(
+        copy_strided_rect_565(
             disp,
             self.geometry.x + x,
             self.geometry.y + viewport_y,
@@ -695,9 +692,8 @@ impl ArcadeListRenderer {
         );
     }
 
-    fn copy_inverted_surface_rect_to_target(
+    fn copy_inverted_surface_rect_to_fb0(
         &mut self,
-        target: &mut UiFrameTarget,
         disp: &mut MappedRgb565Framebuffer,
         x: usize,
         viewport_y: usize,
@@ -711,7 +707,7 @@ impl ArcadeListRenderer {
             let target_x = self.geometry.x + x;
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
-            target.present_rect_565(disp, target_x, target_y, w, copy_h, inverted);
+            copy_dense_rect_565(disp, target_x, target_y, w, copy_h, inverted);
             copied += copy_h;
         }
     }
@@ -740,11 +736,7 @@ impl ArcadeListRenderer {
         &self.selection_invert_scratch
     }
 
-    fn copy_selection_frame_to_target(
-        &mut self,
-        target: &mut UiFrameTarget,
-        disp: &mut MappedRgb565Framebuffer,
-    ) {
+    fn copy_selection_frame_to_fb0(&mut self, disp: &mut MappedRgb565Framebuffer) {
         let rect = self.selection_rect();
         let color = ARCADE_SELECTION_FRAME_COLOR;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
@@ -752,7 +744,7 @@ impl ArcadeListRenderer {
         self.selection_horizontal
             .resize(ARCADE_LIST_W * thickness, color);
         self.selection_horizontal.fill(color);
-        target.present_rect_565(
+        copy_dense_rect_565(
             disp,
             rect.x0,
             rect.y0,
@@ -760,7 +752,7 @@ impl ArcadeListRenderer {
             thickness,
             &self.selection_horizontal,
         );
-        target.present_rect_565(
+        copy_dense_rect_565(
             disp,
             rect.x0,
             rect.y1.saturating_sub(thickness),
@@ -770,7 +762,7 @@ impl ArcadeListRenderer {
         );
         self.selection_vertical.resize(thickness * h, color);
         self.selection_vertical.fill(color);
-        target.present_rect_565(
+        copy_dense_rect_565(
             disp,
             rect.x0,
             rect.y0,
@@ -778,7 +770,7 @@ impl ArcadeListRenderer {
             h,
             &self.selection_vertical,
         );
-        target.present_rect_565(
+        copy_dense_rect_565(
             disp,
             rect.x1.saturating_sub(thickness),
             rect.y0,

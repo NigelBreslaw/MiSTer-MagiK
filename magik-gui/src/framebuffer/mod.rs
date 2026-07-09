@@ -9,6 +9,8 @@ pub mod mode;
 pub mod ownership;
 #[cfg(feature = "ui")]
 pub mod plugin_probe;
+#[cfg(feature = "ui")]
+pub mod present;
 pub mod route;
 #[cfg(feature = "ui")]
 pub mod sample;

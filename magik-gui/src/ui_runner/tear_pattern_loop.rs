@@ -77,16 +77,21 @@ pub(super) fn run_tear_pattern_loop(
                 )
             }
         };
-        let present_rect = this_rect.map(frame_rect);
+        let mut present_rect = None;
         let mut frame_copy_us = 0u64;
         let rows = if let Some(rect) = this_rect {
             let c0 = Instant::now();
-            copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
+            let copied = copy_cached_rect_565(
+                disp,
+                CachedFrameView::new(&cached, ui.render_w(), ui.render_h()),
+                rect,
+            );
             frame_copy_us = c0.elapsed().as_micros() as u64;
             if !profile_on {
                 copy_us += frame_copy_us as u128;
             }
-            rect.y1.saturating_sub(rect.y0)
+            present_rect = copied.map(frame_rect);
+            copied.map_or(0, |rect| rect.y1.saturating_sub(rect.y0))
         } else {
             0
         };

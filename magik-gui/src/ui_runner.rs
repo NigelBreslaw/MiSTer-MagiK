@@ -54,11 +54,15 @@ use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, SLINT_
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EffectKind, EffectSize, EFFECT_SIZES,
 };
+use mister_magik_fb::framebuffer::present::{
+    copy_cached_rect_565, copy_cached_rows_565, copy_direct_preview_rect_565,
+    copy_direct_preview_rect_to_hidden,
+};
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 #[cfg(mister_experiments)]
 use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
 use mister_magik_fb::framebuffer::target::{
-    build_launcher_present_plan_from_layers, copy_cached_rect_565, dirty_rect, format_dirty_rect,
+    build_launcher_present_plan_from_layers, dirty_rect, format_dirty_rect, CachedFrameView,
     DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
