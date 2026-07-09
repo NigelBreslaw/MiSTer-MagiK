@@ -8,6 +8,8 @@ BASE_IMAGE="${QUARTUS_DOCKER_BASE_IMAGE:-ubuntu:20.04}"
 CONTEXT_DIR="$ROOT/build/quartus-lite-docker-context"
 INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$CACHE_DIR/docker-intelFPGA_lite}"
 CONTAINERFILE="$CONTEXT_DIR/Dockerfile"
+INSTALL_TIMEOUT="${QUARTUS_INSTALL_TIMEOUT:-20m}"
+INSTALL_HEARTBEAT_SECS="${QUARTUS_INSTALL_HEARTBEAT_SECS:-60}"
 
 QUARTUS_RUN="QuartusLiteSetup-17.0.0.595-linux.run"
 CYCLONEV_QDZ="cyclonev-17.0.0.595.qdz"
@@ -131,17 +133,36 @@ RUN apt-get update \
 ENV LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 PATH=/opt/intelFPGA_lite/17.0/quartus/bin:$PATH
 EOF
 
+echo "Building Quartus Docker runtime image $IMAGE from $BASE_IMAGE"
 docker build --platform linux/amd64 --file "$CONTAINERFILE" --tag "$IMAGE" "$CONTEXT_DIR"
 
 mkdir -p "$INSTALL_ROOT"
 if [[ ! -x "$INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
+  echo "Installing Quartus Lite 17.0 into $INSTALL_ROOT with timeout $INSTALL_TIMEOUT"
   set +e
   docker run --platform linux/amd64 --rm \
     --volume "$CACHE_DIR:/quartus-cache" \
     --volume "$INSTALL_ROOT:/opt/intelFPGA_lite" \
     --workdir /quartus-cache \
     "$IMAGE" \
-    bash -lc "chmod +x '$QUARTUS_RUN' && timeout 20m ./'$QUARTUS_RUN' --mode unattended --unattendedmodeui minimal --installdir /opt/intelFPGA_lite/17.0"
+    bash -lc "set -euo pipefail
+chmod +x '$QUARTUS_RUN'
+timeout '$INSTALL_TIMEOUT' bash -lc '
+  set +e
+  ./'$QUARTUS_RUN' --mode unattended --unattendedmodeui minimal --installdir /opt/intelFPGA_lite/17.0 &
+  installer_pid=\$!
+  while kill -0 \"\$installer_pid\" 2>/dev/null; do
+    echo \"quartus installer still running \$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+    du -sh /opt/intelFPGA_lite/17.0 2>/dev/null || true
+    sleep '$INSTALL_HEARTBEAT_SECS'
+  done &
+  heartbeat_pid=\$!
+  wait \"\$installer_pid\"
+  installer_status=\$?
+  kill \"\$heartbeat_pid\" 2>/dev/null || true
+  wait \"\$heartbeat_pid\" 2>/dev/null || true
+  exit \"\$installer_status\"
+'"
   install_status=$?
   set -e
 
