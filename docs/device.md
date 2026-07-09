@@ -199,6 +199,14 @@ final present goes through hidden buffers. The reliable proof signals are:
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.
 
+The hidden-buffer backend env is only valid while the experimental RBF is active.
+Returning from a game normally brings Main back as `MiSTer_MagiK menu.rbf`; a
+stale `/media/fat/mister-magik/launcher.env` that still exports
+`MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden` must not be treated as proof
+of the fast path. MagiK falls back to `/dev/fb0` if the latch commands do not
+ack, but experiment scripts should still remove `launcher.env` before restoring
+the normal launcher.
+
 The launcher path relies on Rust-owned framebuffer setup:
 
 - Set the Linux framebuffer mode.
