@@ -30,6 +30,7 @@ PHASE_COLUMNS = [
     "arcade_list_present_us",
     "preview_apply_us",
     "runtime_status_write_us",
+    "status_write_duration_us",
 ]
 CONTEXT_COLUMNS = [
     "catalog_worker_us",
@@ -44,7 +45,10 @@ CONTEXT_COLUMNS = [
     "preview_cache_inserts",
     "preview_cache_evictions",
     "status_write_due",
+    "runtime_status_write_deferred",
+    "frame_tail_slack_us",
     "runtime_status_write_us",
+    "status_write_duration_us",
     "frame_finish_us",
     "post_finish_tail_us",
     "vsync_source",
@@ -270,6 +274,14 @@ def print_summary(
     latch_status = [int_field(row, "main_present_wait_us") for row in latch_rows]
     frame_finish = [int_field(row, "frame_finish_us") for row in rows]
     post_finish_tail = [int_field(row, "post_finish_tail_us") for row in rows]
+    status_due_rows = [row for row in rows if int_field(row, "status_write_due") > 0]
+    status_deferred_rows = [
+        row for row in rows if int_field(row, "runtime_status_write_deferred") > 0
+    ]
+    status_due_frame_finish = [
+        int_field(row, "frame_finish_us") for row in status_due_rows
+    ]
+    frame_tail_slack = [int_field(row, "frame_tail_slack_us") for row in rows]
     latch_miss_frame_finish = [int_field(row, "frame_finish_us") for row in latch_misses]
     latch_miss_post_finish_tail = [
         int_field(row, "post_finish_tail_us") for row in latch_misses
@@ -371,6 +383,11 @@ def print_summary(
         f"latch_status_p99={percentile(latch_status, 99)} "
         f"frame_finish_p99={percentile(frame_finish, 99)} "
         f"post_finish_tail_p99={percentile(post_finish_tail, 99)} "
+        f"status_write_due_frames={len(status_due_rows)} "
+        f"status_write_deferred_frames={len(status_deferred_rows)} "
+        f"status_write_due_frame_finish_max={max(status_due_frame_finish) if status_due_frame_finish else 0} "
+        f"frame_tail_slack_p50={percentile(frame_tail_slack, 50)} "
+        f"frame_tail_slack_min={min(frame_tail_slack) if frame_tail_slack else 0} "
         f"latch_miss_frame_finish_p50={percentile(latch_miss_frame_finish, 50)} "
         f"latch_miss_post_finish_tail_p50={percentile(latch_miss_post_finish_tail, 50)} "
         f"dominant_over_budget={dict(phase_counts.most_common())}"
