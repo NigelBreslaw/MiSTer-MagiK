@@ -1,0 +1,30 @@
+---
+title: Library and Media
+description: Catalog scans, warm validation, and screenshot pack progress.
+sidebar:
+  order: 7
+---
+
+import Screenshot from '../../../components/Screenshot.astro';
+
+<Screenshot src="/screenshots/catalog-scan.png" alt="Catalog scan or update progress" />
+
+The library builder scans launchable content, classifies games, creates an in-memory catalog, then persists SQLite and adjacent warm-start projections. Cold first scan is foreground work because showing a usable catalog quickly matters more than perfect scan-screen animation.
+
+```mermaid
+stateDiagram-v2
+  [*] --> LoadCache
+  LoadCache --> ScanVisible: no usable DB
+  LoadCache --> HomeVisible: warm summary or full DB
+  ScanVisible --> Ready: RAM catalog usable
+  Ready --> Persisting: save SQLite and projections
+  HomeVisible --> BackgroundCheck: delayed validation
+  BackgroundCheck --> Unchanged
+  BackgroundCheck --> LibraryChanged
+  LibraryChanged --> RebuildNow: user chooses Rebuild
+  LibraryChanged --> RebuildNextBoot: user chooses Continue
+```
+
+<Screenshot src="/screenshots/media-progress.png" alt="Screenshot or media pack download popup" />
+
+Screenshot pack progress appears only for real pack download progress. Local checks, skips, sidecar work, save/sync phases, and worker completion should not recreate the popup.

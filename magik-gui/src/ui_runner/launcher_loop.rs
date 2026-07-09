@@ -1,6 +1,10 @@
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
-    LauncherPresentedFrame,
+    LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
+    LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
+};
+use super::launcher_pacing::{
+    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
 };
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
@@ -17,6 +21,7 @@ use mister_magik_fb::framebuffer::ownership::{
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write as _};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -25,8 +30,434 @@ const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200)
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
-const LAUNCHER_LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+const MISTER_CMD_FIFO: &str = "/dev/MiSTer_cmd";
+const MAIN_FLIP_PRESENT_BYTES: usize = 960 * 540 * 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherPresentBackend {
+    Fb0Dirty,
+    MainFlipV1 { buffer_index: u8 },
+    MainVsyncHidden,
+    PluginMainVsyncHidden,
+    FpgaVblankLatchHidden,
+}
+
+impl LauncherPresentBackend {
+    fn from_env_values(backend: Option<&str>, flip_buffer_index: Option<&str>) -> Self {
+        match backend {
+            Some("main-flip-v1") => {
+                let buffer_index = flip_buffer_index
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .filter(|index| (1..=2).contains(index))
+                    .unwrap_or(1);
+                Self::MainFlipV1 { buffer_index }
+            }
+            Some("main-vsync-hidden") => Self::MainVsyncHidden,
+            Some("plugin-main-vsync-hidden") => Self::PluginMainVsyncHidden,
+            Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
+            _ => Self::Fb0Dirty,
+        }
+    }
+
+    fn from_env() -> Self {
+        Self::from_env_values(
+            std::env::var("MISTER_PRESENT_BACKEND").ok().as_deref(),
+            std::env::var("MISTER_PRESENT_FLIP_BUFFER_INDEX")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn log_if_experimental(self) {
+        match self {
+            Self::Fb0Dirty => {}
+            Self::MainFlipV1 { buffer_index } => {
+                crate::ui_logln!(
+                    "launcher_present_backend=main-flip-v1 buffer_index={buffer_index}"
+                );
+                boot_analytics::event(
+                    "launcher_present_backend",
+                    format!("main-flip-v1 buffer_index={buffer_index}"),
+                );
+            }
+            Self::MainVsyncHidden => {
+                crate::ui_logln!("launcher_present_backend=main-vsync-hidden");
+                boot_analytics::event("launcher_present_backend", "main-vsync-hidden");
+            }
+            Self::PluginMainVsyncHidden => {
+                crate::ui_logln!("launcher_present_backend=plugin-main-vsync-hidden");
+                boot_analytics::event("launcher_present_backend", "plugin-main-vsync-hidden");
+            }
+            Self::FpgaVblankLatchHidden => {
+                crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
+                boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
+            }
+        }
+    }
+}
+
+fn launcher_present_backend() -> LauncherPresentBackend {
+    static VALUE: OnceLock<LauncherPresentBackend> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let backend = LauncherPresentBackend::from_env();
+        backend.log_if_experimental();
+        backend
+    })
+}
+
+fn present_with_main_flip_v1(buffer_index: u8) -> Result<(), String> {
+    let command = format!("mister_magik_present_flip_v1 {buffer_index}\n");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(MISTER_CMD_FIFO)
+        .map_err(|e| format!("failed to open {MISTER_CMD_FIFO}: {e}"))?;
+    file.write_all(command.as_bytes())
+        .map_err(|e| format!("failed to write {MISTER_CMD_FIFO}: {e}"))
+}
+
+fn maybe_present_with_main_flip_v1(presentation: &mut LauncherPresentResult) {
+    let LauncherPresentBackend::MainFlipV1 { buffer_index } = launcher_present_backend() else {
+        return;
+    };
+    if presentation.copied_rows == 0 {
+        return;
+    }
+    let start = Instant::now();
+    match present_with_main_flip_v1(buffer_index) {
+        Ok(()) => {
+            presentation.cached_present_us += start.elapsed().as_micros();
+            presentation.present_bytes = presentation
+                .present_bytes
+                .saturating_add(MAIN_FLIP_PRESENT_BYTES);
+        }
+        Err(e) => {
+            static WARNED: OnceLock<()> = OnceLock::new();
+            WARNED.get_or_init(|| {
+                crate::ui_errln!("main_flip_v1_present_failed: {e}");
+            });
+        }
+    }
+}
+
+struct MainVsyncHiddenPresenter {
+    client: crate::main_present::MainPresentClient,
+    buffer1: MainVsyncHiddenBuffer,
+    buffer2: MainVsyncHiddenBuffer,
+    next_buffer_index: u8,
+    sequence: u32,
+    width: usize,
+    height: usize,
+    stride_bytes: usize,
+    backend_label: &'static str,
+}
+
+enum MainVsyncHiddenBuffer {
+    DevMem(HiddenRgb565Framebuffer),
+    Plugin(PluginHiddenRgb565Framebuffer),
+}
+
+impl MainVsyncHiddenBuffer {
+    fn open(
+        mapping: MainVsyncHiddenMapping,
+        index: HiddenRgb565BufferIndex,
+        width: usize,
+        height: usize,
+        stride_bytes: usize,
+    ) -> Result<Self, String> {
+        match mapping {
+            MainVsyncHiddenMapping::DevMem => {
+                HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                    .map(Self::DevMem)
+                    .map_err(|e| e.to_string())
+            }
+            MainVsyncHiddenMapping::PluginProbe => {
+                PluginHiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                    .map(Self::Plugin)
+                    .map_err(|e| e.to_string())
+            }
+        }
+    }
+
+    fn copy_full_frame(&mut self, cached: &[Rgb565Pixel], width: usize) -> Result<usize, String> {
+        match self {
+            Self::DevMem(buffer) => buffer
+                .copy_full_frame(cached, width)
+                .map_err(|e| e.to_string()),
+            Self::Plugin(buffer) => buffer
+                .copy_full_frame(cached, width)
+                .map_err(|e| e.to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainVsyncHiddenMapping {
+    DevMem,
+    PluginProbe,
+}
+
+impl MainVsyncHiddenMapping {
+    fn from_backend(backend: LauncherPresentBackend) -> Option<Self> {
+        match backend {
+            LauncherPresentBackend::MainVsyncHidden => Some(Self::DevMem),
+            LauncherPresentBackend::PluginMainVsyncHidden => Some(Self::PluginProbe),
+            _ => None,
+        }
+    }
+
+    fn backend_label(self) -> &'static str {
+        match self {
+            Self::DevMem => "main-vsync-hidden",
+            Self::PluginProbe => "plugin-main-vsync-hidden",
+        }
+    }
+}
+
+struct MainVsyncHiddenPresentStats {
+    backend_label: &'static str,
+    copied_bytes: usize,
+    buffer_index: u8,
+    copy_us: u128,
+    request_us: u128,
+    wait_us: u64,
+    route_us: u64,
+}
+
+struct FpgaVblankLatchHiddenPresenter {
+    buffer1: PluginHiddenRgb565Framebuffer,
+    buffer2: PluginHiddenRgb565Framebuffer,
+    base1: u32,
+    base2: u32,
+    next_buffer_index: u8,
+    sequence: u16,
+    width: usize,
+    height: usize,
+    route: LauncherFramebufferRoute,
+}
+
+struct FpgaVblankLatchHiddenPresentStats {
+    copied_bytes: usize,
+    buffer_index: u8,
+    copy_us: u128,
+    post_us: u128,
+    status_us: u64,
+    set_supported: bool,
+    status_supported: bool,
+    flip_count: u16,
+}
+
+impl FpgaVblankLatchHiddenPresenter {
+    fn open(ui: &UiDisplay) -> Option<Self> {
+        if launcher_present_backend() != LauncherPresentBackend::FpgaVblankLatchHidden {
+            return None;
+        }
+        let width = ui.render_w();
+        let height = ui.render_h();
+        let stride_bytes = rgb565_stride_bytes(width);
+        let buffer1 = match PluginHiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(1).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("fpga_vblank_latch_hidden_open_failed buffer=1 error={e}");
+                return None;
+            }
+        };
+        let buffer2 = match PluginHiddenRgb565Framebuffer::open(
+            HiddenRgb565BufferIndex::new(2).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!("fpga_vblank_latch_hidden_open_failed buffer=2 error={e}");
+                return None;
+            }
+        };
+        let base1 = match buffer1.physical_addr() {
+            Ok(base) => base,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_vblank_latch_hidden_open_failed buffer=1 stage=physical_addr error={e}"
+                );
+                return None;
+            }
+        };
+        let base2 = match buffer2.physical_addr() {
+            Ok(base) => base,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_vblank_latch_hidden_open_failed buffer=2 stage=physical_addr error={e}"
+                );
+                return None;
+            }
+        };
+        Some(Self {
+            buffer1,
+            buffer2,
+            base1,
+            base2,
+            next_buffer_index: 1,
+            sequence: 1,
+            width,
+            height,
+            route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
+        })
+    }
+
+    fn present_cached_full_frame(
+        &mut self,
+        cached: &[Rgb565Pixel],
+        fpga: &mut Fpga,
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
+        let buffer_index = self.next_buffer_index;
+        let (buffer, base_addr) = if buffer_index == 1 {
+            (&mut self.buffer1, self.base1)
+        } else {
+            (&mut self.buffer2, self.base2)
+        };
+        let copy_start = Instant::now();
+        let copied_bytes = buffer
+            .copy_full_frame(cached, self.width)
+            .map_err(|e| e.to_string())?;
+        let copy_us = copy_start.elapsed().as_micros();
+
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let post_start = Instant::now();
+        let ack = fpga
+            .post_magik_latched_fbuf_rgb565(
+                sequence,
+                base_addr,
+                self.width as u16,
+                self.height as u16,
+                self.route.mode(),
+                self.route.set_vga_fb(),
+            )
+            .map_err(|e| e.to_string())?;
+        let post_us = post_start.elapsed().as_micros();
+        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+            || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
+
+        let status_start = Instant::now();
+        let status = fpga
+            .read_magik_latched_fbuf_status()
+            .map_err(|e| e.to_string())?;
+        let status_us = status_start.elapsed().as_micros() as u64;
+
+        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
+        Ok(FpgaVblankLatchHiddenPresentStats {
+            copied_bytes,
+            buffer_index,
+            copy_us,
+            post_us,
+            status_us,
+            set_supported,
+            status_supported: status.supported(),
+            flip_count: status.flip_count,
+        })
+    }
+}
+
+impl MainVsyncHiddenPresenter {
+    fn open(ui: &UiDisplay) -> Option<Self> {
+        let mapping = MainVsyncHiddenMapping::from_backend(launcher_present_backend())?;
+        let width = ui.render_w();
+        let height = ui.render_h();
+        let stride_bytes = rgb565_stride_bytes(width);
+        let buffer1 = match MainVsyncHiddenBuffer::open(
+            mapping,
+            HiddenRgb565BufferIndex::new(1).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!(
+                    "main_vsync_hidden_open_failed backend={} buffer=1 error={e}",
+                    mapping.backend_label()
+                );
+                return None;
+            }
+        };
+        let buffer2 = match MainVsyncHiddenBuffer::open(
+            mapping,
+            HiddenRgb565BufferIndex::new(2).ok()?,
+            width,
+            height,
+            stride_bytes,
+        ) {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                crate::ui_errln!(
+                    "main_vsync_hidden_open_failed backend={} buffer=2 error={e}",
+                    mapping.backend_label()
+                );
+                return None;
+            }
+        };
+        Some(Self {
+            client: crate::main_present::MainPresentClient::default_paths(),
+            buffer1,
+            buffer2,
+            next_buffer_index: 1,
+            sequence: 1,
+            width,
+            height,
+            stride_bytes,
+            backend_label: mapping.backend_label(),
+        })
+    }
+
+    fn present_cached_full_frame(
+        &mut self,
+        cached: &[Rgb565Pixel],
+    ) -> Result<MainVsyncHiddenPresentStats, String> {
+        let buffer_index = self.next_buffer_index;
+        let buffer = if buffer_index == 1 {
+            &mut self.buffer1
+        } else {
+            &mut self.buffer2
+        };
+        let copy_start = Instant::now();
+        let copied_bytes = buffer
+            .copy_full_frame(cached, self.width)
+            .map_err(|e| e.to_string())?;
+        let copy_us = copy_start.elapsed().as_micros();
+
+        let sequence = self.sequence;
+        self.sequence = self.sequence.wrapping_add(1).max(1);
+        let request_start = Instant::now();
+        let ack = self
+            .client
+            .present(crate::main_present::MainPresentRequest {
+                sequence,
+                buffer_index,
+                width: self.width,
+                height: self.height,
+                stride_bytes: self.stride_bytes,
+            })
+            .map_err(|e| e.to_string())?;
+        let request_us = request_start.elapsed().as_micros();
+        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
+        Ok(MainVsyncHiddenPresentStats {
+            backend_label: self.backend_label,
+            copied_bytes,
+            buffer_index,
+            copy_us,
+            request_us,
+            wait_us: ack.wait_us,
+            route_us: ack.route_us,
+        })
+    }
+}
 
 fn launcher_input_script_wait_frames() -> usize {
     static VALUE: OnceLock<usize> = OnceLock::new();
@@ -664,63 +1095,64 @@ fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct LauncherIdleInput {
+struct LauncherRenderIntent {
     first_visible_copy_done: bool,
-    redraw_pending: bool,
-    launching: bool,
-    setup_active: bool,
-    benchmark_active: bool,
-    scripted_input_active: bool,
     startup_input_enabled: bool,
-    route_forces_full_present: bool,
-    bridge_dirty: bool,
-    catalog_messages_active: bool,
-    media_message_seen: bool,
-    catalog_scan_visible: bool,
-    catalog_background_scan_visible: bool,
-    catalog_scan_redraw_due: bool,
-    catalog_games_found_detail_changed: bool,
-    slint_animation_active: bool,
-    home_pan_present_active: bool,
-    // Arcade list motion lives outside Slint's bridge key, so the final visual
-    // tick still has to present before the launcher is allowed to idle.
-    arcade_visual_changed_this_loop: bool,
-    arcade_scroll_active: bool,
-    arcade_filter_scroll_active: bool,
-    arcade_search_active: bool,
-    preview_dirty: bool,
-    preview_scheduled_this_loop: bool,
-    composition_forces_full_present: bool,
-    composition_clears_direct_layers: bool,
+    wake_reasons: LauncherWakeReasons,
 }
 
-impl LauncherIdleInput {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LauncherWakeReasons(u64);
+
+impl LauncherWakeReasons {
+    const REDRAW_PENDING: Self = Self(1 << 0);
+    const LAUNCHING: Self = Self(1 << 1);
+    const SETUP_ACTIVE: Self = Self(1 << 2);
+    const BENCHMARK_ACTIVE: Self = Self(1 << 3);
+    const SCRIPTED_INPUT_ACTIVE: Self = Self(1 << 4);
+    const ROUTE_FORCES_FULL_PRESENT: Self = Self(1 << 5);
+    const BRIDGE_DIRTY: Self = Self(1 << 6);
+    const CATALOG_MESSAGES_ACTIVE: Self = Self(1 << 7);
+    const MEDIA_MESSAGE_SEEN: Self = Self(1 << 8);
+    const CATALOG_SCAN_VISIBLE: Self = Self(1 << 9);
+    const CATALOG_BACKGROUND_SCAN_VISIBLE: Self = Self(1 << 10);
+    const CATALOG_SCAN_REDRAW_DUE: Self = Self(1 << 11);
+    const CATALOG_GAMES_FOUND_DETAIL_CHANGED: Self = Self(1 << 12);
+    const SLINT_ANIMATION_ACTIVE: Self = Self(1 << 13);
+    const HOME_PAN_PRESENT_ACTIVE: Self = Self(1 << 14);
+    const ARCADE_VISUAL_CHANGED_THIS_LOOP: Self = Self(1 << 15);
+    const ARCADE_SCROLL_ACTIVE: Self = Self(1 << 16);
+    const ARCADE_FILTER_SCROLL_ACTIVE: Self = Self(1 << 17);
+    const ARCADE_SEARCH_ACTIVE: Self = Self(1 << 18);
+    const PREVIEW_DIRTY: Self = Self(1 << 19);
+    const PREVIEW_SCHEDULED_THIS_LOOP: Self = Self(1 << 20);
+    const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
+    const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
+
+    #[inline]
+    fn insert_if(&mut self, reason: Self, active: bool) {
+        if active {
+            self.0 |= reason.0;
+        }
+    }
+
+    #[inline]
+    fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for LauncherWakeReasons {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl LauncherRenderIntent {
     fn can_sleep(self) -> bool {
-        self.first_visible_copy_done
-            && !self.redraw_pending
-            && !self.launching
-            && !self.setup_active
-            && !self.benchmark_active
-            && !self.scripted_input_active
-            && self.startup_input_enabled
-            && !self.route_forces_full_present
-            && !self.bridge_dirty
-            && !self.catalog_messages_active
-            && !self.media_message_seen
-            && !self.catalog_scan_visible
-            && !self.catalog_background_scan_visible
-            && !self.catalog_scan_redraw_due
-            && !self.catalog_games_found_detail_changed
-            && !self.slint_animation_active
-            && !self.home_pan_present_active
-            && !self.arcade_visual_changed_this_loop
-            && !self.arcade_scroll_active
-            && !self.arcade_filter_scroll_active
-            && !self.arcade_search_active
-            && !self.preview_dirty
-            && !self.preview_scheduled_this_loop
-            && !self.composition_forces_full_present
-            && !self.composition_clears_direct_layers
+        self.first_visible_copy_done && self.startup_input_enabled && self.wake_reasons.is_empty()
     }
 }
 
@@ -784,16 +1216,6 @@ fn expand_home_pan_dirty_rect(
 
 fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
     Duration::from_micros(pacer.period_us().max(1))
-}
-
-fn launcher_should_wait_before_late_frame_render(
-    frame_start_phase_us: u64,
-    period_us: u64,
-) -> bool {
-    if period_us <= LAUNCHER_LATE_FRAME_START_HEADROOM_US {
-        return false;
-    }
-    frame_start_phase_us >= period_us - LAUNCHER_LATE_FRAME_START_HEADROOM_US
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -948,19 +1370,33 @@ fn read_catalog_summary_seed(
 
     match catalog_summary::read_catalog_summary(summary_path) {
         Ok(Some(summary)) if !summary.systems.is_empty() => {
-            print_startup_event(
-                start,
-                "catalog_summary_load",
-                format!(
-                    "status=ready systems={} games={} elapsed_us={} path={} {}",
-                    summary.systems.len(),
-                    summary.total_game_count,
-                    summary_t.elapsed().as_micros(),
-                    summary_path.display(),
-                    library_db::catalog_load_counter_detail()
-                ),
-            );
-            Some(summary)
+            if catalog_summary_seed_matches_sqlite(sqlite_path, &summary) {
+                print_startup_event(
+                    start,
+                    "catalog_summary_load",
+                    format!(
+                        "status=ready systems={} games={} elapsed_us={} path={} {}",
+                        summary.systems.len(),
+                        summary.total_game_count,
+                        summary_t.elapsed().as_micros(),
+                        summary_path.display(),
+                        library_db::catalog_load_counter_detail()
+                    ),
+                );
+                Some(summary)
+            } else {
+                print_startup_event(
+                    start,
+                    "catalog_summary_load",
+                    format!(
+                        "status=missing_or_stale elapsed_us={} path={} {}",
+                        summary_t.elapsed().as_micros(),
+                        summary_path.display(),
+                        library_db::catalog_load_counter_detail()
+                    ),
+                );
+                None
+            }
         }
         Ok(Some(_)) => {
             print_startup_event(
@@ -1005,6 +1441,22 @@ fn read_catalog_summary_seed(
     }
 }
 
+fn catalog_summary_seed_matches_sqlite(
+    sqlite_path: &Path,
+    summary: &catalog_summary::CatalogSummaryProjection,
+) -> bool {
+    let summary_stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(
+        summary.catalog_stamp_lines.clone(),
+    );
+    match library_db::read_sqlite_catalog_stamp(sqlite_path) {
+        Ok(Some(stored_stamp)) => {
+            stored_stamp == summary_stamp
+                && summary.catalog_stamp_fingerprint == stored_stamp.fingerprint_hex()
+        }
+        Ok(None) | Err(_) => false,
+    }
+}
+
 fn sqlite_file_has_valid_header(path: &Path) -> bool {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
@@ -1036,6 +1488,8 @@ pub(super) fn run_launcher_loop(
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
+    let mut main_vsync_hidden_presenter = MainVsyncHiddenPresenter::open(ui);
+    let mut fpga_vblank_latch_hidden_presenter = FpgaVblankLatchHiddenPresenter::open(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
@@ -1134,6 +1588,7 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut pacer = VsyncPacer::from_env();
+    let pacing_policy = LauncherFramePacingPolicy::default();
     let present_timing = PresentTiming::from_env();
     if launcher_bench_scenario.is_some() && !preview_archive_warm_skip_enabled() {
         let warm_t = Instant::now();
@@ -2704,38 +3159,93 @@ pub(super) fn run_launcher_loop(
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
-        let idle_input = LauncherIdleInput {
-            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-            redraw_pending: launcher_redraw_pending,
-            launching,
-            setup_active,
-            benchmark_active: launcher_bench_active,
-            scripted_input_active: launcher_input_script.active(),
-            startup_input_enabled: startup_status.input_enabled,
-            route_forces_full_present: route_action.force_full_present,
-            bridge_dirty: full_bridge_dirty || light_bridge_dirty,
-            catalog_messages_active: prepare_trace.catalog_message_count > 0
+        let mut wake_reasons = LauncherWakeReasons::default();
+        wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, launcher_redraw_pending);
+        wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
+        wake_reasons.insert_if(LauncherWakeReasons::SETUP_ACTIVE, setup_active);
+        wake_reasons.insert_if(LauncherWakeReasons::BENCHMARK_ACTIVE, launcher_bench_active);
+        wake_reasons.insert_if(
+            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
+            launcher_input_script.active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
+            route_action.force_full_present,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::BRIDGE_DIRTY,
+            full_bridge_dirty || light_bridge_dirty,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
+            prepare_trace.catalog_message_count > 0
                 || prepare_trace.catalog_backlog > 0
                 || pending_catalog_ready.is_some(),
-            media_message_seen,
+        );
+        wake_reasons.insert_if(LauncherWakeReasons::MEDIA_MESSAGE_SEEN, media_message_seen);
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
             catalog_scan_visible,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
             catalog_background_scan_visible,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
             catalog_scan_redraw_due,
-            catalog_games_found_detail_changed: games_found_detail_changed,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
+            games_found_detail_changed,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
             slint_animation_active,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
             home_pan_present_active,
+        );
+        // Arcade list motion lives outside Slint's bridge key, so the final
+        // visual tick still has to present before the launcher can idle.
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
             arcade_visual_changed_this_loop,
-            arcade_scroll_active: nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
-            arcade_filter_scroll_active: nav.screen == Screen::Arcade
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
+            nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
+            nav.screen == Screen::Arcade
                 && nav.arcade_filter.drawer_open
                 && nav.arcade_filter.is_scroll_active(),
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
             arcade_search_active,
-            preview_dirty: preview.raw_dirty(),
+        );
+        wake_reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, preview.raw_dirty());
+        wake_reasons.insert_if(
+            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
             preview_scheduled_this_loop,
-            composition_forces_full_present: composition_decision.force_full_slint_present,
-            composition_clears_direct_layers: composition_decision.clear_direct_layers,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
+            composition_decision.force_full_slint_present,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+            composition_decision.clear_direct_layers,
+        );
+        let render_intent = LauncherRenderIntent {
+            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+            startup_input_enabled: startup_status.input_enabled,
+            wake_reasons,
         };
-        if idle_input.can_sleep() {
+        if render_intent.can_sleep() {
             frame_accounting.finish_idle_loop(
                 frames,
                 run_start,
@@ -2796,11 +3306,13 @@ pub(super) fn run_launcher_loop(
         }
 
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
-        let wait_before_render = frame_accounting.first_visible_copy_done()
-            && launcher_should_wait_before_late_frame_render(
+        let wait_before_render = pacing_policy
+            .decide(LauncherFramePacingInput {
+                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
                 frame_start_phase_us,
-                pacer.period_us(),
-            );
+                period_us: pacer.period_us(),
+            })
+            .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -2907,30 +3419,12 @@ pub(super) fn run_launcher_loop(
         };
         let frame_t3 = pace.1;
         let cpu_t3 = pace.2;
-        let vsync_source = pace.0.as_ref().map(|pace| pace.source);
-        let vsync_period_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.period_us)
-            .unwrap_or_else(|| pacer.period_us());
-        let vsync_miss_streak = pace.0.as_ref().map(|pace| pace.miss_streak).unwrap_or(0);
-        let vsync_stale_hits = pace.0.as_ref().map(|pace| pace.stale_hits).unwrap_or(0);
-        let vsync_wait_start_age_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.wait_start_age_us)
-            .unwrap_or(0);
-        let vsync_accepted_hit_age_us = pace
-            .0
-            .as_ref()
-            .map(|pace| pace.accepted_hit_age_us)
-            .unwrap_or(0);
-        let present_phase_us = pace
-            .0
-            .as_ref()
-            .and_then(|pace| pace.hit_at)
-            .map(|hit_at| frame_t3.saturating_duration_since(hit_at).as_micros())
-            .unwrap_or(0);
+        let pacing_trace = LauncherPacingTrace::from_pace(
+            pace.0.as_ref(),
+            frame_start_phase_us,
+            pacer.period_us(),
+            frame_t3,
+        );
         if !first_vsync_logged
             && pace
                 .0
@@ -2942,15 +3436,117 @@ pub(super) fn run_launcher_loop(
         }
         let startup_can_present = lifecycle.startup_can_present_frame();
         let (presentation, frame_t4, cpu_t4) = {
-            let presentation = if startup_can_present {
-                LauncherCompositor::present(LauncherPresentRequest {
-                    layer_target: &mut layer_target,
-                    full_frame_present,
-                    slint_dirty: this_rect,
-                    raw_preview,
-                    arcade_list_rect,
-                    arcade_list_renderer: &mut arcade_list_renderer,
-                })
+            let mut presentation = if startup_can_present {
+                if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
+                    let hidden_compose_start = Instant::now();
+                    let direct_preview_rows = raw_preview
+                        .and_then(RawPreviewPresent::direct_rect)
+                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
+                        .unwrap_or(0);
+                    let arcade_update_label =
+                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
+                    let _arcade_stats = arcade_list_rect
+                        .map(|update| {
+                            layer_target
+                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
+                        })
+                        .unwrap_or_default();
+                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
+                    match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
+                        Ok(stats) => LauncherPresentResult {
+                            copied_rows: ui.render_h() as u32,
+                            direct_preview_rows,
+                            present_bytes: stats.copied_bytes,
+                            wasted_present_bytes: 0,
+                            cached_present_us: stats.copy_us,
+                            direct_preview_present_us: hidden_compose_us,
+                            arcade_list_present_us: hidden_compose_us,
+                            main_present_backend: "fpga-vblank-latch-hidden",
+                            main_present_status: if stats.set_supported && stats.status_supported {
+                                "ok"
+                            } else {
+                                "unsupported"
+                            },
+                            main_present_buffer: stats.buffer_index,
+                            main_present_hidden_copy_us: stats.copy_us,
+                            main_present_request_us: stats.post_us,
+                            main_present_wait_us: stats.status_us,
+                            main_present_route_us: stats.flip_count as u64,
+                            arcade_update_label,
+                        },
+                        Err(e) => {
+                            static WARNED: OnceLock<()> = OnceLock::new();
+                            WARNED.get_or_init(|| {
+                                crate::ui_errln!("fpga_vblank_latch_hidden_present_failed: {e}");
+                            });
+                            LauncherCompositor::present(LauncherPresentRequest {
+                                layer_target: &mut layer_target,
+                                full_frame_present,
+                                slint_dirty: this_rect,
+                                raw_preview,
+                                arcade_list_rect,
+                                arcade_list_renderer: &mut arcade_list_renderer,
+                            })
+                        }
+                    }
+                } else if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
+                    let hidden_compose_start = Instant::now();
+                    let direct_preview_rows = raw_preview
+                        .and_then(RawPreviewPresent::direct_rect)
+                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
+                        .unwrap_or(0);
+                    let arcade_update_label =
+                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
+                    let _arcade_stats = arcade_list_rect
+                        .map(|update| {
+                            layer_target
+                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
+                        })
+                        .unwrap_or_default();
+                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
+                    match presenter.present_cached_full_frame(layer_target.cached_565()) {
+                        Ok(stats) => LauncherPresentResult {
+                            copied_rows: ui.render_h() as u32,
+                            direct_preview_rows,
+                            present_bytes: stats.copied_bytes,
+                            wasted_present_bytes: 0,
+                            cached_present_us: stats.copy_us,
+                            direct_preview_present_us: hidden_compose_us,
+                            arcade_list_present_us: hidden_compose_us,
+                            main_present_backend: stats.backend_label,
+                            main_present_status: "ok",
+                            main_present_buffer: stats.buffer_index,
+                            main_present_hidden_copy_us: stats.copy_us,
+                            main_present_request_us: stats.request_us,
+                            main_present_wait_us: stats.wait_us,
+                            main_present_route_us: stats.route_us,
+                            arcade_update_label,
+                        },
+                        Err(e) => {
+                            static WARNED: OnceLock<()> = OnceLock::new();
+                            WARNED.get_or_init(|| {
+                                crate::ui_errln!("main_vsync_hidden_present_failed: {e}");
+                            });
+                            LauncherCompositor::present(LauncherPresentRequest {
+                                layer_target: &mut layer_target,
+                                full_frame_present,
+                                slint_dirty: this_rect,
+                                raw_preview,
+                                arcade_list_rect,
+                                arcade_list_renderer: &mut arcade_list_renderer,
+                            })
+                        }
+                    }
+                } else {
+                    LauncherCompositor::present(LauncherPresentRequest {
+                        layer_target: &mut layer_target,
+                        full_frame_present,
+                        slint_dirty: this_rect,
+                        raw_preview,
+                        arcade_list_rect,
+                        arcade_list_renderer: &mut arcade_list_renderer,
+                    })
+                }
             } else {
                 let _ = disp.wait_vsync();
                 LauncherPresentResult {
@@ -2961,9 +3557,17 @@ pub(super) fn run_launcher_loop(
                     cached_present_us: 0,
                     direct_preview_present_us: 0,
                     arcade_list_present_us: 0,
+                    main_present_backend: "none",
+                    main_present_status: "none",
+                    main_present_buffer: 0,
+                    main_present_hidden_copy_us: 0,
+                    main_present_request_us: 0,
+                    main_present_wait_us: 0,
+                    main_present_route_us: 0,
                     arcade_update_label: ArcadeUpdateTrace::None,
                 }
             };
+            maybe_present_with_main_flip_v1(&mut presentation);
             (
                 presentation,
                 Instant::now(),
@@ -2985,11 +3589,13 @@ pub(super) fn run_launcher_loop(
             prepare_us,
             presentation.copied_rows,
         );
-        frame_accounting.finish_frame(
-            LauncherPresentedFrame {
+        let presented_frame = LauncherFrameSnapshotBuilder {
+            identity: LauncherFrameIdentity {
                 frames,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
+            },
+            timing: LauncherFrameTiming {
                 run_start,
                 loop_start,
                 frame_t0,
@@ -2999,41 +3605,37 @@ pub(super) fn run_launcher_loop(
                 frame_t4,
                 custom_draw_start,
                 custom_draw_done,
+                prepare_us,
+            },
+            render: LauncherFrameRenderData {
                 custom_draw_trace,
                 prepare_trace,
-                prepare_us,
                 dirty_rect: this_rect,
-                copied_rows: presentation.copied_rows,
-                direct_preview_rows: presentation.direct_preview_rows,
-                present_bytes: presentation.present_bytes,
-                wasted_present_bytes: presentation.wasted_present_bytes,
-                cached_present_us: presentation.cached_present_us,
-                direct_preview_present_us: presentation.direct_preview_present_us,
-                arcade_list_present_us: presentation.arcade_list_present_us,
-                vsync_source,
-                vsync_period_us,
-                vsync_miss_streak,
-                vsync_stale_hits,
-                vsync_wait_start_age_us,
-                vsync_accepted_hit_age_us,
-                frame_start_phase_us,
-                present_phase_us,
-                arcade_update_label: presentation.arcade_update_label,
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 composition_status: composition_status.clone(),
+            },
+            pacing: pacing_trace,
+            presentation,
+            status: LauncherFrameStatusData {
                 status_write_due,
                 status_string_copy_us,
                 status_string_copy_bytes,
-                cpu_loop_start,
-                cpu_t0,
-                cpu_t1,
-                cpu_t2,
-                cpu_custom_draw_start,
-                cpu_custom_draw_done,
-                cpu_t3,
-                cpu_t4,
             },
+            cpu: LauncherFrameCpuTrace {
+                loop_start: cpu_loop_start,
+                t0: cpu_t0,
+                t1: cpu_t1,
+                t2: cpu_t2,
+                custom_draw_start: cpu_custom_draw_start,
+                custom_draw_done: cpu_custom_draw_done,
+                t3: cpu_t3,
+                t4: cpu_t4,
+            },
+        }
+        .build();
+        frame_accounting.finish_frame(
+            presented_frame,
             start,
             disp,
             &nav,
@@ -3981,26 +4583,6 @@ mod tests {
     }
 
     #[test]
-    fn late_frame_start_waits_before_render() {
-        assert!(launcher_should_wait_before_late_frame_render(
-            10_667, 16_667
-        ));
-        assert!(launcher_should_wait_before_late_frame_render(
-            31_000, 16_667
-        ));
-    }
-
-    #[test]
-    fn early_frame_start_keeps_render_then_vsync_order() {
-        assert!(!launcher_should_wait_before_late_frame_render(
-            10_666, 16_667
-        ));
-        assert!(!launcher_should_wait_before_late_frame_render(
-            5_000, 20_000
-        ));
-    }
-
-    #[test]
     fn start_system_env_selects_matching_system_and_enters_arcade() {
         let catalog = catalog_for_media_systems(&["arcade", "neogeo", "saturn"]);
         let mut nav = LauncherNav::new();
@@ -4265,6 +4847,50 @@ mod tests {
 
         assert!(!should_draw_arcade_overlay(&nav, true, false));
         assert!(!should_draw_arcade_overlay(&nav, false, true));
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_defaults_to_fb0_dirty() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(None, None),
+            LauncherPresentBackend::Fb0Dirty
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some(""), Some("2")),
+            LauncherPresentBackend::Fb0Dirty
+        );
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_parses_legacy_main_flip_experiment() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), None),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("2")),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 2 }
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-flip-v1"), Some("3")),
+            LauncherPresentBackend::MainFlipV1 { buffer_index: 1 }
+        );
+    }
+
+    #[test]
+    pub(super) fn launcher_present_backend_parses_main_vsync_hidden_experiment() {
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("main-vsync-hidden"), Some("2")),
+            LauncherPresentBackend::MainVsyncHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("plugin-main-vsync-hidden"), Some("2")),
+            LauncherPresentBackend::PluginMainVsyncHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden"), Some("2")),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
     }
 
     #[test]
@@ -4678,73 +5304,96 @@ mod tests {
 
     #[test]
     pub(super) fn launcher_idle_wait_requires_first_visible_copy_and_no_redraw() {
-        let mut input = LauncherIdleInput {
+        let mut intent = LauncherRenderIntent {
             first_visible_copy_done: true,
             startup_input_enabled: true,
-            ..LauncherIdleInput::default()
+            wake_reasons: LauncherWakeReasons::default(),
         };
 
-        assert!(input.can_sleep());
-        input.first_visible_copy_done = false;
-        assert!(!input.can_sleep());
-        input.first_visible_copy_done = true;
-        input.redraw_pending = true;
-        assert!(!input.can_sleep());
+        assert!(intent.can_sleep());
+        intent.first_visible_copy_done = false;
+        assert!(!intent.can_sleep());
+        intent.first_visible_copy_done = true;
+        intent
+            .wake_reasons
+            .insert_if(LauncherWakeReasons::REDRAW_PENDING, true);
+        assert!(!intent.can_sleep());
+        intent.wake_reasons = LauncherWakeReasons::default();
+        intent.startup_input_enabled = false;
+        assert!(!intent.can_sleep());
     }
 
     #[test]
     pub(super) fn launcher_idle_wait_rejects_active_work() {
-        let base = LauncherIdleInput {
-            first_visible_copy_done: true,
-            startup_input_enabled: true,
-            ..LauncherIdleInput::default()
-        };
+        for reason in [
+            LauncherWakeReasons::REDRAW_PENDING,
+            LauncherWakeReasons::LAUNCHING,
+            LauncherWakeReasons::SETUP_ACTIVE,
+            LauncherWakeReasons::BENCHMARK_ACTIVE,
+            LauncherWakeReasons::SCRIPTED_INPUT_ACTIVE,
+            LauncherWakeReasons::ROUTE_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::BRIDGE_DIRTY,
+            LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
+            LauncherWakeReasons::MEDIA_MESSAGE_SEEN,
+            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
+            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
+            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
+            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
+            LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
+            LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
+            LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
+            LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
+            LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
+            LauncherWakeReasons::PREVIEW_DIRTY,
+            LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
+            LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
+            LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+        ] {
+            assert!(!LauncherRenderIntent {
+                first_visible_copy_done: true,
+                startup_input_enabled: true,
+                wake_reasons: reason,
+            }
+            .can_sleep());
+        }
+    }
 
-        assert!(!LauncherIdleInput {
-            launching: true,
-            ..base
+    #[test]
+    pub(super) fn launcher_wake_reasons_combine_without_allocations() {
+        let mut reasons = LauncherWakeReasons::default();
+        assert!(reasons.is_empty());
+
+        reasons.insert_if(LauncherWakeReasons::LAUNCHING, true);
+        reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, true);
+        reasons.insert_if(LauncherWakeReasons::MEDIA_MESSAGE_SEEN, false);
+
+        assert_eq!(
+            reasons,
+            LauncherWakeReasons::LAUNCHING | LauncherWakeReasons::PREVIEW_DIRTY
+        );
+        assert!(!reasons.is_empty());
+    }
+
+    #[test]
+    pub(super) fn launcher_domain_wake_reasons_match_current_behavior() {
+        let arcade = LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP
+            | LauncherWakeReasons::ARCADE_SCROLL_ACTIVE
+            | LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE;
+        let search_preview = LauncherWakeReasons::ARCADE_SEARCH_ACTIVE
+            | LauncherWakeReasons::PREVIEW_DIRTY
+            | LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP;
+        let composition = LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT
+            | LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS;
+
+        for reasons in [arcade, search_preview, composition] {
+            assert!(!LauncherRenderIntent {
+                first_visible_copy_done: true,
+                startup_input_enabled: true,
+                wake_reasons: reasons,
+            }
+            .can_sleep());
         }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            catalog_messages_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            media_message_seen: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            preview_dirty: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            slint_animation_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            home_pan_present_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            arcade_visual_changed_this_loop: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            arcade_scroll_active: true,
-            ..base
-        }
-        .can_sleep());
-        assert!(!LauncherIdleInput {
-            composition_forces_full_present: true,
-            ..base
-        }
-        .can_sleep());
     }
 
     #[test]

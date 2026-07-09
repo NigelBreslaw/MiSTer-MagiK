@@ -13,7 +13,7 @@ const DEFAULT_VSYNC_FALLBACK_US: u64 = 16_667;
 const PAL_VSYNC_FALLBACK_US: u64 = 20_000;
 const VSYNC_GRACE_US: u64 = 1_500;
 const DEFAULT_FRESH_HIT_MAX_AGE_US: u64 = 500;
-const DIRECT_WAIT_ARM_MARGIN_US: u64 = 8_000;
+const DIRECT_WAIT_ARM_MARGIN_US: u64 = 4_000;
 const PERIOD_ALPHA_NUM: u64 = 1;
 const PERIOD_ALPHA_DEN: u64 = 8;
 const VSYNC_WORKER_QUEUE_DEPTH: usize = 1;
@@ -706,17 +706,17 @@ mod tests {
     fn direct_wait_sleeps_until_arm_margin_when_called_early() {
         assert_eq!(
             direct_wait_pre_arm_sleep_us(3_000, DEFAULT_VSYNC_FALLBACK_US),
-            Some(5_667)
+            Some(9_667)
         );
     }
 
     #[test]
     fn direct_wait_does_not_pre_sleep_inside_arm_margin() {
         assert_eq!(
-            direct_wait_pre_arm_sleep_us(9_000, DEFAULT_VSYNC_FALLBACK_US),
+            direct_wait_pre_arm_sleep_us(13_000, DEFAULT_VSYNC_FALLBACK_US),
             None
         );
-        assert_eq!(direct_wait_pre_arm_sleep_us(1_000, 7_000), None);
+        assert_eq!(direct_wait_pre_arm_sleep_us(1_000, 4_000), None);
     }
 
     #[test]

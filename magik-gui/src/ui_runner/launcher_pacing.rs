@@ -1,0 +1,207 @@
+use mister_magik_fb::framebuffer::vsync::{VsyncPace, VsyncPaceSource};
+use std::time::Instant;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct LauncherFramePacingInput {
+    pub(super) first_visible_copy_done: bool,
+    pub(super) frame_start_phase_us: u64,
+    pub(super) period_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct LauncherFramePacingDecision {
+    pub(super) wait_before_render: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct LauncherPacingTrace {
+    pub(super) vsync_source: Option<VsyncPaceSource>,
+    pub(super) vsync_period_us: u64,
+    pub(super) vsync_miss_streak: u32,
+    pub(super) vsync_stale_hits: u32,
+    pub(super) vsync_wait_start_age_us: u64,
+    pub(super) vsync_accepted_hit_age_us: u64,
+    pub(super) frame_start_phase_us: u64,
+    pub(super) present_phase_us: u128,
+}
+
+const LATE_FRAME_START_HEADROOM_US: u64 = 6_000;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LauncherFramePacingPolicy;
+
+impl LauncherFramePacingPolicy {
+    #[inline]
+    pub(super) fn decide(self, input: LauncherFramePacingInput) -> LauncherFramePacingDecision {
+        LauncherFramePacingDecision {
+            wait_before_render: input.first_visible_copy_done
+                && self.should_wait_before_late_frame_render(
+                    input.frame_start_phase_us,
+                    input.period_us,
+                ),
+        }
+    }
+
+    #[inline]
+    fn should_wait_before_late_frame_render(
+        self,
+        frame_start_phase_us: u64,
+        period_us: u64,
+    ) -> bool {
+        if period_us <= LATE_FRAME_START_HEADROOM_US {
+            return false;
+        }
+        frame_start_phase_us >= period_us - LATE_FRAME_START_HEADROOM_US
+    }
+}
+
+impl LauncherPacingTrace {
+    #[inline]
+    pub(super) fn from_pace(
+        pace: Option<&VsyncPace>,
+        frame_start_phase_us: u64,
+        fallback_period_us: u64,
+        present_at: Instant,
+    ) -> Self {
+        Self {
+            vsync_source: pace.map(|pace| pace.source),
+            vsync_period_us: pace
+                .map(|pace| pace.period_us)
+                .unwrap_or(fallback_period_us),
+            vsync_miss_streak: pace.map(|pace| pace.miss_streak).unwrap_or(0),
+            vsync_stale_hits: pace.map(|pace| pace.stale_hits).unwrap_or(0),
+            vsync_wait_start_age_us: pace.map(|pace| pace.wait_start_age_us).unwrap_or(0),
+            vsync_accepted_hit_age_us: pace.map(|pace| pace.accepted_hit_age_us).unwrap_or(0),
+            frame_start_phase_us,
+            present_phase_us: pace
+                .and_then(|pace| pace.hit_at)
+                .map(|hit_at| present_at.saturating_duration_since(hit_at).as_micros())
+                .unwrap_or(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn should_wait(
+        first_visible_copy_done: bool,
+        frame_start_phase_us: u64,
+        period_us: u64,
+    ) -> bool {
+        LauncherFramePacingPolicy::default()
+            .decide(LauncherFramePacingInput {
+                first_visible_copy_done,
+                frame_start_phase_us,
+                period_us,
+            })
+            .wait_before_render
+    }
+
+    #[test]
+    fn first_visible_copy_must_be_done_before_waiting() {
+        assert!(!should_wait(false, 10_667, 16_667));
+    }
+
+    #[test]
+    fn exact_threshold_waits_before_render() {
+        assert!(should_wait(true, 10_667, 16_667));
+        assert!(!should_wait(true, 10_666, 16_667));
+    }
+
+    #[test]
+    fn short_period_never_waits_before_render() {
+        assert!(!should_wait(true, 6_000, 6_000));
+        assert!(!should_wait(true, 6_001, 6_000));
+    }
+
+    #[test]
+    fn normal_60hz_period_waits_in_final_headroom_window() {
+        assert!(should_wait(true, 31_000, 16_667));
+        assert!(should_wait(true, 15_000, 16_667));
+        assert!(!should_wait(true, 10_000, 16_667));
+    }
+
+    #[test]
+    fn pal_50hz_period_waits_in_final_headroom_window() {
+        assert!(should_wait(true, 14_000, 20_000));
+        assert!(!should_wait(true, 13_999, 20_000));
+        assert!(!should_wait(true, 5_000, 20_000));
+    }
+
+    fn test_pace(source: VsyncPaceSource, hit_at: Option<Instant>) -> VsyncPace {
+        VsyncPace {
+            source,
+            wait_us: 12_000,
+            period_us: 16_700,
+            miss_streak: 2,
+            hit_at,
+            wait_start_age_us: 3_000,
+            accepted_hit_age_us: 400,
+            stale_hits: 1,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn no_pace_uses_default_values() {
+        let present_at = Instant::now();
+
+        let trace = LauncherPacingTrace::from_pace(None, 7_000, 20_000, present_at);
+
+        assert_eq!(
+            trace,
+            LauncherPacingTrace {
+                vsync_source: None,
+                vsync_period_us: 20_000,
+                vsync_miss_streak: 0,
+                vsync_stale_hits: 0,
+                vsync_wait_start_age_us: 0,
+                vsync_accepted_hit_age_us: 0,
+                frame_start_phase_us: 7_000,
+                present_phase_us: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn direct_vsync_pace_values_are_preserved() {
+        let present_at = Instant::now();
+        let hit_at = present_at - std::time::Duration::from_micros(900);
+        let pace = test_pace(VsyncPaceSource::Vsync, Some(hit_at));
+
+        let trace = LauncherPacingTrace::from_pace(Some(&pace), 8_000, 20_000, present_at);
+
+        assert_eq!(trace.vsync_source, Some(VsyncPaceSource::Vsync));
+        assert_eq!(trace.vsync_period_us, 16_700);
+        assert_eq!(trace.vsync_miss_streak, 2);
+        assert_eq!(trace.vsync_stale_hits, 1);
+        assert_eq!(trace.vsync_wait_start_age_us, 3_000);
+        assert_eq!(trace.vsync_accepted_hit_age_us, 400);
+        assert_eq!(trace.frame_start_phase_us, 8_000);
+    }
+
+    #[test]
+    fn present_phase_uses_present_time_since_hit() {
+        let present_at = Instant::now();
+        let hit_at = present_at - std::time::Duration::from_micros(1_234);
+        let pace = test_pace(VsyncPaceSource::Vsync, Some(hit_at));
+
+        let trace = LauncherPacingTrace::from_pace(Some(&pace), 0, 16_667, present_at);
+
+        assert_eq!(trace.present_phase_us, 1_234);
+    }
+
+    #[test]
+    fn fallback_period_behavior_matches_existing_trace_defaults() {
+        let present_at = Instant::now();
+        let pace = test_pace(VsyncPaceSource::Fallback, None);
+
+        let trace = LauncherPacingTrace::from_pace(Some(&pace), 9_000, 20_000, present_at);
+
+        assert_eq!(trace.vsync_source, Some(VsyncPaceSource::Fallback));
+        assert_eq!(trace.vsync_period_us, 16_700);
+        assert_eq!(trace.present_phase_us, 0);
+    }
+}

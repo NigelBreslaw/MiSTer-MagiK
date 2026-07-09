@@ -120,7 +120,7 @@ pub(super) trait UiFrameTargetPreviewExt {
         frame: &PreviewRawTransitionFrame<'_>,
         effect: PreviewTransitionEffect,
         progress: f32,
-    ) -> DirtyRect;
+    ) -> (DirtyRect, PreviewFadeTrace);
 
     fn blit_raw_preview_direct(
         &mut self,
@@ -135,7 +135,7 @@ pub(super) trait UiFrameTargetPreviewExt {
         frame: &PreviewRawTransitionFrame<'_>,
         effect: PreviewTransitionEffect,
         progress: f32,
-    ) -> DirtyRect;
+    ) -> (DirtyRect, PreviewFadeTrace);
 }
 
 impl UiFrameTargetPreviewExt for UiFrameTarget {
@@ -154,7 +154,7 @@ impl UiFrameTargetPreviewExt for UiFrameTarget {
         frame: &PreviewRawTransitionFrame<'_>,
         effect: PreviewTransitionEffect,
         progress: f32,
-    ) -> DirtyRect {
+    ) -> (DirtyRect, PreviewFadeTrace) {
         Raw565PreviewRenderer::compose_transition(
             self.cached_565_mut(),
             ui,
@@ -191,7 +191,7 @@ impl UiFrameTargetPreviewExt for UiFrameTarget {
         frame: &PreviewRawTransitionFrame<'_>,
         effect: PreviewTransitionEffect,
         progress: f32,
-    ) -> DirtyRect {
+    ) -> (DirtyRect, PreviewFadeTrace) {
         let screen = preview_screen_rect(ui);
         let (direct_preview, stride) = self.direct_preview_565_rect_mut(screen);
         Raw565PreviewRenderer::compose_transition_strided(
@@ -248,7 +248,7 @@ pub(super) fn blit_raw_preview_if_needed(
         .and_then(|rect| rect.intersection(preview_screen_rect(ui)))
         .is_some();
     let transition_frame = preview.raw_transition_frame();
-    let trace = transition.update(transition_frame.as_ref(), elapsed);
+    let mut trace = transition.update(transition_frame.as_ref(), elapsed);
     if !raw_dirty && !slint_touched_preview && !trace.active {
         preview.finish_raw_empty_transition_if_idle();
         return (None, trace);
@@ -258,7 +258,7 @@ pub(super) fn blit_raw_preview_if_needed(
     };
     let direct_present = preview_direct_present_enabled();
     let raw_rect = if trace.active {
-        if direct_present {
+        let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
                 ui,
                 &transition_frame,
@@ -267,7 +267,9 @@ pub(super) fn blit_raw_preview_if_needed(
             )
         } else {
             target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
-        }
+        };
+        trace.fade = fade;
+        raw_rect
     } else {
         let raw_rect = if direct_present {
             target.blit_raw_preview_direct(ui, &transition_frame.current, raw_dirty)
@@ -326,6 +328,31 @@ pub(super) fn copy_arcade_list_update(
             // but roughly doubled present cost because `/dev/fb0` reads are
             // expensive on the MiSTer write-combined framebuffer.
             renderer.copy_layer_to_target(target, disp, false);
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, false)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
+        }
+    }
+}
+
+pub(super) fn compose_arcade_list_update(
+    target: &mut UiFrameTarget,
+    renderer: &mut ArcadeListRenderer,
+    update: ArcadeListUpdate,
+) -> PresentCopyStats {
+    match update {
+        ArcadeListUpdate::Full(rect) => {
+            renderer.compose_layer_to_cached(target, true);
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, true)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
+        }
+        ArcadeListUpdate::Scroll { rect, .. } => {
+            renderer.compose_layer_to_cached(target, false);
             PresentCopyStats {
                 rows: rect.rows(),
                 bytes: arcade_list_present_pixels(&update, false)

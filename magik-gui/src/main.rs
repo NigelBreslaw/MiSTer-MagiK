@@ -17,6 +17,22 @@
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
+//!     hidden-fb-copy-bench
+//!                        benchmark RGB565 copies into hidden framebuffer slots
+//!     fb-map-report      report framebuffer ioctl metadata and mmap reach
+//!     fb-map-bandwidth   compare fb0 and hidden-buffer write bandwidth
+//!     plugin-map-report  report stock-kernel plugin probe metadata
+//!     plugin-map-bandwidth
+//!                        benchmark plugin probe mappings
+//!     plugin-presenter-report
+//!                        report plugin async-present mailbox capability
+//!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
+//!     fpga-latch-post-report
+//!                        fill one plugin hidden slot and post it through FPGA latch
+//!     fpga-latch-pattern
+//!                        fill plugin hidden slots and vblank-latch them in FPGA
+//!     plugin-present-pattern
+//!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -52,6 +68,8 @@
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(feature = "diagnostics")]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 mod arcade_button_overrides;
@@ -70,6 +88,8 @@ mod frame_profile;
 mod input;
 mod launch_preparation;
 mod launcher;
+#[cfg(feature = "ui")]
+mod main_present;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
@@ -100,9 +120,17 @@ pub use mister_magik_fb::{
 };
 
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
+#[cfg(feature = "diagnostics")]
+use fpga::{MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
+#[cfg(feature = "diagnostics")]
+use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::UiDisplayPlan;
@@ -291,6 +319,20 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "vsync-probe" => run_vsync_probe(),
         #[cfg(feature = "diagnostics")]
         "cpu-profile-smoke" => run_cpu_profile_smoke(),
+        #[cfg(feature = "diagnostics")]
+        "hidden-fb-copy-bench" => run_hidden_fb_copy_bench(),
+        #[cfg(feature = "diagnostics")]
+        "fb-map-report" => run_fb_map_report(),
+        #[cfg(feature = "diagnostics")]
+        "fb-map-bandwidth" => run_fb_map_bandwidth(),
+        #[cfg(feature = "diagnostics")]
+        "plugin-map-report" => run_plugin_map_report(),
+        #[cfg(feature = "diagnostics")]
+        "plugin-map-bandwidth" => run_plugin_map_bandwidth(),
+        #[cfg(feature = "diagnostics")]
+        "plugin-presenter-report" => run_plugin_presenter_report(),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "plugin-present-pattern" => run_plugin_present_pattern(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -341,6 +383,12 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         "effect-bench" => ui_effect_bench::run_effect_bench(f),
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
+        #[cfg(feature = "diagnostics")]
+        "fpga-latch-report" => run_fpga_latch_report(),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "fpga-latch-post-report" => run_fpga_latch_post_report(f),
+        #[cfg(all(feature = "diagnostics", feature = "ui"))]
+        "fpga-latch-pattern" => run_fpga_latch_pattern(f),
         #[cfg(feature = "diagnostics")]
         "library-scan-bench" => library_db::run_scan_bench(),
         other => unknown_command(other),
@@ -730,6 +778,1429 @@ fn run_cpu_profile_smoke() {
     }
 }
 
+#[cfg(feature = "diagnostics")]
+fn run_hidden_fb_copy_bench() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(240)
+        .max(1);
+    let width = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let bytes_per_copy = stride_bytes.saturating_mul(height);
+    let mut source = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+    for (i, pixel) in source.iter_mut().enumerate() {
+        let x = i % width.max(1);
+        let y = i / width.max(1);
+        pixel.0 = (((x as u16) & 0x1f) << 11)
+            | (((y as u16) & 0x3f) << 5)
+            | ((x as u16 ^ y as u16) & 0x1f);
+    }
+
+    let index1 = HiddenRgb565BufferIndex::new(1).expect("hidden buffer 1 index");
+    let index2 = HiddenRgb565BufferIndex::new(2).expect("hidden buffer 2 index");
+    let mut buffer1 = match HiddenRgb565Framebuffer::open(index1, width, height, stride_bytes) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match HiddenRgb565Framebuffer::open(index2, width, height, stride_bytes) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    crate::ui_logln!("hidden_fb_copy_bench_header\tframe\tbuffer\tbytes\twall_us\tcpu_us\tmb_s");
+    let bench_start = std::time::Instant::now();
+    let mut total_wall_us = 0u128;
+    let mut total_cpu_us = 0u128;
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        let target = if buffer_index == 1 {
+            &mut buffer1
+        } else {
+            &mut buffer2
+        };
+        let source_index = frame % source.len();
+        source[source_index].0 ^= 0xffff;
+        let cpu_start = thread_cpu_us();
+        let copy_start = std::time::Instant::now();
+        let copied_bytes = match target.copy_full_frame(&source, width) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                crate::ui_errln!(
+                    "hidden_fb_copy_bench\tfailed\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let wall_us = copy_start.elapsed().as_micros() as u64;
+        let cpu_us = elapsed_thread_cpu_us(cpu_start);
+        total_wall_us += wall_us as u128;
+        total_cpu_us += cpu_us as u128;
+        let mb_s = mb_per_second(copied_bytes, wall_us);
+        crate::ui_logln!(
+            "hidden_fb_copy_bench_tsv\t{frame}\t{buffer_index}\t{copied_bytes}\t{wall_us}\t{cpu_us}\t{mb_s:.2}"
+        );
+    }
+    let elapsed_us = bench_start.elapsed().as_micros() as u128;
+    let total_bytes = (bytes_per_copy as u128).saturating_mul(frames as u128);
+    crate::ui_logln!(
+        "hidden_fb_copy_bench_summary\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\ttotal_bytes={total_bytes}\telapsed_us={elapsed_us}\tavg_wall_us={}\tavg_cpu_us={}\tavg_mb_s={:.2}",
+        total_wall_us / frames as u128,
+        total_cpu_us / frames as u128,
+        mb_per_second(total_bytes.min(usize::MAX as u128) as usize, elapsed_us as u64)
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fb_map_report() {
+    let width = std::env::var("MISTER_FB_MAP_REPORT_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_FB_MAP_REPORT_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let frame_bytes = stride_bytes.saturating_mul(height);
+    let double_bytes = frame_bytes.saturating_mul(2);
+
+    let raw = match MappedRgb565Framebuffer::raw_diagnostics() {
+        Ok(raw) => raw,
+        Err(e) => {
+            crate::ui_errln!("fb_map_report\tfailed\tstage=ioctl\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    crate::ui_logln!(
+        "fb_map_report_fix_tsv\tid={}\tsmem_start=0x{:x}\tsmem_len={}\tline_length={}\ttype={}\ttype_aux={}\tvisual={}\txpanstep={}\typanstep={}\tywrapstep={}\tmmio_start=0x{:x}\tmmio_len={}\taccel={}\tcapabilities=0x{:x}",
+        raw.id,
+        raw.smem_start,
+        raw.smem_len,
+        raw.line_length,
+        raw.type_,
+        raw.type_aux,
+        raw.visual,
+        raw.xpanstep,
+        raw.ypanstep,
+        raw.ywrapstep,
+        raw.mmio_start,
+        raw.mmio_len,
+        raw.accel,
+        raw.capabilities
+    );
+    crate::ui_logln!(
+        "fb_map_report_var_tsv\txres={}\tyres={}\txres_virtual={}\tyres_virtual={}\txoffset={}\tyoffset={}\tbpp={}\tred={}:{}:{}\tgreen={}:{}:{}\tblue={}:{}:{}\ttransp={}:{}:{}\tvmode={}\trotate={}\tcolorspace={}",
+        raw.xres,
+        raw.yres,
+        raw.xres_virtual,
+        raw.yres_virtual,
+        raw.xoffset,
+        raw.yoffset,
+        raw.bits_per_pixel,
+        raw.red_offset,
+        raw.red_length,
+        raw.red_msb_right,
+        raw.green_offset,
+        raw.green_length,
+        raw.green_msb_right,
+        raw.blue_offset,
+        raw.blue_length,
+        raw.blue_msb_right,
+        raw.transp_offset,
+        raw.transp_length,
+        raw.transp_msb_right,
+        raw.vmode,
+        raw.rotate,
+        raw.colorspace
+    );
+    crate::ui_logln!(
+        "fb_map_report_expected_tsv\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tframe_bytes={frame_bytes}\tdouble_bytes={double_bytes}\thidden_slot_bytes={}",
+        mister_magik_fb::framebuffer::hidden::MISTER_FB_SLOT_BYTES
+    );
+
+    let full_reported = raw.smem_len;
+    let probes = [
+        ("active_frame", frame_bytes),
+        ("two_rgb565_frames", double_bytes),
+        ("reported_smem_len", full_reported),
+    ];
+    let mmap_probes = match MappedRgb565Framebuffer::probe_mmap_lengths(&probes) {
+        Ok(probes) => probes,
+        Err(e) => {
+            crate::ui_errln!("fb_map_report\tfailed\tstage=mmap_probe\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for probe in mmap_probes {
+        crate::ui_logln!(
+            "fb_map_report_mmap_tsv\tlabel={}\trequested_len={}\tok={}\terror={}",
+            probe.label,
+            probe.requested_len,
+            bool_tsv(probe.ok),
+            probe.error.unwrap_or_default()
+        );
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fb_map_bandwidth() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_FB_MAP_BANDWIDTH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(120)
+        .max(1);
+    let width = std::env::var("MISTER_FB_MAP_BANDWIDTH_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_FB_MAP_BANDWIDTH_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let frame_bytes = stride_bytes.saturating_mul(height);
+    let mut source = make_rgb565_bench_source(width, height);
+
+    crate::ui_logln!(
+        "fb_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
+    );
+    crate::ui_logln!(
+        "fb_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    let raw = MappedRgb565Framebuffer::raw_diagnostics().ok();
+    let source_bytes_len = frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
+    if raw
+        .as_ref()
+        .map(|raw| raw.smem_len >= frame_bytes)
+        .unwrap_or(false)
+    {
+        match Fb0ByteRange::open(frame_bytes, 0, frame_bytes) {
+            Ok(mut fb0_range) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                    fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-active", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-active", &format!("open range: {e}")),
+        }
+    } else {
+        match MappedRgb565Framebuffer::open_rgb565(width, height) {
+            Ok(mut fb0) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    fb0.present_rows_565(src, 0, height)
+                        .map(|_| frame_bytes)
+                        .map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-active", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-active", &format!("open /dev/fb0: {e}")),
+        }
+    }
+
+    if raw
+        .as_ref()
+        .map(|raw| raw.smem_len >= frame_bytes.saturating_mul(2))
+        .unwrap_or(false)
+    {
+        crate::ui_logln!(
+            "fb_map_bandwidth_case_tsv\tcase=fb0-second-frame-range\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+        );
+        match Fb0ByteRange::open(frame_bytes.saturating_mul(2), frame_bytes, frame_bytes) {
+            Ok(mut fb0_range) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                    fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
+                });
+                print_bandwidth_result("fb0-second-frame-range", &result);
+            }
+            Err(e) => print_bandwidth_error("fb0-second-frame-range", &format!("open range: {e}")),
+        }
+    } else {
+        let smem_len = raw.as_ref().map(|raw| raw.smem_len).unwrap_or_default();
+        print_bandwidth_skip(
+            "fb0-second-frame-range",
+            &format!(
+                "smem_len {smem_len} is smaller than required {}",
+                frame_bytes.saturating_mul(2)
+            ),
+        );
+    }
+
+    crate::ui_logln!(
+        "fb_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    match HiddenRgb565BufferIndex::new(1)
+        .map_err(|e| e.to_string())
+        .and_then(|index| {
+            HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                .map_err(|e| e.to_string())
+        }) {
+        Ok(mut hidden) => {
+            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                hidden
+                    .copy_full_frame(src, width)
+                    .map_err(|e| e.to_string())
+            });
+            print_bandwidth_result("hidden-dev-mem-buffer1", &result);
+        }
+        Err(e) => print_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}")),
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
+
+#[cfg(feature = "diagnostics")]
+const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PluginProbeRegion {
+    index: usize,
+    name: String,
+    available: bool,
+    phys: String,
+    len: usize,
+    dma_owned: bool,
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_plugin_map_report() {
+    match MappedRgb565Framebuffer::raw_diagnostics() {
+        Ok(raw) => {
+            crate::ui_logln!(
+                "plugin_map_fb0_tsv\tid={}\tsmem_start=0x{:x}\tsmem_len={}\tline_length={}\txres={}\tyres={}\txres_virtual={}\tyres_virtual={}\tbpp={}",
+                raw.id,
+                raw.smem_start,
+                raw.smem_len,
+                raw.line_length,
+                raw.xres,
+                raw.yres,
+                raw.xres_virtual,
+                raw.yres_virtual,
+                raw.bits_per_pixel
+            );
+        }
+        Err(e) => crate::ui_logln!("plugin_map_fb0_tsv\terror={e}"),
+    }
+
+    let metadata = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            crate::ui_errln!("plugin_map_report\tfailed\tstage=read_probe\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for line in metadata.lines() {
+        crate::ui_logln!("{line}");
+    }
+
+    let regions = parse_plugin_probe_regions(&metadata);
+    if regions.is_empty() {
+        crate::ui_errln!("plugin_map_report\tfailed\tstage=parse_regions\terror=no regions");
+        std::process::exit(1);
+    }
+    for region in regions {
+        let probe = PluginProbeByteRange::probe(region.index, region.len);
+        crate::ui_logln!(
+            "plugin_map_mmap_tsv\tindex={}\tname={}\tavailable={}\trequested_len={}\tok={}\terror={}",
+            region.index,
+            region.name,
+            bool_tsv(region.available),
+            region.len,
+            bool_tsv(probe.is_ok()),
+            probe.err().map(|e| e.to_string()).unwrap_or_default()
+        );
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_plugin_presenter_report() {
+    let before = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_before\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for line in before.lines().filter(|line| {
+        line.starts_with("plugin_presenter_capability_tsv\t")
+            || line.starts_with("plugin_presenter_status_tsv\t")
+    }) {
+        crate::ui_logln!("plugin_presenter_before_{line}");
+    }
+
+    let request = "plugin_present_async_v1 sequence=1 buffer=1 width=960 height=540 stride=1920\n";
+    let post_start = std::time::Instant::now();
+    let post_result = std::fs::OpenOptions::new()
+        .write(true)
+        .open(PLUGIN_PROBE_DEVICE)
+        .and_then(|mut file| file.write_all(request.as_bytes()));
+    let post_us = post_start.elapsed().as_micros();
+    match post_result {
+        Ok(()) => crate::ui_logln!(
+            "plugin_presenter_post_tsv\tok=1\tpost_us={post_us}\trequest={}",
+            request.trim()
+        ),
+        Err(e) => {
+            crate::ui_logln!("plugin_presenter_post_tsv\tok=0\tpost_us={post_us}\terror={e}");
+            std::process::exit(1);
+        }
+    }
+
+    let after = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_after\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    for line in after.lines().filter(|line| {
+        line.starts_with("plugin_presenter_capability_tsv\t")
+            || line.starts_with("plugin_presenter_status_tsv\t")
+    }) {
+        crate::ui_logln!("plugin_presenter_after_{line}");
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_fpga_latch_report() {
+    let mut fpga = match Fpga::open() {
+        Ok(fpga) => fpga,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_report_failed\tstage=open_fpga\terror={e}");
+            std::process::exit(1);
+        }
+    };
+
+    let set_probe = match fpga.probe_magik_latched_fbuf_set() {
+        Ok((hi, lo)) => (hi, lo, String::new()),
+        Err(e) => (0, 0, e.to_string()),
+    };
+    let set_supported =
+        set_probe.0 == MAGIK_FBUF_LATCH_MAGIC || set_probe.1 == MAGIK_FBUF_LATCH_MAGIC;
+    crate::ui_logln!(
+        "fpga_latch_set_probe_tsv\tcmd=0x46\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\terror={}",
+        bool_tsv(set_supported),
+        MAGIK_FBUF_LATCH_MAGIC,
+        set_probe.0,
+        set_probe.1,
+        set_probe.2
+    );
+
+    let status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_logln!(
+                "fpga_latch_status_tsv\tcmd=0x47\tsupported=0\tmagic_expected=0x{:04x}\terror={e}",
+                MAGIK_FBUF_STATUS_MAGIC
+            );
+            if set_supported {
+                std::process::exit(1);
+            }
+            return;
+        }
+    };
+    crate::ui_logln!(
+        "fpga_latch_status_tsv\tcmd=0x47\tsupported={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpending_enabled={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}\tactive_width={}\tactive_height={}\tactive_stride={}",
+        bool_tsv(status.supported()),
+        MAGIK_FBUF_STATUS_MAGIC,
+        status.magic_hi,
+        status.magic_lo,
+        status.active_sequence,
+        status.pending_sequence,
+        bool_tsv(status.pending()),
+        bool_tsv(status.pending_enabled()),
+        bool_tsv(status.active_enabled()),
+        status.flip_count,
+        status.post_count,
+        status.drop_count,
+        status.active_base,
+        status.active_width,
+        status.active_height,
+        status.active_stride
+    );
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_fpga_latch_post_report(fpga: &mut Fpga) {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_post_report_failed\tstage=open_plugin_buffer\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base_addr = match buffer.physical_addr() {
+        Ok(base_addr) => base_addr,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_post_report_failed\tstage=physical_addr\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    fill_plugin_present_pattern(&mut source, width, height, 0, 1);
+
+    let copy_start = std::time::Instant::now();
+    if let Err(e) = buffer.copy_full_frame(&source, width) {
+        crate::ui_errln!("fpga_latch_post_report_failed\tstage=copy\terror={e}");
+        std::process::exit(1);
+    }
+    let copy_us = copy_start.elapsed().as_micros() as u64;
+
+    let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let post_start = std::time::Instant::now();
+    let post = fpga.post_magik_latched_fbuf_rgb565(
+        1,
+        base_addr,
+        width as u16,
+        height as u16,
+        route,
+        false,
+    );
+    let post_us = post_start.elapsed().as_micros() as u64;
+    let (ack_high, ack_low) = match post {
+        Ok(ack) => ack,
+        Err(e) => {
+            crate::ui_errln!(
+                "fpga_latch_post_report_failed\tstage=post\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+    };
+    let supported = ack_high == MAGIK_FBUF_LATCH_MAGIC || ack_low == MAGIK_FBUF_LATCH_MAGIC;
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let status_start = std::time::Instant::now();
+    let status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_errln!(
+                "fpga_latch_post_report_failed\tstage=status\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+    };
+    let status_us = status_start.elapsed().as_micros() as u64;
+
+    crate::ui_logln!(
+        "fpga_latch_post_report_tsv\tsequence=1\tbuffer=1\tphys=0x{base_addr:08x}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tcopy_us={copy_us}\tpost_us={post_us}\tstatus_us={status_us}\tset_supported={}\tack_high=0x{:04x}\tack_low=0x{:04x}\tstatus_supported={}\tactive_sequence={}\tpending_sequence={}\tpending={}\tactive_enabled={}\tflip_count={}\tpost_count={}\tdrop_count={}\tactive_base=0x{:08x}",
+        bool_tsv(supported),
+        ack_high,
+        ack_low,
+        bool_tsv(status.supported()),
+        status.active_sequence,
+        status.pending_sequence,
+        bool_tsv(status.pending()),
+        bool_tsv(status.active_enabled()),
+        status.flip_count,
+        status.post_count,
+        status.drop_count,
+        status.active_base
+    );
+    if !supported || !status.supported() {
+        std::process::exit(1);
+    }
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_fpga_latch_pattern(fpga: &mut Fpga) {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_FPGA_LATCH_PATTERN_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(180)
+        .max(1);
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=open\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=open\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base1 = match buffer1.physical_addr() {
+        Ok(base) => base,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=physical_addr\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let base2 = match buffer2.physical_addr() {
+        Ok(base) => base,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=physical_addr\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    let mut copy_samples = Vec::with_capacity(frames);
+    let mut post_samples = Vec::with_capacity(frames);
+    let mut status_samples = Vec::with_capacity(frames);
+    let mut unsupported_posts = 0usize;
+    let period = std::time::Duration::from_micros(16_667);
+    let mut next_deadline = std::time::Instant::now();
+
+    crate::ui_logln!(
+        "fpga_latch_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}\tbuffer1_phys=0x{base1:08x}\tbuffer2_phys=0x{base2:08x}",
+        stride_bytes * height
+    );
+    crate::ui_logln!(
+        "fpga_latch_pattern_frame_tsv\tframe\tsequence\tbuffer\tcopy_us\tpost_us\tstatus_us\tset_supported\tactive_sequence\tpending_sequence\tpending\tflip_count\tpost_count\tdrop_count\tactive_base"
+    );
+
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        let sequence = (frame as u16).wrapping_add(1).max(1);
+        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
+
+        let copy_start = std::time::Instant::now();
+        let copy_result = if buffer_index == 1 {
+            buffer1.copy_full_frame(&source, width)
+        } else {
+            buffer2.copy_full_frame(&source, width)
+        };
+        let copy_us = copy_start.elapsed().as_micros() as u64;
+        if let Err(e) = copy_result {
+            crate::ui_errln!(
+                "fpga_latch_pattern_failed\tstage=copy\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+
+        let base_addr = if buffer_index == 1 { base1 } else { base2 };
+        let post_start = std::time::Instant::now();
+        let post = fpga.post_magik_latched_fbuf_rgb565(
+            sequence,
+            base_addr,
+            width as u16,
+            height as u16,
+            route,
+            false,
+        );
+        let post_us = post_start.elapsed().as_micros() as u64;
+        let set_supported = match post {
+            Ok((ack_high, ack_low)) => {
+                ack_high == MAGIK_FBUF_LATCH_MAGIC || ack_low == MAGIK_FBUF_LATCH_MAGIC
+            }
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_latch_pattern_failed\tstage=post\tframe={frame}\tbuffer={buffer_index}\tcopy_us={copy_us}\tpost_us={post_us}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        if !set_supported {
+            unsupported_posts += 1;
+        }
+
+        next_deadline += period;
+        let now = std::time::Instant::now();
+        if next_deadline > now {
+            std::thread::sleep(next_deadline - now);
+        } else {
+            next_deadline = now;
+        }
+
+        let status_start = std::time::Instant::now();
+        let status = match fpga.read_magik_latched_fbuf_status() {
+            Ok(status) => status,
+            Err(e) => {
+                crate::ui_errln!(
+                    "fpga_latch_pattern_failed\tstage=status\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let status_us = status_start.elapsed().as_micros() as u64;
+        copy_samples.push(copy_us);
+        post_samples.push(post_us);
+        status_samples.push(status_us);
+        crate::ui_logln!(
+            "fpga_latch_pattern_frame_tsv\t{frame}\t{sequence}\t{buffer_index}\t{copy_us}\t{post_us}\t{status_us}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t0x{:08x}",
+            bool_tsv(set_supported),
+            status.active_sequence,
+            status.pending_sequence,
+            bool_tsv(status.pending()),
+            status.flip_count,
+            status.post_count,
+            status.drop_count,
+            status.active_base
+        );
+    }
+
+    let final_status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) => status,
+        Err(e) => {
+            crate::ui_errln!("fpga_latch_pattern_failed\tstage=final_status\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    crate::ui_logln!(
+        "fpga_latch_pattern_summary_tsv\tframes={}\tunsupported_posts={unsupported_posts}\tcopy_p50_us={}\tcopy_p95_us={}\tcopy_p99_us={}\tcopy_max_us={}\tpost_p50_us={}\tpost_p95_us={}\tpost_p99_us={}\tpost_max_us={}\tstatus_p50_us={}\tstatus_p95_us={}\tstatus_p99_us={}\tstatus_max_us={}\tfinal_active_sequence={}\tfinal_pending_sequence={}\tfinal_pending={}\tfinal_flip_count={}\tfinal_post_count={}\tfinal_drop_count={}",
+        copy_samples.len(),
+        percentile_u64(&copy_samples, 50),
+        percentile_u64(&copy_samples, 95),
+        percentile_u64(&copy_samples, 99),
+        copy_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&post_samples, 50),
+        percentile_u64(&post_samples, 95),
+        percentile_u64(&post_samples, 99),
+        post_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&status_samples, 50),
+        percentile_u64(&status_samples, 95),
+        percentile_u64(&status_samples, 99),
+        status_samples.iter().copied().max().unwrap_or_default(),
+        final_status.active_sequence,
+        final_status.pending_sequence,
+        bool_tsv(final_status.pending()),
+        final_status.flip_count,
+        final_status.post_count,
+        final_status.drop_count
+    );
+    if unsupported_posts != 0 || !final_status.supported() {
+        std::process::exit(1);
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_plugin_map_bandwidth() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(120)
+        .max(1);
+    let width = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_W")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(960);
+    let height = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_H")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(540);
+    let stride_bytes = rgb565_stride_bytes(width);
+    let frame_bytes = stride_bytes.saturating_mul(height);
+    let mut source = make_rgb565_bench_source(width, height);
+    let source_bytes_len = frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
+
+    crate::ui_logln!(
+        "plugin_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
+    );
+
+    crate::ui_logln!(
+        "plugin_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    match Fb0ByteRange::open(frame_bytes, 0, frame_bytes) {
+        Ok(mut fb0_range) => {
+            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
+            });
+            print_plugin_bandwidth_result("fb0-active", &result);
+        }
+        Err(e) => print_plugin_bandwidth_error("fb0-active", &format!("open range: {e}")),
+    }
+
+    let metadata = match read_plugin_probe_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            print_plugin_bandwidth_error("plugin-probe", &format!("read probe metadata: {e}"));
+            return;
+        }
+    };
+    for region in parse_plugin_probe_regions(&metadata) {
+        let case = format!("plugin-{}", region.name);
+        crate::ui_logln!(
+            "plugin_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}\tdma_owned={}",
+            region.index,
+            region.phys,
+            bool_tsv(region.dma_owned)
+        );
+        if !region.available {
+            print_plugin_bandwidth_skip(&case, "region unavailable");
+            continue;
+        }
+        if region.len < frame_bytes {
+            print_plugin_bandwidth_skip(
+                &case,
+                &format!("region len {} is smaller than {frame_bytes}", region.len),
+            );
+            continue;
+        }
+        match PluginProbeByteRange::open(region.index, frame_bytes) {
+            Ok(mut range) => {
+                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
+                    range.copy_from(src_bytes).map_err(|e| e.to_string())
+                });
+                print_plugin_bandwidth_result(&case, &result);
+            }
+            Err(e) => print_plugin_bandwidth_error(&case, &format!("open plugin range: {e}")),
+        }
+    }
+
+    crate::ui_logln!(
+        "plugin_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+    );
+    match HiddenRgb565BufferIndex::new(1)
+        .map_err(|e| e.to_string())
+        .and_then(|index| {
+            HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                .map_err(|e| e.to_string())
+        }) {
+        Ok(mut hidden) => {
+            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
+                hidden
+                    .copy_full_frame(src, width)
+                    .map_err(|e| e.to_string())
+            });
+            print_plugin_bandwidth_result("hidden-dev-mem-buffer1", &result);
+        }
+        Err(e) => {
+            print_plugin_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}"))
+        }
+    }
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn run_plugin_present_pattern() {
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    let frames = std::env::var("MISTER_PLUGIN_PRESENT_PATTERN_FRAMES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
+        .unwrap_or(180)
+        .max(1);
+    let width = 960usize;
+    let height = 540usize;
+    let stride_bytes = rgb565_stride_bytes(width);
+    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=1\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
+        HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
+        width,
+        height,
+        stride_bytes,
+    ) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=2\terror={e}");
+            std::process::exit(1);
+        }
+    };
+    let mut source = vec![Rgb565Pixel(0); width * height];
+    let client = main_present::MainPresentClient::default_paths();
+    let mut copy_samples = Vec::with_capacity(frames);
+    let mut request_samples = Vec::with_capacity(frames);
+    let mut wait_samples = Vec::with_capacity(frames);
+    let mut route_samples = Vec::with_capacity(frames);
+
+    crate::ui_logln!(
+        "plugin_present_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}",
+        stride_bytes * height
+    );
+    crate::ui_logln!(
+        "plugin_present_pattern_frame_tsv\tframe\tbuffer\tcopy_us\trequest_us\twait_us\troute_us\tstatus"
+    );
+
+    for frame in 0..frames {
+        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
+        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
+
+        let copy_start = std::time::Instant::now();
+        let copy_result = if buffer_index == 1 {
+            buffer1.copy_full_frame(&source, width)
+        } else {
+            buffer2.copy_full_frame(&source, width)
+        };
+        let copy_us = copy_start.elapsed().as_micros() as u64;
+        if let Err(e) = copy_result {
+            crate::ui_errln!(
+                "plugin_present_pattern_failed\tstage=copy\tframe={frame}\tbuffer={buffer_index}\terror={e}"
+            );
+            std::process::exit(1);
+        }
+
+        let sequence = (frame as u32).wrapping_add(1).max(1);
+        let request_start = std::time::Instant::now();
+        let present = client.present(main_present::MainPresentRequest {
+            sequence,
+            buffer_index,
+            width,
+            height,
+            stride_bytes,
+        });
+        let request_us = request_start.elapsed().as_micros() as u64;
+        match present {
+            Ok(ack) => {
+                copy_samples.push(copy_us);
+                request_samples.push(request_us);
+                wait_samples.push(ack.wait_us);
+                route_samples.push(ack.route_us);
+                crate::ui_logln!(
+                    "plugin_present_pattern_frame_tsv\t{frame}\t{buffer_index}\t{copy_us}\t{request_us}\t{}\t{}\t{}",
+                    ack.wait_us,
+                    ack.route_us,
+                    ack.status
+                );
+            }
+            Err(e) => {
+                crate::ui_errln!(
+                    "plugin_present_pattern_failed\tstage=present\tframe={frame}\tbuffer={buffer_index}\tcopy_us={copy_us}\trequest_us={request_us}\terror={e}"
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    crate::ui_logln!(
+        "plugin_present_pattern_summary_tsv\tframes={}\tcopy_p50_us={}\tcopy_p95_us={}\tcopy_p99_us={}\tcopy_max_us={}\trequest_p50_us={}\trequest_p95_us={}\trequest_p99_us={}\trequest_max_us={}\twait_p50_us={}\twait_p95_us={}\twait_p99_us={}\twait_max_us={}\troute_p50_us={}\troute_p95_us={}\troute_p99_us={}\troute_max_us={}",
+        copy_samples.len(),
+        percentile_u64(&copy_samples, 50),
+        percentile_u64(&copy_samples, 95),
+        percentile_u64(&copy_samples, 99),
+        copy_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&request_samples, 50),
+        percentile_u64(&request_samples, 95),
+        percentile_u64(&request_samples, 99),
+        request_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&wait_samples, 50),
+        percentile_u64(&wait_samples, 95),
+        percentile_u64(&wait_samples, 99),
+        wait_samples.iter().copied().max().unwrap_or_default(),
+        percentile_u64(&route_samples, 50),
+        percentile_u64(&route_samples, 95),
+        percentile_u64(&route_samples, 99),
+        route_samples.iter().copied().max().unwrap_or_default()
+    );
+}
+
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+fn fill_plugin_present_pattern(
+    pixels: &mut [slint::platform::software_renderer::Rgb565Pixel],
+    width: usize,
+    height: usize,
+    frame: usize,
+    buffer_index: u8,
+) {
+    let bg = if buffer_index == 1 { 0x001f } else { 0xf800 };
+    let fg = if buffer_index == 1 { 0xffe0 } else { 0x07ff };
+    let phase = frame % 96;
+    for y in 0..height {
+        for x in 0..width {
+            let stripe = ((x + phase) / 48) & 1;
+            let band = ((y + frame / 2) / 36) & 1;
+            let border = x < 8 || y < 8 || x >= width - 8 || y >= height - 8;
+            let sequence_mark = y < 32 && x < ((frame % width).max(1));
+            let color = if border || sequence_mark || (stripe ^ band) != 0 {
+                fg
+            } else {
+                bg
+            };
+            pixels[y * width + x].0 = color;
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn read_plugin_probe_metadata() -> std::io::Result<String> {
+    fs::read_to_string(PLUGIN_PROBE_DEVICE)
+}
+
+#[cfg(feature = "diagnostics")]
+fn parse_plugin_probe_regions(metadata: &str) -> Vec<PluginProbeRegion> {
+    metadata
+        .lines()
+        .filter_map(parse_plugin_probe_region)
+        .collect()
+}
+
+#[cfg(feature = "diagnostics")]
+fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
+    if !line.starts_with("plugin_probe_region_tsv\t") {
+        return None;
+    }
+    let mut index = None;
+    let mut name = None;
+    let mut available = None;
+    let mut phys = None;
+    let mut len = None;
+    let mut dma_owned = None;
+    for field in line.split('\t').skip(1) {
+        let (key, value) = field.split_once('=')?;
+        match key {
+            "index" => index = value.parse::<usize>().ok(),
+            "name" => name = Some(value.to_string()),
+            "available" => available = Some(value == "1"),
+            "phys" => phys = Some(value.to_string()),
+            "len" => len = value.parse::<usize>().ok(),
+            "dma_owned" => dma_owned = Some(value == "1"),
+            _ => {}
+        }
+    }
+    Some(PluginProbeRegion {
+        index: index?,
+        name: name?,
+        available: available?,
+        phys: phys?,
+        len: len?,
+        dma_owned: dma_owned?,
+    })
+}
+
+#[cfg(feature = "diagnostics")]
+fn bool_tsv(value: bool) -> &'static str {
+    if value {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn make_rgb565_bench_source(
+    width: usize,
+    height: usize,
+) -> Vec<slint::platform::software_renderer::Rgb565Pixel> {
+    use slint::platform::software_renderer::Rgb565Pixel;
+    let mut source = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+    for (i, pixel) in source.iter_mut().enumerate() {
+        let x = i % width.max(1);
+        let y = i / width.max(1);
+        pixel.0 = (((x as u16) & 0x1f) << 11)
+            | (((y as u16) & 0x3f) << 5)
+            | ((x as u16 ^ y as u16) & 0x1f);
+    }
+    source
+}
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Debug)]
+struct CopySamples {
+    frames: usize,
+    bytes_per_frame: usize,
+    total_bytes: usize,
+    wall_us: Vec<u64>,
+    cpu_us: Vec<u64>,
+    error: Option<String>,
+}
+
+#[cfg(feature = "diagnostics")]
+fn run_copy_samples<F>(
+    frames: usize,
+    bytes_per_frame: usize,
+    source: &mut [slint::platform::software_renderer::Rgb565Pixel],
+    mut copy: F,
+) -> CopySamples
+where
+    F: FnMut(&[slint::platform::software_renderer::Rgb565Pixel]) -> Result<usize, String>,
+{
+    let mut wall_us = Vec::with_capacity(frames);
+    let mut cpu_us = Vec::with_capacity(frames);
+    let mut total_bytes = 0usize;
+    for frame in 0..frames {
+        if !source.is_empty() {
+            let source_index = frame % source.len();
+            source[source_index].0 ^= 0xffff;
+        }
+        let cpu_start = thread_cpu_us();
+        let start = std::time::Instant::now();
+        match copy(source) {
+            Ok(bytes) => {
+                wall_us.push(start.elapsed().as_micros() as u64);
+                cpu_us.push(elapsed_thread_cpu_us(cpu_start));
+                total_bytes = total_bytes.saturating_add(bytes);
+            }
+            Err(e) => {
+                return CopySamples {
+                    frames: wall_us.len(),
+                    bytes_per_frame,
+                    total_bytes,
+                    wall_us,
+                    cpu_us,
+                    error: Some(format!("frame={frame} {e}")),
+                };
+            }
+        }
+    }
+    CopySamples {
+        frames,
+        bytes_per_frame,
+        total_bytes,
+        wall_us,
+        cpu_us,
+        error: None,
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_result(case: &str, samples: &CopySamples) {
+    if let Some(error) = &samples.error {
+        print_bandwidth_error(case, error);
+        return;
+    }
+    crate::ui_logln!(
+        "fb_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
+        samples.frames,
+        samples.bytes_per_frame,
+        samples.total_bytes,
+        avg_u64(&samples.wall_us),
+        percentile_u64(&samples.wall_us, 50),
+        percentile_u64(&samples.wall_us, 95),
+        percentile_u64(&samples.wall_us, 99),
+        samples.wall_us.iter().copied().max().unwrap_or_default(),
+        avg_u64(&samples.cpu_us),
+        percentile_u64(&samples.cpu_us, 50),
+        percentile_u64(&samples.cpu_us, 95),
+        percentile_u64(&samples.cpu_us, 99),
+        samples.cpu_us.iter().copied().max().unwrap_or_default(),
+        mb_per_second(samples.total_bytes, samples.wall_us.iter().copied().sum())
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_error(case: &str, error: &str) {
+    crate::ui_logln!(
+        "fb_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_bandwidth_skip(case: &str, reason: &str) {
+    crate::ui_logln!("fb_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
+}
+
+#[cfg(feature = "diagnostics")]
+fn avg_u64(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    values.iter().sum::<u64>() / values.len() as u64
+}
+
+#[cfg(feature = "diagnostics")]
+fn percentile_u64(values: &[u64], percentile: usize) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    let index = values.len().saturating_mul(percentile).saturating_add(99) / 100;
+    values[index.saturating_sub(1).min(values.len() - 1)]
+}
+
+#[cfg(feature = "diagnostics")]
+fn rgb565_as_bytes(
+    pixels: &[slint::platform::software_renderer::Rgb565Pixel],
+    len: usize,
+) -> &[u8] {
+    let byte_len = len.min(std::mem::size_of_val(pixels));
+    // SAFETY: Rgb565Pixel is layout-compatible with u16 in framebuffer::mapped
+    // compile-time assertions, and the returned slice is read-only.
+    unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<u8>(), byte_len) }
+}
+
+#[cfg(feature = "diagnostics")]
+struct Fb0ByteRange {
+    mem: *mut u8,
+    map_len: usize,
+    offset: usize,
+    len: usize,
+    _fb0: File,
+}
+
+#[cfg(feature = "diagnostics")]
+impl Fb0ByteRange {
+    fn open(map_len: usize, offset: usize, len: usize) -> std::io::Result<Self> {
+        if len == 0
+            || offset
+                .checked_add(len)
+                .map(|end| end > map_len)
+                .unwrap_or(true)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid fb0 byte range offset={offset} len={len} map_len={map_len}"),
+            ));
+        }
+        let fb0 = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+        // SAFETY: fd refers to /dev/fb0; mapping length is validated above and unmapped in Drop.
+        let mem = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                map_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fb0.as_raw_fd(),
+                0,
+            )
+        };
+        if mem == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        if mem.is_null() {
+            // SAFETY: mem/map_len were just returned by mmap.
+            unsafe {
+                libc::munmap(mem, map_len);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "fb0 range mmap returned null",
+            ));
+        }
+        Ok(Self {
+            mem: mem.cast::<u8>(),
+            map_len,
+            offset,
+            len,
+            _fb0: fb0,
+        })
+    }
+
+    fn copy_from(&mut self, src: &[u8]) -> std::io::Result<usize> {
+        if src.len() < self.len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("source has {} bytes, need {}", src.len(), self.len),
+            ));
+        }
+        // SAFETY: offset/len were validated against map_len in open; &mut self prevents aliasing.
+        let dst = unsafe { std::slice::from_raw_parts_mut(self.mem.add(self.offset), self.len) };
+        dst.copy_from_slice(&src[..self.len]);
+        Ok(self.len)
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for Fb0ByteRange {
+    fn drop(&mut self) {
+        // SAFETY: mem/map_len come from successful mmap and are unmapped once here.
+        unsafe {
+            libc::munmap(self.mem.cast::<libc::c_void>(), self.map_len);
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+struct PluginProbeByteRange {
+    mem: *mut u8,
+    len: usize,
+    _device: File,
+}
+
+#[cfg(feature = "diagnostics")]
+impl PluginProbeByteRange {
+    fn probe(index: usize, len: usize) -> std::io::Result<()> {
+        Self::open(index, len).map(|_| ())
+    }
+
+    fn open(index: usize, len: usize) -> std::io::Result<Self> {
+        if len == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "zero-length plugin range",
+            ));
+        }
+        let device = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(PLUGIN_PROBE_DEVICE)?;
+        let offset = index
+            .checked_mul(PLUGIN_PROBE_REGION_OFFSET_BYTES)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "plugin offset overflow")
+            })?;
+        // SAFETY: fd refers to the plugin probe misc device; mapping length is
+        // requested by diagnostics and unmapped in Drop.
+        let mem = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                device.as_raw_fd(),
+                offset as libc::off_t,
+            )
+        };
+        if mem == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error());
+        }
+        if mem.is_null() {
+            // SAFETY: mem/len were just returned by mmap.
+            unsafe {
+                libc::munmap(mem, len);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "plugin range mmap returned null",
+            ));
+        }
+        Ok(Self {
+            mem: mem.cast::<u8>(),
+            len,
+            _device: device,
+        })
+    }
+
+    fn copy_from(&mut self, src: &[u8]) -> std::io::Result<usize> {
+        if src.len() < self.len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("source has {} bytes, need {}", src.len(), self.len),
+            ));
+        }
+        // SAFETY: mem/len come from successful mmap; &mut self prevents aliasing.
+        let dst = unsafe { std::slice::from_raw_parts_mut(self.mem, self.len) };
+        dst.copy_from_slice(&src[..self.len]);
+        Ok(self.len)
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for PluginProbeByteRange {
+    fn drop(&mut self) {
+        // SAFETY: mem/len come from successful mmap and are unmapped once here.
+        unsafe {
+            libc::munmap(self.mem.cast::<libc::c_void>(), self.len);
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_plugin_bandwidth_result(case: &str, samples: &CopySamples) {
+    if let Some(error) = &samples.error {
+        print_plugin_bandwidth_error(case, error);
+        return;
+    }
+    crate::ui_logln!(
+        "plugin_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
+        samples.frames,
+        samples.bytes_per_frame,
+        samples.total_bytes,
+        avg_u64(&samples.wall_us),
+        percentile_u64(&samples.wall_us, 50),
+        percentile_u64(&samples.wall_us, 95),
+        percentile_u64(&samples.wall_us, 99),
+        samples.wall_us.iter().copied().max().unwrap_or_default(),
+        avg_u64(&samples.cpu_us),
+        percentile_u64(&samples.cpu_us, 50),
+        percentile_u64(&samples.cpu_us, 95),
+        percentile_u64(&samples.cpu_us, 99),
+        samples.cpu_us.iter().copied().max().unwrap_or_default(),
+        mb_per_second(samples.total_bytes, samples.wall_us.iter().copied().sum())
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_plugin_bandwidth_error(case: &str, error: &str) {
+    crate::ui_logln!(
+        "plugin_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn print_plugin_bandwidth_skip(case: &str, reason: &str) {
+    crate::ui_logln!("plugin_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
+}
+
+#[cfg(feature = "diagnostics")]
+fn mb_per_second(bytes: usize, us: u64) -> f64 {
+    if us == 0 {
+        return 0.0;
+    }
+    (bytes as f64 / 1_048_576.0) / (us as f64 / 1_000_000.0)
+}
+
+#[cfg(all(feature = "diagnostics", target_os = "linux"))]
+fn thread_cpu_us() -> Option<u64> {
+    let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, ts.as_mut_ptr()) };
+    if rc != 0 {
+        return None;
+    }
+    let ts = unsafe { ts.assume_init() };
+    Some((ts.tv_sec as u64) * 1_000_000 + (ts.tv_nsec as u64) / 1_000)
+}
+
+#[cfg(all(feature = "diagnostics", not(target_os = "linux")))]
+fn thread_cpu_us() -> Option<u64> {
+    None
+}
+
+#[cfg(feature = "diagnostics")]
+fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
+    start
+        .and_then(|start| thread_cpu_us().map(|end| end.saturating_sub(start)))
+        .unwrap_or_default()
+}
+
 fn run_vsync_probe() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let frames = args
@@ -1114,6 +2585,48 @@ mod tests {
         fs::write(&db, b"not empty").expect("write nonempty db");
         assert!(usable_library_database_exists(&db));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(feature = "diagnostics")]
+    fn plugin_probe_region_parser_reads_module_metadata() {
+        let metadata = "\
+plugin_probe_header_tsv\tname=mister-magik-plugin-probe\tversion=2\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
+plugin_probe_region_tsv\tindex=0\tname=adjacent-fb-resource\tavailable=1\tphys=0x220fd200\tlen=1036800\tdma_owned=0\n\
+plugin_probe_region_tsv\tindex=1\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
+plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x00000000\tlen=1036800\tdma_owned=1\n";
+
+        let regions = parse_plugin_probe_regions(metadata);
+
+        assert_eq!(
+            regions,
+            vec![
+                PluginProbeRegion {
+                    index: 0,
+                    name: "adjacent-fb-resource".to_string(),
+                    available: true,
+                    phys: "0x220fd200".to_string(),
+                    len: 1_036_800,
+                    dma_owned: false,
+                },
+                PluginProbeRegion {
+                    index: 1,
+                    name: "hidden-slot-1".to_string(),
+                    available: true,
+                    phys: "0x22800000".to_string(),
+                    len: 1_036_800,
+                    dma_owned: false,
+                },
+                PluginProbeRegion {
+                    index: 3,
+                    name: "plugin-owned-dma".to_string(),
+                    available: false,
+                    phys: "0x00000000".to_string(),
+                    len: 1_036_800,
+                    dma_owned: true,
+                },
+            ]
+        );
     }
 
     #[test]

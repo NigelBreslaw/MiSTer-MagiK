@@ -406,8 +406,42 @@ pub fn brighten_565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn compose_rect_565_strided_to_cached(
+    cached: &mut [Rgb565Pixel],
+    cached_stride: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Rgb565Pixel],
+    src_stride: usize,
+    src_x: usize,
+    src_y: usize,
+) {
+    if w == 0 || h == 0 || cached_stride == 0 || src_stride == 0 {
+        return;
+    }
+    if x.saturating_add(w) > cached_stride {
+        return;
+    }
+    for row in 0..h {
+        let src_start = (src_y + row)
+            .saturating_mul(src_stride)
+            .saturating_add(src_x);
+        let src_end = src_start.saturating_add(w);
+        let dst_start = (y + row).saturating_mul(cached_stride).saturating_add(x);
+        let dst_end = dst_start.saturating_add(w);
+        if src_end > src.len() || dst_end > cached.len() {
+            return;
+        }
+        cached[dst_start..dst_end].copy_from_slice(&src[src_start..src_end]);
+    }
+}
+
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
+    cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
 }
@@ -416,6 +450,7 @@ impl UiFrameTarget {
     pub fn cached(geometry: FramebufferTargetGeometry) -> Self {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
+            cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
         }
@@ -434,6 +469,7 @@ impl UiFrameTarget {
         renderer: &SoftwareRenderer,
         geometry: FramebufferTargetGeometry,
     ) -> PhysicalRegion {
+        self.cached_stride = geometry.render_w();
         renderer.render(&mut self.cached, geometry.render_w())
     }
 
@@ -482,6 +518,46 @@ impl UiFrameTarget {
         );
     }
 
+    pub fn compose_rect_565(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+    ) {
+        self.compose_rect_565_strided(x, y, w, h, src, w, 0, 0);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride: usize,
+        src_x: usize,
+        src_y: usize,
+    ) {
+        if w == 0 || h == 0 || src_stride == 0 {
+            return;
+        }
+        compose_rect_565_strided_to_cached(
+            &mut self.cached,
+            self.cached_stride,
+            x,
+            y,
+            w,
+            h,
+            src,
+            src_stride,
+            src_x,
+            src_y,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn present_rect_565_strided(
         &mut self,
@@ -527,6 +603,28 @@ impl UiFrameTarget {
         }
         self.direct_preview_rect = Some(rect);
         (&mut self.direct_preview, stride)
+    }
+
+    pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
+        let Some(backing_rect) = self.direct_preview_rect else {
+            return 0;
+        };
+        if !backing_rect.contains(rect) {
+            return 0;
+        }
+        compose_rect_565_strided_to_cached(
+            &mut self.cached,
+            self.cached_stride,
+            rect.x0,
+            rect.y0,
+            rect.x1 - rect.x0,
+            rect.y1 - rect.y0,
+            &self.direct_preview,
+            backing_rect.width(),
+            rect.x0 - backing_rect.x0,
+            rect.y0 - backing_rect.y0,
+        );
+        rect.rows()
     }
 
     pub fn present_direct_preview_rect(
@@ -665,6 +763,33 @@ mod tests {
             cached_present_rect(rect(20, 10, 40, 12), geometry),
             rect(20, 10, 40, 12)
         );
+    }
+
+    #[test]
+    fn direct_preview_can_be_composed_into_cached_frame() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(6, 4));
+        target.cached_565_mut().fill(Rgb565Pixel(0x0001));
+        let preview_rect = rect(2, 1, 5, 3);
+        let (preview, stride) = target.direct_preview_565_rect_mut(preview_rect);
+        assert_eq!(stride, 3);
+        preview.copy_from_slice(&[
+            Rgb565Pixel(0x1000),
+            Rgb565Pixel(0x1001),
+            Rgb565Pixel(0x1002),
+            Rgb565Pixel(0x1003),
+            Rgb565Pixel(0x1004),
+            Rgb565Pixel(0x1005),
+        ]);
+
+        assert_eq!(target.compose_direct_preview_rect(rect(3, 1, 5, 3)), 2);
+
+        let cached = target.cached_565();
+        assert_eq!(cached[1 * 6 + 2], Rgb565Pixel(0x0001));
+        assert_eq!(cached[1 * 6 + 3], Rgb565Pixel(0x1001));
+        assert_eq!(cached[1 * 6 + 4], Rgb565Pixel(0x1002));
+        assert_eq!(cached[2 * 6 + 3], Rgb565Pixel(0x1004));
+        assert_eq!(cached[2 * 6 + 4], Rgb565Pixel(0x1005));
+        assert_eq!(cached[2 * 6 + 5], Rgb565Pixel(0x0001));
     }
 
     #[test]

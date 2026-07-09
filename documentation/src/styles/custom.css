@@ -1,0 +1,19 @@
+:root {
+  --sl-color-accent-low: #1d3b36;
+  --sl-color-accent: #06d6a0;
+  --sl-color-accent-high: #d7fff2;
+}
+
+.magik-screenshot {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 8px;
+  background: var(--sl-color-gray-6);
+}
+
+.screenshot-missing {
+  padding: 1rem;
+  border: 1px dashed var(--sl-color-gray-4);
+  border-radius: 8px;
+  color: var(--sl-color-gray-2);
+  background: var(--sl-color-gray-6);
+}

@@ -1,0 +1,21 @@
+---
+title: Boot and Process
+description: Production boot, Main handoff, launcher child, and dormant Main.
+sidebar:
+  order: 1
+---
+
+MiSTer MagiK keeps production boot compatible with stock MiSTer. Stock Main starts first, reads `MiSTer.ini`, and re-execs the `MiSTer_MagiK` fork. The fork initializes HDMI through the normal Main path before Rust touches the launcher framebuffer.
+
+```mermaid
+flowchart TD
+  Inittab["/etc/inittab"] --> Stock["/media/fat/MiSTer"]
+  Stock --> Ini["Read MiSTer.ini"]
+  Ini --> Fork["main=MiSTer_MagiK"]
+  Fork --> Video["video_init() and HDMI setup"]
+  Video --> Black["mister-magik-fb early-black"]
+  Black --> Launcher["mister-magik-fb ui launcher 0 on tty2"]
+  Launcher --> Dormant["Main dormant launcher mode"]
+```
+
+The fork must not draw the stock menu OSD, keep input grabbed, or change the launcher framebuffer behind Rust while MagiK owns the UI.

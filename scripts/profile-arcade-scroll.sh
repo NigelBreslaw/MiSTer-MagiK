@@ -57,6 +57,8 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+present_backend="${MISTER_PRESENT_BACKEND:-}"
+present_flip_buffer_index="${MISTER_PRESENT_FLIP_BUFFER_INDEX:-1}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
@@ -153,6 +155,11 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$home_selected_index" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX must be an integer" >&2; exit 2; fi
+case "$present_backend" in
+  ""|main-flip-v1|main-vsync-hidden|plugin-main-vsync-hidden|fpga-vblank-latch-hidden) ;;
+  *) echo "MISTER_PRESENT_BACKEND must be main-flip-v1, main-vsync-hidden, plugin-main-vsync-hidden, or fpga-vblank-latch-hidden when set" >&2; exit 2 ;;
+esac
+if [[ ! "$present_flip_buffer_index" =~ ^[0-9]+$ || "$present_flip_buffer_index" -lt 1 || "$present_flip_buffer_index" -gt 2 ]]; then echo "MISTER_PRESENT_FLIP_BUFFER_INDEX must be 1 or 2" >&2; exit 2; fi
 if [[ ! "$human_turbo_idle_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_IDLE_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$human_turbo_normal_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_NORMAL_FRAMES must be an integer" >&2; exit 2; fi
 if [[ ! "$human_turbo_pause_frames" =~ ^[0-9]+$ ]]; then echo "MISTER_HUMAN_TURBO_PAUSE_FRAMES must be an integer" >&2; exit 2; fi
@@ -163,7 +170,7 @@ if [[ ! "$frame_pacing_max_wall_us" =~ ^[0-9]+$ ]]; then echo "MISTER_ARCADE_SCR
 case "$scenario" in
   velocity-scroll|held-scroll|turbo-hold|human-turbo-hold) ;;
   list-scroll|smooth-scroll|selected-first|stress-scroll|cache-warm|preview|preview-changes|screenshot-stress|preview-stress)
-    echo "row-step/jump scenario '$scenario' is not valid for arcade benchmarking; use velocity-scroll, held-scroll, or turbo-hold" >&2
+    echo "row-step/jump scenario '$scenario' is not valid for arcade benchmarking; use velocity-scroll, held-scroll, turbo-hold, or human-turbo-hold" >&2
     exit 2
     ;;
   *) echo "unknown scenario: $scenario" >&2; usage >&2; exit 2 ;;
@@ -312,133 +319,8 @@ PY
 }
 
 check_frame_pacing_gate() {
-  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5"
-  python3 - "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" <<'PY'
-import csv
-import math
-import sys
-
-name, trace_path, p99_work_us_text, p99_wall_us_text, max_wall_us_text = sys.argv[1:6]
-p99_work_us = int(p99_work_us_text)
-p99_wall_us = int(p99_wall_us_text)
-max_wall_us = int(max_wall_us_text)
-required = {
-    "frame",
-    "wall_us",
-    "prepare_us",
-    "slint_render_us",
-    "custom_draw_us",
-    "fb_present_us",
-    "vsync_source",
-    "vsync_miss_streak",
-}
-try:
-    with open(trace_path, newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
-except FileNotFoundError:
-    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_trace\tdetail={trace_path}")
-    sys.exit(9)
-
-if not rows:
-    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_frames\tdetail={trace_path}")
-    sys.exit(9)
-missing = sorted(required - set(rows[0]))
-if missing:
-    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_column\tdetail={','.join(missing)}")
-    sys.exit(9)
-
-def int_field(row, key):
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-measured = []
-for row in rows:
-    source = row.get("vsync_source", "")
-    miss = int_field(row, "vsync_miss_streak")
-    if not measured and source in ("", "none") and miss == 0:
-        continue
-    if int_field(row, "frame") <= 30:
-        continue
-    measured.append(row)
-
-if not measured:
-    print(f"frame_pacing_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=no_measured_frames\tdetail={trace_path}")
-    sys.exit(9)
-
-works = sorted(
-    int_field(row, "prepare_us")
-    + int_field(row, "slint_render_us")
-    + int_field(row, "custom_draw_us")
-    + int_field(row, "fb_present_us")
-    for row in measured
-)
-p99_index = max(0, min(len(works) - 1, math.ceil(len(works) * 0.99) - 1))
-p99_work = works[p99_index]
-walls = sorted(int_field(row, "wall_us") for row in measured)
-p99_wall = walls[p99_index]
-max_wall = walls[-1]
-work_over = sum(1 for value in works if value > 16667)
-wall_over = sum(1 for value in walls if value > 16667)
-wall_over_18ms = sum(1 for value in walls if value > 18000)
-wall_over_20ms = sum(1 for value in walls if value > 20000)
-wall_over_33ms = sum(1 for value in walls if value > 33334)
-low_work_high_wall = 0
-sources = {"vsync": 0, "fallback": 0, "timeout": 0, "error": 0, "other_source": 0}
-dropped_rows = 0
-max_miss = 0
-examples = []
-for row in measured:
-    work = (
-        int_field(row, "prepare_us")
-        + int_field(row, "slint_render_us")
-        + int_field(row, "custom_draw_us")
-        + int_field(row, "fb_present_us")
-    )
-    if int_field(row, "wall_us") > 16667 and work <= 16667:
-        low_work_high_wall += 1
-    source = row.get("vsync_source", "")
-    if source in ("vsync", "fallback", "timeout", "error"):
-        sources[source] += 1
-    else:
-        sources["other_source"] += 1
-    miss = int_field(row, "vsync_miss_streak")
-    max_miss = max(max_miss, miss)
-    if source != "vsync" or miss > 0:
-        dropped_rows += 1
-        if len(examples) < 3:
-            examples.append(f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}")
-
-valid = (
-    p99_work <= p99_work_us
-    and work_over == 0
-    and p99_wall <= p99_wall_us
-    and max_wall <= max_wall_us
-    and wall_over == 0
-    and sources["fallback"] == 0
-    and sources["timeout"] == 0
-    and sources["error"] == 0
-    and sources["other_source"] == 0
-    and max_miss == 0
-)
-detail = (
-    f"frames_after_30={len(measured)} p99_work_us={p99_work} work_threshold={p99_work_us} "
-    f"p99_wall_us={p99_wall} wall_p99_threshold={p99_wall_us} max_wall_us={max_wall} "
-    f"wall_max_threshold={max_wall_us} work_gt_16667={work_over} wall_gt_16667={wall_over} "
-    f"wall_gt_18000={wall_over_18ms} wall_gt_20000={wall_over_20ms} "
-    f"wall_gt_33334={wall_over_33ms} low_work_high_wall={low_work_high_wall} "
-    f"dropped_rows={dropped_rows} vsync={sources['vsync']} "
-    f"fallback={sources['fallback']} timeout={sources['timeout']} error={sources['error']} "
-    f"other_source={sources['other_source']} max_miss_streak={max_miss}"
-)
-if examples:
-    detail += " " + " ".join(examples)
-print(
-    f"frame_pacing_gate_tsv\tlabel={name}\tvalid={1 if valid else 0}\tinvalid_reason={'ok' if valid else 'gate_failed'}\tdetail={detail}"
-)
-sys.exit(0 if valid else 9)
-PY
+  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5" gate_scenario="${6:-}"
+  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario"
 }
 
 gate_arcade_entry_trace() {
@@ -612,6 +494,30 @@ EOF
     echo "self-test expected wall pacing failure" >&2
     exit 1
   fi
+  check_frame_pacing_gate self-human-turbo-wall "$tmpdir/pacing-wall.tsv" 14500 16000 16667 human-turbo-hold >/dev/null
+  cat >"$tmpdir/pacing-human-turbo-wall.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	20001	1000	200	1200	900	vsync	0
+EOF
+  check_frame_pacing_gate self-human-turbo-wall-20ms "$tmpdir/pacing-human-turbo-wall.tsv" 14500 16000 16667 human-turbo-hold >/dev/null
+  cat >"$tmpdir/pacing-human-turbo-wall-33ms.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
+31	15000	1000	200	1200	900	vsync	0
+32	33335	1000	200	1200	900	vsync	0
+EOF
+  if check_frame_pacing_gate self-human-turbo-wall-fail "$tmpdir/pacing-human-turbo-wall-33ms.tsv" 14500 16000 16667 human-turbo-hold >/dev/null 2>&1; then
+    echo "self-test expected human-turbo >33ms wall pacing failure" >&2
+    exit 1
+  fi
+  cat >"$tmpdir/pacing-missing-column.tsv" <<'EOF'
+frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source
+31	15000	1000	200	1200	900	vsync
+EOF
+  if check_frame_pacing_gate self-pacing "$tmpdir/pacing-missing-column.tsv" 14500 16000 16667 >/dev/null 2>&1; then
+    echo "self-test expected missing frame pacing column failure" >&2
+    exit 1
+  fi
   printf 'startup_timing\tcatalog_navigation_load\t100ms\tstatus=ready\n' >"$tmpdir/forbidden.log"
   if gate_arcade_entry_trace self-forbidden "$tmpdir/good.tsv" "$tmpdir/forbidden.log" 350 50 >/dev/null 2>&1; then
     echo "self-test expected forbidden event failure" >&2
@@ -649,6 +555,10 @@ run_boot_prelude() {
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
+    if [[ -n "$present_backend" ]]; then
+      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+      printf 'export MISTER_PRESENT_FLIP_BUFFER_INDEX=%q\n' "$present_flip_buffer_index"
+    fi
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
@@ -804,6 +714,10 @@ else
     printf 'export MISTER_UI_FB_SIZE=%q\n' "$ui_fb_size"
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
+    if [[ -n "$present_backend" ]]; then
+      printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+      printf 'export MISTER_PRESENT_FLIP_BUFFER_INDEX=%q\n' "$present_flip_buffer_index"
+    fi
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'
@@ -877,6 +791,6 @@ echo
 echo
 "$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
-check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us"
+check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario"
 echo
 check_preview_exact_gate "$label" "$local_tsv"

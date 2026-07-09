@@ -166,7 +166,7 @@ pub(crate) fn collapse_catalog_variant_rows(
     out
 }
 
-fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
+pub(crate) fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
     rows.sort_by_cached_key(|row| {
         (
             row.game.title.to_ascii_lowercase(),

@@ -1,0 +1,26 @@
+---
+title: Agent and Capture
+description: TCP agent, diagnostics, framebuffer stream, and still-image capture.
+sidebar:
+  order: 6
+---
+
+The MiSTer-side agent is a development backplane. It exposes token-protected JSON commands on TCP `7498`, diagnostics, deployment helpers, reboot helpers, telemetry, still captures, and the framebuffer stream proxy.
+
+```mermaid
+sequenceDiagram
+  participant Host
+  participant Agent as mister-magik-agent:7498
+  participant UI as mister-magik-fb
+  participant FB as /dev/fb0
+  Host->>Agent: JSON command + token
+  Agent-->>Host: JSON response
+  Host->>Agent: framebuffer-capture request
+  Agent->>FB: one-shot read while UI is running
+  Agent-->>Host: PNG + metadata
+  Host->>Agent: framebuffer_stream_v1 request
+  Agent->>UI: proxy producer stream on 127.0.0.1:7499
+  UI-->>Host: keyframes, deltas, heartbeats
+```
+
+Still captures use `scripts/mister agent framebuffer-capture OUT.png --json OUT.json`. The live stream is different: it proxies frames produced by the running UI and must not poll `/dev/fb0`.

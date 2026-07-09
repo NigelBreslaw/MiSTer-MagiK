@@ -1147,8 +1147,12 @@ fn catalog_from_sqlite_launcher_projection_order(
 ) -> ArcadeCatalog {
     arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
-    let mut games = catalog_projection::collapse_catalog_variants(arcade_rows);
-    games.extend(catalog_projection::collapse_catalog_variants(launcher_rows));
+    let mut arcade_rows = catalog_projection::collapse_catalog_variant_rows(arcade_rows);
+    catalog_projection::sort_catalog_projection_rows(&mut arcade_rows);
+    let mut launcher_rows = catalog_projection::collapse_catalog_variant_rows(launcher_rows);
+    catalog_projection::sort_catalog_projection_rows(&mut launcher_rows);
+    let mut games: Vec<_> = arcade_rows.into_iter().map(|row| row.game).collect();
+    games.extend(launcher_rows.into_iter().map(|row| row.game));
     let visible_refs = games
         .iter()
         .map(|game| game.mra_path.to_string())

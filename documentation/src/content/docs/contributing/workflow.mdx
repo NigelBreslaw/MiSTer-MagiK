@@ -1,0 +1,30 @@
+---
+title: Workflow
+description: Safe local workflow for contributing to MiSTer MagiK.
+sidebar:
+  order: 1
+---
+
+Work in small, focused changes and preserve unrelated user work. The repository may already contain local edits, generated outputs, or private submodule state.
+
+Useful host validation commands:
+
+```bash
+scripts/dev-rust test
+scripts/dev-rust check
+scripts/dev-rust host-tools
+cargo test --manifest-path magik-gui/Cargo.toml --features ui --no-default-features
+cargo clippy --manifest-path magik-gui/Cargo.toml --lib --no-default-features -- -D warnings
+cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
+```
+
+For documentation work in this site:
+
+```bash
+cd documentation
+corepack pnpm install
+corepack pnpm build
+corepack pnpm dev
+```
+
+Use `pnpm` 11 for the docs site. Keep generated screenshots under `documentation/public/screenshots/`.

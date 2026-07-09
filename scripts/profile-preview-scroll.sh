@@ -14,7 +14,7 @@ source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--replace-label]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--fade-mode default|legacy] [--replace-label]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -31,6 +31,7 @@ non-empty CPU SVG artifact.
 the requested system after navigation rows hydrate.
 --skip-preview-warm skips launcher benchmark archive preloading so first-preview
 measurement can exercise the .idx + pread fast lane.
+--fade-mode legacy disables the RGB565 preview fade fast path for A/B timing.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second while the timed scenario runs.
 --replace-label removes existing local artifacts for LABEL before running.
@@ -54,6 +55,7 @@ replace_label="0"
 selected_index=""
 start_system="arcade"
 defer_start_system="0"
+fade_mode="default"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -87,6 +89,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --defer-start-system) defer_start_system="1"; shift ;;
     --skip-preview-warm|--cold-preview-load) skip_preview_warm="1"; shift ;;
+    --fade-mode)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--fade-mode needs a value" >&2; usage >&2; exit 2; fi
+      fade_mode="$2"
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) positionals+=("$1"); shift ;;
@@ -125,6 +132,7 @@ if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only let
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
 if [[ -n "$selected_index" && ! "$selected_index" =~ ^[0-9]+$ ]]; then echo "--selected-index must be an integer" >&2; exit 2; fi
 if [[ ! "$start_system" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "--start-system must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
+case "$fade_mode" in default|legacy) ;; *) echo "--fade-mode must be default or legacy" >&2; exit 2 ;; esac
 
 mkdir -p "$OUT_DIR"
 if [[ "$replace_label" == "1" ]]; then
@@ -264,15 +272,15 @@ emit_run_context_row() {
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
   binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type" "$deployment_state")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$binary_fields" "$thread_sample_enabled"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields" "$thread_sample_enabled"
   else
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tstarted_at=%s\t%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$started_at" "$binary_fields"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields"
   fi
 }
 
@@ -322,6 +330,9 @@ write_launcher_env() {
     fi
     if [[ -n "${MISTER_PREVIEW_DIRECT_PRESENT+x}" ]]; then
       printf 'export MISTER_PREVIEW_DIRECT_PRESENT=%q\n' "$MISTER_PREVIEW_DIRECT_PRESENT"
+    fi
+    if [[ "$fade_mode" == "legacy" ]]; then
+      printf 'export MISTER_PREVIEW_FADE_P02=legacy\n'
     fi
     if [[ "$cpu_profile" == "1" ]]; then
       printf 'export MISTER_PPROF=1\n'
@@ -583,6 +594,138 @@ summarize_custom_draw_phases() {
         p99 = int(n * 0.99); if (p99 < 1) p99 = 1; if (p99 > n) p99 = n
         printf "%s\t%s\t%d\t%.0f\t%d\t%d\n", name, field, n, sum[field] / n, sorted[p95], sorted[p99]
         delete sorted
+      }
+    }
+  ' "$tsv"
+}
+
+summarize_fade_cpu() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" '
+    BEGIN { FS="\t" }
+    function col_value(field) {
+      return (field in col) ? ($(col[field]) + 0) : 0
+    }
+    function sort_values(values, count, sorted,    i, j, tmp) {
+      for (i = 1; i <= count; i++) sorted[i] = values[i]
+      for (i = 1; i <= count; i++) {
+        for (j = i + 1; j <= count; j++) {
+          if (sorted[j] < sorted[i]) {
+            tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
+          }
+        }
+      }
+    }
+    function pct(sorted, count, p,    idx) {
+      if (count <= 0) return 0
+      idx = int(count * p / 100)
+      if (idx < 1) idx = 1
+      if (idx > count) idx = count
+      return sorted[idx]
+    }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has = ("transition_effect" in col) && ("transition_progress" in col) && ("preview_fade_cpu_us" in col) && ("preview_fade_wall_us" in col) && ("preview_fade_pixels" in col) && ("preview_fade_rows" in col) && ("preview_fade_path" in col) && ("preview_fade_alpha_bucket" in col)
+      next
+    }
+    NF && has && $(col["frame"]) + 0 > 30 {
+      progress = $(col["transition_progress"]) + 0
+      if ($(col["transition_effect"]) != "fade" || progress <= 0 || progress >= 1) next
+      n++
+      cpu[n] = col_value("preview_fade_cpu_us")
+      wall[n] = col_value("preview_fade_wall_us")
+      pixels[n] = col_value("preview_fade_pixels")
+      rows[n] = col_value("preview_fade_rows")
+      cpu_sum += cpu[n]
+      wall_sum += wall[n]
+      pixel_sum += pixels[n]
+      row_sum += rows[n]
+      path = $(col["preview_fade_path"])
+      if (path == "") path = "unknown"
+      path_count[path]++
+      if (!(path in path_seen)) {
+        path_seen[path] = 1
+        path_order[++path_order_len] = path
+      }
+    }
+    END {
+      if (!has) {
+        printf "fade_cpu_tsv\tcase=%s\tvalid=0\tinvalid_reason=missing_columns\tframes=0\n", name
+        exit
+      }
+      if (n == 0) {
+        printf "fade_cpu_tsv\tcase=%s\tvalid=0\tinvalid_reason=no_active_fade_frames\tframes=0\n", name
+        exit
+      }
+      sort_values(cpu, n, cpu_sorted)
+      sort_values(wall, n, wall_sorted)
+      sort_values(pixels, n, pixel_sorted)
+      sort_values(rows, n, row_sorted)
+      paths = ""
+      for (i = 1; i <= path_order_len; i++) {
+        path = path_order[i]
+        paths = paths (paths == "" ? "" : ",") path ":" path_count[path]
+      }
+      cpu_ns_per_pixel = pixel_sum > 0 ? (cpu_sum * 1000.0 / pixel_sum) : 0
+      printf "fade_cpu_tsv\tcase=%s\tvalid=1\tframes=%d\tavg_cpu_us=%.1f\tp50_cpu_us=%d\tp95_cpu_us=%d\tp99_cpu_us=%d\tmax_cpu_us=%d\tavg_wall_us=%.1f\tp95_wall_us=%d\tp99_wall_us=%d\tmax_wall_us=%d\tavg_pixels=%.0f\tp95_pixels=%d\tp99_pixels=%d\tavg_rows=%.1f\tp95_rows=%d\tp99_rows=%d\tcpu_ns_per_pixel=%.3f\tpaths=%s\n",
+        name, n, cpu_sum / n, pct(cpu_sorted, n, 50), pct(cpu_sorted, n, 95),
+        pct(cpu_sorted, n, 99), cpu_sorted[n], wall_sum / n,
+        pct(wall_sorted, n, 95), pct(wall_sorted, n, 99), wall_sorted[n],
+        pixel_sum / n, pct(pixel_sorted, n, 95), pct(pixel_sorted, n, 99),
+        row_sum / n, pct(row_sorted, n, 95), pct(row_sorted, n, 99),
+        cpu_ns_per_pixel, paths
+    }
+  ' "$tsv"
+}
+
+summarize_fade_buckets() {
+  local name="$1" tsv="$2"
+  awk -v name="$name" '
+    BEGIN { FS="\t" }
+    function col_value(field) {
+      return (field in col) ? ($(col[field]) + 0) : 0
+    }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) col[$i] = i
+      has = ("transition_effect" in col) && ("transition_progress" in col) && ("preview_fade_cpu_us" in col) && ("preview_fade_wall_us" in col) && ("preview_fade_pixels" in col) && ("preview_fade_path" in col) && ("preview_fade_alpha_bucket" in col)
+      next
+    }
+    NF && has && $(col["frame"]) + 0 > 30 {
+      progress = $(col["transition_progress"]) + 0
+      if ($(col["transition_effect"]) != "fade" || progress <= 0 || progress >= 1) next
+      bucket = col_value("preview_fade_alpha_bucket")
+      path = $(col["preview_fade_path"])
+      if (path == "") path = "unknown"
+      key = bucket SUBSEP path
+      if (!(key in seen)) {
+        seen[key] = 1
+        order[++order_len] = key
+        bucket_by_key[key] = bucket
+        path_by_key[key] = path
+      }
+      frames[key]++
+      cpu_sum[key] += col_value("preview_fade_cpu_us")
+      wall_sum[key] += col_value("preview_fade_wall_us")
+      pixel_sum[key] += col_value("preview_fade_pixels")
+    }
+    END {
+      if (!has) {
+        printf "fade_bucket_tsv\tcase=%s\tvalid=0\tinvalid_reason=missing_columns\tbucket=-1\tpath=missing\tframes=0\n", name
+        exit
+      }
+      if (order_len == 0) {
+        printf "fade_bucket_tsv\tcase=%s\tvalid=0\tinvalid_reason=no_active_fade_frames\tbucket=-1\tpath=none\tframes=0\n", name
+        exit
+      }
+      for (i = 1; i <= order_len; i++) {
+        key = order[i]
+        n = frames[key]
+        avg_cpu = cpu_sum[key] / n
+        avg_wall = wall_sum[key] / n
+        avg_pixels = pixel_sum[key] / n
+        ns_per_pixel = pixel_sum[key] > 0 ? (cpu_sum[key] * 1000.0 / pixel_sum[key]) : 0
+        printf "fade_bucket_tsv\tcase=%s\tvalid=1\tbucket=%d\tpath=%s\tframes=%d\tavg_cpu_us=%.1f\tavg_wall_us=%.1f\tavg_pixels=%.0f\tcpu_ns_per_pixel=%.3f\n",
+          name, bucket_by_key[key], path_by_key[key], n, avg_cpu, avg_wall, avg_pixels, ns_per_pixel
       }
     }
   ' "$tsv"
@@ -1212,6 +1355,14 @@ summarize_frame_pacing arcade "$arcade_tsv"
 echo
 echo $'custom_draw_phase\tphase\tframes_after_30\tavg_us\tp95_us\tp99_us'
 summarize_custom_draw_phases arcade "$arcade_tsv"
+
+echo
+echo $'fade_cpu_tsv\tcase\tvalid\tframes\tavg_cpu_us\tp50_cpu_us\tp95_cpu_us\tp99_cpu_us\tmax_cpu_us\tavg_wall_us\tp95_wall_us\tp99_wall_us\tmax_wall_us\tavg_pixels\tp95_pixels\tp99_pixels\tavg_rows\tp95_rows\tp99_rows\tcpu_ns_per_pixel\tpaths'
+summarize_fade_cpu arcade "$arcade_tsv"
+
+echo
+echo $'fade_bucket_tsv\tcase\tvalid\tbucket\tpath\tframes\tavg_cpu_us\tavg_wall_us\tavg_pixels\tcpu_ns_per_pixel'
+summarize_fade_buckets arcade "$arcade_tsv"
 
 echo
 if ! "$PRESENT_TRACE" summarize "$arcade_tsv" --case arcade; then
