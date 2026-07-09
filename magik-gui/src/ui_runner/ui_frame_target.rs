@@ -337,6 +337,31 @@ pub(super) fn copy_arcade_list_update(
     }
 }
 
+pub(super) fn compose_arcade_list_update(
+    target: &mut UiFrameTarget,
+    renderer: &mut ArcadeListRenderer,
+    update: ArcadeListUpdate,
+) -> PresentCopyStats {
+    match update {
+        ArcadeListUpdate::Full(rect) => {
+            renderer.compose_layer_to_cached(target, true);
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, true)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
+        }
+        ArcadeListUpdate::Scroll { rect, .. } => {
+            renderer.compose_layer_to_cached(target, false);
+            PresentCopyStats {
+                rows: rect.rows(),
+                bytes: arcade_list_present_pixels(&update, false)
+                    * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+            }
+        }
+    }
+}
+
 pub(super) fn arcade_update_dirty_rect(update: &ArcadeListUpdate) -> DirtyRect {
     match update {
         ArcadeListUpdate::Full(rect) => *rect,

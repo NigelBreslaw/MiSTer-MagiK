@@ -3438,15 +3438,29 @@ pub(super) fn run_launcher_loop(
         let (presentation, frame_t4, cpu_t4) = {
             let mut presentation = if startup_can_present {
                 if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
+                    let hidden_compose_start = Instant::now();
+                    let direct_preview_rows = raw_preview
+                        .and_then(RawPreviewPresent::direct_rect)
+                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
+                        .unwrap_or(0);
+                    let arcade_update_label =
+                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
+                    let _arcade_stats = arcade_list_rect
+                        .map(|update| {
+                            layer_target
+                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
+                        })
+                        .unwrap_or_default();
+                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
                     match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
                         Ok(stats) => LauncherPresentResult {
                             copied_rows: ui.render_h() as u32,
-                            direct_preview_rows: 0,
+                            direct_preview_rows,
                             present_bytes: stats.copied_bytes,
                             wasted_present_bytes: 0,
                             cached_present_us: stats.copy_us,
-                            direct_preview_present_us: 0,
-                            arcade_list_present_us: 0,
+                            direct_preview_present_us: hidden_compose_us,
+                            arcade_list_present_us: hidden_compose_us,
                             main_present_backend: "fpga-vblank-latch-hidden",
                             main_present_status: if stats.set_supported && stats.status_supported {
                                 "ok"
@@ -3458,7 +3472,7 @@ pub(super) fn run_launcher_loop(
                             main_present_request_us: stats.post_us,
                             main_present_wait_us: stats.status_us,
                             main_present_route_us: stats.flip_count as u64,
-                            arcade_update_label: ArcadeUpdateTrace::None,
+                            arcade_update_label,
                         },
                         Err(e) => {
                             static WARNED: OnceLock<()> = OnceLock::new();
@@ -3476,15 +3490,29 @@ pub(super) fn run_launcher_loop(
                         }
                     }
                 } else if let Some(presenter) = main_vsync_hidden_presenter.as_mut() {
+                    let hidden_compose_start = Instant::now();
+                    let direct_preview_rows = raw_preview
+                        .and_then(RawPreviewPresent::direct_rect)
+                        .map(|rect| layer_target.compose_direct_preview_rect(rect))
+                        .unwrap_or(0);
+                    let arcade_update_label =
+                        ArcadeUpdateTrace::from_update(arcade_list_rect.as_ref());
+                    let _arcade_stats = arcade_list_rect
+                        .map(|update| {
+                            layer_target
+                                .compose_arcade_list_update(&mut arcade_list_renderer, update)
+                        })
+                        .unwrap_or_default();
+                    let hidden_compose_us = hidden_compose_start.elapsed().as_micros();
                     match presenter.present_cached_full_frame(layer_target.cached_565()) {
                         Ok(stats) => LauncherPresentResult {
                             copied_rows: ui.render_h() as u32,
-                            direct_preview_rows: 0,
+                            direct_preview_rows,
                             present_bytes: stats.copied_bytes,
                             wasted_present_bytes: 0,
                             cached_present_us: stats.copy_us,
-                            direct_preview_present_us: 0,
-                            arcade_list_present_us: 0,
+                            direct_preview_present_us: hidden_compose_us,
+                            arcade_list_present_us: hidden_compose_us,
                             main_present_backend: stats.backend_label,
                             main_present_status: "ok",
                             main_present_buffer: stats.buffer_index,
@@ -3492,7 +3520,7 @@ pub(super) fn run_launcher_loop(
                             main_present_request_us: stats.request_us,
                             main_present_wait_us: stats.wait_us,
                             main_present_route_us: stats.route_us,
-                            arcade_update_label: ArcadeUpdateTrace::None,
+                            arcade_update_label,
                         },
                         Err(e) => {
                             static WARNED: OnceLock<()> = OnceLock::new();
