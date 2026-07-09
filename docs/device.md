@@ -186,9 +186,8 @@ The known-good activation sequence is:
    the FPGA latch before vblank, then waits for vblank only to pace the next
    frame. The default `/dev/fb0` fallback still waits for vblank before copying
    dirty rows into the live framebuffer. Latch mode keeps a larger late-frame
-   headroom window: if the frame loop starts too late in the current refresh,
-   it waits for the next vblank before rendering rather than posting after the
-   latch deadline.
+   headroom window for inactive or non-motion frames, but active Home horizontal
+   motion stays frame-driven and avoids waiting a whole vblank before rendering.
 
 5. Verify support with passive `fpga-latch-report`. The MagiK latch commands
    `0x57` and `0x58` should report supported status/magic: `0x57` acks
@@ -209,6 +208,9 @@ final present goes through hidden buffers. The reliable proof signals are:
 - Home-row benchmark traces show `main_present_backend=fpga-vblank-latch-hidden`
   and `main_present_status=ok`; `main_present_route_us` is a compatibility
   column carrying the FPGA `flip_count` in this mode.
+- The Home-row zero-drop gate reports zero latch deadline misses and zero strict
+  visual cadence misses. `drop_count=0` alone proves FPGA acceptance, not
+  TV-visible smoothness.
 
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.

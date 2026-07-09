@@ -51,10 +51,11 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   physical address before vblank, then waits for vblank only as the pacing
   boundary for the next frame. The default `/dev/fb0` path intentionally keeps
   the older order: wait for vblank, then dirty-copy to `/dev/fb0`.
-  Latch mode also uses a larger late-frame headroom window than `/dev/fb0`: if
-  the frame loop has already consumed too much of the current refresh, it waits
-  for the next vblank before rendering so the hidden-buffer copy and latch post
-  still land before the following deadline.
+  Latch mode keeps a larger late-frame headroom window than `/dev/fb0` for
+  inactive or non-motion frames, but active Home horizontal motion bypasses the
+  pre-render deferral. Holding left/right or running the Home pan window keeps
+  the loop frame-driven so latch mode does not solve tearing by holding the
+  previous visual frame for an extra refresh.
   This path requires the experimental Menu RBF to be loaded from the active
   launcher through Main's `mister_magik_launch` command path and the
   stock-kernel plugin probe module to be loaded. A copied RBF artifact alone
@@ -64,6 +65,9 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   `fpga-latch-report` magic for commands `0x57`/`0x58`, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
+  `drop_count=0` proves the FPGA accepted latch posts, not that every HDMI
+  refresh received a changed visual frame; the Home-row strict cadence gate is
+  the smoothness proof.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer
   fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.
