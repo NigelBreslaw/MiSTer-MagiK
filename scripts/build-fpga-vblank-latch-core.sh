@@ -123,6 +123,8 @@ esac
   echo "quartus_mode=$QUARTUS_MODE"
   echo "quartus_sh=$QUARTUS_CMD"
   echo "quartus_strace=${QUARTUS_STRACE:-0}"
+  echo "quartus_docker_privileged=${QUARTUS_DOCKER_PRIVILEGED:-0}"
+  echo "quartus_docker_empty_sys=${QUARTUS_DOCKER_EMPTY_SYS:-0}"
 } > "$META_OUT"
 
 build_status=0
@@ -132,12 +134,17 @@ if [[ "$QUARTUS_MODE" = "docker" ]]; then
   if [[ "${QUARTUS_DOCKER_PRIVILEGED:-}" = "1" ]]; then
     docker_security_args=(--privileged --security-opt seccomp=unconfined)
   fi
+  docker_mount_args=()
+  if [[ "${QUARTUS_DOCKER_EMPTY_SYS:-}" = "1" ]]; then
+    docker_mount_args=(--tmpfs /sys:ro,nosuid,nodev,noexec,mode=0555)
+  fi
   docker_quartus_cmd=(quartus_sh --flow compile menu)
   if [[ "${QUARTUS_STRACE:-}" = "1" ]]; then
     docker_quartus_cmd=(strace -ff -tt -o "/work/$STRACE_PREFIX" quartus_sh --flow compile menu)
   fi
   docker run --platform linux/amd64 --rm \
     "${docker_security_args[@]}" \
+    "${docker_mount_args[@]}" \
     --cpus "$QUARTUS_DOCKER_CPUS" \
     --memory "$QUARTUS_DOCKER_MEMORY" \
     --volume "$QUARTUS_HOST_INSTALL_ROOT:/opt/intelFPGA_lite:ro" \
