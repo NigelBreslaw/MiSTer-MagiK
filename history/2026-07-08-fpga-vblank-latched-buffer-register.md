@@ -6,6 +6,14 @@ Experiment C starts the FPGA-side path for fixing launcher tearing/frame pacing:
 instead of asking Linux/Main to time a buffer flip, add an experimental FPGA
 command that queues framebuffer route metadata and latches it on HDMI vblank.
 
+2026-07-09 correction: the initial command IDs and activation path below were
+superseded by device evidence. The live protocol now uses `0x57` for set and
+`0x58` for status because `0x43` collides with stock Menu and `0x53..0x56` are
+file-I/O commands. The patched launcher RBF must be activated from the MagiK
+launcher with `mister_magik_launch <rbf>` and proven through Main's cmdline
+before interpreting latch support reports; `load_core <rbf>` from the launcher
+state left stock Menu active.
+
 This slice did not replace the Menu core on the device. The Menu RTL checkout in
 this repo is read-only reference material, so the safe first step was:
 
