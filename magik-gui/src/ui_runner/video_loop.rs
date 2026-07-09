@@ -68,9 +68,14 @@ fn present_direct_video_frame(
 
     if let Some(dirty) = dirty {
         if !video_dirty_clip_ready || dirty.intersection(video_rect).is_none() {
-            copy_cached_rect_565(disp, frame_target_geometry(ui), cached, dirty);
-            rows = rows.saturating_add(dirty.rows());
-            copied_rect = Some(dirty);
+            if let Some(copied) = copy_cached_rect_565(
+                disp,
+                CachedFrameView::new(cached, ui.render_w(), ui.render_h()),
+                dirty,
+            ) {
+                rows = rows.saturating_add(copied.rows());
+                copied_rect = Some(copied);
+            }
         }
     }
 
@@ -444,9 +449,13 @@ pub(super) fn run_video_playback_loop(
                     rows
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
-                    copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
-                    copied_rect = Some(rect);
-                    rect.rows()
+                    let copied = copy_cached_rect_565(
+                        disp,
+                        CachedFrameView::new(&cached, ui.render_w(), ui.render_h()),
+                        rect,
+                    );
+                    copied_rect = copied;
+                    copied.map_or(0, DirtyRect::rows)
                 } else {
                     0
                 };
@@ -583,9 +592,13 @@ pub(super) fn run_video_playback_loop(
                     rows
                 } else if let Some(rect) = this_rect {
                     let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
-                    copy_cached_rect_565(disp, frame_target_geometry(ui), &cached, rect);
-                    copied_rect = Some(rect);
-                    rect.rows()
+                    let copied = copy_cached_rect_565(
+                        disp,
+                        CachedFrameView::new(&cached, ui.render_w(), ui.render_h()),
+                        rect,
+                    );
+                    copied_rect = copied;
+                    copied.map_or(0, DirtyRect::rows)
                 } else {
                     0
                 };

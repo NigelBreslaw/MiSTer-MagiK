@@ -33,10 +33,10 @@ pub(super) fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    let rows = target.present_rect(disp, frame_target_geometry(ui), rect);
+                    let copied = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     copy_us += c0.elapsed().as_micros() as u64;
-                    present_rect = Some(frame_rect(rect));
-                    rows
+                    present_rect = copied.map(frame_rect);
+                    copied.map_or(0, DirtyRect::rows)
                 }
                 None => 0,
             };
@@ -75,10 +75,10 @@ pub(super) fn run_bench_frame(
             let rows = match this_rect {
                 Some(rect) => {
                     let c0 = Instant::now();
-                    let rows = target.present_rect(disp, frame_target_geometry(ui), rect);
+                    let copied = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     copy_us += c0.elapsed().as_micros() as u64;
-                    present_rect = Some(frame_rect(rect));
-                    rows
+                    present_rect = copied.map(frame_rect);
+                    copied.map_or(0, DirtyRect::rows)
                 }
                 None => 0,
             };

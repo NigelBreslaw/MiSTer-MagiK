@@ -85,12 +85,15 @@ impl<'a> LayerTarget<'a> {
     }
 
     fn present_cached_rect(&mut self, rect: DirtyRect) -> u32 {
-        self.target
-            .present_rect(self.disp, frame_target_geometry(self.ui), rect)
+        copy_cached_rect_565(self.disp, self.target.cached_frame_view(), rect)
+            .map_or(0, DirtyRect::rows)
     }
 
     fn present_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
-        self.target.present_direct_preview_rect(self.disp, rect)
+        self.target
+            .direct_preview_view()
+            .map(|view| copy_direct_preview_rect_565(self.disp, view, rect))
+            .unwrap_or(0)
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -102,7 +105,10 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut PluginHiddenRgb565Framebuffer,
         rect: DirtyRect,
     ) -> u32 {
-        self.target.copy_direct_preview_rect_to_hidden(hidden, rect)
+        self.target
+            .direct_preview_view()
+            .map(|view| copy_direct_preview_rect_to_hidden(hidden, view, rect))
+            .unwrap_or(0)
     }
 
     fn present_arcade_list_update(
@@ -110,7 +116,7 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
-        copy_arcade_list_update(self.target, self.disp, renderer, update)
+        copy_arcade_list_update(self.disp, renderer, update)
     }
 
     pub(super) fn compose_arcade_list_update(
@@ -130,8 +136,8 @@ impl<'a> LayerTarget<'a> {
         copy_arcade_list_update_to_hidden(hidden, renderer, update)
     }
 
-    pub(super) fn cached_565(&self) -> &[Rgb565Pixel] {
-        self.target.cached_565()
+    pub(super) fn cached_frame_view(&self) -> CachedFrameView<'_> {
+        self.target.cached_frame_view()
     }
 }
 
@@ -186,9 +192,11 @@ impl LauncherCompositor {
         let mut cached_present_us = 0u128;
         for rect in cached_present_rects.iter() {
             let copy_start = Instant::now();
-            copied_rows += request.layer_target.present_cached_rect(rect);
-            let bytes = present_bytes_for_rect(rect);
-            present_bytes += bytes;
+            let rows = request.layer_target.present_cached_rect(rect);
+            copied_rows += rows;
+            if rows != 0 {
+                present_bytes += present_bytes_for_rect(rect);
+            }
             cached_present_us += copy_start.elapsed().as_micros();
         }
 
@@ -199,7 +207,9 @@ impl LauncherCompositor {
             direct_preview_rows = request.layer_target.present_direct_preview_rect(rect);
             direct_preview_present_us = copy_start.elapsed().as_micros();
             copied_rows += direct_preview_rows;
-            present_bytes += present_bytes_for_rect(rect);
+            if direct_preview_rows != 0 {
+                present_bytes += present_bytes_for_rect(rect);
+            }
         }
 
         let mut arcade_list_present_us = 0u128;
