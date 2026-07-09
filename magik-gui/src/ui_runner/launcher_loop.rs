@@ -17,9 +17,6 @@ use crate::input_state::PadState;
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 use mister_magik_catalog::catalog_summary;
-use mister_magik_fb::framebuffer::ownership::{
-    should_present_full_frame, FramebufferRouteAction, FramebufferRouteGuard,
-};
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -102,9 +99,7 @@ struct FpgaVblankLatchHiddenPresenter {
     sequence: u16,
     width: usize,
     height: usize,
-    route: LauncherFramebufferRoute,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
-    route_armed: bool,
     hidden_active_verified: bool,
     latch_state: TwoBufferLatchState,
 }
@@ -191,9 +186,7 @@ impl FpgaVblankLatchHiddenPresenter {
             sequence: 1,
             width,
             height,
-            route,
             latch_geometry,
-            route_armed: false,
             hidden_active_verified: false,
             latch_state: TwoBufferLatchState::new(width, height),
         })
@@ -204,6 +197,7 @@ impl FpgaVblankLatchHiddenPresenter {
         cached: CachedFrameView<'_>,
         input: LauncherFramePlan,
         fpga: &mut Fpga,
+        display_session: &mut LauncherDisplaySession,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
     where
@@ -220,7 +214,7 @@ impl FpgaVblankLatchHiddenPresenter {
             .read_magik_latched_fbuf_status()
             .map_err(|e| e.to_string())?;
         let mut status_us = status_start.elapsed().as_micros() as u64;
-        self.sync_latch_state_from_status(before_status)?;
+        self.sync_latch_state_from_status(before_status, display_session)?;
 
         let plan = self
             .latch_state
@@ -275,16 +269,12 @@ impl FpgaVblankLatchHiddenPresenter {
             }
         };
         let post_us = post_start.elapsed().as_micros();
-        let set_vga_fb_us = if self.route.set_vga_fb() && !self.route_armed {
-            let set_vga_fb_start = Instant::now();
-            if let Err(e) = fpga.set_vga_fb(true) {
+        let set_vga_fb_us = match display_session.arm_latch_route(fpga) {
+            Ok(elapsed_us) => elapsed_us,
+            Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
                 return Err(e.to_string());
             }
-            self.route_armed = true;
-            set_vga_fb_start.elapsed().as_micros()
-        } else {
-            0
         };
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
@@ -346,6 +336,7 @@ impl FpgaVblankLatchHiddenPresenter {
     fn sync_latch_state_from_status(
         &mut self,
         status: crate::fpga::LatchedFbufStatus,
+        display_session: &mut LauncherDisplaySession,
     ) -> Result<(), String> {
         let sync = match classify_latch_status(
             status,
@@ -371,7 +362,7 @@ impl FpgaVblankLatchHiddenPresenter {
                 expected_stride,
             }) => {
                 self.latch_state.invalidate_all();
-                self.route_armed = false;
+                display_session.note_latch_route_lost();
                 self.hidden_active_verified = false;
                 return Err(format!(
                     "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
@@ -381,7 +372,7 @@ impl FpgaVblankLatchHiddenPresenter {
 
         if sync.recovered_non_hidden_active {
             self.latch_state.invalidate_all();
-            self.route_armed = false;
+            display_session.note_latch_route_lost();
             self.hidden_active_verified = false;
         }
         if sync.hidden_active_verified {
@@ -1555,6 +1546,7 @@ pub(super) fn run_launcher_loop(
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
+    display_session: &mut LauncherDisplaySession,
     window: &Rc<MinimalSoftwareWindow>,
     target: &mut UiFrameTarget,
     mut pad: PadPool,
@@ -1688,7 +1680,6 @@ pub(super) fn run_launcher_loop(
     let mut preview = PreviewState::new_with_trace_start(start);
     let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
-    let mut route_guard = FramebufferRouteGuard::from_env();
     let mut preview_transition = PreviewTransitionDemo::from_env();
     let transition_picker_enabled = preview_transition.picker_enabled();
     let mut transition_picker_prev_left = false;
@@ -2041,10 +2032,6 @@ pub(super) fn run_launcher_loop(
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let mut catalog_scan_redraw = CatalogScanRedraw::new();
-    let mut route_reassert_count = 0u64;
-    let mut last_route_reassert_frame = 0u64;
-    let mut last_route_reassert_ok = false;
-    let mut last_route_reassert_error = String::new();
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
@@ -2106,43 +2093,9 @@ pub(super) fn run_launcher_loop(
             &mut full_bridge_dirty,
             start,
         );
-        let mut route_action = FramebufferRouteAction {
-            reassert_route: false,
-            force_full_present: false,
-        };
+        let route_action = display_session.begin_frame(frames, launching, f);
         let defer_selected_preview = false;
         let mut preview_scheduled_this_loop = false;
-        if !launching {
-            route_action = route_guard.tick(frames);
-            if route_action.reassert_route {
-                let route =
-                    LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
-                match f.enable_launcher_framebuffer_route(route, ui.fb_w(), ui.fb_h()) {
-                    Ok(flag) => {
-                        route_reassert_count = route_reassert_count.saturating_add(1);
-                        last_route_reassert_frame = frames;
-                        last_route_reassert_ok = true;
-                        last_route_reassert_error.clear();
-                        boot_analytics::event(
-                            "launcher_fb_route_reasserted",
-                            format!("frame={frames} support_flag={flag}"),
-                        );
-                    }
-                    Err(e) => {
-                        crate::ui_errln!("failed to reassert Slint framebuffer route: {e}");
-                        route_action.force_full_present = false;
-                        route_reassert_count = route_reassert_count.saturating_add(1);
-                        last_route_reassert_frame = frames;
-                        last_route_reassert_ok = false;
-                        last_route_reassert_error = e.to_string();
-                        boot_analytics::event(
-                            "launcher_fb_route_reassert_failed",
-                            format!("frame={frames} error={e}"),
-                        );
-                    }
-                }
-            }
-        }
         if last_clock_update.elapsed() >= Duration::from_secs(1) {
             let clock_text = launcher_clock_text();
             if dirty_opt {
@@ -2378,7 +2331,13 @@ pub(super) fn run_launcher_loop(
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                     LauncherStatusPresenter::new(&bridge)
                         .sync_loading("Launch failed", "Returning to launcher...");
-                    scheduler.recover_launcher_ui(f, ui);
+                    if scheduler.stop_spawned_mister_for_recovery() {
+                        if let Err(e) = display_session.recover_after_launch_failure(frames, f) {
+                            crate::ui_errln!(
+                                "failed to recover Slint framebuffer route after launch failure: {e}"
+                            );
+                        }
+                    }
                     update_slint_animations(animation_clock);
                     let mut recovery_rect = None;
                     window.draw_if_needed(|renderer| {
@@ -2986,7 +2945,14 @@ pub(super) fn run_launcher_loop(
                             &mut lifecycle_effects,
                         );
                         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        scheduler.recover_launcher_ui(f, ui);
+                        if scheduler.stop_spawned_mister_for_recovery() {
+                            if let Err(e) = display_session.recover_after_launch_failure(frames, f)
+                            {
+                                crate::ui_errln!(
+                                    "failed to recover Slint framebuffer route after launch timeout: {e}"
+                                );
+                            }
+                        }
                         std::process::exit(1);
                     }
                 }
@@ -3205,8 +3171,9 @@ pub(super) fn run_launcher_loop(
         sync_startup_visibility(&app, &lifecycle);
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
-        let mut full_frame_present =
-            should_present_full_frame(launching, route_action) || startup_reveal_ready;
+        let mut full_frame_present = display_session
+            .should_present_full_frame(launching, route_action)
+            || startup_reveal_ready;
         let wants_arcade_list =
             should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading);
         let wants_preview = !memory_guard.active() && preview.raw_transition_frame().is_some();
@@ -3217,7 +3184,7 @@ pub(super) fn run_launcher_loop(
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
             arcade_ready: !active_arcade_games_loading && active_arcade_games.len() > 0,
-            route_ok: last_route_reassert_error.is_empty(),
+            route_ok: display_session.route_ok(),
             wants_arcade_list,
             wants_preview,
             preview_cache_state: preview_cache_state_before_composition,
@@ -3400,10 +3367,10 @@ pub(super) fn run_launcher_loop(
                 launcher_bench_scenario,
                 start_screen,
                 lock_screen,
-                route_reassert_count,
-                last_route_reassert_frame,
-                last_route_reassert_ok,
-                &last_route_reassert_error,
+                display_session.reassert_count(),
+                display_session.last_reassert_frame(),
+                display_session.last_reassert_ok(),
+                display_session.last_reassert_error(),
                 startup_status,
             );
             std::thread::sleep(launcher_idle_sleep_duration(&pacer));
@@ -3595,6 +3562,7 @@ pub(super) fn run_launcher_loop(
                         layer_target.cached_frame_view(),
                         frame_plan,
                         f,
+                        display_session,
                         |hidden, plan| {
                             preview_redraw_rect = plan.preview_redraw;
                             arcade_redraw_update = plan.arcade_redraw;
@@ -3940,10 +3908,10 @@ pub(super) fn run_launcher_loop(
                 launcher_bench_scenario,
                 start_screen,
                 lock_screen,
-                route_reassert_count,
-                last_route_reassert_frame,
-                last_route_reassert_ok,
-                &last_route_reassert_error,
+                display_session.reassert_count(),
+                display_session.last_reassert_frame(),
+                display_session.last_reassert_ok(),
+                display_session.last_reassert_error(),
                 lifecycle.startup_status(),
             );
             // Latch mode posts the hidden buffer first, then spends the slack before
@@ -4018,10 +3986,10 @@ pub(super) fn run_launcher_loop(
                 launcher_bench_scenario,
                 start_screen,
                 lock_screen,
-                route_reassert_count,
-                last_route_reassert_frame,
-                last_route_reassert_ok,
-                &last_route_reassert_error,
+                display_session.reassert_count(),
+                display_session.last_reassert_frame(),
+                display_session.last_reassert_ok(),
+                display_session.last_reassert_error(),
                 lifecycle.startup_status(),
                 latch_trace_flush_deferred,
             );

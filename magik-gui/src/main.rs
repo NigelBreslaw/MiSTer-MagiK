@@ -127,9 +127,9 @@ use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
-use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
-use ui_display::UiDisplayPlan;
+use ui_display::{UiDisplay, UiDisplayPlan};
+use ui_runner::launcher_display_session::LauncherDisplaySession;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
 
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
@@ -2229,19 +2229,17 @@ fn early_black_route(f: &mut Fpga) {
         ),
     );
 
-    let route = LauncherFramebufferRoute::for_scan(
-        display_plan.scan_w,
-        display_plan.scan_h,
-        display_plan.direct_video,
-    );
-    let flag = match f.enable_launcher_framebuffer_route(route, disp.width(), disp.height()) {
+    let ui = UiDisplay::for_plan(display_plan);
+    let mut display_session = LauncherDisplaySession::new(&ui);
+    let route = display_session.route();
+    let flag = match display_session.enable_initial(f) {
         Ok(flag) => flag,
         Err(e) => {
             crate::ui_errln!("early-black: failed to route framebuffer: {e}");
             std::process::exit(1);
         }
     };
-    settle_boot_black_frame("early-black", &mut disp, f, route);
+    settle_boot_black_frame("early-black", &mut disp, f, &mut display_session);
     let route_mode = route.mode();
     boot_analytics::event(
         "early_black_route_completed",

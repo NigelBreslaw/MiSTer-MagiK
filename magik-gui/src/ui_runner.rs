@@ -85,6 +85,7 @@ mod launcher_bridge;
 mod launcher_catalog_session;
 mod launcher_composition;
 mod launcher_compositor;
+pub(crate) mod launcher_display_session;
 mod launcher_frame_accounting;
 mod launcher_latch_state;
 mod launcher_lifecycle;
@@ -117,6 +118,7 @@ use launcher_bridge::*;
 use launcher_catalog_session::*;
 use launcher_composition::*;
 use launcher_compositor::*;
+use launcher_display_session::*;
 use launcher_frame_accounting::*;
 use launcher_latch_state::*;
 use launcher_lifecycle::*;
@@ -274,6 +276,7 @@ pub fn run_ui(f: &mut Fpga) {
     let UiBootFramebufferSession {
         ui,
         mut disp,
+        mut display_session,
         _fb_mode_guard,
     } = UiBootFramebufferSession::start_ui_or_exit(f);
 
@@ -369,6 +372,7 @@ pub fn run_ui(f: &mut Fpga) {
                     &ui,
                     &mut disp,
                     f,
+                    &mut display_session,
                     &window,
                     &mut target,
                     pad,
