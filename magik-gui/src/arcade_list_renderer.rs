@@ -129,6 +129,7 @@ struct ArcadeFilterListDrawKey {
     visible_hash: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArcadeListUpdate {
     Full(DirtyRect),
     /// The cached RAM list surface was advanced by scrolling and patching only
@@ -586,6 +587,19 @@ impl ArcadeListRenderer {
         }
     }
 
+    pub(crate) fn compose_layer_to_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        redraw_selection_frame: bool,
+    ) {
+        for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
+            self.compose_viewport_band_to_cached(target, viewport_y, h);
+        }
+        if redraw_selection_frame {
+            self.compose_selection_frame_to_cached(target);
+        }
+    }
+
     fn copy_viewport_band_to_target(
         &mut self,
         target: &mut UiFrameTarget,
@@ -752,6 +766,110 @@ impl ArcadeListRenderer {
         );
         target.present_rect_565(
             disp,
+            rect.x1.saturating_sub(thickness),
+            rect.y0,
+            thickness,
+            h,
+            &self.selection_vertical,
+        );
+    }
+
+    fn compose_viewport_band_to_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        viewport_y: usize,
+        h: usize,
+    ) {
+        if h == 0 || viewport_y >= ARCADE_LIST_H {
+            return;
+        }
+        let h = h.min(ARCADE_LIST_H - viewport_y);
+        for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
+            ArcadeListPresentKind::Normal => {
+                self.compose_surface_rect_to_cached(target, x, y, w, h);
+            }
+            ArcadeListPresentKind::Inverted => {
+                if arcade_selection_inversion_enabled() {
+                    self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
+                } else {
+                    self.compose_surface_rect_to_cached(target, x, y, w, h);
+                }
+            }
+        });
+    }
+
+    fn compose_surface_rect_to_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            target.compose_rect_565_strided(
+                self.geometry.x + x,
+                self.geometry.y + viewport_y + copied,
+                w,
+                copy_h,
+                &self.surface,
+                ARCADE_LIST_W,
+                x,
+                src_y,
+            );
+            copied += copy_h;
+        }
+    }
+
+    fn compose_inverted_surface_rect_to_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % ARCADE_LIST_H;
+            let copy_h = (h - copied).min(ARCADE_LIST_H - src_y);
+            let target_x = self.geometry.x + x;
+            let target_y = self.geometry.y + viewport_y + copied;
+            let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
+            target.compose_rect_565(target_x, target_y, w, copy_h, inverted);
+            copied += copy_h;
+        }
+    }
+
+    fn compose_selection_frame_to_cached(&mut self, target: &mut UiFrameTarget) {
+        let rect = self.selection_rect();
+        let color = ARCADE_SELECTION_FRAME_COLOR;
+        let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
+        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        self.selection_horizontal
+            .resize(ARCADE_LIST_W * thickness, color);
+        self.selection_horizontal.fill(color);
+        target.compose_rect_565(
+            rect.x0,
+            rect.y0,
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+        );
+        target.compose_rect_565(
+            rect.x0,
+            rect.y1.saturating_sub(thickness),
+            ARCADE_LIST_W,
+            thickness,
+            &self.selection_horizontal,
+        );
+        self.selection_vertical.resize(thickness * h, color);
+        self.selection_vertical.fill(color);
+        target.compose_rect_565(rect.x0, rect.y0, thickness, h, &self.selection_vertical);
+        target.compose_rect_565(
             rect.x1.saturating_sub(thickness),
             rect.y0,
             thickness,
