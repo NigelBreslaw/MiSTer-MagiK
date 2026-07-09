@@ -155,9 +155,6 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
 
 impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
     pub(in crate::ui_runner) fn open(ui: &UiDisplay) -> Option<Self> {
-        if launcher_present_backend() != LauncherPresentBackend::FpgaVblankLatchHidden {
-            return None;
-        }
         let width = ui.render_w();
         let height = ui.render_h();
         let buffers = PluginLatchFrameBuffers::open(width, height)?;

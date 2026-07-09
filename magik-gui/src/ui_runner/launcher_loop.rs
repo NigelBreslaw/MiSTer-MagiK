@@ -760,6 +760,7 @@ impl LauncherWakeReasons {
     const COMPOSITION_FORCES_FULL_PRESENT: Self = Self(1 << 21);
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
+    const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -1146,7 +1147,7 @@ pub(super) fn run_launcher_loop(
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
-    let mut fpga_vblank_latch_hidden_presenter = FpgaVblankLatchHiddenPresenter::open(ui);
+    let mut launcher_presenter = LauncherPresenter::new(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
@@ -2903,6 +2904,10 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             composition_decision.clear_direct_layers,
         );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
+            launcher_presenter.needs_frame(),
+        );
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -2971,13 +2976,13 @@ pub(super) fn run_launcher_loop(
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
         let redraw_pending_for_trace = launcher_redraw_pending;
         let wake_reasons_bits = wake_reasons.bits();
-        let latch_backend_active = fpga_vblank_latch_hidden_presenter.is_some();
+        let latch_backend_active = launcher_presenter.pacing_backend().is_latch();
         let home_motion_active = home_frame_driven_redraw_active(
             nav.screen,
             home_pan_present_active,
             home_horizontal_input_held,
         );
-        let late_frame_start_headroom_us = if fpga_vblank_latch_hidden_presenter.is_some() {
+        let late_frame_start_headroom_us = if latch_backend_active {
             FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
@@ -3136,241 +3141,33 @@ pub(super) fn run_launcher_loop(
             arcade_list_rect,
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
-        let (presentation, frame_t3, frame_t4, cpu_t3, cpu_t4, pacing_trace) =
-            if startup_can_present && fpga_vblank_latch_hidden_presenter.is_some() {
-                let frame_t3 = Instant::now();
-                let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
-                let present_phase_us = pacer.age_since_last_hit_us(frame_t3) as u128;
-                let mut latch_presentation = None;
-                if let Some(presenter) = fpga_vblank_latch_hidden_presenter.as_mut() {
-                    let mut hidden_preview_compose_us = 0u128;
-                    let mut hidden_arcade_compose_us = 0u128;
-                    let mut direct_preview_rows = 0u32;
-                    let mut arcade_stats = PresentCopyStats::default();
-                    let mut preview_redraw_rect = None;
-                    let mut arcade_redraw_update = None;
-                    match presenter.present_cached_full_frame(
-                        layer_target.cached_frame_view(),
-                        frame_plan,
-                        f,
-                        display_session,
-                        |hidden, plan| {
-                            preview_redraw_rect = plan.preview_redraw;
-                            arcade_redraw_update = plan.arcade_redraw;
-                            if let Some(rect) = plan.preview_redraw {
-                                let hidden_preview_compose_start = Instant::now();
-                                direct_preview_rows =
-                                    layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
-                                hidden_preview_compose_us =
-                                    hidden_preview_compose_start.elapsed().as_micros();
-                            }
-                            if let Some(update) = plan.arcade_redraw {
-                                let hidden_arcade_compose_start = Instant::now();
-                                arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
-                                    hidden,
-                                    &mut arcade_list_renderer,
-                                    update,
-                                );
-                                hidden_arcade_compose_us =
-                                    hidden_arcade_compose_start.elapsed().as_micros();
-                            }
-                            Ok(())
-                        },
-                    ) {
-                        Ok(stats) => {
-                            let present_us = stats.copy_us
-                                + stats.post_us
-                                + stats.set_vga_fb_us
-                                + u128::from(stats.status_us);
-                            let hidden_compose_us =
-                                hidden_preview_compose_us + hidden_arcade_compose_us;
-                            let preview_present_bytes = preview_redraw_rect
-                                .map(|rect| {
-                                    rect.width()
-                                        .saturating_mul(rect.rows() as usize)
-                                        .saturating_mul(
-                                            mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
-                                        )
-                                })
-                                .unwrap_or(0);
-                            let arcade_update_label =
-                                ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref());
-                            latch_presentation = Some(LauncherPresentResult {
-                                copied_rows: stats.copied_rows
-                                    + direct_preview_rows
-                                    + arcade_stats.rows,
-                                direct_preview_rows,
-                                present_bytes: stats.copied_bytes
-                                    + preview_present_bytes
-                                    + arcade_stats.bytes,
-                                wasted_present_bytes: 0,
-                                fb_present_us_override: Some(present_us),
-                                vsync_us_override: None,
-                                cached_present_us: stats.copy_us,
-                                hidden_compose_us,
-                                hidden_preview_compose_us,
-                                hidden_arcade_compose_us,
-                                direct_preview_present_us: hidden_preview_compose_us,
-                                arcade_list_present_us: hidden_arcade_compose_us,
-                                main_present_backend: LauncherPresentBackend::FpgaVblankLatchHidden,
-                                main_present_status: if stats.set_supported
-                                    && stats.status_supported
-                                {
-                                    LauncherPresentStatus::Ok
-                                } else {
-                                    LauncherPresentStatus::Unsupported
-                                },
-                                main_present_buffer: stats.buffer_index,
-                                main_present_hidden_copy_us: stats.copy_us,
-                                main_present_hidden_invalid_bytes: stats.invalid_bytes,
-                                main_present_hidden_rect_count: stats.rect_count,
-                                main_present_hidden_catchup_bytes: stats.catchup_bytes,
-                                main_present_hidden_full_copy: stats.full_copy,
-                                main_present_request_us: stats.post_us + stats.set_vga_fb_us,
-                                main_present_set_vga_fb_us: stats.set_vga_fb_us,
-                                main_present_wait_us: stats.status_us,
-                                // Compatibility trace field: latch mode reports the FPGA flip counter here.
-                                main_present_route_us: stats.flip_count as u64,
-                                arcade_update_label,
-                            });
-                        }
-                        Err(e) => {
-                            static WARNED: OnceLock<()> = OnceLock::new();
-                            WARNED.get_or_init(|| {
-                                crate::ui_errln!("fpga_vblank_latch_hidden_present_failed: {e}");
-                            });
-                        }
-                    }
-                }
-                if let Some(mut presentation) = latch_presentation {
-                    let present_done = Instant::now();
-                    presentation.vsync_us_override = Some(0);
-                    let pacing_trace = LauncherPacingTrace::from_pace_with_present_phase(
-                        None,
-                        frame_start_phase_us,
-                        pacer.period_us(),
-                        present_phase_us,
-                    );
-                    (
-                        presentation,
-                        frame_t3,
-                        present_done,
-                        cpu_t3,
-                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-                        pacing_trace,
-                    )
-                } else {
-                    let pace = if frame_accounting.first_visible_copy_done() {
-                        let (pace, vsync_done) = match pre_render_pace {
-                            Some((pace, vsync_done, _)) => (pace, vsync_done),
-                            None => {
-                                let pace = pacer.wait();
-                                (pace, Instant::now())
-                            }
-                        };
-                        present_timing.wait_until_present_time(vsync_done);
-                        let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
-                        let frame_t3 = Instant::now();
-                        (Some(pace), frame_t3, cpu_t3)
-                    } else {
-                        (
-                            None,
-                            Instant::now(),
-                            FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-                        )
-                    };
-                    let frame_t3 = pace.1;
-                    let cpu_t3 = pace.2;
-                    let pacing_trace = LauncherPacingTrace::from_pace(
-                        pace.0.as_ref(),
-                        frame_start_phase_us,
-                        pacer.period_us(),
-                        frame_t3,
-                    );
-                    let presentation = present_fb0_dirty(
-                        &layer_target,
-                        frame_plan,
-                        disp,
-                        &mut arcade_list_renderer,
-                    );
-                    (
-                        presentation,
-                        frame_t3,
-                        Instant::now(),
-                        cpu_t3,
-                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-                        pacing_trace,
-                    )
-                }
-            } else {
-                let pace = if frame_accounting.first_visible_copy_done() {
-                    let (pace, vsync_done) = match pre_render_pace {
-                        Some((pace, vsync_done, _)) => (pace, vsync_done),
-                        None => {
-                            let pace = pacer.wait();
-                            (pace, Instant::now())
-                        }
-                    };
-                    present_timing.wait_until_present_time(vsync_done);
-                    let cpu_t3 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
-                    let frame_t3 = Instant::now();
-                    (Some(pace), frame_t3, cpu_t3)
-                } else {
-                    (
-                        None,
-                        Instant::now(),
-                        FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-                    )
-                };
-                let frame_t3 = pace.1;
-                let cpu_t3 = pace.2;
-                let pacing_trace = LauncherPacingTrace::from_pace(
-                    pace.0.as_ref(),
-                    frame_start_phase_us,
-                    pacer.period_us(),
-                    frame_t3,
-                );
-                let presentation = if startup_can_present {
-                    present_fb0_dirty(&layer_target, frame_plan, disp, &mut arcade_list_renderer)
-                } else {
-                    let _ = disp.wait_vsync();
-                    LauncherPresentResult {
-                        copied_rows: 0,
-                        direct_preview_rows: 0,
-                        present_bytes: 0,
-                        wasted_present_bytes: 0,
-                        fb_present_us_override: None,
-                        vsync_us_override: None,
-                        cached_present_us: 0,
-                        hidden_compose_us: 0,
-                        hidden_preview_compose_us: 0,
-                        hidden_arcade_compose_us: 0,
-                        direct_preview_present_us: 0,
-                        arcade_list_present_us: 0,
-                        main_present_backend: LauncherPresentBackend::None,
-                        main_present_status: LauncherPresentStatus::None,
-                        main_present_buffer: 0,
-                        main_present_hidden_copy_us: 0,
-                        main_present_hidden_invalid_bytes: 0,
-                        main_present_hidden_rect_count: 0,
-                        main_present_hidden_catchup_bytes: 0,
-                        main_present_hidden_full_copy: false,
-                        main_present_request_us: 0,
-                        main_present_set_vga_fb_us: 0,
-                        main_present_wait_us: 0,
-                        main_present_route_us: 0,
-                        arcade_update_label: ArcadeUpdateTrace::None,
-                    }
-                };
-                (
-                    presentation,
-                    frame_t3,
-                    Instant::now(),
-                    cpu_t3,
-                    FrameAnalyticsCpuStamp::capture(frame_analytics_mode),
-                    pacing_trace,
-                )
-            };
+        let present_cycle = launcher_presenter.present(
+            LauncherPresentFrame {
+                plan: frame_plan,
+                startup_can_present,
+                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+                frame_start_phase_us,
+                pre_render_pace,
+                frame_analytics_mode,
+            },
+            LauncherPresentTargets {
+                layer_target: &layer_target,
+                fb0: disp,
+                hardware: f,
+                arcade_list_renderer: &mut arcade_list_renderer,
+                pacer: &mut pacer,
+                present_timing,
+            },
+            display_session,
+        );
+        let LauncherPresentCycle {
+            presentation,
+            frame_t3,
+            frame_t4,
+            cpu_t3,
+            cpu_t4,
+            pacing_trace,
+        } = present_cycle;
         app.global::<slint_ui::launcher::MisterBridge>()
             .set_present_mode_label(
                 present_mode_label_for_backend_status(
@@ -5278,6 +5075,7 @@ mod tests {
             LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
+            LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
         ] {
             assert!(!LauncherRenderIntent {
                 first_visible_copy_done: true,
