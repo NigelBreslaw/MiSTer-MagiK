@@ -10,12 +10,15 @@ use crate::Result;
 
 pub(crate) const AGENT_PORT: u16 = 7498;
 const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
+const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
+#[derive(Debug)]
 pub(crate) struct AgentResponse {
     pub(crate) response: Value,
     pub(crate) elapsed_ms: u128,
 }
 
+#[derive(Debug)]
 pub(crate) struct AgentBinaryResponse {
     pub(crate) response: Value,
     pub(crate) payload: Vec<u8>,
@@ -90,12 +93,7 @@ pub(crate) fn agent_binary_request(
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let response = parse_agent_response_line(line, start)?.response;
-    let payload_bytes = response
-        .pointer("/result/payload_bytes")
-        .or_else(|| response.pointer("/result/raw_bytes"))
-        .and_then(Value::as_u64)
-        .ok_or("agent binary response missing result payload byte count")?
-        as usize;
+    let payload_bytes = agent_binary_payload_len(&response)?;
     let mut payload = vec![0u8; payload_bytes];
     reader.read_exact(&mut payload)?;
     Ok(AgentBinaryResponse {
@@ -153,6 +151,22 @@ fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentRespon
     }
 }
 
+fn agent_binary_payload_len(response: &Value) -> Result<usize> {
+    let payload_bytes = response
+        .pointer("/result/payload_bytes")
+        .or_else(|| response.pointer("/result/raw_bytes"))
+        .and_then(Value::as_u64)
+        .ok_or("agent binary response missing result payload byte count")?;
+    if payload_bytes > MAX_AGENT_BINARY_PAYLOAD_BYTES {
+        return Err(
+            format!("agent binary response payload too large: {payload_bytes} bytes").into(),
+        );
+    }
+    usize::try_from(payload_bytes).map_err(|_| {
+        format!("agent binary response payload size overflows usize: {payload_bytes}").into()
+    })
+}
+
 pub(crate) fn verify_agent_deploy_result(
     result: &Value,
     expected_bytes: u64,
@@ -176,4 +190,78 @@ pub(crate) fn verify_agent_deploy_result(
         .into());
     }
     Ok(remote_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_response_parser_rejects_empty_and_error_responses() {
+        let start = Instant::now();
+
+        assert!(parse_agent_response_line(String::new(), start)
+            .expect_err("empty response should fail")
+            .to_string()
+            .contains("empty response"));
+        assert_eq!(
+            parse_agent_response_line(
+                "{\"ok\":false,\"error\":\"permission denied\"}\n".to_string(),
+                start
+            )
+            .expect_err("agent error should fail")
+            .to_string(),
+            "permission denied"
+        );
+    }
+
+    #[test]
+    fn agent_response_parser_accepts_successful_json() {
+        let response = parse_agent_response_line(
+            "{\"ok\":true,\"result\":{\"value\":42}}\n".to_string(),
+            Instant::now(),
+        )
+        .expect("success response");
+
+        assert_eq!(response.response["result"]["value"], 42);
+    }
+
+    #[test]
+    fn agent_binary_payload_len_prefers_payload_bytes_and_allows_raw_fallback() {
+        assert_eq!(
+            agent_binary_payload_len(&json!({
+                "result": {
+                    "payload_bytes": 7,
+                    "raw_bytes": 99,
+                }
+            }))
+            .expect("payload len"),
+            7
+        );
+        assert_eq!(
+            agent_binary_payload_len(&json!({
+                "result": {
+                    "raw_bytes": 11,
+                }
+            }))
+            .expect("raw fallback len"),
+            11
+        );
+    }
+
+    #[test]
+    fn agent_binary_payload_len_rejects_missing_or_oversized_values() {
+        assert!(agent_binary_payload_len(&json!({"result": {}}))
+            .expect_err("missing payload len should fail")
+            .to_string()
+            .contains("missing result payload byte count"));
+        assert!(agent_binary_payload_len(&json!({
+            "result": {
+                "payload_bytes": MAX_AGENT_BINARY_PAYLOAD_BYTES + 1,
+            }
+        }))
+        .expect_err("oversized payload len should fail")
+        .to_string()
+        .contains("payload too large"));
+    }
 }

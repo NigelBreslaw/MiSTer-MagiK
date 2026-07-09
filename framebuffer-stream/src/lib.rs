@@ -181,7 +181,10 @@ impl std::fmt::Display for FrameStreamError {
             Self::BadRect => write!(f, "bad framebuffer stream rect"),
             Self::PayloadTooLarge => write!(f, "framebuffer stream payload too large"),
             Self::BadPayloadLen { expected, actual } => {
-                write!(f, "bad framebuffer stream payload length expected={expected} actual={actual}")
+                write!(
+                    f,
+                    "bad framebuffer stream payload length expected={expected} actual={actual}"
+                )
             }
         }
     }
@@ -194,6 +197,7 @@ pub fn write_frame<W: Write>(
     header: FrameHeader,
     payload: &[u8],
 ) -> std::io::Result<()> {
+    validate_frame_for_transport(header, payload.len())?;
     writer.write_all(&header.encode())?;
     writer.write_all(payload)
 }
@@ -203,9 +207,50 @@ pub fn read_frame<R: Read>(reader: &mut R) -> std::io::Result<(FrameHeader, Vec<
     reader.read_exact(&mut header_bytes)?;
     let header = FrameHeader::decode(&header_bytes)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-    let mut payload = vec![0u8; header.payload_bytes as usize];
+    validate_frame_shape_for_transport(header)?;
+    let payload_len = declared_payload_len(header)?;
+    let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
+    validate_frame_payload_len(header, payload.len())?;
     Ok((header, payload))
+}
+
+fn validate_frame_for_transport(header: FrameHeader, payload_len: usize) -> std::io::Result<()> {
+    validate_frame_shape_for_transport(header)?;
+    validate_frame_payload_len(header, payload_len)
+}
+
+fn validate_frame_payload_len(header: FrameHeader, payload_len: usize) -> std::io::Result<()> {
+    let declared_payload_len = declared_payload_len(header)?;
+    if declared_payload_len != payload_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "framebuffer stream payload length mismatch expected={} actual={payload_len}",
+                header.payload_bytes
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn declared_payload_len(header: FrameHeader) -> std::io::Result<usize> {
+    let declared_payload_len = usize::try_from(header.payload_bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "framebuffer stream payload length overflows usize",
+        )
+    })?;
+    Ok(declared_payload_len)
+}
+
+fn validate_frame_shape_for_transport(header: FrameHeader) -> std::io::Result<()> {
+    if matches!(header.kind, FrameKind::Keyframe | FrameKind::RectDelta) {
+        header
+            .validate_shape()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    }
+    Ok(())
 }
 
 fn write_u16(dst: &mut [u8], value: u16) {
@@ -313,5 +358,59 @@ mod tests {
 
         assert_eq!(decoded.payload_bytes, payload.len() as u32);
         assert_eq!(decoded_payload, payload);
+    }
+
+    #[test]
+    fn write_frame_rejects_payload_length_mismatch() {
+        let mut header = keyframe_header();
+        header.payload_bytes = 99;
+        let mut wire = Vec::new();
+
+        let err = write_frame(&mut wire, header, &[1, 2, 3, 4])
+            .expect_err("payload length mismatch should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn read_frame_rejects_malformed_data_shape() {
+        let mut header = keyframe_header();
+        header.geometry.stride_pixels = header.geometry.width - 1;
+        header.payload_bytes = 0;
+        let wire = header.encode().to_vec();
+
+        let err = read_frame(&mut wire.as_slice()).expect_err("bad shape should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_frame_allows_zero_geometry_heartbeat() {
+        let header = FrameHeader {
+            kind: FrameKind::Heartbeat,
+            flags: 0,
+            sequence: 0,
+            timestamp_us: 123,
+            geometry: FrameGeometry {
+                width: 0,
+                height: 0,
+                stride_pixels: 0,
+            },
+            rect: FrameRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            raw_bytes: 0,
+            payload_bytes: 0,
+        };
+        let wire = header.encode().to_vec();
+
+        let (decoded, payload) = read_frame(&mut wire.as_slice()).expect("heartbeat should read");
+
+        assert_eq!(decoded, header);
+        assert!(payload.is_empty());
     }
 }
