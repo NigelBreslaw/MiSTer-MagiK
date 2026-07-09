@@ -101,6 +101,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_request_us: u128,
+    pub(super) main_present_set_vga_fb_us: u128,
     pub(super) main_present_wait_us: u64,
     pub(super) main_present_route_us: u64,
     pub(super) vsync_source: Option<VsyncPaceSource>,
@@ -241,6 +242,7 @@ impl LauncherFrameSnapshotBuilder {
             main_present_buffer: self.presentation.main_present_buffer,
             main_present_hidden_copy_us: self.presentation.main_present_hidden_copy_us,
             main_present_request_us: self.presentation.main_present_request_us,
+            main_present_set_vga_fb_us: self.presentation.main_present_set_vga_fb_us,
             main_present_wait_us: self.presentation.main_present_wait_us,
             main_present_route_us: self.presentation.main_present_route_us,
             vsync_source: self.pacing.vsync_source,
@@ -416,6 +418,7 @@ struct PreviewScrollTraceRow {
     main_present_buffer: u8,
     main_present_hidden_copy_us: u128,
     main_present_request_us: u128,
+    main_present_set_vga_fb_us: u128,
     main_present_wait_us: u64,
     main_present_route_us: u64,
     vsync_source: &'static str,
@@ -475,7 +478,7 @@ impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
         let _ = write!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -526,6 +529,7 @@ impl PreviewScrollTraceRow {
             self.main_present_buffer,
             self.main_present_hidden_copy_us,
             self.main_present_request_us,
+            self.main_present_set_vga_fb_us,
             self.main_present_wait_us,
             self.main_present_route_us,
             self.vsync_source,
@@ -625,6 +629,7 @@ fn preview_scroll_trace_row_from_frame(
         main_present_buffer: frame.main_present_buffer,
         main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
         main_present_request_us: frame.main_present_request_us,
+        main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
         main_present_wait_us: frame.main_present_wait_us,
         main_present_route_us: frame.main_present_route_us,
         vsync_source: frame
@@ -1937,6 +1942,7 @@ mod tests {
             main_present_buffer: 0,
             main_present_hidden_copy_us: 0,
             main_present_request_us: 0,
+            main_present_set_vga_fb_us: 0,
             main_present_wait_us: 0,
             main_present_route_us: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
@@ -2030,6 +2036,7 @@ mod tests {
                 main_present_buffer: frame.main_present_buffer,
                 main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
                 main_present_request_us: frame.main_present_request_us,
+                main_present_set_vga_fb_us: frame.main_present_set_vga_fb_us,
                 main_present_wait_us: frame.main_present_wait_us,
                 main_present_route_us: frame.main_present_route_us,
                 arcade_update_label: frame.arcade_update_label,
@@ -2338,7 +2345,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

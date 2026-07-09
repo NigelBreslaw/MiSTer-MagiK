@@ -107,6 +107,8 @@ struct FpgaVblankLatchHiddenPresenter {
     width: usize,
     height: usize,
     route: LauncherFramebufferRoute,
+    latch_geometry: crate::fpga::LatchedFbufGeometry,
+    route_armed: bool,
     status_probe_countdown: u16,
     status_probe_interval: u16,
     last_status_supported: bool,
@@ -118,6 +120,7 @@ struct FpgaVblankLatchHiddenPresentStats {
     buffer_index: u8,
     copy_us: u128,
     post_us: u128,
+    set_vga_fb_us: u128,
     status_us: u64,
     set_supported: bool,
     status_supported: bool,
@@ -174,6 +177,12 @@ impl FpgaVblankLatchHiddenPresenter {
                 return None;
             }
         };
+        let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
+        let latch_geometry = crate::fpga::LatchedFbufGeometry::new(
+            width as u16,
+            route.mode(),
+            configured_fpga_latch_right_guard_cols(),
+        );
         Some(Self {
             buffer1,
             buffer2,
@@ -184,7 +193,9 @@ impl FpgaVblankLatchHiddenPresenter {
             sequence: 1,
             width,
             height,
-            route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
+            route,
+            latch_geometry,
+            route_armed: false,
             status_probe_countdown: 0,
             status_probe_interval: configured_fpga_latch_status_interval(),
             last_status_supported: false,
@@ -224,11 +235,18 @@ impl FpgaVblankLatchHiddenPresenter {
                 base_addr,
                 self.width as u16,
                 self.height as u16,
-                self.route.mode(),
-                self.route.set_vga_fb(),
+                self.latch_geometry,
             )
             .map_err(|e| e.to_string())?;
         let post_us = post_start.elapsed().as_micros();
+        let set_vga_fb_us = if self.route.set_vga_fb() && !self.route_armed {
+            let set_vga_fb_start = Instant::now();
+            fpga.set_vga_fb(true).map_err(|e| e.to_string())?;
+            self.route_armed = true;
+            set_vga_fb_start.elapsed().as_micros()
+        } else {
+            0
+        };
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
@@ -273,12 +291,23 @@ impl FpgaVblankLatchHiddenPresenter {
             buffer_index,
             copy_us,
             post_us,
+            set_vga_fb_us,
             status_us,
             set_supported,
             status_supported,
             flip_count,
         })
     }
+}
+
+fn configured_fpga_latch_right_guard_cols() -> i32 {
+    static VALUE: OnceLock<i32> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+            .unwrap_or(1)
+    })
 }
 
 fn configured_fpga_latch_status_interval() -> u16 {
@@ -3329,8 +3358,10 @@ pub(super) fn run_launcher_loop(
                     let hidden_compose_us = hidden_preview_compose_us + hidden_arcade_compose_us;
                     match presenter.present_cached_full_frame(layer_target.cached_565(), f) {
                         Ok(stats) => {
-                            let present_us =
-                                stats.copy_us + stats.post_us + u128::from(stats.status_us);
+                            let present_us = stats.copy_us
+                                + stats.post_us
+                                + stats.set_vga_fb_us
+                                + u128::from(stats.status_us);
                             latch_presentation = Some(LauncherPresentResult {
                                 copied_rows: ui.render_h() as u32,
                                 direct_preview_rows,
@@ -3354,7 +3385,8 @@ pub(super) fn run_launcher_loop(
                                 },
                                 main_present_buffer: stats.buffer_index,
                                 main_present_hidden_copy_us: stats.copy_us,
-                                main_present_request_us: stats.post_us,
+                                main_present_request_us: stats.post_us + stats.set_vga_fb_us,
+                                main_present_set_vga_fb_us: stats.set_vga_fb_us,
                                 main_present_wait_us: stats.status_us,
                                 // Compatibility trace field: latch mode reports the FPGA flip counter here.
                                 main_present_route_us: stats.flip_count as u64,
@@ -3488,6 +3520,7 @@ pub(super) fn run_launcher_loop(
                         main_present_buffer: 0,
                         main_present_hidden_copy_us: 0,
                         main_present_request_us: 0,
+                        main_present_set_vga_fb_us: 0,
                         main_present_wait_us: 0,
                         main_present_route_us: 0,
                         arcade_update_label: ArcadeUpdateTrace::None,

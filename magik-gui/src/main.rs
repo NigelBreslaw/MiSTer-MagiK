@@ -113,6 +113,8 @@ pub use mister_magik_fb::{
     media_update, preview_worker, setup_nav,
 };
 
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use fpga::LatchedFbufGeometry;
 use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use fpga::{MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC};
@@ -1225,14 +1227,14 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
     let copy_us = copy_start.elapsed().as_micros() as u64;
 
     let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let latch_geometry = LatchedFbufGeometry::new(width as u16, route, 1);
     let post_start = std::time::Instant::now();
     let post = fpga.post_magik_latched_fbuf_rgb565(
         1,
         base_addr,
         width as u16,
         height as u16,
-        route,
-        false,
+        latch_geometry,
     );
     let post_us = post_start.elapsed().as_micros() as u64;
     let (ack_high, ack_low) = match post {
@@ -1330,6 +1332,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
         }
     };
     let route = FramebufferRouteMode::framebuffer_sized(width as u16, height as u16);
+    let latch_geometry = LatchedFbufGeometry::new(width as u16, route, 1);
     let mut source = vec![Rgb565Pixel(0); width * height];
     let mut copy_samples = Vec::with_capacity(frames);
     let mut post_samples = Vec::with_capacity(frames);
@@ -1372,8 +1375,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
             base_addr,
             width as u16,
             height as u16,
-            route,
-            false,
+            latch_geometry,
         );
         let post_us = post_start.elapsed().as_micros() as u64;
         let set_supported = match post {

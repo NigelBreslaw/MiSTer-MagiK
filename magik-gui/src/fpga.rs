@@ -55,6 +55,32 @@ pub const FB_DV_LBRD: i32 = 3;
 pub const FB_DV_UBRD: i32 = 2;
 
 #[derive(Clone, Copy, Debug)]
+pub struct LatchedFbufGeometry {
+    pub xoff: u16,
+    pub right: u16,
+    pub yoff: u16,
+    pub bottom: u16,
+    pub stride_bytes: u16,
+}
+
+impl LatchedFbufGeometry {
+    pub fn new(fb_width: u16, mode: FramebufferRouteMode, right_guard_cols: i32) -> Self {
+        let xoff = mode.hbp as i32 - FB_DV_LBRD;
+        let yoff = mode.vbp as i32 - FB_DV_UBRD;
+        let right_guard_cols = right_guard_cols.clamp(0, mode.hact.saturating_sub(1) as i32);
+        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
+        let bottom = yoff + mode.vact as i32 - 1;
+        Self {
+            xoff: xoff as u16,
+            right: right as u16,
+            yoff: yoff as u16,
+            bottom: bottom as u16,
+            stride_bytes: rgb565_stride_bytes(fb_width as usize) as u16,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct VideoInfo {
     pub raw_res: u16,
     pub width: u32,
@@ -401,19 +427,8 @@ impl Fpga {
         base_addr: u32,
         fb_width: u16,
         fb_height: u16,
-        mode: FramebufferRouteMode,
-        set_vga_fb: bool,
+        geometry: LatchedFbufGeometry,
     ) -> io::Result<(u16, u16)> {
-        let xoff = mode.hbp as i32 - FB_DV_LBRD;
-        let yoff = mode.vbp as i32 - FB_DV_UBRD;
-        let right_guard_cols = std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
-            .ok()
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(1)
-            .clamp(0, mode.hact.saturating_sub(1) as i32);
-        let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
-        let bottom = yoff + mode.vact as i32 - 1;
-
         self.disable_io();
         let support = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH)?;
         let stream_res: io::Result<()> = (|| {
@@ -423,19 +438,16 @@ impl Fpga {
             self.spi_w((base_addr >> 16) as u16)?;
             self.spi_w(fb_width)?;
             self.spi_w(fb_height)?;
-            self.spi_w(xoff as u16)?;
-            self.spi_w(right as u16)?;
-            self.spi_w(yoff as u16)?;
-            self.spi_w(bottom as u16)?;
-            self.spi_w(rgb565_stride_bytes(fb_width as usize) as u16)?;
+            self.spi_w(geometry.xoff)?;
+            self.spi_w(geometry.right)?;
+            self.spi_w(geometry.yoff)?;
+            self.spi_w(geometry.bottom)?;
+            self.spi_w(geometry.stride_bytes)?;
             self.spi_w(sequence)?;
             Ok(())
         })();
         self.disable_io();
         stream_res?;
-        if set_vga_fb {
-            self.set_vga_fb(true)?;
-        }
         Ok(support)
     }
 
