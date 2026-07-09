@@ -239,13 +239,14 @@ impl FpgaVblankLatchHiddenPresenter {
         } else {
             (&mut self.buffer2, self.base2)
         };
-        let invalid = if buffer_index == 1 {
+        let accumulated_invalid = if buffer_index == 1 {
             self.invalid1
         } else {
             self.invalid2
         };
+        let copy_damage = union_dirty_rect(accumulated_invalid, damage);
         let copy_start = Instant::now();
-        let copied_bytes = match invalid {
+        let copied_bytes = match copy_damage {
             Some(rect) => buffer
                 .copy_rect(cached, self.width, rect)
                 .map_err(|e| e.to_string())?,
@@ -259,11 +260,11 @@ impl FpgaVblankLatchHiddenPresenter {
             x1: self.width,
             y1: self.height,
         };
-        let invalid_bytes = invalid
+        let invalid_bytes = accumulated_invalid
             .map(|rect| rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
             .unwrap_or(0);
-        let rect_count = u32::from(invalid.is_some());
-        let full_copy = invalid == Some(full_rect);
+        let rect_count = u32::from(copy_damage.is_some());
+        let full_copy = copy_damage == Some(full_rect);
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
