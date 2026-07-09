@@ -62,8 +62,7 @@ use mister_magik_fb::framebuffer::target::{
     DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
-    format::rgb565_stride_bytes,
-    hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer},
+    format::rgb565_stride_bytes, hidden::HiddenRgb565BufferIndex,
     plugin_probe::PluginHiddenRgb565Framebuffer,
 };
 use slint_ui::launcher::PreviewStatus;

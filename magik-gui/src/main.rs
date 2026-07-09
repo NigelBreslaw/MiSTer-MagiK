@@ -24,15 +24,11 @@
 //!     plugin-map-report  report stock-kernel plugin probe metadata
 //!     plugin-map-bandwidth
 //!                        benchmark plugin probe mappings
-//!     plugin-presenter-report
-//!                        report plugin async-present mailbox capability
 //!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
 //!     fpga-latch-post-report
 //!                        fill one plugin hidden slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill plugin hidden slots and vblank-latch them in FPGA
-//!     plugin-present-pattern
-//!                        fill plugin hidden slots and ask Main to vblank flip them
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -88,8 +84,6 @@ mod frame_profile;
 mod input;
 mod launch_preparation;
 mod launcher;
-#[cfg(feature = "ui")]
-mod main_present;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
@@ -329,10 +323,6 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "plugin-map-report" => run_plugin_map_report(),
         #[cfg(feature = "diagnostics")]
         "plugin-map-bandwidth" => run_plugin_map_bandwidth(),
-        #[cfg(feature = "diagnostics")]
-        "plugin-presenter-report" => run_plugin_presenter_report(),
-        #[cfg(all(feature = "diagnostics", feature = "ui"))]
-        "plugin-present-pattern" => run_plugin_present_pattern(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -1137,55 +1127,6 @@ fn run_plugin_map_report() {
 }
 
 #[cfg(feature = "diagnostics")]
-fn run_plugin_presenter_report() {
-    let before = match read_plugin_probe_metadata() {
-        Ok(metadata) => metadata,
-        Err(e) => {
-            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_before\terror={e}");
-            std::process::exit(1);
-        }
-    };
-    for line in before.lines().filter(|line| {
-        line.starts_with("plugin_presenter_capability_tsv\t")
-            || line.starts_with("plugin_presenter_status_tsv\t")
-    }) {
-        crate::ui_logln!("plugin_presenter_before_{line}");
-    }
-
-    let request = "plugin_present_async_v1 sequence=1 buffer=1 width=960 height=540 stride=1920\n";
-    let post_start = std::time::Instant::now();
-    let post_result = std::fs::OpenOptions::new()
-        .write(true)
-        .open(PLUGIN_PROBE_DEVICE)
-        .and_then(|mut file| file.write_all(request.as_bytes()));
-    let post_us = post_start.elapsed().as_micros();
-    match post_result {
-        Ok(()) => crate::ui_logln!(
-            "plugin_presenter_post_tsv\tok=1\tpost_us={post_us}\trequest={}",
-            request.trim()
-        ),
-        Err(e) => {
-            crate::ui_logln!("plugin_presenter_post_tsv\tok=0\tpost_us={post_us}\terror={e}");
-            std::process::exit(1);
-        }
-    }
-
-    let after = match read_plugin_probe_metadata() {
-        Ok(metadata) => metadata,
-        Err(e) => {
-            crate::ui_errln!("plugin_presenter_report_failed\tstage=read_after\terror={e}");
-            std::process::exit(1);
-        }
-    };
-    for line in after.lines().filter(|line| {
-        line.starts_with("plugin_presenter_capability_tsv\t")
-            || line.starts_with("plugin_presenter_status_tsv\t")
-    }) {
-        crate::ui_logln!("plugin_presenter_after_{line}");
-    }
-}
-
-#[cfg(feature = "diagnostics")]
 fn run_fpga_latch_report() {
     let mut fpga = match Fpga::open() {
         Ok(fpga) => fpga,
@@ -1271,7 +1212,7 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
         }
     };
     let mut source = vec![Rgb565Pixel(0); width * height];
-    fill_plugin_present_pattern(&mut source, width, height, 0, 1);
+    fill_hidden_latch_pattern(&mut source, width, height, 0, 1);
 
     let copy_start = std::time::Instant::now();
     if let Err(e) = buffer.copy_full_frame(&source, width) {
@@ -1405,7 +1346,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
     for frame in 0..frames {
         let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
         let sequence = (frame as u16).wrapping_add(1).max(1);
-        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
+        fill_hidden_latch_pattern(&mut source, width, height, frame, buffer_index);
 
         let copy_start = std::time::Instant::now();
         let copy_result = if buffer_index == 1 {
@@ -1619,131 +1560,7 @@ fn run_plugin_map_bandwidth() {
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
-fn run_plugin_present_pattern() {
-    use slint::platform::software_renderer::Rgb565Pixel;
-
-    let frames = std::env::var("MISTER_PLUGIN_PRESENT_PATTERN_FRAMES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
-        .unwrap_or(180)
-        .max(1);
-    let width = 960usize;
-    let height = 540usize;
-    let stride_bytes = rgb565_stride_bytes(width);
-    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
-        HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
-        width,
-        height,
-        stride_bytes,
-    ) {
-        Ok(buffer) => buffer,
-        Err(e) => {
-            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=1\terror={e}");
-            std::process::exit(1);
-        }
-    };
-    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
-        HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
-        width,
-        height,
-        stride_bytes,
-    ) {
-        Ok(buffer) => buffer,
-        Err(e) => {
-            crate::ui_errln!("plugin_present_pattern_open_failed\tbuffer=2\terror={e}");
-            std::process::exit(1);
-        }
-    };
-    let mut source = vec![Rgb565Pixel(0); width * height];
-    let client = main_present::MainPresentClient::default_paths();
-    let mut copy_samples = Vec::with_capacity(frames);
-    let mut request_samples = Vec::with_capacity(frames);
-    let mut wait_samples = Vec::with_capacity(frames);
-    let mut route_samples = Vec::with_capacity(frames);
-
-    crate::ui_logln!(
-        "plugin_present_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}",
-        stride_bytes * height
-    );
-    crate::ui_logln!(
-        "plugin_present_pattern_frame_tsv\tframe\tbuffer\tcopy_us\trequest_us\twait_us\troute_us\tstatus"
-    );
-
-    for frame in 0..frames {
-        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
-        fill_plugin_present_pattern(&mut source, width, height, frame, buffer_index);
-
-        let copy_start = std::time::Instant::now();
-        let copy_result = if buffer_index == 1 {
-            buffer1.copy_full_frame(&source, width)
-        } else {
-            buffer2.copy_full_frame(&source, width)
-        };
-        let copy_us = copy_start.elapsed().as_micros() as u64;
-        if let Err(e) = copy_result {
-            crate::ui_errln!(
-                "plugin_present_pattern_failed\tstage=copy\tframe={frame}\tbuffer={buffer_index}\terror={e}"
-            );
-            std::process::exit(1);
-        }
-
-        let sequence = (frame as u32).wrapping_add(1).max(1);
-        let request_start = std::time::Instant::now();
-        let present = client.present(main_present::MainPresentRequest {
-            sequence,
-            buffer_index,
-            width,
-            height,
-            stride_bytes,
-        });
-        let request_us = request_start.elapsed().as_micros() as u64;
-        match present {
-            Ok(ack) => {
-                copy_samples.push(copy_us);
-                request_samples.push(request_us);
-                wait_samples.push(ack.wait_us);
-                route_samples.push(ack.route_us);
-                crate::ui_logln!(
-                    "plugin_present_pattern_frame_tsv\t{frame}\t{buffer_index}\t{copy_us}\t{request_us}\t{}\t{}\t{}",
-                    ack.wait_us,
-                    ack.route_us,
-                    ack.status
-                );
-            }
-            Err(e) => {
-                crate::ui_errln!(
-                    "plugin_present_pattern_failed\tstage=present\tframe={frame}\tbuffer={buffer_index}\tcopy_us={copy_us}\trequest_us={request_us}\terror={e}"
-                );
-                std::process::exit(1);
-            }
-        }
-    }
-
-    crate::ui_logln!(
-        "plugin_present_pattern_summary_tsv\tframes={}\tcopy_p50_us={}\tcopy_p95_us={}\tcopy_p99_us={}\tcopy_max_us={}\trequest_p50_us={}\trequest_p95_us={}\trequest_p99_us={}\trequest_max_us={}\twait_p50_us={}\twait_p95_us={}\twait_p99_us={}\twait_max_us={}\troute_p50_us={}\troute_p95_us={}\troute_p99_us={}\troute_max_us={}",
-        copy_samples.len(),
-        percentile_u64(&copy_samples, 50),
-        percentile_u64(&copy_samples, 95),
-        percentile_u64(&copy_samples, 99),
-        copy_samples.iter().copied().max().unwrap_or_default(),
-        percentile_u64(&request_samples, 50),
-        percentile_u64(&request_samples, 95),
-        percentile_u64(&request_samples, 99),
-        request_samples.iter().copied().max().unwrap_or_default(),
-        percentile_u64(&wait_samples, 50),
-        percentile_u64(&wait_samples, 95),
-        percentile_u64(&wait_samples, 99),
-        wait_samples.iter().copied().max().unwrap_or_default(),
-        percentile_u64(&route_samples, 50),
-        percentile_u64(&route_samples, 95),
-        percentile_u64(&route_samples, 99),
-        route_samples.iter().copied().max().unwrap_or_default()
-    );
-}
-
-#[cfg(all(feature = "diagnostics", feature = "ui"))]
-fn fill_plugin_present_pattern(
+fn fill_hidden_latch_pattern(
     pixels: &mut [slint::platform::software_renderer::Rgb565Pixel],
     width: usize,
     height: usize,

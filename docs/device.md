@@ -152,6 +152,16 @@ The launcher path relies on Rust-owned framebuffer setup:
 - Route buffer 0 with the FPGA `SET_FBUF` command.
 - Keep the route alive while the launcher runs.
 
+Supported launcher rendering paths are:
+
+- Default/fallback: cached RGB565 rendering plus dirty copies into `/dev/fb0`.
+- Experimental: `MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden`, which uses
+  the stock-kernel plugin for fast hidden-slot writes and the experimental Menu
+  RBF to latch the selected buffer on HDMI vblank.
+
+Main-mediated present request/ack and FIFO present experiments are retired; do
+not use them for current device work.
+
 MagiK chooses the UI framebuffer size with `MISTER_UI_FB_SIZE`:
 
 - `auto` is the production default. 1080p-class HDMI output uses a 960x540
