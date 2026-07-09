@@ -1,7 +1,9 @@
 diff --git a/sys/sys_top.v b/sys/sys_top.v
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -353,0 +354,31 @@ reg [15:0] io_dout_sys;
+@@ -351,3 +351,33 @@ reg [15:0] io_dout_sys;
+ reg [15:0] io_dout_sys;
+ 
 +// MiSTer MagiK experiment: queue an HPS framebuffer route and apply it only
 +// on HDMI vblank. This keeps the existing UIO_SET_FBUF path unchanged while
 +// adding a diagnostics-only command for a vblank-latched presenter.
@@ -32,8 +34,10 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +reg magik_vbl_sys = 0;
 +reg magik_vbl_old = 0;
 +wire magik_vbl_rise = ~magik_vbl_old & magik_vbl_sys;
-+
-@@ -362,0 +394,21 @@ always@(posedge clk_sys) begin
+ always@(posedge clk_sys) begin
+@@ -359,3 +389,23 @@ always@(posedge clk_sys) begin
+ 	reg  [7:0] fb_crc;
+ 
 +	magik_vbl_meta <= hdmi_vbl;
 +	magik_vbl_sys <= magik_vbl_meta;
 +	magik_vbl_old <= magik_vbl_sys;
@@ -54,11 +58,16 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +		MAGIK_LFB_FLIP_COUNT <= MAGIK_LFB_FLIP_COUNT + 1'd1;
 +		MAGIK_LFB_PENDING <= 0;
 +	end
-+
-@@ -410,0 +463,2 @@ always@(posedge clk_sys) begin
+ 	coef_wr <= 0;
+@@ -397,3 +449,5 @@ always@(posedge clk_sys) begin
+ `endif
+ 			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
 +			if(io_din[7:0] == MAGIK_UIO_SET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_LATCH_MAGIC;
 +			if(io_din[7:0] == MAGIK_UIO_GET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_STATUS_MAGIC;
-@@ -464,0 +519,35 @@ always@(posedge clk_sys) begin
+ 		end
+@@ -451,3 +505,38 @@ always@(posedge clk_sys) begin
+ 				endcase
+ 			end
 +			if(cmd == MAGIK_UIO_SET_FBUF_LATCH) begin
 +				case(cnt[3:0])
 +					0: {MAGIK_LFB_EN,MAGIK_LFB_FLT,MAGIK_LFB_FMT} <= {io_din[15], io_din[14], io_din[5:0]};
@@ -70,7 +79,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +					6: MAGIK_LFB_HMAX        <= io_din[11:0];
 +					7: MAGIK_LFB_VMIN        <= io_din[11:0];
 +					8: MAGIK_LFB_VMAX        <= io_din[11:0];
-+					9: MAGIK_LFB_STRIDE <= io_din[13:0];
++					9: MAGIK_LFB_STRIDE      <= io_din[13:0];
 +					10: begin
 +						MAGIK_LFB_PENDING_SEQ <= io_din;
 +						MAGIK_LFB_PENDING <= 1;
@@ -94,3 +103,4 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +					10: io_dout_sys <= LFB_STRIDE;
 +				endcase
 +			end
+ 			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
