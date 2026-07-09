@@ -75,26 +75,6 @@ verify_sha1() {
   fi
 }
 
-patch_qenv_for_orbstack() {
-  local patch="${QUARTUS_PATCH_QENV_FOR_ORBSTACK:-}"
-  if [[ -z "$patch" && "${OSTYPE:-}" == darwin* ]]; then
-    patch=1
-  fi
-  if [[ "$patch" != "1" ]]; then
-    return 0
-  fi
-  local qenv="$INSTALL_ROOT/17.0/quartus/adm/qenv.sh"
-  [[ -f "$qenv" ]] || return 1
-  if grep -q 'orbstack-amd64-emulation' "$qenv"; then
-    return 0
-  fi
-  if [[ ! -f "$qenv.orig" ]]; then
-    cp "$qenv" "$qenv.orig"
-  fi
-  perl -0pi -e 's/# We don.*?fi\n\n##### Determine/# MagiK OrbStack amd64 emulation: Docker reports uname -m=x86_64, but \/proc\/cpuinfo can still expose host ARM flags. Quartus binaries run; bypass only this shell-wrapper SSE probe.\nexport cpumodel="orbstack-amd64-emulation"\n\n##### Determine/s' "$qenv"
-  grep -q 'orbstack-amd64-emulation' "$qenv"
-}
-
 if [[ "${QUARTUS_ACCEPT_EULA:-}" != "1" ]]; then
   echo "set QUARTUS_ACCEPT_EULA=1 after accepting the Quartus installer terms" >&2
   exit 1
@@ -187,8 +167,6 @@ if [[ -f "$CACHE_DIR/$UPDATE2_RUN" ]]; then
     "$IMAGE" \
     bash -lc "chmod +x '$UPDATE2_RUN' && ./'$UPDATE2_RUN' --mode unattended --unattendedmodeui minimal --installdir /opt/intelFPGA_lite/17.0"
 fi
-
-patch_qenv_for_orbstack
 
 docker run --platform linux/amd64 --rm \
   --volume "$INSTALL_ROOT:/opt/intelFPGA_lite:ro" \
