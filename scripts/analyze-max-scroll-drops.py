@@ -150,6 +150,13 @@ def print_summary(
     walls = [int_field(row, "wall_us") for row in rows]
     works = [work_us(row) for row in rows]
     over = [row for row in rows if int_field(row, "wall_us") > FRAME_BUDGET_US]
+    loop_over = [row for row in rows if int_field(row, "loop_delta_us") > FRAME_BUDGET_US]
+    cadence_misses = [
+        row
+        for row in rows
+        if int_field(row, "wall_us") > FRAME_BUDGET_US
+        or int_field(row, "loop_delta_us") > FRAME_BUDGET_US
+    ]
     near = [row for row in rows if int_field(row, "wall_us") >= 16_000]
     latch_rows = [row for row in rows if is_latch_row(row)]
     latch_misses = [row for row in latch_rows if latch_deadline_margin_us(row) < 0]
@@ -169,6 +176,7 @@ def print_summary(
     backend_valid = expect_backend is None or backend_counts == Counter({expect_backend: len(rows)})
     latch_valid = not latch_rows or (
         len(latch_misses) == 0
+        and len(cadence_misses) == 0
         and status_counts == Counter({"ok": len(rows)})
         and backend_valid
     )
@@ -180,6 +188,8 @@ def print_summary(
     )
     detail = (
         f"frames={len(rows)} near_ge_16000={len(near)} drops_gt_16667={len(over)} "
+        f"loop_drops_gt_16667={len(loop_over)} "
+        f"strict_cadence_misses={len(cadence_misses)} "
         f"wall_p50={percentile(walls, 50)} wall_p95={percentile(walls, 95)} "
         f"wall_p99={percentile(walls, 99)} wall_max={max(walls)} "
         f"work_p99={percentile(works, 99)} work_max={max(works)} "
@@ -207,9 +217,20 @@ def print_summary(
     )
     if expect_backend == LATCH_BACKEND or latch_rows:
         valid = latch_valid
-        invalid_reason = "ok" if valid else "latch_deadline_or_backend"
+        if valid:
+            invalid_reason = "ok"
+        else:
+            missed_deadline = len(latch_misses) > 0 or not backend_valid
+            missed_cadence = len(cadence_misses) > 0
+            invalid_reason = (
+                "latch_deadline_and_cadence"
+                if missed_deadline and missed_cadence
+                else "strict_cadence"
+                if missed_cadence
+                else "latch_deadline_or_backend"
+            )
     else:
-        valid = len(over) == 0 and backend_valid
+        valid = len(cadence_misses) == 0 and backend_valid
         invalid_reason = "ok" if valid else "over_budget_frames"
     print(
         f"max_scroll_gate_tsv\tlabel={label}\tvalid={1 if valid else 0}"
@@ -226,10 +247,19 @@ def print_summary(
             "selected": row.get("selected", ""),
             "visual_index": row.get("visual_index", ""),
             "wall_us": int_field(row, "wall_us"),
+            "loop_delta_us": int_field(row, "loop_delta_us"),
             "work_us": work_us(row),
             "over_budget_us": max(0, int_field(row, "wall_us") - FRAME_BUDGET_US),
+            "loop_over_budget_us": max(
+                0, int_field(row, "loop_delta_us") - FRAME_BUDGET_US
+            ),
             "latch_post_done_phase_us": latch_post_done_phase_us(row),
             "latch_deadline_margin_us": latch_deadline_margin_us(row),
+            "deadline_miss": int(latch_deadline_margin_us(row) < 0),
+            "cadence_miss": int(
+                int_field(row, "wall_us") > FRAME_BUDGET_US
+                or int_field(row, "loop_delta_us") > FRAME_BUDGET_US
+            ),
             "dominant_delta": dominant_phase(row, medians),
         }
         for column in PHASE_COLUMNS + CONTEXT_COLUMNS:
@@ -276,6 +306,7 @@ def run_self_test() -> int:
         "vsync_us": "15000",
         "fb_present_us": "1300",
         "wall_us": "16300",
+        "loop_delta_us": "16300",
         "vsync_period_us": "16667",
         "present_phase_us": "1000",
         "main_present_backend": LATCH_BACKEND,
@@ -286,6 +317,9 @@ def run_self_test() -> int:
     }
     missed = dict(base)
     missed["present_phase_us"] = "16000"
+    cadence_missed = dict(base)
+    cadence_missed["wall_us"] = "17000"
+    cadence_missed["loop_delta_us"] = "17000"
     if latch_deadline_margin_us(base) <= 0:
         print("self-test expected positive latch margin", file=sys.stderr)
         return 1
@@ -297,6 +331,15 @@ def run_self_test() -> int:
         return 1
     if print_summary("self-latch-fail", [missed], [], 1, LATCH_BACKEND) == 0:
         print("self-test expected latch failure", file=sys.stderr)
+        return 1
+    if print_summary("self-latch-cadence-fail", [cadence_missed], [], 1, LATCH_BACKEND) == 0:
+        print("self-test expected latch cadence failure", file=sys.stderr)
+        return 1
+    deadline_only = dict(missed)
+    deadline_only["wall_us"] = "16300"
+    deadline_only["loop_delta_us"] = "16300"
+    if print_summary("self-latch-deadline-only-fail", [deadline_only], [], 1, LATCH_BACKEND) == 0:
+        print("self-test expected latch deadline-only failure", file=sys.stderr)
         return 1
     return 0
 
