@@ -32,7 +32,7 @@ git -C reference/Menu_MiSTer apply --check ../../experiments/fpga-vblank-latch/M
 New UIO commands:
 
 - `0x43` - `MAGIK_UIO_SET_FBUF_LATCH`
-- `0x44` - `MAGIK_UIO_GET_FBUF_LATCH`
+- `0x45` - `MAGIK_UIO_GET_FBUF_LATCH` (`0x44` is now used by upstream Menu)
 
 `0x43` accepts the same framebuffer route payload shape as `UIO_SET_FBUF`:
 
@@ -52,7 +52,7 @@ The key difference is that the command writes pending `MAGIK_LFB_*` registers.
 The active `LFB_*` registers are updated only on the synchronized HDMI vblank
 rising edge.
 
-`0x44` returns status counters and active route metadata:
+`0x45` returns status counters and active route metadata:
 
 - active sequence
 - pending sequence
@@ -128,4 +128,3 @@ fpga_latch_status_tsv supported=1 magic_expected=0x4d48
 Only after that should we add a posting diagnostic that writes alternating
 hidden-slot framebuffer routes and verifies `flip_count`/`active_sequence`
 advances at vblank.
-
