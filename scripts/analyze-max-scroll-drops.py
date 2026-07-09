@@ -23,6 +23,9 @@ PHASE_COLUMNS = [
     "vsync_us",
     "fb_present_us",
     "cached_present_us",
+    "hidden_compose_us",
+    "hidden_preview_compose_us",
+    "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
     "preview_apply_us",
@@ -53,6 +56,9 @@ CONTEXT_COLUMNS = [
     "main_present_backend",
     "main_present_status",
     "main_present_buffer",
+    "hidden_compose_us",
+    "hidden_preview_compose_us",
+    "hidden_arcade_compose_us",
     "main_present_route_us",
 ]
 

@@ -36,6 +36,9 @@ METRICS = [
     "wasted_present_bytes",
     "fb_present_us",
     "cached_present_us",
+    "hidden_compose_us",
+    "hidden_preview_compose_us",
+    "hidden_arcade_compose_us",
     "direct_preview_present_us",
     "arcade_list_present_us",
 ]
@@ -111,6 +114,9 @@ def read_trace(path: Path, *, ignore_frames_through: int, present_width: int = 9
         for row in reader:
             if "arcade_list_present_us" not in row and "overlay_present_us" in row:
                 row["arcade_list_present_us"] = row["overlay_present_us"]
+            row.setdefault("hidden_compose_us", "0")
+            row.setdefault("hidden_preview_compose_us", "0")
+            row.setdefault("hidden_arcade_compose_us", "0")
             row.setdefault("direct_preview_present_us", "0")
             row.setdefault("direct_preview_rows", "0")
             if "present_bytes" not in row or not row.get("present_bytes"):
@@ -371,6 +377,9 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
         "wasted_present_bytes": 0,
         "fb_present_us": 900,
         "cached_present_us": 400,
+        "hidden_compose_us": 0,
+        "hidden_preview_compose_us": 0,
+        "hidden_arcade_compose_us": 0,
         "direct_preview_present_us": 0,
         "arcade_list_present_us": 500,
         "vsync_source": "vsync",
@@ -389,6 +398,9 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                 "wasted_present_bytes",
                 "fb_present_us",
                 "cached_present_us",
+                "hidden_compose_us",
+                "hidden_preview_compose_us",
+                "hidden_arcade_compose_us",
                 "direct_preview_present_us",
                 "arcade_list_present_us",
                 "vsync_source",
@@ -406,6 +418,9 @@ def write_fixture(path: Path, rows: int, **values: int | str) -> None:
                     defaults["wasted_present_bytes"],
                     defaults["fb_present_us"],
                     defaults["cached_present_us"],
+                    defaults["hidden_compose_us"],
+                    defaults["hidden_preview_compose_us"],
+                    defaults["hidden_arcade_compose_us"],
                     defaults["direct_preview_present_us"],
                     defaults["arcade_list_present_us"],
                     defaults["vsync_source"],

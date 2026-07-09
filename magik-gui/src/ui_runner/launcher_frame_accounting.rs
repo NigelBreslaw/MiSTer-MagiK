@@ -27,6 +27,7 @@ pub(super) struct LauncherFrameAccounting {
     vsync_us: u128,
     copy_us: u128,
     cached_present_us: u128,
+    hidden_compose_us: u128,
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     rows: u128,
@@ -90,6 +91,9 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) fb_present_us_override: Option<u128>,
     pub(super) vsync_us_override: Option<u128>,
     pub(super) cached_present_us: u128,
+    pub(super) hidden_compose_us: u128,
+    pub(super) hidden_preview_compose_us: u128,
+    pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
     pub(super) main_present_backend: &'static str,
@@ -226,6 +230,9 @@ impl LauncherFrameSnapshotBuilder {
             fb_present_us_override: self.presentation.fb_present_us_override,
             vsync_us_override: self.presentation.vsync_us_override,
             cached_present_us: self.presentation.cached_present_us,
+            hidden_compose_us: self.presentation.hidden_compose_us,
+            hidden_preview_compose_us: self.presentation.hidden_preview_compose_us,
+            hidden_arcade_compose_us: self.presentation.hidden_arcade_compose_us,
             direct_preview_present_us: self.presentation.direct_preview_present_us,
             arcade_list_present_us: self.presentation.arcade_list_present_us,
             main_present_backend: self.presentation.main_present_backend,
@@ -398,6 +405,9 @@ struct PreviewScrollTraceRow {
     vsync_us: u128,
     fb_present_us: u128,
     cached_present_us: u128,
+    hidden_compose_us: u128,
+    hidden_preview_compose_us: u128,
+    hidden_arcade_compose_us: u128,
     direct_preview_present_us: u128,
     arcade_list_present_us: u128,
     main_present_backend: &'static str,
@@ -461,7 +471,7 @@ impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
         let _ = write!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -502,6 +512,9 @@ impl PreviewScrollTraceRow {
             self.vsync_us,
             self.fb_present_us,
             self.cached_present_us,
+            self.hidden_compose_us,
+            self.hidden_preview_compose_us,
+            self.hidden_arcade_compose_us,
             self.direct_preview_present_us,
             self.arcade_list_present_us,
             self.main_present_backend,
@@ -592,6 +605,9 @@ fn preview_scroll_trace_row_from_frame(
             .fb_present_us_override
             .unwrap_or_else(|| (frame.frame_t4 - frame.frame_t3).as_micros()),
         cached_present_us: frame.cached_present_us,
+        hidden_compose_us: frame.hidden_compose_us,
+        hidden_preview_compose_us: frame.hidden_preview_compose_us,
+        hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
         direct_preview_present_us: frame.direct_preview_present_us,
         arcade_list_present_us: frame.arcade_list_present_us,
         main_present_backend: frame.main_present_backend,
@@ -753,6 +769,7 @@ impl LauncherFrameAccounting {
             vsync_us: 0,
             copy_us: 0,
             cached_present_us: 0,
+            hidden_compose_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             rows: 0,
@@ -1228,6 +1245,7 @@ impl LauncherFrameAccounting {
         self.vsync_us += (frame.frame_t3 - frame.custom_draw_done).as_micros();
         self.copy_us += (frame.frame_t4 - frame.frame_t3).as_micros();
         self.cached_present_us += frame.cached_present_us;
+        self.hidden_compose_us += frame.hidden_compose_us;
         self.direct_preview_present_us += frame.direct_preview_present_us;
         self.arcade_list_present_us += frame.arcade_list_present_us;
         self.rows += frame.copied_rows as u128;
@@ -1246,7 +1264,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
             crate::ui_logln!(
-                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
+                "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us hidden-compose {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
                 self.fps_frames,
                 self.prepare_us / n,
                 self.render_us / n,
@@ -1254,6 +1272,7 @@ impl LauncherFrameAccounting {
                 self.vsync_us / n,
                 self.copy_us / n,
                 self.cached_present_us / n,
+                self.hidden_compose_us / n,
                 self.direct_preview_present_us / n,
                 self.arcade_list_present_us / n,
                 self.rows / n
@@ -1266,6 +1285,7 @@ impl LauncherFrameAccounting {
             self.vsync_us = 0;
             self.copy_us = 0;
             self.cached_present_us = 0;
+            self.hidden_compose_us = 0;
             self.direct_preview_present_us = 0;
             self.arcade_list_present_us = 0;
             self.rows = 0;
@@ -1879,6 +1899,9 @@ mod tests {
             fb_present_us_override: None,
             vsync_us_override: None,
             cached_present_us: 0,
+            hidden_compose_us: 0,
+            hidden_preview_compose_us: 0,
+            hidden_arcade_compose_us: 0,
             direct_preview_present_us: 0,
             arcade_list_present_us: 0,
             main_present_backend: "fb0-dirty",
@@ -1969,6 +1992,9 @@ mod tests {
                 fb_present_us_override: frame.fb_present_us_override,
                 vsync_us_override: frame.vsync_us_override,
                 cached_present_us: frame.cached_present_us,
+                hidden_compose_us: frame.hidden_compose_us,
+                hidden_preview_compose_us: frame.hidden_preview_compose_us,
+                hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
                 direct_preview_present_us: frame.direct_preview_present_us,
                 arcade_list_present_us: frame.arcade_list_present_us,
                 main_present_backend: frame.main_present_backend,
@@ -2021,6 +2047,29 @@ mod tests {
     }
 
     #[test]
+    fn frame_snapshot_builder_preserves_hidden_present_attribution() {
+        let start = Instant::now();
+        let mut expected = presented_frame(42, start, 21_000);
+        expected.hidden_compose_us = 730;
+        expected.hidden_preview_compose_us = 230;
+        expected.hidden_arcade_compose_us = 500;
+        expected.direct_preview_present_us = 230;
+        expected.arcade_list_present_us = 500;
+
+        let built = builder_from_frame(&expected).build();
+
+        assert_eq!(built.hidden_compose_us, 730);
+        assert_eq!(built.hidden_preview_compose_us, 230);
+        assert_eq!(built.hidden_arcade_compose_us, 500);
+        assert_eq!(built.direct_preview_present_us, 230);
+        assert_eq!(built.arcade_list_present_us, 500);
+        assert_eq!(
+            built.hidden_compose_us,
+            built.hidden_preview_compose_us + built.hidden_arcade_compose_us
+        );
+    }
+
+    #[test]
     fn frame_snapshot_builder_keeps_default_pacing_values_when_missing() {
         let start = Instant::now();
         let frame = presented_frame(43, start, 16_500);
@@ -2064,10 +2113,19 @@ mod tests {
             loop_delta_us,
             3_210,
             runtime_status_write_us,
+            654,
+            987,
         )
         .write_tsv(&mut expected_row);
-        preview_scroll_trace_row_from_frame(&built, loop_delta_us, 3_210, runtime_status_write_us)
-            .write_tsv(&mut built_row);
+        preview_scroll_trace_row_from_frame(
+            &built,
+            loop_delta_us,
+            3_210,
+            runtime_status_write_us,
+            654,
+            987,
+        )
+        .write_tsv(&mut built_row);
 
         assert_eq!(built_row, expected_row);
     }
@@ -2080,15 +2138,27 @@ mod tests {
         let mut builder = builder_from_frame(&frame);
         builder.presentation.fb_present_us_override = Some(1_700);
         builder.presentation.vsync_us_override = Some(8_200);
+        builder.presentation.hidden_compose_us = 730;
+        builder.presentation.hidden_preview_compose_us = 230;
+        builder.presentation.hidden_arcade_compose_us = 500;
+        builder.presentation.direct_preview_present_us = 230;
+        builder.presentation.arcade_list_present_us = 500;
         let built = builder.build();
 
-        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0);
+        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0, 654, 987);
 
         assert_eq!(row.fb_present_us, 1_700);
         assert_eq!(row.vsync_us, 8_200);
+        assert_eq!(row.hidden_compose_us, 730);
+        assert_eq!(row.hidden_preview_compose_us, 230);
+        assert_eq!(row.hidden_arcade_compose_us, 500);
+        assert_eq!(row.direct_preview_present_us, 230);
+        assert_eq!(row.arcade_list_present_us, 500);
         assert_eq!(row.pre_render_wait_us, 400);
         assert_eq!(row.post_present_wait_us, 800);
         assert_eq!(row.post_frame_tail_us, 3_210);
+        assert_eq!(row.frame_finish_us, 654);
+        assert_eq!(row.post_finish_tail_us, 987);
         assert_eq!(row.home_pan_present_active, 1);
         assert_eq!(row.home_horizontal_input_held, 1);
         assert_eq!(row.redraw_pending, 1);
@@ -2213,7 +2283,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

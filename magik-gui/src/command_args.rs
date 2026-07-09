@@ -55,7 +55,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("plugin-map-report", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("plugin-map-bandwidth", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
     CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
@@ -247,7 +247,6 @@ mod tests {
             "input",
             "hbmame-metadata-from-library",
             "library-scan-bench",
-            "fpga-latch-report",
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
@@ -311,12 +310,14 @@ mod tests {
             "media-bench-download",
             "media-bench-save",
             "launch-prep-bench",
+            "fpga-latch-report",
             "preview-pack-bench",
             "preview-index-refresh-bench",
         ] {
             assert!(is_known_command(command), "{command}");
         }
         assert!(!is_known_command("audio-tone"));
+        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
     }
 
     #[test]
