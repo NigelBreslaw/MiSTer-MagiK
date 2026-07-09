@@ -117,6 +117,37 @@ Acceptance depends on `/tmp/mister-magik/status.json` reporting
 `startup_splash_visible`; return-from-game must restore Arcade selection before
 `launcher_revealed` and wait for `return_preview_ready`.
 
+## Latch Benchmark Split
+
+Use one focused latch benchmark per claim. Do not bundle Home, Arcade, preview,
+and copy-path conclusions into one broad run.
+
+- Home render or horizontal pan claims: use
+  `scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs N`.
+  Report latch-visible metrics from the generated `*-launcher-home-scroll-drops.tsv`:
+  latch deadline misses, visual latch misses, FPGA `drop_count`, latch margin,
+  and the specific Home timing under test.
+- Hidden-copy claims: use the Home latch gate when the change affects normal
+  launcher presentation, and use the plugin-hidden copy microbench when the
+  claim is specifically about `PluginHiddenRgb565Framebuffer` copy mechanics.
+  Report `latch_copy_p50/p95/p99` or the microbench copy timing, not Arcade
+  list timing.
+- Arcade list or preview claims: use
+  `scripts/profile-arcade-scroll.sh LABEL --secs N --scenario turbo-hold` for
+  synthetic maximum velocity or `--scenario human-turbo-hold` for pacing
+  refactors that need human-like bursts and pauses. Report Arcade/preview
+  metrics from the trace plus passive latch evidence from
+  `*-arcade-latch-drops.tsv` and `*-fpga-latch-{before,after}.log`.
+- Frame-tail/status-write claims: use Arcade turbo when the suspected work
+  appears after latch post during active Arcade frames. Report
+  `status_write_due_frame_finish_max`, `status_write_deferred_frames`,
+  `frame_tail_slack_*`, `work_gt_16667`, fallback/timeout/error counts, and
+  latch status.
+
+Performance-impact commits should name the one focused command used for
+before/after and the metric it owns. Benchmark/correctness commits may update
+the reporting surface without claiming a faster renderer.
+
 ## Home System Row Scenarios
 
 Use `home-repeat-hold` when measuring the experience of holding left or right

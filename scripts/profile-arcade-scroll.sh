@@ -20,6 +20,11 @@ Runs the Main-supervised launcher on the real Arcade screen with
 MISTER_LAUNCHER_BENCH_SCENARIO and MISTER_PREVIEW_SCROLL_TRACE. By default it
 reboots to Home, quickly navigates to the Arcade tile, enters it, then starts
 the timed turbo scroll trace in that same launcher session.
+Use turbo-hold or human-turbo-hold for Arcade list/preview latch claims and
+active-Arcade frame-tail/status-write claims. Report the trace metric owned by
+the change, plus passive latch evidence from the generated
+*-arcade-latch-drops.tsv and *-fpga-latch-before/after.log artifacts. Use the
+Home latch gate instead for Home render/pan or normal launcher copy-path claims.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 --cpu-profile builds/deploys the profiling binary, runs the same boot-entry
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
