@@ -20,7 +20,6 @@ QUARTUS_DOCKER_IMAGE="${QUARTUS_DOCKER_IMAGE:-mister-magik-quartus-runtime:ubunt
 QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
 QUARTUS_DOCKER_MEMORY="${QUARTUS_DOCKER_MEMORY:-12g}"
 QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite-17.0/docker-intelFPGA_lite}"
-QUARTUS_DOCKER_BAKED_INSTALL="${QUARTUS_DOCKER_BAKED_INSTALL:-0}"
 APPLY_PATCH="${MISTER_FPGA_APPLY_PATCH:-1}"
 
 usage() {
@@ -36,9 +35,6 @@ If quartus_sh is not on PATH, the script will try the Docker runtime image
 named by QUARTUS_DOCKER_IMAGE, defaulting to
 mister-magik-quartus-runtime:ubuntu20-amd64. Create that runtime plus the
 mounted Quartus install with scripts/install-quartus-lite-docker.sh.
-
-Set QUARTUS_DOCKER_BAKED_INSTALL=1 when QUARTUS_DOCKER_IMAGE already contains
-Quartus under /opt/intelFPGA_lite/17.0.
 EOF
 }
 
@@ -76,19 +72,12 @@ fi
 QUARTUS_MODE=local
 if command -v quartus_sh >/dev/null 2>&1; then
   QUARTUS_CMD="$(command -v quartus_sh)"
-elif [[ "$QUARTUS_DOCKER_BAKED_INSTALL" = "1" ]] &&
-  command -v docker >/dev/null 2>&1 && docker image inspect "$QUARTUS_DOCKER_IMAGE" >/dev/null 2>&1; then
-  QUARTUS_MODE=docker
-  QUARTUS_CMD="docker:$QUARTUS_DOCKER_IMAGE"
 elif [[ -x "$QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]] &&
   command -v docker >/dev/null 2>&1 && docker image inspect "$QUARTUS_DOCKER_IMAGE" >/dev/null 2>&1; then
   QUARTUS_MODE=docker
   QUARTUS_CMD="docker:$QUARTUS_DOCKER_IMAGE"
 else
-  if [[ "$QUARTUS_DOCKER_BAKED_INSTALL" = "1" ]]; then
-    echo "missing baked Quartus Docker image: $QUARTUS_DOCKER_IMAGE" >&2
-    echo "pull it first, or unset QUARTUS_DOCKER_BAKED_INSTALL to use a mounted install" >&2
-  elif [[ ! -x "$QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
+  if [[ ! -x "$QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" ]]; then
     echo "missing mounted Quartus install: $QUARTUS_HOST_INSTALL_ROOT/17.0/quartus/bin/quartus_sh" >&2
   else
     echo "missing Quartus Docker image: $QUARTUS_DOCKER_IMAGE" >&2
@@ -137,7 +126,6 @@ esac
   echo "quartus_strace=${QUARTUS_STRACE:-0}"
   echo "quartus_docker_privileged=${QUARTUS_DOCKER_PRIVILEGED:-0}"
   echo "quartus_docker_empty_sys=${QUARTUS_DOCKER_EMPTY_SYS:-0}"
-  echo "quartus_docker_baked_install=$QUARTUS_DOCKER_BAKED_INSTALL"
 } > "$META_OUT"
 
 build_status=0
@@ -151,10 +139,10 @@ if [[ "$QUARTUS_MODE" = "docker" ]]; then
   if [[ "${QUARTUS_DOCKER_EMPTY_SYS:-}" = "1" ]]; then
     docker_mount_args=(--tmpfs /sys:ro,nosuid,nodev,noexec,mode=0555)
   fi
-  docker_quartus_mount_args=(--volume "$WORK_DIR:/work")
-  if [[ "$QUARTUS_DOCKER_BAKED_INSTALL" != "1" ]]; then
-    docker_quartus_mount_args=(--volume "$QUARTUS_HOST_INSTALL_ROOT:/opt/intelFPGA_lite:ro" "${docker_quartus_mount_args[@]}")
-  fi
+  docker_quartus_mount_args=(
+    --volume "$QUARTUS_HOST_INSTALL_ROOT:/opt/intelFPGA_lite:ro"
+    --volume "$WORK_DIR:/work"
+  )
   docker_quartus_cmd=(quartus_sh --flow compile menu)
   if [[ "${QUARTUS_STRACE:-}" = "1" ]]; then
     docker_quartus_cmd=(strace -ff -tt -o "/work/$STRACE_PREFIX" quartus_sh --flow compile menu)
