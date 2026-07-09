@@ -2,7 +2,7 @@ use super::*;
 use mister_magik_fb::framebuffer::ownership::{FramebufferRouteAction, FramebufferRouteGuard};
 use std::io;
 
-trait LauncherDisplayHardware {
+pub(in crate::ui_runner) trait LauncherDisplayHardware {
     fn enable_launcher_route(
         &mut self,
         route: LauncherFramebufferRoute,
@@ -45,7 +45,10 @@ impl LauncherDisplaySession {
         Self::with_guard(ui, FramebufferRouteGuard::from_env())
     }
 
-    fn with_guard(ui: &UiDisplay, route_guard: FramebufferRouteGuard) -> Self {
+    pub(in crate::ui_runner) fn with_guard(
+        ui: &UiDisplay,
+        route_guard: FramebufferRouteGuard,
+    ) -> Self {
         Self {
             route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
             fb_width: ui.fb_w(),
@@ -137,7 +140,7 @@ impl LauncherDisplaySession {
         self.arm_latch_route_with_hardware(hardware)
     }
 
-    fn arm_latch_route_with_hardware(
+    pub(in crate::ui_runner) fn arm_latch_route_with_hardware(
         &mut self,
         hardware: &mut impl LauncherDisplayHardware,
     ) -> io::Result<u128> {
