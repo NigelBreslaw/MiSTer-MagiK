@@ -21,16 +21,17 @@ usage() {
 Usage:
   scripts/fpga-vblank-latch-real-ui-one-shot.sh [--capture] [--label LABEL] [--scroll-secs N]
 
-Builds/deploys the diagnostics binary, plugin probe module, and experimental
-vblank-latched Menu RBF; loads the RBF once through Main's command path; runs
-FPGA latch diagnostics; then profiles the real launcher with
-MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden. Existing local RBF and plugin
-artifacts are reused; the Rust diagnostics binary is rebuilt because normal
-deploys overwrite the same target path.
+Deploys the diagnostics binary, plugin probe module, and prebuilt experimental
+vblank-latched Menu RBF; loads the RBF once through Main's MagiK launch command;
+runs FPGA latch diagnostics; then profiles the real launcher with
+MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden. The RBF must already exist at
+build/fpga-vblank-latch/menu-magik-vblank-latch.rbf from the manual CI workflow;
+this script does not build Quartus locally. Existing local plugin artifacts are
+reused; the Rust diagnostics binary is rebuilt because normal deploys overwrite
+the same target path.
 
-Set MISTER_MENU_DIR to a writable Menu_MiSTer checkout if the RBF has not been
-built yet. Use --capture or MISTER_FPGA_LATCH_CAPTURE=1 to record HDMI capture
-evidence for the Home-row repeat-hold pan.
+Use --capture or MISTER_FPGA_LATCH_CAPTURE=1 to record HDMI capture evidence for
+the Home-row repeat-hold pan.
 EOF
 }
 
@@ -58,11 +59,12 @@ restore_normal() {
 trap restore_normal EXIT
 
 if [[ ! -f "$LOCAL_RBF" ]]; then
-  "$ROOT/scripts/build-fpga-vblank-latch-core.sh"
-else
-  echo "==> Reusing existing experimental RBF: $LOCAL_RBF"
+  echo "missing prebuilt experimental RBF: $LOCAL_RBF" >&2
+  echo "build it with GitHub Actions: gh workflow run fpga-vblank-latch.yml --repo NigelBreslaw/MiSTer-MagiK --ref main" >&2
+  exit 1
 fi
 test -f "$LOCAL_RBF"
+echo "==> Reusing prebuilt experimental RBF: $LOCAL_RBF"
 
 if [[ ! -f "$LOCAL_KO" ]]; then
   "$ROOT/scripts/build-plugin-probe-module.sh"
@@ -84,15 +86,23 @@ echo "==> Verifying stock runtime before one-shot experiment"
 "$MISTER" status
 "$MISTER" run "set -e; uname -r; test \"\$(uname -r)\" = '5.15.1-MiSTer'; command -v insmod; command -v rmmod; test ! -e /dev/mister-magik-plugin-probe || rmmod mister_magik_plugin_probe"
 
-echo "==> Uploading diagnostics binary, plugin module, and experimental RBF"
-"$MISTER" run "pidof mister-magik-fb 2>/dev/null | xargs -r kill -9; mkdir -p /media/fat/mister-magik/experiments '$REMOTE_DIR'"
-"$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
+echo "==> Uploading plugin module and experimental RBF"
+"$MISTER" run "mkdir -p /media/fat/mister-magik/experiments '$REMOTE_DIR'"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
 "$MISTER" put "$LOCAL_RBF" "$REMOTE_RBF"
-"$MISTER" run "chmod +x '$REMOTE_BIN'; chmod 600 '$REMOTE_KO'; sync"
+"$MISTER" run "chmod 600 '$REMOTE_KO'; sync"
 
-echo "==> Loading experimental Menu core through Main command path"
-"$MISTER" run "printf 'load_core $REMOTE_RBF\n' > /dev/MiSTer_cmd; sleep 2"
+echo "==> Loading experimental Menu core through Main MagiK launch path"
+"$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\n' > /dev/MiSTer_cmd; sleep 4"
+
+echo "==> Verifying experimental RBF is the active Main core"
+"$MISTER" run "set -e; pid=\$(pidof MiSTer_MagiK); tr '\000' ' ' < /proc/\$pid/cmdline; echo; tr '\000' ' ' < /proc/\$pid/cmdline | grep -F '$REMOTE_RBF'" \
+  | tee "$LOCAL_DIR/${LABEL}-active-main-cmdline.log"
+
+echo "==> Uploading diagnostics binary"
+"$MISTER" run "pidof mister-magik-fb 2>/dev/null | xargs -r kill -9"
+"$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
+"$MISTER" run "chmod +x '$REMOTE_BIN'; sync"
 
 echo "==> Loading plugin module"
 "$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-plugin-probe; grep '^mister_magik_plugin_probe ' /proc/modules"
@@ -106,6 +116,7 @@ echo "==> Running FPGA latch capability report"
 "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" | tee "$LOCAL_DIR/${LABEL}-fpga-latch-report.log"
 if ! grep -q $'\tsupported=1\t' "$LOCAL_DIR/${LABEL}-fpga-latch-report.log"; then
   echo "FPGA latch commands are not supported after activation; collecting evidence and stopping before capture." >&2
+  "$MISTER" run "pid=\$(pidof MiSTer_MagiK 2>/dev/null || true); if [ -n \"\$pid\" ]; then tr '\000' ' ' < /proc/\$pid/cmdline; echo; fi" > "$LOCAL_DIR/${LABEL}-failure-main-cmdline.log" 2>/dev/null || true
   "$MISTER" get /tmp/mister-magik-slint.log "$LOCAL_DIR/${LABEL}-mister-magik-slint.log" >/dev/null 2>&1 || true
   "$MISTER" get /tmp/mister-magik/status.json "$LOCAL_DIR/${LABEL}-status.json" >/dev/null 2>&1 || true
   exit 1
@@ -136,6 +147,7 @@ restore_normal
 trap - EXIT
 
 echo "==> Wrote:"
+echo "    $LOCAL_DIR/${LABEL}-active-main-cmdline.log"
 echo "    $LOCAL_DIR/${LABEL}-fpga-latch-report.log"
 echo "    $LOCAL_DIR/${LABEL}-fpga-latch-post-report.log"
 echo "    $LOCAL_DIR/${LABEL}-fpga-latch-pattern.log"

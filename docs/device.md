@@ -151,11 +151,23 @@ The known-good activation sequence is:
 
 1. Copy the CI artifact to
    `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`.
-2. Load that RBF through Main's command path, not with an external loader:
+2. Load that RBF through Main's MagiK launch command path, not with an
+   external loader and not with `load_core` while the launcher is active:
 
    ```bash
-   scripts/mister run "printf 'load_core /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
+   scripts/mister run "printf 'mister_magik_launch /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
    ```
+
+   Prove activation before diagnosing latch support:
+
+   ```bash
+   scripts/mister run "pid=\$(pidof MiSTer_MagiK); tr '\000' ' ' < /proc/\$pid/cmdline"
+   ```
+
+   The cmdline must include
+   `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`. Earlier
+   experiments used `load_core` from the launcher state; Main stayed on the
+   stock Menu path, so `supported=0` only proved the patched RBF was not active.
 
 3. Load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
 
@@ -170,11 +182,22 @@ The known-good activation sequence is:
    ```
 
 5. Verify support with `fpga-latch-report` or `fpga-latch-post-report`. The
-   MagiK latch commands `0x57` and `0x58` should report supported status/magic.
+   MagiK latch commands `0x57` and `0x58` should report supported status/magic:
+   `0x57` acks `0x4d47`, and `0x58` acks `0x4d48`.
 
-If `/tmp/mister-magik/status.json` reports `composition_state=full-slint`, or
-if `mister_magik_plugin_probe` is absent from `/proc/modules`, the launcher is
-running the normal fallback path even if the experimental RBF file is present.
+Do not use `/tmp/mister-magik/status.json` `composition_state=full-slint` as the
+fast-path proof; the launcher can still be a full-Slint composition while the
+final present goes through hidden buffers. The reliable proof signals are:
+
+- Main's cmdline contains the experimental RBF path.
+- `mister_magik_plugin_probe` is present in `/proc/modules`.
+- `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with `0x4d47` and
+  `0x4d48` acks.
+- `flip_count` and `post_count` advance during a launcher run, with
+  `drop_count=0`.
+
+If the RBF file is merely present on `/media/fat`, or the backend env is logged
+without the latch counters advancing, the fast path has not been proven.
 
 The launcher path relies on Rust-owned framebuffer setup:
 
