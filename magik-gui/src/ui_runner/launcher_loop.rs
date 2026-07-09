@@ -96,6 +96,10 @@ struct FpgaVblankLatchHiddenPresenter {
     width: usize,
     height: usize,
     route: LauncherFramebufferRoute,
+    status_probe_countdown: u16,
+    status_probe_interval: u16,
+    last_status_supported: bool,
+    last_flip_count: u16,
 }
 
 struct FpgaVblankLatchHiddenPresentStats {
@@ -170,6 +174,10 @@ impl FpgaVblankLatchHiddenPresenter {
             width,
             height,
             route: LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video()),
+            status_probe_countdown: 0,
+            status_probe_interval: configured_fpga_latch_status_interval(),
+            last_status_supported: false,
+            last_flip_count: 0,
         })
     }
 
@@ -213,12 +221,27 @@ impl FpgaVblankLatchHiddenPresenter {
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
-        let status_start = Instant::now();
-        let status = fpga
-            .read_magik_latched_fbuf_status()
-            .map_err(|e| e.to_string())?;
-        let status_us = status_start.elapsed().as_micros() as u64;
-        let status_supported = status.supported();
+        let mut status_magic_hi = 0;
+        let mut status_magic_lo = 0;
+        let mut status_us = 0;
+        let mut status_supported = self.last_status_supported;
+        let mut flip_count = self.last_flip_count;
+        if !set_supported || self.status_probe_countdown == 0 {
+            let status_start = Instant::now();
+            let status = fpga
+                .read_magik_latched_fbuf_status()
+                .map_err(|e| e.to_string())?;
+            status_us = status_start.elapsed().as_micros() as u64;
+            status_supported = status.supported();
+            status_magic_hi = status.magic_hi;
+            status_magic_lo = status.magic_lo;
+            flip_count = status.flip_count;
+            self.last_status_supported = status_supported;
+            self.last_flip_count = flip_count;
+            self.status_probe_countdown = self.status_probe_interval.saturating_sub(1);
+        } else {
+            self.status_probe_countdown = self.status_probe_countdown.saturating_sub(1);
+        }
 
         if !set_supported || !status_supported {
             self.disabled = true;
@@ -228,8 +251,8 @@ impl FpgaVblankLatchHiddenPresenter {
                 u8::from(status_supported),
                 ack.0,
                 ack.1,
-                status.magic_hi,
-                status.magic_lo
+                status_magic_hi,
+                status_magic_lo
             ));
         }
 
@@ -242,9 +265,24 @@ impl FpgaVblankLatchHiddenPresenter {
             status_us,
             set_supported,
             status_supported,
-            flip_count: status.flip_count,
+            flip_count,
         })
     }
+}
+
+fn configured_fpga_latch_status_interval() -> u16 {
+    fpga_latch_status_interval_from_value(
+        std::env::var("MISTER_FPGA_LATCH_STATUS_INTERVAL")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn fpga_latch_status_interval_from_value(value: Option<&str>) -> u16 {
+    value
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(60)
 }
 
 fn launcher_input_script_wait_frames() -> usize {
@@ -3233,6 +3271,7 @@ pub(super) fn run_launcher_loop(
                                 main_present_hidden_copy_us: stats.copy_us,
                                 main_present_request_us: stats.post_us,
                                 main_present_wait_us: stats.status_us,
+                                // Compatibility trace field: latch mode reports the FPGA flip counter here.
                                 main_present_route_us: stats.flip_count as u64,
                                 arcade_update_label,
                             });
@@ -4694,6 +4733,16 @@ mod tests {
             LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden")),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
+    }
+
+    #[test]
+    pub(super) fn fpga_latch_status_interval_defaults_unless_positive_integer() {
+        assert_eq!(fpga_latch_status_interval_from_value(None), 60);
+        assert_eq!(fpga_latch_status_interval_from_value(Some("")), 60);
+        assert_eq!(fpga_latch_status_interval_from_value(Some("0")), 60);
+        assert_eq!(fpga_latch_status_interval_from_value(Some("abc")), 60);
+        assert_eq!(fpga_latch_status_interval_from_value(Some("1")), 1);
+        assert_eq!(fpga_latch_status_interval_from_value(Some("120")), 120);
     }
 
     #[test]
