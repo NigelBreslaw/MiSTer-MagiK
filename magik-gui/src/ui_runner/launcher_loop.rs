@@ -1138,6 +1138,18 @@ fn pad_state_home_horizontal_held(state: &PadState) -> bool {
     state.dpad_left || state.dpad_right
 }
 
+fn home_frame_driven_redraw_active(
+    screen: Screen,
+    home_pan_present_active: bool,
+    home_horizontal_input_held: bool,
+) -> bool {
+    screen == Screen::Home && (home_pan_present_active || home_horizontal_input_held)
+}
+
+fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active: bool) -> bool {
+    !(latch_backend_active && home_motion_active)
+}
+
 fn catalog_background_nav_motion_active(nav: &LauncherNav) -> bool {
     nav.arcade.has_scroll_motion_or_queue()
         || nav.arcade.is_scroll_active()
@@ -2994,6 +3006,13 @@ pub(super) fn run_launcher_loop(
         );
         let home_horizontal_input_held =
             nav.screen == Screen::Home && pad_state_home_horizontal_held(pad.state());
+        if home_frame_driven_redraw_active(
+            nav.screen,
+            home_pan_present_active,
+            home_horizontal_input_held,
+        ) {
+            request_launcher_redraw!();
+        }
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
@@ -3150,19 +3169,27 @@ pub(super) fn run_launcher_loop(
         let frame_start_phase_us = pacer.age_since_last_hit_us(loop_start);
         let redraw_pending_for_trace = launcher_redraw_pending;
         let wake_reasons_bits = wake_reasons.bits();
+        let latch_backend_active = fpga_vblank_latch_hidden_presenter.is_some();
+        let home_motion_active = home_frame_driven_redraw_active(
+            nav.screen,
+            home_pan_present_active,
+            home_horizontal_input_held,
+        );
         let late_frame_start_headroom_us = if fpga_vblank_latch_hidden_presenter.is_some() {
             FPGA_LATCH_LATE_FRAME_START_HEADROOM_US
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
         };
-        let wait_before_render = pacing_policy
-            .decide(LauncherFramePacingInput {
-                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-                frame_start_phase_us,
-                period_us: pacer.period_us(),
-                late_frame_start_headroom_us,
-            })
-            .wait_before_render;
+        let wait_before_render =
+            latch_late_start_wait_enabled(latch_backend_active, home_motion_active)
+                && pacing_policy
+                    .decide(LauncherFramePacingInput {
+                        first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+                        frame_start_phase_us,
+                        period_us: pacer.period_us(),
+                        late_frame_start_headroom_us,
+                    })
+                    .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -5241,6 +5268,7 @@ mod tests {
             LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
             LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
             LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
+            LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD,
             LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP,
             LauncherWakeReasons::ARCADE_SCROLL_ACTIVE,
             LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE,
@@ -5277,6 +5305,8 @@ mod tests {
 
     #[test]
     pub(super) fn launcher_domain_wake_reasons_match_current_behavior() {
+        let home = LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE
+            | LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD;
         let arcade = LauncherWakeReasons::ARCADE_VISUAL_CHANGED_THIS_LOOP
             | LauncherWakeReasons::ARCADE_SCROLL_ACTIVE
             | LauncherWakeReasons::ARCADE_FILTER_SCROLL_ACTIVE;
@@ -5286,7 +5316,7 @@ mod tests {
         let composition = LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT
             | LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS;
 
-        for reasons in [arcade, search_preview, composition] {
+        for reasons in [home, arcade, search_preview, composition] {
             assert!(!LauncherRenderIntent {
                 first_visible_copy_done: true,
                 startup_input_enabled: true,
@@ -5294,6 +5324,42 @@ mod tests {
             }
             .can_sleep());
         }
+    }
+
+    #[test]
+    pub(super) fn home_frame_driven_redraw_tracks_home_motion_only() {
+        assert!(home_frame_driven_redraw_active(Screen::Home, true, false));
+        assert!(home_frame_driven_redraw_active(Screen::Home, false, true));
+        assert!(home_frame_driven_redraw_active(Screen::Home, true, true));
+        assert!(!home_frame_driven_redraw_active(Screen::Home, false, false));
+        assert!(!home_frame_driven_redraw_active(Screen::Arcade, true, true));
+        assert!(!home_frame_driven_redraw_active(
+            Screen::Settings,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    pub(super) fn home_horizontal_held_matches_left_or_right_only() {
+        assert!(!pad_state_home_horizontal_held(&PadState::default()));
+        assert!(pad_state_home_horizontal_held(&pad_state_with(|state| {
+            state.dpad_left = true;
+        })));
+        assert!(pad_state_home_horizontal_held(&pad_state_with(|state| {
+            state.dpad_right = true;
+        })));
+        assert!(!pad_state_home_horizontal_held(&pad_state_with(|state| {
+            state.dpad_up = true;
+        })));
+    }
+
+    #[test]
+    pub(super) fn latch_late_start_wait_is_disabled_only_for_active_home_motion() {
+        assert!(latch_late_start_wait_enabled(false, false));
+        assert!(latch_late_start_wait_enabled(false, true));
+        assert!(latch_late_start_wait_enabled(true, false));
+        assert!(!latch_late_start_wait_enabled(true, true));
     }
 
     #[test]
