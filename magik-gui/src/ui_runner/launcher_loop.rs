@@ -102,19 +102,14 @@ struct FpgaVblankLatchHiddenPresenter {
     base1: u32,
     base2: u32,
     disabled: bool,
-    next_buffer_index: u8,
     sequence: u16,
     width: usize,
     height: usize,
     route: LauncherFramebufferRoute,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     route_armed: bool,
-    invalid1: Option<DirtyRect>,
-    invalid2: Option<DirtyRect>,
-    status_probe_countdown: u16,
-    status_probe_interval: u16,
-    last_status_supported: bool,
-    last_flip_count: u16,
+    hidden_active_verified: bool,
+    latch_state: TwoBufferLatchState,
 }
 
 struct FpgaVblankLatchHiddenPresentStats {
@@ -124,6 +119,7 @@ struct FpgaVblankLatchHiddenPresentStats {
     catchup_bytes: usize,
     full_copy: bool,
     buffer_index: u8,
+    copied_rows: u32,
     copy_us: u128,
     post_us: u128,
     set_vga_fb_us: u128,
@@ -189,38 +185,27 @@ impl FpgaVblankLatchHiddenPresenter {
             route.mode(),
             configured_fpga_latch_right_guard_cols(),
         );
-        let full_rect = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: width,
-            y1: height,
-        };
         Some(Self {
             buffer1,
             buffer2,
             base1,
             base2,
             disabled: false,
-            next_buffer_index: 1,
             sequence: 1,
             width,
             height,
             route,
             latch_geometry,
             route_armed: false,
-            invalid1: Some(full_rect),
-            invalid2: Some(full_rect),
-            status_probe_countdown: 0,
-            status_probe_interval: configured_fpga_latch_status_interval(),
-            last_status_supported: false,
-            last_flip_count: 0,
+            hidden_active_verified: false,
+            latch_state: TwoBufferLatchState::new(width, height),
         })
     }
 
     fn present_cached_full_frame<F>(
         &mut self,
         cached: &[Rgb565Pixel],
-        damage: Option<DirtyRect>,
+        damage: LatchFrameDamage,
         fpga: &mut Fpga,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
@@ -233,55 +218,72 @@ impl FpgaVblankLatchHiddenPresenter {
             );
         }
 
-        let buffer_index = self.next_buffer_index;
+        let status_start = Instant::now();
+        let before_status = fpga
+            .read_magik_latched_fbuf_status()
+            .map_err(|e| e.to_string())?;
+        let mut status_us = status_start.elapsed().as_micros() as u64;
+        self.sync_latch_state_from_status(before_status)?;
+
+        let plan = self
+            .latch_state
+            .plan_next(damage)
+            .ok_or_else(|| "no writable hidden latch buffer".to_string())?;
+        let buffer_index = plan.slot_index;
+        let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
+        let rect_count = plan.restore_rects.len() as u32;
+        let copied_rows = plan
+            .restore_rects
+            .iter()
+            .map(|rect| rect.rows())
+            .sum::<u32>();
+        let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
+        let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let (buffer, base_addr) = if buffer_index == 1 {
             (&mut self.buffer1, self.base1)
         } else {
             (&mut self.buffer2, self.base2)
         };
-        let accumulated_invalid = if buffer_index == 1 {
-            self.invalid1
-        } else {
-            self.invalid2
-        };
-        let copy_damage = union_dirty_rect(accumulated_invalid, damage);
         let copy_start = Instant::now();
-        let copied_bytes = match copy_damage {
-            Some(rect) => buffer
-                .copy_rect(cached, self.width, rect)
-                .map_err(|e| e.to_string())?,
-            None => 0,
-        };
+        let mut copied_bytes = 0usize;
+        for rect in plan.restore_rects.iter() {
+            match buffer.copy_rect(cached, self.width, rect) {
+                Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
+                Err(e) => {
+                    self.latch_state.mark_attempt_failed(buffer_index);
+                    return Err(e.to_string());
+                }
+            }
+        }
         let copy_us = copy_start.elapsed().as_micros();
-        apply_overlays(buffer)?;
-        let full_rect = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.width,
-            y1: self.height,
-        };
-        let invalid_bytes = accumulated_invalid
-            .map(|rect| rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
-            .unwrap_or(0);
-        let rect_count = u32::from(copy_damage.is_some());
-        let full_copy = copy_damage == Some(full_rect);
+        if let Err(e) = apply_overlays(buffer) {
+            self.latch_state.mark_attempt_failed(buffer_index);
+            return Err(e);
+        }
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let post_start = Instant::now();
-        let ack = fpga
-            .post_magik_latched_fbuf_rgb565(
-                sequence,
-                base_addr,
-                self.width as u16,
-                self.height as u16,
-                self.latch_geometry,
-            )
-            .map_err(|e| e.to_string())?;
+        let ack = match fpga.post_magik_latched_fbuf_rgb565(
+            sequence,
+            base_addr,
+            self.width as u16,
+            self.height as u16,
+            self.latch_geometry,
+        ) {
+            Ok(ack) => ack,
+            Err(e) => {
+                self.latch_state.mark_attempt_failed(buffer_index);
+                return Err(e.to_string());
+            }
+        };
         let post_us = post_start.elapsed().as_micros();
         let set_vga_fb_us = if self.route.set_vga_fb() && !self.route_armed {
             let set_vga_fb_start = Instant::now();
-            fpga.set_vga_fb(true).map_err(|e| e.to_string())?;
+            if let Err(e) = fpga.set_vga_fb(true) {
+                self.latch_state.mark_attempt_failed(buffer_index);
+                return Err(e.to_string());
+            }
             self.route_armed = true;
             set_vga_fb_start.elapsed().as_micros()
         } else {
@@ -290,29 +292,20 @@ impl FpgaVblankLatchHiddenPresenter {
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
-        let mut status_magic_hi = 0;
-        let mut status_magic_lo = 0;
-        let mut status_us = 0;
-        let mut status_supported = self.last_status_supported;
-        let mut flip_count = self.last_flip_count;
-        if !set_supported || self.status_probe_countdown == 0 {
-            let status_start = Instant::now();
-            let status = fpga
-                .read_magik_latched_fbuf_status()
-                .map_err(|e| e.to_string())?;
-            status_us = status_start.elapsed().as_micros() as u64;
-            status_supported = status.supported();
-            status_magic_hi = status.magic_hi;
-            status_magic_lo = status.magic_lo;
-            flip_count = status.flip_count;
-            self.last_status_supported = status_supported;
-            self.last_flip_count = flip_count;
-            self.status_probe_countdown = self.status_probe_interval.saturating_sub(1);
-        } else {
-            self.status_probe_countdown = self.status_probe_countdown.saturating_sub(1);
-        }
+        let status_start = Instant::now();
+        let after_status = match fpga.read_magik_latched_fbuf_status() {
+            Ok(status) => status,
+            Err(e) => {
+                self.latch_state.mark_attempt_failed(buffer_index);
+                return Err(e.to_string());
+            }
+        };
+        status_us = status_us.saturating_add(status_start.elapsed().as_micros() as u64);
+        let status_supported = after_status.supported();
+        let flip_count = after_status.flip_count;
 
         if !set_supported || !status_supported {
+            self.latch_state.mark_attempt_failed(buffer_index);
             self.disabled = true;
             return Err(format!(
                 "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
@@ -320,26 +313,20 @@ impl FpgaVblankLatchHiddenPresenter {
                 u8::from(status_supported),
                 ack.0,
                 ack.1,
-                status_magic_hi,
-                status_magic_lo
+                after_status.magic_hi,
+                after_status.magic_lo
             ));
         }
 
-        self.next_buffer_index = if buffer_index == 1 { 2 } else { 1 };
-        if buffer_index == 1 {
-            self.invalid1 = None;
-            self.invalid2 = union_dirty_rect(self.invalid2, damage);
-        } else {
-            self.invalid2 = None;
-            self.invalid1 = union_dirty_rect(self.invalid1, damage);
-        }
+        self.latch_state.mark_post_success(plan);
         Ok(FpgaVblankLatchHiddenPresentStats {
             copied_bytes,
             invalid_bytes,
             rect_count,
-            catchup_bytes: copied_bytes,
+            catchup_bytes,
             full_copy,
             buffer_index,
+            copied_rows,
             copy_us,
             post_us,
             set_vga_fb_us,
@@ -349,14 +336,169 @@ impl FpgaVblankLatchHiddenPresenter {
             flip_count,
         })
     }
+
+    fn full_rect(&self) -> DirtyRect {
+        DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.width,
+            y1: self.height,
+        }
+    }
+
+    fn sync_latch_state_from_status(
+        &mut self,
+        status: crate::fpga::LatchedFbufStatus,
+    ) -> Result<(), String> {
+        let sync = match classify_latch_status(
+            status,
+            self.base1,
+            self.base2,
+            self.width,
+            self.height,
+            self.hidden_active_verified,
+        ) {
+            Ok(sync) => sync,
+            Err(LatchStatusSyncError::Unsupported { magic_hi, magic_lo }) => {
+                self.disabled = true;
+                return Err(format!(
+                    "unsupported latch status ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                ));
+            }
+            Err(LatchStatusSyncError::HiddenGeometryMismatch {
+                active_width,
+                active_height,
+                active_stride,
+                expected_width,
+                expected_height,
+                expected_stride,
+            }) => {
+                self.latch_state.invalidate_all();
+                self.route_armed = false;
+                self.hidden_active_verified = false;
+                return Err(format!(
+                    "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
+                ));
+            }
+        };
+
+        if sync.recovered_non_hidden_active {
+            self.latch_state.invalidate_all();
+            self.route_armed = false;
+            self.hidden_active_verified = false;
+        }
+        if sync.hidden_active_verified {
+            self.hidden_active_verified = true;
+        }
+        self.latch_state.sync_hardware(
+            sync.active_slot,
+            sync.active_sequence,
+            sync.pending,
+            sync.pending_sequence,
+        );
+        Ok(())
+    }
 }
 
-fn union_dirty_rect(current: Option<DirtyRect>, next: Option<DirtyRect>) -> Option<DirtyRect> {
-    match (current, next) {
-        (Some(a), Some(b)) => Some(a.union(b)),
-        (Some(rect), None) | (None, Some(rect)) => Some(rect),
-        (None, None) => None,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LatchStatusSync {
+    active_slot: Option<u8>,
+    active_sequence: u16,
+    pending: bool,
+    pending_sequence: u16,
+    hidden_active_verified: bool,
+    recovered_non_hidden_active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LatchStatusSyncError {
+    Unsupported {
+        magic_hi: u16,
+        magic_lo: u16,
+    },
+    HiddenGeometryMismatch {
+        active_width: u16,
+        active_height: u16,
+        active_stride: u16,
+        expected_width: u16,
+        expected_height: u16,
+        expected_stride: u16,
+    },
+}
+
+fn classify_latch_status(
+    status: crate::fpga::LatchedFbufStatus,
+    base1: u32,
+    base2: u32,
+    width: usize,
+    height: usize,
+    hidden_active_verified: bool,
+) -> Result<LatchStatusSync, LatchStatusSyncError> {
+    if !status.supported() {
+        return Err(LatchStatusSyncError::Unsupported {
+            magic_hi: status.magic_hi,
+            magic_lo: status.magic_lo,
+        });
     }
+
+    let pending = status.pending();
+    let pending_sequence = status.pending_sequence;
+    if !status.active_enabled() {
+        return Ok(LatchStatusSync {
+            active_slot: None,
+            active_sequence: status.active_sequence,
+            pending,
+            pending_sequence,
+            hidden_active_verified: false,
+            recovered_non_hidden_active: false,
+        });
+    }
+
+    let active_slot = match status.active_base {
+        base if base == base1 => Some(1),
+        base if base == base2 => Some(2),
+        _ => None,
+    };
+
+    if let Some(active_slot) = active_slot {
+        let expected_width = width as u16;
+        let expected_height = height as u16;
+        let expected_stride = rgb565_stride_bytes(width) as u16;
+        if status.active_width != expected_width
+            || status.active_height != expected_height
+            || status.active_stride != expected_stride
+        {
+            return Err(LatchStatusSyncError::HiddenGeometryMismatch {
+                active_width: status.active_width,
+                active_height: status.active_height,
+                active_stride: status.active_stride,
+                expected_width,
+                expected_height,
+                expected_stride,
+            });
+        }
+        return Ok(LatchStatusSync {
+            active_slot: Some(active_slot),
+            active_sequence: status.active_sequence,
+            pending,
+            pending_sequence,
+            hidden_active_verified: true,
+            recovered_non_hidden_active: false,
+        });
+    }
+
+    Ok(LatchStatusSync {
+        active_slot: None,
+        active_sequence: status.active_sequence,
+        pending,
+        pending_sequence,
+        hidden_active_verified: false,
+        recovered_non_hidden_active: hidden_active_verified,
+    })
+}
+
+fn rect_list_contains(list: DirtyRectList, target: DirtyRect) -> bool {
+    list.iter().any(|rect| rect == target)
 }
 
 fn configured_fpga_latch_right_guard_cols() -> i32 {
@@ -367,21 +509,6 @@ fn configured_fpga_latch_right_guard_cols() -> i32 {
             .and_then(|value| value.parse::<i32>().ok())
             .unwrap_or(1)
     })
-}
-
-fn configured_fpga_latch_status_interval() -> u16 {
-    fpga_latch_status_interval_from_value(
-        std::env::var("MISTER_FPGA_LATCH_STATUS_INTERVAL")
-            .ok()
-            .as_deref(),
-    )
-}
-
-fn fpga_latch_status_interval_from_value(value: Option<&str>) -> u16 {
-    value
-        .and_then(|value| value.parse::<u16>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(60)
 }
 
 fn launcher_input_script_wait_frames() -> usize {
@@ -3409,15 +3536,19 @@ pub(super) fn run_launcher_loop(
                     } else {
                         this_rect
                     };
-                    let raw_preview_damage = raw_preview
-                        .and_then(|present| present.cached_rect().or(present.direct_rect()));
-                    let arcade_damage = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
-                    let hidden_damage = union_dirty_rect(
-                        union_dirty_rect(base_damage, raw_preview_damage),
-                        arcade_damage,
-                    );
+                    let raw_preview_cached_rect =
+                        raw_preview.and_then(RawPreviewPresent::cached_rect);
                     let raw_preview_direct_rect =
                         raw_preview.and_then(RawPreviewPresent::direct_rect);
+                    let arcade_damage = arcade_list_rect.as_ref().map(arcade_update_dirty_rect);
+                    let mut cached_damage = DirtyRectList::new();
+                    cached_damage.push_if_some(base_damage);
+                    cached_damage.push_if_some(raw_preview_cached_rect);
+                    let hidden_damage = LatchFrameDamage::new(
+                        cached_damage,
+                        raw_preview_direct_rect,
+                        arcade_damage,
+                    );
                     let mut hidden_preview_compose_us = 0u128;
                     let mut hidden_arcade_compose_us = 0u128;
                     let mut direct_preview_rows = 0u32;
@@ -3464,7 +3595,7 @@ pub(super) fn run_launcher_loop(
                                 })
                                 .unwrap_or(0);
                             latch_presentation = Some(LauncherPresentResult {
-                                copied_rows: ui.render_h() as u32
+                                copied_rows: stats.copied_rows
                                     + direct_preview_rows
                                     + arcade_stats.rows,
                                 direct_preview_rows,
@@ -5088,14 +5219,142 @@ mod tests {
         );
     }
 
+    fn latch_status(active_base: u32, flags: u16) -> crate::fpga::LatchedFbufStatus {
+        crate::fpga::LatchedFbufStatus {
+            magic_hi: crate::fpga::MAGIK_FBUF_STATUS_MAGIC,
+            magic_lo: 0,
+            active_sequence: 11,
+            pending_sequence: 12,
+            flags,
+            flip_count: 3,
+            post_count: 4,
+            drop_count: 5,
+            active_base,
+            active_width: 960,
+            active_height: 540,
+            active_stride: rgb565_stride_bytes(960) as u16,
+        }
+    }
+
     #[test]
-    pub(super) fn fpga_latch_status_interval_defaults_unless_positive_integer() {
-        assert_eq!(fpga_latch_status_interval_from_value(None), 60);
-        assert_eq!(fpga_latch_status_interval_from_value(Some("")), 60);
-        assert_eq!(fpga_latch_status_interval_from_value(Some("0")), 60);
-        assert_eq!(fpga_latch_status_interval_from_value(Some("abc")), 60);
-        assert_eq!(fpga_latch_status_interval_from_value(Some("1")), 1);
-        assert_eq!(fpga_latch_status_interval_from_value(Some("120")), 120);
+    pub(super) fn cold_front_buffer_active_status_allows_first_hidden_slot() {
+        let front_base = 0x2200_1000;
+        let sync = classify_latch_status(
+            latch_status(front_base, 0x0001),
+            0x227e_9000,
+            0x22fd_2000,
+            960,
+            540,
+            false,
+        )
+        .expect("front buffer should be tolerated before hidden latch is verified");
+        assert_eq!(sync.active_slot, None);
+        assert!(!sync.recovered_non_hidden_active);
+        assert!(!sync.hidden_active_verified);
+
+        let mut state = TwoBufferLatchState::new(960, 540);
+        state.sync_hardware(
+            sync.active_slot,
+            sync.active_sequence,
+            sync.pending,
+            sync.pending_sequence,
+        );
+        let plan = state
+            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .expect("slot 1 should be writable");
+        assert_eq!(plan.slot_index, 1);
+    }
+
+    #[test]
+    pub(super) fn front_buffer_active_after_hidden_verification_requests_recovery() {
+        let front_base = 0x2200_1000;
+        let sync = classify_latch_status(
+            latch_status(front_base, 0x0001),
+            0x227e_9000,
+            0x22fd_2000,
+            960,
+            540,
+            true,
+        )
+        .expect("front buffer after hidden latch should recover, not disable");
+
+        assert_eq!(sync.active_slot, None);
+        assert!(sync.recovered_non_hidden_active);
+        assert!(!sync.hidden_active_verified);
+    }
+
+    #[test]
+    pub(super) fn known_hidden_active_status_blocks_that_slot() {
+        let sync = classify_latch_status(
+            latch_status(0x227e_9000, 0x0001),
+            0x227e_9000,
+            0x22fd_2000,
+            960,
+            540,
+            false,
+        )
+        .expect("hidden slot status");
+        assert_eq!(sync.active_slot, Some(1));
+        assert!(sync.hidden_active_verified);
+
+        let mut state = TwoBufferLatchState::new(960, 540);
+        state.sync_hardware(
+            sync.active_slot,
+            sync.active_sequence,
+            sync.pending,
+            sync.pending_sequence,
+        );
+        let plan = state
+            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .expect("other slot should be writable");
+        assert_eq!(plan.slot_index, 2);
+    }
+
+    #[test]
+    pub(super) fn known_hidden_active_status_rejects_wrong_geometry() {
+        let mut status = latch_status(0x227e_9000, 0x0001);
+        status.active_height = 539;
+
+        assert!(matches!(
+            classify_latch_status(status, 0x227e_9000, 0x22fd_2000, 960, 540, true),
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
+        ));
+    }
+
+    #[test]
+    pub(super) fn pending_status_blocks_hidden_writes() {
+        let sync = classify_latch_status(
+            latch_status(0x227e_9000, 0x0001 | 0x0004),
+            0x227e_9000,
+            0x22fd_2000,
+            960,
+            540,
+            true,
+        )
+        .expect("pending hidden status");
+        assert!(sync.pending);
+
+        let mut state = TwoBufferLatchState::new(960, 540);
+        state.sync_hardware(
+            sync.active_slot,
+            sync.active_sequence,
+            sync.pending,
+            sync.pending_sequence,
+        );
+        assert!(state
+            .plan_next(LatchFrameDamage::new(DirtyRectList::new(), None, None))
+            .is_none());
+    }
+
+    #[test]
+    pub(super) fn unsupported_latch_status_is_disable_error() {
+        let mut status = latch_status(0x2200_1000, 0x0001);
+        status.magic_hi = 0;
+
+        assert!(matches!(
+            classify_latch_status(status, 0x227e_9000, 0x22fd_2000, 960, 540, false),
+            Err(LatchStatusSyncError::Unsupported { .. })
+        ));
     }
 
     #[test]

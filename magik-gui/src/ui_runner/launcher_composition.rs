@@ -155,7 +155,8 @@ impl UiCompositionController {
         UiCompositionDecision {
             state,
             allow_arcade_list_blit: state == UiCompositionState::MixedArcade,
-            allow_preview_blit: state == UiCompositionState::MixedArcade,
+            allow_preview_blit: state == UiCompositionState::MixedArcade
+                && preview_frame_drawable(input.preview_cache_state, input.preview_frame_status),
             force_full_slint_present,
             clear_direct_layers,
             recovery_count: self.recovery_count,
@@ -212,16 +213,14 @@ fn composition_invariant(
         });
     }
 
-    if input.preview_cache_state == "exact"
-        && input.preview_frame_status != PreviewRawFrameStatus::Ready
-    {
-        return Some(CompositionInvariant {
-            kind: "exact-preview-not-drawable",
-            detail: format!("preview_frame_status={:?}", input.preview_frame_status),
-        });
-    }
-
     None
+}
+
+fn preview_frame_drawable(
+    preview_cache_state: &'static str,
+    preview_frame_status: PreviewRawFrameStatus,
+) -> bool {
+    preview_cache_state != "exact" || preview_frame_status == PreviewRawFrameStatus::Ready
 }
 
 #[cfg(test)]
@@ -391,17 +390,21 @@ mod tests {
     }
 
     #[test]
-    fn exact_preview_must_have_drawable_frame() {
+    fn exact_preview_without_drawable_frame_keeps_arcade_list_enabled() {
         let mut controller = UiCompositionController::new();
         let decision = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
             wants_preview: true,
             preview_cache_state: "exact",
             preview_frame_status: PreviewRawFrameStatus::Empty,
             ..input(Screen::Arcade)
         });
 
-        assert_eq!(decision.state, UiCompositionState::Recovering);
-        assert_eq!(decision.last_invariant_kind, "exact-preview-not-drawable");
+        assert_eq!(decision.state, UiCompositionState::MixedArcade);
+        assert!(decision.allow_arcade_list_blit);
+        assert!(!decision.allow_preview_blit);
+        assert_eq!(decision.recovery_count, 0);
+        assert_eq!(decision.last_invariant_kind, "");
     }
 
     #[test]

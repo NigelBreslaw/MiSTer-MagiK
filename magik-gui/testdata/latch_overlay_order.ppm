@@ -1,0 +1,8 @@
+P3
+# 4x3 deterministic latch overlay-order fixture:
+# base black, preview red, arcade-list green over preview.
+4 3
+255
+0 0 0   255 0 0   255 0 0   255 0 0
+0 0 0   255 0 0   0 255 0   0 255 0
+0 0 0   0 0 0     0 255 0   0 255 0
