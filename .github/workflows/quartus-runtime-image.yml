@@ -21,7 +21,6 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/mister-magik-quartus-lite
   BUILD_CONTEXT: ${{ github.workspace }}/build/quartus-runtime-image
 
 jobs:
@@ -54,6 +53,12 @@ jobs:
           printf '{"data-root":"%s/.docker-data"}\n' "$GITHUB_WORKSPACE" | sudo tee /etc/docker/daemon.json
           sudo systemctl start docker
           docker info --format 'DockerRootDir={{.DockerRootDir}}'
+
+      - name: Set image name
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE_NAME=ghcr.io/${owner}/mister-magik-quartus-lite" >> "$GITHUB_ENV"
 
       - name: Prepare Docker build context
         env:
