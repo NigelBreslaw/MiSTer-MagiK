@@ -88,6 +88,14 @@ fn launcher_present_backend() -> LauncherPresentBackend {
     })
 }
 
+fn present_mode_label_for_backend_status(backend: &str, status: &str) -> &'static str {
+    if backend == "fpga-vblank-latch-hidden" && status == "ok" {
+        "Mode=latch"
+    } else {
+        "Mode=/dev/fb0"
+    }
+}
+
 struct FpgaVblankLatchHiddenPresenter {
     buffer1: PluginHiddenRgb565Framebuffer,
     buffer2: PluginHiddenRgb565Framebuffer,
@@ -3483,6 +3491,14 @@ pub(super) fn run_launcher_loop(
                     pacing_trace,
                 )
             };
+        app.global::<slint_ui::launcher::MisterBridge>()
+            .set_present_mode_label(
+                present_mode_label_for_backend_status(
+                    presentation.main_present_backend,
+                    presentation.main_present_status,
+                )
+                .into(),
+            );
         let post_present_wait_us =
             if presentation.main_present_backend == "fpga-vblank-latch-hidden" {
                 presentation.vsync_us_override.unwrap_or(0)
@@ -4892,6 +4908,26 @@ mod tests {
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden")),
             LauncherPresentBackend::FpgaVblankLatchHidden
+        );
+    }
+
+    #[test]
+    pub(super) fn present_mode_label_reports_only_proven_latch_as_latch() {
+        assert_eq!(
+            present_mode_label_for_backend_status("fpga-vblank-latch-hidden", "ok"),
+            "Mode=latch"
+        );
+        assert_eq!(
+            present_mode_label_for_backend_status("fpga-vblank-latch-hidden", "unsupported"),
+            "Mode=/dev/fb0"
+        );
+        assert_eq!(
+            present_mode_label_for_backend_status("fb0-dirty", "none"),
+            "Mode=/dev/fb0"
+        );
+        assert_eq!(
+            present_mode_label_for_backend_status("none", "none"),
+            "Mode=/dev/fb0"
         );
     }
 
