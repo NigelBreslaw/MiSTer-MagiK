@@ -1,5 +1,5 @@
-use super::ArcadeListUpdate;
-use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList};
+use super::{arcade_update_dirty_rect, ArcadeListUpdate};
+use mister_magik_fb::framebuffer::target::{subtract_dirty_rects, DirtyRect, DirtyRectList};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LatchSlotHardwareState {
@@ -268,6 +268,10 @@ impl TwoBufferLatchState {
             input.arcade_dirty,
             arcade_intersects_restore,
         );
+        let mut direct_redraws = DirtyRectList::new();
+        direct_redraws.push_if_some(preview_redraw);
+        direct_redraws.push_if_some(arcade_redraw.as_ref().map(arcade_update_dirty_rect));
+        let restore_rects = subtract_dirty_rects(restore_rects, &direct_redraws);
 
         LatchPresentPlan {
             slot_index,
@@ -680,6 +684,39 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_moved_layer_restores_only_uncovered_old_residue() {
+        let old_preview = rect(0, 0, 3, 2);
+        let new_preview = rect(1, 0, 4, 2);
+        let old_residue = rect(0, 0, 1, 2);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(layer(old_preview, 1)),
+                Some(old_preview),
+                None,
+                None,
+            ))
+            .expect("first plan");
+        state.mark_post_success(first);
+        all_writable(&mut state);
+        state.mark_post_success(
+            state
+                .plan_next(input(None, None, None, None, None))
+                .expect("second plan"),
+        );
+        all_writable(&mut state);
+
+        let moved = state
+            .plan_next(input(None, Some(layer(new_preview, 2)), None, None, None))
+            .expect("moved plan");
+
+        assert_eq!(moved.restore_rects, DirtyRectList::from_one(old_residue));
+        assert_eq!(moved.preview_redraw, Some(new_preview));
+    }
+
+    #[test]
     fn cached_damage_intersecting_desired_layer_forces_redraw() {
         let preview = rect(1, 0, 4, 2);
         let preview_layer = layer(preview, 1);
@@ -739,6 +776,100 @@ mod tests {
 
         assert_eq!(
             slot,
+            parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn direct_redraws_are_subtracted_from_cached_restore_without_changing_order() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let cached = vec![BASE; WIDTH * HEIGHT];
+        let mut slot = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+
+        let plan = state
+            .plan_next(input(
+                Some(full()),
+                Some(layer(preview, 1)),
+                Some(preview),
+                Some(layer(arcade, 1)),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("plan");
+
+        assert_eq!(plan.restore_rects.total_rgb565_bytes(), 4 * 2);
+        assert!(plan.restore_rects.iter().all(|restore| {
+            restore.intersection(preview).is_none() && restore.intersection(arcade).is_none()
+        }));
+        apply_plan(&mut slot, &cached, plan);
+        assert_eq!(
+            slot,
+            parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn changed_arcade_version_promotes_scroll_to_full_before_subtraction() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_v1 = layer(arcade, 1);
+        let arcade_v2 = layer(arcade, 2);
+        let cached = vec![BASE; WIDTH * HEIGHT];
+        let mut slot1 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut slot2 = vec![Rgb565Pixel(0xffff); WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                Some(arcade_v1),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("first plan");
+        apply_plan(&mut slot1, &cached, first);
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        let second = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                Some(preview),
+                Some(arcade_v1),
+                Some(ArcadeListUpdate::Full(arcade)),
+            ))
+            .expect("second plan");
+        apply_plan(&mut slot2, &cached, second);
+        state.mark_post_success(second);
+
+        all_writable(&mut state);
+        let changed = state
+            .plan_next(input(
+                Some(full()),
+                Some(preview_layer),
+                None,
+                Some(arcade_v2),
+                Some(ArcadeListUpdate::Scroll {
+                    delta_y: -1,
+                    rect: arcade,
+                }),
+            ))
+            .expect("changed plan");
+
+        assert_eq!(changed.preview_redraw, Some(preview));
+        assert_eq!(changed.arcade_redraw, Some(ArcadeListUpdate::Full(arcade)));
+        assert!(changed.restore_rects.iter().all(|restore| {
+            restore.intersection(preview).is_none() && restore.intersection(arcade).is_none()
+        }));
+        apply_plan(&mut slot1, &cached, changed);
+        assert_eq!(
+            slot1,
             parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
         );
     }
