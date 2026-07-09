@@ -14,7 +14,7 @@ deploy="skip"
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 catalog_refresh="${MISTER_CATALOG_REFRESH:-off}"
-present_backend="${MISTER_PRESENT_BACKEND:-}"
+present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
 
 usage() {
   cat <<'EOF'
@@ -25,11 +25,12 @@ home-repeat-hold scenario for 30s by default. The scenario holds left/right
 through the normal launcher input path, including the real repeat delay and
 80ms repeat cadence, and reverses at the ends of the system row.
 
-For /dev/fb0 the gate fails if any measured frame after warmup has
-wall_us > 16667 or loop_delta_us > 16667. For the FPGA latch backend, the gate
-fails on latch-visible evidence: deadline misses, repeated buffers, sampled
-flip-counter gaps, unsupported status, or passive FPGA drop_count > 0. It still
-reports wall/loop overages as scheduler wake jitter.
+The default backend is fpga-vblank-latch-hidden. For /dev/fb0 the gate fails if
+any measured frame after warmup has wall_us > 16667 or loop_delta_us > 16667.
+For the FPGA latch backend, the gate fails on latch-visible evidence: deadline
+misses, repeated buffers, sampled flip-counter gaps, unsupported status, or
+passive FPGA drop_count > 0. It still reports wall/loop overages as scheduler
+wake jitter.
 
 Default: --skip-build, useful when a bench-tools MagiK binary is already
 deployed. Use --deploy-device to build and deploy one first.

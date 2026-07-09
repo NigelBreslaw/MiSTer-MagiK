@@ -41,16 +41,16 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   startup drawing. 1080p-class outputs use a half-resolution framebuffer such as
   960x540; 720p, direct-video, and lower outputs run native.
 - Slint renders the planned launcher framebuffer into cached RAM.
-- The Rust frame loop copies dirty regions into the write-combined `/dev/fb0`.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI and scaled
   to the output mode.
-- The single-frame `/dev/fb0` dirty-copy path remains the fallback renderer.
-  The only current hidden-buffer present experiment is
-  `MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden`, which copies complete
-  cached RGB565 frames into plugin-exposed hidden slots, posts the selected
-  physical address before vblank, then waits for vblank only as the pacing
-  boundary for the next frame. The default `/dev/fb0` path intentionally keeps
-  the older order: wait for vblank, then dirty-copy to `/dev/fb0`.
+- The default renderer is the FPGA vblank latch path when the MagiK Menu latch
+  RBF and stock-kernel plugin support are available. It copies complete cached
+  RGB565 frames into plugin-exposed hidden slots, posts the selected physical
+  address before vblank, then waits for vblank only as the pacing boundary for
+  the next frame. The single-frame `/dev/fb0` dirty-copy path remains the
+  fallback renderer and can be forced with `MISTER_PRESENT_BACKEND=fb0-dirty`;
+  that path intentionally keeps the older order: wait for vblank, then
+  dirty-copy to `/dev/fb0`.
   Latch mode keeps a larger late-frame headroom window than `/dev/fb0` for
   inactive or non-motion frames, but active Home horizontal motion bypasses the
   pre-render deferral. Holding left/right or running the Home pan window keeps
@@ -59,7 +59,7 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   buffered on the latch path; diagnostic file flushes must not run immediately
   after the post-present vblank wait because that would delay the next frame's
   hidden-buffer copy/post deadline.
-  This path requires the experimental Menu RBF to be loaded from the active
+  The latch path requires the MagiK Menu latch RBF to be loaded from the active
   launcher through Main's `mister_magik_launch` command path and the
   stock-kernel plugin probe module to be loaded. A copied RBF artifact alone
   does not activate the fast path, and `load_core` from the launcher state does
@@ -81,8 +81,8 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
 Important policy:
 
 - Do not render Slint directly into the live framebuffer for production. The
-  cached-RAM plus dirty-copy path is the fallback design; the latch experiment
-  exists to remove copy-after-vblank timing pressure once support is proven.
+  latch path is the default production renderer when support is available; the
+  cached-RAM plus `/dev/fb0` dirty-copy path is the fallback design.
 - Do not assume `/dev/fb0` contents are visible on HDMI. The FPGA may be scanning
   another buffer.
 - RGB888/8888 UI support and color-route smoke tooling have been removed from
@@ -94,9 +94,10 @@ Important policy:
   new launcher paths that depend on Main request/ack present files or FIFO
   present commands.
 - Diagnose the fast path by checking the runtime state, not just the files on
-  disk: `composition_state=full-slint` means MagiK is on the fallback renderer,
-  and absence of `mister_magik_plugin_probe` means hidden plugin slots are not
-  available.
+  disk: absence of `mister_magik_plugin_probe` means hidden plugin slots are not
+  available, and benchmark traces must report
+  `main_present_backend=fpga-vblank-latch-hidden` with status `ok` to prove the
+  latch renderer is active.
 
 ## Framebuffer Stream
 

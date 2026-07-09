@@ -175,19 +175,23 @@ The known-good activation sequence is:
    scripts/mister run "insmod /tmp/mister-magik-plugin-probe/mister_magik_plugin_probe.ko"
    ```
 
-4. Start the launcher with the surviving fast backend:
+4. Start the launcher. The FPGA latch backend is the default when the RBF and
+   plugin support are available:
 
    ```bash
-   MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden scripts/run-rust.sh launcher 0
+   scripts/run-rust.sh launcher 0
    ```
 
-   In this backend, MagiK renders into cached RAM, copies the complete RGB565
+   Use `MISTER_PRESENT_BACKEND=fb0-dirty scripts/run-rust.sh launcher 0` only
+   when intentionally forcing the legacy `/dev/fb0` fallback.
+
+   In latch mode, MagiK renders into cached RAM, copies the complete RGB565
    frame into an alternating plugin hidden slot, posts that physical address to
    the FPGA latch before vblank, then waits for vblank only to pace the next
-   frame. The default `/dev/fb0` fallback still waits for vblank before copying
-   dirty rows into the live framebuffer. Latch mode keeps a larger late-frame
-   headroom window for inactive or non-motion frames, but active Home horizontal
-   motion stays frame-driven and avoids waiting a whole vblank before rendering.
+   frame. The `/dev/fb0` fallback still waits for vblank before copying dirty
+   rows into the live framebuffer. Latch mode keeps a larger late-frame headroom
+   window for inactive or non-motion frames, but active Home horizontal motion
+   stays frame-driven and avoids waiting a whole vblank before rendering.
 
 5. Verify support with passive `fpga-latch-report`. The MagiK latch commands
    `0x57` and `0x58` should report supported status/magic: `0x57` acks
@@ -199,7 +203,7 @@ Do not use `/tmp/mister-magik/status.json` `composition_state=full-slint` as the
 fast-path proof; the launcher can still be a full-Slint composition while the
 final present goes through hidden buffers. The reliable proof signals are:
 
-- Main's cmdline contains the experimental RBF path.
+- Main's cmdline contains the MagiK Menu latch RBF path.
 - `mister_magik_plugin_probe` is present in `/proc/modules`.
 - Passive `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with
   `0x4d47` and `0x4d48` acks.
@@ -217,13 +221,11 @@ final present goes through hidden buffers. The reliable proof signals are:
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.
 
-The hidden-buffer backend env is only valid while the experimental RBF is active.
-Returning from a game normally brings Main back as `MiSTer_MagiK menu.rbf`; a
-stale `/media/fat/mister-magik/launcher.env` that still exports
-`MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden` must not be treated as proof
-of the fast path. MagiK falls back to `/dev/fb0` if the latch commands do not
-ack, but experiment scripts should still remove `launcher.env` before restoring
-the normal launcher.
+The latch backend is only active while the MagiK Menu latch RBF and plugin support
+are active. Returning from a game normally brings Main back as
+`MiSTer_MagiK menu.rbf`; runtime counters and benchmark traces must be checked
+again after return. MagiK falls back to `/dev/fb0` if hidden buffers or latch
+commands are unavailable.
 
 The launcher path relies on Rust-owned framebuffer setup:
 
@@ -234,10 +236,11 @@ The launcher path relies on Rust-owned framebuffer setup:
 
 Supported launcher rendering paths are:
 
-- Default/fallback: cached RGB565 rendering plus dirty copies into `/dev/fb0`.
-- Experimental: `MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden`, which uses
-  the stock-kernel plugin for fast hidden-slot writes and the experimental Menu
-  RBF to latch the selected buffer on HDMI vblank.
+- Default when supported: FPGA vblank latch hidden-buffer presentation, which
+  uses the stock-kernel plugin for fast hidden-slot writes and the MagiK Menu
+  latch RBF to latch the selected buffer on HDMI vblank.
+- Fallback/diagnostic override: `MISTER_PRESENT_BACKEND=fb0-dirty`, cached
+  RGB565 rendering plus dirty copies into `/dev/fb0`.
 
 Main-mediated present request/ack and FIFO present experiments are retired; do
 not use them for current device work.
