@@ -196,6 +196,7 @@ pub(super) struct LauncherFrameCpuTrace {
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 pub(super) struct LauncherFrameFinishTraceTiming {
     runtime_status_write_us: u128,
+    runtime_status_write_deferred: bool,
     frame_finish_us: u128,
 }
 
@@ -432,9 +433,12 @@ struct PreviewScrollTraceRow {
     dirty_y0: usize,
     dirty_y1: usize,
     status_write_due: u8,
+    runtime_status_write_deferred: u8,
+    frame_tail_slack_us: u128,
     status_string_copy_us: u128,
     status_string_copy_bytes: usize,
     runtime_status_write_us: u128,
+    status_write_duration_us: u128,
     wall_us: u128,
 }
 
@@ -471,7 +475,7 @@ impl PreviewScrollTraceRow {
     fn write_tsv(&self, out: &mut String) {
         let _ = write!(
             out,
-            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{:.6}\t{}\t{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             self.frame,
             self.elapsed_us,
             self.loop_delta_us,
@@ -539,9 +543,12 @@ impl PreviewScrollTraceRow {
             self.dirty_y0,
             self.dirty_y1,
             self.status_write_due,
+            self.runtime_status_write_deferred,
+            self.frame_tail_slack_us,
             self.status_string_copy_us,
             self.status_string_copy_bytes,
             self.runtime_status_write_us,
+            self.status_write_duration_us,
             self.wall_us,
             self.frame_finish_us,
             self.post_finish_tail_us
@@ -555,9 +562,12 @@ fn preview_scroll_trace_row_from_frame(
     loop_delta_us: u128,
     post_frame_tail_us: u128,
     runtime_status_write_us: u128,
+    runtime_status_write_deferred: bool,
     frame_finish_us: u128,
     post_finish_tail_us: u128,
 ) -> PreviewScrollTraceRow {
+    let wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
+    let frame_tail_slack_us = u128::from(frame.vsync_period_us).saturating_sub(wall_us);
     PreviewScrollTraceRow {
         frame: frame.frames,
         elapsed_us: frame.loop_start.duration_since(frame.run_start).as_micros(),
@@ -635,10 +645,13 @@ fn preview_scroll_trace_row_from_frame(
         dirty_y0: frame.dirty_rect.map(|rect| rect.y0).unwrap_or(0),
         dirty_y1: frame.dirty_rect.map(|rect| rect.y1).unwrap_or(0),
         status_write_due: u8::from(frame.status_write_due),
+        runtime_status_write_deferred: u8::from(runtime_status_write_deferred),
+        frame_tail_slack_us,
         status_string_copy_us: frame.prepare_trace.status_string_copy_us,
         status_string_copy_bytes: frame.status_string_copy_bytes,
         runtime_status_write_us,
-        wall_us: (frame.frame_t4 - frame.loop_start).as_micros(),
+        status_write_duration_us: runtime_status_write_us,
+        wall_us,
     }
 }
 
@@ -941,7 +954,9 @@ impl LauncherFrameAccounting {
     ) -> LauncherFrameFinishTraceTiming {
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let frame_finish_start = Instant::now();
-        if frame.status_write_due {
+        let runtime_status_write_deferred = should_defer_runtime_status_write(frame);
+        let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
+        if status_write_now {
             self.refresh_frame_analytics_mode();
         }
         self.record_first_copy(&frame, disp);
@@ -955,9 +970,9 @@ impl LauncherFrameAccounting {
         self.record_first_frame(&frame, start, catalog_ready);
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let runtime_status_write_start =
-            (frame.status_write_due && self.preview_scroll_trace.is_some()).then(Instant::now);
+            (status_write_now && self.preview_scroll_trace.is_some()).then(Instant::now);
         self.write_runtime_status(
-            frame.status_write_due,
+            status_write_now,
             frame.frames,
             frame.run_start,
             nav,
@@ -1002,6 +1017,7 @@ impl LauncherFrameAccounting {
             let frame_finish_us = frame_finish_start.elapsed().as_micros();
             LauncherFrameFinishTraceTiming {
                 runtime_status_write_us,
+                runtime_status_write_deferred,
                 frame_finish_us,
             }
         }
@@ -1020,6 +1036,7 @@ impl LauncherFrameAccounting {
             self.write_preview_trace(
                 frame,
                 timing.runtime_status_write_us,
+                timing.runtime_status_write_deferred,
                 timing.frame_finish_us,
                 defer_preview_trace_flush,
             );
@@ -1145,6 +1162,7 @@ impl LauncherFrameAccounting {
         &mut self,
         frame: &LauncherPresentedFrame,
         runtime_status_write_us: u128,
+        runtime_status_write_deferred: bool,
         frame_finish_us: u128,
         defer_flush: bool,
     ) {
@@ -1195,6 +1213,7 @@ impl LauncherFrameAccounting {
             loop_delta_us,
             post_frame_tail_us,
             runtime_status_write_us,
+            runtime_status_write_deferred,
             frame_finish_us,
             post_finish_tail_us,
         );
@@ -1745,6 +1764,15 @@ fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
     }
 }
 
+fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
+    let frame_wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
+    u128::from(frame.vsync_period_us).saturating_sub(frame_wall_us)
+}
+
+fn should_defer_runtime_status_write(frame: &LauncherPresentedFrame) -> bool {
+    frame.status_write_due && frame.main_present_backend == "fpga-vblank-latch-hidden"
+}
+
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
     match mode {
         FrameAnalyticsMode::Off => "off",
@@ -2113,6 +2141,7 @@ mod tests {
             loop_delta_us,
             3_210,
             runtime_status_write_us,
+            false,
             654,
             987,
         )
@@ -2122,6 +2151,7 @@ mod tests {
             loop_delta_us,
             3_210,
             runtime_status_write_us,
+            false,
             654,
             987,
         )
@@ -2145,7 +2175,7 @@ mod tests {
         builder.presentation.arcade_list_present_us = 500;
         let built = builder.build();
 
-        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0, 654, 987);
+        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0, false, 654, 987);
 
         assert_eq!(row.fb_present_us, 1_700);
         assert_eq!(row.vsync_us, 8_200);
@@ -2157,12 +2187,37 @@ mod tests {
         assert_eq!(row.pre_render_wait_us, 400);
         assert_eq!(row.post_present_wait_us, 800);
         assert_eq!(row.post_frame_tail_us, 3_210);
+        assert_eq!(row.runtime_status_write_deferred, 0);
+        assert_eq!(row.frame_tail_slack_us, 0);
+        assert_eq!(row.status_write_duration_us, 0);
         assert_eq!(row.frame_finish_us, 654);
         assert_eq!(row.post_finish_tail_us, 987);
         assert_eq!(row.home_pan_present_active, 1);
         assert_eq!(row.home_horizontal_input_held, 1);
         assert_eq!(row.redraw_pending, 1);
         assert_eq!(row.wake_reasons_bits, 0x40);
+    }
+
+    #[test]
+    fn low_slack_latch_frames_defer_runtime_status_writes() {
+        let start = Instant::now();
+        let mut low_slack = presented_frame(46, start, 15_500);
+        low_slack.status_write_due = true;
+        low_slack.main_present_backend = "fpga-vblank-latch-hidden";
+
+        assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
+        assert!(should_defer_runtime_status_write(&low_slack));
+
+        let mut enough_slack = presented_frame(47, start, 14_000);
+        enough_slack.status_write_due = true;
+        enough_slack.main_present_backend = "fpga-vblank-latch-hidden";
+        assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
+        assert!(should_defer_runtime_status_write(&enough_slack));
+
+        let mut non_latch = presented_frame(48, start, 15_500);
+        non_latch.status_write_due = true;
+        non_latch.main_present_backend = "fb0-dirty";
+        assert!(!should_defer_runtime_status_write(&non_latch));
     }
 
     #[test]
@@ -2283,7 +2338,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
