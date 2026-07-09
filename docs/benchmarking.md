@@ -137,11 +137,20 @@ holding left/right across the Home system row:
 scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
 ```
 
+For the FPGA latch path, first prove `fpga-latch-report` support, then run the
+same Home-row gate with the backend pinned:
+
+```bash
+scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build --present-backend fpga-vblank-latch-hidden
+```
+
 The gate writes `build/launcher-home-scroll-profiles/*-launcher-home-scroll.tsv`
-and a matching `*-launcher-home-scroll-drops.tsv` report. It fails if any
-warmed-up frame has `wall_us > 16667`, and the report lists the worst frames,
-present backend/status, vsync state, and the timing phase most likely to explain
-each miss. The shared trace schema predates the Home-row gate, so the `selected`
+and a matching `*-launcher-home-scroll-drops.tsv` report. The default `/dev/fb0`
+gate fails if any warmed-up frame has `wall_us > 16667`. The FPGA latch gate
+requires the requested backend on every measured frame and fails if any latch
+post misses the vblank deadline. The report lists the worst frames, present
+backend/status, vsync state, latch copy/post/status timings, and latch deadline
+margin. The shared trace schema predates the Home-row gate, so the `selected`
 and `visual_index` columns still describe the Arcade list, not the Home system
 index; use the log/status `bench_scenario=home-repeat-hold` fields to confirm
 the Home benchmark path. The default `MISTER_CATALOG_REFRESH=off` isolates

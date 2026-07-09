@@ -181,6 +181,12 @@ The known-good activation sequence is:
    MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden scripts/run-rust.sh launcher 0
    ```
 
+   In this backend, MagiK renders into cached RAM, copies the complete RGB565
+   frame into an alternating plugin hidden slot, posts that physical address to
+   the FPGA latch before vblank, then waits for vblank only to pace the next
+   frame. The default `/dev/fb0` fallback still waits for vblank before copying
+   dirty rows into the live framebuffer.
+
 5. Verify support with `fpga-latch-report` or `fpga-latch-post-report`. The
    MagiK latch commands `0x57` and `0x58` should report supported status/magic:
    `0x57` acks `0x4d47`, and `0x58` acks `0x4d48`.
@@ -195,6 +201,9 @@ final present goes through hidden buffers. The reliable proof signals are:
   `0x4d48` acks.
 - `flip_count` and `post_count` advance during a launcher run, with
   `drop_count=0`.
+- Home-row benchmark traces show `main_present_backend=fpga-vblank-latch-hidden`
+  and `main_present_status=ok`; `main_present_route_us` is a compatibility
+  column carrying the FPGA `flip_count` in this mode.
 
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.
