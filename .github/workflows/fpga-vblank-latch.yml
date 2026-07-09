@@ -36,7 +36,6 @@ env:
   QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
   QUARTUS_DOCKER_CPUS: "4"
   QUARTUS_DOCKER_MEMORY: "0"
-  QUARTUS_DOCKER_PRIVILEGED: "1"
 
 jobs:
   build-rbf:
@@ -112,6 +111,7 @@ jobs:
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
           MISTER_FPGA_APPLY_PATCH: ${{ github.event.inputs.apply_magik_patch || 'true' }}
+          QUARTUS_DOCKER_PRIVILEGED: "1"
         run: scripts/build-fpga-vblank-latch-core.sh
 
       - name: Upload FPGA build evidence
