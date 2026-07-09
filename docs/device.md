@@ -208,9 +208,11 @@ final present goes through hidden buffers. The reliable proof signals are:
 - Home-row benchmark traces show `main_present_backend=fpga-vblank-latch-hidden`
   and `main_present_status=ok`; `main_present_route_us` is a compatibility
   column carrying the FPGA `flip_count` in this mode.
-- The Home-row zero-drop gate reports zero latch deadline misses and zero strict
-  visual cadence misses. `drop_count=0` alone proves FPGA acceptance, not
-  TV-visible smoothness.
+- The Home-row zero-drop gate reports zero latch deadline misses, alternating
+  hidden buffers, consistent sampled flip counters, and zero FPGA drops. Wall
+  and loop cadence overages are still reported as scheduler wake jitter, but
+  they are not latch visual misses by themselves because the FPGA latches the
+  already-posted buffer at vblank.
 
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.

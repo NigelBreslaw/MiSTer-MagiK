@@ -68,9 +68,11 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   `fpga-latch-report` magic for commands `0x57`/`0x58`, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
-  `drop_count=0` proves the FPGA accepted latch posts, not that every HDMI
-  refresh received a changed visual frame; the Home-row strict cadence gate is
-  the smoothness proof.
+  For `/dev/fb0`, userspace wall/loop cadence is the visual proof because the
+  copy happens after vblank. For the latch path, TV-visible proof comes from
+  posts completing before deadline, alternating hidden buffers, consistent
+  sampled flip counters, and passive `drop_count=0`; Linux wake jitter after the
+  vblank wait is reported separately as scheduler timing.
 - The launcher routes the framebuffer during startup and explicit recovery. The
   old periodic route watchdog is disabled by default now that the Main_MiSTer
   fork suppresses stock OSD/menu/framebuffer paths while MagiK owns the UI.
