@@ -68,6 +68,14 @@ impl<'a> LayerTarget<'a> {
         self.target.compose_direct_preview_rect(rect)
     }
 
+    pub(super) fn copy_direct_preview_rect_to_hidden(
+        &self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        rect: DirtyRect,
+    ) -> u32 {
+        self.target.copy_direct_preview_rect_to_hidden(hidden, rect)
+    }
+
     fn present_arcade_list_update(
         &mut self,
         renderer: &mut ArcadeListRenderer,
@@ -82,6 +90,15 @@ impl<'a> LayerTarget<'a> {
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
         compose_arcade_list_update(self.target, renderer, update)
+    }
+
+    pub(super) fn copy_arcade_list_update_to_hidden(
+        &self,
+        hidden: &mut PluginHiddenRgb565Framebuffer,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+    ) -> PresentCopyStats {
+        copy_arcade_list_update_to_hidden(hidden, renderer, update)
     }
 
     pub(super) fn cached_565(&self) -> &[Rgb565Pixel] {
