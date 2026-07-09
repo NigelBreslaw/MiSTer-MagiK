@@ -112,10 +112,17 @@ def dominant_phase(row: dict[str, str], medians: dict[str, int]) -> str:
     return best_column
 
 
-def read_rows(path: Path, ignore_frames_through: int) -> list[dict[str, str]]:
+def read_rows(
+    path: Path, ignore_frames_through: int, ignore_elapsed_zero: bool
+) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
-    return [row for row in rows if int_field(row, "frame") > ignore_frames_through]
+    return [
+        row
+        for row in rows
+        if int_field(row, "frame") > ignore_frames_through
+        and (not ignore_elapsed_zero or int_field(row, "elapsed_us") != 0)
+    ]
 
 
 def status_slow_frames(path: Path | None) -> list[dict[str, object]]:
@@ -534,6 +541,7 @@ def main() -> int:
     parser.add_argument("--fpga-latch-report-before", type=Path)
     parser.add_argument("--fpga-latch-report-after", type=Path)
     parser.add_argument("--ignore-frames-through", type=int, default=30)
+    parser.add_argument("--ignore-elapsed-zero", action="store_true")
     parser.add_argument("--worst", type=int, default=12)
     parser.add_argument("--expect-backend", choices=[LATCH_BACKEND, "fb0-dirty"])
     parser.add_argument("--self-test", action="store_true")
@@ -544,7 +552,7 @@ def main() -> int:
     if args.trace is None:
         parser.error("trace is required unless --self-test is used")
 
-    rows = read_rows(args.trace, args.ignore_frames_through)
+    rows = read_rows(args.trace, args.ignore_frames_through, args.ignore_elapsed_zero)
     return print_summary(
         args.label,
         rows,
