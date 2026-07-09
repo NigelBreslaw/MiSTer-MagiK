@@ -1,6 +1,14 @@
 name: FPGA Vblank Latch RBF
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fpga-vblank-latch.yml"
+      - "experiments/fpga-vblank-latch/**"
+      - "scripts/build-fpga-vblank-latch-core.sh"
+      - "scripts/install-quartus-lite-docker.sh"
   pull_request:
     paths:
       - ".github/workflows/fpga-vblank-latch.yml"
