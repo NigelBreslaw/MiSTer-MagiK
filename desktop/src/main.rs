@@ -2,6 +2,7 @@ mod agent_client;
 mod app_state;
 mod file_icons;
 mod frame_profile;
+#[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
 mod framebuffer_cadence;
 mod library;
 #[cfg(target_os = "macos")]
@@ -141,20 +142,41 @@ struct FramebufferDisplayUpdate {
     received_at: Instant,
 }
 
-#[derive(Default)]
 struct FramebufferDisplayState {
     recent_dirty_rects: VecDeque<DirtyRectOverlayState>,
     geometry: Option<mister_magik_framebuffer_stream::FrameGeometry>,
     applied: u64,
     last_chrome_update: Option<Instant>,
+    chrome_enabled: bool,
+}
+
+impl Default for FramebufferDisplayState {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl FramebufferDisplayState {
+    fn new(chrome_enabled: bool) -> Self {
+        Self {
+            recent_dirty_rects: VecDeque::new(),
+            geometry: None,
+            applied: 0,
+            last_chrome_update: None,
+            chrome_enabled,
+        }
+    }
 }
 
 type SharedFramebufferDisplayMailbox = Arc<LatestMailbox<FramebufferDisplayUpdate>>;
 type SharedFramebufferDisplayState = Arc<Mutex<FramebufferDisplayState>>;
 
+#[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
 struct FramebufferRenderMetrics {
     supported: AtomicBool,
     observer_ready: AtomicBool,
+    winit_observer_ready: AtomicBool,
+    rendering_notifier_ready: AtomicBool,
     focused: AtomicBool,
     occluded: AtomicBool,
     lost_focus_during_measurement: AtomicBool,
@@ -185,7 +207,7 @@ struct FramebufferRenderMetricsState {
     latencies: VecDeque<Duration>,
 }
 
-#[cfg_attr(not(feature = "live-ui"), allow(dead_code))]
+#[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default)]
 struct FramebufferRenderSnapshot {
     supported: bool,
@@ -206,6 +228,8 @@ impl Default for FramebufferRenderMetrics {
         Self {
             supported: AtomicBool::new(false),
             observer_ready: AtomicBool::new(false),
+            winit_observer_ready: AtomicBool::new(false),
+            rendering_notifier_ready: AtomicBool::new(false),
             focused: AtomicBool::new(false),
             occluded: AtomicBool::new(false),
             lost_focus_during_measurement: AtomicBool::new(false),
@@ -316,17 +340,20 @@ impl FramebufferRenderMetrics {
     fn benchmark_ready(&self) -> bool {
         self.observer_ready.load(Ordering::Acquire)
             && self.received.load(Ordering::Acquire) > 0
+            && self.applied.load(Ordering::Acquire) > 0
+            && self.rendered.load(Ordering::Acquire) > 0
             && self.focused.load(Ordering::Acquire)
             && !self.occluded.load(Ordering::Acquire)
-            && self.foreground_redraws.load(Ordering::Acquire) > 0
     }
 
     #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
     fn benchmark_invalid_reason(&self) -> Option<&'static str> {
         if !self.observer_ready.load(Ordering::Acquire) {
-            Some("redraw_observer_not_ready")
+            Some("rendering_notifier_not_ready")
         } else if self.received.load(Ordering::Acquire) == 0 {
             Some("no_stream_frames")
+        } else if self.applied.load(Ordering::Acquire) == 0 {
+            Some("no_applied_frames")
         } else if !self.focused.load(Ordering::Acquire) {
             Some("window_unfocused")
         } else if self.lost_focus_during_measurement.load(Ordering::Acquire) {
@@ -335,8 +362,8 @@ impl FramebufferRenderMetrics {
             Some("window_occluded")
         } else if self.occluded_during_measurement.load(Ordering::Acquire) {
             Some("window_was_occluded")
-        } else if self.foreground_redraws.load(Ordering::Acquire) == 0 {
-            Some("zero_foreground_redraws")
+        } else if self.rendered.load(Ordering::Acquire) == 0 {
+            Some("zero_after_rendering")
         } else {
             None
         }
@@ -408,7 +435,14 @@ fn install_framebuffer_render_notifier(
                         .foreground_redraws
                         .fetch_add(1, Ordering::Relaxed);
                 }
-                redraw_metrics.mark_rendered(Instant::now(), CadenceEventKind::RedrawRequested)
+                redraw_metrics.cadence.record(
+                    CadenceEventKind::RedrawRequested,
+                    0,
+                    0,
+                    redraw_metrics.applied_serial.load(Ordering::Acquire),
+                    0,
+                    0,
+                );
             }
             winit::event::WindowEvent::Focused(focused) => {
                 redraw_metrics.focused.store(*focused, Ordering::Release);
@@ -446,10 +480,10 @@ fn install_framebuffer_render_notifier(
         }
         EventResult::Propagate
     });
-    metrics.supported.store(true, Ordering::Release);
+    metrics.winit_observer_ready.store(true, Ordering::Release);
 
     let callback_metrics = Arc::clone(&metrics);
-    if window
+    let rendering_notifier_ready = window
         .set_rendering_notifier(move |state, _graphics_api| match state {
             slint::RenderingState::RenderingSetup => {
                 callback_metrics
@@ -482,11 +516,16 @@ fn install_framebuffer_render_notifier(
             }
             _ => {}
         })
-        .is_ok()
-    {
-        metrics.supported.store(true, Ordering::Release);
-    }
-    metrics.observer_ready.store(true, Ordering::Release);
+        .is_ok();
+    metrics
+        .rendering_notifier_ready
+        .store(rendering_notifier_ready, Ordering::Release);
+    metrics
+        .supported
+        .store(rendering_notifier_ready, Ordering::Release);
+    metrics
+        .observer_ready
+        .store(rendering_notifier_ready, Ordering::Release);
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1280,19 +1319,31 @@ fn library_sort_column_id(column: library::LibrarySortColumn) -> &'static str {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if let Some(seconds) = framebuffer_display_bench_seconds()? {
+    if let Some(args) = framebuffer_display_bench_args()? {
+        if cfg!(debug_assertions) {
+            return Err("desktop display benchmarks require --release".into());
+        }
+        if !cfg!(feature = "compiled-ui") || !cfg!(feature = "skia-renderer") {
+            return Err(
+                "desktop display benchmarks require --no-default-features --features compiled-ui,skia-renderer"
+                    .into(),
+            );
+        }
         if std::env::var_os("SLINT_BACKEND").is_none() {
             std::env::set_var("SLINT_BACKEND", default_slint_backend());
         }
         select_backend()?;
         #[cfg(feature = "compiled-ui")]
-        return run_compiled_framebuffer_display_bench(seconds);
-        #[cfg(all(not(feature = "compiled-ui"), feature = "live-ui"))]
-        return run_live_framebuffer_display_bench(seconds);
-        #[cfg(not(any(feature = "live-ui", feature = "compiled-ui")))]
+        return match args.source {
+            FramebufferDisplayBenchSource::RealStream => {
+                run_compiled_framebuffer_display_bench(args)
+            }
+            FramebufferDisplayBenchSource::Synthetic => run_compiled_synthetic_display_bench(args),
+        };
+        #[cfg(not(feature = "compiled-ui"))]
         {
-            let _ = seconds;
-            return Err("display benchmark requires live-ui or compiled-ui".into());
+            let _ = args;
+            return Err("desktop display benchmarks require compiled-ui".into());
         }
     }
     if let Some((mode, limit)) = framebuffer_stream_bench_args()? {
@@ -1321,18 +1372,73 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn framebuffer_display_bench_seconds() -> Result<Option<u64>, Box<dyn Error>> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FramebufferDisplayBenchSource {
+    RealStream,
+    Synthetic,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FramebufferDisplayBenchArgs {
+    source: FramebufferDisplayBenchSource,
+    seconds: u64,
+    chrome: bool,
+    cadence_out: Option<PathBuf>,
+}
+
+fn framebuffer_display_bench_args() -> Result<Option<FramebufferDisplayBenchArgs>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    if args.first().map(String::as_str) != Some("--framebuffer-stream-display-bench-secs") {
-        return Ok(None);
-    }
+    parse_framebuffer_display_bench_args(&args)
+}
+
+fn parse_framebuffer_display_bench_args(
+    args: &[String],
+) -> Result<Option<FramebufferDisplayBenchArgs>, Box<dyn Error>> {
+    let source = match args.first().map(String::as_str) {
+        Some("--framebuffer-stream-display-bench-secs") => {
+            FramebufferDisplayBenchSource::RealStream
+        }
+        Some("--framebuffer-synthetic-display-bench-secs") => {
+            FramebufferDisplayBenchSource::Synthetic
+        }
+        _ => return Ok(None),
+    };
     let seconds = args
         .get(1)
         .map(String::as_str)
         .unwrap_or("30")
         .parse::<u64>()?
         .max(1);
-    Ok(Some(seconds))
+    let mut chrome = true;
+    let mut cadence_out = None;
+    let mut index = 2;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--chrome" => {
+                let value = args.get(index + 1).ok_or("--chrome needs on or off")?;
+                chrome = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("--chrome needs on or off".into()),
+                };
+                index += 2;
+            }
+            "--cadence-out" => {
+                let value = args.get(index + 1).ok_or("--cadence-out needs a path")?;
+                cadence_out = Some(PathBuf::from(value));
+                index += 2;
+            }
+            other => {
+                return Err(format!("unknown desktop display benchmark option: {other}").into())
+            }
+        }
+    }
+    Ok(Some(FramebufferDisplayBenchArgs {
+        source,
+        seconds,
+        chrome,
+        cadence_out,
+    }))
 }
 
 fn default_slint_backend() -> &'static str {
@@ -1536,43 +1642,6 @@ fn run_live_ui() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(feature = "live-ui")]
-fn run_live_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Error>> {
-    use slint::ComponentHandle;
-    use slint::SharedString;
-    use slint_interpreter::Value;
-
-    let ui_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/main.slint");
-    let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
-    let (instance, render_metrics) = create_live_instance(&ui_path, &host)?;
-    let _ = instance.set_global_property(
-        "AppState",
-        "selected-page",
-        Value::String(SharedString::from("analytics")),
-    );
-    let _ = instance.set_global_property("AnalyticsState", "live-stream", Value::Bool(true));
-    instance.invoke_global("Actions", "live-stream-changed", &[Value::Bool(true)])?;
-
-    let timer_metrics = Arc::clone(&render_metrics);
-    let timer_instance = instance.as_weak();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(3));
-        timer_metrics.reset();
-        std::thread::sleep(Duration::from_secs(seconds));
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(instance) = timer_instance.upgrade() {
-                let _ =
-                    instance.invoke_global("Actions", "live-stream-changed", &[Value::Bool(false)]);
-            }
-            let _ = slint::quit_event_loop();
-        });
-    });
-
-    instance.run()?;
-    print_framebuffer_display_bench(seconds, &render_metrics, None);
-    Ok(())
-}
-
 #[cfg(feature = "compiled-ui")]
 fn prepare_compiled_framebuffer_benchmark_window(
     ui: &AppWindow,
@@ -1600,8 +1669,6 @@ fn prepare_compiled_framebuffer_benchmark_window(
                 .monitor_refresh_millihertz
                 .store(u64::from(refresh_millihertz), Ordering::Release);
         }
-        install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
-
         winit_window.set_visible(true);
         #[cfg(target_os = "macos")]
         let _ = macos_titlebar::activate_benchmark_window(&winit_window);
@@ -1630,9 +1697,12 @@ fn wait_for_framebuffer_benchmark_ready(
 }
 
 #[cfg(feature = "compiled-ui")]
-fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Error>> {
+fn run_compiled_framebuffer_display_bench(
+    args: FramebufferDisplayBenchArgs,
+) -> Result<(), Box<dyn Error>> {
     use slint::ComponentHandle;
 
+    let seconds = args.seconds;
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let ui = AppWindow::new()?;
     let capture = Arc::new(Mutex::new(None));
@@ -1646,6 +1716,7 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
     let stream_generation = Arc::clone(&generation);
     let stream_control = Arc::clone(&control);
     let stream_metrics = Arc::clone(&metrics);
+    let chrome_enabled = args.chrome;
     ui.global::<Actions>()
         .on_live_stream_changed(move |enabled| {
             let next_generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1659,6 +1730,7 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
                     Arc::clone(&stream_metrics),
                     host.clone(),
                     next_generation,
+                    chrome_enabled,
                 );
             }
         });
@@ -1667,6 +1739,7 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
         .set_selected_page("analytics".into());
     ui.global::<AnalyticsState>().set_live_stream(true);
     ui.global::<Actions>().invoke_live_stream_changed(true);
+    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
     ui.show()?;
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
@@ -1701,21 +1774,303 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
         });
     });
 
-    ui.run()?;
+    slint::run_event_loop()?;
+    ui.hide()?;
     let invalid_reason = invalid_reason.lock().ok().and_then(|reason| reason.clone());
-    print_framebuffer_display_bench(seconds, &metrics, invalid_reason.as_deref());
+    print_framebuffer_display_bench(
+        seconds,
+        "real-stream",
+        args.chrome,
+        args.cadence_out.as_deref(),
+        &metrics,
+        invalid_reason.as_deref(),
+    );
     Ok(())
 }
 
+#[cfg(feature = "compiled-ui")]
+fn run_compiled_synthetic_display_bench(
+    args: FramebufferDisplayBenchArgs,
+) -> Result<(), Box<dyn Error>> {
+    use slint::ComponentHandle;
+
+    let seconds = args.seconds;
+    let ui = AppWindow::new()?;
+    let capture = Arc::new(Mutex::new(None));
+    let metrics = Arc::new(FramebufferRenderMetrics::default());
+    let generation = Arc::new(AtomicU64::new(1));
+    let invalid_reason = Arc::new(Mutex::new(None::<String>));
+    let frames = Arc::new(build_synthetic_display_frames());
+
+    ui.global::<AppState>()
+        .set_selected_page("analytics".into());
+    ui.global::<AnalyticsState>().set_live_stream(true);
+    ui.global::<AnalyticsState>()
+        .set_live_stream_summary("Synthetic 60fps SharedPixelBuffer source.".into());
+    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
+    ui.show()?;
+    #[cfg(target_os = "macos")]
+    setup_macos_titlebar_for_compiled_ui(&ui);
+    prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
+    spawn_compiled_synthetic_display_source(
+        ui.as_weak(),
+        capture,
+        Arc::clone(&generation),
+        Arc::clone(&metrics),
+        frames,
+        args.chrome,
+        1,
+    );
+
+    let timer_metrics = Arc::clone(&metrics);
+    let timer_generation = Arc::clone(&generation);
+    let timer_invalid_reason = Arc::clone(&invalid_reason);
+    std::thread::spawn(move || {
+        match wait_for_framebuffer_benchmark_ready(&timer_metrics, Duration::from_secs(10)) {
+            Ok(()) => {
+                std::thread::sleep(Duration::from_secs(3));
+                timer_metrics.reset();
+                std::thread::sleep(Duration::from_secs(seconds));
+                if let Some(reason) = timer_metrics.benchmark_invalid_reason() {
+                    if let Ok(mut invalid) = timer_invalid_reason.lock() {
+                        *invalid = Some(reason.to_string());
+                    }
+                }
+            }
+            Err(reason) => {
+                if let Ok(mut invalid) = timer_invalid_reason.lock() {
+                    *invalid = Some(reason.to_string());
+                }
+            }
+        }
+        timer_generation.fetch_add(1, Ordering::SeqCst);
+        let _ = slint::invoke_from_event_loop(|| {
+            let _ = slint::quit_event_loop();
+        });
+    });
+
+    slint::run_event_loop()?;
+    ui.hide()?;
+    let invalid_reason = invalid_reason.lock().ok().and_then(|reason| reason.clone());
+    print_framebuffer_display_bench(
+        seconds,
+        "synthetic",
+        args.chrome,
+        args.cadence_out.as_deref(),
+        &metrics,
+        invalid_reason.as_deref(),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "compiled-ui")]
+fn build_synthetic_display_frames() -> Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
+    const WIDTH: u32 = 480;
+    const HEIGHT: u32 = 270;
+    const FRAME_COUNT: usize = 60;
+    let mut frames = Vec::with_capacity(FRAME_COUNT);
+    for sequence in 0..FRAME_COUNT {
+        let mut frame = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(WIDTH, HEIGHT);
+        let bytes = frame.make_mut_bytes();
+        for (index, pixel) in bytes.chunks_exact_mut(4).enumerate() {
+            let x = (index % WIDTH as usize) as u8;
+            let y = (index / WIDTH as usize) as u8;
+            pixel.copy_from_slice(&[12 + x / 8, 18 + y / 8, 32 + x / 12, 255]);
+        }
+
+        let marker_x = (sequence * 7) % (WIDTH as usize - 16);
+        fill_synthetic_rect(
+            bytes,
+            WIDTH,
+            marker_x,
+            28,
+            16,
+            HEIGHT as usize - 56,
+            [45, 212, 191, 255],
+        );
+        for bit in 0..6 {
+            let color = if sequence & (1 << bit) == 0 {
+                [42, 49, 66, 255]
+            } else {
+                [248, 196, 79, 255]
+            };
+            fill_synthetic_rect(bytes, WIDTH, 16 + bit * 18, 8, 12, 12, color);
+        }
+        frames.push(frame);
+    }
+    frames
+}
+
+#[cfg(feature = "compiled-ui")]
+fn fill_synthetic_rect(
+    rgba: &mut [u8],
+    stride_pixels: u32,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: [u8; 4],
+) {
+    let stride = stride_pixels as usize * 4;
+    for row in y..y + height {
+        let start = row * stride + x * 4;
+        for pixel in rgba[start..start + width * 4].chunks_exact_mut(4) {
+            pixel.copy_from_slice(&color);
+        }
+    }
+}
+
+#[cfg(feature = "compiled-ui")]
+fn synthetic_stream_frame(
+    sequence: u64,
+    timestamp_us: u64,
+) -> agent_client::FramebufferStreamFrame {
+    let geometry = mister_magik_framebuffer_stream::FrameGeometry {
+        width: 480,
+        height: 270,
+        stride_pixels: 480,
+    };
+    let now = Instant::now();
+    agent_client::FramebufferStreamFrame {
+        capture: agent_client::FramebufferCapture {
+            png_path: PathBuf::new(),
+            rgba_pixels: Vec::new(),
+            raw_pixels: Vec::new(),
+            raw_stride_bytes: 0,
+            width: u64::from(geometry.width),
+            height: u64::from(geometry.height),
+            bpp: 16,
+            raw_bytes: u64::from(geometry.width) * u64::from(geometry.height) * 2,
+            payload_bytes: 0,
+            encoding: "synthetic-shared-pixel-buffer".to_string(),
+            png_bytes: 0,
+            png_hex_bytes: 0,
+            timing: agent_client::FramebufferCaptureTiming::default(),
+        },
+        kind: if sequence == 0 {
+            mister_magik_framebuffer_stream::FrameKind::Keyframe
+        } else {
+            mister_magik_framebuffer_stream::FrameKind::RectDelta
+        },
+        sequence,
+        timestamp_us,
+        geometry,
+        rect: mister_magik_framebuffer_stream::FrameRect::full(geometry),
+        raw_bytes: u64::from(geometry.width) * u64::from(geometry.height) * 2,
+        payload_bytes: 0,
+        timing: agent_client::FramebufferStreamTiming {
+            read_started: now,
+            read_complete: now,
+            decompress_complete: now,
+            rgba_complete: now,
+        },
+    }
+}
+
+#[cfg(feature = "compiled-ui")]
+fn spawn_compiled_synthetic_display_source(
+    ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    render_metrics: Arc<FramebufferRenderMetrics>,
+    frames: Arc<Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>>,
+    chrome_enabled: bool,
+    generation: u64,
+) {
+    std::thread::spawn(move || {
+        let stream_start = Instant::now();
+        let mailbox = Arc::new(LatestMailbox::default());
+        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::new(chrome_enabled)));
+        let frame_interval = Duration::from_nanos(16_666_667);
+        let mut next_frame_at = Instant::now();
+        let mut sequence = 0_u64;
+        while stream_generation.load(Ordering::SeqCst) == generation {
+            let received_at = Instant::now();
+            let timestamp_us = stream_start.elapsed().as_micros() as u64;
+            let frame = synthetic_stream_frame(sequence, timestamp_us);
+            let pixels = frames[sequence as usize % frames.len()].clone();
+            render_metrics.cadence.record(
+                CadenceEventKind::SourceReceived,
+                sequence,
+                timestamp_us,
+                0,
+                0,
+                0,
+            );
+            render_metrics.cadence.record(
+                CadenceEventKind::DecodeComplete,
+                sequence,
+                timestamp_us,
+                0,
+                0,
+                0,
+            );
+            render_metrics.cadence.record(
+                CadenceEventKind::PixelBufferReady,
+                sequence,
+                timestamp_us,
+                0,
+                0,
+                0,
+            );
+            let (_, coalesced_before) = mailbox.stats();
+            let schedule = mailbox.publish(FramebufferDisplayUpdate {
+                frame,
+                pixels: Some(pixels),
+                received_at,
+            });
+            let (_, coalesced) = mailbox.stats();
+            render_metrics.cadence.record(
+                if coalesced > coalesced_before {
+                    CadenceEventKind::MailboxReplace
+                } else {
+                    CadenceEventKind::MailboxPublish
+                },
+                sequence,
+                timestamp_us,
+                0,
+                0,
+                0,
+            );
+            render_metrics.mark_received(coalesced);
+            if schedule {
+                schedule_compiled_framebuffer_display(
+                    ui.clone(),
+                    Arc::clone(&capture_state),
+                    Arc::clone(&stream_generation),
+                    Arc::clone(&mailbox),
+                    Arc::clone(&display_state),
+                    Arc::clone(&render_metrics),
+                    stream_start,
+                    generation,
+                );
+            }
+            sequence = sequence.wrapping_add(1);
+            next_frame_at += frame_interval;
+            if let Some(remaining) = next_frame_at.checked_duration_since(Instant::now()) {
+                std::thread::sleep(remaining);
+            } else {
+                next_frame_at = Instant::now();
+            }
+        }
+        mailbox.close();
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
 fn print_framebuffer_display_bench(
     seconds: u64,
+    source: &str,
+    chrome: bool,
+    cadence_out: Option<&Path>,
     render_metrics: &FramebufferRenderMetrics,
     invalid_reason: Option<&str>,
 ) {
     let snapshot = render_metrics.snapshot(Instant::now());
     let invalid_reason = invalid_reason.unwrap_or("none");
     println!(
-        "framebuffer_display_bench_tsv\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
+        "framebuffer_display_bench_tsv\tsource={source}\tchrome={}\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\twinit_observer_ready={}\trendering_notifier_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
+        if chrome { "on" } else { "off" },
         if cfg!(debug_assertions) { "debug" } else { "release" },
         u8::from(invalid_reason == "none"),
         snapshot.received,
@@ -1729,6 +2084,16 @@ fn print_framebuffer_display_bench(
         snapshot.latency_p95_ms,
         u8::from(snapshot.supported),
         u8::from(render_metrics.observer_ready.load(Ordering::Acquire)),
+        u8::from(
+            render_metrics
+                .winit_observer_ready
+                .load(Ordering::Acquire),
+        ),
+        u8::from(
+            render_metrics
+                .rendering_notifier_ready
+                .load(Ordering::Acquire),
+        ),
         u8::from(render_metrics.focused.load(Ordering::Acquire)),
         u8::from(render_metrics.occluded.load(Ordering::Acquire)),
         u8::from(
@@ -1768,8 +2133,10 @@ fn print_framebuffer_display_bench(
         cadence.bucket_500ms_min,
         cadence.bucket_500ms_max,
     );
-    if let Some(path) = std::env::var_os("MISTER_FRAMEBUFFER_CADENCE_OUT") {
-        let path = PathBuf::from(path);
+    let cadence_path = cadence_out
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("MISTER_FRAMEBUFFER_CADENCE_OUT").map(PathBuf::from));
+    if let Some(path) = cadence_path {
         match render_metrics.cadence.write_tsv(&path) {
             Ok(()) => println!(
                 "framebuffer_cadence_artifact_tsv\tpath={}\tevents={}",
@@ -3003,6 +3370,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                     Arc::clone(&stream_render_metrics),
                     stream_host.clone(),
                     generation,
+                    true,
                 );
             }
         });
@@ -5218,10 +5586,11 @@ fn schedule_live_framebuffer_display(
             .lock()
             .map(|mut state| {
                 let geometry_changed = record_applied_frame(&mut state, &update.frame);
-                let refresh_chrome = geometry_changed
-                    || state.last_chrome_update.is_none_or(|last| {
-                        now.saturating_duration_since(last) >= Duration::from_millis(250)
-                    });
+                let refresh_chrome = state.chrome_enabled
+                    && (geometry_changed
+                        || state.last_chrome_update.is_none_or(|last| {
+                            now.saturating_duration_since(last) >= Duration::from_millis(250)
+                        }));
                 let chrome = refresh_chrome.then(|| {
                     state.last_chrome_update = Some(now);
                     (
@@ -5691,10 +6060,11 @@ fn schedule_compiled_framebuffer_display(
             .lock()
             .map(|mut state| {
                 let geometry_changed = record_applied_frame(&mut state, &update.frame);
-                let refresh_chrome = geometry_changed
-                    || state.last_chrome_update.is_none_or(|last| {
-                        now.saturating_duration_since(last) >= Duration::from_millis(250)
-                    });
+                let refresh_chrome = state.chrome_enabled
+                    && (geometry_changed
+                        || state.last_chrome_update.is_none_or(|last| {
+                            now.saturating_duration_since(last) >= Duration::from_millis(250)
+                        }));
                 let chrome = refresh_chrome.then(|| {
                     state.last_chrome_update = Some(now);
                     (
@@ -5766,12 +6136,13 @@ fn spawn_compiled_framebuffer_stream(
     render_metrics: Arc<FramebufferRenderMetrics>,
     host: String,
     generation: u64,
+    chrome_enabled: bool,
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
         let stream_start = Instant::now();
         let mailbox = Arc::new(LatestMailbox::default());
-        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
+        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::new(chrome_enabled)));
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -6365,6 +6736,59 @@ mod tests {
     }
 
     #[test]
+    fn framebuffer_display_bench_cli_parses_source_chrome_and_cadence_path() {
+        let real = parse_framebuffer_display_bench_args(&[
+            "--framebuffer-stream-display-bench-secs".to_string(),
+            "12".to_string(),
+            "--chrome".to_string(),
+            "off".to_string(),
+            "--cadence-out".to_string(),
+            "/tmp/real.tsv".to_string(),
+        ])
+        .expect("real display args")
+        .expect("real display benchmark");
+        assert_eq!(real.source, FramebufferDisplayBenchSource::RealStream);
+        assert_eq!(real.seconds, 12);
+        assert!(!real.chrome);
+        assert_eq!(real.cadence_out, Some(PathBuf::from("/tmp/real.tsv")));
+
+        let synthetic = parse_framebuffer_display_bench_args(&[
+            "--framebuffer-synthetic-display-bench-secs".to_string(),
+            "3".to_string(),
+        ])
+        .expect("synthetic display args")
+        .expect("synthetic display benchmark");
+        assert_eq!(synthetic.source, FramebufferDisplayBenchSource::Synthetic);
+        assert!(synthetic.chrome);
+        assert_eq!(synthetic.cadence_out, None);
+    }
+
+    #[test]
+    fn framebuffer_display_bench_cli_rejects_bad_chrome_value() {
+        let error = parse_framebuffer_display_bench_args(&[
+            "--framebuffer-synthetic-display-bench-secs".to_string(),
+            "3".to_string(),
+            "--chrome".to_string(),
+            "sometimes".to_string(),
+        ])
+        .expect_err("bad chrome value should fail");
+
+        assert!(error.to_string().contains("on or off"));
+    }
+
+    #[cfg(feature = "compiled-ui")]
+    #[test]
+    fn synthetic_display_prebuilds_sixty_distinct_shared_pixel_buffers() {
+        let frames = build_synthetic_display_frames();
+
+        assert_eq!(frames.len(), 60);
+        assert!(frames
+            .iter()
+            .all(|frame| frame.width() == 480 && frame.height() == 270));
+        assert_ne!(frames[0].as_bytes(), frames[1].as_bytes());
+    }
+
+    #[test]
     fn latest_mailbox_keeps_newest_value_and_only_arms_one_wake() {
         let mailbox = LatestMailbox::default();
 
@@ -6411,23 +6835,28 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_benchmark_readiness_requires_visible_foreground_redraw() {
+    fn framebuffer_benchmark_readiness_requires_visible_after_rendering() {
         let metrics = FramebufferRenderMetrics::default();
         assert_eq!(
             metrics.benchmark_invalid_reason(),
-            Some("redraw_observer_not_ready")
+            Some("rendering_notifier_not_ready")
         );
 
         metrics.observer_ready.store(true, Ordering::Release);
         assert_eq!(metrics.benchmark_invalid_reason(), Some("no_stream_frames"));
         metrics.received.store(1, Ordering::Release);
+        assert_eq!(
+            metrics.benchmark_invalid_reason(),
+            Some("no_applied_frames")
+        );
+        metrics.applied.store(1, Ordering::Release);
         assert_eq!(metrics.benchmark_invalid_reason(), Some("window_unfocused"));
         metrics.focused.store(true, Ordering::Release);
         assert_eq!(
             metrics.benchmark_invalid_reason(),
-            Some("zero_foreground_redraws")
+            Some("zero_after_rendering")
         );
-        metrics.foreground_redraws.store(1, Ordering::Release);
+        metrics.rendered.store(1, Ordering::Release);
 
         assert!(metrics.benchmark_ready());
         assert_eq!(metrics.benchmark_invalid_reason(), None);
@@ -6438,8 +6867,9 @@ mod tests {
         let metrics = FramebufferRenderMetrics::default();
         metrics.observer_ready.store(true, Ordering::Release);
         metrics.received.store(1, Ordering::Release);
+        metrics.applied.store(1, Ordering::Release);
+        metrics.rendered.store(1, Ordering::Release);
         metrics.focused.store(true, Ordering::Release);
-        metrics.foreground_redraws.store(1, Ordering::Release);
         metrics
             .lost_focus_during_measurement
             .store(true, Ordering::Release);
