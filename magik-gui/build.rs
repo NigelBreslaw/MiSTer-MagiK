@@ -2,6 +2,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_NUMBER");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
+    println!("cargo:rerun-if-env-changed=MISTER_ARM_NEON");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=ui");
@@ -12,6 +13,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
     println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
+    println!("cargo:rustc-check-cfg=cfg(mister_arm_neon)");
     println!(
         "cargo:rustc-env=MISTER_MAGIK_BUILD_NUMBER={}",
         git_commit_count()
@@ -41,6 +43,25 @@ fn main() {
     let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
     if experiments {
         println!("cargo:rustc-cfg=mister_experiments");
+    }
+
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let fixed_mister_neon = target == "armv7-unknown-linux-gnueabihf"
+        && std::env::var("MISTER_ARM_NEON").as_deref() == Ok("1");
+    if fixed_mister_neon {
+        // Stable Rust currently accepts `-C target-feature=+neon` for ARMv7
+        // code generation but does not expose `cfg(target_feature = "neon")`.
+        // Compile this tiny routine directly for the fixed Cortex-A9 target;
+        // retain the Rust-intrinsic path for toolchains that do expose the cfg.
+        println!("cargo:rustc-cfg=mister_arm_neon");
+        println!("cargo:rerun-if-changed=src/framebuffer/downsample_neon.c");
+        cc::Build::new()
+            .file("src/framebuffer/downsample_neon.c")
+            .flag("-mtune=cortex-a9")
+            .flag("-mfpu=neon")
+            .flag("-fno-tree-vectorize")
+            .warnings_into_errors(true)
+            .compile("mister_magik_downsample_neon");
     }
 }
 

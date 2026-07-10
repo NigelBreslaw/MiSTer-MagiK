@@ -52,6 +52,9 @@ diagnostics = []
 video = ["dep:ffmpeg-next", "mister-magik-ui?/video"]
 video-lab = ["video", "ffmpeg-next/software-scaling"]
 
+[build-dependencies]
+cc = "1"
+
 [profile.release]
 # Base optimized Cargo profile. MiSTer builds use release-device by default.
 opt-level = 3
