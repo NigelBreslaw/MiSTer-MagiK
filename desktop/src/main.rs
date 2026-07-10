@@ -51,6 +51,103 @@ struct DirtyRectOverlayState {
     kind: String,
 }
 
+struct LatestMailbox<T> {
+    state: Mutex<LatestMailboxState<T>>,
+}
+
+struct LatestMailboxState<T> {
+    pending: Option<T>,
+    wake_outstanding: bool,
+    closed: bool,
+    published: u64,
+    coalesced: u64,
+}
+
+impl<T> Default for LatestMailbox<T> {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(LatestMailboxState {
+                pending: None,
+                wake_outstanding: false,
+                closed: false,
+                published: 0,
+                coalesced: 0,
+            }),
+        }
+    }
+}
+
+impl<T> LatestMailbox<T> {
+    fn publish(&self, value: T) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed {
+            return false;
+        }
+        state.published = state.published.saturating_add(1);
+        if state.pending.replace(value).is_some() {
+            state.coalesced = state.coalesced.saturating_add(1);
+        }
+        if state.wake_outstanding {
+            false
+        } else {
+            state.wake_outstanding = true;
+            true
+        }
+    }
+
+    fn take(&self) -> Option<T> {
+        self.state.lock().ok()?.pending.take()
+    }
+
+    fn complete_apply(&self) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed {
+            state.wake_outstanding = false;
+            return false;
+        }
+        if state.pending.is_some() {
+            true
+        } else {
+            state.wake_outstanding = false;
+            false
+        }
+    }
+
+    fn stats(&self) -> (u64, u64) {
+        self.state
+            .lock()
+            .map(|state| (state.published, state.coalesced))
+            .unwrap_or_default()
+    }
+
+    fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+            state.pending = None;
+            state.wake_outstanding = false;
+        }
+    }
+}
+
+struct FramebufferDisplayUpdate {
+    frame: agent_client::FramebufferStreamFrame,
+    received_at: Instant,
+}
+
+#[derive(Default)]
+struct FramebufferDisplayState {
+    recent_dirty_rects: VecDeque<DirtyRectOverlayState>,
+    geometry: Option<mister_magik_framebuffer_stream::FrameGeometry>,
+    applied: u64,
+}
+
+type SharedFramebufferDisplayMailbox = Arc<LatestMailbox<FramebufferDisplayUpdate>>;
+type SharedFramebufferDisplayState = Arc<Mutex<FramebufferDisplayState>>;
+
 #[derive(Clone, Debug, Default)]
 struct RealtimeHistory {
     samples: VecDeque<DeviceTelemetrySample>,
@@ -2580,6 +2677,31 @@ fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
 }
 
 #[cfg(feature = "live-ui")]
+fn apply_live_framebuffer_stream_capture(
+    instance: &slint_interpreter::ComponentInstance,
+    capture: &agent_client::FramebufferCapture,
+) {
+    use slint_interpreter::Value;
+
+    let image = framebuffer_capture_image(capture);
+    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(false));
+    let _ =
+        instance.set_global_property("AnalyticsState", "framebuffer-image", Value::Image(image));
+    let _ = instance.set_global_property("AnalyticsState", "has-image", Value::Bool(true));
+    let _ = instance.set_global_property("AnalyticsState", "can-save-image", Value::Bool(true));
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "framebuffer-width",
+        Value::Number(capture.width as f64),
+    );
+    let _ = instance.set_global_property(
+        "AnalyticsState",
+        "framebuffer-height",
+        Value::Number(capture.height as f64),
+    );
+}
+
+#[cfg(feature = "live-ui")]
 fn apply_live_framebuffer_capture_result(
     instance: &slint_interpreter::ComponentInstance,
     result: Result<agent_client::FramebufferCapture, String>,
@@ -2642,6 +2764,20 @@ fn set_compiled_analytics_loading(ui: &AppWindow) {
     state.set_loading(true);
     state.set_status("Capturing framebuffer stream...".into());
     state.set_last_error("".into());
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_framebuffer_stream_capture(
+    ui: &AppWindow,
+    capture: &agent_client::FramebufferCapture,
+) {
+    let state = ui.global::<AnalyticsState>();
+    state.set_loading(false);
+    state.set_framebuffer_image(framebuffer_capture_image(capture));
+    state.set_has_image(true);
+    state.set_can_save_image(true);
+    state.set_framebuffer_width(capture.width as i32);
+    state.set_framebuffer_height(capture.height as i32);
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -2971,15 +3107,37 @@ fn start_or_stop_compiled_realtime(
     spawn_compiled_realtime_stream(ui, stream_generation, stream_control, host, generation);
 }
 
-fn framebuffer_stream_summary(frames: u64, elapsed: Duration, last_frame: Duration) -> String {
-    let fps = if elapsed.is_zero() {
-        0.0
-    } else {
-        frames as f64 / elapsed.as_secs_f64()
-    };
+fn record_applied_frame(
+    state: &mut FramebufferDisplayState,
+    frame: &agent_client::FramebufferStreamFrame,
+) -> (VecDeque<DirtyRectOverlayState>, String) {
+    if state.geometry != Some(frame.geometry) {
+        state.recent_dirty_rects.clear();
+        state.geometry = Some(frame.geometry);
+    }
+    push_recent_dirty_rect(&mut state.recent_dirty_rects, frame);
+    state.applied = state.applied.saturating_add(1);
+    let summary = dirty_rect_summary(frame, state.recent_dirty_rects.len());
+    (state.recent_dirty_rects.clone(), summary)
+}
+
+fn framebuffer_display_summary(
+    mailbox: &LatestMailbox<FramebufferDisplayUpdate>,
+    state: &FramebufferDisplayState,
+    stream_start: Instant,
+    received_at: Instant,
+) -> String {
+    let elapsed = stream_start.elapsed().as_secs_f64().max(f64::EPSILON);
+    let (received, coalesced) = mailbox.stats();
+    let receive_fps = received as f64 / elapsed;
+    let applied_fps = state.applied as f64 / elapsed;
+    let geometry = state
+        .geometry
+        .map(|value| format!("{}x{}", value.width, value.height))
+        .unwrap_or_else(|| "unknown".to_string());
     format!(
-        "{fps:.1} fps avg, {:.0} ms last frame",
-        last_frame.as_secs_f64() * 1000.0
+        "rx {receive_fps:.1} fps · applied {applied_fps:.1} fps · {geometry} · coalesced {coalesced} · queue {:.0} ms",
+        received_at.elapsed().as_secs_f64() * 1000.0
     )
 }
 
@@ -4366,6 +4524,58 @@ fn spawn_live_profile_load(
 }
 
 #[cfg(feature = "live-ui")]
+fn schedule_live_framebuffer_display(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    mailbox: SharedFramebufferDisplayMailbox,
+    display_state: SharedFramebufferDisplayState,
+    stream_start: Instant,
+    generation: u64,
+) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            mailbox.close();
+            return;
+        }
+        let Some(update) = mailbox.take() else {
+            let _ = mailbox.complete_apply();
+            return;
+        };
+        let Some(instance) = instance.upgrade() else {
+            mailbox.close();
+            return;
+        };
+        let (dirty_rects, dirty_summary, stream_summary) = display_state
+            .lock()
+            .map(|mut state| {
+                let (rects, summary) = record_applied_frame(&mut state, &update.frame);
+                let stream_summary =
+                    framebuffer_display_summary(&mailbox, &state, stream_start, update.received_at);
+                (rects, summary, stream_summary)
+            })
+            .unwrap_or_default();
+        apply_live_framebuffer_stream_capture(&instance, &update.frame.capture);
+        apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
+        apply_live_stream_summary(&instance, &stream_summary);
+        if let Ok(mut state) = capture_state.lock() {
+            *state = Some(update.frame.capture);
+        }
+        if mailbox.complete_apply() {
+            schedule_live_framebuffer_display(
+                instance.as_weak(),
+                capture_state,
+                stream_generation,
+                mailbox,
+                display_state,
+                stream_start,
+                generation,
+            );
+        }
+    });
+}
+
+#[cfg(feature = "live-ui")]
 fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
@@ -4376,8 +4586,8 @@ fn spawn_live_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         let stream_start = Instant::now();
-        let mut frames = 0_u64;
-        let mut recent_dirty_rects = VecDeque::new();
+        let mailbox = Arc::new(LatestMailbox::default());
+        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -4433,58 +4643,42 @@ fn spawn_live_framebuffer_stream(
         }
         register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
-            let frame_start = Instant::now();
-            let result = stream.next_frame().map_err(|err| err.to_string());
-            let frame_elapsed = frame_start.elapsed();
-            if let Ok(frame) = &result {
-                frames += 1;
-                push_recent_dirty_rect(&mut recent_dirty_rects, frame);
-            }
-            let summary = result
-                .as_ref()
-                .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
-                .unwrap_or_else(|_| "Live stream disconnected.".to_string());
-            let dirty_summary = result
-                .as_ref()
-                .map(|frame| dirty_rect_summary(frame, recent_dirty_rects.len()))
-                .unwrap_or_else(|_| "Dirty overlay idle.".to_string());
-            let dirty_rects = recent_dirty_rects.clone();
-            let capture = result.as_ref().ok().map(|frame| frame.capture.clone());
-            let capture_result = result
-                .as_ref()
-                .map(|frame| frame.capture.clone())
-                .map_err(Clone::clone);
-            let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
-            let disconnected = result.is_err();
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_instance = instance.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Some(capture) = capture {
-                    if let Ok(mut state) = event_capture_state.lock() {
-                        *state = Some(capture);
+            match stream.next_frame() {
+                Ok(frame) => {
+                    let schedule = mailbox.publish(FramebufferDisplayUpdate {
+                        frame,
+                        received_at: Instant::now(),
+                    });
+                    if schedule {
+                        schedule_live_framebuffer_display(
+                            instance.clone(),
+                            Arc::clone(&capture_state),
+                            Arc::clone(&stream_generation),
+                            Arc::clone(&mailbox),
+                            Arc::clone(&display_state),
+                            stream_start,
+                            generation,
+                        );
                     }
                 }
-                if let Some(instance) = event_instance.upgrade() {
-                    if disconnected {
-                        let err = result
-                            .err()
-                            .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
-                        apply_live_stream_disconnected(&instance, &err);
-                    } else {
-                        apply_live_framebuffer_capture_result(&instance, capture_result);
-                        apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
-                        apply_live_stream_summary(&instance, &summary);
-                    }
+                Err(err) => {
+                    mailbox.close();
+                    let err = err.to_string();
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_instance = instance.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(instance) = event_instance.upgrade() {
+                            apply_live_stream_disconnected(&instance, &err);
+                        }
+                    });
+                    break;
                 }
-            });
-            if !should_continue || disconnected {
-                break;
             }
         }
+        mailbox.close();
         unregister_framebuffer_stream(&stream_control, generation);
     });
 }
@@ -4703,6 +4897,58 @@ fn spawn_compiled_profile_load(ui: slint::Weak<AppWindow>, path: String) {
 }
 
 #[cfg(feature = "compiled-ui")]
+fn schedule_compiled_framebuffer_display(
+    ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    mailbox: SharedFramebufferDisplayMailbox,
+    display_state: SharedFramebufferDisplayState,
+    stream_start: Instant,
+    generation: u64,
+) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if stream_generation.load(Ordering::SeqCst) != generation {
+            mailbox.close();
+            return;
+        }
+        let Some(update) = mailbox.take() else {
+            let _ = mailbox.complete_apply();
+            return;
+        };
+        let Some(ui) = ui.upgrade() else {
+            mailbox.close();
+            return;
+        };
+        let (dirty_rects, dirty_summary, stream_summary) = display_state
+            .lock()
+            .map(|mut state| {
+                let (rects, summary) = record_applied_frame(&mut state, &update.frame);
+                let stream_summary =
+                    framebuffer_display_summary(&mailbox, &state, stream_start, update.received_at);
+                (rects, summary, stream_summary)
+            })
+            .unwrap_or_default();
+        apply_compiled_framebuffer_stream_capture(&ui, &update.frame.capture);
+        apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
+        apply_compiled_stream_summary(&ui, &stream_summary);
+        if let Ok(mut state) = capture_state.lock() {
+            *state = Some(update.frame.capture);
+        }
+        if mailbox.complete_apply() {
+            schedule_compiled_framebuffer_display(
+                ui.as_weak(),
+                capture_state,
+                stream_generation,
+                mailbox,
+                display_state,
+                stream_start,
+                generation,
+            );
+        }
+    });
+}
+
+#[cfg(feature = "compiled-ui")]
 fn spawn_compiled_framebuffer_stream(
     ui: slint::Weak<AppWindow>,
     capture_state: SharedFramebufferCapture,
@@ -4713,8 +4959,8 @@ fn spawn_compiled_framebuffer_stream(
 ) {
     std::thread::spawn(move || {
         let stream_start = Instant::now();
-        let mut frames = 0_u64;
-        let mut recent_dirty_rects = VecDeque::new();
+        let mailbox = Arc::new(LatestMailbox::default());
+        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -4770,58 +5016,42 @@ fn spawn_compiled_framebuffer_stream(
         }
         register_framebuffer_stream(&stream_control, generation, control);
         while stream_generation.load(Ordering::SeqCst) == generation {
-            let frame_start = Instant::now();
-            let result = stream.next_frame().map_err(|err| err.to_string());
-            let frame_elapsed = frame_start.elapsed();
-            if let Ok(frame) = &result {
-                frames += 1;
-                push_recent_dirty_rect(&mut recent_dirty_rects, frame);
-            }
-            let summary = result
-                .as_ref()
-                .map(|_| framebuffer_stream_summary(frames, stream_start.elapsed(), frame_elapsed))
-                .unwrap_or_else(|_| "Live stream disconnected.".to_string());
-            let dirty_summary = result
-                .as_ref()
-                .map(|frame| dirty_rect_summary(frame, recent_dirty_rects.len()))
-                .unwrap_or_else(|_| "Dirty overlay idle.".to_string());
-            let dirty_rects = recent_dirty_rects.clone();
-            let capture = result.as_ref().ok().map(|frame| frame.capture.clone());
-            let capture_result = result
-                .as_ref()
-                .map(|frame| frame.capture.clone())
-                .map_err(Clone::clone);
-            let should_continue = stream_generation.load(Ordering::SeqCst) == generation;
-            let disconnected = result.is_err();
-            let event_generation = Arc::clone(&stream_generation);
-            let event_capture_state = Arc::clone(&capture_state);
-            let event_ui = ui.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if event_generation.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                if let Some(capture) = capture {
-                    if let Ok(mut state) = event_capture_state.lock() {
-                        *state = Some(capture);
+            match stream.next_frame() {
+                Ok(frame) => {
+                    let schedule = mailbox.publish(FramebufferDisplayUpdate {
+                        frame,
+                        received_at: Instant::now(),
+                    });
+                    if schedule {
+                        schedule_compiled_framebuffer_display(
+                            ui.clone(),
+                            Arc::clone(&capture_state),
+                            Arc::clone(&stream_generation),
+                            Arc::clone(&mailbox),
+                            Arc::clone(&display_state),
+                            stream_start,
+                            generation,
+                        );
                     }
                 }
-                if let Some(ui) = event_ui.upgrade() {
-                    if disconnected {
-                        let err = result
-                            .err()
-                            .unwrap_or_else(|| "framebuffer stream disconnected".to_string());
-                        apply_compiled_stream_disconnected(&ui, &err);
-                    } else {
-                        apply_compiled_framebuffer_capture_result(&ui, capture_result);
-                        apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
-                        apply_compiled_stream_summary(&ui, &summary);
-                    }
+                Err(err) => {
+                    mailbox.close();
+                    let err = err.to_string();
+                    let event_generation = Arc::clone(&stream_generation);
+                    let event_ui = ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if event_generation.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
+                        if let Some(ui) = event_ui.upgrade() {
+                            apply_compiled_stream_disconnected(&ui, &err);
+                        }
+                    });
+                    break;
                 }
-            });
-            if !should_continue || disconnected {
-                break;
             }
         }
+        mailbox.close();
         unregister_framebuffer_stream(&stream_control, generation);
     });
 }
@@ -5266,7 +5496,7 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_stream_helpers_report_fps_and_latency() {
+    fn framebuffer_stream_helpers_report_latency() {
         let latencies = [
             Duration::from_millis(10),
             Duration::from_millis(20),
@@ -5274,9 +5504,29 @@ mod tests {
         ];
 
         assert_eq!(latency_percentile_ms(&latencies, 0.50), 20.0);
-        assert_eq!(
-            framebuffer_stream_summary(30, Duration::from_secs(3), Duration::from_millis(75)),
-            "10.0 fps avg, 75 ms last frame"
-        );
+    }
+
+    #[test]
+    fn latest_mailbox_keeps_newest_value_and_only_arms_one_wake() {
+        let mailbox = LatestMailbox::default();
+
+        assert!(mailbox.publish(1));
+        assert!(!mailbox.publish(2));
+        assert_eq!(mailbox.stats(), (2, 1));
+        assert_eq!(mailbox.take(), Some(2));
+        assert!(!mailbox.complete_apply());
+    }
+
+    #[test]
+    fn latest_mailbox_rearms_when_publish_arrives_during_apply() {
+        let mailbox = LatestMailbox::default();
+
+        assert!(mailbox.publish(1));
+        assert_eq!(mailbox.take(), Some(1));
+        assert!(!mailbox.publish(2));
+        assert!(mailbox.complete_apply());
+        assert_eq!(mailbox.take(), Some(2));
+        assert!(!mailbox.complete_apply());
+        assert!(mailbox.publish(3));
     }
 }
