@@ -582,7 +582,9 @@ scripts/gate-framebuffer-stream-55fps.sh LABEL --secs 30 --deploy-device
 The gate runs four otherwise identical Arcade `turbo-hold` profiles: no
 subscriber, scalar adaptive display, automatic-SIMD adaptive null drain, and
 automatic-SIMD adaptive Analytics display. The desktop display measurements
-include a three-second warmup before the requested measurement interval.
+include a three-second warmup before the requested measurement interval. Each
+device motion trace runs 25 seconds longer than that interval so live UI
+interpretation and connection setup happen before the measured window ends.
 Passing requires at least 55 distinct rendered and applied frames per second in
 Analytics, at least 58 frames per second through the null drain, render p95 no
 greater than 50ms, a working Slint rendering notifier, NEON dispatch, half-size

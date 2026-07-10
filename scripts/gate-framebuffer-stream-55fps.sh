@@ -69,11 +69,12 @@ require_le() {
 
 run_profile() {
   local run_label="$1" consumer="$2" simd="$3" scale="$4" build_mode="$5"
-  "$PROFILE" "$run_label" "$build_mode" --skip-boot-prelude --secs "$secs" \
+  local profile_secs=$((secs + 25))
+  "$PROFILE" "$run_label" "$build_mode" --skip-boot-prelude --secs "$profile_secs" \
     --scenario turbo-hold --present-backend fpga-vblank-latch-hidden \
     --frame-pacing-policy vsync-integrity \
     --catalog-refresh off --stream-consumer "$consumer" \
-    --stream-scale "$scale" --stream-simd "$simd"
+    --stream-secs "$secs" --stream-scale "$scale" --stream-simd "$simd"
 }
 
 echo "==> Build production Skia desktop benchmark"

@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -62,6 +62,7 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+stream_secs=""
 stream_scale="${MISTER_FRAMEBUFFER_STREAM_SCALE:-off}"
 stream_simd="${MISTER_FRAMEBUFFER_STREAM_SIMD:-auto}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
@@ -137,6 +138,11 @@ while [[ $# -gt 0 ]]; do
       stream_consumer="$2"
       shift 2
       ;;
+    --stream-secs)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-secs needs a value" >&2; usage >&2; exit 2; fi
+      stream_secs="$2"
+      shift 2
+      ;;
     --stream-scale)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-scale needs off, full, half, or adaptive" >&2; usage >&2; exit 2; fi
       stream_scale="$2"
@@ -178,6 +184,7 @@ if [[ "${#positionals[@]}" -ge 1 ]]; then
 fi
 
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer number of seconds" >&2; exit 2; fi
+if [[ -n "$stream_secs" && ! "$stream_secs" =~ ^[0-9]+$ ]]; then echo "--stream-secs must be an integer number of seconds" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$entry_open_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-open-gate-ms must be an integer" >&2; exit 2; fi
 if [[ ! "$entry_gate_ms" =~ ^[0-9]+$ ]]; then echo "--entry-gate-ms must be an integer" >&2; exit 2; fi
@@ -254,7 +261,7 @@ local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
 run_id="${label}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 stream_pid=""
-stream_seconds="$secs"
+stream_seconds="${stream_secs:-$secs}"
 present_width="960"
 if [[ "$ui_fb_size" == "1280x720" ]]; then
   present_width="1280"
