@@ -45,6 +45,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::GameSystem,
     >::new())));
+    bridge.set_home_scroll_repeat_active(false);
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_active_system_count(0);
@@ -401,6 +402,7 @@ pub(super) fn sync_bridge_launcher(
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active(Instant::now()));
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
@@ -498,6 +500,12 @@ pub(super) fn sync_bridge_launcher_light(
         get_selected_index,
         set_selected_index,
         nav.selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_home_scroll_repeat_active,
+        set_home_scroll_repeat_active,
+        nav.home_horizontal_repeat_active(Instant::now())
     );
     set_bridge_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
     set_bridge_if_changed!(
@@ -774,6 +782,7 @@ pub(super) struct LauncherBridgeKey {
     pub(super) screen: Screen,
     selected: usize,
     scroll_x: i32,
+    home_scroll_repeat_active: bool,
     settings_focused: bool,
     settings_selected: usize,
     simple_joystick_handling: bool,
@@ -796,6 +805,7 @@ impl LauncherBridgeKey {
             screen: nav.screen,
             selected: nav.selected,
             scroll_x: nav.scroll_x,
+            home_scroll_repeat_active: nav.home_horizontal_repeat_active(Instant::now()),
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
             simple_joystick_handling: nav.settings.simple_joystick_handling,
@@ -873,6 +883,7 @@ impl LauncherBridgeModels {
 mod tests {
     use super::*;
     use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, DEFAULT_ARCADE_ROOT};
+    use crate::input_state::PadState;
     use crate::test_support::arcade_game;
     use std::cell::Cell;
     use std::path::PathBuf;
@@ -891,6 +902,44 @@ mod tests {
         let after = LauncherBridgeKey::from_nav(&nav);
 
         assert!(before != after);
+    }
+
+    #[test]
+    fn launcher_bridge_key_tracks_home_repeat_release() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "one".into(),
+                    title: "One".into(),
+                    count: 0,
+                },
+                GameSystemEntry {
+                    id: "two".into(),
+                    title: "Two".into(),
+                    count: 0,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        let mut held = PadState::default();
+        held.dpad_right = true;
+        let now = Instant::now();
+        nav.handle_input(&held, now - Duration::from_millis(1001), &catalog);
+        nav.handle_input(&held, now, &catalog);
+
+        let repeating = LauncherBridgeKey::from_nav(&nav);
+        assert!(repeating.home_scroll_repeat_active);
+
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(1),
+            &catalog,
+        );
+        let released = LauncherBridgeKey::from_nav(&nav);
+        assert!(!released.home_scroll_repeat_active);
+        assert!(repeating != released);
     }
 
     #[test]

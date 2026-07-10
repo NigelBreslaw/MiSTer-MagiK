@@ -7,9 +7,17 @@ export component HomeGrid inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <length> tile-width: 220px * s;
     property <length> tile-gap: 16px * s;
+    property <length> tile-pitch: tile-width + tile-gap;
     property <length> content-width: MisterBridge.game-systems.length * tile-width
         + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
+    property <length> animated-scroll-x: scroll-x;
+    property <int> first-visible-index: floor(animated-scroll-x / tile-pitch);
+    property <duration> scroll-duration: MisterBridge.home-scroll-repeat-active ? 80ms : 160ms;
+    property <easing> scroll-easing: MisterBridge.home-scroll-repeat-active
+        ? Easing.linear : Easing.ease-out;
+
+    animate animated-scroll-x { duration: scroll-duration; easing: scroll-easing; }
 
     background: transparent;
 
@@ -63,21 +71,28 @@ export component HomeGrid inherits Rectangle {
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 viewport-width: root.content-width;
                 viewport-height: self.height;
-                viewport-x: -scroll-x;
-                animate viewport-x { duration: 160ms; easing: ease-out; }
+                viewport-x: -root.animated-scroll-x;
 
                 for _ in 1: Rectangle {
                     width: root.content-width;
                     height: parent.height;
                     background: transparent;
 
-                    for system[i] in MisterBridge.game-systems: LauncherTile {
-                        x: i * (root.tile-width + root.tile-gap);
+                    // Five 220px tiles are sufficient to cover the 868px viewport at every
+                    // fractional offset. The cyclic slot mapping keeps four delegates stable
+                    // when first-visible-index advances and recycles only the fifth.
+                    for slot in 5: LauncherTile {
+                        property <int> system-index: root.first-visible-index
+                            + Math.mod(Math.mod(slot - root.first-visible-index, 5) + 5, 5);
+
+                        visible: system-index < MisterBridge.game-systems.length;
+                        x: system-index * root.tile-pitch;
                         width: root.tile-width;
                         height: parent.height;
-                        label: system.title;
-                        subtitle: system.count + " games";
-                        focused: !MisterBridge.settings-focused && system.focused;
+                        label: MisterBridge.game-systems[system-index].title;
+                        subtitle: MisterBridge.game-systems[system-index].count + " games";
+                        focused: !MisterBridge.settings-focused
+                            && MisterBridge.game-systems[system-index].focused;
                     }
                 }
             }
