@@ -1,4 +1,6 @@
 pub mod copy;
+#[cfg(feature = "ui")]
+pub mod downsample;
 pub mod format;
 #[cfg(feature = "ui")]
 pub mod hidden;
