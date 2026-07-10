@@ -252,6 +252,7 @@ local_status_json="$OUT_DIR/${label}-arcade-scroll.status.json"
 local_cpu_svg="$OUT_DIR/${label}-arcade-scroll-cpu.svg"
 local_stream_tsv="$OUT_DIR/${label}-framebuffer-stream.tsv"
 local_stream_log="$OUT_DIR/${label}-framebuffer-stream.log"
+local_cadence_tsv="$OUT_DIR/${label}-framebuffer-cadence.tsv"
 local_latch_before="$OUT_DIR/${label}-fpga-latch-before.log"
 local_latch_after="$OUT_DIR/${label}-fpga-latch-after.log"
 local_latch_drop_report="$OUT_DIR/${label}-arcade-latch-drops.tsv"
@@ -653,7 +654,7 @@ run_boot_prelude() {
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
   } >"$env_file"
-  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
+  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_cadence_tsv" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   "$MISTER" run "rm -f '$REMOTE_ENV' '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   echo "==> Armed fresh boot-entry run_id=$run_id entry_before_a_wait_frames=$entry_before_a_wait_frames human_idle_frames=$human_turbo_idle_frames human_normal_frames=$human_turbo_normal_frames human_pause_frames=$human_turbo_pause_frames"
@@ -727,7 +728,7 @@ start_stream_consumer() {
   echo "==> Start framebuffer stream consumer mode=$stream_consumer seconds=$stream_seconds scale=$stream_scale simd=$stream_simd"
   (
     cd "$HERE"
-    MISTER_IP="${MISTER_IP:-192.168.1.117}" cargo run --manifest-path desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" MISTER_FRAMEBUFFER_CADENCE_OUT="$local_cadence_tsv" cargo run --manifest-path desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
   ) >"$local_stream_tsv" 2>"$local_stream_log" &
   stream_pid="$!"
 }
@@ -809,7 +810,7 @@ else
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
   } >"$env_file"
-  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
+  rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_cadence_tsv" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   capture_latch_report before "$local_latch_before"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   "$MISTER" run "rm -f '$remote_tsv' '$remote_log' '$cpu_profile_remote_svg'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null

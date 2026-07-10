@@ -2,6 +2,7 @@ mod agent_client;
 mod app_state;
 mod file_icons;
 mod frame_profile;
+mod framebuffer_cadence;
 mod library;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
@@ -14,6 +15,7 @@ use agent_client::{
     DeviceTelemetryStreamControl, FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
+use framebuffer_cadence::{CadenceEventKind, FramebufferCadenceTrace};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
 use sd_card::SdTreeRow;
@@ -158,6 +160,7 @@ struct FramebufferRenderMetrics {
     rendered: AtomicU64,
     coalesced: AtomicU64,
     applied_serial: AtomicU64,
+    cadence: Arc<FramebufferCadenceTrace>,
     state: Mutex<FramebufferRenderMetricsState>,
 }
 
@@ -195,6 +198,7 @@ impl Default for FramebufferRenderMetrics {
             rendered: AtomicU64::new(0),
             coalesced: AtomicU64::new(0),
             applied_serial: AtomicU64::new(0),
+            cadence: Arc::new(FramebufferCadenceTrace::default()),
             state: Mutex::new(FramebufferRenderMetricsState {
                 started: Instant::now(),
                 latest_applied: None,
@@ -208,6 +212,7 @@ impl Default for FramebufferRenderMetrics {
 
 impl FramebufferRenderMetrics {
     fn reset(&self) {
+        self.cadence.reset();
         self.render_callbacks.store(0, Ordering::Release);
         self.applied_serial.store(0, Ordering::Release);
         self.received.store(0, Ordering::Release);
@@ -223,9 +228,17 @@ impl FramebufferRenderMetrics {
         }
     }
 
-    fn mark_applied(&self, received_at: Instant) {
+    fn mark_applied(&self, received_at: Instant, source_sequence: u64, source_timestamp_us: u64) {
         self.applied.fetch_add(1, Ordering::Relaxed);
         let serial = self.applied_serial.fetch_add(1, Ordering::AcqRel) + 1;
+        self.cadence.record(
+            CadenceEventKind::UiApplied,
+            source_sequence,
+            source_timestamp_us,
+            serial,
+            received_at.elapsed().as_micros() as u64,
+            0,
+        );
         if let Ok(mut state) = self.state.lock() {
             state.latest_applied = Some((serial, received_at));
         }
@@ -236,9 +249,10 @@ impl FramebufferRenderMetrics {
         self.coalesced.store(coalesced, Ordering::Relaxed);
     }
 
-    fn mark_rendered(&self, now: Instant) {
+    fn mark_rendered(&self, now: Instant, kind: CadenceEventKind) {
         self.render_callbacks.fetch_add(1, Ordering::Relaxed);
         let serial = self.applied_serial.load(Ordering::Acquire);
+        self.cadence.record(kind, 0, 0, serial, 0, 0);
         if serial == 0 {
             return;
         }
@@ -316,8 +330,27 @@ fn install_framebuffer_render_notifier(
 
     let redraw_metrics = Arc::clone(&metrics);
     window.on_winit_window_event(move |_window, event| {
-        if matches!(event, winit::event::WindowEvent::RedrawRequested) {
-            redraw_metrics.mark_rendered(Instant::now());
+        match event {
+            winit::event::WindowEvent::RedrawRequested => {
+                redraw_metrics.mark_rendered(Instant::now(), CadenceEventKind::RedrawRequested)
+            }
+            winit::event::WindowEvent::Focused(focused) => redraw_metrics.cadence.record(
+                CadenceEventKind::WindowFocused,
+                0,
+                0,
+                0,
+                0,
+                i64::from(*focused),
+            ),
+            winit::event::WindowEvent::Occluded(occluded) => redraw_metrics.cadence.record(
+                CadenceEventKind::WindowOccluded,
+                0,
+                0,
+                0,
+                0,
+                i64::from(*occluded),
+            ),
+            _ => {}
         }
         EventResult::Propagate
     });
@@ -325,10 +358,19 @@ fn install_framebuffer_render_notifier(
 
     let callback_metrics = Arc::clone(&metrics);
     if window
-        .set_rendering_notifier(move |state, _graphics_api| {
-            if matches!(state, slint::RenderingState::AfterRendering) {
-                callback_metrics.mark_rendered(Instant::now());
+        .set_rendering_notifier(move |state, _graphics_api| match state {
+            slint::RenderingState::BeforeRendering => callback_metrics.cadence.record(
+                CadenceEventKind::BeforeRendering,
+                0,
+                0,
+                callback_metrics.applied_serial.load(Ordering::Acquire),
+                0,
+                0,
+            ),
+            slint::RenderingState::AfterRendering => {
+                callback_metrics.mark_rendered(Instant::now(), CadenceEventKind::AfterRendering)
             }
+            _ => {}
         })
         .is_ok()
     {
@@ -1493,6 +1535,36 @@ fn print_framebuffer_display_bench(seconds: u64, render_metrics: &FramebufferRen
         snapshot.latency_p95_ms,
         u8::from(snapshot.supported),
     );
+    let cadence = render_metrics
+        .cadence
+        .summary(CadenceEventKind::AfterRendering);
+    println!(
+        "framebuffer_cadence_summary_tsv\tobserver=after-rendering\tsamples={}\tinterval_p50_us={}\tinterval_p95_us={}\tinterval_p99_us={}\tinterval_max_us={}\tgaps_over_20ms={}\tgaps_over_34ms={}\tmax_consecutive_over_20ms={}\tbucket_500ms_min={}\tbucket_500ms_max={}",
+        cadence.samples,
+        cadence.interval_p50_us,
+        cadence.interval_p95_us,
+        cadence.interval_p99_us,
+        cadence.interval_max_us,
+        cadence.gaps_over_20ms,
+        cadence.gaps_over_34ms,
+        cadence.max_consecutive_over_20ms,
+        cadence.bucket_500ms_min,
+        cadence.bucket_500ms_max,
+    );
+    if let Some(path) = std::env::var_os("MISTER_FRAMEBUFFER_CADENCE_OUT") {
+        let path = PathBuf::from(path);
+        match render_metrics.cadence.write_tsv(&path) {
+            Ok(()) => println!(
+                "framebuffer_cadence_artifact_tsv\tpath={}\tevents={}",
+                path.display(),
+                render_metrics.cadence.events().len()
+            ),
+            Err(err) => eprintln!(
+                "write framebuffer cadence artifact {}: {err}",
+                path.display()
+            ),
+        }
+    }
 }
 
 #[cfg(feature = "live-ui")]
@@ -4916,6 +4988,14 @@ fn schedule_live_framebuffer_display(
             mailbox.close();
             return;
         };
+        render_metrics.cadence.record(
+            CadenceEventKind::MailboxTake,
+            update.frame.sequence,
+            update.frame.timestamp_us,
+            render_metrics.applied_serial.load(Ordering::Acquire),
+            update.received_at.elapsed().as_micros() as u64,
+            0,
+        );
         let now = Instant::now();
         let (geometry_changed, chrome_update) = display_state
             .lock()
@@ -4948,8 +5028,20 @@ fn schedule_live_framebuffer_display(
             update.pixels,
             geometry_changed,
         );
-        render_metrics.mark_applied(update.received_at);
+        render_metrics.mark_applied(
+            update.received_at,
+            update.frame.sequence,
+            update.frame.timestamp_us,
+        );
         if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
+            render_metrics.cadence.record(
+                CadenceEventKind::ChromeRefresh,
+                update.frame.sequence,
+                update.frame.timestamp_us,
+                render_metrics.applied_serial.load(Ordering::Acquire),
+                0,
+                0,
+            );
             apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
             apply_live_stream_summary(&instance, &stream_summary);
         }
@@ -5047,13 +5139,55 @@ fn spawn_live_framebuffer_stream(
         while stream_generation.load(Ordering::SeqCst) == generation {
             match stream.next_frame() {
                 Ok(frame) => {
+                    let received_at = Instant::now();
+                    render_metrics.cadence.record_at(
+                        CadenceEventKind::SourceReceived,
+                        frame.timing.read_complete,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        0,
+                        0,
+                    );
+                    render_metrics.cadence.record_at(
+                        CadenceEventKind::DecodeComplete,
+                        frame.timing.decompress_complete,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        0,
+                        0,
+                    );
                     let pixels = framebuffer_capture_pixel_buffer(&frame.capture);
+                    render_metrics.cadence.record(
+                        CadenceEventKind::PixelBufferReady,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        received_at.elapsed().as_micros() as u64,
+                        0,
+                    );
+                    let (_, coalesced_before) = mailbox.stats();
+                    let source_sequence = frame.sequence;
+                    let source_timestamp_us = frame.timestamp_us;
                     let schedule = mailbox.publish(FramebufferDisplayUpdate {
                         frame,
                         pixels,
-                        received_at: Instant::now(),
+                        received_at,
                     });
                     let (_, coalesced) = mailbox.stats();
+                    render_metrics.cadence.record(
+                        if coalesced > coalesced_before {
+                            CadenceEventKind::MailboxReplace
+                        } else {
+                            CadenceEventKind::MailboxPublish
+                        },
+                        source_sequence,
+                        source_timestamp_us,
+                        0,
+                        received_at.elapsed().as_micros() as u64,
+                        0,
+                    );
                     render_metrics.mark_received(coalesced);
                     if schedule {
                         schedule_live_framebuffer_display(
@@ -5327,6 +5461,14 @@ fn schedule_compiled_framebuffer_display(
             mailbox.close();
             return;
         };
+        render_metrics.cadence.record(
+            CadenceEventKind::MailboxTake,
+            update.frame.sequence,
+            update.frame.timestamp_us,
+            render_metrics.applied_serial.load(Ordering::Acquire),
+            update.received_at.elapsed().as_micros() as u64,
+            0,
+        );
         let now = Instant::now();
         let (geometry_changed, chrome_update) = display_state
             .lock()
@@ -5359,8 +5501,20 @@ fn schedule_compiled_framebuffer_display(
             update.pixels,
             geometry_changed,
         );
-        render_metrics.mark_applied(update.received_at);
+        render_metrics.mark_applied(
+            update.received_at,
+            update.frame.sequence,
+            update.frame.timestamp_us,
+        );
         if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
+            render_metrics.cadence.record(
+                CadenceEventKind::ChromeRefresh,
+                update.frame.sequence,
+                update.frame.timestamp_us,
+                render_metrics.applied_serial.load(Ordering::Acquire),
+                0,
+                0,
+            );
             apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
             apply_compiled_stream_summary(&ui, &stream_summary);
         }
@@ -5458,13 +5612,55 @@ fn spawn_compiled_framebuffer_stream(
         while stream_generation.load(Ordering::SeqCst) == generation {
             match stream.next_frame() {
                 Ok(frame) => {
+                    let received_at = Instant::now();
+                    render_metrics.cadence.record_at(
+                        CadenceEventKind::SourceReceived,
+                        frame.timing.read_complete,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        0,
+                        0,
+                    );
+                    render_metrics.cadence.record_at(
+                        CadenceEventKind::DecodeComplete,
+                        frame.timing.decompress_complete,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        0,
+                        0,
+                    );
                     let pixels = framebuffer_capture_pixel_buffer(&frame.capture);
+                    render_metrics.cadence.record(
+                        CadenceEventKind::PixelBufferReady,
+                        frame.sequence,
+                        frame.timestamp_us,
+                        0,
+                        received_at.elapsed().as_micros() as u64,
+                        0,
+                    );
+                    let (_, coalesced_before) = mailbox.stats();
+                    let source_sequence = frame.sequence;
+                    let source_timestamp_us = frame.timestamp_us;
                     let schedule = mailbox.publish(FramebufferDisplayUpdate {
                         frame,
                         pixels,
-                        received_at: Instant::now(),
+                        received_at,
                     });
                     let (_, coalesced) = mailbox.stats();
+                    render_metrics.cadence.record(
+                        if coalesced > coalesced_before {
+                            CadenceEventKind::MailboxReplace
+                        } else {
+                            CadenceEventKind::MailboxPublish
+                        },
+                        source_sequence,
+                        source_timestamp_us,
+                        0,
+                        received_at.elapsed().as_micros() as u64,
+                        0,
+                    );
                     render_metrics.mark_received(coalesced);
                     if schedule {
                         schedule_compiled_framebuffer_display(
@@ -5981,9 +6177,15 @@ mod tests {
         metrics.supported.store(true, Ordering::Release);
         let applied_at = Instant::now();
 
-        metrics.mark_applied(applied_at);
-        metrics.mark_rendered(applied_at + Duration::from_millis(10));
-        metrics.mark_rendered(applied_at + Duration::from_millis(20));
+        metrics.mark_applied(applied_at, 1, 100);
+        metrics.mark_rendered(
+            applied_at + Duration::from_millis(10),
+            CadenceEventKind::AfterRendering,
+        );
+        metrics.mark_rendered(
+            applied_at + Duration::from_millis(20),
+            CadenceEventKind::AfterRendering,
+        );
 
         let state = metrics.state.lock().expect("render metrics state");
         assert_eq!(state.last_rendered_serial, 1);
