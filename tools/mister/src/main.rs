@@ -18,7 +18,7 @@ mod media;
 mod remote;
 
 use agent_client::{
-    agent_binary_request, agent_request, agent_stream_request, agent_token,
+    agent_binary_request_bounded, agent_request, agent_stream_request, agent_token,
     verify_agent_deploy_result, AGENT_PORT,
 };
 use remote::{
@@ -33,6 +33,8 @@ const DEFAULT_FB_H: usize = 1080;
 #[cfg(test)]
 const DEFAULT_FB_BPP: usize = 32;
 const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
+const MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES: usize = 16 * 1024 * 1024;
+const MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES: u64 = 17 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
@@ -1722,20 +1724,32 @@ fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<(
     } else {
         "framebuffer_capture_raw_stream"
     };
-    let reply = agent_binary_request(agent_command, json!({}), Duration::from_secs(10))?;
+    let reply = agent_binary_request_bounded(
+        agent_command,
+        json!({}),
+        Duration::from_secs(10),
+        MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES,
+    )?;
     let result = reply
         .response
         .get("result")
         .ok_or("agent framebuffer binary response missing result")?;
-    let raw = if encoding == "lz4" {
-        lz4_flex::decompress_size_prepended(&reply.payload)?
-    } else {
-        reply.payload.clone()
-    };
     let expected_raw = result
         .get("raw_bytes")
         .and_then(Value::as_u64)
-        .unwrap_or(raw.len() as u64) as usize;
+        .map(usize::try_from)
+        .transpose()?
+        .ok_or("agent framebuffer response missing raw_bytes")?;
+    if expected_raw > MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES {
+        return Err(
+            format!("framebuffer capture raw payload too large: {expected_raw} bytes").into(),
+        );
+    }
+    let raw = if encoding == "lz4" {
+        decompress_framebuffer_capture_lz4(&reply.payload, expected_raw)?
+    } else {
+        reply.payload.clone()
+    };
     if raw.len() != expected_raw {
         return Err(format!(
             "decoded framebuffer size mismatch expected={expected_raw} actual={}",
@@ -1769,6 +1783,27 @@ fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<(
         reply.elapsed_ms
     );
     Ok(())
+}
+
+fn decompress_framebuffer_capture_lz4(payload: &[u8], expected_raw: usize) -> Result<Vec<u8>> {
+    let (prefixed_raw, compressed) = lz4_flex::block::uncompressed_size(payload)?;
+    if prefixed_raw != expected_raw {
+        return Err(format!(
+            "framebuffer capture LZ4 size prefix mismatch expected={expected_raw} actual={prefixed_raw}"
+        )
+        .into());
+    }
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(expected_raw)?;
+    raw.resize(expected_raw, 0);
+    let actual = lz4_flex::block::decompress_into(compressed, &mut raw)?;
+    if actual != expected_raw {
+        return Err(format!(
+            "decoded framebuffer size mismatch expected={expected_raw} actual={actual}"
+        )
+        .into());
+    }
+    Ok(raw)
 }
 
 fn framebuffer_capture_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
@@ -4627,6 +4662,19 @@ fn unix_secs() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn framebuffer_capture_lz4_decode_is_exact_and_bounded_by_metadata() {
+        let payload = lz4_flex::compress_prepend_size(b"pixels");
+        assert_eq!(
+            decompress_framebuffer_capture_lz4(&payload, 6).expect("decode capture"),
+            b"pixels"
+        );
+
+        let err = decompress_framebuffer_capture_lz4(&payload, 5)
+            .expect_err("mismatched prefix should fail before decode");
+        assert!(err.to_string().contains("size prefix mismatch"));
+    }
 
     fn status_fixture() -> Value {
         json!({

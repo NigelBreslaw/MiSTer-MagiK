@@ -2,9 +2,13 @@
 //!
 //! Catalog v2 builds SQLite off SD/exFAT and publishes only the completed file.
 
+use crate::bounded_lz4;
 use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
 use crate::catalog_stamp::CatalogStamp;
 use rusqlite::{params, Connection, OptionalExtension};
+
+const MAX_COMPRESSED_LINE_STORE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COMPRESSED_LINE_STORE_PAYLOAD_BYTES: i64 = 64 * 1024 * 1024;
 
 pub fn create_catalog_stamp_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -76,19 +80,32 @@ fn read_line_store(conn: &Connection, table: &str) -> Result<Vec<String>, String
 }
 
 fn read_compressed_lines(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
-    let sql = format!("SELECT bytes FROM {table} WHERE id=0");
+    let length_sql = format!("SELECT length(bytes) FROM {table} WHERE id=0");
     let mut stmt = conn
-        .prepare(&sql)
-        .map_err(|e| format!("prepare compressed line read: {e}"))?;
-    let bytes = stmt
-        .query_row([], |row| row.get::<_, Vec<u8>>(0))
+        .prepare(&length_sql)
+        .map_err(|e| format!("prepare compressed line length: {e}"))?;
+    let compressed_len = stmt
+        .query_row([], |row| row.get::<_, Option<i64>>(0))
         .optional()
-        .map_err(|e| format!("query compressed line read: {e}"))?;
-    let Some(bytes) = bytes else {
+        .map_err(|e| format!("query compressed line length: {e}"))?
+        .flatten();
+    let Some(compressed_len) = compressed_len else {
         return Ok(Vec::new());
     };
-    let decoded = lz4_flex::decompress_size_prepended(&bytes)
-        .map_err(|e| format!("decompress compressed line store: {e}"))?;
+    if !(0..=MAX_COMPRESSED_LINE_STORE_PAYLOAD_BYTES).contains(&compressed_len) {
+        return Err(format!(
+            "compressed line store payload size {compressed_len} exceeds max {MAX_COMPRESSED_LINE_STORE_PAYLOAD_BYTES}"
+        ));
+    }
+    let sql = format!("SELECT bytes FROM {table} WHERE id=0");
+    let bytes = conn
+        .query_row(&sql, [], |row| row.get::<_, Vec<u8>>(0))
+        .map_err(|e| format!("read compressed line payload: {e}"))?;
+    let decoded = bounded_lz4::decompress_size_prepended(
+        &bytes,
+        MAX_COMPRESSED_LINE_STORE_BYTES,
+        "compressed line store",
+    )?;
     decode_lines(&decoded)
 }
 
@@ -123,7 +140,16 @@ fn encode_lines(lines: &[String]) -> Result<Vec<u8>, String> {
 fn decode_lines(bytes: &[u8]) -> Result<Vec<String>, String> {
     let mut pos = 0usize;
     let count = read_u32(bytes, &mut pos)? as usize;
-    let mut lines = Vec::with_capacity(count);
+    let max_count = (bytes.len() - pos) / 4;
+    if count > max_count {
+        return Err(format!(
+            "catalog line count {count} exceeds remaining encoded bytes"
+        ));
+    }
+    let mut lines = Vec::new();
+    lines
+        .try_reserve_exact(count)
+        .map_err(|err| format!("allocate catalog lines ({count}): {err}"))?;
     for _ in 0..count {
         let len = read_u32(bytes, &mut pos)? as usize;
         let end = pos
@@ -187,6 +213,15 @@ fn sqlite_table_has_column(conn: &Connection, table: &str, column: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_line_decoder_rejects_count_without_encoded_headers() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+
+        assert!(decode_lines(&bytes).is_err());
+    }
 
     #[test]
     fn catalog_stamp_round_trips_through_sqlite() {

@@ -7,6 +7,7 @@ use crate::sd_card::{
 };
 use mister_magik_framebuffer_stream::{
     read_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
+    MAX_FRAME_SURFACE_BYTES,
 };
 use serde_json::{json, Value};
 use std::env;
@@ -20,6 +21,7 @@ use std::time::{Duration, Instant};
 const AGENT_PORT: u16 = 7498;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenSource {
@@ -594,14 +596,8 @@ impl AgentClient {
             .read_line(&mut line)
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         let value = parse_response(&line, Duration::ZERO)?;
-        let payload_bytes = value
-            .pointer("/payload_bytes")
-            .or_else(|| value.pointer("/raw_bytes"))
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                AgentError::Protocol("binary response missing payload byte count".to_string())
-            })? as usize;
-        let mut payload = vec![0u8; payload_bytes];
+        let payload_bytes = binary_payload_len(&value)?;
+        let mut payload = zeroed_buffer(payload_bytes, "binary response payload")?;
         reader
             .read_exact(&mut payload)
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
@@ -649,6 +645,83 @@ impl AgentClient {
         let value = parse_response(&line, Duration::ZERO)?;
         Ok((value, reader))
     }
+}
+
+fn binary_payload_len(value: &Value) -> Result<usize, AgentError> {
+    let payload_bytes = value
+        .pointer("/payload_bytes")
+        .or_else(|| value.pointer("/raw_bytes"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            AgentError::Protocol("binary response missing payload byte count".to_string())
+        })?;
+    if payload_bytes > MAX_AGENT_BINARY_PAYLOAD_BYTES {
+        return Err(AgentError::Protocol(format!(
+            "binary response payload too large: {payload_bytes} bytes"
+        )));
+    }
+    usize::try_from(payload_bytes).map_err(|_| {
+        AgentError::Protocol(format!(
+            "binary response payload size overflows usize: {payload_bytes}"
+        ))
+    })
+}
+
+fn reserved_buffer(len: usize, context: &str) -> Result<Vec<u8>, AgentError> {
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|err| AgentError::Protocol(format!("allocate {context} ({len} bytes): {err}")))?;
+    Ok(bytes)
+}
+
+fn zeroed_buffer(len: usize, context: &str) -> Result<Vec<u8>, AgentError> {
+    let mut bytes = reserved_buffer(len, context)?;
+    bytes.resize(len, 0);
+    Ok(bytes)
+}
+
+fn decompress_size_prepended_exact(
+    payload: &[u8],
+    expected_raw: usize,
+    max_raw: usize,
+    context: &str,
+) -> Result<Vec<u8>, AgentError> {
+    if expected_raw > max_raw {
+        return Err(AgentError::Protocol(format!(
+            "{context} raw payload too large: {expected_raw} bytes"
+        )));
+    }
+    let (prefixed_raw_len, compressed) = lz4_flex::block::uncompressed_size(payload)
+        .map_err(|err| AgentError::Protocol(format!("decompress {context}: {err}")))?;
+    if prefixed_raw_len != expected_raw {
+        return Err(AgentError::Protocol(format!(
+            "{context} LZ4 size prefix mismatch expected={expected_raw} actual={prefixed_raw_len}"
+        )));
+    }
+    decompress_block_exact(compressed, expected_raw, max_raw, context)
+}
+
+fn decompress_block_exact(
+    payload: &[u8],
+    expected_raw: usize,
+    max_raw: usize,
+    context: &str,
+) -> Result<Vec<u8>, AgentError> {
+    if expected_raw > max_raw {
+        return Err(AgentError::Protocol(format!(
+            "{context} raw payload too large: {expected_raw} bytes"
+        )));
+    }
+    let mut raw = zeroed_buffer(expected_raw, context)?;
+    let decoded_len = lz4_flex::block::decompress_into(payload, &mut raw)
+        .map_err(|err| AgentError::Protocol(format!("decompress {context}: {err}")))?;
+    if decoded_len != expected_raw {
+        return Err(AgentError::Protocol(format!(
+            "{context} raw size mismatch expected={expected_raw} actual={decoded_len}"
+        )));
+    }
+    Ok(raw)
 }
 
 impl FramebufferStream {
@@ -790,15 +863,12 @@ impl FramebufferStreamState {
                 }
             }
         }
-        let raw = lz4_flex::decompress_size_prepended(payload)
-            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer stream: {err}")))?;
-        if raw.len() != header.raw_bytes as usize {
-            return Err(AgentError::Protocol(format!(
-                "framebuffer stream raw size mismatch expected={} actual={}",
-                header.raw_bytes,
-                raw.len()
-            )));
-        }
+        let raw = decompress_size_prepended_exact(
+            payload,
+            header.raw_bytes as usize,
+            MAX_FRAME_SURFACE_BYTES,
+            "framebuffer stream",
+        )?;
         let decompress_complete = Instant::now();
         if self.geometry != Some(header.geometry) || header.kind == FrameKind::Keyframe {
             self.reset_buffer(header.geometry)?;
@@ -862,8 +932,12 @@ impl FramebufferStreamState {
             .ok_or_else(|| {
                 AgentError::Protocol("framebuffer stream geometry overflow".to_string())
             })? as usize;
-        self.rgb565.clear();
-        self.rgb565.resize(bytes, 0);
+        if bytes > MAX_FRAME_SURFACE_BYTES {
+            return Err(AgentError::Protocol(format!(
+                "framebuffer stream surface too large: {bytes} bytes"
+            )));
+        }
+        self.rgb565 = zeroed_buffer(bytes, "framebuffer stream surface")?;
         self.expected_sequence = None;
         self.awaiting_keyframe = false;
         Ok(())
@@ -1435,10 +1509,29 @@ fn parse_framebuffer_capture_lz4(
         ));
     }
     let encoding = string_at(value, "/encoding").unwrap_or("raw");
+    let expected_raw = value
+        .pointer("/raw_bytes")
+        .and_then(Value::as_u64)
+        .map(usize::try_from)
+        .transpose()
+        .map_err(|_| AgentError::Protocol("framebuffer raw size overflows usize".to_string()))?;
     let raw = match encoding {
-        "lz4-block-size-prepended" => lz4_flex::decompress_size_prepended(payload)
-            .map_err(|err| AgentError::Protocol(format!("decompress framebuffer LZ4: {err}")))?,
-        "raw" => payload.to_vec(),
+        "lz4-block-size-prepended" => decompress_size_prepended_exact(
+            payload,
+            expected_raw
+                .ok_or_else(|| AgentError::Protocol("missing framebuffer raw_bytes".to_string()))?,
+            MAX_FRAME_SURFACE_BYTES,
+            "framebuffer capture",
+        )?,
+        "raw" => {
+            if payload.len() > MAX_FRAME_SURFACE_BYTES {
+                return Err(AgentError::Protocol(format!(
+                    "framebuffer capture raw payload too large: {} bytes",
+                    payload.len()
+                )));
+            }
+            payload.to_vec()
+        }
         other => {
             return Err(AgentError::Protocol(format!(
                 "unsupported framebuffer raw stream encoding: {other}"
@@ -1455,10 +1548,7 @@ fn parse_framebuffer_capture_lz4(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let bpp = value.pointer("/bpp").and_then(Value::as_u64).unwrap_or(0);
-    let expected_raw = value
-        .pointer("/raw_bytes")
-        .and_then(Value::as_u64)
-        .unwrap_or(raw.len() as u64) as usize;
+    let expected_raw = expected_raw.unwrap_or(raw.len());
     if raw.len() != expected_raw {
         return Err(AgentError::Protocol(format!(
             "decoded framebuffer size mismatch expected={expected_raw} actual={}",
@@ -1528,14 +1618,12 @@ pub(crate) fn parse_library_database_snapshot_lz4(
         .to_string();
     let raw_len = usize::try_from(raw_bytes)
         .map_err(|_| AgentError::Protocol("library snapshot is too large".to_string()))?;
-    let bytes = lz4_flex::block::decompress(payload, raw_len)
-        .map_err(|err| AgentError::Protocol(format!("decompress library snapshot LZ4: {err}")))?;
-    if bytes.len() as u64 != raw_bytes {
-        return Err(AgentError::Protocol(format!(
-            "decoded library snapshot size mismatch expected={raw_bytes} actual={}",
-            bytes.len()
-        )));
-    }
+    let bytes = decompress_block_exact(
+        payload,
+        raw_len,
+        MAX_AGENT_BINARY_PAYLOAD_BYTES as usize,
+        "library snapshot LZ4",
+    )?;
     let actual_checksum = fnv64_hex(&bytes);
     if actual_checksum != checksum {
         return Err(AgentError::Protocol(format!(
@@ -1595,12 +1683,11 @@ fn framebuffer_raw_to_rgba(
         )));
     }
 
-    let mut rgba = Vec::with_capacity(
-        width
-            .checked_mul(height)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or_else(|| AgentError::Protocol("RGBA image size overflow".to_string()))?,
-    );
+    let rgba_len = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| AgentError::Protocol("RGBA image size overflow".to_string()))?;
+    let mut rgba = reserved_buffer(rgba_len, "RGBA image")?;
     for y in 0..height {
         for x in 0..width {
             match bpp {
@@ -2230,6 +2317,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_framebuffer_lz4_capture_rejects_size_prefix_mismatch() {
+        let payload = lz4_flex::compress_prepend_size(&[0u8; 8]);
+        let err = parse_framebuffer_capture_lz4(
+            &json!({
+                "schema": "mister-magik-framebuffer-raw-stream-v1",
+                "width": 2,
+                "height": 1,
+                "stride": 4,
+                "bpp": 16,
+                "encoding": "lz4-block-size-prepended",
+                "raw_bytes": 4,
+                "payload_bytes": payload.len()
+            }),
+            &payload,
+        )
+        .expect_err("mismatched LZ4 size prefix should fail");
+
+        assert!(err.to_string().contains("size prefix mismatch"));
+    }
+
+    #[test]
     fn parse_library_snapshot_lz4_verifies_payload() {
         let bytes = b"sqlite bytes";
         let payload = lz4_flex::block::compress(bytes);
@@ -2293,6 +2401,25 @@ mod tests {
         assert!(
             matches!(bad_path, AgentError::Protocol(message) if message.contains("allowlisted"))
         );
+    }
+
+    #[test]
+    fn parse_library_snapshot_rejects_oversized_raw_length_before_decode() {
+        let payload = lz4_flex::block::compress(b"small");
+        let err = parse_library_database_snapshot_lz4(
+            &json!({
+                "schema": "mister-magik-library-db-snapshot-v1",
+                "remote_path": "/media/fat/mister-magik/library.sqlite3",
+                "raw_bytes": MAX_AGENT_BINARY_PAYLOAD_BYTES + 1,
+                "payload_bytes": payload.len(),
+                "encoding": "lz4-block",
+                "checksum": "unused"
+            }),
+            &payload,
+        )
+        .expect_err("oversized decoded snapshot should fail");
+
+        assert!(err.to_string().contains("raw payload too large"));
     }
 
     #[test]
@@ -2552,6 +2679,51 @@ mod tests {
         assert_eq!(frame.rect, FrameRect::full(second));
         assert_eq!(stream.rgb565, vec![4, 5, 6, 7]);
         assert_eq!(stream.expected_sequence, Some(21));
+    }
+
+    #[test]
+    fn framebuffer_stream_rejects_lz4_size_prefix_mismatch_before_decode() {
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let rect = FrameRect::full(geometry);
+        let payload = lz4_flex::compress_prepend_size(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let header = FrameHeader {
+            kind: FrameKind::Keyframe,
+            flags: FLAG_LZ4_SIZE_PREPENDED,
+            sequence: 1,
+            timestamp_us: 0,
+            geometry,
+            rect,
+            raw_bytes: 4,
+            payload_bytes: payload.len() as u32,
+        };
+
+        let err = FramebufferStreamState::default()
+            .apply_frame(header, &payload)
+            .expect_err("mismatched LZ4 size prefix should fail");
+
+        assert!(err.to_string().contains("size prefix mismatch"));
+    }
+
+    #[test]
+    fn binary_payload_len_is_bounded_before_allocation() {
+        assert_eq!(
+            binary_payload_len(&json!({"payload_bytes": 7, "raw_bytes": 99}))
+                .expect("payload byte count"),
+            7
+        );
+        assert_eq!(
+            binary_payload_len(&json!({"raw_bytes": 11})).expect("raw byte fallback"),
+            11
+        );
+        let err = binary_payload_len(&json!({
+            "payload_bytes": MAX_AGENT_BINARY_PAYLOAD_BYTES + 1
+        }))
+        .expect_err("oversized binary payload should fail");
+        assert!(err.to_string().contains("payload too large"));
     }
 
     #[test]

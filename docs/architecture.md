@@ -117,6 +117,10 @@ Wire policy:
   `error`.
 - Frame messages carry sequence, producer timestamp, geometry, stride, dirty
   rectangle, uncompressed byte count, and compressed byte count.
+- Binary payload and decoded-surface sizes are bounded before allocation. LZ4
+  size-prepended frames must agree with the header's uncompressed byte count;
+  a disagreement is a protocol error, not an invitation to decode or recover
+  the partial frame.
 - A new subscriber receives a full keyframe before any deltas. Geometry changes
   also force a keyframe.
 - If the desktop detects a sequence gap or malformed delta, it must discard the

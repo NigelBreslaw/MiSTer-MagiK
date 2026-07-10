@@ -4,6 +4,9 @@ pub const SCHEMA: &str = "mister-magik-framebuffer-stream-v1";
 pub const MAGIC: &[u8; 8] = b"MMFSv1\0\0";
 pub const HEADER_LEN: usize = 72;
 pub const FLAG_LZ4_SIZE_PREPENDED: u16 = 1;
+pub const MAX_FRAME_SURFACE_BYTES: usize = 16 * 1024 * 1024;
+// LZ4's incompressible representation is slightly larger than its source.
+pub const MAX_FRAME_PAYLOAD_BYTES: usize = 17 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -150,6 +153,15 @@ impl FrameHeader {
             .checked_mul(self.rect.height)
             .and_then(|pixels| pixels.checked_mul(2))
             .ok_or(FrameStreamError::PayloadTooLarge)?;
+        let surface_bytes = self
+            .geometry
+            .stride_pixels
+            .checked_mul(self.geometry.height)
+            .and_then(|pixels| pixels.checked_mul(2))
+            .ok_or(FrameStreamError::PayloadTooLarge)?;
+        if surface_bytes as usize > MAX_FRAME_SURFACE_BYTES {
+            return Err(FrameStreamError::PayloadTooLarge);
+        }
         if self.raw_bytes != expected_raw {
             return Err(FrameStreamError::BadPayloadLen {
                 expected: expected_raw,
@@ -209,7 +221,13 @@ pub fn read_frame<R: Read>(reader: &mut R) -> std::io::Result<(FrameHeader, Vec<
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
     validate_frame_shape_for_transport(header)?;
     let payload_len = declared_payload_len(header)?;
-    let mut payload = vec![0u8; payload_len];
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(payload_len).map_err(|err| {
+        std::io::Error::other(format!(
+            "allocate framebuffer stream payload ({payload_len} bytes): {err}"
+        ))
+    })?;
+    payload.resize(payload_len, 0);
     reader.read_exact(&mut payload)?;
     validate_frame_payload_len(header, payload.len())?;
     Ok((header, payload))
@@ -241,6 +259,12 @@ fn declared_payload_len(header: FrameHeader) -> std::io::Result<usize> {
             "framebuffer stream payload length overflows usize",
         )
     })?;
+    if declared_payload_len > MAX_FRAME_PAYLOAD_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            FrameStreamError::PayloadTooLarge,
+        ));
+    }
     Ok(declared_payload_len)
 }
 
@@ -412,5 +436,62 @@ mod tests {
 
         assert_eq!(decoded, header);
         assert!(payload.is_empty());
+    }
+
+    #[test]
+    fn read_frame_rejects_oversized_payload_before_reading_it() {
+        let header = FrameHeader {
+            kind: FrameKind::Error,
+            flags: 0,
+            sequence: 0,
+            timestamp_us: 0,
+            geometry: FrameGeometry {
+                width: 0,
+                height: 0,
+                stride_pixels: 0,
+            },
+            rect: FrameRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            raw_bytes: 0,
+            payload_bytes: MAX_FRAME_PAYLOAD_BYTES as u32 + 1,
+        };
+        let wire = header.encode().to_vec();
+
+        let err = read_frame(&mut wire.as_slice()).expect_err("oversized payload should fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("payload too large"));
+    }
+
+    #[test]
+    fn frame_header_rejects_oversized_surface_with_small_rect() {
+        let header = FrameHeader {
+            kind: FrameKind::RectDelta,
+            flags: FLAG_LZ4_SIZE_PREPENDED,
+            sequence: 1,
+            timestamp_us: 0,
+            geometry: FrameGeometry {
+                width: 1,
+                height: 4097,
+                stride_pixels: 2048,
+            },
+            rect: FrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            raw_bytes: 2,
+            payload_bytes: 1,
+        };
+
+        assert_eq!(
+            header.validate_shape(),
+            Err(FrameStreamError::PayloadTooLarge)
+        );
     }
 }

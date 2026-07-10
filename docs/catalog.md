@@ -115,6 +115,11 @@ database is published. Do not publish navigation rows from the pre-save RAM
 catalog: SQLite owns preferred arcade variant collapse and final list ordering,
 and the navigation sidecar must match those materialized rows exactly.
 
+Compressed catalog sidecars are untrusted stored input: read their LZ4 decoded
+length before allocating, reject it above the owning format's bound, then decode
+into exactly that buffer. A malformed or oversized sidecar is treated as a
+failed warm cache and must not make the launcher allocate an unbounded buffer.
+
 The Settings-screen `Reset Database` action removes the SQLite catalog, its
 adjacent `library.summary.json` projection, and all recognized screenshot pack
 files under `/media/fat/mister-magik/assets` before requesting the supervised
