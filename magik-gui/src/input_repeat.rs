@@ -40,6 +40,11 @@ impl RepeatGate {
             }
         }
     }
+
+    pub fn repeat_active(&self, now: Instant) -> bool {
+        self.hold_start
+            .is_some_and(|start| now.saturating_duration_since(start) >= INITIAL_DELAY)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,6 +94,18 @@ mod tests {
         assert!(gate.tick(true, t0 + Duration::from_millis(1000)));
         assert!(!gate.tick(true, t0 + Duration::from_millis(1050)));
         assert!(gate.tick(true, t0 + Duration::from_millis(1080)));
+    }
+
+    #[test]
+    fn repeat_active_excludes_the_initial_press_and_delay() {
+        let mut gate = RepeatGate::default();
+        let t0 = Instant::now();
+        assert!(gate.tick(true, t0));
+        assert!(!gate.repeat_active(t0));
+        assert!(!gate.repeat_active(t0 + Duration::from_millis(999)));
+        assert!(gate.repeat_active(t0 + Duration::from_millis(1000)));
+        gate.tick(false, t0 + Duration::from_millis(1001));
+        assert!(!gate.repeat_active(t0 + Duration::from_millis(1001)));
     }
 
     #[test]

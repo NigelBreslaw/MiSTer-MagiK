@@ -616,6 +616,12 @@ impl Default for LauncherNav {
 }
 
 impl LauncherNav {
+    pub fn home_horizontal_repeat_active(&self, now: Instant) -> bool {
+        self.screen == Screen::Home
+            && !self.settings_focused
+            && (self.repeat.left.repeat_active(now) || self.repeat.right.repeat_active(now))
+    }
+
     pub fn new() -> Self {
         Self {
             screen: Screen::Home,
