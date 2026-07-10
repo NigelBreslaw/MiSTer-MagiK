@@ -29,6 +29,7 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) frame_start_phase_us: u64,
     pub(in crate::ui_runner) pre_render_pace: Option<(VsyncPace, Instant, u128)>,
     pub(in crate::ui_runner) frame_analytics_mode: FrameAnalyticsMode,
+    pub(in crate::ui_runner) stream_motion_active: bool,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentTargets<'a, 'target> {
@@ -103,11 +104,19 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             frame_start_phase_us: frame.frame_start_phase_us,
             pre_render_pace: frame.pre_render_pace,
             frame_analytics_mode: frame.frame_analytics_mode,
+            stream_motion_active: frame.stream_motion_active,
         };
         if !frame.startup_can_present {
             return adapters.present_suppressed();
         }
         self.present_with(frame.plan, &mut adapters)
+    }
+
+    pub(in crate::ui_runner) fn publish_stream_refinement_if_due(&self) -> bool {
+        match &self.state {
+            LauncherPresenterState::Latch(latch) => latch.publish_requested_full_snapshot(),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::LatchUnavailable => false,
+        }
     }
 }
 
@@ -180,6 +189,7 @@ struct LivePresentationAdapters<'a, 'target> {
     frame_start_phase_us: u64,
     pre_render_pace: Option<(VsyncPace, Instant, u128)>,
     frame_analytics_mode: FrameAnalyticsMode,
+    stream_motion_active: bool,
 }
 
 fn run_fb0_transaction<T>(
@@ -305,7 +315,9 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 Ok(())
             },
         )?;
-        if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale() {
+        if let Some(scale) =
+            mister_magik_fb::framebuffer::stream::configured_latch_scale(self.stream_motion_active)
+        {
             let frame_view = latch.committed_frame_view(stats.buffer_index);
             let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
         }

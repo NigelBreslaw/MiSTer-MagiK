@@ -148,6 +148,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     height: usize,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     hidden_active_verified: bool,
+    last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
 }
 
@@ -203,6 +204,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             height,
             latch_geometry,
             hidden_active_verified: false,
+            last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(width, height),
         }
     }
@@ -313,6 +315,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         }
 
         self.latch_state.mark_post_success(plan);
+        self.last_committed_buffer = Some(buffer_index);
         Ok(FpgaVblankLatchHiddenPresentStats {
             copied_bytes,
             invalid_bytes,
@@ -337,6 +340,20 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     ) -> Rgb565FrameView<'_> {
         self.buffers
             .frame_view(buffer_index, self.width, self.height)
+    }
+
+    pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
+        if !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due() {
+            return false;
+        }
+        let Some(buffer_index) = self.last_committed_buffer else {
+            return false;
+        };
+        mister_magik_fb::framebuffer::stream::publish_latch_snapshot(
+            self.committed_frame_view(buffer_index),
+            mister_magik_fb::framebuffer::stream::LatchStreamScale::Full,
+        )
+        .queued
     }
 
     fn full_rect(&self) -> DirtyRect {
