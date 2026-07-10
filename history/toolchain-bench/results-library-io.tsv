@@ -2715,3 +2715,344 @@ PERF-20260705-LIBIO	import_stage_total	24261											path=/tmp/mister-magik/sq
 PERF-20260705-LIBIO	sqlite_publish_progress	4											bytes=41885696 copy_ms=3475 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=161 result=bench-ok
 PERF-20260705-LIBIO	refresh_done	0											skipped=false bytes=41885696 scan_us=34327124 discover_us=24604091 classify_us=31243791 import_us=51333755 discoveries=61626 normal_files=44543 containers=2814 entries=16834
 PERF-20260705-LIBIO	done	88											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	0	1	2	0	0	16745	25587	148912	4032	55848	226	disk_io_ms=2308 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	1	35	74	0	0	16781	25663	149012	4032	55848	226	disk_io_ms=2308 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	2	42	87	3057152	0	16787	25686	149094	4133	56273	233	disk_io_ms=3322 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	3	49	97	6819840	0	16792	25707	149170	4242	56683	233	disk_io_ms=4373 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	4	56	114	10132480	0	16798	25734	149231	4355	57248	233	disk_io_ms=5459 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	5	64	145	12753920	0	16803	25779	149282	4460	57937	233	disk_io_ms=6532 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	6	83	176	15721984	0	16811	25825	149315	4574	58750	233	disk_io_ms=7585 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	7	127	259	18727936	0	16825	25923	149322	4640	59374	233	disk_io_ms=8698 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	9	156	319	22748672	0	16842	25995	149376	4694	60105	233	disk_io_ms=9720 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	10	172	360	25688576	0	16854	26048	149451	4759	60552	233	disk_io_ms=10757 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	11	178	401	29917696	0	16860	26099	149533	4827	60798	233	disk_io_ms=11723 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	12	186	442	33988608	0	16869	26152	149630	4878	61065	233	disk_io_ms=12544 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	13	200	483	38402560	0	16883	26202	149723	4929	61273	233	disk_io_ms=13297 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	14	205	490	49447936	0	16889	26221	149819	5016	61469	233	disk_io_ms=14343 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	15	211	496	59655680	0	16896	26236	149919	5103	61653	233	disk_io_ms=15413 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	16	216	501	69307392	0	16902	26253	150016	5194	61814	233	disk_io_ms=16480 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	17	222	508	80428032	0	16909	26273	150110	5282	61999	233	disk_io_ms=17530 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	18	227	517	91705344	0	16913	26294	150208	5369	62182	233	disk_io_ms=18578 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	19	232	523	103104000	0	16919	26310	150307	5457	62364	233	disk_io_ms=19633 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	20	267	552	108541952	0	16948	26353	150364	5532	62856	233	disk_io_ms=20567 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	21	285	648	110683136	0	16957	26468	150380	5591	63471	233	disk_io_ms=21611 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	23	370	709	116926464	0	17009	26545	150432	5643	63881	233	disk_io_ms=22521 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	24	484	775	119058432	0	17074	26619	150447	5660	63933	233	disk_io_ms=22618 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	25	533	825	119307776	0	17095	26676	150520	5691	64134	233	disk_io_ms=23043 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	26	558	881	120109056	0	17122	26740	150619	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	27	583	962	120109056	0	17147	26830	150717	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	28	604	1047	120109056	0	17171	26919	150816	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	29	631	1126	120109056	0	17202	27001	150916	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	30	729	1133	120109056	0	17301	27014	151015	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	31	834	1134	120109056	0	17408	27019	151114	5713	64340	233	disk_io_ms=23376 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	32	929	1137	121595904	0	17505	27030	151211	5719	64385	233	disk_io_ms=23524 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	33	971	1144	130889728	0	17549	27051	151306	5770	64724	233	disk_io_ms=24286 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	34	1059	1150	132435456	0	17640	27067	151403	5780	64815	233	disk_io_ms=24425 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	36	1138	1155	135581184	0	17721	27081	151500	5799	64943	233	disk_io_ms=24680 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	37	1239	1158	135581184	0	17825	27093	151599	5799	64943	233	disk_io_ms=24680 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	38	1342	1161	135581184	0	17930	27103	151697	5799	64943	233	disk_io_ms=24680 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	39	1447	1161	135585280	0	18036	27109	151797	5799	64944	233	disk_io_ms=24682 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	40	1550	1163	135585280	0	18140	27117	151897	5799	64944	233	disk_io_ms=24682 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	41	1649	1168	135814656	0	18242	27128	151997	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	42	1750	1172	135814656	0	18345	27138	152096	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	43	1851	1176	135814656	0	18448	27150	152194	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	44	1952	1180	135814656	0	18552	27159	152293	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	45	2052	1185	135814656	0	18655	27170	152393	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	46	2155	1188	135814656	0	18759	27179	152492	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	47	2257	1190	135814656	0	18864	27189	152590	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	48	2362	1191	135814656	0	18971	27195	152690	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	49	2466	1192	135814656	0	19077	27202	152790	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	50	2571	1193	135814656	0	19184	27209	152890	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	51	2676	1193	135814656	0	19291	27215	152990	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	53	2781	1194	135814656	0	19398	27224	153088	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	54	2886	1194	135814656	0	19506	27231	153187	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	55	2992	1195	135814656	0	19614	27237	153287	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	56	3098	1195	135814656	0	19722	27242	153387	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	57	3203	1195	135814656	0	19830	27249	153487	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	58	3308	1196	135814656	0	19938	27257	153585	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	59	3412	1198	135814656	0	20043	27265	153684	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	60	3514	1201	135814656	0	20148	27274	153783	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	61	3618	1202	135814656	0	20254	27280	153882	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	62	3721	1205	135814656	0	20360	27290	153980	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	63	3827	1206	135814656	0	20469	27295	154078	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	64	3933	1206	135814656	0	20577	27300	154177	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	65	4039	1206	135814656	0	20685	27305	154277	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	66	4145	1207	135814656	0	20791	27311	154377	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	67	4250	1207	135814656	0	20900	27318	154475	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	69	4357	1207	135814656	0	21008	27323	154574	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	70	4463	1207	135814656	0	21116	27329	154673	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	71	4569	1207	135814656	0	21224	27334	154773	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	72	4676	1207	135814656	0	21332	27340	154872	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	73	4782	1207	135814656	0	21441	27346	154970	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	74	4888	1208	135814656	0	21548	27351	155069	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	75	4993	1208	135814656	0	21654	27357	155169	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	76	5098	1209	135814656	0	21761	27362	155268	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	77	5203	1209	135814656	0	21868	27368	155367	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	78	5308	1210	135814656	0	21975	27374	155465	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	79	5413	1211	135814656	0	22082	27381	155564	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	80	5517	1213	135814656	0	22187	27389	155663	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	81	5621	1215	135814656	0	22293	27395	155763	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	82	5725	1216	135814656	0	22398	27403	155861	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	83	5829	1218	135814656	0	22504	27409	155960	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	84	5934	1218	135814656	0	22610	27414	156060	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	85	6038	1220	135814656	0	22716	27421	156159	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	87	6141	1223	135814656	0	22820	27428	156259	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	88	6244	1226	135814656	0	22925	27437	156356	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	89	6348	1228	135814656	0	23030	27446	156456	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	90	6453	1228	135814656	0	23137	27456	156550	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	91	6511	1276	135814656	0	23196	27511	156649	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	92	6534	1360	135814656	0	23220	27599	156748	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	93	6558	1442	135814656	0	23246	27688	156846	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	94	6586	1521	135814656	0	23276	27773	156946	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	95	6674	1539	135814656	0	23366	27796	157046	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	96	6698	1622	135814656	0	23391	27884	157146	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	97	6724	1701	135814656	0	23418	27969	157245	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	98	6748	1784	135814656	0	23444	28057	157343	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	99	6772	1866	135814656	0	23469	28144	157442	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	100	6797	1946	135814656	0	23495	28231	157542	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	101	6819	2030	135814656	0	23519	28319	157642	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	102	6843	2112	135814656	0	23545	28408	157739	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	104	6867	2194	135814656	0	23570	28496	157839	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	105	6888	2279	135814656	0	23592	28586	157938	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	106	6909	2364	135814656	0	23616	28675	158037	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	107	6931	2448	135814656	0	23639	28765	158137	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	108	6952	2533	135814656	0	23661	28857	158234	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	109	6971	2621	135814656	0	23681	28951	158333	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	110	6990	2708	135814656	0	23702	29044	158432	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	111	7013	2791	135814656	0	23727	29132	158531	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	112	7033	2877	135814656	0	23748	29224	158631	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	113	7054	2962	135814656	0	23772	29315	158729	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	114	7071	3051	135814656	0	23790	29410	158828	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	115	7091	3137	135814656	0	23812	29501	158928	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	116	7111	3223	135814656	0	23833	29593	159027	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	117	7129	3312	135814656	0	23852	29689	159126	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	118	7177	3371	135814656	0	23902	29751	159225	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	119	7282	3371	135814656	0	24008	29757	159324	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	121	7387	3372	135814656	0	24115	29762	159423	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	122	7493	3372	135814656	0	24223	29766	159523	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	123	7597	3373	135814656	0	24329	29773	159621	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	124	7701	3374	135814656	0	24435	29779	159720	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	125	7804	3377	135814656	0	24540	29787	159819	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	126	7907	3381	135814656	0	24643	29797	159918	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	127	8009	3384	135814656	0	24748	29805	160017	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	128	8107	3393	135814656	0	24847	29821	160114	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	129	8207	3398	135814656	0	24949	29832	160213	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	130	8304	3407	135814656	0	25047	29846	160312	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	131	8392	3424	135814656	0	25138	29867	160411	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	132	8422	3500	135814656	0	25168	29950	160511	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	133	8446	3582	135814656	0	25194	30038	160609	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	134	8473	3661	135814656	0	25222	30122	160708	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	135	8497	3743	135814656	0	25248	30208	160808	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	136	8523	3824	135814656	0	25275	30294	160907	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	137	8545	3907	135814656	0	25300	30384	161005	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	139	8570	3989	135814656	0	25325	30471	161105	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	140	8593	4071	135814656	0	25350	30558	161205	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	141	8616	4154	135814656	0	25376	30645	161305	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	142	8638	4238	135814656	0	25398	30735	161404	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	143	8660	4323	135814656	0	25422	30827	161501	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	144	8680	4408	135814656	0	25444	30917	161600	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	145	8701	4494	135814656	0	25466	31009	161699	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	146	8724	4577	135814656	0	25491	31097	161799	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	147	8744	4663	135814656	0	25512	31188	161898	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	148	8764	4749	135814656	0	25535	31280	161996	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	149	8782	4838	135814656	0	25554	31374	162095	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	150	8802	4923	135814656	0	25576	31465	162195	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	151	8823	5009	135814656	0	25599	31555	162294	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	152	8841	5096	135814656	0	25619	31648	162394	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	153	8862	5181	135814656	0	25641	31740	162491	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	154	8886	5264	135814656	0	25668	31826	162591	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	155	8991	5264	135814656	0	25776	31831	162690	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	157	9096	5264	135814656	0	25882	31836	162789	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	158	9202	5264	135814656	0	25989	31842	162887	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	159	9307	5265	135814656	0	26096	31847	162987	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	160	9411	5266	135814656	0	26202	31853	163086	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	161	9516	5268	135814656	0	26307	31861	163185	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	162	9618	5271	135814656	0	26411	31870	163284	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	163	9718	5278	135814656	0	26513	31883	163382	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	164	9817	5284	135814656	0	26614	31894	163481	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	165	9917	5289	135814656	0	26716	31904	163580	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	166	10017	5295	135814656	0	26817	31916	163679	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	167	10115	5303	135814656	0	26917	31928	163778	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	168	10216	5307	135814656	0	27020	31939	163876	5799	64959	233	disk_io_ms=24705 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	169	10246	5312	135815168	4214784	27049	31950	163977	5868	64960	264	disk_io_ms=25303 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	170	10247	5319	135815168	10506240	27051	31963	164078	5961	64960	314	disk_io_ms=26484 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	171	10325	5324	135815680	11988992	27133	31974	164178	5980	64961	326	disk_io_ms=26696 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	172	10393	5328	135815680	14872576	27203	31984	164277	6014	64961	348	disk_io_ms=27041 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	sample	173	10497	5329	135815680	14872576	27310	31992	164373	6016	64961	357	disk_io_ms=27061 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_active_profiles	1117											profiles=79
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_targets	0											roots=4 targets=83 extensions=81
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_first_candidate	35											path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_first_discovery	174											candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	4265											path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	47											path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	7											path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	42											path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	5											path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	76											path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	9											path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	866											path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	47											path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	586											path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	391											path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	164											path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2874											path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	337											path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1534											path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	7439											path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	10											path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	12											path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	4											path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	6											path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	43											path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	13											path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	3											path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	3											path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	4											path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	14											path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	6											path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1106											path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	163											path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	28											path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	320											path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	4											path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	55											path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2477											path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	20											path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	14											path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	3											path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	7											path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	14											path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	78											path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	144											path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	10											path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	16											path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	10											path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	21											path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	5											path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	56											path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	3											path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/QL dirs=1 files=4 candidates=4
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	12											path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	0											path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	45											path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	3											path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	2											path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	20											path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	1											path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	16											path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk_target	5											path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_walk	23502											candidates=45440
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_profile_match	352											calls=45440
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_installed_collection	308											calls=44544
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_archive_toc	9707											containers=2814
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_collection_listings	0											collections=0
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_file_discovery	12103											files=44543
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_classify_total	24208											discoveries=62939 normal_files=44543 containers=2814 entries=16834
+PERF-REVIEW-20260710-LIBRARY-IO	scan_stage_coverage_audit	4041											rows=1675
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_precompute_catalog	7333											rows=59228
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_schema	37											tables=14
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_metadata_load	2198											mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_begin_tx	0											phase=begin
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_profiles	2											rows=79
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_catalog_audit	24											rows=1675
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	82											from=0 to=1000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	86											from=1000 to=2000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=2000 to=3000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	93											from=3000 to=4000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	84											from=4000 to=5000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	83											from=5000 to=6000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	104											from=6000 to=7000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	105											from=7000 to=8000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	84											from=8000 to=9000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	83											from=9000 to=10000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	83											from=10000 to=11000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	83											from=11000 to=12000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	83											from=12000 to=13000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	85											from=13000 to=14000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	131											from=14000 to=15000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	87											from=15000 to=16000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	84											from=16000 to=17000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	70											from=17000 to=18000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	117											from=18000 to=19000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	123											from=19000 to=20000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	113											from=20000 to=21000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	77											from=21000 to=22000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	75											from=22000 to=23000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	74											from=23000 to=24000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	78											from=24000 to=25000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	79											from=25000 to=26000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	79											from=26000 to=27000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=27000 to=28000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=28000 to=29000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	79											from=29000 to=30000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	102											from=30000 to=31000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=31000 to=32000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=32000 to=33000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=33000 to=34000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=34000 to=35000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=35000 to=36000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=36000 to=37000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=37000 to=38000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	168											from=38000 to=39000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=39000 to=40000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=40000 to=41000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=41000 to=42000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	101											from=42000 to=43000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	81											from=43000 to=44000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=44000 to=45000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=45000 to=46000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	80											from=46000 to=47000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	84											from=47000 to=48000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	76											from=48000 to=49000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	76											from=49000 to=50000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	77											from=50000 to=51000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	85											from=51000 to=52000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	161											from=52000 to=53000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	166											from=53000 to=54000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	153											from=54000 to=55000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	120											from=55000 to=56000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	76											from=56000 to=57000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	135											from=57000 to=58000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	172											from=58000 to=59000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	169											from=59000 to=60000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	82											from=60000 to=61000 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_chunk	47											from=61000 to=61626 total=61626
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_games_total	6933											rows=61626 launcher_rows=58634
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_materialize_arcade_ui	30912											source=projection
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_launcher_arcade	0											rows=0
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_launcher_console	2219											rows=58183
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_launcher_launch_plans	8405											rows=56495
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_meta	1413											rows=12
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_catalog_stamp	4281											stamp_rows=1688 checkpoint_rows=1525
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_insert_software_hash_cache	0											rows=0
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_build_saved_catalog	0											skipped=precomputed_projection
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_commit	15											result=ok
+PERF-REVIEW-20260710-LIBRARY-IO	import_stage_total	56442											path=/tmp/mister-magik/sqlite-build/.library-io-bench.sqlite3.build.3735
+PERF-REVIEW-20260710-LIBRARY-IO	sqlite_publish_progress	2											bytes=11481088 copy_ms=1973 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
+PERF-REVIEW-20260710-LIBRARY-IO	refresh_done	0											skipped=false bytes=11481088 scan_us=30606688 discover_us=23501828 classify_us=28249134 import_us=141888184 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+PERF-REVIEW-20260710-LIBRARY-IO	done	175											rc=0 disk=mmcblk0 sqlite=/media/fat/mister-magik/library-io-bench.sqlite3 build_dir=none
