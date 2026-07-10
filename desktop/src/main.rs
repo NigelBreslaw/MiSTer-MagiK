@@ -148,6 +148,175 @@ struct FramebufferDisplayState {
 type SharedFramebufferDisplayMailbox = Arc<LatestMailbox<FramebufferDisplayUpdate>>;
 type SharedFramebufferDisplayState = Arc<Mutex<FramebufferDisplayState>>;
 
+struct FramebufferRenderMetrics {
+    supported: AtomicBool,
+    received: AtomicU64,
+    applied: AtomicU64,
+    rendered: AtomicU64,
+    coalesced: AtomicU64,
+    applied_serial: AtomicU64,
+    state: Mutex<FramebufferRenderMetricsState>,
+}
+
+struct FramebufferRenderMetricsState {
+    started: Instant,
+    latest_applied: Option<(u64, Instant)>,
+    last_rendered_serial: u64,
+    rendered_at: VecDeque<Instant>,
+    latencies: VecDeque<Duration>,
+}
+
+#[cfg_attr(not(feature = "live-ui"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default)]
+struct FramebufferRenderSnapshot {
+    supported: bool,
+    fps: f64,
+    received_fps: f64,
+    applied_fps: f64,
+    rendered_fps: f64,
+    received: u64,
+    applied: u64,
+    rendered: u64,
+    coalesced: u64,
+    latency_p95_ms: f64,
+}
+
+impl Default for FramebufferRenderMetrics {
+    fn default() -> Self {
+        Self {
+            supported: AtomicBool::new(false),
+            received: AtomicU64::new(0),
+            applied: AtomicU64::new(0),
+            rendered: AtomicU64::new(0),
+            coalesced: AtomicU64::new(0),
+            applied_serial: AtomicU64::new(0),
+            state: Mutex::new(FramebufferRenderMetricsState {
+                started: Instant::now(),
+                latest_applied: None,
+                last_rendered_serial: 0,
+                rendered_at: VecDeque::new(),
+                latencies: VecDeque::new(),
+            }),
+        }
+    }
+}
+
+impl FramebufferRenderMetrics {
+    fn reset(&self) {
+        self.applied_serial.store(0, Ordering::Release);
+        self.received.store(0, Ordering::Release);
+        self.applied.store(0, Ordering::Release);
+        self.rendered.store(0, Ordering::Release);
+        self.coalesced.store(0, Ordering::Release);
+        if let Ok(mut state) = self.state.lock() {
+            state.started = Instant::now();
+            state.latest_applied = None;
+            state.last_rendered_serial = 0;
+            state.rendered_at.clear();
+            state.latencies.clear();
+        }
+    }
+
+    fn mark_applied(&self, received_at: Instant) {
+        self.applied.fetch_add(1, Ordering::Relaxed);
+        let serial = self.applied_serial.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Ok(mut state) = self.state.lock() {
+            state.latest_applied = Some((serial, received_at));
+        }
+    }
+
+    fn mark_received(&self, coalesced: u64) {
+        self.received.fetch_add(1, Ordering::Relaxed);
+        self.coalesced.store(coalesced, Ordering::Relaxed);
+    }
+
+    fn mark_rendered(&self, now: Instant) {
+        let serial = self.applied_serial.load(Ordering::Acquire);
+        if serial == 0 {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.last_rendered_serial == serial {
+            return;
+        }
+        state.last_rendered_serial = serial;
+        self.rendered.fetch_add(1, Ordering::Relaxed);
+        state.rendered_at.push_back(now);
+        if let Some((applied_serial, applied_at)) = state.latest_applied {
+            if applied_serial == serial {
+                state
+                    .latencies
+                    .push_back(now.saturating_duration_since(applied_at));
+            }
+        }
+        prune_render_metrics(&mut state, now);
+    }
+
+    fn snapshot(&self, now: Instant) -> FramebufferRenderSnapshot {
+        let Ok(mut state) = self.state.lock() else {
+            return FramebufferRenderSnapshot::default();
+        };
+        prune_render_metrics(&mut state, now);
+        let elapsed = now
+            .saturating_duration_since(state.started)
+            .min(Duration::from_secs(2))
+            .as_secs_f64()
+            .max(f64::EPSILON);
+        let total_elapsed = now
+            .saturating_duration_since(state.started)
+            .as_secs_f64()
+            .max(f64::EPSILON);
+        let received = self.received.load(Ordering::Relaxed);
+        let applied = self.applied.load(Ordering::Relaxed);
+        let rendered = self.rendered.load(Ordering::Relaxed);
+        let mut latencies = state.latencies.iter().copied().collect::<Vec<_>>();
+        latencies.sort();
+        FramebufferRenderSnapshot {
+            supported: self.supported.load(Ordering::Acquire),
+            fps: state.rendered_at.len() as f64 / elapsed,
+            received_fps: received as f64 / total_elapsed,
+            applied_fps: applied as f64 / total_elapsed,
+            rendered_fps: rendered as f64 / total_elapsed,
+            received,
+            applied,
+            rendered,
+            coalesced: self.coalesced.load(Ordering::Relaxed),
+            latency_p95_ms: latency_percentile_ms(&latencies, 0.95),
+        }
+    }
+}
+
+fn prune_render_metrics(state: &mut FramebufferRenderMetricsState, now: Instant) {
+    let cutoff = now.checked_sub(Duration::from_secs(2)).unwrap_or(now);
+    while state
+        .rendered_at
+        .front()
+        .is_some_and(|value| *value < cutoff)
+    {
+        state.rendered_at.pop_front();
+        state.latencies.pop_front();
+    }
+}
+
+fn install_framebuffer_render_notifier(
+    window: &slint::Window,
+    metrics: Arc<FramebufferRenderMetrics>,
+) {
+    let callback_metrics = Arc::clone(&metrics);
+    if window
+        .set_rendering_notifier(move |state, _graphics_api| {
+            if matches!(state, slint::RenderingState::AfterRendering) {
+                callback_metrics.mark_rendered(Instant::now());
+            }
+        })
+        .is_ok()
+    {
+        metrics.supported.store(true, Ordering::Release);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct RealtimeHistory {
     samples: VecDeque<DeviceTelemetrySample>,
@@ -939,6 +1108,19 @@ fn library_sort_column_id(column: library::LibrarySortColumn) -> &'static str {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if let Some(seconds) = framebuffer_display_bench_seconds()? {
+        if std::env::var_os("SLINT_BACKEND").is_none() {
+            std::env::set_var("SLINT_BACKEND", default_slint_backend());
+        }
+        select_backend()?;
+        #[cfg(feature = "live-ui")]
+        return run_live_framebuffer_display_bench(seconds);
+        #[cfg(not(feature = "live-ui"))]
+        {
+            let _ = seconds;
+            return Err("display benchmark requires the live-ui feature".into());
+        }
+    }
     if let Some((mode, limit)) = framebuffer_stream_bench_args()? {
         run_framebuffer_stream_bench(mode, limit)?;
         return Ok(());
@@ -963,6 +1145,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         compile_error!("enable either live-ui or compiled-ui");
     }
+}
+
+fn framebuffer_display_bench_seconds() -> Result<Option<u64>, Box<dyn Error>> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().map(String::as_str) != Some("--framebuffer-stream-display-bench-secs") {
+        return Ok(None);
+    }
+    let seconds = args
+        .get(1)
+        .map(String::as_str)
+        .unwrap_or("30")
+        .parse::<u64>()?
+        .max(1);
+    Ok(Some(seconds))
 }
 
 fn default_slint_backend() -> &'static str {
@@ -1150,7 +1346,7 @@ fn run_live_ui() -> Result<(), Box<dyn Error>> {
     loop {
         let reload_requested = Arc::new(AtomicBool::new(false));
         let stop_watcher = Arc::new(AtomicBool::new(false));
-        let instance = create_live_instance(&ui_path, &host)?;
+        let (instance, _render_metrics) = create_live_instance(&ui_path, &host)?;
         start_reload_watcher(
             &ui_path,
             Arc::clone(&reload_requested),
@@ -1167,10 +1363,65 @@ fn run_live_ui() -> Result<(), Box<dyn Error>> {
 }
 
 #[cfg(feature = "live-ui")]
+fn run_live_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Error>> {
+    use slint::ComponentHandle;
+    use slint::SharedString;
+    use slint_interpreter::Value;
+
+    let ui_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/main.slint");
+    let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
+    let (instance, render_metrics) = create_live_instance(&ui_path, &host)?;
+    let _ = instance.set_global_property(
+        "AppState",
+        "selected-page",
+        Value::String(SharedString::from("analytics")),
+    );
+    let _ = instance.set_global_property("AnalyticsState", "live-stream", Value::Bool(true));
+    instance.invoke_global("Actions", "live-stream-changed", &[Value::Bool(true)])?;
+
+    let timer_metrics = Arc::clone(&render_metrics);
+    let timer_instance = instance.as_weak();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+        timer_metrics.reset();
+        std::thread::sleep(Duration::from_secs(seconds));
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(instance) = timer_instance.upgrade() {
+                let _ =
+                    instance.invoke_global("Actions", "live-stream-changed", &[Value::Bool(false)]);
+            }
+            let _ = slint::quit_event_loop();
+        });
+    });
+
+    instance.run()?;
+    let snapshot = render_metrics.snapshot(Instant::now());
+    println!(
+        "framebuffer_display_bench_tsv\tseconds={seconds}\treceived={}\tapplied={}\trendered={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}",
+        snapshot.received,
+        snapshot.applied,
+        snapshot.rendered,
+        snapshot.received_fps,
+        snapshot.applied_fps,
+        snapshot.rendered_fps,
+        snapshot.coalesced,
+        snapshot.latency_p95_ms,
+        u8::from(snapshot.supported),
+    );
+    Ok(())
+}
+
+#[cfg(feature = "live-ui")]
 fn create_live_instance(
     ui_path: &Path,
     host: &str,
-) -> Result<slint_interpreter::ComponentInstance, Box<dyn Error>> {
+) -> Result<
+    (
+        slint_interpreter::ComponentInstance,
+        Arc<FramebufferRenderMetrics>,
+    ),
+    Box<dyn Error>,
+> {
     use slint::ComponentHandle;
     use slint_interpreter::{Compiler, Value};
 
@@ -1187,6 +1438,8 @@ fn create_live_instance(
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
+    let framebuffer_render_metrics = Arc::new(FramebufferRenderMetrics::default());
+    install_framebuffer_render_notifier(instance.window(), Arc::clone(&framebuffer_render_metrics));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
@@ -1303,6 +1556,7 @@ fn create_live_instance(
     let stream_capture = Arc::clone(&framebuffer_capture);
     let stream_generation = Arc::clone(&live_stream_generation);
     let stream_control = Arc::clone(&live_stream_control);
+    let stream_render_metrics = Arc::clone(&framebuffer_render_metrics);
     instance.set_global_callback("Actions", "live-stream-changed", move |args| {
         let Some(Value::Bool(enabled)) = args.first() else {
             return Value::Void;
@@ -1325,6 +1579,7 @@ fn create_live_instance(
                 Arc::clone(&stream_capture),
                 Arc::clone(&stream_generation),
                 Arc::clone(&stream_control),
+                Arc::clone(&stream_render_metrics),
                 stream_host.clone(),
                 generation,
             );
@@ -1595,7 +1850,7 @@ fn create_live_instance(
     apply_live_library_state(&instance, &library_browser);
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_live_instance(&instance);
-    Ok(instance)
+    Ok((instance, framebuffer_render_metrics))
 }
 
 #[cfg(feature = "live-ui")]
@@ -2253,6 +2508,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let sd_browser = Arc::new(Mutex::new(SdCardBrowser::new()));
     let library_browser = Arc::new(Mutex::new(LibraryBrowser::new()));
     let framebuffer_capture = Arc::new(Mutex::new(None));
+    let framebuffer_render_metrics = Arc::new(FramebufferRenderMetrics::default());
+    install_framebuffer_render_notifier(ui.window(), Arc::clone(&framebuffer_render_metrics));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
@@ -2349,6 +2606,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let stream_capture = Arc::clone(&framebuffer_capture);
     let stream_generation = Arc::clone(&live_stream_generation);
     let stream_control = Arc::clone(&live_stream_control);
+    let stream_render_metrics = Arc::clone(&framebuffer_render_metrics);
     ui.global::<Actions>()
         .on_live_stream_changed(move |enabled| {
             let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2369,6 +2627,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                     Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
+                    Arc::clone(&stream_render_metrics),
                     stream_host.clone(),
                     generation,
                 );
@@ -3124,6 +3383,7 @@ fn record_applied_frame(
 fn framebuffer_display_summary(
     mailbox: &LatestMailbox<FramebufferDisplayUpdate>,
     state: &FramebufferDisplayState,
+    render_metrics: &FramebufferRenderMetrics,
     stream_start: Instant,
     received_at: Instant,
 ) -> String {
@@ -3135,8 +3395,17 @@ fn framebuffer_display_summary(
         .geometry
         .map(|value| format!("{}x{}", value.width, value.height))
         .unwrap_or_else(|| "unknown".to_string());
+    let rendered = render_metrics.snapshot(Instant::now());
+    let rendered_label = if rendered.supported {
+        format!(
+            "rendered {:.1} fps · render p95 {:.0} ms",
+            rendered.fps, rendered.latency_p95_ms
+        )
+    } else {
+        "rendered n/a".to_string()
+    };
     format!(
-        "rx {receive_fps:.1} fps · applied {applied_fps:.1} fps · {geometry} · coalesced {coalesced} · queue {:.0} ms",
+        "rx {receive_fps:.1} fps · applied {applied_fps:.1} fps · {rendered_label} · {geometry} · coalesced {coalesced} · queue {:.0} ms",
         received_at.elapsed().as_secs_f64() * 1000.0
     )
 }
@@ -4530,6 +4799,7 @@ fn schedule_live_framebuffer_display(
     stream_generation: SharedLiveStreamGeneration,
     mailbox: SharedFramebufferDisplayMailbox,
     display_state: SharedFramebufferDisplayState,
+    render_metrics: Arc<FramebufferRenderMetrics>,
     stream_start: Instant,
     generation: u64,
 ) {
@@ -4550,12 +4820,18 @@ fn schedule_live_framebuffer_display(
             .lock()
             .map(|mut state| {
                 let (rects, summary) = record_applied_frame(&mut state, &update.frame);
-                let stream_summary =
-                    framebuffer_display_summary(&mailbox, &state, stream_start, update.received_at);
+                let stream_summary = framebuffer_display_summary(
+                    &mailbox,
+                    &state,
+                    &render_metrics,
+                    stream_start,
+                    update.received_at,
+                );
                 (rects, summary, stream_summary)
             })
             .unwrap_or_default();
         apply_live_framebuffer_stream_capture(&instance, &update.frame.capture);
+        render_metrics.mark_applied(update.received_at);
         apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
         apply_live_stream_summary(&instance, &stream_summary);
         if let Ok(mut state) = capture_state.lock() {
@@ -4568,6 +4844,7 @@ fn schedule_live_framebuffer_display(
                 stream_generation,
                 mailbox,
                 display_state,
+                render_metrics,
                 stream_start,
                 generation,
             );
@@ -4581,10 +4858,12 @@ fn spawn_live_framebuffer_stream(
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
+    render_metrics: Arc<FramebufferRenderMetrics>,
     host: String,
     generation: u64,
 ) {
     std::thread::spawn(move || {
+        render_metrics.reset();
         let stream_start = Instant::now();
         let mailbox = Arc::new(LatestMailbox::default());
         let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
@@ -4649,6 +4928,8 @@ fn spawn_live_framebuffer_stream(
                         frame,
                         received_at: Instant::now(),
                     });
+                    let (_, coalesced) = mailbox.stats();
+                    render_metrics.mark_received(coalesced);
                     if schedule {
                         schedule_live_framebuffer_display(
                             instance.clone(),
@@ -4656,6 +4937,7 @@ fn spawn_live_framebuffer_stream(
                             Arc::clone(&stream_generation),
                             Arc::clone(&mailbox),
                             Arc::clone(&display_state),
+                            Arc::clone(&render_metrics),
                             stream_start,
                             generation,
                         );
@@ -4903,6 +5185,7 @@ fn schedule_compiled_framebuffer_display(
     stream_generation: SharedLiveStreamGeneration,
     mailbox: SharedFramebufferDisplayMailbox,
     display_state: SharedFramebufferDisplayState,
+    render_metrics: Arc<FramebufferRenderMetrics>,
     stream_start: Instant,
     generation: u64,
 ) {
@@ -4923,12 +5206,18 @@ fn schedule_compiled_framebuffer_display(
             .lock()
             .map(|mut state| {
                 let (rects, summary) = record_applied_frame(&mut state, &update.frame);
-                let stream_summary =
-                    framebuffer_display_summary(&mailbox, &state, stream_start, update.received_at);
+                let stream_summary = framebuffer_display_summary(
+                    &mailbox,
+                    &state,
+                    &render_metrics,
+                    stream_start,
+                    update.received_at,
+                );
                 (rects, summary, stream_summary)
             })
             .unwrap_or_default();
         apply_compiled_framebuffer_stream_capture(&ui, &update.frame.capture);
+        render_metrics.mark_applied(update.received_at);
         apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
         apply_compiled_stream_summary(&ui, &stream_summary);
         if let Ok(mut state) = capture_state.lock() {
@@ -4941,6 +5230,7 @@ fn schedule_compiled_framebuffer_display(
                 stream_generation,
                 mailbox,
                 display_state,
+                render_metrics,
                 stream_start,
                 generation,
             );
@@ -4954,10 +5244,12 @@ fn spawn_compiled_framebuffer_stream(
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
+    render_metrics: Arc<FramebufferRenderMetrics>,
     host: String,
     generation: u64,
 ) {
     std::thread::spawn(move || {
+        render_metrics.reset();
         let stream_start = Instant::now();
         let mailbox = Arc::new(LatestMailbox::default());
         let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
@@ -5022,6 +5314,8 @@ fn spawn_compiled_framebuffer_stream(
                         frame,
                         received_at: Instant::now(),
                     });
+                    let (_, coalesced) = mailbox.stats();
+                    render_metrics.mark_received(coalesced);
                     if schedule {
                         schedule_compiled_framebuffer_display(
                             ui.clone(),
@@ -5029,6 +5323,7 @@ fn spawn_compiled_framebuffer_stream(
                             Arc::clone(&stream_generation),
                             Arc::clone(&mailbox),
                             Arc::clone(&display_state),
+                            Arc::clone(&render_metrics),
                             stream_start,
                             generation,
                         );
@@ -5528,5 +5823,21 @@ mod tests {
         assert_eq!(mailbox.take(), Some(2));
         assert!(!mailbox.complete_apply());
         assert!(mailbox.publish(3));
+    }
+
+    #[test]
+    fn render_metrics_count_each_applied_serial_once() {
+        let metrics = FramebufferRenderMetrics::default();
+        metrics.supported.store(true, Ordering::Release);
+        let applied_at = Instant::now();
+
+        metrics.mark_applied(applied_at);
+        metrics.mark_rendered(applied_at + Duration::from_millis(10));
+        metrics.mark_rendered(applied_at + Duration::from_millis(20));
+
+        let state = metrics.state.lock().expect("render metrics state");
+        assert_eq!(state.last_rendered_serial, 1);
+        assert_eq!(state.rendered_at.len(), 1);
+        assert_eq!(state.latencies, [Duration::from_millis(10)]);
     }
 }
