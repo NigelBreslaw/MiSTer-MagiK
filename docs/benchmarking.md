@@ -585,6 +585,18 @@ Measure sustained resolution capability separately from that cadence gate:
 scripts/profile-framebuffer-stream-resolution.sh LABEL --secs 30 --deploy-device
 ```
 
+Prove the compiled RGB565 scalar/NEON implementations separately:
+
+```bash
+scripts/gate-framebuffer-stream-neon.sh LABEL --deploy-device
+```
+
+This gate is deliberately independent of stream averages. It compares exact
+checksums for contiguous 960x540, padded 960x540, and odd-sized inputs, then
+requires NEON p95/max no greater than 4/6ms and at least 1.5x scalar speedup.
+The July 10 Cortex-A9 run failed the speedup condition: scalar p95 was 1.011ms
+and NEON p95 was 1.476ms, so automatic dispatch remains scalar.
+
 The resolution matrix runs matched half, full, and adaptive null-drain/display
 profiles and reports payload, transport, applied/rendered cadence, producer
 snapshot cost, coalescing, and the existing latch gate result. Its additional
@@ -624,6 +636,12 @@ redraw events are diagnostic-only because Slint's macOS CADisplayLink path can
 draw without emitting `RedrawRequested`. Keep the
 historical roughly-20fps monitor result as context only: it predates the latch
 producer and is not a like-for-like baseline for this gate.
+
+Current rollout evidence and blockers are recorded in
+`history/2026-07-10-framebuffer-stream-cadence.md`. In particular, a valid
+30-second full-resolution null drain sustained 56.01fps but had an 89.3ms
+interval p95, while half resolution sustained 59.90fps with a 24.4ms interval
+p95. These are capability measurements, not permission to enable production.
 
 Build profiles and toolchain details live in `magik-gui/BUILD.md`.
 
