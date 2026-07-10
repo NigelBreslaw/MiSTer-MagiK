@@ -84,8 +84,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("library-scan-bench", CommandKind::Fpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("launch-prep-bench", CommandKind::PreFpga),
-    #[cfg(feature = "bench-tools")]
-    CommandSpec::new("framebuffer-stream-simd-bench", CommandKind::PreFpga),
 ];
 
 pub fn find_command(name: &str) -> Option<&'static CommandSpec> {
@@ -251,7 +249,6 @@ mod tests {
             "library-scan-bench",
             "preview-pack-bench",
             "preview-index-refresh-bench",
-            "framebuffer-stream-simd-bench",
         ] {
             assert!(!is_known_command(command), "{command}");
         }
@@ -316,7 +313,6 @@ mod tests {
             "fpga-latch-report",
             "preview-pack-bench",
             "preview-index-refresh-bench",
-            "framebuffer-stream-simd-bench",
         ] {
             assert!(is_known_command(command), "{command}");
         }

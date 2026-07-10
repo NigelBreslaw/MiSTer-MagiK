@@ -138,14 +138,10 @@ Latch-stream policy:
   decoded-image mailbox and at most one outstanding UI callback.
 - `MISTER_FRAMEBUFFER_STREAM_SCALE=off|full|half|adaptive` controls latch
   publication. The current production default remains `off` until the real
-  device/desktop 55fps gate passes. `MISTER_FRAMEBUFFER_STREAM_SIMD=auto|scalar|neon`
-  selects the RGB565 decimator. The fixed Cortex-A9 build contains both scalar
-  and NEON implementations, but `auto` currently selects scalar: the July 10
-  device gate measured explicit NEON slower for this select-every-other-pixel
-  loop even after a standalone search across load/deinterleave, unrolling, and
-  prefetch variants. The scalar kernel uses pointer walking; the best tested
-  NEON kernel narrows 32 outputs per iteration and prefetches 256 bytes ahead.
-  `neon` remains an explicit benchmark override, not a production win.
+  device/desktop 55fps gate passes. The fixed Cortex-A9 build uses the optimized
+  scalar RGB565 decimator. Its pointer-walking loop beat every tested NEON shape
+  for this select-every-other-pixel workload, so there is no runtime decimator
+  selector or retained NEON fallback.
 - On macOS the desktop consumes its newest-frame mailbox from a native
   `CADisplayLink`; the producer never schedules catch-up callbacks. Winit redraw
   events are diagnostic-only because Slint may draw directly from its own

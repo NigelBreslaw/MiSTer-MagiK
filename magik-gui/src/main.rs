@@ -39,8 +39,6 @@
 //!     preview-pack-bench benchmark screenshot pack entry access/decode timings
 //!     preview-index-refresh-bench
 //!                        update DB preview flags from screenshot pack indexes
-//!     framebuffer-stream-simd-bench
-//!                        verify RGB565 scalar/NEON identity and device timing
 //!     input              gamepad log / sniff / calibrate
 //!   Benchmarks:
 //!     scenes             list Slint scene names
@@ -346,12 +344,6 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
         "launch-prep-bench" => launch_preparation::run_launch_prep_bench(),
-        #[cfg(feature = "bench-tools")]
-        "framebuffer-stream-simd-bench" => {
-            if !mister_magik_fb::framebuffer::downsample::run_simd_bench() {
-                std::process::exit(1);
-            }
-        }
         #[cfg(mister_experiments)]
         "experiment-capabilities" => print_experiment_capabilities(),
         #[cfg(mister_experiments)]

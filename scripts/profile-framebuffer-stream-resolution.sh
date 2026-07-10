@@ -102,7 +102,7 @@ run_profile() {
     --scenario "$scenario" --present-backend fpga-vblank-latch-hidden \
     --frame-pacing-policy vsync-integrity --catalog-refresh off \
     --stream-consumer "$consumer" --stream-secs "$secs" \
-    --stream-scale "$scale" --stream-simd auto
+    --stream-scale "$scale"
 }
 
 echo "==> Build release null-drain benchmark"

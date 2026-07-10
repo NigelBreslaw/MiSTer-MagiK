@@ -12,8 +12,8 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/profile-rgb565-decimator.sh LABEL [--samples N] [--runs N] [--cpu N] [--skip-build]
 
-Builds a standalone C benchmark for the Cortex-A9 and runs repeated scalar and
-NEON RGB565 2x decimator comparisons on the MiSTer. No Slint/Rust application
+Builds a standalone C benchmark for the Cortex-A9 and runs repeated production
+scalar RGB565 2x decimator measurements on the MiSTer. No Slint/Rust application
 startup is involved. Raw TSV evidence is written under build/.
 USAGE
 }
@@ -68,10 +68,10 @@ if [[ "$skip_build" == 0 ]]; then
     "$IMAGE" \
     arm-linux-gnueabihf-gcc \
       -std=c11 -O3 -Wall -Wextra -Werror \
-      -march=armv7-a -mtune=cortex-a9 -mfpu=neon -mfloat-abi=hard \
-      -fno-tree-vectorize -fno-strict-aliasing -ffunction-sections -fdata-sections \
+      -march=armv7-a -mtune=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=hard \
+      -fno-tree-vectorize -ffunction-sections -fdata-sections \
       tools/rgb565-decimator-bench/main.c \
-      magik-gui/src/framebuffer/downsample_neon.c \
+      magik-gui/src/framebuffer/downsample_scalar.c \
       -Wl,--gc-sections \
       -o /project/build/rgb565-decimator-bench/rgb565-decimator-bench
 fi

@@ -9,13 +9,13 @@ usage() {
   cat <<'EOF'
 Usage: scripts/gate-framebuffer-stream-55fps.sh [LABEL] [--secs N] [--deploy-device|--skip-build] [--self-test]
 
-Runs no-subscriber, scalar adaptive, NEON drain, and NEON Analytics-display
-Arcade turbo-hold profiles. Adaptive streaming remains opt-in; this gate does
-not change production defaults.
+Runs no-subscriber, adaptive drain, and adaptive Analytics-display Arcade
+turbo-hold profiles. Adaptive streaming remains opt-in; this gate does not
+change production defaults.
 EOF
 }
 
-label="NEON-STREAM-$(date -u +%Y%m%dT%H%M%SZ)"
+label="FRAMEBUFFER-STREAM-$(date -u +%Y%m%dT%H%M%SZ)"
 secs="30"
 deploy="--skip-build"
 self_test="0"
@@ -127,13 +127,13 @@ if [[ "$self_test" == "1" ]]; then
 fi
 
 run_profile() {
-  local run_label="$1" consumer="$2" simd="$3" scale="$4" build_mode="$5"
+  local run_label="$1" consumer="$2" scale="$3" build_mode="$4"
   local profile_secs=$((secs + 25))
   "$PROFILE" "$run_label" "$build_mode" --skip-boot-prelude --secs "$profile_secs" \
     --scenario turbo-hold --present-backend fpga-vblank-latch-hidden \
     --frame-pacing-policy vsync-integrity \
     --catalog-refresh off --stream-consumer "$consumer" \
-    --stream-secs "$secs" --stream-scale "$scale" --stream-simd "$simd"
+    --stream-secs "$secs" --stream-scale "$scale"
 }
 
 echo "==> Build production Skia desktop benchmark"
@@ -141,44 +141,34 @@ cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release --no-d
   --features compiled-ui,skia-renderer
 
 nosub_label="${label}-NOSUB"
-scalar_label="${label}-SCALAR"
-drain_label="${label}-AUTO-DRAIN"
-auto_label="${label}-AUTO-DISPLAY"
+drain_label="${label}-DRAIN"
+display_label="${label}-DISPLAY"
 
-run_profile "$nosub_label" none auto off "$deploy"
-run_profile "$scalar_label" desktop-display scalar adaptive --skip-build
-run_profile "$drain_label" null-drain auto adaptive --skip-build
-run_profile "$auto_label" desktop-display auto adaptive --skip-build
+run_profile "$nosub_label" none off "$deploy"
+run_profile "$drain_label" null-drain adaptive --skip-build
+run_profile "$display_label" desktop-display adaptive --skip-build
 
-scalar_display_file="$OUT_DIR/${scalar_label}-framebuffer-stream.tsv"
-auto_display_file="$OUT_DIR/${auto_label}-framebuffer-stream.tsv"
+display_file="$OUT_DIR/${display_label}-framebuffer-stream.tsv"
 drain_file="$OUT_DIR/${drain_label}-framebuffer-stream.tsv"
-scalar_log="$OUT_DIR/${scalar_label}-arcade-scroll.log"
-auto_log="$OUT_DIR/${auto_label}-arcade-scroll.log"
+display_log="$OUT_DIR/${display_label}-arcade-scroll.log"
 
-scalar_display="$(grep '^framebuffer_display_bench_tsv' "$scalar_display_file" | tail -n 1)"
-auto_display="$(grep '^framebuffer_display_bench_tsv' "$auto_display_file" | tail -n 1)"
-auto_cadence="$(grep '^framebuffer_cadence_summary_tsv' "$auto_display_file" | tail -n 1)"
+display="$(grep '^framebuffer_display_bench_tsv' "$display_file" | tail -n 1)"
+cadence="$(grep '^framebuffer_cadence_summary_tsv' "$display_file" | tail -n 1)"
 drain_row="$(grep '^framebuffer_stream_bench_tsv' "$drain_file" | tail -n 1)"
-scalar_snapshot="$(grep '^framebuffer_stream_snapshot_tsv' "$scalar_log" | tail -n 1)"
-auto_snapshot="$(grep '^framebuffer_stream_snapshot_tsv' "$auto_log" | tail -n 1)"
+snapshot="$(grep '^framebuffer_stream_snapshot_tsv' "$display_log" | tail -n 1)"
 
-validate_display_cadence "$auto_display" "$auto_cadence" || exit 20
+validate_display_cadence "$display" "$cadence" || exit 20
 require_ge "Producer drain fps" "$(tsv_field "$drain_row" fps)" "${MISTER_STREAM_MIN_DRAIN_FPS:-58}"
 
-auto_impl="$(tsv_field "$auto_snapshot" implementation)"
-if [[ "$auto_impl" != "neon" ]]; then
-  echo "NEON dispatch gate failed: implementation=$auto_impl" >&2
+implementation="$(tsv_field "$snapshot" implementation)"
+if [[ "$implementation" != "scalar" ]]; then
+  echo "Framebuffer decimator gate failed: implementation=$implementation" >&2
   exit 22
 fi
-require_le "Half snapshot p95" "$(tsv_field "$auto_snapshot" half_snapshot_p95_us)" "${MISTER_STREAM_MAX_HALF_P95_US:-4000}"
-require_le "Half snapshot max" "$(tsv_field "$auto_snapshot" half_snapshot_max_us)" "${MISTER_STREAM_MAX_HALF_MAX_US:-6000}"
-require_le "Full snapshot p95" "$(tsv_field "$auto_snapshot" full_snapshot_p95_us)" "${MISTER_STREAM_MAX_FULL_P95_US:-10000}"
-require_le "Full snapshot max" "$(tsv_field "$auto_snapshot" full_snapshot_max_us)" "${MISTER_STREAM_MAX_FULL_MAX_US:-15000}"
+half_p95="$(tsv_field "$snapshot" half_snapshot_p95_us)"
+require_le "Half snapshot p95" "$half_p95" "${MISTER_STREAM_MAX_HALF_P95_US:-4000}"
+require_le "Half snapshot max" "$(tsv_field "$snapshot" half_snapshot_max_us)" "${MISTER_STREAM_MAX_HALF_MAX_US:-6000}"
+require_le "Full snapshot p95" "$(tsv_field "$snapshot" full_snapshot_p95_us)" "${MISTER_STREAM_MAX_FULL_P95_US:-10000}"
+require_le "Full snapshot max" "$(tsv_field "$snapshot" full_snapshot_max_us)" "${MISTER_STREAM_MAX_FULL_MAX_US:-15000}"
 
-scalar_p95="$(tsv_field "$scalar_snapshot" half_snapshot_p95_us)"
-auto_p95="$(tsv_field "$auto_snapshot" half_snapshot_p95_us)"
-speedup="$(awk -v scalar="$scalar_p95" -v neon="$auto_p95" 'BEGIN { if (neon == 0) print 0; else printf "%.2f", scalar / neon }')"
-require_ge "NEON scalar speedup" "$speedup" "${MISTER_STREAM_MIN_NEON_SPEEDUP:-1.5}"
-
-echo "framebuffer_stream_gate_tsv\tlabel=$label\trendered_fps=$(tsv_field "$auto_display" rendered_fps)\tapplied_fps=$(tsv_field "$auto_display" applied_fps)\tdrain_fps=$(tsv_field "$drain_row" fps)\trender_p95_ms=$(tsv_field "$auto_display" render_p95_ms)\thalf_snapshot_p95_us=$auto_p95\tneon_speedup=$speedup\tvalid=1"
+echo "framebuffer_stream_gate_tsv\tlabel=$label\trendered_fps=$(tsv_field "$display" rendered_fps)\tapplied_fps=$(tsv_field "$display" applied_fps)\tdrain_fps=$(tsv_field "$drain_row" fps)\trender_p95_ms=$(tsv_field "$display" render_p95_ms)\thalf_snapshot_p95_us=$half_p95\timplementation=scalar\tvalid=1"
