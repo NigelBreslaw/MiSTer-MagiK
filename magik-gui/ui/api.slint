@@ -71,7 +71,8 @@ export global MisterBridge {
     // Dialog focus: 0=cancel, 1=confirm.
     in-out property <int> confirm-selected;
     in-out property <[GameSystem]> game-systems;
-    // Scroll offset in logical pixels (0 = left); translates the Home five-tile ring.
+    // Scroll offset in logical pixels (0 = left); translates the Home six-tile ring.
+    in-out property <bool> home-scroll-held;
     in-out property <bool> home-scroll-repeat-active;
     in-out property <int> home-scroll-x;
     in-out property <string> active-system-title;

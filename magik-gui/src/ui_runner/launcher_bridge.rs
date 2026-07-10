@@ -46,6 +46,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
         slint_ui::launcher::GameSystem,
     >::new())));
     bridge.set_home_scroll_repeat_active(false);
+    bridge.set_home_scroll_held(false);
     bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_active_system_count(0);
@@ -402,6 +403,7 @@ pub(super) fn sync_bridge_launcher(
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_home_scroll_held(nav.home_horizontal_held());
     bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active());
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
@@ -502,6 +504,12 @@ pub(super) fn sync_bridge_launcher_light(
         get_selected_index,
         set_selected_index,
         nav.selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_home_scroll_held,
+        set_home_scroll_held,
+        nav.home_horizontal_held()
     );
     set_bridge_if_changed!(
         bridge,
@@ -785,6 +793,7 @@ pub(super) struct LauncherBridgeKey {
     selected: usize,
     scroll_x: i32,
     home_scroll_repeat_active: bool,
+    home_scroll_held: bool,
     settings_focused: bool,
     settings_selected: usize,
     simple_joystick_handling: bool,
@@ -808,6 +817,7 @@ impl LauncherBridgeKey {
             selected: nav.selected,
             scroll_x: nav.scroll_x,
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
+            home_scroll_held: nav.home_horizontal_held(),
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
             simple_joystick_handling: nav.settings.simple_joystick_handling,
@@ -929,12 +939,15 @@ mod tests {
         held.dpad_right = true;
         let start = Instant::now();
         nav.handle_input(&held, start, &catalog);
-        assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
+        let pressed = LauncherBridgeKey::from_nav(&nav);
+        assert!(pressed.home_scroll_held);
+        assert!(!pressed.home_scroll_repeat_active);
         nav.handle_input(&held, start + Duration::from_millis(199), &catalog);
         assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
         nav.handle_input(&held, start + Duration::from_millis(200), &catalog);
 
         let repeating = LauncherBridgeKey::from_nav(&nav);
+        assert!(repeating.home_scroll_held);
         assert!(repeating.home_scroll_repeat_active);
 
         nav.handle_input(
@@ -943,6 +956,7 @@ mod tests {
             &catalog,
         );
         let released = LauncherBridgeKey::from_nav(&nav);
+        assert!(!released.home_scroll_held);
         assert!(!released.home_scroll_repeat_active);
         assert!(repeating != released);
     }
