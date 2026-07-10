@@ -99,6 +99,7 @@ mod preview_state;
 mod runtime_status;
 mod screenshot_transitions;
 mod settings;
+mod spring_animation;
 #[cfg(test)]
 mod test_support;
 mod ui_display;
