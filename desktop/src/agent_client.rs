@@ -426,13 +426,28 @@ pub fn drain_framebuffer_stream(
     host: &str,
     frames: u64,
 ) -> Result<FramebufferStreamDrainStats, AgentError> {
+    drain_framebuffer_stream_until(host, |count, _elapsed| count >= frames)
+}
+
+pub fn drain_framebuffer_stream_for(
+    host: &str,
+    duration: Duration,
+) -> Result<FramebufferStreamDrainStats, AgentError> {
+    drain_framebuffer_stream_until(host, |_count, elapsed| elapsed >= duration)
+}
+
+fn drain_framebuffer_stream_until(
+    host: &str,
+    mut done: impl FnMut(u64, Duration) -> bool,
+) -> Result<FramebufferStreamDrainStats, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
     let (_, mut reader) = request_framebuffer_stream_with_retry(&client)?;
-    let mut latencies = Vec::with_capacity(frames as usize);
+    let mut latencies = Vec::new();
     let mut payload_bytes = 0_u64;
     let mut raw_bytes = 0_u64;
-    while latencies.len() < frames as usize {
+    let started = Instant::now();
+    while !done(latencies.len() as u64, started.elapsed()) {
         let frame_started = Instant::now();
         let (header, payload) = read_frame(&mut reader)
             .map_err(|err| AgentError::Unreachable(format!("read framebuffer stream: {err}")))?;

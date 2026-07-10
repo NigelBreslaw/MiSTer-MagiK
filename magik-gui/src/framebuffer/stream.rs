@@ -70,6 +70,7 @@ struct FrameUpdate {
     geometry: FrameGeometry,
     rect: FrameRect,
     pixels: Vec<Rgb565Pixel>,
+    captured_at_us: u64,
 }
 
 struct FrameJob {
@@ -77,6 +78,7 @@ struct FrameJob {
     rect: FrameRect,
     kind: FrameKind,
     raw: Vec<u8>,
+    captured_at_us: u64,
 }
 
 enum WorkerEvent {
@@ -256,6 +258,7 @@ fn publish_rect(
         geometry,
         rect,
         pixels,
+        captured_at_us: timestamp_us(),
     }) {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(true, Ordering::Release);
@@ -282,7 +285,7 @@ fn is_full_frame(geometry: FrameGeometry, rect: FrameRect) -> bool {
     rect.x == 0 && rect.y == 0 && rect.width == geometry.width && rect.height == geometry.height
 }
 
-fn latest_keyframe_job(state: &ProducerState) -> Option<FrameJob> {
+fn latest_keyframe_job(state: &ProducerState, captured_at_us: u64) -> Option<FrameJob> {
     if !state.has_full_frame_base {
         return None;
     }
@@ -293,6 +296,7 @@ fn latest_keyframe_job(state: &ProducerState) -> Option<FrameJob> {
         FrameKind::Keyframe,
         &state.latest_pixels,
         geometry.stride_pixels as usize,
+        captured_at_us,
     ))
 }
 
@@ -302,6 +306,7 @@ fn frame_job_from_pixels(
     kind: FrameKind,
     pixels: &[Rgb565Pixel],
     stride_pixels: usize,
+    captured_at_us: u64,
 ) -> FrameJob {
     let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, 0, 0);
     FrameJob {
@@ -309,6 +314,7 @@ fn frame_job_from_pixels(
         geometry,
         rect,
         raw,
+        captured_at_us,
     }
 }
 
@@ -349,7 +355,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     || sequence == 0
                     || sequence.is_multiple_of(KEYFRAME_INTERVAL_FRAMES);
                 let job = if force_keyframe {
-                    latest_keyframe_job(&producer_state)
+                    latest_keyframe_job(&producer_state, update.captured_at_us)
                 } else {
                     None
                 }
@@ -360,6 +366,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                         FrameKind::RectDelta,
                         &update.pixels,
                         update.rect.width as usize,
+                        update.captured_at_us,
                     ))
                 });
                 let Some(job) = job else {
@@ -427,7 +434,7 @@ fn write_job(stream: &mut TcpStream, sequence: u64, job: FrameJob) -> io::Result
         kind: job.kind,
         flags: FLAG_LZ4_SIZE_PREPENDED,
         sequence,
-        timestamp_us: timestamp_us(),
+        timestamp_us: job.captured_at_us,
         geometry: job.geometry,
         rect: job.rect,
         raw_bytes: job.raw.len() as u32,
@@ -657,11 +664,13 @@ mod tests {
             geometry,
             rect: FrameRect::full(geometry),
             pixels: vec![Rgb565Pixel(1), Rgb565Pixel(2)],
+            captured_at_us: 1,
         };
         let second = FrameUpdate {
             geometry,
             rect: FrameRect::full(geometry),
             pixels: vec![Rgb565Pixel(3), Rgb565Pixel(4)],
+            captured_at_us: 2,
         };
 
         assert!(queue.push_frame(first));
