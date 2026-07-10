@@ -402,7 +402,7 @@ pub(super) fn sync_bridge_launcher(
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
-    bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active(Instant::now()));
+    bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active());
     bridge.set_home_scroll_x(nav.scroll_x);
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
@@ -455,6 +455,7 @@ pub(super) fn sync_bridge_launcher(
 pub(super) fn sync_bridge_launcher_light(
     app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
+    models: &mut LauncherBridgeModels,
     setup: &SetupNav,
     loading_message: &str,
     loading_detail: &str,
@@ -465,6 +466,7 @@ pub(super) fn sync_bridge_launcher_light(
     defer_selected_preview: bool,
     render_w: usize,
 ) {
+    models.sync_game_system_focus(nav.selected);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
     let active_games_len = active_arcade_games.as_ref().map_or_else(
@@ -505,7 +507,7 @@ pub(super) fn sync_bridge_launcher_light(
         bridge,
         get_home_scroll_repeat_active,
         set_home_scroll_repeat_active,
-        nav.home_horizontal_repeat_active(Instant::now())
+        nav.home_horizontal_repeat_active()
     );
     set_bridge_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
     set_bridge_if_changed!(
@@ -805,7 +807,7 @@ impl LauncherBridgeKey {
             screen: nav.screen,
             selected: nav.selected,
             scroll_x: nav.scroll_x,
-            home_scroll_repeat_active: nav.home_horizontal_repeat_active(Instant::now()),
+            home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             settings_focused: nav.settings_focused,
             settings_selected: nav.settings_selected,
             simple_joystick_handling: nav.settings.simple_joystick_handling,
@@ -925,16 +927,19 @@ mod tests {
         let mut nav = LauncherNav::new();
         let mut held = PadState::default();
         held.dpad_right = true;
-        let now = Instant::now();
-        nav.handle_input(&held, now - Duration::from_millis(1001), &catalog);
-        nav.handle_input(&held, now, &catalog);
+        let start = Instant::now();
+        nav.handle_input(&held, start, &catalog);
+        assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
+        nav.handle_input(&held, start + Duration::from_millis(199), &catalog);
+        assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
+        nav.handle_input(&held, start + Duration::from_millis(200), &catalog);
 
         let repeating = LauncherBridgeKey::from_nav(&nav);
         assert!(repeating.home_scroll_repeat_active);
 
         nav.handle_input(
             &PadState::default(),
-            now + Duration::from_millis(1),
+            start + Duration::from_millis(201),
             &catalog,
         );
         let released = LauncherBridgeKey::from_nav(&nav);
@@ -1032,10 +1037,13 @@ mod tests {
         nav.screen = Screen::Arcade;
         nav.selected = 1;
         let mut preview = PreviewState::new();
+        let mut models = LauncherBridgeModels::default();
+        let rows = models.game_systems(&catalog, 1, 0);
 
         sync_bridge_launcher_light(
             &app,
             &nav,
+            &mut models,
             &SetupNav::new(),
             "",
             "",
@@ -1049,5 +1057,7 @@ mod tests {
 
         assert_eq!(bridge.get_active_system_title().as_str(), "Arcade");
         assert_eq!(bridge.get_active_system_count(), 2);
+        assert!(!rows.row_data(0).expect("first row").focused);
+        assert!(rows.row_data(1).expect("second row").focused);
     }
 }

@@ -709,65 +709,31 @@ mod tests {
         assert_eq!(nav.selected, 1);
         assert_eq!(state.home_repeat_dir, 1);
 
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_millis(1000),
-        );
-        state.advance_if(ran);
-        assert_eq!(nav.selected, 2);
-        assert_eq!(state.home_repeat_dir, 1);
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_millis(1080),
-        );
-        state.advance_if(ran);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(state.home_repeat_dir, -1);
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_millis(1160),
-        );
-        state.advance_if(ran);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(state.home_repeat_dir, -1);
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_millis(2080),
-        );
-        state.advance_if(ran);
-        assert_eq!(nav.selected, 0);
-        assert_eq!(state.home_repeat_dir, -1);
-
-        let ran = launcher_bench_step(
-            LauncherBenchScenario::HomeRepeatHold,
-            &mut nav,
-            &catalog,
-            None,
-            &mut state,
-            t0 + Duration::from_millis(2160),
-        );
-        state.advance_if(ran);
-        assert_eq!(nav.selected, 1);
-        assert_eq!(state.home_repeat_dir, 1);
+        let mut saw_right_edge = false;
+        let mut saw_left_reversal = false;
+        for frame in 1..100 {
+            let previous_dir = state.home_repeat_dir;
+            let previous_selected = nav.selected;
+            let ran = launcher_bench_step(
+                LauncherBenchScenario::HomeRepeatHold,
+                &mut nav,
+                &catalog,
+                None,
+                &mut state,
+                t0 + Duration::from_millis(frame * 16),
+            );
+            state.advance_if(ran);
+            if previous_dir > 0 && state.home_repeat_dir < 0 {
+                assert_eq!(previous_selected, catalog.systems.len() - 1);
+                saw_right_edge = true;
+            }
+            if previous_dir < 0 && state.home_repeat_dir > 0 {
+                assert_eq!(previous_selected, 0);
+                saw_left_reversal = true;
+            }
+        }
+        assert!(saw_right_edge);
+        assert!(saw_left_reversal);
     }
 
     #[test]
