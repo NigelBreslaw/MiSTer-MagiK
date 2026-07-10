@@ -24,10 +24,42 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const SD_DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const SD_LIST_PROTOCOL_UNKNOWN: u8 = 0;
-const SD_LIST_PROTOCOL_V2: u8 = 1;
-const SD_LIST_PROTOCOL_V1: u8 = 2;
-static SD_LIST_PROTOCOL: AtomicU8 = AtomicU8::new(SD_LIST_PROTOCOL_UNKNOWN);
+static SD_LIST_PROTOCOL: SdListProtocolCache = SdListProtocolCache::new();
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdListProtocol {
+    Unknown = 0,
+    V2 = 1,
+    V1 = 2,
+}
+
+struct SdListProtocolCache {
+    state: AtomicU8,
+}
+
+impl SdListProtocolCache {
+    const fn new() -> Self {
+        Self {
+            state: AtomicU8::new(SdListProtocol::Unknown as u8),
+        }
+    }
+
+    fn load(&self) -> SdListProtocol {
+        match self.state.load(Ordering::Acquire) {
+            value if value == SdListProtocol::V2 as u8 => SdListProtocol::V2,
+            value if value == SdListProtocol::V1 as u8 => SdListProtocol::V1,
+            _ => SdListProtocol::Unknown,
+        }
+    }
+
+    fn remember(&self, protocol: SdListProtocol) {
+        self.state.store(protocol as u8, Ordering::Release);
+    }
+}
+
+fn is_unknown_command(error: &AgentError) -> bool {
+    matches!(error, AgentError::Command(message) if message == "unknown cmd")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenSource {
@@ -343,22 +375,22 @@ pub fn fetch_sd_directory(
     let client = AgentClient::new(host.to_string(), token);
     let args = json!({ "path": path, "show_hidden": show_hidden });
     let started = Instant::now();
-    let value = match SD_LIST_PROTOCOL.load(Ordering::Acquire) {
-        SD_LIST_PROTOCOL_V1 => {
+    let value = match SD_LIST_PROTOCOL.load() {
+        SdListProtocol::V1 => {
             client.request_with_read_timeout("sd_list_dir", args, SD_DIRECTORY_REQUEST_TIMEOUT)?
         }
-        SD_LIST_PROTOCOL_UNKNOWN | SD_LIST_PROTOCOL_V2 => {
+        SdListProtocol::Unknown | SdListProtocol::V2 => {
             match client.request_with_read_timeout(
                 "sd_list_dir_v2",
                 args.clone(),
                 SD_DIRECTORY_REQUEST_TIMEOUT,
             ) {
                 Ok(value) => {
-                    SD_LIST_PROTOCOL.store(SD_LIST_PROTOCOL_V2, Ordering::Release);
+                    SD_LIST_PROTOCOL.remember(SdListProtocol::V2);
                     value
                 }
-                Err(AgentError::Command(message)) if message == "unknown cmd" => {
-                    SD_LIST_PROTOCOL.store(SD_LIST_PROTOCOL_V1, Ordering::Release);
+                Err(err) if is_unknown_command(&err) => {
+                    SD_LIST_PROTOCOL.remember(SdListProtocol::V1);
                     client.request_with_read_timeout(
                         "sd_list_dir",
                         args,
@@ -368,7 +400,6 @@ pub fn fetch_sd_directory(
                 Err(err) => return Err(err),
             }
         }
-        _ => unreachable!("invalid SD list protocol state"),
     };
     let mut listing = parse_sd_directory(&value)?;
     listing.round_trip_ms = started.elapsed().as_millis() as u64;
@@ -2062,6 +2093,24 @@ mod tests {
         assert!(
             matches!(default_command, AgentError::Command(message) if message == "agent command failed")
         );
+    }
+
+    #[test]
+    fn sd_list_protocol_cache_remembers_v2_and_unknown_command_fallback() {
+        let cache = SdListProtocolCache::new();
+        assert_eq!(cache.load(), SdListProtocol::Unknown);
+
+        cache.remember(SdListProtocol::V2);
+        assert_eq!(cache.load(), SdListProtocol::V2);
+
+        assert!(is_unknown_command(&AgentError::Command(
+            "unknown cmd".to_string()
+        )));
+        assert!(!is_unknown_command(&AgentError::Command(
+            "permission denied".to_string()
+        )));
+        cache.remember(SdListProtocol::V1);
+        assert_eq!(cache.load(), SdListProtocol::V1);
     }
 
     #[test]

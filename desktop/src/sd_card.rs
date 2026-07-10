@@ -300,6 +300,10 @@ impl SdCardBrowser {
         let path = normalize_ui_path(&self.current_path);
         self.detail_generation = self.detail_generation.saturating_add(1);
         let generation = self.detail_generation;
+        if self.selected_detail.path == path && self.selected_detail.kind == "directory" {
+            self.selected_detail = SdItemDetail::folder_for(&path);
+            return None;
+        }
         if !force {
             if let Some(detail) = self.detail_cache.get(&path).cloned() {
                 self.selected_detail = detail;
@@ -692,6 +696,7 @@ mod tests {
         assert_eq!(detail.kind, "directory");
         assert!(!detail.loading);
         assert_eq!(detail.overview_rows[0].value, "/_Arcade");
+        assert_eq!(browser.begin_detail_fetch_current(true), None);
     }
 
     #[test]
@@ -938,6 +943,7 @@ mod tests {
         let mut current = SdItemDetail::empty();
         current.path = second.path.clone();
         current.title = "MiSTer.ini".to_string();
+        current.kind = "file".to_string();
         browser.apply_detail_result(&second.path, second.generation, Ok(current));
         assert_eq!(browser.selected_detail().title, "MiSTer.ini");
 
