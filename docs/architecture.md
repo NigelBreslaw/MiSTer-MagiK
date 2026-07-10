@@ -143,6 +143,9 @@ Latch-stream policy:
   pointer-walking loop is retained because both tested Rust scalar forms were
   materially slower on the device; there is no runtime decimator selector or
   retained NEON fallback.
+- RGB565 preview fades use their measured scalar row blend. Stable Rust does
+  not expose the ARM NEON cfg used by the former fade implementation, and a
+  byte-exact C NEON probe was 26–29% slower on the Cortex-A9.
 - On macOS the desktop consumes its newest-frame mailbox from a native
   `CADisplayLink`; the producer never schedules catch-up callbacks. Winit redraw
   events are diagnostic-only because Slint may draw directly from its own
