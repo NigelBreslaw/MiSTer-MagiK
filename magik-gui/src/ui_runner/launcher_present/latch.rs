@@ -43,6 +43,9 @@ pub(in crate::ui_runner) trait LatchFrameBuffers {
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
     ) -> Result<usize, String>;
+    fn sync_zero_copy(&self, _slot_index: u8, _rects: &DirtyRectList) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
@@ -50,6 +53,7 @@ pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
     buffer2: PluginHiddenRgb565Framebuffer,
     base1: u32,
     base2: u32,
+    scanout: Option<PluginScanoutRgb565Buffers>,
 }
 
 impl PluginLatchFrameBuffers {
@@ -59,11 +63,21 @@ impl PluginLatchFrameBuffers {
         let buffer2 = open_hidden_buffer(2, width, height, stride_bytes)?;
         let base1 = hidden_buffer_base(&buffer1, 1)?;
         let base2 = hidden_buffer_base(&buffer2, 2)?;
+        let scanout = if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
+            PluginScanoutRgb565Buffers::open(width, height).ok()
+        } else {
+            None
+        };
+        let (base1, base2) = scanout
+            .as_ref()
+            .map(|s| (s.dma_addr(0), s.dma_addr(1)))
+            .unwrap_or((base1, base2));
         Some(Self {
             buffer1,
             buffer2,
             base1,
             base2,
+            scanout,
         })
     }
 }
@@ -109,6 +123,15 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
         buffer
             .copy_rect(cached.pixels(), cached.stride(), rect)
             .map_err(|e| e.to_string())
+    }
+
+    fn sync_zero_copy(&self, slot_index: u8, rects: &DirtyRectList) -> Result<(), String> {
+        if let Some(scanout) = self.scanout.as_ref() {
+            scanout
+                .sync_rects((slot_index - 1) as usize, rects.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -246,7 +269,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
         let mut copied_bytes = 0usize;
+        let zero_copy = cached.scanout_slot() == Some(buffer_index);
         for rect in plan.restore_rects.iter() {
+            if zero_copy {
+                copied_bytes = copied_bytes.saturating_add(rect.width() * rect.rows() as usize * 2);
+                continue;
+            }
             match B::copy_rect(buffer, cached, rect) {
                 Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
                 Err(e) => {
@@ -259,6 +287,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         if let Err(e) = apply_overlays(buffer, plan) {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(e);
+        }
+        if zero_copy {
+            self.buffers
+                .sync_zero_copy(buffer_index, &plan.restore_rects)?;
         }
 
         let sequence = self.sequence;

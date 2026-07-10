@@ -67,8 +67,9 @@ use mister_magik_fb::framebuffer::target::{
     DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
-    format::rgb565_stride_bytes, hidden::HiddenRgb565BufferIndex,
-    plugin_probe::PluginHiddenRgb565Framebuffer,
+    format::rgb565_stride_bytes,
+    hidden::HiddenRgb565BufferIndex,
+    plugin_probe::{PluginHiddenRgb565Framebuffer, PluginScanoutRgb565Buffers},
 };
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;
@@ -324,7 +325,13 @@ pub fn run_ui(f: &mut Fpga) {
         return;
     }
 
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    let window = MinimalSoftwareWindow::new(
+        if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
+            RepaintBufferType::SwappedBuffers
+        } else {
+            RepaintBufferType::ReusedBuffer
+        },
+    );
     let animation_clock = AnimationClock::from_env();
     slint::platform::set_platform(Box::new(MisterPlatform {
         window: window.clone(),

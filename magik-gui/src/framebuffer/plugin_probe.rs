@@ -12,9 +12,156 @@ use std::io;
 use std::os::unix::io::AsRawFd;
 
 pub const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
+pub const PLUGIN_SCANOUT_DEVICE: &str = "/dev/mister-magik-scanout";
 pub const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
 pub const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_HIDDEN_SLOT_FRAME_BYTES: usize = 960 * 540 * 2;
+
+const SCANOUT_SLOT_COUNT: usize = 2;
+const SCANOUT_MAX_RANGES: usize = 64;
+const SCANOUT_GET_CAPS: libc::c_ulong = 0x80184d20;
+const SCANOUT_ACQUIRE_CPU: libc::c_ulong = 0x40044d21;
+const SCANOUT_SYNC_DEVICE: libc::c_ulong = 0x42084d22;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ScanoutCaps {
+    abi_version: u32,
+    slot_count: u32,
+    slot_bytes: u32,
+    mmap_stride: u32,
+    dma_addr: [u32; SCANOUT_SLOT_COUNT],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ScanoutRange {
+    offset: u32,
+    length: u32,
+}
+
+#[repr(C)]
+struct ScanoutSync {
+    slot: u32,
+    range_count: u32,
+    ranges: [ScanoutRange; SCANOUT_MAX_RANGES],
+}
+
+pub struct PluginScanoutRgb565Buffers {
+    device: File,
+    maps: [*mut Rgb565Pixel; SCANOUT_SLOT_COUNT],
+    map_len: usize,
+    frame_pixels: usize,
+    stride_pixels: usize,
+    dma_addr: [u32; SCANOUT_SLOT_COUNT],
+}
+
+impl PluginScanoutRgb565Buffers {
+    pub fn open(width: usize, height: usize) -> io::Result<Self> {
+        let device = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(PLUGIN_SCANOUT_DEVICE)?;
+        let mut caps = ScanoutCaps::default();
+        if unsafe { libc::ioctl(device.as_raw_fd(), SCANOUT_GET_CAPS, &mut caps) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let frame_pixels = width
+            .checked_mul(height)
+            .ok_or_else(|| io::Error::other("scanout geometry overflow"))?;
+        let frame_bytes = frame_pixels
+            .checked_mul(2)
+            .ok_or_else(|| io::Error::other("scanout geometry overflow"))?;
+        if caps.abi_version != 1 || caps.slot_count != 2 || frame_bytes > caps.slot_bytes as usize {
+            return Err(io::Error::other("unsupported scanout capabilities"));
+        }
+        let mut maps: [*mut Rgb565Pixel; SCANOUT_SLOT_COUNT] =
+            [std::ptr::null_mut(); SCANOUT_SLOT_COUNT];
+        for (slot, map) in maps.iter_mut().enumerate() {
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    frame_bytes,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    device.as_raw_fd(),
+                    (slot * caps.mmap_stride as usize) as libc::off_t,
+                )
+            };
+            if ptr == libc::MAP_FAILED {
+                for prior in maps.iter().take(slot) {
+                    unsafe {
+                        libc::munmap((*prior).cast(), frame_bytes);
+                    }
+                }
+                return Err(io::Error::last_os_error());
+            }
+            *map = ptr.cast();
+        }
+        Ok(Self {
+            device,
+            maps,
+            map_len: frame_bytes,
+            frame_pixels,
+            stride_pixels: width,
+            dma_addr: caps.dma_addr,
+        })
+    }
+
+    pub fn dma_addr(&self, slot: usize) -> u32 {
+        self.dma_addr[slot]
+    }
+    pub fn stride_pixels(&self) -> usize {
+        self.stride_pixels
+    }
+    pub fn pixels(&self, slot: usize) -> &[Rgb565Pixel] {
+        unsafe { std::slice::from_raw_parts(self.maps[slot], self.frame_pixels) }
+    }
+    pub fn pixels_mut(&mut self, slot: usize) -> &mut [Rgb565Pixel] {
+        unsafe { std::slice::from_raw_parts_mut(self.maps[slot], self.frame_pixels) }
+    }
+    pub fn acquire(&self, slot: usize) -> io::Result<()> {
+        let value = slot as u32;
+        if unsafe { libc::ioctl(self.device.as_raw_fd(), SCANOUT_ACQUIRE_CPU, &value) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    pub fn sync_rects(
+        &self,
+        slot: usize,
+        rects: &[crate::framebuffer::target::DirtyRect],
+    ) -> io::Result<()> {
+        let mut request = ScanoutSync {
+            slot: slot as u32,
+            range_count: 0,
+            ranges: [ScanoutRange::default(); SCANOUT_MAX_RANGES],
+        };
+        for rect in rects.iter().take(SCANOUT_MAX_RANGES) {
+            let start = (rect.y0 * self.stride_pixels + rect.x0) * 2;
+            let end = ((rect.y1 - 1) * self.stride_pixels + rect.x1) * 2;
+            request.ranges[request.range_count as usize] = ScanoutRange {
+                offset: start as u32,
+                length: (end - start) as u32,
+            };
+            request.range_count += 1;
+        }
+        if unsafe { libc::ioctl(self.device.as_raw_fd(), SCANOUT_SYNC_DEVICE, &request) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PluginScanoutRgb565Buffers {
+    fn drop(&mut self) {
+        for map in self.maps {
+            unsafe {
+                libc::munmap(map.cast(), self.map_len);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PluginProbeHeader {
