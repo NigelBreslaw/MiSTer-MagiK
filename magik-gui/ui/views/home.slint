@@ -10,17 +10,7 @@ export component HomeGrid inherits Rectangle {
     property <length> content-width: MisterBridge.game-systems.length * tile-width
         + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
-    property <length> animated-scroll-x: scroll-x;
-    property <int> first-visible-index: floor(animated-scroll-x / tile-pitch);
-    property <duration> scroll-duration: MisterBridge.home-scroll-repeat-active
-        ? 0ms : (MisterBridge.home-scroll-held ? 200ms : 640ms);
-    property <easing> scroll-easing: MisterBridge.home-scroll-repeat-active
-        ? Easing.linear
-        : (MisterBridge.home-scroll-held
-            ? cubic-bezier(0.42, 0.0, 0.70, 0.583)
-            : cubic-bezier(0.42, 0.0, 0.58, 1.0));
-
-    animate animated-scroll-x { duration: scroll-duration; easing: scroll-easing; }
+    property <int> first-visible-index: floor(scroll-x / tile-pitch);
 
     background: transparent;
 
@@ -72,7 +62,7 @@ export component HomeGrid inherits Rectangle {
                 clip: true;
 
                 Rectangle {
-                    x: -root.animated-scroll-x;
+                    x: -root.scroll-x;
                     width: root.content-width;
                     height: parent.height;
                     background: transparent;

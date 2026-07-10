@@ -9,6 +9,7 @@ use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::library_db;
 use crate::settings::MagikSettings;
+use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::{
     screenshot_reset_deletes_filename, DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
 };
@@ -26,8 +27,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const HOME_SCROLL_HOLD_DELAY: Duration = Duration::from_millis(200);
-/// The launcher is paced at 60 Hz, so 24 logical pixels per rendered frame is 1440px/s.
-const HOME_SCROLL_PX_PER_FRAME: i32 = 24;
+const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
+const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
 
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
@@ -468,6 +469,7 @@ pub struct LauncherNav {
     game_list_memory: HashMap<String, GameListMemory>,
     repeat: RepeatNav,
     home_scroll: HomeScrollState,
+    home_scroll_animation: SpringAnimation,
     prev: PadState,
 }
 
@@ -475,8 +477,11 @@ pub struct LauncherNav {
 struct HomeScrollState {
     held_dir: i32,
     hold_started_at: Option<Instant>,
+    last_frame_at: Option<Instant>,
     active: bool,
-    cursor_px: i32,
+    cursor_px: f64,
+    motion_velocity: f64,
+    settle_direction: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -653,6 +658,7 @@ impl LauncherNav {
             game_list_memory: HashMap::new(),
             repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
+            home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::apple_smooth()),
             prev: PadState::default(),
         }
     }
@@ -700,6 +706,7 @@ impl LauncherNav {
         }
         if self.settings_focused {
             self.home_scroll = HomeScrollState::default();
+            self.home_scroll_animation.snap_to(self.scroll_x as f64);
             if rising(now.btn_a, self.prev.btn_a) {
                 self.settings_selected = 0;
                 self.screen = Screen::Settings;
@@ -709,13 +716,16 @@ impl LauncherNav {
 
         if system_count == 0 {
             self.home_scroll = HomeScrollState::default();
+            self.scroll_x = 0;
+            self.home_scroll_animation.snap_to(0.0);
             return None;
         }
 
         if self.selected >= system_count {
             self.selected = system_count - 1;
             keep_home_visible(self.selected, &mut self.scroll_x, system_count);
-            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
+            self.home_scroll_animation.snap_to(self.scroll_x as f64);
+            self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
         }
         self.update_home_scroll(now, frame_now, system_count);
 
@@ -734,34 +744,81 @@ impl LauncherNav {
     }
 
     fn update_home_scroll(&mut self, now: &PadState, frame_now: Instant, count: usize) {
+        let delta = self
+            .home_scroll
+            .last_frame_at
+            .map_or(Duration::ZERO, |previous| {
+                frame_now.saturating_duration_since(previous)
+            });
+        self.home_scroll.last_frame_at = Some(frame_now);
+
         let dir = i32::from(now.dpad_right) - i32::from(now.dpad_left);
         let previous_dir = i32::from(self.prev.dpad_right) - i32::from(self.prev.dpad_left);
         if dir == 0 {
+            let settle_direction = if previous_dir != 0 {
+                previous_dir
+            } else {
+                self.home_scroll.settle_direction
+            };
             if previous_dir != 0 && self.home_scroll.active {
-                self.scroll_x = home_snapped_scroll(self.scroll_x, count, previous_dir);
+                let target = home_directional_spring_target(
+                    self.home_scroll_animation.value(),
+                    self.home_scroll_animation.velocity(),
+                    count,
+                    previous_dir,
+                    self.home_scroll_animation
+                        .configuration()
+                        .angular_frequency(),
+                );
+                retarget_home_spring_monotonically(&mut self.home_scroll_animation, target);
             }
             self.home_scroll = HomeScrollState {
-                cursor_px: self.selected as i32 * home_tile_pitch(),
+                last_frame_at: Some(frame_now),
+                cursor_px: self.selected as f64 * home_tile_pitch() as f64,
+                settle_direction,
                 ..HomeScrollState::default()
             };
+            self.home_scroll_animation.advance(delta);
+            clamp_home_spring_at_target(
+                &mut self.home_scroll_animation,
+                self.home_scroll.settle_direction,
+            );
+            self.scroll_x = self
+                .home_scroll_animation
+                .value()
+                .round()
+                .clamp(0.0, home_max_scroll(count) as f64) as i32;
             return;
         }
 
         if dir != previous_dir {
+            if (self.home_scroll_animation.value() - self.scroll_x as f64).abs() > 1.0 {
+                self.home_scroll_animation.snap_to(self.scroll_x as f64);
+            }
             self.home_scroll = HomeScrollState {
                 held_dir: dir,
                 hold_started_at: Some(frame_now),
+                last_frame_at: Some(frame_now),
                 active: false,
-                cursor_px: self.selected as i32 * home_tile_pitch(),
+                cursor_px: self.selected as f64 * home_tile_pitch() as f64,
+                motion_velocity: self.home_scroll_animation.velocity(),
+                settle_direction: 0,
             };
             if dir < 0 && self.selected > 0 {
                 self.selected -= 1;
             } else if dir > 0 && self.selected + 1 < count {
                 self.selected += 1;
             }
-            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
-            keep_home_visible(self.selected, &mut self.scroll_x, count);
+            self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
+            let mut target = self.home_scroll_animation.target().round() as i32;
+            keep_home_visible(self.selected, &mut target, count);
+            self.home_scroll_animation.set_target(target as f64);
             return;
+        }
+
+        if !self.home_scroll.active {
+            self.home_scroll_animation.advance(delta);
+            self.scroll_x = self.home_scroll_animation.value().round() as i32;
         }
 
         if !self.home_scroll.active
@@ -770,21 +827,39 @@ impl LauncherNav {
             })
         {
             self.home_scroll.active = true;
-            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
+            self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
+            self.home_scroll.motion_velocity = self.home_scroll_animation.velocity();
         }
         if !self.home_scroll.active {
             return;
         }
 
-        let max_cursor = count.saturating_sub(1) as i32 * home_tile_pitch();
-        self.home_scroll.cursor_px = (self.home_scroll.cursor_px
-            + self.home_scroll.held_dir * HOME_SCROLL_PX_PER_FRAME)
-            .clamp(0, max_cursor);
-        self.scroll_x = (self.scroll_x + self.home_scroll.held_dir * HOME_SCROLL_PX_PER_FRAME)
-            .clamp(0, home_max_scroll(count));
-        self.selected = ((self.home_scroll.cursor_px + home_tile_pitch() / 2) / home_tile_pitch())
-            .clamp(0, count.saturating_sub(1) as i32) as usize;
-        keep_home_visible(self.selected, &mut self.scroll_x, count);
+        let seconds = delta.as_secs_f64().clamp(0.0, 0.1);
+        let desired_velocity = self.home_scroll.held_dir as f64 * HOME_SCROLL_SPEED_PX_PER_SECOND;
+        let velocity_delta = desired_velocity - self.home_scroll.motion_velocity;
+        let max_velocity_delta = HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED * seconds;
+        let motion_velocity = self.home_scroll.motion_velocity
+            + velocity_delta.clamp(-max_velocity_delta, max_velocity_delta);
+        self.home_scroll.motion_velocity = motion_velocity;
+        let max_scroll = home_max_scroll(count) as f64;
+        let value =
+            (self.home_scroll_animation.value() + motion_velocity * seconds).clamp(0.0, max_scroll);
+        let velocity = if value == 0.0 || value == max_scroll {
+            0.0
+        } else {
+            motion_velocity
+        };
+        self.home_scroll_animation.set_state(value, velocity);
+        self.home_scroll_animation.set_target(value);
+        self.scroll_x = value.round() as i32;
+
+        let max_cursor = count.saturating_sub(1) as f64 * home_tile_pitch() as f64;
+        self.home_scroll.cursor_px =
+            (self.home_scroll.cursor_px + motion_velocity * seconds).clamp(0.0, max_cursor);
+        self.selected = ((self.home_scroll.cursor_px + home_tile_pitch() as f64 / 2.0)
+            / home_tile_pitch() as f64)
+            .floor()
+            .clamp(0.0, count.saturating_sub(1) as f64) as usize;
     }
 
     fn handle_arcade(
@@ -1874,16 +1949,56 @@ fn home_tile_pitch() -> i32 {
     HOME_TILE_WIDTH + HOME_TILE_GAP
 }
 
-fn home_snapped_scroll(scroll_x: i32, count: usize, direction: i32) -> i32 {
-    let pitch = home_tile_pitch();
-    let snapped = if direction > 0 {
-        ((scroll_x + pitch - 1) / pitch) * pitch
-    } else if direction < 0 {
-        (scroll_x / pitch) * pitch
+fn home_directional_spring_target(
+    value: f64,
+    velocity: f64,
+    count: usize,
+    direction: i32,
+    angular_frequency: f64,
+) -> f64 {
+    let pitch = home_tile_pitch() as f64;
+    let max_scroll = home_max_scroll(count) as f64;
+    if direction == 0 {
+        return value.clamp(0.0, max_scroll);
+    }
+
+    // A critically damped spring remains monotonic when the remaining distance
+    // is at least |velocity| / angular_frequency. Advance by another pitch when
+    // needed instead of allowing a release settle to cross and recoil.
+    let minimum_distance = velocity.abs() / angular_frequency.max(f64::EPSILON);
+    let mut target = if direction > 0 {
+        (value / pitch).ceil() * pitch
     } else {
-        scroll_x
+        (value / pitch).floor() * pitch
     };
-    snapped.clamp(0, home_max_scroll(count))
+    if direction > 0 {
+        while target - value < minimum_distance && target < max_scroll {
+            target += pitch;
+        }
+    } else {
+        while value - target < minimum_distance && target > 0.0 {
+            target -= pitch;
+        }
+    }
+    target.clamp(0.0, max_scroll)
+}
+
+fn clamp_home_spring_at_target(animation: &mut SpringAnimation, direction: i32) {
+    let crossed = (direction > 0 && animation.value() >= animation.target())
+        || (direction < 0 && animation.value() <= animation.target());
+    if crossed {
+        animation.snap_to(animation.target());
+    }
+}
+
+fn retarget_home_spring_monotonically(animation: &mut SpringAnimation, target: f64) {
+    animation.set_target(target);
+    let distance = target - animation.value();
+    let max_velocity = distance.abs() * animation.configuration().angular_frequency();
+    let velocity = animation.velocity();
+    if velocity.signum() == distance.signum() && velocity.abs() > max_velocity {
+        animation.set_state(animation.value(), distance.signum() * max_velocity);
+    }
 }
 
 fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
@@ -3012,7 +3127,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_home_hold_scrolls_at_constant_frame_speed_and_keeps_focus_visible() {
+    fn launcher_home_hold_accelerates_to_constant_speed_then_spring_settles_forward() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..10)
@@ -3033,14 +3148,14 @@ mod tests {
         assert!(!nav.home_horizontal_repeat_active());
 
         let mut previous_scroll = nav.scroll_x;
-        for frame in 0..20 {
+        for frame in 0..30 {
             nav.handle_input(
                 &held_right,
                 start + Duration::from_millis(200 + frame * 16),
                 &catalog,
             );
             assert!(nav.home_horizontal_repeat_active());
-            assert_eq!(nav.scroll_x - previous_scroll, HOME_SCROLL_PX_PER_FRAME);
+            assert!(nav.scroll_x >= previous_scroll);
             previous_scroll = nav.scroll_x;
 
             let selected_left = nav.selected as i32 * home_tile_pitch();
@@ -3048,16 +3163,32 @@ mod tests {
             assert!(selected_left >= nav.scroll_x);
             assert!(selected_right <= nav.scroll_x + HOME_LIST_VISIBLE_W);
         }
+        assert!(
+            (nav.home_scroll_animation.velocity() - HOME_SCROLL_SPEED_PX_PER_SECOND).abs() < 1e-9
+        );
 
         nav.handle_input(
             &PadState::default(),
-            start + Duration::from_millis(520),
+            start + Duration::from_millis(680),
             &catalog,
         );
         assert!(!nav.home_horizontal_repeat_active());
-        assert_eq!(nav.scroll_x, home_snapped_scroll(previous_scroll, 10, 1));
         assert!(nav.scroll_x >= previous_scroll);
-        assert_eq!(nav.scroll_x % home_tile_pitch(), 0);
+        let target = nav.home_scroll_animation.target();
+        assert!(target >= nav.scroll_x as f64);
+
+        let mut previous = nav.scroll_x;
+        for frame in 1..=120 {
+            nav.handle_input(
+                &PadState::default(),
+                start + Duration::from_millis(680 + frame * 16),
+                &catalog,
+            );
+            assert!(nav.scroll_x >= previous);
+            previous = nav.scroll_x;
+        }
+        assert!(nav.home_scroll_animation.is_settled());
+        assert_eq!(nav.scroll_x as f64, target);
     }
 
     #[test]
@@ -3078,15 +3209,35 @@ mod tests {
         keep_home_visible(9, &mut scroll_x, 10);
         assert_eq!(scroll_x, home_max_scroll(10));
 
-        let between_tiles = 2 * home_tile_pitch() + 40;
+        let between_tiles = (2 * home_tile_pitch() + 40) as f64;
+        let omega = SpringConfiguration::apple_smooth().angular_frequency();
         assert_eq!(
-            home_snapped_scroll(between_tiles, 10, 1),
-            3 * home_tile_pitch()
+            home_directional_spring_target(between_tiles, 0.0, 10, 1, omega),
+            (3 * home_tile_pitch()) as f64
         );
         assert_eq!(
-            home_snapped_scroll(between_tiles, 10, -1),
-            2 * home_tile_pitch()
+            home_directional_spring_target(between_tiles, 0.0, 10, -1, omega),
+            (2 * home_tile_pitch()) as f64
         );
+    }
+
+    #[test]
+    fn home_release_at_end_caps_velocity_and_never_recoils() {
+        let target = home_max_scroll(10) as f64;
+        let mut spring = SpringAnimation::new(target - 10.0, SpringConfiguration::apple_smooth());
+        spring.set_state(target - 10.0, HOME_SCROLL_SPEED_PX_PER_SECOND);
+        retarget_home_spring_monotonically(&mut spring, target);
+
+        let mut previous = spring.value();
+        for _ in 0..120 {
+            spring.advance(Duration::from_secs_f64(1.0 / 60.0));
+            clamp_home_spring_at_target(&mut spring, 1);
+            assert!(spring.value() >= previous);
+            assert!(spring.value() <= target);
+            previous = spring.value();
+        }
+        assert!(spring.is_settled());
+        assert_eq!(spring.value(), target);
     }
 
     #[test]

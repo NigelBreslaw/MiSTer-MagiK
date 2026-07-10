@@ -153,10 +153,11 @@ the reporting surface without claiming a faster renderer.
 Use `home-repeat-hold` when measuring the experience of holding left or right
 on the Home system row. The scenario feeds held d-pad input through the normal
 launcher input path, so it includes the real motion behavior: an immediate
-single-tap move, a 200ms hold threshold, then frame-driven motion at 24 logical
-pixels per rendered frame (1440px/s at 60Hz). At either end of the system list
-it reverses direction, which keeps long traces exercising both left and right
-movement.
+single-tap move using the reusable Apple-compatible critically damped spring, a
+200ms hold threshold, acceleration into frame-delta-driven motion at 1440px/s,
+then velocity-preserving spring settling onto a directional tile boundary after
+release. At either end of the system list it reverses direction, which keeps
+long traces exercising both left and right movement.
 
 ```bash
 scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --launcher-scenario home-repeat-hold --ui-scope launcher
@@ -171,8 +172,10 @@ scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
 
 The default gate follows the production renderer,
 `fpga-vblank-latch-hidden`, and collects passive `fpga-latch-report` samples
-before and after the run. To force the legacy fallback path for comparison, pass
-`--present-backend fb0-dirty`:
+before and after the run. Home visual and performance acceptance must use this
+latch backend. The legacy `fb0-dirty` path is recovery-only and may tear during
+horizontal motion; do not use it for visual conclusions. It can be forced only
+for an explicitly labeled fallback diagnostic comparison:
 
 ```bash
 scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build --present-backend fb0-dirty

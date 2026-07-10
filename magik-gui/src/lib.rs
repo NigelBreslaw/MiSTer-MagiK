@@ -21,6 +21,7 @@ pub mod raw565;
 pub mod runtime_status;
 pub mod settings;
 pub mod setup_nav;
+pub mod spring_animation;
 #[cfg(test)]
 mod test_support;
 #[cfg(mister_experiments)]
