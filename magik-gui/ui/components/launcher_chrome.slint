@@ -4,11 +4,12 @@ export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
     in property <bool> focused;
+    in property <bool> flat-focus-style: false;
 
-    border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
+    border-width: flat-focus-style ? 2px : (focused ? 2px : 1px);
+    border-color: flat-focus-style ? #315a55 : (focused ? #06d6a0 : #5c4a72);
     border-radius: 0px;
-    background: focused ? #2a2236 : #1e1828;
+    background: flat-focus-style ? #1e1828 : (focused ? #2a2236 : #1e1828);
 
     VerticalLayout {
         padding: 16px;
@@ -20,13 +21,18 @@ export component LauncherTile inherits Rectangle {
             color: focused ? #06d6a0 : #e8e0f0;
             font-size: 16px;
             horizontal-alignment: center;
+
+            animate color { duration: 100ms; easing: Easing.ease-in-out; }
         }
 
         if subtitle != "" : Text {
             text: subtitle;
             color: #9080a8;
+            opacity: flat-focus-style ? (focused ? 1.0 : 0.0) : 1.0;
             font-size: 8px;
             horizontal-alignment: center;
+
+            animate opacity { duration: 100ms; easing: Easing.ease-in-out; }
         }
     }
 }

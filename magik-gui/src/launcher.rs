@@ -629,6 +629,10 @@ impl Default for LauncherNav {
 }
 
 impl LauncherNav {
+    pub fn home_horizontal_held(&self) -> bool {
+        self.screen == Screen::Home && !self.settings_focused && self.home_scroll.held_dir != 0
+    }
+
     pub fn home_horizontal_repeat_active(&self) -> bool {
         self.screen == Screen::Home && !self.settings_focused && self.home_scroll.active
     }
@@ -733,6 +737,9 @@ impl LauncherNav {
         let dir = i32::from(now.dpad_right) - i32::from(now.dpad_left);
         let previous_dir = i32::from(self.prev.dpad_right) - i32::from(self.prev.dpad_left);
         if dir == 0 {
+            if previous_dir != 0 && self.home_scroll.active {
+                self.scroll_x = home_snapped_scroll(self.scroll_x, count, previous_dir);
+            }
             self.home_scroll = HomeScrollState {
                 cursor_px: self.selected as i32 * home_tile_pitch(),
                 ..HomeScrollState::default()
@@ -1867,14 +1874,27 @@ fn home_tile_pitch() -> i32 {
     HOME_TILE_WIDTH + HOME_TILE_GAP
 }
 
+fn home_snapped_scroll(scroll_x: i32, count: usize, direction: i32) -> i32 {
+    let pitch = home_tile_pitch();
+    let snapped = if direction > 0 {
+        ((scroll_x + pitch - 1) / pitch) * pitch
+    } else if direction < 0 {
+        (scroll_x / pitch) * pitch
+    } else {
+        scroll_x
+    };
+    snapped.clamp(0, home_max_scroll(count))
+}
+
 fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
     let visible_left = selected as i32 * home_tile_pitch();
     let visible_right = visible_left + HOME_TILE_WIDTH;
+    let next_tile_preview = HOME_TILE_GAP + (HOME_TILE_WIDTH + 1) / 2;
     if visible_left < *scroll_x {
         *scroll_x = visible_left;
     }
-    if visible_right > *scroll_x + HOME_LIST_VISIBLE_W {
-        *scroll_x = visible_right - HOME_LIST_VISIBLE_W;
+    if visible_right + next_tile_preview > *scroll_x + HOME_LIST_VISIBLE_W {
+        *scroll_x = visible_right + next_tile_preview - HOME_LIST_VISIBLE_W;
     }
     *scroll_x = (*scroll_x).clamp(0, home_max_scroll(count));
 }
@@ -3035,7 +3055,38 @@ mod tests {
             &catalog,
         );
         assert!(!nav.home_horizontal_repeat_active());
-        assert_eq!(nav.scroll_x, previous_scroll);
+        assert_eq!(nav.scroll_x, home_snapped_scroll(previous_scroll, 10, 1));
+        assert!(nav.scroll_x >= previous_scroll);
+        assert_eq!(nav.scroll_x % home_tile_pitch(), 0);
+    }
+
+    #[test]
+    fn home_viewport_shows_four_tiles_and_half_of_the_next_until_the_end() {
+        let half_tile = (HOME_TILE_WIDTH + 1) / 2;
+        assert_eq!(
+            4 * HOME_TILE_WIDTH + 4 * HOME_TILE_GAP + half_tile,
+            HOME_LIST_VISIBLE_W
+        );
+
+        let mut scroll_x = 0;
+        keep_home_visible(4, &mut scroll_x, 10);
+        assert_eq!(scroll_x, home_tile_pitch());
+
+        let next_tile_left = 5 * home_tile_pitch();
+        assert_eq!(scroll_x + HOME_LIST_VISIBLE_W - next_tile_left, half_tile);
+
+        keep_home_visible(9, &mut scroll_x, 10);
+        assert_eq!(scroll_x, home_max_scroll(10));
+
+        let between_tiles = 2 * home_tile_pitch() + 40;
+        assert_eq!(
+            home_snapped_scroll(between_tiles, 10, 1),
+            3 * home_tile_pitch()
+        );
+        assert_eq!(
+            home_snapped_scroll(between_tiles, 10, -1),
+            2 * home_tile_pitch()
+        );
     }
 
     #[test]
