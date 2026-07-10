@@ -105,6 +105,8 @@ run_profile() {
     --stream-scale "$scale" --stream-simd auto
 }
 
+echo "==> Build release null-drain benchmark"
+cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release
 echo "==> Build production Skia desktop benchmark"
 cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release \
   --no-default-features --features compiled-ui,skia-renderer
