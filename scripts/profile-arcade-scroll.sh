@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -75,6 +75,7 @@ entry_input_script="${MISTER_ARCADE_ENTRY_INPUT_SCRIPT:-}"
 frame_pacing_p99_work_us="${MISTER_ARCADE_SCROLL_P99_WORK_US:-14500}"
 frame_pacing_p99_wall_us="${MISTER_ARCADE_SCROLL_P99_WALL_US:-16000}"
 frame_pacing_max_wall_us="${MISTER_ARCADE_SCROLL_MAX_WALL_US:-16667}"
+frame_pacing_policy="auto"
 self_test="0"
 positionals=()
 
@@ -144,6 +145,11 @@ while [[ $# -gt 0 ]]; do
     --stream-simd)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-simd needs auto or scalar" >&2; usage >&2; exit 2; fi
       stream_simd="$2"
+      shift 2
+      ;;
+    --frame-pacing-policy)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--frame-pacing-policy needs auto, strict, or vsync-integrity" >&2; usage >&2; exit 2; fi
+      frame_pacing_policy="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -218,6 +224,10 @@ esac
 case "$stream_simd" in
   auto|scalar) ;;
   *) echo "--stream-simd must be auto or scalar" >&2; exit 2 ;;
+esac
+case "$frame_pacing_policy" in
+  auto|strict|vsync-integrity) ;;
+  *) echo "--frame-pacing-policy must be auto, strict, or vsync-integrity" >&2; exit 2 ;;
 esac
 case "$catalog_refresh" in
   default|off|force) ;;
@@ -366,8 +376,8 @@ PY
 }
 
 check_frame_pacing_gate() {
-  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5" gate_scenario="${6:-}"
-  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario"
+  local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5" gate_scenario="${6:-}" policy="${7:-auto}"
+  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario" "$policy"
 }
 
 gate_arcade_entry_trace() {
@@ -542,6 +552,7 @@ EOF
     exit 1
   fi
   check_frame_pacing_gate self-human-turbo-wall "$tmpdir/pacing-wall.tsv" 14500 16000 16667 human-turbo-hold >/dev/null
+  check_frame_pacing_gate self-stream-turbo-wall "$tmpdir/pacing-wall.tsv" 14500 16000 16667 turbo-hold vsync-integrity >/dev/null
   cat >"$tmpdir/pacing-human-turbo-wall.tsv" <<'EOF'
 frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_source	vsync_miss_streak
 31	15000	1000	200	1200	900	vsync	0
@@ -862,6 +873,6 @@ if [[ "$latch_drop_status" -ne 0 ]]; then
   exit "$latch_drop_status"
 fi
 echo
-check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario"
+check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario" "$frame_pacing_policy"
 echo
 check_preview_exact_gate "$label" "$local_tsv"
