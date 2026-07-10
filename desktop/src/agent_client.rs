@@ -220,6 +220,7 @@ pub struct LauncherTelemetry {
     pub idle: bool,
     pub fps: String,
     pub preview_cache_state: String,
+    pub ui_thread_cpu: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1155,6 +1156,9 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
                 .map(|fps| format!("{fps:.1} fps"))
                 .unwrap_or_else(|| "- fps".to_string()),
             preview_cache_state: str_at(&value, "/launcher/preview_cache_state", "unknown"),
+            ui_thread_cpu: value
+                .pointer("/launcher/ui_thread_cpu")
+                .and_then(Value::as_u64),
         },
         magik: process_telemetry_at(&value, "/processes/mister-magik-fb"),
         main: process_telemetry_at(&value, "/processes/MiSTer_MagiK"),
@@ -2058,6 +2062,16 @@ mod tests {
         assert_eq!(sample.magik.pids, vec![42]);
         assert_eq!(sample.network.tx_bytes_per_sec, 456);
         assert_eq!(sample.storage.available_pct, 50.0);
+    }
+
+    #[test]
+    fn parse_device_telemetry_sample_keeps_the_sampled_ui_thread_cpu() {
+        let sample = parse_device_telemetry_sample(
+            r#"{"schema":"mister-magik-device-telemetry-v1","launcher":{"ui_thread_cpu":1}}"#,
+        )
+        .expect("telemetry should parse");
+
+        assert_eq!(sample.launcher.ui_thread_cpu, Some(1));
     }
 
     #[test]

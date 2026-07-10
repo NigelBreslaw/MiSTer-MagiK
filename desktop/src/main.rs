@@ -730,6 +730,7 @@ struct RealtimeViewState {
     available_memory_pct: f64,
     storage_used_pct: f64,
     frame_budget_pct: f64,
+    ui_thread_cpu: Option<u64>,
     cores: Vec<agent_client::CpuCoreTelemetry>,
     cpu_history: Vec<RealtimeChartPoint>,
     cpu0_path: String,
@@ -1089,6 +1090,7 @@ fn realtime_view_from_history(
             available_memory_pct: 0.0,
             storage_used_pct: 0.0,
             frame_budget_pct: 0.0,
+            ui_thread_cpu: None,
             cores: Vec::new(),
             cpu_history,
             cpu0_path,
@@ -1199,6 +1201,7 @@ fn realtime_view_from_history(
         available_memory_pct: sample.memory.available_pct,
         storage_used_pct,
         frame_budget_pct,
+        ui_thread_cpu: sample.launcher.ui_thread_cpu,
         cores: sample.cores.clone(),
         cpu_history,
         cpu0_path,
@@ -4647,6 +4650,11 @@ fn apply_live_realtime_view(
         "frame-budget-pct",
         Value::Number(view.frame_budget_pct),
     );
+    set(
+        instance,
+        "ui-thread-cpu",
+        Value::Number(view.ui_thread_cpu.map_or(-1.0, |cpu| cpu as f64)),
+    );
 
     set(
         instance,
@@ -4862,6 +4870,11 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
     state.set_available_memory_pct(view.available_memory_pct as f32);
     state.set_storage_used_pct(view.storage_used_pct as f32);
     state.set_frame_budget_pct(view.frame_budget_pct as f32);
+    state.set_ui_thread_cpu(
+        view.ui_thread_cpu
+            .and_then(|cpu| i32::try_from(cpu).ok())
+            .unwrap_or(-1),
+    );
     state.set_cpu_cores(ModelRc::new(VecModel::from(
         view.cores
             .iter()
@@ -6802,6 +6815,7 @@ mod tests {
                 idle: false,
                 fps: "59.9 fps".to_string(),
                 preview_cache_state: "exact".to_string(),
+                ui_thread_cpu: Some(0),
             },
             magik: agent_client::ProcessTelemetry {
                 pids: vec![42],
@@ -6851,6 +6865,8 @@ mod tests {
         assert_eq!(view.cpu_history.len(), 1);
         assert_eq!(view.cpu0_path, "M 100.00 87.50");
         assert_eq!(view.cpu1_path, "M 100.00 75.00");
+        assert_eq!(view.cpu_summary, "Combined 12.5%");
+        assert_eq!(view.ui_thread_cpu, Some(0));
         assert_eq!(view.memory_total_label, "976.6 MiB");
         assert_eq!(view.memory_magik_label, "MagiK: 97.7 MiB");
         assert_eq!(view.memory_other_label, "Other: 488.3 MiB");

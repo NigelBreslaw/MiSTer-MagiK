@@ -1373,6 +1373,8 @@ mod linux {
             let magik_rss_kb = magik.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
             let main_rss_kb = main.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
             let slint_status = read_json_value("/tmp/mister-magik/status.json");
+            let ui_thread_cpu =
+                launcher_ui_pid(&slint_status, &magik["pids"]).and_then(main_thread_current_cpu);
             let slint_current = status_pid_matches(&slint_status, &magik["pids"]);
             json!({
                 "schema": "mister-magik-device-telemetry-v1",
@@ -1396,6 +1398,7 @@ mod linux {
                     "fps_estimate": slint_status.get("fps_estimate").cloned().unwrap_or(Value::Null),
                     "preview_cache_state": slint_status.get("preview_cache_state").cloned().unwrap_or(Value::Null),
                     "frame_budget": slint_status.get("frame_budget").cloned().unwrap_or(Value::Null),
+                    "ui_thread_cpu": ui_thread_cpu,
                     "last_error": Value::Null,
                 },
             })
@@ -1565,6 +1568,21 @@ mod linux {
             let (line_key, rest) = line.split_once(':')?;
             (line_key == key).then(|| rest.trim().to_string())
         })
+    }
+
+    fn main_thread_current_cpu(pid: u64) -> Option<u64> {
+        let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        parse_proc_stat_processor(&text)
+    }
+
+    fn parse_proc_stat_processor(text: &str) -> Option<u64> {
+        // `comm` is parenthesized and may contain spaces, so count fields only
+        // after its final closing delimiter. Processor is Linux stat field 39.
+        text.rsplit_once(") ")?
+            .1
+            .split_whitespace()
+            .nth(36)
+            .and_then(|value| value.parse::<u64>().ok())
     }
 
     pub(super) fn network_rate_json(previous: Option<NetSample>, current: NetSample) -> Value {
@@ -3061,12 +3079,24 @@ mod linux {
         paths.into_iter().take(limit).collect::<Vec<_>>()
     }
 
-    fn status_pid_matches(status: &Value, pids: &Value) -> bool {
+    fn current_status_pid(status: &Value, pids: &Value) -> Option<u64> {
         let Some(status_pid) = status.get("pid").and_then(Value::as_u64) else {
-            return false;
+            return None;
         };
         pids.as_array()
             .is_some_and(|pids| pids.iter().any(|pid| pid.as_u64() == Some(status_pid)))
+            .then_some(status_pid)
+    }
+
+    fn launcher_ui_pid(status: &Value, pids: &Value) -> Option<u64> {
+        current_status_pid(status, pids).or_else(|| {
+            let pids = pids.as_array()?;
+            (pids.len() == 1).then(|| pids[0].as_u64()).flatten()
+        })
+    }
+
+    fn status_pid_matches(status: &Value, pids: &Value) -> bool {
+        current_status_pid(status, pids).is_some()
     }
 
     fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
@@ -3981,6 +4011,43 @@ mod tests {
         assert_eq!(rows[0].user, 1);
         assert_eq!(rows[1].system, 20);
         assert_eq!(rows[2].idle, 70);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_processor_parser_handles_a_parenthesized_process_name() {
+        let fields = (0..37)
+            .map(|index| {
+                if index == 0 {
+                    "S".to_string()
+                } else {
+                    index.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(
+            linux::parse_proc_stat_processor(&format!("42 (mister magik) {fields}")),
+            Some(36)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_ui_pid_prefers_the_current_status_process() {
+        let pids = serde_json::json!([11, 22]);
+        assert_eq!(
+            linux::launcher_ui_pid(&serde_json::json!({"pid": 22}), &pids),
+            Some(22)
+        );
+        assert_eq!(
+            linux::launcher_ui_pid(&serde_json::json!({"pid": 33}), &pids),
+            None
+        );
+        assert_eq!(
+            linux::launcher_ui_pid(&serde_json::json!({"pid": 33}), &serde_json::json!([11])),
+            Some(11)
+        );
     }
 
     #[cfg(target_os = "linux")]

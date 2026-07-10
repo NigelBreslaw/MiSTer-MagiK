@@ -105,7 +105,7 @@ component CpuCoreBars inherits HorizontalLayout {
     spacing: 12px;
     cross-axis-alignment: end;
 
-    for core in root.cores : VerticalLayout {
+    for core[ix] in root.cores : VerticalLayout {
         width: 54px;
         height: 100px;
         spacing: 4px;
@@ -135,6 +135,15 @@ component CpuCoreBars inherits HorizontalLayout {
                     : core.busy-pct >= 65.0 ? #bf8700
                     : #1f883d;
             }
+
+            if ix == RealtimeState.ui-thread-cpu: Text {
+                text: "UI";
+                color: PrimerColors.fgOnEmphasis;
+                font-size: 9px;
+                font-weight: LayoutTokens.base-text-weight-semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
         }
 
         Text {
@@ -154,6 +163,11 @@ component CpuCoreBars inherits HorizontalLayout {
 }
 
 component CpuCoreLineChart inherits Rectangle {
+    private property <length> plot-x: 46px;
+    private property <length> plot-y: 12px;
+    private property <length> plot-w: self.width - 58px;
+    private property <length> plot-h: self.height - 34px;
+
     width: 100%;
     height: 116px;
     border-width: 1px;
@@ -162,11 +176,35 @@ component CpuCoreLineChart inherits Rectangle {
     background: PrimerColors.bgColor-default;
     clip: true;
 
+    Text {
+        x: 8px;
+        y: root.plot-y + root.plot-h - 3px;
+        text: "0%";
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
+
+    Text {
+        x: 4px;
+        y: root.plot-y + root.plot-h / 2 - 7px;
+        text: "50%";
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
+
+    Text {
+        x: 2px;
+        y: root.plot-y - 2px;
+        text: "100%";
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
+
     plot := Rectangle {
-        x: 10px;
-        y: 10px;
-        width: parent.width - 20px;
-        height: parent.height - 32px;
+        x: root.plot-x;
+        y: root.plot-y;
+        width: root.plot-w;
+        height: root.plot-h;
         background: PrimerColors.bgColor-inset;
         border-width: 1px;
         border-color: PrimerColors.borderColor-muted;
@@ -232,17 +270,17 @@ component CpuCoreLineChart inherits Rectangle {
     }
 
     if RealtimeState.cpu0-path == "" && RealtimeState.cpu1-path == "": Text {
-        x: 12px;
-        y: 12px;
+        x: root.plot-x + 10px;
+        y: root.plot-y + 10px;
         text: "Waiting for per-core CPU samples.";
         color: PrimerColors.fgColor-muted;
         font-size: LayoutTokens.text-body-size-small;
     }
 
     HorizontalLayout {
-        x: 10px;
+        x: root.plot-x;
         y: parent.height - 18px;
-        width: parent.width - 20px;
+        width: root.plot-w;
         height: 14px;
         spacing: 12px;
 
