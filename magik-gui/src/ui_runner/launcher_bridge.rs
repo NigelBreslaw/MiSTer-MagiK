@@ -416,7 +416,7 @@ pub(super) fn sync_bridge_launcher(
         let games = active_system_game_view(catalog, nav);
         let header = active_system_header(catalog, nav, games.len());
         active_games_loading = active_system_games_loading(catalog, nav);
-        bridge.set_game_systems(models.game_systems(catalog, catalog_version));
+        bridge.set_game_systems(models.game_systems(catalog, catalog_version, nav.selected));
         bridge.set_active_system_title(header.title.into());
         bridge.set_active_system_count(header.count as i32);
         active_games_for_preview = Some(games);
@@ -594,17 +594,20 @@ pub(super) fn launcher_clock_text() -> String {
 
 pub(super) fn slint_game_systems(
     catalog: &ArcadeCatalog,
-) -> ModelRc<slint_ui::launcher::GameSystem> {
+    selected: usize,
+) -> Rc<VecModel<slint_ui::launcher::GameSystem>> {
     let rows: Vec<slint_ui::launcher::GameSystem> = catalog
         .systems
         .iter()
-        .map(|system| slint_ui::launcher::GameSystem {
+        .enumerate()
+        .map(|(index, system)| slint_ui::launcher::GameSystem {
             id: system.id.clone().into(),
             title: system.title.clone().into(),
             count: system.count as i32,
+            focused: index == selected,
         })
         .collect();
-    ModelRc::new(VecModel::from(rows))
+    Rc::new(VecModel::from(rows))
 }
 
 pub(super) fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
@@ -814,7 +817,8 @@ impl LauncherBridgeKey {
 #[derive(Default)]
 pub(super) struct LauncherBridgeModels {
     game_systems_key: Option<usize>,
-    game_systems: Option<ModelRc<slint_ui::launcher::GameSystem>>,
+    game_systems: Option<Rc<VecModel<slint_ui::launcher::GameSystem>>>,
+    game_systems_selected: Option<usize>,
 }
 
 impl LauncherBridgeModels {
@@ -822,15 +826,46 @@ impl LauncherBridgeModels {
         &mut self,
         catalog: &ArcadeCatalog,
         catalog_version: usize,
+        selected: usize,
     ) -> ModelRc<slint_ui::launcher::GameSystem> {
         if self.game_systems_key != Some(catalog_version) {
-            self.game_systems = Some(slint_game_systems(catalog));
+            self.game_systems = Some(slint_game_systems(catalog, selected));
             self.game_systems_key = Some(catalog_version);
+            self.game_systems_selected = (selected < catalog.systems.len()).then_some(selected);
+        } else {
+            self.sync_game_system_focus(selected);
         }
-        self.game_systems
+        ModelRc::from(
+            self.game_systems
+                .as_ref()
+                .expect("game system model should be initialized")
+                .clone(),
+        )
+    }
+
+    fn sync_game_system_focus(&mut self, selected: usize) {
+        let model = self
+            .game_systems
             .as_ref()
-            .expect("game system model should be initialized")
-            .clone()
+            .expect("game system model should be initialized");
+        let selected = (selected < model.row_count()).then_some(selected);
+        if self.game_systems_selected == selected {
+            return;
+        }
+
+        if let Some(previous) = self.game_systems_selected {
+            if let Some(mut row) = model.row_data(previous) {
+                row.focused = false;
+                model.set_row_data(previous, row);
+            }
+        }
+        if let Some(current) = selected {
+            if let Some(mut row) = model.row_data(current) {
+                row.focused = true;
+                model.set_row_data(current, row);
+            }
+        }
+        self.game_systems_selected = selected;
     }
 }
 
@@ -877,6 +912,44 @@ mod tests {
                 fixed_time,
             }));
         });
+    }
+
+    #[test]
+    fn game_system_focus_updates_rows_without_replacing_the_model() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "one".into(),
+                    title: "One".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "two".into(),
+                    title: "Two".into(),
+                    count: 2,
+                },
+                GameSystemEntry {
+                    id: "three".into(),
+                    title: "Three".into(),
+                    count: 3,
+                },
+            ],
+        );
+        let mut models = LauncherBridgeModels::default();
+        let rows = models.game_systems(&catalog, 1, 0);
+
+        assert!(rows.row_data(0).expect("first row").focused);
+        assert!(!rows.row_data(1).expect("second row").focused);
+        assert!(!rows.row_data(2).expect("third row").focused);
+
+        let updated_rows = models.game_systems(&catalog, 1, 2);
+
+        assert!(!rows.row_data(0).expect("first row").focused);
+        assert!(!rows.row_data(1).expect("second row").focused);
+        assert!(rows.row_data(2).expect("third row").focused);
+        assert!(updated_rows.row_data(2).expect("updated third row").focused);
     }
 
     #[test]
