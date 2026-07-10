@@ -2603,7 +2603,7 @@ fn create_live_instance(
         if let Some(Value::String(path)) = args.first() {
             let detail_request = if let Ok(mut browser) = sd_current_browser.lock() {
                 browser.select_path(path.as_str());
-                Some(browser.begin_detail_fetch_current(false))
+                browser.begin_detail_fetch_current(false)
             } else {
                 None
             };
@@ -2656,7 +2656,7 @@ fn create_live_instance(
         let detail_request = sd_detail_refresh_browser
             .lock()
             .ok()
-            .map(|mut browser| browser.begin_detail_fetch_current(true));
+            .and_then(|mut browser| browser.begin_detail_fetch_current(true));
         if let Some(instance) = sd_detail_refresh_instance.upgrade() {
             apply_live_sd_state(&instance, &sd_detail_refresh_browser);
         }
@@ -3647,7 +3647,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     ui.global::<Actions>().on_sd_row_current(move |path| {
         let detail_request = if let Ok(mut browser) = sd_current_browser.lock() {
             browser.select_path(path.as_str());
-            Some(browser.begin_detail_fetch_current(false))
+            browser.begin_detail_fetch_current(false)
         } else {
             None
         };
@@ -3697,7 +3697,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
         let detail_request = sd_detail_refresh_browser
             .lock()
             .ok()
-            .map(|mut browser| browser.begin_detail_fetch_current(true));
+            .and_then(|mut browser| browser.begin_detail_fetch_current(true));
         if let Some(ui) = sd_detail_refresh_ui.upgrade() {
             apply_compiled_sd_state(&ui, &sd_detail_refresh_browser);
         }

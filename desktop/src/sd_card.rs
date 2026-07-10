@@ -296,18 +296,18 @@ impl SdCardBrowser {
         self.rebuild_rows();
     }
 
-    pub fn begin_detail_fetch_current(&mut self, force: bool) -> SdDetailRequest {
+    pub fn begin_detail_fetch_current(&mut self, force: bool) -> Option<SdDetailRequest> {
         let path = normalize_ui_path(&self.current_path);
         self.detail_generation = self.detail_generation.saturating_add(1);
         let generation = self.detail_generation;
         if !force {
             if let Some(detail) = self.detail_cache.get(&path).cloned() {
                 self.selected_detail = detail;
-                return SdDetailRequest { path, generation };
+                return None;
             }
         }
         self.selected_detail = SdItemDetail::loading_for(&path);
-        SdDetailRequest { path, generation }
+        Some(SdDetailRequest { path, generation })
     }
 
     pub fn apply_detail_result(
@@ -924,9 +924,9 @@ mod tests {
     fn detail_results_ignore_stale_generation_and_wrong_path() {
         let mut browser = SdCardBrowser::new();
         browser.select_path("/ReadMe.txt");
-        let first = browser.begin_detail_fetch_current(false);
+        let first = browser.begin_detail_fetch_current(false).unwrap();
         browser.select_path("/MiSTer.ini");
-        let second = browser.begin_detail_fetch_current(false);
+        let second = browser.begin_detail_fetch_current(false).unwrap();
 
         let mut stale = SdItemDetail::empty();
         stale.path = first.path.clone();
@@ -940,6 +940,9 @@ mod tests {
         current.title = "MiSTer.ini".to_string();
         browser.apply_detail_result(&second.path, second.generation, Ok(current));
         assert_eq!(browser.selected_detail().title, "MiSTer.ini");
+
+        assert_eq!(browser.begin_detail_fetch_current(false), None);
+        assert!(browser.begin_detail_fetch_current(true).is_some());
     }
 
     #[test]
