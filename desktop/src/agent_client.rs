@@ -73,6 +73,15 @@ pub struct FramebufferStreamFrame {
     pub rect: FrameRect,
     pub raw_bytes: u64,
     pub payload_bytes: u64,
+    pub timing: FramebufferStreamTiming,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FramebufferStreamTiming {
+    pub read_started: Instant,
+    pub read_complete: Instant,
+    pub decompress_complete: Instant,
+    pub rgba_complete: Instant,
 }
 
 #[derive(Debug)]
@@ -659,12 +668,19 @@ impl FramebufferStream {
 
     pub fn next_frame(&mut self) -> Result<FramebufferStreamFrame, AgentError> {
         loop {
+            let read_started = Instant::now();
             let (header, payload) = read_frame(&mut self.reader).map_err(|err| {
                 AgentError::Unreachable(format!("read framebuffer stream: {err}"))
             })?;
+            let read_complete = Instant::now();
             match header.kind {
                 FrameKind::Keyframe | FrameKind::RectDelta => {
-                    if let Some(frame) = self.state.apply_frame(header, &payload)? {
+                    if let Some(frame) = self.state.apply_frame_timed(
+                        header,
+                        &payload,
+                        read_started,
+                        read_complete,
+                    )? {
                         return Ok(frame);
                     }
                 }
@@ -726,10 +742,22 @@ impl FramebufferStreamControl {
 }
 
 impl FramebufferStreamState {
+    #[cfg(test)]
     fn apply_frame(
         &mut self,
         header: FrameHeader,
         payload: &[u8],
+    ) -> Result<Option<FramebufferStreamFrame>, AgentError> {
+        let now = Instant::now();
+        self.apply_frame_timed(header, payload, now, now)
+    }
+
+    fn apply_frame_timed(
+        &mut self,
+        header: FrameHeader,
+        payload: &[u8],
+        read_started: Instant,
+        read_complete: Instant,
     ) -> Result<Option<FramebufferStreamFrame>, AgentError> {
         if header.flags & FLAG_LZ4_SIZE_PREPENDED == 0 {
             return Err(AgentError::Protocol(
@@ -771,6 +799,7 @@ impl FramebufferStreamState {
                 raw.len()
             )));
         }
+        let decompress_complete = Instant::now();
         if self.geometry != Some(header.geometry) || header.kind == FrameKind::Keyframe {
             self.reset_buffer(header.geometry)?;
         }
@@ -791,6 +820,7 @@ impl FramebufferStreamState {
             stride_bytes,
             16,
         )?;
+        let rgba_complete = Instant::now();
         let capture = FramebufferCapture {
             png_path: PathBuf::new(),
             rgba_pixels,
@@ -815,6 +845,12 @@ impl FramebufferStreamState {
             rect: header.rect,
             raw_bytes: header.raw_bytes as u64,
             payload_bytes: header.payload_bytes as u64,
+            timing: FramebufferStreamTiming {
+                read_started,
+                read_complete,
+                decompress_complete,
+                rgba_complete,
+            },
         }))
     }
 
