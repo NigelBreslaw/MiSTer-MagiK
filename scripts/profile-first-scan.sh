@@ -46,6 +46,28 @@ first_scan_gate_check() {
   return 0
 }
 
+first_scan_commit_is_dirty_from_statuses() {
+  local worktree_status="$1"
+  local index_status="$2"
+  [[ "$worktree_status" -ne 0 || "$index_status" -ne 0 ]]
+}
+
+first_scan_commit_is_dirty() {
+  local repo="$1"
+  local worktree_status index_status
+  if git -C "$repo" diff --quiet -- . ':!history/toolchain-bench/results-first-scan.tsv'; then
+    worktree_status=0
+  else
+    worktree_status=$?
+  fi
+  if git -C "$repo" diff --cached --quiet -- . ':!history/toolchain-bench/results-first-scan.tsv'; then
+    index_status=0
+  else
+    index_status=$?
+  fi
+  first_scan_commit_is_dirty_from_statuses "$worktree_status" "$index_status"
+}
+
 first_scan_self_test() {
   first_scan_gate_check 56094 71573
   first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" "$DB_SAVE_GATE_MS"
@@ -55,6 +77,18 @@ first_scan_self_test() {
   fi
   if first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" $((DB_SAVE_GATE_MS + 1)); then
     echo "save gate accepted gate+1" >&2
+    return 1
+  fi
+  if first_scan_commit_is_dirty_from_statuses 0 0; then
+    echo "first-scan dirty helper marked a clean source dirty" >&2
+    return 1
+  fi
+  if ! first_scan_commit_is_dirty_from_statuses 1 0; then
+    echo "first-scan dirty helper ignored an unstaged source diff" >&2
+    return 1
+  fi
+  if ! first_scan_commit_is_dirty_from_statuses 0 1; then
+    echo "first-scan dirty helper ignored a staged source diff" >&2
     return 1
   fi
   first_scan_reset_artifact_self_test
@@ -149,7 +183,7 @@ ensure_launcher_recovered() {
 ensure_launcher_recovered "setup"
 
 commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if [[ "$commit" != "unknown" ]] && ! git -C "$HERE" diff --quiet -- . ':!history/toolchain-bench/results-first-scan.tsv'; then
+if [[ "$commit" != "unknown" ]] && first_scan_commit_is_dirty "$HERE"; then
   commit="${commit}-dirty"
 fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"

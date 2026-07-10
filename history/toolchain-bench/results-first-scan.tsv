@@ -3965,3 +3965,549 @@ ITEM5-AFTER3-20260703	41561743-dirty	import_stage_total	9836	path=/tmp/mister-ma
 ITEM5-AFTER3-20260703	41561743-dirty	sqlite_publish_progress	857	bytes=10268672 copy_ms=845 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=41 result=bench-ok
 ITEM5-AFTER3-20260703	41561743-dirty	library_db_saved	68670	bytes=10268672 scan_us=48706616 discover_us=42196492 classify_us=42391136 import_us=14892686 discoveries=13205 normal_files=10617 containers=162 entries=1151 audit_rows=469
 ITEM5-AFTER3-20260703	41561743-dirty	db_count	0	13205
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	first_frame	490	catalog_ready=false
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_active_profiles	46792	profiles=79
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_targets	0	roots=4 targets=83 extensions=81
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_first_candidate	30	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_first_discovery	131	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	full_scan_counter_climb	48607	target=50
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	4255	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	477	path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	45	path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	22	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	192	path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	11	path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1972	path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	12	path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	15	path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	724	path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	77	path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	10883	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7709	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	988	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7067	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	9	path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	69	path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	783	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	52	path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	18	path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	11	path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7	path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	93	path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	26	path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	5	path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	6	path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	6	path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	25	path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7	path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1583	path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	326	path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	45	path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	434	path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7	path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	90	path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	3823	path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	2	path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	6	path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	52	path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	41	path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	9	path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	23	path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	32	path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	0	path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	313	path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	197	path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	3	path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	28	path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	0	path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	49	path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	2	path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	2	path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	13	path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	41	path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	0	path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	8	path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	6	path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	107	path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	2	path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	3	path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/QL dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	38	path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	0	path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	5	path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	100	path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	3	path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	10	path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	39	path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	1	path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	29	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk_target	7	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_walk	43074	candidates=45440
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_profile_match	789	calls=45440
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_installed_collection	514	calls=44544
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_archive_toc	12271	containers=2814
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_collection_listings	0	collections=0
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_file_discovery	16531	files=44543
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_classify_total	43917	discoveries=62939 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	library_scan_complete	92313	scan_us=90711597 discover_us=43074087 classify_us=43917204 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	library_ready	101785	games=59228 load_us=9203579
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	catalog_bridge_sync_update	101786	games=59228 elapsed_us=289
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	catalog_worker_ram_catalog	101786	games=59228 catalog_us=9203579
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	scan_stage_coverage_audit_deferred	9041	rows=1675
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_schema	51	tables=14
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_metadata_load	3024	mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_begin_tx	0	-
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_profiles	4	rows=79
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_catalog_audit	36	rows=1675
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=0 to=1000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	121	from=1000 to=2000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	116	from=2000 to=3000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	131	from=3000 to=4000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	120	from=4000 to=5000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	118	from=5000 to=6000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	142	from=6000 to=7000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	161	from=7000 to=8000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	120	from=8000 to=9000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	122	from=9000 to=10000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	119	from=10000 to=11000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	119	from=11000 to=12000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	120	from=12000 to=13000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	123	from=13000 to=14000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	187	from=14000 to=15000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	154	from=15000 to=16000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	183	from=16000 to=17000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	115	from=17000 to=18000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	134	from=18000 to=19000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	166	from=19000 to=20000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	164	from=20000 to=21000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	109	from=21000 to=22000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	107	from=22000 to=23000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	105	from=23000 to=24000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	118	from=24000 to=25000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	149	from=25000 to=26000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	118	from=26000 to=27000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	112	from=27000 to=28000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	113	from=28000 to=29000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	111	from=29000 to=30000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=30000 to=31000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=31000 to=32000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	116	from=32000 to=33000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	115	from=33000 to=34000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	130	from=34000 to=35000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	149	from=35000 to=36000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	165	from=36000 to=37000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	126	from=37000 to=38000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	227	from=38000 to=39000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=39000 to=40000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=40000 to=41000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	115	from=41000 to=42000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	115	from=42000 to=43000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	117	from=43000 to=44000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	126	from=44000 to=45000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	142	from=45000 to=46000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	114	from=46000 to=47000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	119	from=47000 to=48000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	111	from=48000 to=49000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	106	from=49000 to=50000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	108	from=50000 to=51000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	121	from=51000 to=52000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	231	from=52000 to=53000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	272	from=53000 to=54000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	281	from=54000 to=55000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	172	from=55000 to=56000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	106	from=56000 to=57000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	198	from=57000 to=58000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	248	from=58000 to=59000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	289	from=59000 to=60000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	126	from=60000 to=61000 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_chunk	64	from=61000 to=61626 total=61626
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_games_total	10123	rows=61626 launcher_rows=58634
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_materialize_arcade_ui	42365	-
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_launcher_arcade	0	-
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_launcher_console	2995	rows=58183
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_launcher_launch_plans	10710	rows=56495
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_meta	1894	rows=12
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_catalog_stamp	5823	stamp_rows=1688 checkpoint_rows=1525
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_insert_software_hash_cache	0	rows=0
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_commit	19	-
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	import_stage_total	77047	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.628
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	sqlite_publish_progress	802	bytes=11481088 copy_ms=792 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	library_db_saved	192608	bytes=11481088 scan_us=99752414 discover_us=43074087 classify_us=43917204 import_us=81259864 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
+P12-C01-AFFINITY-BEFORE-20260710	74ce4c2	db_count	0	61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	first_frame	96	catalog_ready=false
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_active_profiles	45529	profiles=79
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_targets	0	roots=4 targets=83 extensions=81
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_first_candidate	29	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_first_discovery	182	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	full_scan_counter_climb	47282	target=50
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3590	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	544	path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	50	path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	16	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	167	path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	5	path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1135	path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	15	path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	757	path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	30	path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	7366	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	6464	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	2980	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	8704	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	30	path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	571	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	47	path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	22	path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	13	path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	8	path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	75	path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	17	path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	5	path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	8	path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1232	path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	189	path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	26	path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	363	path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	5	path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	67	path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	2701	path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	23	path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	16	path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	8	path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	17	path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	218	path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	226	path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	12	path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	12	path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	24	path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	6	path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	61	path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/QL dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	13	path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	50	path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	23	path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk_target	5	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_walk	38038	candidates=45440
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_profile_match	500	calls=45440
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_installed_collection	337	calls=44544
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_archive_toc	12511	containers=2814
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_collection_listings	0	collections=0
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_file_discovery	18151	files=44543
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_classify_total	38770	discoveries=62939 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	library_scan_complete	85902	scan_us=84300876 discover_us=38038086 classify_us=38770005 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	library_ready	95174	games=59228 load_us=9001362
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	catalog_bridge_sync_update	95175	games=59228 elapsed_us=293
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	catalog_worker_ram_catalog	95175	games=59228 catalog_us=9001362
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	scan_stage_coverage_audit_deferred	8944	rows=1675
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_schema	52	tables=14
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_metadata_load	2961	mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_begin_tx	0	-
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_profiles	3	rows=79
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_catalog_audit	33	rows=1675
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	140	from=0 to=1000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	138	from=1000 to=2000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	116	from=2000 to=3000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	131	from=3000 to=4000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	121	from=4000 to=5000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=5000 to=6000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=6000 to=7000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	145	from=7000 to=8000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	124	from=8000 to=9000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	136	from=9000 to=10000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	163	from=10000 to=11000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	136	from=11000 to=12000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	148	from=12000 to=13000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	123	from=13000 to=14000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	183	from=14000 to=15000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	126	from=15000 to=16000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	121	from=16000 to=17000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	99	from=17000 to=18000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	137	from=18000 to=19000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	201	from=19000 to=20000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	176	from=20000 to=21000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	111	from=21000 to=22000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	110	from=22000 to=23000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	107	from=23000 to=24000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	114	from=24000 to=25000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	116	from=25000 to=26000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	115	from=26000 to=27000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	115	from=27000 to=28000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	132	from=28000 to=29000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	151	from=29000 to=30000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	149	from=30000 to=31000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	143	from=31000 to=32000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=32000 to=33000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=33000 to=34000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=34000 to=35000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=35000 to=36000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=36000 to=37000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=37000 to=38000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	262	from=38000 to=39000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=39000 to=40000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=40000 to=41000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=41000 to=42000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	116	from=42000 to=43000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=43000 to=44000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=44000 to=45000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=45000 to=46000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=46000 to=47000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	146	from=47000 to=48000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	148	from=48000 to=49000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=49000 to=50000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	125	from=50000 to=51000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	139	from=51000 to=52000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	232	from=52000 to=53000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	209	from=53000 to=54000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	222	from=54000 to=55000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	215	from=55000 to=56000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	110	from=56000 to=57000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	197	from=57000 to=58000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	249	from=58000 to=59000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	247	from=59000 to=60000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=60000 to=61000 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	67	from=61000 to=61626 total=61626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_games_total	10139	rows=61626 launcher_rows=58634
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_materialize_arcade_ui	42691	-
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_launcher_arcade	0	-
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_launcher_console	2968	rows=58183
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_launcher_launch_plans	10730	rows=56495
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_meta	1774	rows=12
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_catalog_stamp	5614	stamp_rows=1688 checkpoint_rows=1525
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_insert_software_hash_cache	0	rows=0
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_commit	19	-
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	import_stage_total	76987	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.626
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	sqlite_publish_progress	822	bytes=11481088 copy_ms=812 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	library_db_saved	185937	bytes=11481088 scan_us=93245286 discover_us=38038086 classify_us=38770005 import_us=81284276 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
+P12-C01-AFFINITY-CANDIDATE-20260710	74ce4c2-dirty	db_count	0	61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	first_frame	100	catalog_ready=false
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_active_profiles	45518	profiles=79
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_targets	0	roots=4 targets=83 extensions=81
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_first_candidate	29	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_first_discovery	174	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	full_scan_counter_climb	47286	target=50
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	3689	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	383	path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	38	path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	25	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	207	path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1167	path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	9	path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	16	path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	809	path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	31	path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	7370	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	6455	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2798	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	8824	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	30	path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	595	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	35	path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	6	path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	7	path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	54	path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	23	path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	9	path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1173	path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	198	path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	41	path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	403	path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	61	path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2773	path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	23	path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	13	path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	5	path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	6	path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	13	path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	216	path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	199	path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	12	path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	28	path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	7	path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	66	path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	4	path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/QL dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	14	path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	0	path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	63	path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	3	path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	2	path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	16	path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	1	path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	19	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk_target	6	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_walk	38063	candidates=45440
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_profile_match	475	calls=45440
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_installed_collection	322	calls=44544
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_archive_toc	11966	containers=2814
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_collection_listings	0	collections=0
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_file_discovery	18535	files=44543
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_classify_total	38775	discoveries=62939 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	library_scan_complete	85936	scan_us=84294858 discover_us=38063138 classify_us=38775139 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	library_ready	95121	games=59228 load_us=8901476
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	catalog_bridge_sync_update	95121	games=59228 elapsed_us=411
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	catalog_worker_ram_catalog	95122	games=59228 catalog_us=8901476
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	scan_stage_coverage_audit_deferred	8804	rows=1675
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_schema	51	tables=14
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_metadata_load	2953	mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_begin_tx	0	-
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_profiles	4	rows=79
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_catalog_audit	35	rows=1675
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	114	from=0 to=1000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=1000 to=2000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	122	from=2000 to=3000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	128	from=3000 to=4000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	116	from=4000 to=5000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=5000 to=6000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=6000 to=7000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	198	from=7000 to=8000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	130	from=8000 to=9000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	142	from=9000 to=10000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	122	from=10000 to=11000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	118	from=11000 to=12000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=12000 to=13000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=13000 to=14000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	179	from=14000 to=15000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	149	from=15000 to=16000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	132	from=16000 to=17000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	98	from=17000 to=18000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	135	from=18000 to=19000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	168	from=19000 to=20000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	163	from=20000 to=21000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	112	from=21000 to=22000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	106	from=22000 to=23000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	105	from=23000 to=24000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	136	from=24000 to=25000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	139	from=25000 to=26000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	121	from=26000 to=27000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	117	from=27000 to=28000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	138	from=28000 to=29000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	113	from=29000 to=30000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	114	from=30000 to=31000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	113	from=31000 to=32000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	113	from=32000 to=33000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	116	from=33000 to=34000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	146	from=34000 to=35000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	122	from=35000 to=36000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	113	from=36000 to=37000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	115	from=37000 to=38000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	226	from=38000 to=39000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	115	from=39000 to=40000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	122	from=40000 to=41000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	114	from=41000 to=42000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	124	from=42000 to=43000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	145	from=43000 to=44000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	113	from=44000 to=45000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	133	from=45000 to=46000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	120	from=46000 to=47000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	135	from=47000 to=48000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	119	from=48000 to=49000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	107	from=49000 to=50000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	108	from=50000 to=51000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	122	from=51000 to=52000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	272	from=52000 to=53000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	207	from=53000 to=54000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	222	from=54000 to=55000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	173	from=55000 to=56000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	108	from=56000 to=57000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	195	from=57000 to=58000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	291	from=58000 to=59000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	258	from=59000 to=60000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	127	from=60000 to=61000 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_chunk	76	from=61000 to=61626 total=61626
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_games_total	9996	rows=61626 launcher_rows=58634
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_materialize_arcade_ui	42508	-
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_launcher_arcade	0	-
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_launcher_console	2991	rows=58183
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_launcher_launch_plans	10809	rows=56495
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_meta	1848	rows=12
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_catalog_stamp	5608	stamp_rows=1688 checkpoint_rows=1525
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_insert_software_hash_cache	0	rows=0
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_commit	22	-
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_total	76828	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.627
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	sqlite_publish_progress	1456	bytes=11481088 copy_ms=1446 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	library_db_saved	186138	bytes=11481088 scan_us=93099141 discover_us=38063138 classify_us=38775139 import_us=81727143 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
+P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	db_count	0	61626

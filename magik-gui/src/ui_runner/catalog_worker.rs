@@ -143,6 +143,19 @@ pub(super) fn start_library_catalog_worker(
                         detail: "source=already_loaded state=ready".to_string(),
                     });
                 }
+                CatalogWorkerInitialCache::AlreadyProbedMissing => {
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "catalog_worker_initial_cache".to_string(),
+                        detail: "source=ui_probe state=missing".to_string(),
+                    });
+                }
+                CatalogWorkerInitialCache::AlreadyProbedEmpty => {
+                    cache_state = CatalogCacheState::Empty;
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "catalog_worker_initial_cache".to_string(),
+                        detail: "source=ui_probe state=empty".to_string(),
+                    });
+                }
             }
             let plan = catalog_worker_plan(cache_state, request);
             let first_catalog_build = plan == CatalogWorkerPlan::ForceBuild
@@ -409,6 +422,8 @@ pub(super) enum CatalogWorkerInitialCache {
     ProbeNavigationThenSqlite,
     ProbeSqlite,
     AlreadyLoadedReady,
+    AlreadyProbedMissing,
+    AlreadyProbedEmpty,
 }
 
 impl CatalogWorkerRequest {
