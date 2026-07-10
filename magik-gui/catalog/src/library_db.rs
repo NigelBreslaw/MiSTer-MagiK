@@ -11,6 +11,7 @@ use crate::catalog_config::DEFAULT_SQLITE_PATH;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
+use crate::catalog_discovery::{GameDirFact, InstalledCore};
 use crate::catalog_load_metrics;
 pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
@@ -131,6 +132,10 @@ pub(crate) struct LibraryScan {
     pub(crate) version: u32,
     pub(crate) scanned_at_unix: i64,
     pub(crate) roots: Vec<String>,
+    /// Filesystem facts collected by the scan plan.  They are deliberately
+    /// retained so audit/validation never need to re-walk the SD card.
+    pub(crate) installed_cores: Vec<InstalledCore>,
+    pub(crate) game_dir_facts: Vec<GameDirFact>,
     pub(crate) profiles: Vec<LaunchProfile>,
     pub(crate) normal_files: Vec<LibraryPayloadFile>,
     pub(crate) containers: Vec<LibraryContainer>,
@@ -279,8 +284,11 @@ impl LibraryRamScanArtifact {
 
     pub fn complete_coverage_audit(mut self) -> LibraryScanArtifact {
         let audit_t = std::time::Instant::now();
-        self.scan.audit_rows =
-            core_audit::audit_catalog_coverage(&self.scan.roots, &self.scan.profiles);
+        self.scan.audit_rows = core_audit::audit_catalog_coverage_from_facts(
+            &self.scan.profiles,
+            &self.scan.installed_cores,
+            &self.scan.game_dir_facts,
+        );
         let audit_us = audit_t.elapsed().as_micros() as u64;
         report_library_scan_timing(
             "coverage_audit_deferred",
@@ -499,11 +507,7 @@ pub fn rewrite_default_catalog_projections(
         .as_ref()
         .ok_or_else(|| "sqlite catalog has no stamp".to_string())?;
     let repair_t = std::time::Instant::now();
-    sqlite_catalog::rewrite_catalog_projections_for_catalog(
-        &sqlite_path,
-        &loaded.catalog,
-        stamp,
-    )?;
+    sqlite_catalog::rewrite_catalog_projections_for_catalog(&sqlite_path, &loaded.catalog, stamp)?;
     let repair_us = repair_t.elapsed().as_micros() as u64;
     let summary_bytes = std::fs::metadata(crate::catalog_summary::summary_path_for_sqlite(
         &sqlite_path,
@@ -1750,6 +1754,8 @@ mod tests {
         std::fs::write(root.join("_Console/UnknownCore_20260701.rbf"), b"rbf").expect("write core");
         let mut scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "1942")]);
         scan.roots = vec![root.display().to_string()];
+        scan.installed_cores = crate::catalog_discovery::installed_cores_for_roots(&scan.roots);
+        scan.game_dir_facts = crate::catalog_discovery::top_level_game_dirs_for_roots(&scan.roots);
         let ram_artifact = LibraryRamScanArtifact {
             stats: LibraryScanStats {
                 scan_us: 42,

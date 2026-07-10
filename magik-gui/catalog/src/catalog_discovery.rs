@@ -135,6 +135,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
     out
 }
 
+#[cfg(test)]
 pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String]) -> bool {
     for entry in walkdir::WalkDir::new(path)
         .follow_links(false)
@@ -146,9 +147,10 @@ pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String])
         if !entry.file_type().is_file() {
             continue;
         }
-        let p = entry.path();
-        if path_ext_eq(p, "zip")
-            || p.extension()
+        let path = entry.path();
+        if path_ext_eq(path, "zip")
+            || path
+                .extension()
                 .and_then(|ext| ext.to_str())
                 .is_some_and(|ext| contains_ignore_ascii_case(extensions, ext))
         {
@@ -159,7 +161,8 @@ pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String])
 }
 
 pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDirFact {
-    let (has_payload_files, has_zip_files, payload_extensions) = game_dir_payload_facts(&header.path);
+    let (has_payload_files, has_zip_files, payload_extensions) =
+        game_dir_payload_facts(&header.path);
     GameDirFact {
         name: header.name,
         path: header.path,
@@ -280,8 +283,11 @@ fn path_ext_eq(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
+#[cfg(test)]
 fn contains_ignore_ascii_case(values: &[String], needle: &str) -> bool {
-    values.iter().any(|value| value.eq_ignore_ascii_case(needle))
+    values
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case(needle))
 }
 
 fn should_ignore_hidden_path(path: &Path) -> bool {

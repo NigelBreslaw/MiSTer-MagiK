@@ -325,31 +325,107 @@ pub fn builtin_profiles() -> Vec<LaunchProfile> {
     all_profiles()
 }
 
-pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
-    let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
-    let installed = installed_cores
-        .iter()
-        .map(|core| core.core_id.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    let mut profiles = special_profiles();
-    profiles.extend(generic_manifest_profiles().into_iter().filter(|profile| {
-        installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
-    }));
-    let mut active_game_dirs = active_profile_game_dirs(&profiles);
-    for plan in
-        runtime_profile_plans_for_roots_with_cores(roots, &installed_cores, &active_game_dirs)
-    {
-        let RuntimeProfileDecision::Catalogable { profile } = plan.decision else {
-            continue;
-        };
-        activate_runtime_profile(*profile, &mut profiles, &mut active_game_dirs);
+/// Filesystem facts and profile state shared by one cold catalog scan.
+///
+/// Building the plan reads the installed cores and enumerates only the
+/// unclaimed top-level game directory headers.  Callers that already collect
+/// payload facts while walking those directories can then finalize the active
+/// profile set without repeating either discovery step.
+#[derive(Clone, Debug)]
+pub(crate) struct CatalogScanPlan {
+    installed_cores: Vec<catalog_discovery::InstalledCore>,
+    all_game_dir_headers: Vec<catalog_discovery::GameDirHeader>,
+    game_dir_headers: Vec<catalog_discovery::GameDirHeader>,
+    base_profiles: Vec<LaunchProfile>,
+}
+
+impl CatalogScanPlan {
+    pub(crate) fn for_roots(roots: &[String]) -> Self {
+        let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+        let base_profiles = base_profiles_for_installed_cores(&installed_cores);
+        let active_game_dirs = active_profile_game_dirs(&base_profiles);
+        let all_game_dir_headers =
+            catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
+                roots,
+                &BTreeSet::new(),
+            );
+        let game_dir_headers = all_game_dir_headers
+            .iter()
+            .filter(|header| !active_game_dirs.contains(&header.name.to_ascii_lowercase()))
+            .cloned()
+            .collect::<Vec<_>>();
+        Self {
+            installed_cores,
+            all_game_dir_headers,
+            game_dir_headers,
+            base_profiles,
+        }
     }
-    profiles
+
+    pub(crate) fn installed_cores(&self) -> &[catalog_discovery::InstalledCore] {
+        &self.installed_cores
+    }
+
+    pub(crate) fn game_dir_headers(&self) -> &[catalog_discovery::GameDirHeader] {
+        &self.game_dir_headers
+    }
+
+    pub(crate) fn all_game_dir_headers(&self) -> &[catalog_discovery::GameDirHeader] {
+        &self.all_game_dir_headers
+    }
+
+    pub(crate) fn base_profiles(&self) -> &[LaunchProfile] {
+        &self.base_profiles
+    }
+
+    pub(crate) fn finalize_profiles(
+        &self,
+        game_dirs: &[catalog_discovery::GameDirFact],
+    ) -> Vec<LaunchProfile> {
+        finalize_profiles_from_facts(&self.base_profiles, &self.installed_cores, game_dirs)
+    }
+
+    /// Resolves the profile for one walker-derived game-directory fact.
+    ///
+    /// This deliberately delegates to finalization rather than using the
+    /// tentative streaming profile set, so an empty or unsupported runtime
+    /// directory never becomes a launch target.
+    pub(crate) fn profile_for_game_dir_facts(
+        &self,
+        game_dir: &catalog_discovery::GameDirFact,
+    ) -> Option<LaunchProfile> {
+        self.finalize_profiles(std::slice::from_ref(game_dir))
+            .into_iter()
+            .find(|profile| {
+                profile
+                    .game_dirs
+                    .iter()
+                    .any(|dir| dir.eq_ignore_ascii_case(&game_dir.name))
+            })
+    }
+}
+
+pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
+    let plan = CatalogScanPlan::for_roots(roots);
+    let game_dirs = plan
+        .game_dir_headers()
+        .iter()
+        .cloned()
+        .map(catalog_discovery::game_dir_payload_facts_for_header)
+        .collect::<Vec<_>>();
+    plan.finalize_profiles(&game_dirs)
 }
 
 pub(crate) fn active_profiles_for_roots_with_facts(
     installed_cores: &[catalog_discovery::InstalledCore],
     game_dirs: &[catalog_discovery::GameDirFact],
+) -> Vec<LaunchProfile> {
+    let base_profiles = base_profiles_for_installed_cores(installed_cores);
+    finalize_profiles_from_facts(&base_profiles, installed_cores, game_dirs)
+}
+
+fn base_profiles_for_installed_cores(
+    installed_cores: &[catalog_discovery::InstalledCore],
 ) -> Vec<LaunchProfile> {
     let installed = installed_cores
         .iter()
@@ -359,6 +435,15 @@ pub(crate) fn active_profiles_for_roots_with_facts(
     profiles.extend(generic_manifest_profiles().into_iter().filter(|profile| {
         installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
     }));
+    profiles
+}
+
+fn finalize_profiles_from_facts(
+    base_profiles: &[LaunchProfile],
+    installed_cores: &[catalog_discovery::InstalledCore],
+    game_dirs: &[catalog_discovery::GameDirFact],
+) -> Vec<LaunchProfile> {
+    let mut profiles = base_profiles.to_vec();
     let mut active_game_dirs = active_profile_game_dirs(&profiles);
     for plan in runtime_profile_plans_for_game_dirs_with_cores(
         game_dirs,
@@ -465,6 +550,7 @@ pub fn installed_core_ids_for_roots(roots: &[String]) -> BTreeSet<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn runtime_profile_plans_for_roots_with_cores(
     roots: &[String],
     cores: &[catalog_discovery::InstalledCore],
@@ -495,6 +581,7 @@ pub(crate) fn runtime_profile_plans_for_game_dirs_with_cores(
         .collect()
 }
 
+#[cfg(test)]
 fn runtime_profile_plan_for_game_dir_header(
     game_dir: catalog_discovery::GameDirHeader,
     cores: &[catalog_discovery::InstalledCore],
@@ -562,6 +649,7 @@ fn runtime_profile_plan_for_game_dir(
     }
 }
 
+#[cfg(test)]
 fn runtime_profile_decision_for_named_candidate(
     game_dir: &catalog_discovery::GameDirHeader,
     candidate: &RuntimeCoreCandidate<'_>,
@@ -1631,6 +1719,65 @@ mod tests {
         assert!(coleco
             .classify_archive_entry(Path::new("Smurf Rescue.col"))
             .is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_scan_plan_keeps_unclaimed_headers_and_finalizes_from_collected_facts() {
+        let root = unique_temp_dir("catalog-scan-plan");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/NES")).expect("create nes dir");
+        std::fs::create_dir_all(root.join("games/Loose")).expect("create loose dir");
+        std::fs::write(root.join("_Console/NES_20260630.rbf"), b"rbf").expect("write nes core");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf")
+            .expect("write gameboy core");
+        std::fs::write(root.join("games/Loose/Tetris.gb"), b"rom").expect("write rom");
+
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+
+        assert!(plan
+            .installed_cores()
+            .iter()
+            .any(|core| core.core_id == "NES"));
+        assert!(plan
+            .base_profiles()
+            .iter()
+            .any(|profile| profile.system_id == "nes"));
+        assert!(plan
+            .game_dir_headers()
+            .iter()
+            .any(|header| header.name == "Loose"));
+        assert!(!plan
+            .game_dir_headers()
+            .iter()
+            .any(|header| header.name.eq_ignore_ascii_case("NES")));
+
+        let game_dirs = plan
+            .game_dir_headers()
+            .iter()
+            .cloned()
+            .map(catalog_discovery::game_dir_payload_facts_for_header)
+            .collect::<Vec<_>>();
+        let loose_fact = game_dirs
+            .iter()
+            .find(|facts| facts.name == "Loose")
+            .expect("loose facts");
+        let resolved = plan
+            .profile_for_game_dir_facts(loose_fact)
+            .expect("profile for supplied facts");
+        assert_eq!(resolved.id, "runtime-gameboy");
+        assert_eq!(resolved.game_dirs, vec!["Loose"]);
+        let expected_profiles = active_profiles_for_roots(&roots);
+        std::fs::remove_dir_all(root.join("games/Loose")).expect("remove walked dir");
+
+        let profiles = plan.finalize_profiles(&game_dirs);
+        let gameboy = profiles
+            .iter()
+            .find(|profile| profile.id == "runtime-gameboy")
+            .expect("runtime gameboy profile from collected facts");
+        assert_eq!(gameboy.game_dirs, vec!["Loose"]);
+        assert_eq!(profiles, expected_profiles);
         let _ = std::fs::remove_dir_all(root);
     }
 

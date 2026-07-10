@@ -4511,3 +4511,493 @@ P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	import_stage_total	76828	path=/
 P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	sqlite_publish_progress	1456	bytes=11481088 copy_ms=1446 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
 P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	library_db_saved	186138	bytes=11481088 scan_us=93099141 discover_us=38063138 classify_us=38775139 import_us=81727143 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
 P12-C01-AFFINITY-REVIEWED-20260710	74ce4c2-dirty	db_count	0	61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	first_frame	180	catalog_ready=false
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_active_profiles	45364	profiles=79
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_targets	0	roots=4 targets=83 extensions=81
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_first_candidate	25	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_first_discovery	215	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	full_scan_counter_climb	47125	target=50
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3819	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	430	path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	38	path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	4	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	197	path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	11	path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1183	path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	4	path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	8	path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	755	path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	44	path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	7676	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6572	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	2525	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	8341	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	32	path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	630	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	32	path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6	path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6	path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6	path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	51	path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	16	path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	4	path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	4	path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	19	path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	8	path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1300	path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	204	path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	37	path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	403	path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	5	path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	64	path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	2587	path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	2	path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	19	path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	15	path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	8	path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	14	path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	224	path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	192	path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	12	path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	20	path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	14	path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	27	path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6	path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	69	path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	2	path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	4	path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/QL dirs=1 files=4 candidates=4
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	15	path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	0	path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	60	path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	3	path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	25	path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	1	path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	20	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk_target	6	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_walk	37827	candidates=45440
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_profile_match	487	calls=45440
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_installed_collection	345	calls=44544
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_archive_toc	11717	containers=2814
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_collection_listings	0	collections=0
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_file_discovery	18701	files=44543
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_classify_total	38582	discoveries=62939 normal_files=44543 containers=2814 entries=16834
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	library_scan_complete	85708	scan_us=83948032 discover_us=37827069 classify_us=38581777 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	library_ready	94693	games=59228 load_us=8738280
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	catalog_bridge_sync_update	94693	games=59228 elapsed_us=317
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	catalog_worker_ram_catalog	94694	games=59228 catalog_us=8738280
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	scan_stage_coverage_audit_deferred	9111	rows=1675
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_schema	51	tables=14
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_metadata_load	2915	mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_begin_tx	0	-
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_profiles	4	rows=79
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_catalog_audit	38	rows=1675
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	115	from=0 to=1000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	120	from=1000 to=2000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=2000 to=3000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	132	from=3000 to=4000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	132	from=4000 to=5000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	119	from=5000 to=6000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	120	from=6000 to=7000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	147	from=7000 to=8000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	120	from=8000 to=9000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	119	from=9000 to=10000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	121	from=10000 to=11000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	120	from=11000 to=12000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	121	from=12000 to=13000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	122	from=13000 to=14000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	181	from=14000 to=15000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	144	from=15000 to=16000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	128	from=16000 to=17000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	113	from=17000 to=18000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	149	from=18000 to=19000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	169	from=19000 to=20000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	165	from=20000 to=21000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	113	from=21000 to=22000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	109	from=22000 to=23000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	107	from=23000 to=24000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	113	from=24000 to=25000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=25000 to=26000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	113	from=26000 to=27000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=27000 to=28000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=28000 to=29000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	112	from=29000 to=30000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	115	from=30000 to=31000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=31000 to=32000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	117	from=32000 to=33000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=33000 to=34000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	117	from=34000 to=35000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	127	from=35000 to=36000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	125	from=36000 to=37000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	133	from=37000 to=38000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	236	from=38000 to=39000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=39000 to=40000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	115	from=40000 to=41000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=41000 to=42000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=42000 to=43000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	124	from=43000 to=44000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=44000 to=45000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=45000 to=46000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	114	from=46000 to=47000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	121	from=47000 to=48000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	108	from=48000 to=49000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	110	from=49000 to=50000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	110	from=50000 to=51000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	121	from=51000 to=52000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	232	from=52000 to=53000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	227	from=53000 to=54000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	239	from=54000 to=55000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	195	from=55000 to=56000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	109	from=56000 to=57000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	196	from=57000 to=58000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	247	from=58000 to=59000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	243	from=59000 to=60000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	116	from=60000 to=61000 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_chunk	66	from=61000 to=61626 total=61626
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_games_total	9742	rows=61626 launcher_rows=58634
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_materialize_arcade_ui	40901	-
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_launcher_arcade	0	-
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_launcher_console	2903	rows=58183
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_launcher_launch_plans	10492	rows=56495
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_meta	1777	rows=12
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_catalog_stamp	5527	stamp_rows=1688 checkpoint_rows=1525
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_insert_software_hash_cache	0	rows=0
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_commit	19	-
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	import_stage_total	74372	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.625
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	sqlite_publish_progress	1038	bytes=11481088 copy_ms=1026 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=0 progress_events=45 result=bench-ok
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	library_db_saved	183127	bytes=11481088 scan_us=93059228 discover_us=37827069 classify_us=38581777 import_us=78791754 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
+P12-C02-SCANPLAN-BEFORE-20260710	994aa44	db_count	0	61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	first_frame	96	catalog_ready=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_catalog_scan_plan	10439	base_profiles=24 installed_cores=415 runtime_dirs=124
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_targets	0	roots=4 targets=149 extensions=36 runtime_dirs=124
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_first_candidate	19	path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_first_discovery	177	candidate=1 discoveries=1 path=/media/fat/_Arcade/Pac-Manic Miner.mra
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	full_scan_counter_climb	12730	target=50
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5717	path=/media/fat/_Arcade dirs=511 files=2758 candidates=2755
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	542	path=/media/fat/games/Saturn dirs=12 files=682 candidates=372
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	71	path=/media/fat/games/PSX dirs=2 files=123 candidates=123
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	38	path=/media/fat/games/Amiga dirs=3 files=15 candidates=5
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	251	path=/media/fat/games/NEOGEO dirs=12 files=555 candidates=281
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5	path=/media/fat/games/NeoGeo-CD dirs=1 files=93 candidates=93
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1280	path=/media/fat/games/mame dirs=1 files=1165 candidates=1161
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5	path=/media/fat/games/hbmame dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	9	path=/media/fat/games/Atari5200 dirs=1 files=165 candidates=163
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2307	path=/media/fat/games/Atari7800 dirs=241 files=528 candidates=82
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	80	path=/media/fat/games/AtariLynx dirs=1 files=779 candidates=400
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/ColecoVision dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	10684	path=/media/fat/games/GBA dirs=1705 files=1800 candidates=1692
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	6810	path=/media/fat/games/MegaDrive dirs=1248 files=1249 candidates=1248
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2941	path=/media/fat/games/N64 dirs=417 files=420 candidates=415
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	8923	path=/media/fat/games/NES dirs=1760 files=1990 candidates=1724
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	8	path=/media/fat/games/S32X dirs=1 files=51 candidates=51
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	34	path=/media/fat/games/SMS dirs=1 files=592 candidates=585
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	727	path=/media/fat/games/SNES dirs=1 files=1867 candidates=1862
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	32	path=/media/fat/games/Vectrex dirs=2 files=125 candidates=35
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	6	path=/media/fat/games/WonderSwan dirs=1 files=114 candidates=112
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/WonderSwanColor dirs=1 files=66 candidates=64
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	17	path=/media/fat/_DOS Games dirs=1 files=305 candidates=305
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5	path=/media/fat/_LLAPI/_Arcade dirs=1 files=81 candidates=81
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/3DO dirs=1 files=2 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/AcornAtom buffered=87 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	7	path=/media/fat/games/AcornAtom dirs=1 files=87 candidates=87
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/AcornElectron buffered=818 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	46	path=/media/fat/games/AcornElectron dirs=1 files=818 candidates=818
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Adam dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/AliceMC10 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Altair8800 buffered=8 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Altair8800 dirs=1 files=8 candidates=8
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	18	path=/media/fat/games/Amiga500 dirs=4 files=35 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/AmigaCD32 dirs=1 files=3 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Amstrad buffered=121 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	35	path=/media/fat/games/Amstrad dirs=1 files=122 candidates=121
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	16	path=/media/fat/games/Amstrad PCW dirs=2 files=10 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/APOGEE dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/APPLE-I dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Apple-II buffered=51 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5	path=/media/fat/games/Apple-II dirs=2 files=52 candidates=51
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/Apple-IIgs dirs=1 files=2 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/AQUARIUS buffered=55 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/AQUARIUS dirs=1 files=55 candidates=55
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Arcadia buffered=73 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/Arcadia dirs=1 files=73 candidates=73
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/ARCHIE buffered=2 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	91	path=/media/fat/games/ARCHIE dirs=4 files=209 candidates=2
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Astrocade buffered=27 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	8	path=/media/fat/games/Astrocade dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Atari2600 buffered=1117 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1400	path=/media/fat/games/Atari2600 dirs=241 files=1563 candidates=1117
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/ATARI2600-Sinden dirs=1 files=2 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/ATARI800 buffered=262 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	177	path=/media/fat/games/ATARI800 dirs=1 files=263 candidates=262
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/AtariST buffered=510 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	29	path=/media/fat/games/AtariST dirs=1 files=510 candidates=510
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/AVision dirs=1 files=4 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/AY-3-8500 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/BBCBridgeCompanion dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/BBCMicro buffered=4762 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	248	path=/media/fat/games/BBCMicro dirs=1 files=4764 candidates=4762
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/BK0011M dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/C128 buffered=63 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/C128 dirs=1 files=64 candidates=63
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/C16 buffered=967 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	46	path=/media/fat/games/C16 dirs=1 files=967 candidates=967
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/C64 buffered=16622 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	12351	path=/media/fat/games/C64 dirs=65 files=31623 candidates=16622
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Casio_PV-1000 buffered=5 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/Casio_PV-1000 dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Casio_PV-2000 buffered=10 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/Casio_PV-2000 dirs=1 files=10 candidates=10
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/CD-i dirs=1 files=3 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/ChannelF buffered=34 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/ChannelF dirs=1 files=34 candidates=34
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/CoCo2 buffered=389 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	19	path=/media/fat/games/CoCo2 dirs=1 files=389 candidates=389
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/COCO3 buffered=3 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/COCO3 dirs=1 files=3 candidates=3
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Coleco buffered=280 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	13	path=/media/fat/games/Coleco dirs=1 files=281 candidates=280
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/CreatiVision buffered=40 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/CreatiVision dirs=1 files=40 candidates=40
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/EDSAC dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/eg2000 buffered=122 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	7	path=/media/fat/games/eg2000 dirs=1 files=122 candidates=122
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Enterprise dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/EpochGalaxyII dirs=1 files=1 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/FDS buffered=261 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	13	path=/media/fat/games/FDS dirs=1 files=261 candidates=261
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Galaksija dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Gamate buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Gamate dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Game and Watch dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/GAMEBOY buffered=1383 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	247	path=/media/fat/games/GAMEBOY dirs=7 files=1473 candidates=1383
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	101	path=/media/fat/games/GAMEBOY2P dirs=14 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/GameGear buffered=16 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1251	path=/media/fat/games/GameGear dirs=440 files=440 candidates=16
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/GameGear2P dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	5	path=/media/fat/games/GameNWatch dirs=1 files=59 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/GBA2P buffered=156 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	61	path=/media/fat/games/GBA2P dirs=4 files=156 candidates=156
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3296	path=/media/fat/games/GBC dirs=1064 files=1059 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Genesis-Sinden buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/Genesis-Sinden dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Homelab dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Intellivision buffered=291 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	18	path=/media/fat/games/Intellivision dirs=1 files=319 candidates=291
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Interact buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Interact dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/IQ151 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Jaguar buffered=5 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/Jaguar dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Jupiter dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Laser dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Lynx48 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/MACLC buffered=5 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/MACLC dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/MACPLUS buffered=5 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/MACPLUS dirs=1 files=5 candidates=5
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/MegaCD buffered=170 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	72	path=/media/fat/games/MegaCD dirs=4 files=170 candidates=170
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	40	path=/media/fat/games/MegaDuck dirs=5 files=25 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	7	path=/media/fat/games/MEMTEST dirs=2 files=9 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/MSX buffered=410 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	24	path=/media/fat/games/MSX dirs=1 files=410 candidates=410
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/MSX1 buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/MSX1 dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/MultiComp dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/MyVision dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/NeoGeoPocket buffered=10 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/NeoGeoPocket dirs=1 files=11 candidates=10
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/NES-Sinden buffered=11 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/NES-Sinden dirs=1 files=11 candidates=11
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	6	path=/media/fat/games/NGPC dirs=1 files=75 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/ODYSSEY2 buffered=85 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	7	path=/media/fat/games/ODYSSEY2 dirs=1 files=94 candidates=85
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Ondra_SPO186 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/OpenBOR dirs=1 files=3 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/ORAO dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Oric buffered=1017 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	60	path=/media/fat/games/Oric dirs=1 files=1017 candidates=1017
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	11737	path=/media/fat/games/PC8801 dirs=2038 files=3926 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/PCjr dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/PCXT dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/PDP1 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/PET2001 buffered=18 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/PET2001 dirs=1 files=18 candidates=18
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/PICO-8 dirs=1 files=3 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/PMD85 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/PocketChallengeV2 dirs=1 files=2 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/PokemonMini buffered=45 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/PokemonMini dirs=1 files=45 candidates=45
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/QL buffered=4 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/QL dirs=1 files=4 candidates=4
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/RX78 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SAMCOUPE buffered=173 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	10	path=/media/fat/games/SAMCOUPE dirs=1 files=173 candidates=173
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Satellaview buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/Satellaview dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SCV buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SCV dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SGB buffered=27 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/SGB dirs=1 files=27 candidates=27
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SGB2 buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/SGB2 dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SharpMZ dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SMS-Sinden buffered=14 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/SMS-Sinden dirs=1 files=14 candidates=14
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SNES-Sinden buffered=1 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SNES-Sinden dirs=1 files=1 candidates=1
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Sord M5 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/Spectrum buffered=860 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	43	path=/media/fat/games/Spectrum dirs=1 files=863 candidates=860
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SPMX dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/SuperGrafx dirs=1 files=4 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/SuperVision buffered=47 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/SuperVision dirs=1 files=47 candidates=47
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SuperVision8000 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/SVI328 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/Tamagotchi dirs=1 files=4 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/Tandy1000 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/TatungEinstein dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	91	path=/media/fat/games/TGFX16 dirs=3 files=495 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	7	path=/media/fat/games/TGFX16-CD dirs=1 files=62 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	26	path=/media/fat/games/TI-99_4A dirs=1 files=497 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/TK2000 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	3	path=/media/fat/games/TomyScramble dirs=1 files=1 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/TomyTutor buffered=3 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/TomyTutor dirs=1 files=3 candidates=3
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/TRS-80 buffered=4 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/TRS-80 dirs=1 files=4 candidates=4
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/TSConf dirs=1 files=2 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/UK101 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/VC4000 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/VECTOR06 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/VIC20 buffered=30 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	4	path=/media/fat/games/VIC20 dirs=1 files=30 candidates=30
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	1	path=/media/fat/games/VT52 dirs=1 files=0 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/X68000 buffered=305 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	20	path=/media/fat/games/X68000 dirs=1 files=312 candidates=305
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_runtime_buffer	0	path=/media/fat/games/ZX81 buffered=13 limit=65536 overflowed=false
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/ZX81 dirs=1 files=13 candidates=13
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	2	path=/media/fat/games/ZXNext dirs=1 files=1 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk_target	811	path=/media/fat/games/AO486 dirs=297 files=11 candidates=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_walk	73143	candidates=45440
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_profile_match	380	calls=45440
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_installed_collection	346	calls=44544
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_archive_toc	22983	containers=2814
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_collection_listings	0	collections=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_file_discovery	27967	files=44543
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_classify_total	73679	discoveries=62939 normal_files=44543 containers=2814 entries=16834
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_active_profiles	36	profiles=79 runtime_facts=143
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	library_scan_complete	85829	scan_us=84171103 discover_us=73142893 classify_us=73716408 discoveries=61626 normal_files=44543 containers=2814 entries=16834
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	library_ready	94968	games=59228 load_us=8851889
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	catalog_bridge_sync_update	94968	games=59228 elapsed_us=277
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	catalog_worker_ram_catalog	94969	games=59228 catalog_us=8851889
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	scan_stage_coverage_audit_deferred	2742	rows=1675
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_schema	52	tables=14
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_metadata_load	3049	mame=2679 hbmame=548 mame_needed=2983 software_lists=14979 preview_paths=8
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_begin_tx	0	-
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_profiles	2	rows=79
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_catalog_audit	34	rows=1675
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	112	from=0 to=1000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	123	from=1000 to=2000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	118	from=2000 to=3000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	134	from=3000 to=4000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	123	from=4000 to=5000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	122	from=5000 to=6000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	138	from=6000 to=7000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	173	from=7000 to=8000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	126	from=8000 to=9000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	123	from=9000 to=10000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	131	from=10000 to=11000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	123	from=11000 to=12000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	124	from=12000 to=13000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	123	from=13000 to=14000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	184	from=14000 to=15000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	179	from=15000 to=16000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	160	from=16000 to=17000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	115	from=17000 to=18000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	147	from=18000 to=19000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	170	from=19000 to=20000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	166	from=20000 to=21000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	115	from=21000 to=22000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	111	from=22000 to=23000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	119	from=23000 to=24000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	147	from=24000 to=25000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	117	from=25000 to=26000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	116	from=26000 to=27000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	115	from=27000 to=28000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	116	from=28000 to=29000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	116	from=29000 to=30000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	117	from=30000 to=31000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	118	from=31000 to=32000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	118	from=32000 to=33000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	143	from=33000 to=34000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	156	from=34000 to=35000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	112	from=35000 to=36000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	124	from=36000 to=37000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	149	from=37000 to=38000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	232	from=38000 to=39000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	119	from=39000 to=40000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	118	from=40000 to=41000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	135	from=41000 to=42000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	142	from=42000 to=43000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	119	from=43000 to=44000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	118	from=44000 to=45000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	117	from=45000 to=46000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	115	from=46000 to=47000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	128	from=47000 to=48000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	112	from=48000 to=49000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	112	from=49000 to=50000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	113	from=50000 to=51000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	156	from=51000 to=52000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	268	from=52000 to=53000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	240	from=53000 to=54000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	237	from=54000 to=55000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	177	from=55000 to=56000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	111	from=56000 to=57000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	246	from=57000 to=58000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	252	from=58000 to=59000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	252	from=59000 to=60000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	121	from=60000 to=61000 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_chunk	70	from=61000 to=61626 total=61626
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_games_total	10251	rows=61626 launcher_rows=58634
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_materialize_arcade_ui	42538	-
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_launcher_arcade	0	-
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_launcher_console	2988	rows=58183
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_launcher_launch_plans	10769	rows=56495
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_meta	1818	rows=12
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_catalog_stamp	5748	stamp_rows=1688 checkpoint_rows=1525
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_insert_software_hash_cache	0	rows=0
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_build_saved_catalog	0	skipped=precomputed_projection
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_commit	19	-
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	import_stage_total	77273	path=/tmp/mister-magik/sqlite-build/.library.sqlite3.build.625
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	sqlite_publish_progress	801	bytes=11481088 copy_ms=788 build_sync_ms=0 final_sync_ms=0 rename_ms=0 parent_sync_ms=3 progress_events=45 result=bench-ok
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	library_db_saved	179744	bytes=11481088 scan_us=86912980 discover_us=73142893 classify_us=73716408 import_us=81542701 discoveries=61626 normal_files=44543 containers=2814 entries=16834 audit_rows=1675
+P12-C02-SCANPLAN-CANDIDATE-20260710	994aa44-dirty	db_count	0	61626

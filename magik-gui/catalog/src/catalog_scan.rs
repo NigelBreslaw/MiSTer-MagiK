@@ -1,6 +1,9 @@
 //! Library walking and archive candidate discovery.
 
-use crate::launch_profiles::{self, LaunchProfile, PayloadDisposition, ProfilePathClass};
+use crate::catalog_discovery::{GameDirFact, GameDirHeader};
+use crate::launch_profiles::{
+    self, CatalogScanPlan, LaunchProfile, PayloadDisposition, ProfilePathClass,
+};
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
@@ -13,6 +16,11 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 const DISCOVERY_EVENT_BUFFER: usize = 8192;
+/// A runtime directory normally contributes a small set of candidate records.
+/// Keep that transient buffer bounded; the overflow path deliberately re-walks
+/// just that directory after its facts have selected a profile, rather than
+/// dropping a possible game.
+const MAX_RUNTIME_DIRECTORY_BUFFERED_FILES: usize = 65_536;
 const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
 const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
@@ -22,6 +30,13 @@ pub(crate) struct FoundFile {
     pub(crate) ext: String,
     pub(crate) size: u64,
     pub(crate) mtime_secs: i64,
+}
+
+pub(crate) struct RuntimeDirectoryCandidates {
+    pub(crate) header: GameDirHeader,
+    pub(crate) facts: GameDirFact,
+    pub(crate) files: Vec<FoundFile>,
+    pub(crate) overflowed: bool,
 }
 
 pub(crate) struct ArchiveScan {
@@ -37,6 +52,8 @@ pub(crate) fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, 
     while let Ok(event) = rx.recv() {
         match event {
             DiscoveryEvent::File(_) => candidates += 1,
+            DiscoveryEvent::GameDirFacts(_) => {}
+            DiscoveryEvent::RuntimeDirectory(runtime) => candidates += runtime.files.len(),
             DiscoveryEvent::Done { dirs: count, .. } => {
                 dirs = count;
                 break;
@@ -85,6 +102,8 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
 
 pub(crate) enum DiscoveryEvent {
     File(FoundFile),
+    GameDirFacts(GameDirFact),
+    RuntimeDirectory(RuntimeDirectoryCandidates),
     Done { dirs: usize, discover_us: u64 },
 }
 
@@ -100,22 +119,32 @@ pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<Dis
     discover_files_pipelined_with_role(roots, None, RuntimeThreadRole::LibraryWalker)
 }
 
-pub(crate) fn discover_files_pipelined_with_profiles(
+pub(crate) fn discover_files_pipelined_foreground_with_plan(
     roots: Vec<String>,
-    profiles: Vec<LaunchProfile>,
+    plan: CatalogScanPlan,
 ) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_role(roots, Some(profiles), RuntimeThreadRole::LibraryWalker)
+    discover_files_pipelined_with_plan(roots, plan, RuntimeThreadRole::LibraryWalkerForeground)
 }
 
-pub(crate) fn discover_files_pipelined_foreground_with_profiles(
+pub(crate) fn discover_files_pipelined_with_plan(
     roots: Vec<String>,
-    profiles: Vec<LaunchProfile>,
+    plan: CatalogScanPlan,
+    role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_role(
-        roots,
-        Some(profiles),
-        RuntimeThreadRole::LibraryWalkerForeground,
-    )
+    let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
+    std::thread::Builder::new()
+        .name("library-walker".to_string())
+        .spawn(move || {
+            apply_runtime_thread_policy(role);
+            let t = Instant::now();
+            let dirs = walk_index_candidates_with_plan(&roots, &plan, &tx);
+            let _ = tx.send(DiscoveryEvent::Done {
+                dirs,
+                discover_us: t.elapsed().as_micros() as u64,
+            });
+        })
+        .expect("spawn library-walker");
+    rx
 }
 
 fn discover_files_pipelined_with_role(
@@ -189,6 +218,120 @@ fn walk_index_candidates(
     dirs
 }
 
+enum PlannedScanTarget {
+    Static {
+        path: PathBuf,
+        game_dir_header: Option<GameDirHeader>,
+    },
+    Runtime(GameDirHeader),
+    FactsOnly(GameDirHeader),
+}
+
+fn walk_index_candidates_with_plan(
+    roots: &[String],
+    plan: &CatalogScanPlan,
+    tx: &mpsc::SyncSender<DiscoveryEvent>,
+) -> usize {
+    let profiles = plan.base_profiles();
+    let candidate_exts = source_index_extensions(profiles);
+    let targets = scan_targets_for_plan(roots, plan, profiles);
+    library_db::report_library_scan_timing(
+        "walk_targets",
+        0,
+        format!(
+            "roots={} targets={} extensions={} runtime_dirs={}",
+            roots.len(),
+            targets.len(),
+            candidate_exts.len(),
+            plan.game_dir_headers().len(),
+        ),
+    );
+    let mut dirs = 0usize;
+    for target in targets {
+        let stats = match target {
+            PlannedScanTarget::Static {
+                path,
+                game_dir_header,
+            } => {
+                let (stats, facts) = scan_target_candidates_with_facts(
+                    &path,
+                    profiles,
+                    &candidate_exts,
+                    game_dir_header.as_ref(),
+                    |file| tx.send(DiscoveryEvent::File(file)).is_ok(),
+                );
+                report_walk_target(&path, &stats);
+                if let Some(facts) = facts {
+                    if tx.send(DiscoveryEvent::GameDirFacts(facts)).is_err() {
+                        break;
+                    }
+                }
+                stats
+            }
+            PlannedScanTarget::Runtime(header) => {
+                let (stats, candidates) = scan_runtime_target_candidates(&header, plan);
+                report_walk_target(&header.path, &stats);
+                if tx
+                    .send(DiscoveryEvent::RuntimeDirectory(candidates))
+                    .is_err()
+                {
+                    break;
+                }
+                stats
+            }
+            PlannedScanTarget::FactsOnly(header) => {
+                let (stats, facts) = scan_game_dir_facts_only(&header);
+                report_walk_target(&header.path, &stats);
+                if tx.send(DiscoveryEvent::GameDirFacts(facts)).is_err() {
+                    break;
+                }
+                stats
+            }
+        };
+        dirs += stats.dirs;
+        if stats.aborted {
+            break;
+        }
+    }
+    dirs
+}
+
+fn scan_targets_for_plan(
+    roots: &[String],
+    plan: &CatalogScanPlan,
+    profiles: &[LaunchProfile],
+) -> Vec<PlannedScanTarget> {
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for path in scan_targets_for_roots(roots, profiles) {
+        let key = path.display().to_string().to_ascii_lowercase();
+        if seen.insert(key) {
+            let game_dir_header = plan
+                .all_game_dir_headers()
+                .iter()
+                .find(|header| header.path == path)
+                .cloned();
+            targets.push(PlannedScanTarget::Static {
+                path,
+                game_dir_header,
+            });
+        }
+    }
+    for header in plan.game_dir_headers() {
+        let key = header.path.display().to_string().to_ascii_lowercase();
+        if seen.insert(key) {
+            targets.push(PlannedScanTarget::Runtime(header.clone()));
+        }
+    }
+    for header in plan.all_game_dir_headers() {
+        let key = header.path.display().to_string().to_ascii_lowercase();
+        if seen.insert(key) {
+            targets.push(PlannedScanTarget::FactsOnly(header.clone()));
+        }
+    }
+    targets
+}
+
 fn walk_index_candidates_streaming(
     targets: Vec<PathBuf>,
     profiles: &[LaunchProfile],
@@ -213,13 +356,30 @@ fn scan_target_candidates(
     target: &Path,
     profiles: &[LaunchProfile],
     candidate_exts: &HashSet<String>,
-    mut emit: impl FnMut(FoundFile) -> bool,
+    emit: impl FnMut(FoundFile) -> bool,
 ) -> WalkTargetStats {
+    scan_target_candidates_with_facts(target, profiles, candidate_exts, None, emit).0
+}
+
+fn scan_target_candidates_with_facts(
+    target: &Path,
+    profiles: &[LaunchProfile],
+    candidate_exts: &HashSet<String>,
+    game_dir_header: Option<&GameDirHeader>,
+    mut emit: impl FnMut(FoundFile) -> bool,
+) -> (WalkTargetStats, Option<GameDirFact>) {
     let target_t = Instant::now();
     let mut dirs = 1usize;
     let mut files = 0usize;
     let mut candidates = 0usize;
     let mut aborted = false;
+    let mut facts = game_dir_header.map(|header| GameDirFact {
+        name: header.name.clone(),
+        path: header.path.clone(),
+        has_payload_files: false,
+        has_zip_files: false,
+        payload_extensions: std::collections::BTreeSet::new(),
+    });
     for entry in walkdir::WalkDir::new(target)
         .follow_links(false)
         .into_iter()
@@ -243,6 +403,23 @@ fn scan_target_candidates(
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        if let Some(facts) = facts.as_mut() {
+            let depth = p
+                .strip_prefix(target)
+                .ok()
+                .map(|relative| relative.components().count())
+                .unwrap_or(usize::MAX);
+            if depth <= 2 {
+                if ext.eq_ignore_ascii_case("zip") {
+                    facts.has_zip_files = true;
+                } else {
+                    facts.has_payload_files = true;
+                    if !ext.is_empty() {
+                        facts.payload_extensions.insert(ext.clone());
+                    }
+                }
+            }
+        }
         if !is_source_index_extension(candidate_exts, p, &ext) {
             continue;
         }
@@ -262,13 +439,266 @@ fn scan_target_candidates(
             break;
         }
     }
-    WalkTargetStats {
-        dirs,
-        files,
-        candidates,
-        elapsed_us: target_t.elapsed().as_micros() as u64,
-        aborted,
+    (
+        WalkTargetStats {
+            dirs,
+            files,
+            candidates,
+            elapsed_us: target_t.elapsed().as_micros() as u64,
+            aborted,
+        },
+        facts,
+    )
+}
+
+fn scan_runtime_target_candidates(
+    header: &GameDirHeader,
+    plan: &CatalogScanPlan,
+) -> (WalkTargetStats, RuntimeDirectoryCandidates) {
+    let target_t = Instant::now();
+    let mut dirs = 1usize;
+    let mut files_seen = 0usize;
+    let mut has_payload_files = false;
+    let mut has_zip_files = false;
+    let mut payload_extensions = std::collections::BTreeSet::new();
+    let mut shallow_files = Vec::new();
+    let mut deep_roots = Vec::new();
+
+    for entry in walkdir::WalkDir::new(&header.path)
+        .follow_links(false)
+        .max_depth(2)
+        .into_iter()
+        .filter_entry(|entry| !should_ignore_path(entry.path()))
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path == header.path {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            dirs += 1;
+            if path
+                .strip_prefix(&header.path)
+                .ok()
+                .is_some_and(|relative| relative.components().count() == 2)
+            {
+                deep_roots.push(path.to_path_buf());
+            }
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        files_seen += 1;
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext.eq_ignore_ascii_case("zip") {
+            has_zip_files = true;
+        } else {
+            has_payload_files = true;
+            if !ext.is_empty() {
+                payload_extensions.insert(ext.clone());
+            }
+        }
+        let (size, mtime_secs) = candidate_signature_for_walk_entry(path, &ext, &entry);
+        let file = FoundFile {
+            path: path.to_path_buf(),
+            ext,
+            size,
+            mtime_secs,
+        };
+        shallow_files.push(file);
     }
+    let facts = GameDirFact {
+        name: header.name.clone(),
+        path: header.path.clone(),
+        has_payload_files,
+        has_zip_files,
+        payload_extensions,
+    };
+    let Some(profile) = plan.profile_for_game_dir_facts(&facts) else {
+        return (
+            WalkTargetStats {
+                dirs,
+                files: files_seen,
+                candidates: 0,
+                elapsed_us: target_t.elapsed().as_micros() as u64,
+                aborted: false,
+            },
+            RuntimeDirectoryCandidates {
+                header: header.clone(),
+                facts,
+                files: Vec::new(),
+                overflowed: false,
+            },
+        );
+    };
+
+    let candidate_exts = source_index_extensions(std::slice::from_ref(&profile));
+    let mut files = Vec::new();
+    let mut overflowed = false;
+    for file in shallow_files {
+        push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
+    }
+    for root in deep_roots {
+        for entry in walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| !should_ignore_path(entry.path()))
+            .filter_map(Result::ok)
+        {
+            let path = entry.path();
+            if path == root {
+                continue;
+            }
+            if entry.file_type().is_dir() {
+                dirs += 1;
+                continue;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            files_seen += 1;
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let (size, mtime_secs) = candidate_signature_for_walk_entry(path, &ext, &entry);
+            let file = FoundFile {
+                path: path.to_path_buf(),
+                ext,
+                size,
+                mtime_secs,
+            };
+            push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
+        }
+    }
+    let stats = WalkTargetStats {
+        dirs,
+        files: files_seen,
+        candidates: files.len(),
+        elapsed_us: target_t.elapsed().as_micros() as u64,
+        aborted: false,
+    };
+    library_db::report_library_scan_timing(
+        "runtime_buffer",
+        0,
+        format!(
+            "path={} buffered={} limit={} overflowed={}",
+            header.path.display(),
+            files.len(),
+            MAX_RUNTIME_DIRECTORY_BUFFERED_FILES,
+            overflowed,
+        ),
+    );
+    (
+        stats,
+        RuntimeDirectoryCandidates {
+            header: header.clone(),
+            facts,
+            files,
+            overflowed,
+        },
+    )
+}
+
+fn push_runtime_candidate(
+    files: &mut Vec<FoundFile>,
+    overflowed: &mut bool,
+    candidate_exts: &HashSet<String>,
+    profile: &LaunchProfile,
+    file: FoundFile,
+) {
+    if *overflowed
+        || !is_source_index_extension(candidate_exts, &file.path, &file.ext)
+        || !is_index_candidate(std::slice::from_ref(profile), &file.path, &file.ext)
+    {
+        return;
+    }
+    if files.len() == MAX_RUNTIME_DIRECTORY_BUFFERED_FILES {
+        *overflowed = true;
+        files.clear();
+        return;
+    }
+    files.push(file);
+}
+
+fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDirFact) {
+    let target_t = Instant::now();
+    let mut dirs = 1usize;
+    let mut files = 0usize;
+    let mut has_payload_files = false;
+    let mut has_zip_files = false;
+    let mut payload_extensions = std::collections::BTreeSet::new();
+    for entry in walkdir::WalkDir::new(&header.path)
+        .follow_links(false)
+        .max_depth(2)
+        .into_iter()
+        .filter_entry(|entry| !should_ignore_path(entry.path()))
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path == header.path {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            dirs += 1;
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        files += 1;
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext.eq_ignore_ascii_case("zip") {
+            has_zip_files = true;
+        } else {
+            has_payload_files = true;
+            if !ext.is_empty() {
+                payload_extensions.insert(ext);
+            }
+        }
+    }
+    (
+        WalkTargetStats {
+            dirs,
+            files,
+            candidates: 0,
+            elapsed_us: target_t.elapsed().as_micros() as u64,
+            aborted: false,
+        },
+        GameDirFact {
+            name: header.name.clone(),
+            path: header.path.clone(),
+            has_payload_files,
+            has_zip_files,
+            payload_extensions,
+        },
+    )
+}
+
+/// Correctness-preserving rare fallback for a runtime directory that exceeded
+/// the in-RAM candidate bound. The normal path never calls this second walk.
+pub(crate) fn collect_runtime_candidates_after_overflow(
+    header: &GameDirHeader,
+    profiles: &[LaunchProfile],
+) -> Vec<FoundFile> {
+    let candidate_exts = source_index_extensions(profiles);
+    let mut files = Vec::new();
+    let stats = scan_target_candidates(&header.path, profiles, &candidate_exts, |file| {
+        files.push(file);
+        true
+    });
+    report_walk_target(&header.path, &stats);
+    files
 }
 
 fn report_walk_target(target: &Path, stats: &WalkTargetStats) {
@@ -918,6 +1348,12 @@ mod tests {
             .try_iter()
             .map(|event| match event {
                 DiscoveryEvent::File(file) => file.path,
+                DiscoveryEvent::GameDirFacts(_) => {
+                    unreachable!("direct walk does not collect game-dir facts")
+                }
+                DiscoveryEvent::RuntimeDirectory(_) => {
+                    unreachable!("direct walk does not buffer runtime directories")
+                }
                 DiscoveryEvent::Done { .. } => unreachable!("direct walk does not send done"),
             })
             .collect::<Vec<_>>();

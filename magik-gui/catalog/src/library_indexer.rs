@@ -130,25 +130,33 @@ fn scan_library_with_progress_and_events(
     mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
     let discover_t = Instant::now();
-    let profiles_t = Instant::now();
-    let profiles = launch_profiles::active_profiles_for_roots(&cfg.roots);
+    let plan_t = Instant::now();
+    let plan = launch_profiles::CatalogScanPlan::for_roots(&cfg.roots);
     library_db::report_library_scan_timing(
-        "active_profiles",
-        profiles_t.elapsed().as_micros() as u64,
-        format!("profiles={}", profiles.len()),
+        "catalog_scan_plan",
+        plan_t.elapsed().as_micros() as u64,
+        format!(
+            "base_profiles={} installed_cores={} runtime_dirs={}",
+            plan.base_profiles().len(),
+            plan.installed_cores().len(),
+            plan.game_dir_headers().len(),
+        ),
     );
     let rx = match priority {
-        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_profiles(
+        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
-            profiles.clone(),
+            plan.clone(),
+            crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         ),
         LibraryScanPriority::Foreground => {
-            catalog_scan::discover_files_pipelined_foreground_with_profiles(
+            catalog_scan::discover_files_pipelined_foreground_with_plan(
                 cfg.roots.clone(),
-                profiles.clone(),
+                plan.clone(),
             )
         }
     };
+    let mut game_dir_facts = Vec::with_capacity(plan.game_dir_headers().len());
+    let mut profiles = plan.base_profiles().to_vec();
     let mut discover_us = 0;
 
     let mut normal_files = Vec::new();
@@ -162,8 +170,29 @@ fn scan_library_with_progress_and_events(
     let mut first_discovery_reported = false;
     let mut discovered_systems = BTreeSet::new();
     while let Ok(event) = rx.recv() {
-        let f = match event {
-            DiscoveryEvent::File(file) => file,
+        let files = match event {
+            DiscoveryEvent::File(file) => vec![file],
+            DiscoveryEvent::GameDirFacts(facts) => {
+                game_dir_facts.push(facts);
+                Vec::new()
+            }
+            DiscoveryEvent::RuntimeDirectory(runtime) => {
+                game_dir_facts.push(runtime.facts);
+                profiles = plan.finalize_profiles(&game_dir_facts);
+                if runtime.overflowed {
+                    library_db::report_library_scan_timing(
+                        "runtime_buffer_overflow",
+                        0,
+                        format!("path={}", runtime.header.path.display()),
+                    );
+                    catalog_scan::collect_runtime_candidates_after_overflow(
+                        &runtime.header,
+                        &profiles,
+                    )
+                } else {
+                    runtime.files
+                }
+            }
             DiscoveryEvent::Done {
                 discover_us: us, ..
             } => {
@@ -171,150 +200,158 @@ fn scan_library_with_progress_and_events(
                 break;
             }
         };
-        if idx == 0 {
-            library_db::report_library_scan_timing(
-                "first_candidate",
-                classify_t.elapsed().as_micros() as u64,
-                format!("path={}", f.path.display()),
-            );
-        }
-        idx += 1;
-        let discoveries_before = discoveries.len();
-        let profile_match_t = Instant::now();
-        let profile_match = catalog_scan::classify_profile_path(&profiles, &f.path);
-        timing.profile_match_us += profile_match_t.elapsed().as_micros() as u64;
-        timing.profile_match_count += 1;
-        match profile_match {
-            Some((
-                profile,
-                ProfilePathClass::Payload {
-                    rule:
-                        payload_rule @ PayloadRule {
-                            disposition: PayloadDisposition::Playable,
-                            ..
-                        },
-                },
-            )) => {
-                if media_metadata::is_amigavision_save_media_path(&f.path) {
-                    ignored_files += 1;
-                    continue;
-                }
-                let installed_t = Instant::now();
-                let installed =
-                    media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
-                timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
-                timing.installed_collection_count += 1;
-                if let Some(installed) = installed {
-                    ignored_files += 1;
-                    discoveries.extend(installed);
-                    continue;
-                }
-                let mut has_archive_entries = false;
-                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                    let archive_t = Instant::now();
-                    let scan = catalog_scan::scan_archive_toc(&f, format, profile);
-                    timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
-                    timing.archive_toc_count += 1;
-                    has_archive_entries = !scan.entries.is_empty();
-                    for entry in scan.entries {
-                        discoveries.push(discovery_from_profile_archive_entry(
-                            &entry,
-                            profile,
-                            &entry.rule,
-                        ));
-                        entries.push(entry);
-                    }
-                    containers.push(scan.container);
-                }
-                if has_archive_entries {
-                    continue;
-                }
-                normal_files.push(LibraryPayloadFile {
-                    path: f.path.display().to_string(),
-                });
-                let discovery_t = Instant::now();
-                discoveries.push(discovery_from_profile_file(
-                    &f,
+        for f in files {
+            // Runtime directories are buffered before their profile is resolved.
+            // Static walker events already satisfy this predicate, so applying it
+            // here keeps the original candidate/progress accounting intact.
+            if !catalog_scan::is_index_candidate(&profiles, &f.path, &f.ext) {
+                continue;
+            }
+            if idx == 0 {
+                library_db::report_library_scan_timing(
+                    "first_candidate",
+                    classify_t.elapsed().as_micros() as u64,
+                    format!("path={}", f.path.display()),
+                );
+            }
+            idx += 1;
+            let discoveries_before = discoveries.len();
+            let profile_match_t = Instant::now();
+            let profile_match = catalog_scan::classify_profile_path(&profiles, &f.path);
+            timing.profile_match_us += profile_match_t.elapsed().as_micros() as u64;
+            timing.profile_match_count += 1;
+            match profile_match {
+                Some((
                     profile,
-                    &payload_rule,
-                    &profiles,
-                ));
-                timing.file_discovery_us += discovery_t.elapsed().as_micros() as u64;
-                timing.file_discovery_count += 1;
-            }
-            Some((
-                _,
-                ProfilePathClass::Payload {
-                    rule:
-                        PayloadRule {
-                            disposition: PayloadDisposition::AttachedMedia,
-                            ..
-                        },
-                },
-            )) => {
-                normal_files.push(LibraryPayloadFile {
-                    path: f.path.display().to_string(),
-                });
-                ignored_files += 1;
-            }
-            Some((profile, ProfilePathClass::Collection { rule })) => {
-                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                    containers.push(catalog_scan::scan_container_header(&f, format));
-                }
-                let collection_t = Instant::now();
-                discoveries.extend(media_metadata::collection_discoveries_from_container(
-                    &f, profile, &rule,
-                ));
-                timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
-                timing.collection_listing_count += 1;
-            }
-            Some((_profile, ProfilePathClass::Ignored { .. })) => {
-                ignored_files += 1;
-            }
-            Some((profile, ProfilePathClass::NotMatched))
-                if catalog_scan::is_archive_entry_container_candidate(&profiles, &f.path) =>
-            {
-                if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                    let archive_t = Instant::now();
-                    let scan = catalog_scan::scan_archive_toc(&f, format, profile);
-                    timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
-                    timing.archive_toc_count += 1;
-                    for entry in scan.entries {
-                        discoveries.push(discovery_from_profile_archive_entry(
-                            &entry,
-                            profile,
-                            &entry.rule,
-                        ));
-                        entries.push(entry);
+                    ProfilePathClass::Payload {
+                        rule:
+                            payload_rule @ PayloadRule {
+                                disposition: PayloadDisposition::Playable,
+                                ..
+                            },
+                    },
+                )) => {
+                    if media_metadata::is_amigavision_save_media_path(&f.path) {
+                        ignored_files += 1;
+                        continue;
                     }
-                    containers.push(scan.container);
+                    let installed_t = Instant::now();
+                    let installed =
+                        media_metadata::installed_amigavision_discoveries_from_hdf(&f, profile);
+                    timing.installed_collection_us += installed_t.elapsed().as_micros() as u64;
+                    timing.installed_collection_count += 1;
+                    if let Some(installed) = installed {
+                        ignored_files += 1;
+                        discoveries.extend(installed);
+                        continue;
+                    }
+                    let mut has_archive_entries = false;
+                    if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                        let archive_t = Instant::now();
+                        let scan = catalog_scan::scan_archive_toc(&f, format, profile);
+                        timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                        timing.archive_toc_count += 1;
+                        has_archive_entries = !scan.entries.is_empty();
+                        for entry in scan.entries {
+                            discoveries.push(discovery_from_profile_archive_entry(
+                                &entry,
+                                profile,
+                                &entry.rule,
+                            ));
+                            entries.push(entry);
+                        }
+                        containers.push(scan.container);
+                    }
+                    if has_archive_entries {
+                        continue;
+                    }
+                    normal_files.push(LibraryPayloadFile {
+                        path: f.path.display().to_string(),
+                    });
+                    let discovery_t = Instant::now();
+                    discoveries.push(discovery_from_profile_file(
+                        &f,
+                        profile,
+                        &payload_rule,
+                        &profiles,
+                    ));
+                    timing.file_discovery_us += discovery_t.elapsed().as_micros() as u64;
+                    timing.file_discovery_count += 1;
                 }
+                Some((
+                    _,
+                    ProfilePathClass::Payload {
+                        rule:
+                            PayloadRule {
+                                disposition: PayloadDisposition::AttachedMedia,
+                                ..
+                            },
+                    },
+                )) => {
+                    normal_files.push(LibraryPayloadFile {
+                        path: f.path.display().to_string(),
+                    });
+                    ignored_files += 1;
+                }
+                Some((profile, ProfilePathClass::Collection { rule })) => {
+                    if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                        containers.push(catalog_scan::scan_container_header(&f, format));
+                    }
+                    let collection_t = Instant::now();
+                    discoveries.extend(media_metadata::collection_discoveries_from_container(
+                        &f, profile, &rule,
+                    ));
+                    timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
+                    timing.collection_listing_count += 1;
+                }
+                Some((_profile, ProfilePathClass::Ignored { .. })) => {
+                    ignored_files += 1;
+                }
+                Some((profile, ProfilePathClass::NotMatched))
+                    if catalog_scan::is_archive_entry_container_candidate(&profiles, &f.path) =>
+                {
+                    if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                        let archive_t = Instant::now();
+                        let scan = catalog_scan::scan_archive_toc(&f, format, profile);
+                        timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                        timing.archive_toc_count += 1;
+                        for entry in scan.entries {
+                            discoveries.push(discovery_from_profile_archive_entry(
+                                &entry,
+                                profile,
+                                &entry.rule,
+                            ));
+                            entries.push(entry);
+                        }
+                        containers.push(scan.container);
+                    }
+                }
+                Some((_, ProfilePathClass::NotMatched)) | None => {}
             }
-            Some((_, ProfilePathClass::NotMatched)) | None => {}
-        }
-        report_new_discovered_systems(
-            &discoveries[discoveries_before..],
-            &mut discovered_systems,
-            &mut scan_events,
-        );
-        if discoveries.len() > discoveries_before && !first_discovery_reported {
-            first_discovery_reported = true;
-            library_db::report_library_scan_timing(
-                "first_discovery",
-                classify_t.elapsed().as_micros() as u64,
-                format!(
-                    "candidate={} discoveries={} path={}",
-                    idx,
-                    discoveries.len(),
-                    f.path.display()
-                ),
+            report_new_discovered_systems(
+                &discoveries[discoveries_before..],
+                &mut discovered_systems,
+                &mut scan_events,
             );
-        }
-        if idx.is_multiple_of(SCAN_PROGRESS_CANDIDATE_BATCH) {
-            report_catalog_progress(
-                &mut progress,
-                CatalogProgress::classifying_games_found(discoveries.len()),
-            );
+            if discoveries.len() > discoveries_before && !first_discovery_reported {
+                first_discovery_reported = true;
+                library_db::report_library_scan_timing(
+                    "first_discovery",
+                    classify_t.elapsed().as_micros() as u64,
+                    format!(
+                        "candidate={} discoveries={} path={}",
+                        idx,
+                        discoveries.len(),
+                        f.path.display()
+                    ),
+                );
+            }
+            if idx.is_multiple_of(SCAN_PROGRESS_CANDIDATE_BATCH) {
+                report_catalog_progress(
+                    &mut progress,
+                    CatalogProgress::classifying_games_found(discoveries.len()),
+                );
+            }
         }
     }
     if discover_us == 0 {
@@ -357,10 +394,25 @@ fn scan_library_with_progress_and_events(
             entries.len()
         ),
     );
+    let profiles_t = Instant::now();
+    profiles = plan.finalize_profiles(&game_dir_facts);
+    library_db::report_library_scan_timing(
+        "active_profiles",
+        profiles_t.elapsed().as_micros() as u64,
+        format!(
+            "profiles={} runtime_facts={}",
+            profiles.len(),
+            game_dir_facts.len()
+        ),
+    );
     let audit_rows = match audit_mode {
         CoverageAuditMode::Inline => {
             let audit_t = Instant::now();
-            let audit_rows = core_audit::audit_catalog_coverage(&cfg.roots, &profiles);
+            let audit_rows = core_audit::audit_catalog_coverage_from_facts(
+                &profiles,
+                plan.installed_cores(),
+                &game_dir_facts,
+            );
             library_db::report_library_scan_timing(
                 "coverage_audit",
                 audit_t.elapsed().as_micros() as u64,
@@ -374,6 +426,8 @@ fn scan_library_with_progress_and_events(
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),
         roots: cfg.roots.clone(),
+        installed_cores: plan.installed_cores().to_vec(),
+        game_dir_facts,
         profiles,
         normal_files,
         containers,
