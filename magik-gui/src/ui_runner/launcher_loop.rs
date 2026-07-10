@@ -1503,7 +1503,7 @@ pub(super) fn run_launcher_loop(
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade))
         && !arcade_navigation_ready(catalog_ready, &catalog);
-    bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version));
+    bridge.set_game_systems(bridge_models.game_systems(&catalog, catalog_version, nav.selected));
     print_startup_event(
         start,
         "catalog_bridge_systems",

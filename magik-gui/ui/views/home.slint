@@ -77,7 +77,7 @@ export component HomeGrid inherits Rectangle {
                         height: parent.height;
                         label: system.title;
                         subtitle: system.count + " games";
-                        focused: !MisterBridge.settings-focused && MisterBridge.selected-index == i;
+                        focused: !MisterBridge.settings-focused && system.focused;
                     }
                 }
             }
