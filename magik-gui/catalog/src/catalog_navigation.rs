@@ -3,6 +3,7 @@
 use crate::arcade_catalog::{
     ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, StructuredLaunchPlan,
 };
+use crate::bounded_lz4;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
@@ -18,6 +19,9 @@ const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB7\0";
 const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
+const MAX_CATALOG_NAVIGATION_BYTES: usize = 64 * 1024 * 1024;
+const MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CATALOG_NAVIGATION_ITEMS: usize = 100_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogNavigationProjection {
@@ -90,13 +94,28 @@ pub fn read_catalog_navigation_projection(
     expected_stamp: &CatalogStamp,
 ) -> Result<Option<CatalogNavigationProjection>, String> {
     catalog_load_metrics::record_nav_projection_read();
+    let compressed_len = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("inspect catalog navigation {}: {e}", path.display())),
+    };
+    if compressed_len > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
+        return Err(format!(
+            "catalog navigation {} compressed size {compressed_len} exceeds max {MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES}",
+            path.display()
+        ));
+    }
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("read catalog navigation {}: {e}", path.display())),
     };
-    let decoded = lz4_flex::decompress_size_prepended(&bytes)
-        .map_err(|e| format!("decompress catalog navigation {}: {e}", path.display()))?;
+    let decoded = bounded_lz4::decompress_size_prepended(
+        &bytes,
+        MAX_CATALOG_NAVIGATION_BYTES,
+        "catalog navigation",
+    )
+    .map_err(|e| format!("decompress catalog navigation {}: {e}", path.display()))?;
     let projection = decode_navigation_projection(&decoded)
         .map_err(|e| format!("parse catalog navigation {}: {e}", path.display()))?;
     if !projection.matches(expected_stamp) {
@@ -553,13 +572,15 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     let catalog_build_version = reader.read_u32()?;
     let catalog_generation = reader.read_string()?;
     let catalog_stamp_fingerprint = reader.read_string()?;
-    let stamp_line_count = reader.read_len()?;
-    let mut catalog_stamp_lines = Vec::with_capacity(stamp_line_count);
+    let stamp_line_count = read_navigation_count(&mut reader, 4, "stamp lines")?;
+    let mut catalog_stamp_lines = Vec::new();
+    reserve_navigation_vec(&mut catalog_stamp_lines, stamp_line_count, "stamp lines")?;
     for _ in 0..stamp_line_count {
         catalog_stamp_lines.push(reader.read_string()?);
     }
-    let system_count = reader.read_len()?;
-    let mut systems = Vec::with_capacity(system_count);
+    let system_count = read_navigation_count(&mut reader, 16, "systems")?;
+    let mut systems = Vec::new();
+    reserve_navigation_vec(&mut systems, system_count, "systems")?;
     for _ in 0..system_count {
         systems.push(NavigationSystem {
             id: reader.read_string()?,
@@ -570,8 +591,11 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
                 .map_err(|_| "system count too large".to_string())?,
         });
     }
-    let launch_default_count = reader.read_len()?;
+    let launch_default_count = read_navigation_count(&mut reader, 14, "launch defaults")?;
     let mut launch_defaults = HashMap::<String, NavigationLaunchDefault>::new();
+    launch_defaults
+        .try_reserve(launch_default_count)
+        .map_err(|err| format!("allocate navigation launch defaults ({launch_default_count}): {err}"))?;
     for _ in 0..launch_default_count {
         let system_id = reader.read_string()?;
         let default = NavigationLaunchDefault {
@@ -583,8 +607,9 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
         };
         launch_defaults.insert(system_id, default);
     }
-    let game_count = reader.read_len()?;
-    let mut game_rows = Vec::with_capacity(game_count);
+    let game_count = read_navigation_count(&mut reader, 32, "games")?;
+    let mut game_rows = Vec::new();
+    reserve_navigation_vec(&mut game_rows, game_count, "games")?;
     for _ in 0..game_count {
         let title = reader.read_arc_string()?;
         let launch_ref = match reader.read_u8()? {
@@ -621,8 +646,9 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             is_new,
         });
     }
-    let launch_plan_count = reader.read_len()?;
-    let mut launch_plans = Vec::with_capacity(launch_plan_count);
+    let launch_plan_count = read_navigation_count(&mut reader, 11, "launch plans")?;
+    let mut launch_plans = Vec::new();
+    reserve_navigation_vec(&mut launch_plans, launch_plan_count, "launch plans")?;
     for _ in 0..launch_plan_count {
         let game_index = reader.read_u32()? as usize;
         let ref_kind = reader.read_u8()?;
@@ -673,11 +699,15 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             delay_secs: mount.delay_secs,
         });
     }
-    let mut games = Vec::with_capacity(game_rows.len());
-    let launch_refs_by_plan = launch_plans
-        .iter()
-        .map(|plan| plan.launch_ref.clone())
-        .collect::<Vec<_>>();
+    let mut games = Vec::new();
+    reserve_navigation_vec(&mut games, game_rows.len(), "decoded games")?;
+    let mut launch_refs_by_plan = Vec::new();
+    reserve_navigation_vec(
+        &mut launch_refs_by_plan,
+        launch_plans.len(),
+        "decoded launch references",
+    )?;
+    launch_refs_by_plan.extend(launch_plans.iter().map(|plan| plan.launch_ref.clone()));
     for game in game_rows {
         let launch_ref = match game.launch_ref {
             CompactDecodedGameLaunchRef::Full(launch_ref) => launch_ref,
@@ -711,6 +741,31 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
         games,
         launch_plans,
     })
+}
+
+fn read_navigation_count(
+    reader: &mut NavigationBinaryReader<'_>,
+    minimum_item_bytes: usize,
+    label: &str,
+) -> Result<usize, String> {
+    let count = reader.read_len()?;
+    let max_by_remaining_bytes = reader.remaining() / minimum_item_bytes;
+    if count > MAX_CATALOG_NAVIGATION_ITEMS || count > max_by_remaining_bytes {
+        return Err(format!(
+            "navigation projection {label} count {count} exceeds available bounds"
+        ));
+    }
+    Ok(count)
+}
+
+fn reserve_navigation_vec<T>(
+    values: &mut Vec<T>,
+    count: usize,
+    label: &str,
+) -> Result<(), String> {
+    values
+        .try_reserve_exact(count)
+        .map_err(|err| format!("allocate navigation {label} ({count}): {err}"))
 }
 
 fn write_len(out: &mut Vec<u8>, value: usize) -> Result<(), String> {
@@ -766,6 +821,10 @@ impl<'a> NavigationBinaryReader<'a> {
         self.read_u32()?
             .try_into()
             .map_err(|_| "navigation projection length too large".to_string())
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len() - self.pos
     }
 
     fn read_string(&mut self) -> Result<String, String> {
@@ -889,6 +948,18 @@ fn navigation_temp_path_for(final_path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::test_support::arcade_game;
+
+    #[test]
+    fn navigation_count_rejects_impossible_and_excessive_allocations() {
+        let mut impossible = NavigationBinaryReader::new(&[2, 0, 0, 0]);
+        assert!(read_navigation_count(&mut impossible, 4, "fixture").is_err());
+
+        let mut bytes = Vec::with_capacity(MAX_CATALOG_NAVIGATION_ITEMS + 5);
+        bytes.extend_from_slice(&((MAX_CATALOG_NAVIGATION_ITEMS + 1) as u32).to_le_bytes());
+        bytes.resize(MAX_CATALOG_NAVIGATION_ITEMS + 5, 0);
+        let mut excessive = NavigationBinaryReader::new(&bytes);
+        assert!(read_navigation_count(&mut excessive, 1, "fixture").is_err());
+    }
 
     fn stamp(lines: &[&str]) -> CatalogStamp {
         CatalogStamp::from_lines(lines.iter().map(|line| line.to_string()).collect())

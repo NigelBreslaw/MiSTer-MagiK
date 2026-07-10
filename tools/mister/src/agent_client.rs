@@ -66,10 +66,11 @@ pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result
     parse_agent_response_line(line, start)
 }
 
-pub(crate) fn agent_binary_request(
+pub(crate) fn agent_binary_request_bounded(
     cmd: &str,
     args: Value,
     timeout: Duration,
+    max_payload_bytes: u64,
 ) -> Result<AgentBinaryResponse> {
     let token = agent_token()?;
     let addr = format!("{}:{AGENT_PORT}", host())
@@ -94,7 +95,15 @@ pub(crate) fn agent_binary_request(
     reader.read_line(&mut line)?;
     let response = parse_agent_response_line(line, start)?.response;
     let payload_bytes = agent_binary_payload_len(&response)?;
-    let mut payload = vec![0u8; payload_bytes];
+    if u64::try_from(payload_bytes)? > max_payload_bytes {
+        return Err(format!(
+            "agent binary payload too large: {payload_bytes} bytes (max {max_payload_bytes})"
+        )
+        .into());
+    }
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(payload_bytes)?;
+    payload.resize(payload_bytes, 0);
     reader.read_exact(&mut payload)?;
     Ok(AgentBinaryResponse {
         response,

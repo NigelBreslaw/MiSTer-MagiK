@@ -52,6 +52,7 @@ use std::time::{Duration, Instant};
 const NEW_GAME_BADGE_SECS: i64 = 14 * 24 * 60 * 60;
 const SQLITE_PUBLISH_COPY_CHUNK_BYTES: usize = 256 * 1024;
 const SQLITE_PATH_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_SQLITE_PATH_CHUNK_BYTES: usize = SQLITE_PATH_CHUNK_BYTES + 64 * 1024;
 
 #[derive(Default)]
 struct SqlitePathInterner {
@@ -195,14 +196,23 @@ fn register_sqlite_catalog_functions(conn: &Connection) -> rusqlite::Result<()> 
             let offset = usize::try_from(offset).map_err(sqlite_function_error)?;
             let len = usize::try_from(len).map_err(sqlite_function_error)?;
             let expected_len = usize::try_from(expected_len).map_err(sqlite_function_error)?;
+            if expected_len > MAX_SQLITE_PATH_CHUNK_BYTES {
+                return Err(sqlite_function_error(format!(
+                    "path chunk {chunk_id} declared size {expected_len} exceeds max {MAX_SQLITE_PATH_CHUNK_BYTES}"
+                )));
+            }
             let mut cache = cache
                 .lock()
                 .map_err(|_| sqlite_function_error("path chunk cache lock poisoned"))?;
             let chunk = match cache.get(&chunk_id) {
                 Some(chunk) => chunk,
                 None => {
-                    let decoded = lz4_flex::decompress_size_prepended(compressed)
-                        .map_err(sqlite_function_error)?;
+                    let decoded = crate::bounded_lz4::decompress_size_prepended(
+                        compressed,
+                        MAX_SQLITE_PATH_CHUNK_BYTES,
+                        "SQLite path chunk",
+                    )
+                    .map_err(sqlite_function_error)?;
                     if decoded.len() != expected_len {
                         return Err(sqlite_function_error(format!(
                             "path chunk {chunk_id} decoded to {} bytes, expected {expected_len}",

@@ -1,6 +1,7 @@
 //! Catalog, library scan, and preview-loading logic for MiSTer MagiK.
 
 pub mod arcade_catalog;
+mod bounded_lz4;
 pub mod catalog_build;
 pub mod catalog_checkpoint;
 pub mod catalog_classify;

@@ -24,6 +24,32 @@ fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn decompress_lz4_block_exact(
+    payload: &[u8],
+    expected_raw: usize,
+    max_raw: usize,
+    context: &str,
+) -> Result<Vec<u8>, String> {
+    if expected_raw > max_raw {
+        return Err(format!(
+            "{context} raw size {expected_raw} exceeds max {max_raw}"
+        ));
+    }
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(expected_raw)
+        .map_err(|err| format!("allocate {context} ({expected_raw} bytes): {err}"))?;
+    raw.resize(expected_raw, 0);
+    let actual = lz4_flex::block::decompress_into(payload, &mut raw)
+        .map_err(|err| format!("decompress {context}: {err}"))?;
+    if actual != expected_raw {
+        return Err(format!(
+            "{context} raw size mismatch expected={expected_raw} actual={actual}"
+        ));
+    }
+    Ok(raw)
+}
+
+#[cfg(any(target_os = "linux", test))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
     use quick_xml::events::{BytesStart, Event};
@@ -309,11 +335,18 @@ mod sd_browse {
         })
     }
 
-    fn image_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
-        if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    pub(super) fn image_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+        if bytes.len() >= 24
+            && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+            && bytes[8..12] == 13u32.to_be_bytes()
+            && &bytes[12..16] == b"IHDR"
+        {
             let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
             let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
-            return Some(("png", width, height));
+            if width != 0 && height != 0 {
+                return Some(("png", width, height));
+            }
+            return None;
         }
         if bytes.len() >= 4 && bytes[0..2] == [0xff, 0xd8] {
             let mut i = 2usize;
@@ -350,11 +383,14 @@ mod sd_browse {
                         | 0xcd
                         | 0xce
                         | 0xcf
-                ) && len >= 7
+                ) && len >= 8
                 {
                     let height = u16::from_be_bytes([bytes[i + 3], bytes[i + 4]]) as u32;
                     let width = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
-                    return Some(("jpeg", width, height));
+                    if width != 0 && height != 0 {
+                        return Some(("jpeg", width, height));
+                    }
+                    return None;
                 }
                 i += len;
             }
@@ -2687,7 +2723,13 @@ mod linux {
         validate_deploy_remote(remote)?;
         let expectations = deploy_expectations(&args)?;
         let receive_t = Instant::now();
-        let mut payload = vec![0u8; expectations.payload_size as usize];
+        let payload_size = usize::try_from(expectations.payload_size)
+            .map_err(|_| "deploy payload size overflows usize".to_string())?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(payload_size)
+            .map_err(|err| format!("allocate deploy payload ({payload_size} bytes): {err}"))?;
+        payload.resize(payload_size, 0);
         reader
             .read_exact(&mut payload)
             .map_err(|err| err.to_string())?;
@@ -2770,8 +2812,12 @@ mod linux {
         }
         match expectations.encoding.as_str() {
             "raw" => Ok(payload),
-            "lz4-block" => lz4_flex::block::decompress(&payload, expectations.raw_size as usize)
-                .map_err(|err| err.to_string()),
+            "lz4-block" => crate::decompress_lz4_block_exact(
+                &payload,
+                expectations.raw_size as usize,
+                MAX_DEPLOY_BYTES as usize,
+                "deploy payload",
+            ),
             _ => Err(format!(
                 "unsupported deploy encoding: {}",
                 expectations.encoding
@@ -3545,6 +3591,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bounded_lz4_block_decode_rejects_output_larger_than_metadata() {
+        let payload = lz4_flex::block::compress(b"payload");
+        assert_eq!(
+            decompress_lz4_block_exact(&payload, 7, 16, "fixture").expect("decode fixture"),
+            b"payload"
+        );
+
+        assert!(decompress_lz4_block_exact(&payload, 6, 16, "fixture").is_err());
+        assert!(decompress_lz4_block_exact(&payload, 17, 16, "fixture")
+            .expect_err("oversized metadata should fail")
+            .contains("exceeds max"));
+    }
+
+    #[test]
     fn mac_text_parser_accepts_exact_six_octets() {
         assert_eq!(
             parse_mac_text("aa:BB:01:23:45:ff\n").unwrap(),
@@ -3778,6 +3838,21 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_image_dimensions_reject_invalid_png_header_and_zero_geometry() {
+        let mut wrong_chunk = [0u8; 24];
+        wrong_chunk[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        wrong_chunk[12..16].copy_from_slice(b"NOPE");
+        wrong_chunk[16..20].copy_from_slice(&2u32.to_be_bytes());
+        wrong_chunk[20..24].copy_from_slice(&3u32.to_be_bytes());
+        assert_eq!(sd_browse::image_dimensions(&wrong_chunk), None);
+
+        let mut zero_width = wrong_chunk;
+        zero_width[12..16].copy_from_slice(b"IHDR");
+        zero_width[16..20].copy_from_slice(&0u32.to_be_bytes());
+        assert_eq!(sd_browse::image_dimensions(&zero_width), None);
     }
 
     #[test]
