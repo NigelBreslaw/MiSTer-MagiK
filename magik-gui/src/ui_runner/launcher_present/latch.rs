@@ -1,4 +1,5 @@
 use super::super::*;
+use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use std::io;
 
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
@@ -36,6 +37,7 @@ pub(in crate::ui_runner) trait LatchFrameBuffers {
 
     fn base_addr(&self, slot_index: u8) -> u32;
     fn buffer_mut(&mut self, slot_index: u8) -> &mut Self::Buffer;
+    fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_>;
     fn copy_rect(
         buffer: &mut Self::Buffer,
         cached: CachedFrameView<'_>,
@@ -82,6 +84,20 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
             &mut self.buffer1
         } else {
             &mut self.buffer2
+        }
+    }
+
+    fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_> {
+        let buffer = if slot_index == 1 {
+            &self.buffer1
+        } else {
+            &self.buffer2
+        };
+        Rgb565FrameView {
+            pixels: buffer.pixels(),
+            width,
+            height,
+            stride_pixels: buffer.stride_pixels(),
         }
     }
 
@@ -315,6 +331,14 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         })
     }
 
+    pub(in crate::ui_runner) fn committed_frame_view(
+        &self,
+        buffer_index: u8,
+    ) -> Rgb565FrameView<'_> {
+        self.buffers
+            .frame_view(buffer_index, self.width, self.height)
+    }
+
     fn full_rect(&self) -> DirtyRect {
         DirtyRect {
             x0: 0,
@@ -513,6 +537,7 @@ mod tests {
     struct FakeBuffer {
         copy_count: usize,
         events: EventLog,
+        pixels: Vec<Rgb565Pixel>,
     }
 
     impl FakeBuffer {
@@ -520,6 +545,7 @@ mod tests {
             Self {
                 copy_count: 0,
                 events,
+                pixels: vec![Rgb565Pixel(0); WIDTH * HEIGHT],
             }
         }
     }
@@ -551,13 +577,27 @@ mod tests {
             &mut self.buffers[usize::from(slot_index - 1)]
         }
 
+        fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_> {
+            Rgb565FrameView {
+                pixels: &self.buffers[usize::from(slot_index - 1)].pixels,
+                width,
+                height,
+                stride_pixels: width,
+            }
+        }
+
         fn copy_rect(
             buffer: &mut Self::Buffer,
-            _cached: CachedFrameView<'_>,
+            cached: CachedFrameView<'_>,
             rect: DirtyRect,
         ) -> Result<usize, String> {
             buffer.events.borrow_mut().push(TestEvent::Copy);
             buffer.copy_count += 1;
+            for y in rect.y0..rect.y1 {
+                let start = y * WIDTH + rect.x0;
+                let end = y * WIDTH + rect.x1;
+                buffer.pixels[start..end].copy_from_slice(&cached.pixels()[start..end]);
+            }
             Ok(rect.width() * rect.rows() as usize * 2)
         }
     }
@@ -721,6 +761,36 @@ mod tests {
                 TestEvent::ReadStatus,
             ]
         );
+    }
+
+    #[test]
+    fn committed_frame_view_contains_final_overlay_pixels() {
+        let mut presenter = presenter();
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(FRONT_BASE, 0x0001)), Ok(status(BASE1, 0x0001))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+        let pixels = cached_pixels();
+
+        let stats = presenter
+            .present_cached_full_frame(
+                CachedFrameView::new(&pixels, WIDTH, HEIGHT),
+                frame_plan(),
+                &mut hardware,
+                &mut display,
+                |hidden, _| {
+                    hidden.pixels[0] = Rgb565Pixel(0x5aa5);
+                    Ok(())
+                },
+            )
+            .expect("successful latch present");
+
+        let committed = presenter.committed_frame_view(stats.buffer_index);
+        assert_eq!(committed.pixels[0], Rgb565Pixel(0x5aa5));
+        assert_eq!(committed.width, WIDTH);
+        assert_eq!(committed.height, HEIGHT);
+        assert_eq!(committed.stride_pixels, WIDTH);
     }
 
     #[test]

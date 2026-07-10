@@ -305,6 +305,10 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 Ok(())
             },
         )?;
+        if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale() {
+            let frame_view = latch.committed_frame_view(stats.buffer_index);
+            let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
+        }
         let presentation = latch_present_result(
             stats,
             hidden_preview_compose_us,
