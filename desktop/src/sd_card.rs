@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 pub const ROOT_PATH: &str = "/";
 
@@ -177,6 +178,8 @@ pub struct SdCardBrowser {
     expanded_paths: HashSet<String>,
     current_path: String,
     loading_paths: HashSet<String>,
+    loading_started_at: HashMap<String, Instant>,
+    visible_loading_paths: HashSet<String>,
     directory_cache: HashMap<String, CachedDirectory>,
     detail_cache: HashMap<String, SdItemDetail>,
     tree_rows: Vec<SdTreeRow>,
@@ -199,6 +202,8 @@ impl SdCardBrowser {
             expanded_paths: HashSet::new(),
             current_path: ROOT_PATH.to_string(),
             loading_paths: HashSet::new(),
+            loading_started_at: HashMap::new(),
+            visible_loading_paths: HashSet::new(),
             directory_cache: HashMap::new(),
             detail_cache: HashMap::new(),
             tree_rows: Vec::new(),
@@ -249,6 +254,8 @@ impl SdCardBrowser {
         self.show_hidden = show_hidden;
         self.directory_cache.clear();
         self.loading_paths.clear();
+        self.loading_started_at.clear();
+        self.visible_loading_paths.clear();
         self.last_error.clear();
         self.status = if show_hidden {
             "Showing hidden SD Card entries.".to_string()
@@ -344,6 +351,8 @@ impl SdCardBrowser {
     pub fn apply_listing(&mut self, raw_path: &str, result: Result<SdDirectoryListing, String>) {
         let path = normalize_ui_path(raw_path);
         self.loading_paths.remove(&path);
+        self.loading_started_at.remove(&path);
+        self.visible_loading_paths.remove(&path);
         match result {
             Ok(listing) => {
                 let entry_count = listing.entries.len();
@@ -394,9 +403,26 @@ impl SdCardBrowser {
             self.rebuild_rows();
             return None;
         }
-        self.status = format!("Loading {path}...");
+        self.loading_started_at.insert(path.clone(), Instant::now());
         self.rebuild_rows();
         Some(path)
+    }
+
+    pub fn reveal_loading_after(&mut self, raw_path: &str, delay: Duration) -> bool {
+        let path = normalize_ui_path(raw_path);
+        let delay_elapsed = self
+            .loading_started_at
+            .get(&path)
+            .is_some_and(|started_at| started_at.elapsed() >= delay);
+        if !self.loading_paths.contains(&path)
+            || !delay_elapsed
+            || !self.visible_loading_paths.insert(path.clone())
+        {
+            return false;
+        }
+        self.status = format!("Loading {path}...");
+        self.rebuild_rows();
+        true
     }
 
     fn refresh_target(&self) -> String {
@@ -445,7 +471,7 @@ impl SdCardBrowser {
             leading_is_directory: true,
             interactive: true,
             is_skeleton: false,
-            loading_children_badge: if self.loading_paths.contains(path) {
+            loading_children_badge: if self.visible_loading_paths.contains(path) {
                 "loading".to_string()
             } else {
                 String::new()
@@ -457,20 +483,22 @@ impl SdCardBrowser {
         }
 
         if self.loading_paths.contains(path) {
-            for index in 0..3 {
-                rows.push(SdTreeRow {
-                    id: format!("{path}::loading-{index}"),
-                    label: String::new(),
-                    icon_key: "document".to_string(),
-                    level: level + 1,
-                    has_children: false,
-                    expanded: false,
-                    current: false,
-                    leading_is_directory: false,
-                    interactive: false,
-                    is_skeleton: true,
-                    loading_children_badge: String::new(),
-                });
+            if self.visible_loading_paths.contains(path) {
+                for index in 0..3 {
+                    rows.push(SdTreeRow {
+                        id: format!("{path}::loading-{index}"),
+                        label: String::new(),
+                        icon_key: "document".to_string(),
+                        level: level + 1,
+                        has_children: false,
+                        expanded: false,
+                        current: false,
+                        leading_is_directory: false,
+                        interactive: false,
+                        is_skeleton: true,
+                        loading_children_badge: String::new(),
+                    });
+                }
             }
             return;
         }
@@ -659,7 +687,21 @@ mod tests {
             Some(ROOT_PATH)
         );
         assert!(browser.loading());
+        assert!(!browser.rows().iter().any(|row| row.is_skeleton));
+        assert!(!browser.status().contains("Loading"));
+
+        assert!(browser.reveal_loading_after(ROOT_PATH, Duration::ZERO));
         assert!(browser.rows().iter().any(|row| row.is_skeleton));
+        assert!(browser.status().contains("Loading"));
+        assert_eq!(
+            browser
+                .rows()
+                .iter()
+                .find(|row| row.id == ROOT_PATH)
+                .unwrap()
+                .loading_children_badge,
+            "loading"
+        );
 
         browser.apply_listing(
             ROOT_PATH,
@@ -680,6 +722,37 @@ mod tests {
         assert_eq!(browser.toggle_directory(ROOT_PATH), None);
         assert_eq!(browser.toggle_directory(ROOT_PATH), None);
         assert!(browser.status().contains("cached"));
+    }
+
+    #[test]
+    fn fast_listing_never_reveals_loading_state() {
+        let mut browser = SdCardBrowser::new();
+
+        assert_eq!(
+            browser.toggle_directory(ROOT_PATH).as_deref(),
+            Some(ROOT_PATH)
+        );
+        browser.apply_listing(
+            ROOT_PATH,
+            Ok(SdDirectoryListing {
+                path: ROOT_PATH.to_string(),
+                entries: vec![file("MiSTer.ini", "/MiSTer.ini")],
+                elapsed_ms: 4,
+                round_trip_ms: 8,
+            }),
+        );
+
+        assert!(!browser.reveal_loading_after(ROOT_PATH, Duration::ZERO));
+        assert!(!browser.rows().iter().any(|row| row.is_skeleton));
+        assert_eq!(
+            browser
+                .rows()
+                .iter()
+                .find(|row| row.id == ROOT_PATH)
+                .unwrap()
+                .loading_children_badge,
+            ""
+        );
     }
 
     #[test]
