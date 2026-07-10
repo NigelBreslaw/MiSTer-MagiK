@@ -6,6 +6,8 @@ mod frame_profile;
 mod framebuffer_cadence;
 mod library;
 #[cfg(target_os = "macos")]
+mod macos_display_clock;
+#[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod sd_card;
 
@@ -22,12 +24,14 @@ use sd_card::SdCardBrowser;
 use sd_card::SdTreeRow;
 #[cfg(feature = "live-ui")]
 use slint::ComponentHandle;
+use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -44,6 +48,106 @@ const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
 const REALTIME_HISTORY_CAPACITY: usize = 300;
 const REALTIME_FRAME_SAMPLE_CAPACITY: usize = 1200;
 const REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE: u64 = 60;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FramebufferDisplayClockTick {
+    timestamp_us: u64,
+    target_timestamp_us: u64,
+    duration_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+enum FramebufferDisplayClockKind {
+    #[default]
+    Unknown = 0,
+    MacosDisplayLink = 1,
+    SlintTimer = 2,
+}
+
+impl FramebufferDisplayClockKind {
+    #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::MacosDisplayLink => "macos-cadisplaylink",
+            Self::SlintTimer => "slint-timer",
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::MacosDisplayLink,
+            2 => Self::SlintTimer,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[allow(dead_code)] // Variants own the active clock for their Drop/lifetime behavior.
+enum FramebufferDisplayClock {
+    #[cfg(target_os = "macos")]
+    Macos(macos_display_clock::MacDisplayClock),
+    Timer(slint::Timer),
+}
+
+impl FramebufferDisplayClock {
+    fn kind(&self) -> FramebufferDisplayClockKind {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Macos(_) => FramebufferDisplayClockKind::MacosDisplayLink,
+            Self::Timer(_) => FramebufferDisplayClockKind::SlintTimer,
+        }
+    }
+}
+
+fn start_framebuffer_display_clock(
+    window: &slint::Window,
+    callback: impl FnMut(FramebufferDisplayClockTick) + 'static,
+) -> FramebufferDisplayClock {
+    let callback = Rc::new(RefCell::new(
+        Box::new(callback) as Box<dyn FnMut(FramebufferDisplayClockTick)>
+    ));
+    #[cfg(target_os = "macos")]
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        let tick_callback = Rc::clone(&callback);
+        let mac_callback = Rc::new(RefCell::new(Box::new(
+            move |tick: macos_display_clock::MacDisplayLinkTick| {
+                (tick_callback.borrow_mut())(FramebufferDisplayClockTick {
+                    timestamp_us: tick.timestamp_us,
+                    target_timestamp_us: tick.target_timestamp_us,
+                    duration_us: tick.duration_us,
+                });
+            },
+        )
+            as Box<dyn FnMut(macos_display_clock::MacDisplayLinkTick)>));
+        if let Some(clock) = window
+            .with_winit_window(|winit_window| {
+                macos_display_clock::MacDisplayClock::start(winit_window, mac_callback)
+            })
+            .flatten()
+        {
+            return FramebufferDisplayClock::Macos(clock);
+        }
+    }
+
+    let timer = slint::Timer::default();
+    let started = Instant::now();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_nanos(16_666_667),
+        move || {
+            let timestamp_us = started.elapsed().as_micros() as u64;
+            (callback.borrow_mut())(FramebufferDisplayClockTick {
+                timestamp_us,
+                target_timestamp_us: timestamp_us.saturating_add(16_667),
+                duration_us: 16_667,
+            });
+        },
+    );
+    FramebufferDisplayClock::Timer(timer)
+}
 
 #[derive(Clone, Debug)]
 struct DirtyRectOverlayState {
@@ -189,6 +293,8 @@ struct FramebufferRenderMetrics {
     rendering_before: AtomicU64,
     rendering_after: AtomicU64,
     rendering_teardown: AtomicU64,
+    clock_kind: AtomicU8,
+    display_ticks: AtomicU64,
     render_callbacks: AtomicU64,
     received: AtomicU64,
     applied: AtomicU64,
@@ -242,6 +348,8 @@ impl Default for FramebufferRenderMetrics {
             rendering_before: AtomicU64::new(0),
             rendering_after: AtomicU64::new(0),
             rendering_teardown: AtomicU64::new(0),
+            clock_kind: AtomicU8::new(FramebufferDisplayClockKind::Unknown as u8),
+            display_ticks: AtomicU64::new(0),
             render_callbacks: AtomicU64::new(0),
             received: AtomicU64::new(0),
             applied: AtomicU64::new(0),
@@ -274,6 +382,7 @@ impl FramebufferRenderMetrics {
         self.rendering_before.store(0, Ordering::Release);
         self.rendering_after.store(0, Ordering::Release);
         self.rendering_teardown.store(0, Ordering::Release);
+        self.display_ticks.store(0, Ordering::Release);
         self.render_callbacks.store(0, Ordering::Release);
         self.applied_serial.store(0, Ordering::Release);
         self.received.store(0, Ordering::Release);
@@ -310,6 +419,31 @@ impl FramebufferRenderMetrics {
         self.coalesced.store(coalesced, Ordering::Relaxed);
     }
 
+    fn mark_display_tick(
+        &self,
+        kind: FramebufferDisplayClockKind,
+        tick: FramebufferDisplayClockTick,
+    ) {
+        self.clock_kind.store(kind as u8, Ordering::Release);
+        self.display_ticks.fetch_add(1, Ordering::Relaxed);
+        self.cadence.record(
+            CadenceEventKind::DisplayLinkTick,
+            0,
+            tick.timestamp_us,
+            self.applied_serial.load(Ordering::Acquire),
+            tick.duration_us,
+            i64::try_from(tick.target_timestamp_us).unwrap_or(i64::MAX),
+        );
+    }
+
+    fn clock_kind(&self) -> FramebufferDisplayClockKind {
+        FramebufferDisplayClockKind::from_u8(self.clock_kind.load(Ordering::Acquire))
+    }
+
+    fn set_clock_kind(&self, kind: FramebufferDisplayClockKind) {
+        self.clock_kind.store(kind as u8, Ordering::Release);
+    }
+
     fn mark_rendered(&self, now: Instant, kind: CadenceEventKind) {
         self.render_callbacks.fetch_add(1, Ordering::Relaxed);
         let serial = self.applied_serial.load(Ordering::Acquire);
@@ -339,6 +473,7 @@ impl FramebufferRenderMetrics {
     #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
     fn benchmark_ready(&self) -> bool {
         self.observer_ready.load(Ordering::Acquire)
+            && self.formal_display_clock_ready()
             && self.received.load(Ordering::Acquire) > 0
             && self.applied.load(Ordering::Acquire) > 0
             && self.rendered.load(Ordering::Acquire) > 0
@@ -348,24 +483,43 @@ impl FramebufferRenderMetrics {
 
     #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
     fn benchmark_invalid_reason(&self) -> Option<&'static str> {
+        if let Some(reason) = self.benchmark_readiness_reason() {
+            return Some(reason);
+        }
+        if self.lost_focus_during_measurement.load(Ordering::Acquire) {
+            Some("window_lost_focus")
+        } else if self.occluded_during_measurement.load(Ordering::Acquire) {
+            Some("window_was_occluded")
+        } else {
+            None
+        }
+    }
+
+    fn benchmark_readiness_reason(&self) -> Option<&'static str> {
         if !self.observer_ready.load(Ordering::Acquire) {
             Some("rendering_notifier_not_ready")
+        } else if !self.formal_display_clock_ready() {
+            Some("macos_display_link_not_ready")
         } else if self.received.load(Ordering::Acquire) == 0 {
             Some("no_stream_frames")
         } else if self.applied.load(Ordering::Acquire) == 0 {
             Some("no_applied_frames")
         } else if !self.focused.load(Ordering::Acquire) {
             Some("window_unfocused")
-        } else if self.lost_focus_during_measurement.load(Ordering::Acquire) {
-            Some("window_lost_focus")
         } else if self.occluded.load(Ordering::Acquire) {
             Some("window_occluded")
-        } else if self.occluded_during_measurement.load(Ordering::Acquire) {
-            Some("window_was_occluded")
         } else if self.rendered.load(Ordering::Acquire) == 0 {
             Some("zero_after_rendering")
         } else {
             None
+        }
+    }
+
+    fn formal_display_clock_ready(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.clock_kind() == FramebufferDisplayClockKind::MacosDisplayLink
+        } else {
+            self.clock_kind() != FramebufferDisplayClockKind::Unknown
         }
     }
 
@@ -1692,7 +1846,7 @@ fn wait_for_framebuffer_benchmark_ready(
         std::thread::sleep(Duration::from_millis(10));
     }
     Err(metrics
-        .benchmark_invalid_reason()
+        .benchmark_readiness_reason()
         .unwrap_or("benchmark_window_not_ready"))
 }
 
@@ -1710,6 +1864,7 @@ fn run_compiled_framebuffer_display_bench(
     let generation = Arc::new(AtomicU64::new(0));
     let control = Arc::new(Mutex::new(None));
     let invalid_reason = Arc::new(Mutex::new(None::<String>));
+    let display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayClock>));
 
     let stream_ui = ui.as_weak();
     let stream_capture = Arc::clone(&capture);
@@ -1717,20 +1872,36 @@ fn run_compiled_framebuffer_display_bench(
     let stream_control = Arc::clone(&control);
     let stream_metrics = Arc::clone(&metrics);
     let chrome_enabled = args.chrome;
+    let stream_display_clock = Rc::clone(&display_clock);
     ui.global::<Actions>()
         .on_live_stream_changed(move |enabled| {
             let next_generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
             cancel_framebuffer_stream(&stream_control);
+            stream_display_clock.borrow_mut().take();
             if enabled {
+                let mailbox = Arc::new(LatestMailbox::default());
+                let display_state =
+                    Arc::new(Mutex::new(FramebufferDisplayState::new(chrome_enabled)));
+                let stream_start = Instant::now();
+                *stream_display_clock.borrow_mut() = start_compiled_framebuffer_display_clock(
+                    stream_ui.clone(),
+                    Arc::clone(&stream_capture),
+                    Arc::clone(&stream_generation),
+                    Arc::clone(&mailbox),
+                    display_state,
+                    Arc::clone(&stream_metrics),
+                    stream_start,
+                    next_generation,
+                );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
                     Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_metrics),
+                    mailbox,
                     host.clone(),
                     next_generation,
-                    chrome_enabled,
                 );
             }
         });
@@ -1738,12 +1909,21 @@ fn run_compiled_framebuffer_display_bench(
     ui.global::<AppState>()
         .set_selected_page("analytics".into());
     ui.global::<AnalyticsState>().set_live_stream(true);
-    ui.global::<Actions>().invoke_live_stream_changed(true);
     install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
     ui.show()?;
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
+    let start_ui = ui.as_weak();
+    slint::spawn_local(async move {
+        use slint::winit_030::WinitWindowAccessor;
+        let Some(ui) = start_ui.upgrade() else {
+            return;
+        };
+        if ui.window().winit_window().await.is_ok() {
+            ui.global::<Actions>().invoke_live_stream_changed(true);
+        }
+    })?;
 
     let timer_metrics = Arc::clone(&metrics);
     let timer_ui = ui.as_weak();
@@ -1801,6 +1981,10 @@ fn run_compiled_synthetic_display_bench(
     let generation = Arc::new(AtomicU64::new(1));
     let invalid_reason = Arc::new(Mutex::new(None::<String>));
     let frames = Arc::new(build_synthetic_display_frames());
+    let mailbox = Arc::new(LatestMailbox::default());
+    let display_state = Arc::new(Mutex::new(FramebufferDisplayState::new(args.chrome)));
+    let stream_start = Instant::now();
+    let display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayClock>));
 
     ui.global::<AppState>()
         .set_selected_page("analytics".into());
@@ -1812,13 +1996,38 @@ fn run_compiled_synthetic_display_bench(
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
+    let clock_ui = ui.as_weak();
+    let clock_capture = Arc::clone(&capture);
+    let clock_generation = Arc::clone(&generation);
+    let clock_mailbox = Arc::clone(&mailbox);
+    let clock_display_state = Arc::clone(&display_state);
+    let clock_metrics = Arc::clone(&metrics);
+    let clock_holder = Rc::clone(&display_clock);
+    slint::spawn_local(async move {
+        use slint::winit_030::WinitWindowAccessor;
+        let Some(ui) = clock_ui.upgrade() else {
+            return;
+        };
+        if ui.window().winit_window().await.is_err() {
+            return;
+        }
+        *clock_holder.borrow_mut() = start_compiled_framebuffer_display_clock(
+            ui.as_weak(),
+            clock_capture,
+            clock_generation,
+            clock_mailbox,
+            clock_display_state,
+            clock_metrics,
+            stream_start,
+            1,
+        );
+    })?;
     spawn_compiled_synthetic_display_source(
-        ui.as_weak(),
-        capture,
         Arc::clone(&generation),
         Arc::clone(&metrics),
         frames,
-        args.chrome,
+        mailbox,
+        stream_start,
         1,
     );
 
@@ -1969,18 +2178,14 @@ fn synthetic_stream_frame(
 
 #[cfg(feature = "compiled-ui")]
 fn spawn_compiled_synthetic_display_source(
-    ui: slint::Weak<AppWindow>,
-    capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
     render_metrics: Arc<FramebufferRenderMetrics>,
     frames: Arc<Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>>,
-    chrome_enabled: bool,
+    mailbox: SharedFramebufferDisplayMailbox,
+    stream_start: Instant,
     generation: u64,
 ) {
     std::thread::spawn(move || {
-        let stream_start = Instant::now();
-        let mailbox = Arc::new(LatestMailbox::default());
-        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::new(chrome_enabled)));
         let frame_interval = Duration::from_nanos(16_666_667);
         let mut next_frame_at = Instant::now();
         let mut sequence = 0_u64;
@@ -2014,7 +2219,7 @@ fn spawn_compiled_synthetic_display_source(
                 0,
             );
             let (_, coalesced_before) = mailbox.stats();
-            let schedule = mailbox.publish(FramebufferDisplayUpdate {
+            let _ = mailbox.publish(FramebufferDisplayUpdate {
                 frame,
                 pixels: Some(pixels),
                 received_at,
@@ -2033,18 +2238,6 @@ fn spawn_compiled_synthetic_display_source(
                 0,
             );
             render_metrics.mark_received(coalesced);
-            if schedule {
-                schedule_compiled_framebuffer_display(
-                    ui.clone(),
-                    Arc::clone(&capture_state),
-                    Arc::clone(&stream_generation),
-                    Arc::clone(&mailbox),
-                    Arc::clone(&display_state),
-                    Arc::clone(&render_metrics),
-                    stream_start,
-                    generation,
-                );
-            }
             sequence = sequence.wrapping_add(1);
             next_frame_at += frame_interval;
             if let Some(remaining) = next_frame_at.checked_duration_since(Instant::now()) {
@@ -2069,8 +2262,9 @@ fn print_framebuffer_display_bench(
     let snapshot = render_metrics.snapshot(Instant::now());
     let invalid_reason = invalid_reason.unwrap_or("none");
     println!(
-        "framebuffer_display_bench_tsv\tsource={source}\tchrome={}\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\twinit_observer_ready={}\trendering_notifier_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
+        "framebuffer_display_bench_tsv\tsource={source}\tchrome={}\tclock={}\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\twinit_observer_ready={}\trendering_notifier_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\tdisplay_ticks={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
         if chrome { "on" } else { "off" },
+        render_metrics.clock_kind().label(),
         if cfg!(debug_assertions) { "debug" } else { "release" },
         u8::from(invalid_reason == "none"),
         snapshot.received,
@@ -2109,6 +2303,7 @@ fn print_framebuffer_display_bench(
         render_metrics
             .monitor_refresh_millihertz
             .load(Ordering::Relaxed),
+        render_metrics.display_ticks.load(Ordering::Relaxed),
         render_metrics.winit_events.load(Ordering::Relaxed),
         render_metrics.winit_redraws.load(Ordering::Relaxed),
         render_metrics.foreground_redraws.load(Ordering::Relaxed),
@@ -2182,6 +2377,7 @@ fn create_live_instance(
     install_framebuffer_render_notifier(instance.window(), Arc::clone(&framebuffer_render_metrics));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
+    let live_display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayClock>));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
     let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
@@ -2297,12 +2493,14 @@ fn create_live_instance(
     let stream_generation = Arc::clone(&live_stream_generation);
     let stream_control = Arc::clone(&live_stream_control);
     let stream_render_metrics = Arc::clone(&framebuffer_render_metrics);
+    let stream_display_clock = Rc::clone(&live_display_clock);
     instance.set_global_callback("Actions", "live-stream-changed", move |args| {
         let Some(Value::Bool(enabled)) = args.first() else {
             return Value::Void;
         };
         let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
         cancel_framebuffer_stream(&stream_control);
+        stream_display_clock.borrow_mut().take();
         if let Some(instance) = stream_instance.upgrade() {
             apply_live_stream_summary(
                 &instance,
@@ -2314,12 +2512,26 @@ fn create_live_instance(
             );
         }
         if *enabled {
+            let mailbox = Arc::new(LatestMailbox::default());
+            let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
+            let stream_start = Instant::now();
+            *stream_display_clock.borrow_mut() = start_live_framebuffer_display_clock(
+                stream_instance.clone(),
+                Arc::clone(&stream_capture),
+                Arc::clone(&stream_generation),
+                Arc::clone(&mailbox),
+                display_state,
+                Arc::clone(&stream_render_metrics),
+                stream_start,
+                generation,
+            );
             spawn_live_framebuffer_stream(
                 stream_instance.clone(),
                 Arc::clone(&stream_capture),
                 Arc::clone(&stream_generation),
                 Arc::clone(&stream_control),
                 Arc::clone(&stream_render_metrics),
+                mailbox,
                 stream_host.clone(),
                 generation,
             );
@@ -3252,6 +3464,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     install_framebuffer_render_notifier(ui.window(), Arc::clone(&framebuffer_render_metrics));
     let live_stream_generation = Arc::new(AtomicU64::new(0));
     let live_stream_control = Arc::new(Mutex::new(None));
+    let live_display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayClock>));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
     let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
@@ -3347,10 +3560,12 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let stream_generation = Arc::clone(&live_stream_generation);
     let stream_control = Arc::clone(&live_stream_control);
     let stream_render_metrics = Arc::clone(&framebuffer_render_metrics);
+    let stream_display_clock = Rc::clone(&live_display_clock);
     ui.global::<Actions>()
         .on_live_stream_changed(move |enabled| {
             let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
             cancel_framebuffer_stream(&stream_control);
+            stream_display_clock.borrow_mut().take();
             if let Some(ui) = stream_ui.upgrade() {
                 apply_compiled_stream_summary(
                     &ui,
@@ -3362,15 +3577,28 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                 );
             }
             if enabled {
+                let mailbox = Arc::new(LatestMailbox::default());
+                let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
+                let stream_start = Instant::now();
+                *stream_display_clock.borrow_mut() = start_compiled_framebuffer_display_clock(
+                    stream_ui.clone(),
+                    Arc::clone(&stream_capture),
+                    Arc::clone(&stream_generation),
+                    Arc::clone(&mailbox),
+                    display_state,
+                    Arc::clone(&stream_render_metrics),
+                    stream_start,
+                    generation,
+                );
                 spawn_compiled_framebuffer_stream(
                     stream_ui.clone(),
                     Arc::clone(&stream_capture),
                     Arc::clone(&stream_generation),
                     Arc::clone(&stream_control),
                     Arc::clone(&stream_render_metrics),
+                    mailbox,
                     stream_host.clone(),
                     generation,
-                    true,
                 );
             }
         });
@@ -5550,7 +5778,38 @@ fn spawn_live_profile_load(
 }
 
 #[cfg(feature = "live-ui")]
-fn schedule_live_framebuffer_display(
+fn start_live_framebuffer_display_clock(
+    instance: slint::Weak<slint_interpreter::ComponentInstance>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    mailbox: SharedFramebufferDisplayMailbox,
+    display_state: SharedFramebufferDisplayState,
+    render_metrics: Arc<FramebufferRenderMetrics>,
+    stream_start: Instant,
+    generation: u64,
+) -> Option<FramebufferDisplayClock> {
+    let strong = instance.upgrade()?;
+    let window = strong.window();
+    let tick_metrics = Arc::clone(&render_metrics);
+    let clock = start_framebuffer_display_clock(window, move |tick| {
+        tick_metrics.mark_display_tick(tick_metrics.clock_kind(), tick);
+        consume_live_framebuffer_display(
+            instance.clone(),
+            Arc::clone(&capture_state),
+            Arc::clone(&stream_generation),
+            Arc::clone(&mailbox),
+            Arc::clone(&display_state),
+            Arc::clone(&tick_metrics),
+            stream_start,
+            generation,
+        );
+    });
+    render_metrics.set_clock_kind(clock.kind());
+    Some(clock)
+}
+
+#[cfg(feature = "live-ui")]
+fn consume_live_framebuffer_display(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
@@ -5560,97 +5819,89 @@ fn schedule_live_framebuffer_display(
     stream_start: Instant,
     generation: u64,
 ) {
-    let _ = slint::invoke_from_event_loop(move || {
-        if stream_generation.load(Ordering::SeqCst) != generation {
-            mailbox.close();
-            return;
-        }
-        let Some(update) = mailbox.take() else {
-            let _ = mailbox.complete_apply();
-            return;
-        };
-        let Some(instance) = instance.upgrade() else {
-            mailbox.close();
-            return;
-        };
+    if stream_generation.load(Ordering::SeqCst) != generation {
+        mailbox.close();
+        return;
+    }
+    let Some(update) = mailbox.take() else {
+        let _ = mailbox.complete_apply();
+        return;
+    };
+    let Some(instance) = instance.upgrade() else {
+        mailbox.close();
+        return;
+    };
+    render_metrics.cadence.record(
+        CadenceEventKind::MailboxTake,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+        render_metrics.applied_serial.load(Ordering::Acquire),
+        update.received_at.elapsed().as_micros() as u64,
+        0,
+    );
+    let now = Instant::now();
+    let (geometry_changed, chrome_update) = display_state
+        .lock()
+        .map(|mut state| {
+            let geometry_changed = record_applied_frame(&mut state, &update.frame);
+            let refresh_chrome = state.chrome_enabled
+                && (geometry_changed
+                    || state.last_chrome_update.is_none_or(|last| {
+                        now.saturating_duration_since(last) >= Duration::from_millis(250)
+                    }));
+            let chrome = refresh_chrome.then(|| {
+                state.last_chrome_update = Some(now);
+                (
+                    state.recent_dirty_rects.clone(),
+                    dirty_rect_summary(&update.frame, state.recent_dirty_rects.len()),
+                    framebuffer_display_summary(
+                        &mailbox,
+                        &state,
+                        &render_metrics,
+                        stream_start,
+                        update.received_at,
+                    ),
+                )
+            });
+            (geometry_changed, chrome)
+        })
+        .unwrap_or_default();
+    apply_live_framebuffer_stream_capture(
+        &instance,
+        &update.frame.capture,
+        update.pixels,
+        geometry_changed,
+    );
+    render_metrics.mark_applied(
+        update.received_at,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+    );
+    if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
         render_metrics.cadence.record(
-            CadenceEventKind::MailboxTake,
+            CadenceEventKind::ChromeRefresh,
             update.frame.sequence,
             update.frame.timestamp_us,
             render_metrics.applied_serial.load(Ordering::Acquire),
-            update.received_at.elapsed().as_micros() as u64,
+            0,
             0,
         );
-        let now = Instant::now();
-        let (geometry_changed, chrome_update) = display_state
-            .lock()
-            .map(|mut state| {
-                let geometry_changed = record_applied_frame(&mut state, &update.frame);
-                let refresh_chrome = state.chrome_enabled
-                    && (geometry_changed
-                        || state.last_chrome_update.is_none_or(|last| {
-                            now.saturating_duration_since(last) >= Duration::from_millis(250)
-                        }));
-                let chrome = refresh_chrome.then(|| {
-                    state.last_chrome_update = Some(now);
-                    (
-                        state.recent_dirty_rects.clone(),
-                        dirty_rect_summary(&update.frame, state.recent_dirty_rects.len()),
-                        framebuffer_display_summary(
-                            &mailbox,
-                            &state,
-                            &render_metrics,
-                            stream_start,
-                            update.received_at,
-                        ),
-                    )
-                });
-                (geometry_changed, chrome)
-            })
-            .unwrap_or_default();
-        apply_live_framebuffer_stream_capture(
-            &instance,
-            &update.frame.capture,
-            update.pixels,
-            geometry_changed,
-        );
-        render_metrics.mark_applied(
-            update.received_at,
-            update.frame.sequence,
-            update.frame.timestamp_us,
-        );
-        if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
-            render_metrics.cadence.record(
-                CadenceEventKind::ChromeRefresh,
-                update.frame.sequence,
-                update.frame.timestamp_us,
-                render_metrics.applied_serial.load(Ordering::Acquire),
-                0,
-                0,
-            );
-            apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
-            apply_live_stream_summary(&instance, &stream_summary);
-        }
-        instance.window().request_redraw();
-        if let Ok(mut state) = capture_state.lock() {
-            *state = Some(update.frame.capture);
-        }
-        if mailbox.complete_apply() {
-            let instance = instance.as_weak();
-            slint::Timer::single_shot(Duration::from_millis(1), move || {
-                schedule_live_framebuffer_display(
-                    instance,
-                    capture_state,
-                    stream_generation,
-                    mailbox,
-                    display_state,
-                    render_metrics,
-                    stream_start,
-                    generation,
-                );
-            });
-        }
-    });
+        apply_live_dirty_rects(&instance, &dirty_rects, &dirty_summary);
+        apply_live_stream_summary(&instance, &stream_summary);
+    }
+    instance.window().request_redraw();
+    render_metrics.cadence.record(
+        CadenceEventKind::RedrawSubmit,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+        render_metrics.applied_serial.load(Ordering::Acquire),
+        0,
+        0,
+    );
+    if let Ok(mut state) = capture_state.lock() {
+        *state = Some(update.frame.capture);
+    }
+    let _ = mailbox.complete_apply();
 }
 
 #[cfg(feature = "live-ui")]
@@ -5660,14 +5911,12 @@ fn spawn_live_framebuffer_stream(
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
+    mailbox: SharedFramebufferDisplayMailbox,
     host: String,
     generation: u64,
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let stream_start = Instant::now();
-        let mailbox = Arc::new(LatestMailbox::default());
-        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::default()));
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -5756,7 +6005,7 @@ fn spawn_live_framebuffer_stream(
                     let (_, coalesced_before) = mailbox.stats();
                     let source_sequence = frame.sequence;
                     let source_timestamp_us = frame.timestamp_us;
-                    let schedule = mailbox.publish(FramebufferDisplayUpdate {
+                    let _ = mailbox.publish(FramebufferDisplayUpdate {
                         frame,
                         pixels,
                         received_at,
@@ -5775,18 +6024,6 @@ fn spawn_live_framebuffer_stream(
                         0,
                     );
                     render_metrics.mark_received(coalesced);
-                    if schedule {
-                        schedule_live_framebuffer_display(
-                            instance.clone(),
-                            Arc::clone(&capture_state),
-                            Arc::clone(&stream_generation),
-                            Arc::clone(&mailbox),
-                            Arc::clone(&display_state),
-                            Arc::clone(&render_metrics),
-                            stream_start,
-                            generation,
-                        );
-                    }
                 }
                 Err(err) => {
                     mailbox.close();
@@ -6024,7 +6261,38 @@ fn spawn_compiled_profile_load(ui: slint::Weak<AppWindow>, path: String) {
 }
 
 #[cfg(feature = "compiled-ui")]
-fn schedule_compiled_framebuffer_display(
+fn start_compiled_framebuffer_display_clock(
+    ui: slint::Weak<AppWindow>,
+    capture_state: SharedFramebufferCapture,
+    stream_generation: SharedLiveStreamGeneration,
+    mailbox: SharedFramebufferDisplayMailbox,
+    display_state: SharedFramebufferDisplayState,
+    render_metrics: Arc<FramebufferRenderMetrics>,
+    stream_start: Instant,
+    generation: u64,
+) -> Option<FramebufferDisplayClock> {
+    let strong = ui.upgrade()?;
+    let window = strong.window();
+    let tick_metrics = Arc::clone(&render_metrics);
+    let clock = start_framebuffer_display_clock(window, move |tick| {
+        tick_metrics.mark_display_tick(tick_metrics.clock_kind(), tick);
+        consume_compiled_framebuffer_display(
+            ui.clone(),
+            Arc::clone(&capture_state),
+            Arc::clone(&stream_generation),
+            Arc::clone(&mailbox),
+            Arc::clone(&display_state),
+            Arc::clone(&tick_metrics),
+            stream_start,
+            generation,
+        );
+    });
+    render_metrics.set_clock_kind(clock.kind());
+    Some(clock)
+}
+
+#[cfg(feature = "compiled-ui")]
+fn consume_compiled_framebuffer_display(
     ui: slint::Weak<AppWindow>,
     capture_state: SharedFramebufferCapture,
     stream_generation: SharedLiveStreamGeneration,
@@ -6034,97 +6302,89 @@ fn schedule_compiled_framebuffer_display(
     stream_start: Instant,
     generation: u64,
 ) {
-    let _ = slint::invoke_from_event_loop(move || {
-        if stream_generation.load(Ordering::SeqCst) != generation {
-            mailbox.close();
-            return;
-        }
-        let Some(update) = mailbox.take() else {
-            let _ = mailbox.complete_apply();
-            return;
-        };
-        let Some(ui) = ui.upgrade() else {
-            mailbox.close();
-            return;
-        };
+    if stream_generation.load(Ordering::SeqCst) != generation {
+        mailbox.close();
+        return;
+    }
+    let Some(update) = mailbox.take() else {
+        let _ = mailbox.complete_apply();
+        return;
+    };
+    let Some(ui) = ui.upgrade() else {
+        mailbox.close();
+        return;
+    };
+    render_metrics.cadence.record(
+        CadenceEventKind::MailboxTake,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+        render_metrics.applied_serial.load(Ordering::Acquire),
+        update.received_at.elapsed().as_micros() as u64,
+        0,
+    );
+    let now = Instant::now();
+    let (geometry_changed, chrome_update) = display_state
+        .lock()
+        .map(|mut state| {
+            let geometry_changed = record_applied_frame(&mut state, &update.frame);
+            let refresh_chrome = state.chrome_enabled
+                && (geometry_changed
+                    || state.last_chrome_update.is_none_or(|last| {
+                        now.saturating_duration_since(last) >= Duration::from_millis(250)
+                    }));
+            let chrome = refresh_chrome.then(|| {
+                state.last_chrome_update = Some(now);
+                (
+                    state.recent_dirty_rects.clone(),
+                    dirty_rect_summary(&update.frame, state.recent_dirty_rects.len()),
+                    framebuffer_display_summary(
+                        &mailbox,
+                        &state,
+                        &render_metrics,
+                        stream_start,
+                        update.received_at,
+                    ),
+                )
+            });
+            (geometry_changed, chrome)
+        })
+        .unwrap_or_default();
+    apply_compiled_framebuffer_stream_capture(
+        &ui,
+        &update.frame.capture,
+        update.pixels,
+        geometry_changed,
+    );
+    render_metrics.mark_applied(
+        update.received_at,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+    );
+    if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
         render_metrics.cadence.record(
-            CadenceEventKind::MailboxTake,
+            CadenceEventKind::ChromeRefresh,
             update.frame.sequence,
             update.frame.timestamp_us,
             render_metrics.applied_serial.load(Ordering::Acquire),
-            update.received_at.elapsed().as_micros() as u64,
+            0,
             0,
         );
-        let now = Instant::now();
-        let (geometry_changed, chrome_update) = display_state
-            .lock()
-            .map(|mut state| {
-                let geometry_changed = record_applied_frame(&mut state, &update.frame);
-                let refresh_chrome = state.chrome_enabled
-                    && (geometry_changed
-                        || state.last_chrome_update.is_none_or(|last| {
-                            now.saturating_duration_since(last) >= Duration::from_millis(250)
-                        }));
-                let chrome = refresh_chrome.then(|| {
-                    state.last_chrome_update = Some(now);
-                    (
-                        state.recent_dirty_rects.clone(),
-                        dirty_rect_summary(&update.frame, state.recent_dirty_rects.len()),
-                        framebuffer_display_summary(
-                            &mailbox,
-                            &state,
-                            &render_metrics,
-                            stream_start,
-                            update.received_at,
-                        ),
-                    )
-                });
-                (geometry_changed, chrome)
-            })
-            .unwrap_or_default();
-        apply_compiled_framebuffer_stream_capture(
-            &ui,
-            &update.frame.capture,
-            update.pixels,
-            geometry_changed,
-        );
-        render_metrics.mark_applied(
-            update.received_at,
-            update.frame.sequence,
-            update.frame.timestamp_us,
-        );
-        if let Some((dirty_rects, dirty_summary, stream_summary)) = chrome_update {
-            render_metrics.cadence.record(
-                CadenceEventKind::ChromeRefresh,
-                update.frame.sequence,
-                update.frame.timestamp_us,
-                render_metrics.applied_serial.load(Ordering::Acquire),
-                0,
-                0,
-            );
-            apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
-            apply_compiled_stream_summary(&ui, &stream_summary);
-        }
-        ui.window().request_redraw();
-        if let Ok(mut state) = capture_state.lock() {
-            *state = Some(update.frame.capture);
-        }
-        if mailbox.complete_apply() {
-            let ui = ui.as_weak();
-            slint::Timer::single_shot(Duration::from_millis(1), move || {
-                schedule_compiled_framebuffer_display(
-                    ui,
-                    capture_state,
-                    stream_generation,
-                    mailbox,
-                    display_state,
-                    render_metrics,
-                    stream_start,
-                    generation,
-                );
-            });
-        }
-    });
+        apply_compiled_dirty_rects(&ui, &dirty_rects, &dirty_summary);
+        apply_compiled_stream_summary(&ui, &stream_summary);
+    }
+    ui.window().request_redraw();
+    render_metrics.cadence.record(
+        CadenceEventKind::RedrawSubmit,
+        update.frame.sequence,
+        update.frame.timestamp_us,
+        render_metrics.applied_serial.load(Ordering::Acquire),
+        0,
+        0,
+    );
+    if let Ok(mut state) = capture_state.lock() {
+        *state = Some(update.frame.capture);
+    }
+    let _ = mailbox.complete_apply();
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -6134,15 +6394,12 @@ fn spawn_compiled_framebuffer_stream(
     stream_generation: SharedLiveStreamGeneration,
     stream_control: SharedFramebufferStreamControl,
     render_metrics: Arc<FramebufferRenderMetrics>,
+    mailbox: SharedFramebufferDisplayMailbox,
     host: String,
     generation: u64,
-    chrome_enabled: bool,
 ) {
     std::thread::spawn(move || {
         render_metrics.reset();
-        let stream_start = Instant::now();
-        let mailbox = Arc::new(LatestMailbox::default());
-        let display_state = Arc::new(Mutex::new(FramebufferDisplayState::new(chrome_enabled)));
         let seed_capture = fetch_framebuffer_capture(&host).ok();
         if let Some(capture) = seed_capture.clone() {
             let event_generation = Arc::clone(&stream_generation);
@@ -6231,7 +6488,7 @@ fn spawn_compiled_framebuffer_stream(
                     let (_, coalesced_before) = mailbox.stats();
                     let source_sequence = frame.sequence;
                     let source_timestamp_us = frame.timestamp_us;
-                    let schedule = mailbox.publish(FramebufferDisplayUpdate {
+                    let _ = mailbox.publish(FramebufferDisplayUpdate {
                         frame,
                         pixels,
                         received_at,
@@ -6250,18 +6507,6 @@ fn spawn_compiled_framebuffer_stream(
                         0,
                     );
                     render_metrics.mark_received(coalesced);
-                    if schedule {
-                        schedule_compiled_framebuffer_display(
-                            ui.clone(),
-                            Arc::clone(&capture_state),
-                            Arc::clone(&stream_generation),
-                            Arc::clone(&mailbox),
-                            Arc::clone(&display_state),
-                            Arc::clone(&render_metrics),
-                            stream_start,
-                            generation,
-                        );
-                    }
                 }
                 Err(err) => {
                     mailbox.close();
@@ -6835,6 +7080,44 @@ mod tests {
     }
 
     #[test]
+    fn display_clock_tick_records_clock_timing_and_kind() {
+        let metrics = FramebufferRenderMetrics::default();
+        metrics.mark_display_tick(
+            FramebufferDisplayClockKind::MacosDisplayLink,
+            FramebufferDisplayClockTick {
+                timestamp_us: 1_000,
+                target_timestamp_us: 9_333,
+                duration_us: 8_333,
+            },
+        );
+
+        assert_eq!(
+            metrics.clock_kind(),
+            FramebufferDisplayClockKind::MacosDisplayLink
+        );
+        assert_eq!(metrics.display_ticks.load(Ordering::Relaxed), 1);
+        let events = metrics.cadence.events();
+        let event = events.last().expect("display tick event");
+        assert_eq!(event.kind, CadenceEventKind::DisplayLinkTick);
+        assert_eq!(event.source_timestamp_us, 1_000);
+        assert_eq!(event.queue_age_us, 8_333);
+        assert_eq!(event.value, 9_333);
+    }
+
+    #[test]
+    fn display_clock_kind_labels_are_stable() {
+        assert_eq!(
+            FramebufferDisplayClockKind::from_u8(1).label(),
+            "macos-cadisplaylink"
+        );
+        assert_eq!(
+            FramebufferDisplayClockKind::from_u8(2).label(),
+            "slint-timer"
+        );
+        assert_eq!(FramebufferDisplayClockKind::from_u8(99).label(), "unknown");
+    }
+
+    #[test]
     fn framebuffer_benchmark_readiness_requires_visible_after_rendering() {
         let metrics = FramebufferRenderMetrics::default();
         assert_eq!(
@@ -6843,6 +7126,11 @@ mod tests {
         );
 
         metrics.observer_ready.store(true, Ordering::Release);
+        metrics.set_clock_kind(if cfg!(target_os = "macos") {
+            FramebufferDisplayClockKind::MacosDisplayLink
+        } else {
+            FramebufferDisplayClockKind::SlintTimer
+        });
         assert_eq!(metrics.benchmark_invalid_reason(), Some("no_stream_frames"));
         metrics.received.store(1, Ordering::Release);
         assert_eq!(
@@ -6866,6 +7154,11 @@ mod tests {
     fn framebuffer_benchmark_remembers_focus_and_occlusion_failures() {
         let metrics = FramebufferRenderMetrics::default();
         metrics.observer_ready.store(true, Ordering::Release);
+        metrics.set_clock_kind(if cfg!(target_os = "macos") {
+            FramebufferDisplayClockKind::MacosDisplayLink
+        } else {
+            FramebufferDisplayClockKind::SlintTimer
+        });
         metrics.received.store(1, Ordering::Release);
         metrics.applied.store(1, Ordering::Release);
         metrics.rendered.store(1, Ordering::Release);
