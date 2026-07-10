@@ -432,6 +432,19 @@ impl PluginHiddenRgb565Framebuffer {
         parse_region_phys_u32(&self.region)
     }
 
+    pub fn pixels(&self) -> &[Rgb565Pixel] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.mem.cast::<Rgb565Pixel>(),
+                self.stride_pixels * self.height,
+            )
+        }
+    }
+
+    pub fn stride_pixels(&self) -> usize {
+        self.stride_pixels
+    }
+
     fn buffer_mut(&mut self) -> &mut [Rgb565Pixel] {
         unsafe {
             std::slice::from_raw_parts_mut(

@@ -1,3 +1,6 @@
+use crate::framebuffer::downsample::{
+    configured_implementation, downsample_rgb565_2x, Rgb565FrameView,
+};
 use mister_magik_framebuffer_stream::{
     write_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
 };
@@ -20,6 +23,7 @@ static SUBSCRIBER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static NEEDS_KEYFRAME: AtomicBool = AtomicBool::new(true);
 static PENDING_FRAME: AtomicBool = AtomicBool::new(false);
 static COALESCED_FRAMES: AtomicU64 = AtomicU64::new(0);
+static SNAPSHOT_POOL: OnceLock<Mutex<Vec<Vec<Rgb565Pixel>>>> = OnceLock::new();
 
 struct ProducerState {
     latest_geometry: Option<FrameGeometry>,
@@ -71,6 +75,29 @@ struct FrameUpdate {
     rect: FrameRect,
     pixels: Vec<Rgb565Pixel>,
     captured_at_us: u64,
+    kind: FrameUpdateKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrameUpdateKind {
+    Delta,
+    SelfContainedKeyframe,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LatchStreamScale {
+    Full,
+    Half,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LatchSnapshotStats {
+    pub queued: bool,
+    pub snapshot_us: u64,
+    pub raw_bytes: usize,
+    pub output_width: usize,
+    pub output_height: usize,
+    pub implementation: &'static str,
 }
 
 enum WorkerEvent {
@@ -109,6 +136,21 @@ impl WorkerQueue {
     }
 
     fn push_frame(&self, frame: FrameUpdate) -> bool {
+        if frame.kind == FrameUpdateKind::SelfContainedKeyframe {
+            let Ok(mut state) = self.state.lock() else {
+                recycle_snapshot_pixels(frame.pixels);
+                return false;
+            };
+            if let Some(replaced) = state.frame.replace(frame) {
+                COALESCED_FRAMES.fetch_add(1, Ordering::Relaxed);
+                if replaced.kind == FrameUpdateKind::SelfContainedKeyframe {
+                    recycle_snapshot_pixels(replaced.pixels);
+                }
+            }
+            PENDING_FRAME.store(true, Ordering::Release);
+            self.ready.notify_one();
+            return true;
+        }
         if PENDING_FRAME.swap(true, Ordering::AcqRel) {
             COALESCED_FRAMES.fetch_add(1, Ordering::Relaxed);
             NEEDS_KEYFRAME.store(true, Ordering::Release);
@@ -209,6 +251,87 @@ pub fn publish_cached_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[R
     );
 }
 
+pub fn subscriber_active() -> bool {
+    SUBSCRIBER_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn configured_latch_scale() -> Option<LatchStreamScale> {
+    static SCALE: OnceLock<Option<LatchStreamScale>> = OnceLock::new();
+    *SCALE.get_or_init(
+        || match std::env::var("MISTER_FRAMEBUFFER_STREAM_SCALE").as_deref() {
+            Ok("full") | Ok("FULL") => Some(LatchStreamScale::Full),
+            Ok("half") | Ok("HALF") => Some(LatchStreamScale::Half),
+            _ => None,
+        },
+    )
+}
+
+pub fn publish_latch_snapshot(
+    source: Rgb565FrameView<'_>,
+    scale: LatchStreamScale,
+) -> LatchSnapshotStats {
+    if !subscriber_active() {
+        return LatchSnapshotStats::default();
+    }
+    let captured_at_us = timestamp_us();
+    let started = Instant::now();
+    let mut pixels = take_snapshot_pixels();
+    let (width, height, implementation) = match scale {
+        LatchStreamScale::Full => {
+            let Some(pixel_count) = source.width.checked_mul(source.height) else {
+                recycle_snapshot_pixels(pixels);
+                return LatchSnapshotStats::default();
+            };
+            pixels.clear();
+            pixels.reserve(pixel_count);
+            for y in 0..source.height {
+                let start = y.saturating_mul(source.stride_pixels);
+                let Some(row) = source.pixels.get(start..start.saturating_add(source.width)) else {
+                    recycle_snapshot_pixels(pixels);
+                    return LatchSnapshotStats::default();
+                };
+                pixels.extend_from_slice(row);
+            }
+            (source.width, source.height, "copy")
+        }
+        LatchStreamScale::Half => {
+            let implementation = configured_implementation();
+            let Ok(geometry) = downsample_rgb565_2x(source, &mut pixels) else {
+                recycle_snapshot_pixels(pixels);
+                return LatchSnapshotStats::default();
+            };
+            (geometry.width, geometry.height, implementation.label())
+        }
+    };
+    let Some(geometry) = frame_geometry(width, height) else {
+        recycle_snapshot_pixels(pixels);
+        return LatchSnapshotStats::default();
+    };
+    let raw_bytes = pixels
+        .len()
+        .saturating_mul(std::mem::size_of::<Rgb565Pixel>());
+    let snapshot_us = started.elapsed().as_micros() as u64;
+    let queued = worker_queue().push_frame(FrameUpdate {
+        geometry,
+        rect: FrameRect::full(geometry),
+        pixels,
+        captured_at_us,
+        kind: FrameUpdateKind::SelfContainedKeyframe,
+    });
+    if !queued {
+        SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
+        NEEDS_KEYFRAME.store(true, Ordering::Release);
+    }
+    LatchSnapshotStats {
+        queued,
+        snapshot_us,
+        raw_bytes,
+        output_width: width,
+        output_height: height,
+        implementation,
+    }
+}
+
 pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
     if !SUBSCRIBER_ACTIVE.load(Ordering::Acquire) {
         return;
@@ -251,6 +374,7 @@ fn publish_rect(
         rect,
         pixels,
         captured_at_us: timestamp_us(),
+        kind: FrameUpdateKind::Delta,
     }) {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(true, Ordering::Release);
@@ -305,16 +429,35 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 NEEDS_KEYFRAME.store(true, Ordering::Release);
             }
             WorkerEvent::Frame(update) => {
-                producer_state.remember_rect_pixels(update.geometry, update.rect, &update.pixels);
+                if update.kind == FrameUpdateKind::Delta {
+                    producer_state.remember_rect_pixels(
+                        update.geometry,
+                        update.rect,
+                        &update.pixels,
+                    );
+                }
                 let Some(stream) = subscriber.as_mut() else {
+                    if update.kind == FrameUpdateKind::SelfContainedKeyframe {
+                        recycle_snapshot_pixels(update.pixels);
+                    }
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
                     continue;
                 };
-                let force_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel)
+                let needs_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel);
+                let force_keyframe = update.kind == FrameUpdateKind::SelfContainedKeyframe
+                    || needs_keyframe
                     || sequence == 0
                     || sequence.is_multiple_of(KEYFRAME_INTERVAL_FRAMES);
-                let job = if force_keyframe && producer_state.has_full_frame_base {
+                let job = if update.kind == FrameUpdateKind::SelfContainedKeyframe {
+                    Some((
+                        update.geometry,
+                        update.rect,
+                        FrameKind::Keyframe,
+                        update.pixels.as_slice(),
+                        update.rect.width as usize,
+                    ))
+                } else if force_keyframe && producer_state.has_full_frame_base {
                     producer_state.latest_geometry.map(|geometry| {
                         (
                             geometry,
@@ -359,6 +502,9 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     subscriber = None;
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
+                }
+                if update.kind == FrameUpdateKind::SelfContainedKeyframe {
+                    recycle_snapshot_pixels(update.pixels);
                 }
             }
             WorkerEvent::Timeout => {
@@ -464,6 +610,36 @@ fn timestamp_us() -> u64 {
     STARTED_AT.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
+fn frame_geometry(width: usize, height: usize) -> Option<FrameGeometry> {
+    Some(FrameGeometry {
+        width: u32::try_from(width).ok()?,
+        height: u32::try_from(height).ok()?,
+        stride_pixels: u32::try_from(width).ok()?,
+    })
+}
+
+fn snapshot_pool() -> &'static Mutex<Vec<Vec<Rgb565Pixel>>> {
+    SNAPSHOT_POOL.get_or_init(|| Mutex::new(Vec::with_capacity(3)))
+}
+
+fn take_snapshot_pixels() -> Vec<Rgb565Pixel> {
+    snapshot_pool()
+        .lock()
+        .ok()
+        .and_then(|mut pool| pool.pop())
+        .unwrap_or_default()
+}
+
+fn recycle_snapshot_pixels(mut pixels: Vec<Rgb565Pixel>) {
+    pixels.clear();
+    let Ok(mut pool) = snapshot_pool().lock() else {
+        return;
+    };
+    if pool.len() < 3 {
+        pool.push(pixels);
+    }
+}
+
 fn collect_strided_rect(
     pixels: &[Rgb565Pixel],
     src_stride: usize,
@@ -565,6 +741,13 @@ fn rgb565_rect_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queue_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("queue test lock")
+    }
 
     #[test]
     fn strided_rect_collection_extracts_rows() {
@@ -712,6 +895,7 @@ mod tests {
 
     #[test]
     fn worker_queue_drops_frame_when_pending_and_requests_keyframe() {
+        let _guard = queue_test_lock();
         PENDING_FRAME.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(false, Ordering::Release);
         let queue = WorkerQueue::new();
@@ -725,12 +909,14 @@ mod tests {
             rect: FrameRect::full(geometry),
             pixels: vec![Rgb565Pixel(1), Rgb565Pixel(2)],
             captured_at_us: 1,
+            kind: FrameUpdateKind::Delta,
         };
         let second = FrameUpdate {
             geometry,
             rect: FrameRect::full(geometry),
             pixels: vec![Rgb565Pixel(3), Rgb565Pixel(4)],
             captured_at_us: 2,
+            kind: FrameUpdateKind::Delta,
         };
 
         assert!(queue.push_frame(first));
@@ -740,6 +926,36 @@ mod tests {
         let state = queue.state.lock().expect("queue state");
         let pending = state.frame.as_ref().expect("latest frame remains queued");
         assert_eq!(pending.pixels, vec![Rgb565Pixel(1), Rgb565Pixel(2)]);
+        PENDING_FRAME.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn worker_queue_replaces_self_contained_keyframe_with_newest() {
+        let _guard = queue_test_lock();
+        PENDING_FRAME.store(false, Ordering::Release);
+        NEEDS_KEYFRAME.store(false, Ordering::Release);
+        let queue = WorkerQueue::new();
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let keyframe = |value, captured_at_us| FrameUpdate {
+            geometry,
+            rect: FrameRect::full(geometry),
+            pixels: vec![Rgb565Pixel(value), Rgb565Pixel(value)],
+            captured_at_us,
+            kind: FrameUpdateKind::SelfContainedKeyframe,
+        };
+
+        assert!(queue.push_frame(keyframe(1, 10)));
+        assert!(queue.push_frame(keyframe(2, 20)));
+
+        assert!(!NEEDS_KEYFRAME.load(Ordering::Acquire));
+        let state = queue.state.lock().expect("queue state");
+        let pending = state.frame.as_ref().expect("newest keyframe queued");
+        assert_eq!(pending.pixels, vec![Rgb565Pixel(2), Rgb565Pixel(2)]);
+        assert_eq!(pending.captured_at_us, 20);
         PENDING_FRAME.store(false, Ordering::Release);
     }
 }

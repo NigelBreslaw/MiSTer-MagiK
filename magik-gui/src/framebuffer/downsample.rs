@@ -1,32 +1,28 @@
-// This kernel lands one commit before the latch observer that consumes it so
-// scalar/NEON equivalence can be reviewed and bisected independently.
-#![allow(dead_code)]
-
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Rgb565FrameView<'a> {
-    pub(crate) pixels: &'a [Rgb565Pixel],
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) stride_pixels: usize,
+pub struct Rgb565FrameView<'a> {
+    pub pixels: &'a [Rgb565Pixel],
+    pub width: usize,
+    pub height: usize,
+    pub stride_pixels: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct DownsampledGeometry {
-    pub(crate) width: usize,
-    pub(crate) height: usize,
+pub struct DownsampledGeometry {
+    pub width: usize,
+    pub height: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DownsampleImplementation {
+pub enum DownsampleImplementation {
     Scalar,
     Neon,
 }
 
 impl DownsampleImplementation {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Scalar => "scalar",
             Self::Neon => "neon",
@@ -34,7 +30,7 @@ impl DownsampleImplementation {
     }
 }
 
-pub(crate) fn configured_implementation() -> DownsampleImplementation {
+pub fn configured_implementation() -> DownsampleImplementation {
     static IMPLEMENTATION: OnceLock<DownsampleImplementation> = OnceLock::new();
     *IMPLEMENTATION.get_or_init(|| {
         if matches!(
@@ -54,7 +50,7 @@ pub(crate) fn configured_implementation() -> DownsampleImplementation {
     })
 }
 
-pub(crate) fn downsample_rgb565_2x(
+pub fn downsample_rgb565_2x(
     source: Rgb565FrameView<'_>,
     destination: &mut Vec<Rgb565Pixel>,
 ) -> Result<DownsampledGeometry, &'static str> {
