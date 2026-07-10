@@ -589,6 +589,10 @@ greater than 50ms, a working Slint rendering notifier, NEON dispatch, half-size
 snapshot p95/max no greater than 4/6ms, full-size snapshot p95/max no greater
 than 10/15ms, and at least 1.5x half-size snapshot p95 speedup over scalar. The
 underlying profiles also retain the normal latch, pacing, and zero-drop gates.
+Because constant `turbo-hold` is needed to measure sustained stream throughput,
+the stream gate selects the explicit `vsync-integrity` pacing policy: normal
+60Hz scheduler jitter is diagnostic, while work over budget, wall frames over
+33ms, fallback/error sources, latch misses, and non-zero FPGA drops still fail.
 
 The generated `*-framebuffer-stream.tsv` files report consumer measurements;
 the matching `*-arcade-scroll.log` files contain

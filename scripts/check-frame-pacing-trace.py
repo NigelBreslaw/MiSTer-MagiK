@@ -42,6 +42,7 @@ def check_frame_pacing(
     p99_wall_us: int,
     max_wall_us: int,
     scenario: str = "",
+    policy: str = "auto",
 ) -> int:
     try:
         with open(trace_path, newline="") as f:
@@ -115,7 +116,11 @@ def check_frame_pacing(
             if len(examples) < 3:
                 examples.append(f"frame={row.get('frame', '?')}:source={source or 'blank'}:miss={miss}")
 
-    human_turbo = scenario == "human-turbo-hold"
+    if policy not in ("auto", "strict", "vsync-integrity"):
+        return fail(label, "invalid_policy", policy)
+    wall_policy = policy
+    if wall_policy == "auto":
+        wall_policy = "vsync-integrity" if scenario == "human-turbo-hold" else "strict"
     common_valid = (
         p99_work <= p99_work_us
         and work_over == 0
@@ -125,14 +130,14 @@ def check_frame_pacing(
         and sources["other_source"] == 0
         and max_miss == 0
     )
-    if human_turbo:
+    if wall_policy == "vsync-integrity":
         wall_valid = wall_over_33ms == 0
     else:
         wall_valid = p99_wall <= p99_wall_us and max_wall <= max_wall_us and wall_over == 0
     valid = common_valid and wall_valid
     detail = (
         f"frames_after_30={len(measured)} scenario={scenario or 'default'} "
-        f"wall_policy={'human_turbo' if human_turbo else 'strict'} "
+        f"wall_policy={wall_policy} "
         f"p99_work_us={p99_work} work_threshold={p99_work_us} "
         f"p99_wall_us={p99_wall} wall_p99_threshold={p99_wall_us} max_wall_us={max_wall} "
         f"wall_max_threshold={max_wall_us} work_gt_16667={work_over} wall_gt_16667={wall_over} "
@@ -152,14 +157,17 @@ def check_frame_pacing(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) not in (6, 7):
+    if len(argv) not in (6, 7, 8):
         print(
-            "usage: check-frame-pacing-trace.py LABEL TRACE P99_WORK_US P99_WALL_US MAX_WALL_US [SCENARIO]",
+            "usage: check-frame-pacing-trace.py LABEL TRACE P99_WORK_US P99_WALL_US MAX_WALL_US [SCENARIO] [POLICY]",
             file=sys.stderr,
         )
         return 2
     label, trace_path, p99_work_us_text, p99_wall_us_text, max_wall_us_text = argv[1:6]
     scenario = argv[6] if len(argv) == 7 else ""
+    if len(argv) == 8:
+        scenario = argv[6]
+    policy = argv[7] if len(argv) == 8 else "auto"
     return check_frame_pacing(
         label,
         trace_path,
@@ -167,6 +175,7 @@ def main(argv: list[str]) -> int:
         int(p99_wall_us_text),
         int(max_wall_us_text),
         scenario,
+        policy,
     )
 
 
