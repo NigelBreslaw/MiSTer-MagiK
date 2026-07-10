@@ -579,6 +579,20 @@ default:
 scripts/gate-framebuffer-stream-55fps.sh LABEL --secs 30 --deploy-device
 ```
 
+Measure sustained resolution capability separately from that cadence gate:
+
+```bash
+scripts/profile-framebuffer-stream-resolution.sh LABEL --secs 30 --deploy-device
+```
+
+The resolution matrix runs matched half, full, and adaptive null-drain/display
+profiles and reports payload, transport, applied/rendered cadence, producer
+snapshot cost, coalescing, and the existing latch gate result. Its additional
+motion/settle profile requires at least one exact 960x540 adaptive refinement
+no more than 15ms after its scheduled refinement deadline. Full-resolution
+throughput is reported capability; it is not a prerequisite for adaptive
+half-resolution motion.
+
 The gate runs four otherwise identical Arcade `turbo-hold` profiles: no
 subscriber, scalar adaptive display, automatic-SIMD adaptive null drain, and
 automatic-SIMD adaptive Analytics display. The desktop display measurements

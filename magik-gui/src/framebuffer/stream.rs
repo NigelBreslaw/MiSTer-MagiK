@@ -120,6 +120,10 @@ struct SnapshotMetrics {
     half_frames: u64,
     raw_bytes: u64,
     implementation: &'static str,
+    adaptive_refinements: u64,
+    refinement_late_us: Vec<u64>,
+    last_refinement_width: usize,
+    last_refinement_height: usize,
     coalesced_start: u64,
     reported: bool,
 }
@@ -134,6 +138,10 @@ impl SnapshotMetrics {
             half_frames: 0,
             raw_bytes: 0,
             implementation: "none",
+            adaptive_refinements: 0,
+            refinement_late_us: Vec::with_capacity(32),
+            last_refinement_width: 0,
+            last_refinement_height: 0,
             coalesced_start: 0,
             reported: false,
         }
@@ -351,6 +359,7 @@ pub fn publish_latch_snapshot(
         return LatchSnapshotStats::default();
     }
     let captured_at_us = timestamp_us();
+    let refinement_due_us = REFINEMENT_DUE_US.load(Ordering::Acquire);
     let started = Instant::now();
     let mut pixels = take_snapshot_pixels();
     let (width, height, implementation) = match scale {
@@ -422,7 +431,7 @@ pub fn publish_latch_snapshot(
         output_height: height,
         implementation,
     };
-    record_snapshot_metrics(scale, stats);
+    record_snapshot_metrics(scale, stats, refinement_due_us, captured_at_us);
     stats
 }
 
@@ -744,11 +753,20 @@ fn reset_snapshot_metrics() {
     metrics.half_frames = 0;
     metrics.raw_bytes = 0;
     metrics.implementation = "none";
+    metrics.adaptive_refinements = 0;
+    metrics.refinement_late_us.clear();
+    metrics.last_refinement_width = 0;
+    metrics.last_refinement_height = 0;
     metrics.coalesced_start = COALESCED_FRAMES.load(Ordering::Relaxed);
     metrics.reported = false;
 }
 
-fn record_snapshot_metrics(scale: LatchStreamScale, stats: LatchSnapshotStats) {
+fn record_snapshot_metrics(
+    scale: LatchStreamScale,
+    stats: LatchSnapshotStats,
+    refinement_due_us: u64,
+    captured_at_us: u64,
+) {
     let Ok(mut metrics) = snapshot_metrics().lock() else {
         return;
     };
@@ -757,6 +775,17 @@ fn record_snapshot_metrics(scale: LatchStreamScale, stats: LatchSnapshotStats) {
         LatchStreamScale::Full => {
             metrics.full_frames = metrics.full_frames.saturating_add(1);
             metrics.full_snapshot_us.push(stats.snapshot_us);
+            if let Some(late_us) = adaptive_refinement_late_us(
+                configured_latch_mode(),
+                scale,
+                refinement_due_us,
+                captured_at_us,
+            ) {
+                metrics.adaptive_refinements = metrics.adaptive_refinements.saturating_add(1);
+                metrics.refinement_late_us.push(late_us);
+                metrics.last_refinement_width = stats.output_width;
+                metrics.last_refinement_height = stats.output_height;
+            }
         }
         LatchStreamScale::Half => {
             metrics.half_frames = metrics.half_frames.saturating_add(1);
@@ -789,6 +818,10 @@ fn report_snapshot_metrics(reason: &str) {
     full_samples.sort_unstable();
     let full_p95 = percentile_u64(&full_samples, 0.95);
     let full_max = full_samples.last().copied().unwrap_or(0);
+    let mut refinement_late_samples = metrics.refinement_late_us.clone();
+    refinement_late_samples.sort_unstable();
+    let refinement_late_p95 = percentile_u64(&refinement_late_samples, 0.95);
+    let refinement_late_max = refinement_late_samples.last().copied().unwrap_or(0);
     let avg_raw = if frames == 0 {
         0
     } else {
@@ -798,12 +831,28 @@ fn report_snapshot_metrics(reason: &str) {
         .load(Ordering::Relaxed)
         .saturating_sub(metrics.coalesced_start);
     crate::ui_logln!(
-        "framebuffer_stream_snapshot_tsv\treason={reason}\tmode={:?}\timplementation={}\tframes={frames}\thalf_frames={}\tfull_frames={}\tsnapshot_p50_us={p50}\tsnapshot_p95_us={p95}\tsnapshot_max_us={max}\thalf_snapshot_p95_us={half_p95}\thalf_snapshot_max_us={half_max}\tfull_snapshot_p95_us={full_p95}\tfull_snapshot_max_us={full_max}\tavg_raw_bytes={avg_raw}\tcoalesced={coalesced}",
+        "framebuffer_stream_snapshot_tsv\treason={reason}\tmode={:?}\timplementation={}\tframes={frames}\thalf_frames={}\tfull_frames={}\tsnapshot_p50_us={p50}\tsnapshot_p95_us={p95}\tsnapshot_max_us={max}\thalf_snapshot_p95_us={half_p95}\thalf_snapshot_max_us={half_max}\tfull_snapshot_p95_us={full_p95}\tfull_snapshot_max_us={full_max}\tadaptive_refinements={}\trefinement_late_p95_us={refinement_late_p95}\trefinement_late_max_us={refinement_late_max}\tlast_refinement_width={}\tlast_refinement_height={}\tavg_raw_bytes={avg_raw}\tcoalesced={coalesced}",
         configured_latch_mode(),
         metrics.implementation,
         metrics.half_frames,
         metrics.full_frames,
+        metrics.adaptive_refinements,
+        metrics.last_refinement_width,
+        metrics.last_refinement_height,
     );
+}
+
+fn adaptive_refinement_late_us(
+    mode: LatchStreamMode,
+    scale: LatchStreamScale,
+    due_us: u64,
+    captured_at_us: u64,
+) -> Option<u64> {
+    (mode == LatchStreamMode::Adaptive
+        && scale == LatchStreamScale::Full
+        && due_us != 0
+        && captured_at_us >= due_us)
+        .then(|| captured_at_us.saturating_sub(due_us))
 }
 
 fn percentile_u64(values: &[u64], percentile: f64) -> u64 {
@@ -980,6 +1029,46 @@ mod tests {
         );
         assert_eq!(latch_scale_for_mode(LatchStreamMode::Off, true), None);
         assert_eq!(parse_latch_stream_mode(Some("bogus")), LatchStreamMode::Off);
+    }
+
+    #[test]
+    fn adaptive_refinement_lateness_counts_only_due_full_frames() {
+        assert_eq!(
+            adaptive_refinement_late_us(
+                LatchStreamMode::Adaptive,
+                LatchStreamScale::Full,
+                100_000,
+                112_500,
+            ),
+            Some(12_500)
+        );
+        assert_eq!(
+            adaptive_refinement_late_us(
+                LatchStreamMode::Adaptive,
+                LatchStreamScale::Half,
+                100_000,
+                112_500,
+            ),
+            None
+        );
+        assert_eq!(
+            adaptive_refinement_late_us(
+                LatchStreamMode::Full,
+                LatchStreamScale::Full,
+                100_000,
+                112_500,
+            ),
+            None
+        );
+        assert_eq!(
+            adaptive_refinement_late_us(
+                LatchStreamMode::Adaptive,
+                LatchStreamScale::Full,
+                0,
+                112_500,
+            ),
+            None
+        );
     }
 
     #[test]
