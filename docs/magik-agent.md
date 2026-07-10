@@ -32,6 +32,13 @@ Failures use:
 {"id":1,"ok":false,"error":"..."}
 ```
 
+The SD Card browser uses two compatible directory-listing commands. Legacy
+`sd_list_dir` returns metadata-rich `mister-magik-sd-list-dir-v1` entries.
+`sd_list_dir_v2` returns lightweight `mister-magik-sd-list-dir-v2` entries with
+only `name`, `path`, and `kind`, allowing the desktop to render a sorted folder
+without issuing one metadata lookup per item. New desktops try v2 once and
+fall back to v1 when connected to an older agent.
+
 The token lives on the MiSTer at:
 
 ```text

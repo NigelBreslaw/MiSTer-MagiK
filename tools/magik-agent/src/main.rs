@@ -93,6 +93,34 @@ mod sd_browse {
         }))
     }
 
+    pub fn list_dir_fast_at_root(
+        root: &Path,
+        requested_path: &str,
+        show_hidden: bool,
+    ) -> Result<Value, String> {
+        let start = Instant::now();
+        let relative_path = normalize_sd_relative_path(requested_path)?;
+        let host_path = sd_host_path(root, &relative_path);
+        let mut entries = Vec::new();
+        for entry in
+            fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
+        {
+            let entry = entry.map_err(|err| format!("read_dir {relative_path}: {err}"))?;
+            if !show_hidden && is_hidden_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            entries.push(sd_entry_fast_json(&relative_path, entry)?);
+        }
+        entries.sort_by(sd_entry_value_cmp);
+        Ok(json!({
+            "schema": "mister-magik-sd-list-dir-v2",
+            "path": relative_path,
+            "show_hidden": show_hidden,
+            "entries": entries,
+            "elapsed_ms": start.elapsed().as_millis() as u64,
+        }))
+    }
+
     pub fn stat_item_at_root(root: &Path, requested_path: &str) -> Result<Value, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
@@ -279,6 +307,19 @@ mod sd_browse {
             "modified_unix_ms": modified_unix_ms,
             "readonly": metadata.permissions().readonly(),
             "hidden": is_hidden_name(&name),
+        }))
+    }
+
+    fn sd_entry_fast_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = child_sd_path(parent_path, &name);
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type {entry_path}: {err}"))?;
+        Ok(json!({
+            "name": name,
+            "path": entry_path,
+            "kind": if file_type.is_dir() { "directory" } else { "file" },
         }))
     }
 
@@ -1847,6 +1888,10 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
+            "sd_list_dir_v2" => match sd_list_dir_v2(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "sd_stat_item_v1" => match sd_stat_item(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
@@ -1967,6 +2012,22 @@ mod linux {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         crate::sd_browse::list_dir_at_root(Path::new(crate::sd_browse::SD_ROOT), path, show_hidden)
+    }
+
+    fn sd_list_dir_v2(args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        let show_hidden = args
+            .get("show_hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        crate::sd_browse::list_dir_fast_at_root(
+            Path::new(crate::sd_browse::SD_ROOT),
+            path,
+            show_hidden,
+        )
     }
 
     fn sd_stat_item(args: Value) -> Result<Value, String> {
@@ -3787,6 +3848,42 @@ mod tests {
 
         let err = sd_browse::list_dir_at_root(&root, "/missing", false).unwrap_err();
         assert!(err.contains("read_dir /missing"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sd_list_dir_v2_returns_only_render_critical_entry_fields() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-agent-sd-json-v2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("games")).unwrap();
+        std::fs::write(root.join("MiSTer.ini"), b"ini").unwrap();
+        std::fs::write(root.join(".hidden"), b"hidden").unwrap();
+
+        let result = sd_browse::list_dir_fast_at_root(&root, "/", false).unwrap();
+        assert_eq!(result["schema"], "mister-magik-sd-list-dir-v2");
+        assert_eq!(result["path"], "/");
+        assert_eq!(result["show_hidden"], false);
+        let entries = result["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["name"], "games");
+        assert_eq!(entries[0]["kind"], "directory");
+        assert_eq!(entries[1]["name"], "MiSTer.ini");
+        assert_eq!(entries[1]["kind"], "file");
+        for entry in entries {
+            let object = entry.as_object().unwrap();
+            assert_eq!(object.len(), 3);
+            assert!(object.contains_key("name"));
+            assert!(object.contains_key("path"));
+            assert!(object.contains_key("kind"));
+        }
+
+        let hidden = sd_browse::list_dir_fast_at_root(&root, "/", true).unwrap();
+        assert_eq!(hidden["entries"].as_array().unwrap().len(), 3);
+        assert!(sd_browse::list_dir_fast_at_root(&root, "/missing", false).is_err());
 
         let _ = std::fs::remove_dir_all(&root);
     }
