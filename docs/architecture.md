@@ -140,11 +140,12 @@ Latch-stream policy:
   publication. The current production default remains `off` until the real
   device/desktop 55fps gate passes. `MISTER_FRAMEBUFFER_STREAM_SIMD=auto|scalar`
   selects the Cortex-A9 NEON decimator or its scalar oracle for measurement.
-- Desktop display throughput counts distinct stream image serials at Winit
-  `RedrawRequested`, immediately before Slint handles the on-screen render;
-  `AfterRendering` corroborates the same serial on backends that emit it.
-  Received or decoded frames are diagnostic counters; they are not evidence
-  that Analytics scheduled those frames for display.
+- On macOS the desktop consumes its newest-frame mailbox from a native
+  `CADisplayLink`; the producer never schedules catch-up callbacks. Winit redraw
+  events are diagnostic-only because Slint may draw directly from its own
+  display link. Display throughput counts distinct stream image serials at
+  Slint `AfterRendering`. Received, decoded, applied, and redraw-submitted
+  frames remain separate diagnostic counters.
 
 Historical evidence:
 
