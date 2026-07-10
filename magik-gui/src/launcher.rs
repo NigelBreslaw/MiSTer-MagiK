@@ -39,8 +39,8 @@ const MAGIK_INPUT_DIR: &str = "/media/fat/mister-magik/input";
 pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
 #[cfg(test)]
 const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
-const ARCADE_NORMAL_PX_PER_FRAME: i32 = 6;
-const ARCADE_TURBO_PX_PER_FRAME: i32 = 12;
+const ARCADE_NORMAL_PX_PER_SECOND: f64 = 360.0;
+const ARCADE_TURBO_PX_PER_SECOND: f64 = 720.0;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
 const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,11 +167,12 @@ pub struct ArcadeNav {
     pub visual_index: f32,
     row_height: i32,
     scroll: ArcadeScrollState,
+    scroll_animation: SpringAnimation,
+    scroll_velocity_animation: SpringAnimation,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ArcadeScrollState {
-    visual_px: i32,
     target_index: usize,
     intent_queue: i32,
     held_dir: i32,
@@ -180,6 +181,9 @@ struct ArcadeScrollState {
     last_quick_tap_released_at: Option<Instant>,
     turbo_candidate: bool,
     turbo_active: bool,
+    last_frame_at: Option<Instant>,
+    settle_direction: i32,
+    continuous_active: bool,
 }
 
 impl Default for ArcadeNav {
@@ -200,6 +204,11 @@ impl ArcadeNav {
             visual_index: 0.0,
             row_height: row_height.max(1),
             scroll: ArcadeScrollState::default(),
+            scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::apple_smooth()),
+            scroll_velocity_animation: SpringAnimation::new(
+                0.0,
+                SpringConfiguration::apple_smooth(),
+            ),
         }
     }
 
@@ -208,12 +217,16 @@ impl ArcadeNav {
         self.scroll_y = 0;
         self.visual_index = 0.0;
         self.scroll = ArcadeScrollState::default();
+        self.scroll_animation.snap_to(0.0);
+        self.scroll_velocity_animation.snap_to(0.0);
     }
 
     pub fn snap_to_selected(&mut self) {
         self.scroll.target_index = self.selected;
         self.scroll.intent_queue = 0;
-        self.scroll.visual_px = self.selected as i32 * self.row_height;
+        self.scroll_animation
+            .snap_to(self.selected as f64 * self.row_height as f64);
+        self.scroll_velocity_animation.snap_to(0.0);
         self.sync_visual_from_px();
     }
 
@@ -227,11 +240,13 @@ impl ArcadeNav {
         self.scroll.target_index = self.selected;
         let selected_px = self.selected as i32 * self.row_height;
         let saved_scroll_y = scroll_y.clamp(0, self.max_scroll_y(count));
-        self.scroll.visual_px = if saved_scroll_y == selected_px {
+        let visual_px = if saved_scroll_y == selected_px {
             saved_scroll_y
         } else {
             selected_px
         };
+        self.scroll_animation.snap_to(visual_px as f64);
+        self.scroll_velocity_animation.snap_to(0.0);
         self.sync_visual_from_px();
     }
 
@@ -259,7 +274,7 @@ impl ArcadeNav {
         let dir = dir.signum();
         let previous_dir = previous_dir.signum();
         if previous_dir != 0 && previous_dir != dir {
-            self.record_release(previous_dir, now);
+            self.record_release(previous_dir, now, count);
         }
         if dir == 0 {
             self.scroll.held_dir = 0;
@@ -280,7 +295,7 @@ impl ArcadeNav {
         }
     }
 
-    pub fn tick(&mut self, count: usize) {
+    pub fn tick(&mut self, count: usize, now: Instant) {
         if count == 0 {
             self.reset();
             return;
@@ -290,27 +305,59 @@ impl ArcadeNav {
             self.snap_to_selected();
             return;
         }
-        let target_px = self.scroll.target_index as i32 * self.row_height;
-        let delta = target_px - self.scroll.visual_px;
-        if delta == 0 {
-            self.scroll.intent_queue = 0;
-            self.sync_visual_from_px();
-            return;
-        }
-        let step = if self.scroll.turbo_active {
-            ARCADE_TURBO_PX_PER_FRAME
+        let delta = self
+            .scroll
+            .last_frame_at
+            .map_or(Duration::from_secs_f64(1.0 / 60.0), |previous| {
+                now.saturating_duration_since(previous)
+            });
+        self.scroll.last_frame_at = Some(now);
+
+        let before_row = (self.scroll_animation.value() / self.row_height as f64).floor() as i32;
+        let continuous_active = self.scroll.held_dir != 0
+            && self.scroll.hold_started_at.is_some_and(|started| {
+                now.saturating_duration_since(started) > ARCADE_QUICK_TAP_MAX
+            });
+        if continuous_active {
+            let target_speed = if self.scroll.turbo_active {
+                ARCADE_TURBO_PX_PER_SECOND
+            } else {
+                ARCADE_NORMAL_PX_PER_SECOND
+            } / arcade_scroll_speed_div() as f64;
+            if !self.scroll.continuous_active {
+                self.scroll_velocity_animation
+                    .snap_to(self.scroll_animation.velocity());
+            }
+            self.scroll_velocity_animation
+                .set_target(self.scroll.held_dir as f64 * target_speed);
+            let velocity = self.scroll_velocity_animation.advance(delta);
+            let value = (self.scroll_animation.value() + velocity * delta.as_secs_f64())
+                .clamp(0.0, self.max_scroll_y(count) as f64);
+            self.scroll_animation.set_state(value, velocity);
+            self.scroll.continuous_active = true;
+
+            let row = if self.scroll.held_dir > 0 {
+                (value / self.row_height as f64).ceil()
+            } else {
+                (value / self.row_height as f64).floor()
+            }
+            .clamp(0.0, count.saturating_sub(1) as f64) as usize;
+            self.scroll.target_index = row;
+            self.selected = row;
+            self.scroll.settle_direction = self.scroll.held_dir;
+            self.scroll_animation
+                .set_target(row as f64 * self.row_height as f64);
         } else {
-            ARCADE_NORMAL_PX_PER_FRAME
+            self.scroll.continuous_active = false;
+            self.scroll_animation.advance(delta);
+            clamp_arcade_spring_at_target(&mut self.scroll_animation, self.scroll.settle_direction);
         }
-        .saturating_div(arcade_scroll_speed_div())
-        .max(1);
-        let movement = delta.signum() * step.min(delta.abs());
-        let before_row = self.scroll.visual_px.div_euclid(self.row_height);
-        self.scroll.visual_px =
-            (self.scroll.visual_px + movement).clamp(0, self.max_scroll_y(count));
-        let after_row = self.scroll.visual_px.div_euclid(self.row_height);
+        let after_row = (self.scroll_animation.value() / self.row_height as f64).floor() as i32;
         if after_row != before_row && self.scroll.intent_queue != 0 {
             self.scroll.intent_queue -= self.scroll.intent_queue.signum();
+        }
+        if self.is_settled() {
+            self.scroll.intent_queue = 0;
         }
         self.sync_visual_from_px();
     }
@@ -323,7 +370,7 @@ impl ArcadeNav {
         now: Instant,
     ) {
         self.handle_direction_input(dir, previous_dir, now, count);
-        self.tick(count);
+        self.tick(count, now);
     }
 
     // Benchmark-only turbo motion: keep stressing preview scroll by bouncing at
@@ -337,7 +384,7 @@ impl ArcadeNav {
             self.scroll.held_dir = 0;
             self.scroll.turbo_candidate = false;
             self.scroll.turbo_active = false;
-            self.tick(count);
+            self.tick(count, now);
             return;
         }
         if self.selected >= count {
@@ -365,7 +412,7 @@ impl ArcadeNav {
         if self.is_settled() {
             self.enqueue_step(dir, count);
         }
-        self.tick(count);
+        self.tick(count, now);
     }
 
     fn begin_press(&mut self, dir: i32, now: Instant) {
@@ -397,7 +444,7 @@ impl ArcadeNav {
         }
     }
 
-    fn record_release(&mut self, dir: i32, now: Instant) {
+    fn record_release(&mut self, dir: i32, now: Instant, count: usize) {
         if let Some(started) = self.scroll.hold_started_at {
             if self.scroll.held_dir == dir {
                 if now.saturating_duration_since(started) <= ARCADE_QUICK_TAP_MAX {
@@ -413,10 +460,28 @@ impl ArcadeNav {
         self.scroll.hold_started_at = None;
         self.scroll.turbo_candidate = false;
         self.scroll.turbo_active = false;
+        if self.scroll.continuous_active {
+            let target = directional_row_spring_target(
+                self.scroll_animation.value(),
+                self.scroll_animation.velocity(),
+                count,
+                dir,
+                self.row_height,
+                self.scroll_animation.configuration().angular_frequency(),
+            );
+            let target_index = (target / self.row_height as f64).round() as usize;
+            self.scroll.target_index = target_index;
+            self.selected = target_index;
+            self.scroll.settle_direction = dir;
+            self.scroll_animation.set_target(target);
+            self.scroll_velocity_animation
+                .snap_to(self.scroll_animation.velocity());
+            self.scroll.continuous_active = false;
+        }
     }
 
     pub fn is_settled(&self) -> bool {
-        self.scroll.visual_px == self.scroll.target_index as i32 * self.row_height
+        self.scroll_animation.is_settled()
     }
 
     pub fn is_scroll_active(&self) -> bool {
@@ -446,12 +511,59 @@ impl ArcadeNav {
         self.scroll.target_index = next;
         self.selected = next;
         self.scroll.intent_queue += dir.signum();
+        self.scroll.settle_direction = dir.signum();
+        self.scroll_animation
+            .set_target(next as f64 * self.row_height as f64);
     }
 
     fn sync_visual_from_px(&mut self) {
-        self.scroll_y = self.scroll.visual_px;
-        self.visual_index = self.scroll.visual_px as f32 / self.row_height as f32;
+        let visual_px = self.scroll_animation.value();
+        self.scroll_y = visual_px.round() as i32;
+        self.visual_index = visual_px as f32 / self.row_height as f32;
     }
+}
+
+fn clamp_arcade_spring_at_target(animation: &mut SpringAnimation, direction: i32) {
+    let target = animation.target();
+    if (direction > 0 && animation.value() >= target)
+        || (direction < 0 && animation.value() <= target)
+    {
+        animation.snap_to(target);
+    }
+}
+
+fn directional_row_spring_target(
+    value: f64,
+    velocity: f64,
+    count: usize,
+    direction: i32,
+    row_height: i32,
+    angular_frequency: f64,
+) -> f64 {
+    let pitch = row_height.max(1) as f64;
+    let max_scroll = count.saturating_sub(1) as f64 * pitch;
+    if direction == 0 {
+        return (value / pitch).round() * pitch;
+    }
+
+    // Give the critically damped spring enough forward runway to absorb the
+    // incoming cruise velocity without crossing its target and recoiling.
+    let minimum_distance = velocity.abs() / angular_frequency.max(f64::EPSILON);
+    let mut target = if direction > 0 {
+        (value / pitch).ceil() * pitch
+    } else {
+        (value / pitch).floor() * pitch
+    };
+    if direction > 0 {
+        while target - value < minimum_distance && target < max_scroll {
+            target += pitch;
+        }
+    } else {
+        while value - target < minimum_distance && target > 0.0 {
+            target -= pitch;
+        }
+    }
+    target.clamp(0.0, max_scroll)
 }
 
 pub struct LauncherNav {
@@ -912,7 +1024,7 @@ impl LauncherNav {
         let previous_dir = arcade_dpad_dir(&self.prev);
         self.arcade
             .handle_direction_input(dir, previous_dir, frame_now, count);
-        self.arcade.tick(count);
+        self.arcade.tick(count, frame_now);
 
         if rising(now.btn_a, self.prev.btn_a) {
             return self
@@ -996,7 +1108,7 @@ impl LauncherNav {
                 let previous_dir = arcade_dpad_dir(&self.prev);
                 self.arcade
                     .handle_direction_input(dir, previous_dir, frame_now, count);
-                self.arcade.tick(count);
+                self.arcade.tick(count, frame_now);
                 if rising(now.btn_a, self.prev.btn_a) {
                     return self
                         .active_arcade_game_at(catalog, system_id, self.arcade.selected)
@@ -1047,7 +1159,7 @@ impl LauncherNav {
                 frame_now,
                 items.len(),
             );
-            self.arcade_filter.scroll.tick(items.len());
+            self.arcade_filter.scroll.tick(items.len(), frame_now);
             self.sync_arcade_filter_from_scroll();
         } else {
             self.arcade_filter.scroll.reset();
@@ -2893,16 +3005,15 @@ mod tests {
 
     fn input(nav: &mut ArcadeNav, dir: i32, previous_dir: i32, count: usize, now: Instant) {
         nav.handle_direction_input(dir, previous_dir, now, count);
-        nav.tick(count);
+        nav.tick(count, now);
     }
 
     fn settle(nav: &mut ArcadeNav, count: usize, start: Instant) {
-        for frame in 1..=64 {
-            nav.tick(count);
+        for frame in 1..=180 {
+            nav.tick(count, start + Duration::from_millis(frame * 16));
             if nav.is_settled() {
                 return;
             }
-            let _ = start + Duration::from_millis(frame * 16);
         }
         assert!(nav.is_settled(), "arcade nav did not settle");
     }
@@ -4571,40 +4682,43 @@ mod tests {
             input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(frame * 16));
         }
         assert_eq!(nav.selected, 1);
-        assert_eq!(nav.visual_index, 1.0);
-        input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(128));
-        assert_eq!(nav.selected, 2);
+        assert!(nav.visual_index > 0.0 && nav.visual_index < 1.0);
+        for frame in 8..=30 {
+            input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(frame * 16));
+        }
+        assert!(nav.selected >= 2);
         assert!(nav.visual_index > 1.0);
     }
 
     #[test]
-    fn arcade_scroll_stays_active_while_direction_is_held_between_steps() {
+    fn arcade_scroll_stays_active_during_continuous_hold() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
-        settle(&mut nav, 10, t0);
-
-        assert!(nav.is_settled());
+        for frame in 1..=30 {
+            input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(frame * 16));
+        }
         assert!(nav.is_scroll_active());
+        assert!(nav.selected > 1);
 
-        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(140));
-
+        input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(500));
+        settle(&mut nav, 10, t0 + Duration::from_millis(500));
         assert!(!nav.is_scroll_active());
     }
 
     #[test]
-    fn arcade_scroll_motion_is_idle_while_direction_is_held_between_steps() {
+    fn arcade_scroll_motion_continues_while_direction_is_held() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
 
         assert!(nav.has_scroll_motion_or_queue());
 
-        settle(&mut nav, 10, t0);
-
-        assert!(nav.is_settled());
+        for frame in 1..=30 {
+            input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(frame * 16));
+        }
         assert!(nav.is_scroll_active());
-        assert!(!nav.has_scroll_motion_or_queue());
+        assert!(nav.scroll_animation.velocity() > 0.0);
     }
 
     #[test]
@@ -4658,12 +4772,13 @@ mod tests {
         assert!(nav.visual_index > 0.0);
         input(&mut nav, -1, 0, 10, t0 + Duration::from_millis(40));
         assert_eq!(nav.selected, 0);
-        settle(&mut nav, 10, t0);
+        input(&mut nav, 0, -1, 10, t0 + Duration::from_millis(60));
+        settle(&mut nav, 10, t0 + Duration::from_millis(60));
         assert_eq!(nav.visual_index, 0.0);
     }
 
     #[test]
-    fn arcade_turbo_repress_uses_12_px_steps() {
+    fn arcade_turbo_repress_springs_toward_cruise_velocity() {
         let mut nav = ArcadeNav::new();
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
@@ -4674,14 +4789,51 @@ mod tests {
         assert!(!nav.is_turbo_active());
         assert_eq!(nav.selected, 2);
 
-        let visual_before_turbo = nav.scroll.visual_px;
+        let visual_before_turbo = nav.scroll_animation.value();
         input(&mut nav, 1, 1, 10, t0 + Duration::from_millis(360));
         assert!(nav.scroll.turbo_active);
         assert!(nav.is_turbo_active());
+        assert!(nav.scroll_animation.value() > visual_before_turbo);
+        assert!(nav.scroll_animation.velocity() > 0.0);
+        assert!(nav.scroll_animation.velocity() < ARCADE_TURBO_PX_PER_SECOND);
+    }
+
+    #[test]
+    fn arcade_turbo_release_springs_forward_to_an_exact_row() {
+        let mut nav = ArcadeNav::new();
+        let t0 = Instant::now();
+        input(&mut nav, 1, 0, 100, t0);
+        input(&mut nav, 0, 1, 100, t0 + Duration::from_millis(50));
+        input(&mut nav, 1, 0, 100, t0 + Duration::from_millis(120));
+        for frame in 23..=70 {
+            input(&mut nav, 1, 1, 100, t0 + Duration::from_millis(frame * 16));
+        }
+        assert!(nav.is_turbo_active());
+        let release_value = nav.scroll_animation.value();
+        let release_velocity = nav.scroll_animation.velocity();
+        let nearest_forward_row = (release_value / nav.row_height as f64).ceil() as usize;
+
+        let release_at = t0 + Duration::from_millis(1136);
+        input(&mut nav, 0, 1, 100, release_at);
+        assert!(!nav.is_turbo_active());
+        assert!(nav.scroll.target_index > nearest_forward_row);
         assert_eq!(
-            nav.scroll.visual_px,
-            visual_before_turbo + ARCADE_TURBO_PX_PER_FRAME
+            nav.scroll_animation.target(),
+            nav.scroll.target_index as f64 * nav.row_height as f64
         );
+
+        let mut previous = nav.scroll_animation.value();
+        for frame in 1..=180 {
+            nav.tick(100, release_at + Duration::from_millis(frame * 16));
+            assert!(nav.scroll_animation.value() >= previous);
+            previous = nav.scroll_animation.value();
+            if nav.is_settled() {
+                break;
+            }
+        }
+        assert!(release_velocity > 0.0);
+        assert!(nav.is_settled());
+        assert_eq!(nav.visual_index, nav.selected as f32);
     }
 
     #[test]
@@ -4753,13 +4905,10 @@ mod tests {
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
         input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
-        let visual_before_repress = nav.scroll.visual_px;
+        let visual_before_repress = nav.scroll_animation.value();
         input(&mut nav, 1, 0, 10, t0 + Duration::from_millis(450));
         assert!(!nav.scroll.turbo_active);
-        assert_eq!(
-            nav.scroll.visual_px,
-            visual_before_repress + ARCADE_NORMAL_PX_PER_FRAME
-        );
+        assert!(nav.scroll_animation.value() > visual_before_repress);
     }
 
     #[test]
@@ -4770,13 +4919,14 @@ mod tests {
         let t0 = Instant::now();
         input(&mut nav, 1, 0, 10, t0);
         input(&mut nav, 0, 1, 10, t0 + Duration::from_millis(50));
-        let visual_before_repress = nav.scroll.visual_px;
+        let visual_before_repress = nav.scroll_animation.value();
         input(&mut nav, -1, 0, 10, t0 + Duration::from_millis(120));
         assert!(!nav.scroll.turbo_active);
-        assert_eq!(
-            nav.scroll.visual_px,
-            visual_before_repress - ARCADE_NORMAL_PX_PER_FRAME
-        );
+        assert_eq!(nav.selected, 5);
+        assert_ne!(nav.scroll_animation.value(), visual_before_repress);
+        input(&mut nav, 0, -1, 10, t0 + Duration::from_millis(140));
+        settle(&mut nav, 10, t0 + Duration::from_millis(140));
+        assert_eq!(nav.visual_index, 5.0);
     }
 
     #[test]
