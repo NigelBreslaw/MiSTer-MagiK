@@ -2590,20 +2590,8 @@ fn create_live_instance(
                 show_hidden,
             );
         }
-        let detail_request = sd_toggle_browser
-            .lock()
-            .ok()
-            .map(|mut browser| browser.begin_detail_fetch_current(false));
         if let Some(instance) = sd_toggle_instance.upgrade() {
             apply_live_sd_state(&instance, &sd_toggle_browser);
-        }
-        if let Some(detail_request) = detail_request {
-            spawn_live_sd_detail_fetch(
-                sd_toggle_instance.clone(),
-                Arc::clone(&sd_toggle_browser),
-                sd_toggle_host.clone(),
-                detail_request,
-            );
         }
         Value::Void
     })?;
@@ -3648,20 +3636,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                 show_hidden,
             );
         }
-        let detail_request = sd_toggle_browser
-            .lock()
-            .ok()
-            .map(|mut browser| browser.begin_detail_fetch_current(false));
         if let Some(ui) = sd_toggle_ui.upgrade() {
             apply_compiled_sd_state(&ui, &sd_toggle_browser);
-        }
-        if let Some(detail_request) = detail_request {
-            spawn_compiled_sd_detail_fetch(
-                sd_toggle_ui.clone(),
-                Arc::clone(&sd_toggle_browser),
-                sd_toggle_host.clone(),
-                detail_request,
-            );
         }
     });
 
