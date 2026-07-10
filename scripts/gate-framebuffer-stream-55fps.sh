@@ -78,7 +78,8 @@ run_profile() {
 }
 
 echo "==> Build production Skia desktop benchmark"
-cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --features skia-renderer
+cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release --no-default-features \
+  --features compiled-ui,skia-renderer
 
 nosub_label="${label}-NOSUB"
 scalar_label="${label}-SCALAR"
