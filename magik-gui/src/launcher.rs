@@ -204,11 +204,8 @@ impl ArcadeNav {
             visual_index: 0.0,
             row_height: row_height.max(1),
             scroll: ArcadeScrollState::default(),
-            scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::apple_smooth()),
-            scroll_velocity_animation: SpringAnimation::new(
-                0.0,
-                SpringConfiguration::apple_smooth(),
-            ),
+            scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
+            scroll_velocity_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
         }
     }
 
@@ -770,7 +767,7 @@ impl LauncherNav {
             game_list_memory: HashMap::new(),
             repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
-            home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::apple_smooth()),
+            home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
             prev: PadState::default(),
         }
     }
@@ -3321,7 +3318,7 @@ mod tests {
         assert_eq!(scroll_x, home_max_scroll(10));
 
         let between_tiles = (2 * home_tile_pitch() + 40) as f64;
-        let omega = SpringConfiguration::apple_smooth().angular_frequency();
+        let omega = SpringConfiguration::smooth().angular_frequency();
         assert_eq!(
             home_directional_spring_target(between_tiles, 0.0, 10, 1, omega),
             (3 * home_tile_pitch()) as f64
@@ -3335,7 +3332,7 @@ mod tests {
     #[test]
     fn home_release_at_end_caps_velocity_and_never_recoils() {
         let target = home_max_scroll(10) as f64;
-        let mut spring = SpringAnimation::new(target - 10.0, SpringConfiguration::apple_smooth());
+        let mut spring = SpringAnimation::new(target - 10.0, SpringConfiguration::smooth());
         spring.set_state(target - 10.0, HOME_SCROLL_SPEED_PX_PER_SECOND);
         retarget_home_spring_monotonically(&mut spring, target);
 

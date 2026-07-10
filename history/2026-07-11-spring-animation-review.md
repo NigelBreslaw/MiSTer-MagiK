@@ -5,11 +5,11 @@
 - Fixed point: `ce4f89f` (`Better animated launcher`).
 - Scenario: 30-second Home `home-repeat-hold` at 960x540 RGB565.
 - Spring implementation: analytic damped oscillator with persistent value,
-  velocity, and target; Apple `Spring()` / `.smooth` defaults.
+  velocity, and target; smooth critically damped defaults.
 
-## Apple Default Parameters
+## Smooth Default Parameters
 
-Queried from the local SwiftUI framework on macOS 26:
+The reusable smooth configuration uses:
 
 - response / perceptual duration: 0.5s
 - bounce: 0

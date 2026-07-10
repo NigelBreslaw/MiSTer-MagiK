@@ -55,8 +55,8 @@ impl SpringConfiguration {
         }
     }
 
-    /// SwiftUI's `Spring()` / `.smooth` default: response 0.5s, bounce 0.
-    pub fn apple_smooth() -> Self {
+    /// A smooth, critically damped spring with a 0.5-second response.
+    pub fn smooth() -> Self {
         Self::from_response(Duration::from_millis(500), 1.0)
     }
 
@@ -83,7 +83,7 @@ impl SpringConfiguration {
 
 impl Default for SpringConfiguration {
     fn default() -> Self {
-        Self::apple_smooth()
+        Self::smooth()
     }
 }
 
@@ -203,8 +203,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apple_smooth_matches_swiftui_parameters() {
-        let spring = SpringConfiguration::apple_smooth();
+    fn smooth_has_expected_physical_parameters() {
+        let spring = SpringConfiguration::smooth();
         assert!((spring.mass() - 1.0).abs() < 1e-12);
         assert!((spring.stiffness() - 157.913_670_417_429_73).abs() < 1e-9);
         assert!((spring.damping() - 25.132_741_228_718_345).abs() < 1e-9);
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn retargeting_preserves_velocity() {
-        let mut spring = SpringAnimation::new(0.0, SpringConfiguration::apple_smooth());
+        let mut spring = SpringAnimation::new(0.0, SpringConfiguration::smooth());
         spring.set_target(100.0);
         spring.advance(Duration::from_millis(100));
         let velocity = spring.velocity();
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn analytic_solution_is_frame_rate_independent() {
-        let mut sixty = SpringAnimation::new(0.0, SpringConfiguration::apple_smooth());
+        let mut sixty = SpringAnimation::new(0.0, SpringConfiguration::smooth());
         let mut one_twenty = sixty;
         sixty.set_target(100.0);
         one_twenty.set_target(100.0);
@@ -243,8 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn apple_smooth_converges_without_overshoot_from_rest() {
-        let mut spring = SpringAnimation::new(0.0, SpringConfiguration::apple_smooth());
+    fn smooth_converges_without_overshoot_from_rest() {
+        let mut spring = SpringAnimation::new(0.0, SpringConfiguration::smooth());
         spring.set_target(100.0);
         let mut previous = spring.value();
         for _ in 0..120 {
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn full_frame_delta_is_evaluated_without_truncation() {
-        let mut one_step = SpringAnimation::new(0.0, SpringConfiguration::apple_smooth());
+        let mut one_step = SpringAnimation::new(0.0, SpringConfiguration::smooth());
         let mut split = one_step;
         one_step.set_target(100.0);
         split.set_target(100.0);

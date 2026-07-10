@@ -153,7 +153,7 @@ the reporting surface without claiming a faster renderer.
 Use `home-repeat-hold` when measuring the experience of holding left or right
 on the Home system row. The scenario feeds held d-pad input through the normal
 launcher input path, so it includes the real motion behavior: an immediate
-single-tap move using the reusable Apple-compatible critically damped spring, a
+single-tap move using the reusable critically damped smooth spring, a
 200ms hold threshold, acceleration into frame-delta-driven motion at 1440px/s,
 then velocity-preserving spring settling onto a directional tile boundary after
 release. At either end of the system list it reverses direction, which keeps
