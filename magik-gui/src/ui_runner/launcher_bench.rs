@@ -340,7 +340,7 @@ pub(super) fn launcher_bench_step(
             if state.step % preview_step_hold_frames() == 0 {
                 nav.arcade.handle_direction_input(1, 0, now, count);
             }
-            nav.arcade.tick(count);
+            nav.arcade.tick(count, now);
             true
         }
         LauncherBenchScenario::QuickTap => {
