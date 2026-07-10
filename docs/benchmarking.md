@@ -583,11 +583,13 @@ The gate runs four otherwise identical Arcade `turbo-hold` profiles: no
 subscriber, scalar adaptive display, automatic-SIMD adaptive null drain, and
 automatic-SIMD adaptive Analytics display. The desktop display measurements
 include a three-second warmup before the requested measurement interval. Each
-device motion trace runs 25 seconds longer than that interval so live UI
-interpretation and connection setup happen before the measured window ends.
+device motion trace runs 25 seconds longer than that interval so desktop process
+and connection setup happen before the measured window ends.
+The Analytics consumer is the release-profile compiled Slint UI with the Skia
+renderer; debug or live-interpreted desktop numbers are diagnostic only.
 Passing requires at least 55 distinct rendered and applied frames per second in
 Analytics, at least 58 frames per second through the null drain, render p95 no
-greater than 50ms, a working Slint rendering notifier, NEON dispatch, half-size
+greater than 50ms, a working desktop redraw observer, NEON dispatch, half-size
 snapshot p95/max no greater than 4/6ms, full-size snapshot p95/max no greater
 than 10/15ms, and at least 1.5x half-size snapshot p95 speedup over scalar. The
 underlying profiles also retain the normal latch, pacing, and zero-drop gates.
@@ -599,8 +601,10 @@ the stream gate selects the explicit `vsync-integrity` pacing policy: normal
 The generated `*-framebuffer-stream.tsv` files report consumer measurements;
 the matching `*-arcade-scroll.log` files contain
 `framebuffer_stream_snapshot_tsv` producer timing. `rendered_fps` specifically
-means distinct stream image serials observed by Slint `AfterRendering`, not
-frames received, decompressed, or merely handed to the UI event loop. Keep the
+means distinct stream image serials observed at Winit `RedrawRequested`, just
+before Slint's on-screen render, not frames received, decompressed, or merely
+handed to the UI event loop. `AfterRendering` deduplicates the same serial when
+the selected backend emits it. Keep the
 historical roughly-20fps monitor result as context only: it predates the latch
 producer and is not a like-for-like baseline for this gate.
 

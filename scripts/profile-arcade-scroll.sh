@@ -714,13 +714,13 @@ run_boot_prelude() {
 }
 
 start_stream_consumer() {
-  stream_features=()
+  stream_features=(--release)
   case "$stream_consumer" in
     none) return 0 ;;
     desktop-bench) stream_arg="--framebuffer-stream-bench-secs" ;;
     desktop-display)
       stream_arg="--framebuffer-stream-display-bench-secs"
-      stream_features=(--features skia-renderer)
+      stream_features+=(--no-default-features --features compiled-ui,skia-renderer)
       ;;
     null-drain) stream_arg="--framebuffer-stream-drain-bench-secs" ;;
   esac
