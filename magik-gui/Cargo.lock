@@ -2599,6 +2599,7 @@ name = "mister-magik-fb"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cc",
  "ffmpeg-next",
  "libc",
  "lz4_flex",
