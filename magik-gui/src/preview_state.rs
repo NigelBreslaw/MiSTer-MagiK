@@ -320,7 +320,7 @@ pub(crate) struct PreviewState {
     window_preview_keys: Vec<String>,
     window_shape: Option<PreviewWindowShape>,
     pending_prefetch_keys: HashSet<String>,
-    ready_backlog: VecDeque<PreviewResult>,
+    deferred_selected_result: Option<PreviewResult>,
     raw_dirty: bool,
     last_prefetch_selected: Option<usize>,
     prefetch_direction: i8,
@@ -490,7 +490,7 @@ impl PreviewState {
             window_preview_keys: Vec::new(),
             window_shape: None,
             pending_prefetch_keys: HashSet::new(),
-            ready_backlog: VecDeque::new(),
+            deferred_selected_result: None,
             raw_dirty: false,
             last_prefetch_selected: None,
             prefetch_direction: 0,
@@ -527,7 +527,7 @@ impl PreviewState {
             self.window_preview_keys.clear();
             self.window_shape = None;
             self.pending_prefetch_keys.clear();
-            self.ready_backlog.clear();
+            self.deferred_selected_result = None;
             self.last_prefetch_selected = None;
             self.prefetch_direction = 0;
             self.last_prefetch_window = None;
@@ -1292,143 +1292,16 @@ pub(crate) fn request_arcade_preview_window(
             );
             return true;
         }
-        request_selected_preview_async(preview, selected, selected_game, &candidate);
-        trace_preview_coverage_sample(
-            preview,
-            selected,
-            selected_game,
-            Some(&candidate),
-            turbo_active,
-        );
-        return false;
     }
-    match preview.worker.load_asset_pixels_timed(
-        candidate_game.preview_archive_path.as_ref(),
-        candidate_game.preview_asset_key.as_ref(),
-    ) {
-        Ok(loaded) => {
-            let completed_at_ms = preview.trace_elapsed_ms();
-            let load_source = loaded.load_source;
-            let total_us = loaded.total_us;
-            let read_us = loaded.read_us;
-            let decode_us = loaded.decode_us;
-            let raw565_parse_us = loaded.raw565_parse_us;
-            let age_us = completed_at_ms.saturating_sub(requested_at_ms) * 1000;
-            if preview_startup_trace_enabled() {
-                crate::ui_errln!(
-                    "startup_timing\tpreview_selected_decoded\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\traw565_parse_us={}\tage_us={}",
-                    completed_at_ms,
-                    candidate_game.system_id,
-                    candidate_game.title,
-                    candidate_game.preview_asset_key,
-                    load_source.label(),
-                    total_us,
-                    read_us,
-                    decode_us,
-                    raw565_parse_us,
-                    age_us
-                );
-            }
-            if preview_startup_trace_enabled() && load_source == PreviewLoadSource::IndexPread {
-                crate::ui_errln!(
-                    "startup_timing\tpreview_sidecar_ready\t{}ms\tsystem={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\tread_us={}",
-                    completed_at_ms,
-                    candidate_game.system_id,
-                    candidate_game.title,
-                    candidate_game.preview_asset_key,
-                    load_source.label(),
-                    read_us
-                );
-            }
-            let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
-            preview.frame_cache_evictions += preview.cache.insert(
-                preview_key.clone(),
-                Arc::clone(&loaded_image),
-                &preview.window_preview_keys,
-                Some(&preview.visible_preview_key),
-            );
-            preview.current_generation = 0;
-            preview.selected_preview_key = Some(preview_key.clone());
-            preview.has_visible_preview = true;
-            preview.visible_preview_load_source = load_source.label();
-            preview.begin_raw_transition_to(&preview_key, PreviewTransitionPace::Normal);
-            preview.visible_preview_key = preview_key;
-            preview.raw_dirty = true;
-            apply_preview_image_bridge(bridge, &loaded_image);
-            if preview_startup_trace_enabled() {
-                crate::ui_errln!(
-                    "startup_timing\tpreview_selected_applied\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration=0\tload_source={}\ttotal_us={}\tread_us={}\tdecode_us={}\tage_us={}",
-                    preview.trace_elapsed_ms(),
-                    candidate_game.system_id,
-                    selected,
-                    candidate_game.title,
-                    candidate_game.preview_asset_key,
-                    load_source.label(),
-                    total_us,
-                    read_us,
-                    decode_us,
-                    age_us
-                );
-            }
-            request_preview_prefetches_if_allowed(
-                games,
-                selected,
-                preview,
-                scroll_active,
-                turbo_active,
-            );
-            trace_preview_coverage_sample(
-                preview,
-                selected,
-                selected_game,
-                Some(&candidate),
-                turbo_active,
-            );
-            return true;
-        }
-        Err(err) => {
-            if preview_trace_enabled() {
-                crate::ui_errln!(
-                    "preview_trace sync_selected_failed title={} archive_path={} asset_key={} error={}",
-                    candidate_game.title,
-                    candidate_game.preview_archive_path,
-                    candidate_game.preview_asset_key,
-                    err
-                );
-            }
-            preview.cache.insert_failed(preview_key.clone());
-            if first_available_preview_candidate(
-                games,
-                selected,
-                prefetch_radius,
-                &mut preview.cache,
-            )
-            .is_some()
-            {
-                preview.selected_mra_path = None;
-                return request_arcade_preview_window(
-                    bridge,
-                    games,
-                    selected,
-                    preview,
-                    defer_selected_application,
-                    scroll_active,
-                    turbo_active,
-                );
-            }
-            preview.select_empty_preview(preview_transition_pace(turbo_active));
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            request_preview_prefetches_if_allowed(
-                games,
-                selected,
-                preview,
-                scroll_active,
-                turbo_active,
-            );
-            trace_preview_coverage_sample(preview, selected, selected_game, None, turbo_active);
-            return true;
-        }
-    }
+    request_selected_preview_async(preview, selected, selected_game, &candidate);
+    trace_preview_coverage_sample(
+        preview,
+        selected,
+        selected_game,
+        Some(&candidate),
+        turbo_active,
+    );
+    false
 }
 
 fn request_selected_preview_async(
@@ -1557,13 +1430,16 @@ fn request_preview_prefetches(
             continue;
         }
         let distance = idx.abs_diff(selected);
-        preview.pending_prefetch_keys.insert(preview_key);
-        preview.worker.request_prefetch(
+        if preview.worker.request_prefetch(
             game.title.to_string(),
             game.preview_archive_path.to_string(),
             game.preview_asset_key.to_string(),
             rank + 1,
-        );
+        ) {
+            preview.pending_prefetch_keys.insert(preview_key);
+        } else {
+            continue;
+        }
         if preview_trace_enabled() {
             crate::ui_errln!(
                 "preview_trace prefetch distance={} rank={} direction={} title={} archive_path={} asset_key={}",
@@ -1839,28 +1715,49 @@ pub(crate) fn apply_ready_preview(
 ) -> bool {
     preview.last_apply_trace = PreviewApplyTrace::default();
     if !preview_loading_enabled() {
-        for _ in preview.worker.drain() {}
-        preview.ready_backlog.clear();
+        preview.worker.discard_ready_results();
+        preview.deferred_selected_result = None;
         return false;
     }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let mut dirty = false;
-    for result in preview.worker.drain() {
-        preview.last_apply_trace.worker_drained += 1;
-        preview.ready_backlog.push_back(result);
+    let mut ready_backlog = VecDeque::new();
+    if !defer_selected_result {
+        if let Some(result) = preview.deferred_selected_result.take() {
+            ready_backlog.push_front(result);
+        }
     }
-    preview.last_apply_trace.backlog_len = preview.ready_backlog.len() as u32;
+    if let Some(result) = preview.worker.take_latest_selected_result() {
+        preview.last_apply_trace.worker_drained += 1;
+        if defer_selected_result
+            && is_current_selected_result(
+                &result,
+                preview.current_generation,
+                preview.selected_preview_key.as_deref(),
+            )
+        {
+            preview.deferred_selected_result = Some(result);
+        } else {
+            ready_backlog.push_front(result);
+        }
+    }
+    if let Some(result) = preview.worker.take_prefetch_result() {
+        preview.last_apply_trace.worker_drained += 1;
+        ready_backlog.push_back(result);
+    }
+    preview.last_apply_trace.backlog_len =
+        ready_backlog.len() as u32 + u32::from(preview.deferred_selected_result.is_some());
     let mut selected_processed = false;
     let mut prefetch_results = 0;
     while let Some(idx) = next_ready_result_index(
-        &preview.ready_backlog,
+        &ready_backlog,
         preview.current_generation,
         preview.selected_preview_key.as_deref(),
         selected_processed,
         prefetch_results,
         defer_selected_result,
     ) {
-        let Some(result) = preview.ready_backlog.remove(idx) else {
+        let Some(result) = ready_backlog.remove(idx) else {
             break;
         };
         preview.last_apply_trace.ready_processed += 1;
@@ -2008,7 +1905,8 @@ pub(crate) fn apply_ready_preview(
             }
         }
     }
-    preview.last_apply_trace.backlog_len = preview.ready_backlog.len() as u32;
+    preview.last_apply_trace.backlog_len =
+        ready_backlog.len() as u32 + u32::from(preview.deferred_selected_result.is_some());
     dirty
 }
 
