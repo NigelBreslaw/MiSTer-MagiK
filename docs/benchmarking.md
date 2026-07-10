@@ -152,10 +152,11 @@ the reporting surface without claiming a faster renderer.
 
 Use `home-repeat-hold` when measuring the experience of holding left or right
 on the Home system row. The scenario feeds held d-pad input through the normal
-launcher input path, so it includes the real repeat behavior: immediate first
-move, 1s initial repeat delay, then 80ms repeat. At either end of the system
-list it reverses direction and repeats, which keeps long traces exercising both
-left and right movement.
+launcher input path, so it includes the real motion behavior: an immediate
+single-tap move, a 200ms hold threshold, then frame-driven motion at 24 logical
+pixels per rendered frame (1440px/s at 60Hz). At either end of the system list
+it reverses direction, which keeps long traces exercising both left and right
+movement.
 
 ```bash
 scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --launcher-scenario home-repeat-hold --ui-scope launcher

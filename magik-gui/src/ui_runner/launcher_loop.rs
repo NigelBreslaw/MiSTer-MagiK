@@ -796,7 +796,6 @@ impl LauncherRenderIntent {
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
 const CATALOG_BACKGROUND_IDLE_SETTLE: Duration = Duration::from_millis(2000);
-const HOME_SIDE_LABEL_W: usize = 56;
 const HOME_LAYOUT_PADDING: usize = 18;
 const HOME_HEADER_H: usize = 42;
 const HOME_LAYOUT_SPACING: usize = 14;
@@ -828,7 +827,7 @@ fn update_home_pan_present_window(
 
 fn home_pan_present_rect(ui: &UiDisplay) -> DirtyRect {
     let scale = SLINT_UI_SCALE.max(1) as usize;
-    let x0 = (HOME_SIDE_LABEL_W + HOME_LAYOUT_PADDING) * scale;
+    let x0 = HOME_LAYOUT_PADDING * scale;
     let y0 = (HOME_LAYOUT_PADDING + HOME_HEADER_H + HOME_LAYOUT_SPACING) * scale;
     let x1 = ui.render_w().saturating_sub(HOME_LAYOUT_PADDING * scale);
     let y1 = ui.render_h().saturating_sub(HOME_LAYOUT_PADDING * scale);
@@ -2527,6 +2526,7 @@ pub(super) fn run_launcher_loop(
                 sync_bridge_launcher_light(
                     &app,
                     &nav,
+                    &mut bridge_models,
                     &setup,
                     scheduler.visible_loading_title(&loading_title),
                     "",
@@ -5333,7 +5333,7 @@ mod tests {
         assert_eq!(
             home_pan_present_rect(&ui),
             DirtyRect {
-                x0: 74,
+                x0: 18,
                 y0: 74,
                 x1: 942,
                 y1: 522,
@@ -5358,7 +5358,7 @@ mod tests {
         assert_eq!(
             expand_home_pan_dirty_rect(Some(dirty), &ui, true),
             Some(DirtyRect {
-                x0: 74,
+                x0: 18,
                 y0: 74,
                 x1: 942,
                 y1: 522,
@@ -5367,7 +5367,7 @@ mod tests {
         assert_eq!(
             expand_home_pan_dirty_rect(None, &ui, true),
             Some(DirtyRect {
-                x0: 74,
+                x0: 18,
                 y0: 74,
                 x1: 942,
                 y1: 522,

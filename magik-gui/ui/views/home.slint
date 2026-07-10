@@ -1,7 +1,6 @@
-import { ListView } from "std-widgets.slint";
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
-import { LauncherTile, OsdSideLabel, SettingsButton } from "../components/launcher_chrome.slint";
+import { LauncherTile, SettingsButton } from "../components/launcher_chrome.slint";
 
 export component HomeGrid inherits Rectangle {
     property <int> s: MisterUi.scale;
@@ -13,7 +12,7 @@ export component HomeGrid inherits Rectangle {
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
     property <length> animated-scroll-x: scroll-x;
     property <int> first-visible-index: floor(animated-scroll-x / tile-pitch);
-    property <duration> scroll-duration: MisterBridge.home-scroll-repeat-active ? 80ms : 160ms;
+    property <duration> scroll-duration: MisterBridge.home-scroll-repeat-active ? 0ms : 160ms;
     property <easing> scroll-easing: MisterBridge.home-scroll-repeat-active
         ? Easing.linear : Easing.ease-out;
 
@@ -22,8 +21,6 @@ export component HomeGrid inherits Rectangle {
     background: transparent;
 
     HorizontalLayout {
-        OsdSideLabel { }
-
         VerticalLayout {
             padding: 18px * s;
             spacing: 14px * s;
@@ -65,20 +62,18 @@ export component HomeGrid inherits Rectangle {
                 }
             }
 
-            system-list := ListView {
+            system-viewport := Rectangle {
                 vertical-stretch: 1;
-                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                viewport-width: root.content-width;
-                viewport-height: self.height;
-                viewport-x: -root.animated-scroll-x;
+                background: transparent;
+                clip: true;
 
-                for _ in 1: Rectangle {
+                Rectangle {
+                    x: -root.animated-scroll-x;
                     width: root.content-width;
                     height: parent.height;
                     background: transparent;
 
-                    // Five 220px tiles are sufficient to cover the 868px viewport at every
+                    // Five 220px tiles are sufficient to cover the 924px viewport at every
                     // fractional offset. The cyclic slot mapping keeps four delegates stable
                     // when first-visible-index advances and recycles only the fifth.
                     for slot in 5: LauncherTile {

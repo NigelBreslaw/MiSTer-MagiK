@@ -25,6 +25,10 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+const HOME_SCROLL_HOLD_DELAY: Duration = Duration::from_millis(200);
+/// The launcher is paced at 60 Hz, so 24 logical pixels per rendered frame is 1440px/s.
+const HOME_SCROLL_PX_PER_FRAME: i32 = 24;
+
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
 const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
@@ -463,7 +467,16 @@ pub struct LauncherNav {
     pub arcade_search: ArcadeSearchState,
     game_list_memory: HashMap<String, GameListMemory>,
     repeat: RepeatNav,
+    home_scroll: HomeScrollState,
     prev: PadState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HomeScrollState {
+    held_dir: i32,
+    hold_started_at: Option<Instant>,
+    active: bool,
+    cursor_px: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,10 +629,8 @@ impl Default for LauncherNav {
 }
 
 impl LauncherNav {
-    pub fn home_horizontal_repeat_active(&self, now: Instant) -> bool {
-        self.screen == Screen::Home
-            && !self.settings_focused
-            && (self.repeat.left.repeat_active(now) || self.repeat.right.repeat_active(now))
+    pub fn home_horizontal_repeat_active(&self) -> bool {
+        self.screen == Screen::Home && !self.settings_focused && self.home_scroll.active
     }
 
     pub fn new() -> Self {
@@ -637,6 +648,7 @@ impl LauncherNav {
             arcade_search: ArcadeSearchState::new(),
             game_list_memory: HashMap::new(),
             repeat: RepeatNav::default(),
+            home_scroll: HomeScrollState::default(),
             prev: PadState::default(),
         }
     }
@@ -683,6 +695,7 @@ impl LauncherNav {
             self.settings_focused = false;
         }
         if self.settings_focused {
+            self.home_scroll = HomeScrollState::default();
             if rising(now.btn_a, self.prev.btn_a) {
                 self.settings_selected = 0;
                 self.screen = Screen::Settings;
@@ -691,21 +704,16 @@ impl LauncherNav {
         }
 
         if system_count == 0 {
+            self.home_scroll = HomeScrollState::default();
             return None;
         }
 
         if self.selected >= system_count {
             self.selected = system_count - 1;
             keep_home_visible(self.selected, &mut self.scroll_x, system_count);
+            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
         }
-        if self.repeat.tick_left(now.dpad_left, frame_now) && self.selected > 0 {
-            self.selected -= 1;
-            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
-        }
-        if self.repeat.tick_right(now.dpad_right, frame_now) && self.selected + 1 < system_count {
-            self.selected += 1;
-            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
-        }
+        self.update_home_scroll(now, frame_now, system_count);
 
         if rising(now.btn_a, self.prev.btn_a) {
             self.arcade_filter.active = ArcadeFilter::All;
@@ -719,6 +727,57 @@ impl LauncherNav {
         }
 
         None
+    }
+
+    fn update_home_scroll(&mut self, now: &PadState, frame_now: Instant, count: usize) {
+        let dir = i32::from(now.dpad_right) - i32::from(now.dpad_left);
+        let previous_dir = i32::from(self.prev.dpad_right) - i32::from(self.prev.dpad_left);
+        if dir == 0 {
+            self.home_scroll = HomeScrollState {
+                cursor_px: self.selected as i32 * home_tile_pitch(),
+                ..HomeScrollState::default()
+            };
+            return;
+        }
+
+        if dir != previous_dir {
+            self.home_scroll = HomeScrollState {
+                held_dir: dir,
+                hold_started_at: Some(frame_now),
+                active: false,
+                cursor_px: self.selected as i32 * home_tile_pitch(),
+            };
+            if dir < 0 && self.selected > 0 {
+                self.selected -= 1;
+            } else if dir > 0 && self.selected + 1 < count {
+                self.selected += 1;
+            }
+            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
+            keep_home_visible(self.selected, &mut self.scroll_x, count);
+            return;
+        }
+
+        if !self.home_scroll.active
+            && self.home_scroll.hold_started_at.is_some_and(|started| {
+                frame_now.saturating_duration_since(started) >= HOME_SCROLL_HOLD_DELAY
+            })
+        {
+            self.home_scroll.active = true;
+            self.home_scroll.cursor_px = self.selected as i32 * home_tile_pitch();
+        }
+        if !self.home_scroll.active {
+            return;
+        }
+
+        let max_cursor = count.saturating_sub(1) as i32 * home_tile_pitch();
+        self.home_scroll.cursor_px = (self.home_scroll.cursor_px
+            + self.home_scroll.held_dir * HOME_SCROLL_PX_PER_FRAME)
+            .clamp(0, max_cursor);
+        self.scroll_x = (self.scroll_x + self.home_scroll.held_dir * HOME_SCROLL_PX_PER_FRAME)
+            .clamp(0, home_max_scroll(count));
+        self.selected = ((self.home_scroll.cursor_px + home_tile_pitch() / 2) / home_tile_pitch())
+            .clamp(0, count.saturating_sub(1) as i32) as usize;
+        keep_home_visible(self.selected, &mut self.scroll_x, count);
     }
 
     fn handle_arcade(
@@ -1804,14 +1863,18 @@ fn home_max_scroll(count: usize) -> i32 {
     (content - HOME_LIST_VISIBLE_W).max(0)
 }
 
+fn home_tile_pitch() -> i32 {
+    HOME_TILE_WIDTH + HOME_TILE_GAP
+}
+
 fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
-    let tile_left = selected as i32 * (HOME_TILE_WIDTH + HOME_TILE_GAP);
-    let tile_right = tile_left + HOME_TILE_WIDTH;
-    if tile_left < *scroll_x {
-        *scroll_x = tile_left;
+    let visible_left = selected as i32 * home_tile_pitch();
+    let visible_right = visible_left + HOME_TILE_WIDTH;
+    if visible_left < *scroll_x {
+        *scroll_x = visible_left;
     }
-    if tile_right > *scroll_x + HOME_LIST_VISIBLE_W {
-        *scroll_x = tile_right - HOME_LIST_VISIBLE_W;
+    if visible_right > *scroll_x + HOME_LIST_VISIBLE_W {
+        *scroll_x = visible_right - HOME_LIST_VISIBLE_W;
     }
     *scroll_x = (*scroll_x).clamp(0, home_max_scroll(count));
 }
@@ -2926,6 +2989,53 @@ mod tests {
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.scroll_x, 0);
+    }
+
+    #[test]
+    fn launcher_home_hold_scrolls_at_constant_frame_speed_and_keeps_focus_visible() {
+        let catalog = arcade_catalog(
+            Vec::new(),
+            (0..10)
+                .map(|index| arcade_system(format!("system-{index}"), 0))
+                .collect(),
+        );
+        let mut nav = LauncherNav::new();
+        let held_right = pad_with(|pad| pad.dpad_right = true);
+        let start = Instant::now();
+
+        nav.handle_input(&held_right, start, &catalog);
+        assert_eq!(nav.selected, 1);
+        assert_eq!(nav.scroll_x, 0);
+        assert!(!nav.home_horizontal_repeat_active());
+
+        nav.handle_input(&held_right, start + Duration::from_millis(199), &catalog);
+        assert_eq!(nav.scroll_x, 0);
+        assert!(!nav.home_horizontal_repeat_active());
+
+        let mut previous_scroll = nav.scroll_x;
+        for frame in 0..20 {
+            nav.handle_input(
+                &held_right,
+                start + Duration::from_millis(200 + frame * 16),
+                &catalog,
+            );
+            assert!(nav.home_horizontal_repeat_active());
+            assert_eq!(nav.scroll_x - previous_scroll, HOME_SCROLL_PX_PER_FRAME);
+            previous_scroll = nav.scroll_x;
+
+            let selected_left = nav.selected as i32 * home_tile_pitch();
+            let selected_right = selected_left + HOME_TILE_WIDTH;
+            assert!(selected_left >= nav.scroll_x);
+            assert!(selected_right <= nav.scroll_x + HOME_LIST_VISIBLE_W);
+        }
+
+        nav.handle_input(
+            &PadState::default(),
+            start + Duration::from_millis(520),
+            &catalog,
+        );
+        assert!(!nav.home_horizontal_repeat_active());
+        assert_eq!(nav.scroll_x, previous_scroll);
     }
 
     #[test]
