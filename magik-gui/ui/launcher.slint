@@ -22,7 +22,7 @@ export { ArcadeGame, GameSystem } from "arcade_game.slint";
 export component Launcher inherits MisterWindow {
     default-font-family: "Press Start 2P";
     title: "MiSTer MagiK Launcher";
-    background: #1a1424;
+    background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
 
     if MisterBridge.screen-mode == 0 : HomeGrid { }
 
