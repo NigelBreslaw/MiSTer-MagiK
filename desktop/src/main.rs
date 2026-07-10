@@ -9,9 +9,9 @@ mod sd_card;
 
 use agent_client::{
     connect_device_telemetry_stream, connect_framebuffer_stream, connect_framebuffer_stream_seeded,
-    drain_framebuffer_stream, fetch_dashboard, fetch_framebuffer_capture, fetch_sd_directory,
-    fetch_sd_item_detail, DeviceTelemetrySample, DeviceTelemetryStreamControl,
-    FramebufferStreamControl,
+    drain_framebuffer_stream, drain_framebuffer_stream_for, fetch_dashboard,
+    fetch_framebuffer_capture, fetch_sd_directory, fetch_sd_item_detail, DeviceTelemetrySample,
+    DeviceTelemetryStreamControl, FramebufferStreamControl,
 };
 use app_state::{DashboardSnapshot, DEFAULT_HOST};
 use sd_card::SdCardBrowser;
@@ -842,8 +842,8 @@ fn library_sort_column_id(column: library::LibrarySortColumn) -> &'static str {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if let Some((mode, frames)) = framebuffer_stream_bench_args()? {
-        run_framebuffer_stream_bench(mode, frames)?;
+    if let Some((mode, limit)) = framebuffer_stream_bench_args()? {
+        run_framebuffer_stream_bench(mode, limit)?;
         return Ok(());
     }
 
@@ -884,6 +884,12 @@ enum FramebufferBenchMode {
     Dump(PathBuf),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FramebufferBenchLimit {
+    Frames(u64),
+    Duration(Duration),
+}
+
 impl FramebufferBenchMode {
     fn label(&self) -> &'static str {
         match self {
@@ -895,20 +901,23 @@ impl FramebufferBenchMode {
     }
 }
 
-fn framebuffer_stream_bench_args() -> Result<Option<(FramebufferBenchMode, u64)>, Box<dyn Error>> {
+fn framebuffer_stream_bench_args(
+) -> Result<Option<(FramebufferBenchMode, FramebufferBenchLimit)>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let Some(first) = args.first() else {
         return Ok(None);
     };
-    let mode = match first.as_str() {
-        "--framebuffer-stream-bench" => FramebufferBenchMode::Stream,
-        "--framebuffer-poll-bench" => FramebufferBenchMode::Poll,
-        "--framebuffer-stream-drain-bench" => FramebufferBenchMode::Drain,
+    let (mode, duration_mode) = match first.as_str() {
+        "--framebuffer-stream-bench" => (FramebufferBenchMode::Stream, false),
+        "--framebuffer-stream-bench-secs" => (FramebufferBenchMode::Stream, true),
+        "--framebuffer-poll-bench" => (FramebufferBenchMode::Poll, false),
+        "--framebuffer-stream-drain-bench" => (FramebufferBenchMode::Drain, false),
+        "--framebuffer-stream-drain-bench-secs" => (FramebufferBenchMode::Drain, true),
         "--framebuffer-stream-dump" => {
             let dir = args
                 .get(1)
                 .ok_or("--framebuffer-stream-dump needs OUT_DIR [FRAMES]")?;
-            FramebufferBenchMode::Dump(PathBuf::from(dir))
+            (FramebufferBenchMode::Dump(PathBuf::from(dir)), false)
         }
         _ => return Ok(None),
     };
@@ -917,26 +926,31 @@ fn framebuffer_stream_bench_args() -> Result<Option<(FramebufferBenchMode, u64)>
     } else {
         1
     };
-    let frames = match args.get(frame_arg_index) {
+    let value = match args.get(frame_arg_index) {
         Some(value) => value.parse::<u64>()?,
         None => 120,
     };
-    Ok(Some((mode, frames.max(1))))
+    let limit = if duration_mode {
+        FramebufferBenchLimit::Duration(Duration::from_secs(value.max(1)))
+    } else {
+        FramebufferBenchLimit::Frames(value.max(1))
+    };
+    Ok(Some((mode, limit)))
 }
 
 fn run_framebuffer_stream_bench(
     mode: FramebufferBenchMode,
-    frames: u64,
+    limit: FramebufferBenchLimit,
 ) -> Result<(), Box<dyn Error>> {
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let started = Instant::now();
-    let mut latencies = Vec::with_capacity(frames as usize);
+    let mut latencies = Vec::new();
     let mut payload_bytes = 0_u64;
     let mut raw_bytes = 0_u64;
     match mode {
         FramebufferBenchMode::Stream => {
             let mut stream = connect_framebuffer_stream(&host)?;
-            for _ in 0..frames {
+            while !bench_limit_reached(limit, latencies.len() as u64, started.elapsed()) {
                 let frame_started = Instant::now();
                 let capture = stream.next_capture()?;
                 let _image = framebuffer_capture_image(&capture);
@@ -946,13 +960,18 @@ fn run_framebuffer_stream_bench(
             }
         }
         FramebufferBenchMode::Drain => {
-            let stats = drain_framebuffer_stream(&host, frames)?;
+            let stats = match limit {
+                FramebufferBenchLimit::Frames(frames) => drain_framebuffer_stream(&host, frames)?,
+                FramebufferBenchLimit::Duration(duration) => {
+                    drain_framebuffer_stream_for(&host, duration)?
+                }
+            };
             latencies = stats.latencies;
             payload_bytes = stats.payload_bytes;
             raw_bytes = stats.raw_bytes;
         }
         FramebufferBenchMode::Poll => {
-            for _ in 0..frames {
+            while !bench_limit_reached(limit, latencies.len() as u64, started.elapsed()) {
                 let frame_started = Instant::now();
                 let capture = fetch_framebuffer_capture(&host)?;
                 let _image = framebuffer_capture_image(&capture);
@@ -969,6 +988,10 @@ fn run_framebuffer_stream_bench(
                 std::fs::write(dir.join("frame-0000-seed.png"), png)?;
             }
             let mut stream = connect_framebuffer_stream_seeded(&host, seed_capture.as_ref())?;
+            let frames = match limit {
+                FramebufferBenchLimit::Frames(frames) => frames,
+                FramebufferBenchLimit::Duration(_) => unreachable!("dump is frame-count only"),
+            };
             for idx in 0..frames {
                 let frame_started = Instant::now();
                 let capture = stream.next_capture()?;
@@ -982,6 +1005,10 @@ fn run_framebuffer_stream_bench(
     }
     latencies.sort();
     let elapsed = started.elapsed();
+    let frames = latencies.len() as u64;
+    if frames == 0 {
+        return Err("framebuffer stream benchmark received no frames".into());
+    }
     let fps = frames as f64 / elapsed.as_secs_f64();
     let p50 = latency_percentile_ms(&latencies, 0.50);
     let p95 = latency_percentile_ms(&latencies, 0.95);
@@ -993,6 +1020,13 @@ fn run_framebuffer_stream_bench(
         elapsed.as_secs_f64() * 1000.0
     );
     Ok(())
+}
+
+fn bench_limit_reached(limit: FramebufferBenchLimit, frames: u64, elapsed: Duration) -> bool {
+    match limit {
+        FramebufferBenchLimit::Frames(target) => frames >= target,
+        FramebufferBenchLimit::Duration(target) => elapsed >= target,
+    }
 }
 
 fn latency_percentile_ms(latencies: &[Duration], percentile: f64) -> f64 {
