@@ -7,9 +7,7 @@ use std::io::Read;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::media_identity::{
@@ -29,6 +27,8 @@ use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
 pub const TURBO_PREVIEW_DECODED_CACHE_CAP: usize = 96;
+const PREFETCH_REQUEST_CAP: usize = 64;
+const PREFETCH_RESULT_CAP: usize = 8;
 const MISSING_ARCHIVE_TTL: Duration = Duration::from_secs(5);
 const PREVIEW_ARCHIVE_METADATA_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_MEDIA_SIZE: &str = DEFAULT_SCREENSHOT_IMAGE_SIZE;
@@ -93,6 +93,64 @@ pub struct PreviewResult {
 impl PreviewResult {
     pub fn preview_key(&self) -> String {
         preview_asset_cache_key(&self.preview_archive_path, &self.preview_asset_key)
+    }
+}
+
+/// A one-slot hand-off. Publishing replaces unstarted work instead of allowing
+/// a selection burst to grow an unbounded queue behind an in-flight decode.
+struct LatestMailbox<T> {
+    state: Mutex<LatestMailboxState<T>>,
+    ready: Condvar,
+}
+
+struct LatestMailboxState<T> {
+    item: Option<T>,
+    closed: bool,
+}
+
+impl<T> LatestMailbox<T> {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(LatestMailboxState {
+                item: None,
+                closed: false,
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn publish(&self, item: T) -> bool {
+        let mut state = self.state.lock().expect("preview mailbox lock");
+        if state.closed {
+            return false;
+        }
+        state.item = Some(item);
+        self.ready.notify_one();
+        true
+    }
+
+    fn take_blocking(&self) -> Option<T> {
+        let mut state = self.state.lock().expect("preview mailbox lock");
+        loop {
+            if let Some(item) = state.item.take() {
+                return Some(item);
+            }
+            if state.closed {
+                return None;
+            }
+            state = self.ready.wait(state).expect("preview mailbox wait");
+        }
+    }
+
+    fn try_take(&self) -> Option<T> {
+        self.state.lock().expect("preview mailbox lock").item.take()
+    }
+
+    fn close(&self) {
+        let mut state = self.state.lock().expect("preview mailbox lock");
+        state.closed = true;
+        state.item = None;
+        self.ready.notify_all();
     }
 }
 
@@ -291,11 +349,11 @@ pub struct PreviewArchiveSidecarStems {
 }
 
 pub struct PreviewWorker {
-    selected_tx: mpsc::Sender<PreviewRequest>,
-    prefetch_tx: mpsc::Sender<PreviewRequest>,
-    rx: mpsc::Receiver<PreviewResult>,
+    selected_tx: Arc<LatestMailbox<PreviewRequest>>,
+    prefetch_tx: mpsc::SyncSender<PreviewRequest>,
+    selected_rx: Arc<LatestMailbox<PreviewResult>>,
+    prefetch_rx: mpsc::Receiver<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
-    sync_scratch: PreviewArchiveScratch,
     trace_start: Instant,
     next_generation: u64,
 }
@@ -312,18 +370,26 @@ impl PreviewWorker {
     }
 
     pub fn new_with_trace_start(trace_start: Instant) -> Self {
-        let (selected_tx, selected_rx) = mpsc::channel::<PreviewRequest>();
-        let (prefetch_tx, prefetch_rx) = mpsc::channel::<PreviewRequest>();
-        let (res_tx, res_rx) = mpsc::channel::<PreviewResult>();
+        let selected_tx = Arc::new(LatestMailbox::new());
+        let (prefetch_tx, prefetch_rx) = mpsc::sync_channel::<PreviewRequest>(PREFETCH_REQUEST_CAP);
+        let selected_rx = Arc::new(LatestMailbox::new());
+        let (prefetch_result_tx, prefetch_result_rx) =
+            mpsc::sync_channel::<PreviewResult>(PREFETCH_RESULT_CAP);
         let decoded_cache = Arc::new(Mutex::new(PreviewDecodedCache::new(
             preview_decoded_cache_cap(),
         )));
         let selected_cache = Arc::clone(&decoded_cache);
-        let selected_res_tx = res_tx.clone();
+        let selected_request_rx = Arc::clone(&selected_tx);
+        let selected_result_tx = Arc::clone(&selected_rx);
         std::thread::Builder::new()
             .name("preview-selected-loader".to_string())
             .spawn(move || {
-                preview_selected_thread(selected_rx, selected_res_tx, selected_cache, trace_start)
+                preview_selected_thread(
+                    selected_request_rx,
+                    selected_result_tx,
+                    selected_cache,
+                    trace_start,
+                )
             })
             .expect("spawn preview-selected-loader");
         let prefetch_trace_start = trace_start;
@@ -331,15 +397,20 @@ impl PreviewWorker {
         std::thread::Builder::new()
             .name("preview-prefetch-loader".to_string())
             .spawn(move || {
-                preview_prefetch_thread(prefetch_rx, res_tx, prefetch_cache, prefetch_trace_start)
+                preview_prefetch_thread(
+                    prefetch_rx,
+                    prefetch_result_tx,
+                    prefetch_cache,
+                    prefetch_trace_start,
+                )
             })
             .expect("spawn preview-prefetch-loader");
         Self {
             selected_tx,
             prefetch_tx,
-            rx: res_rx,
+            selected_rx,
+            prefetch_rx: prefetch_result_rx,
             decoded_cache,
-            sync_scratch: PreviewArchiveScratch::default(),
             trace_start,
             next_generation: 1,
         }
@@ -353,7 +424,7 @@ impl PreviewWorker {
     ) -> u64 {
         let generation = self.next_generation;
         self.next_generation += 1;
-        let _ = self.selected_tx.send(PreviewRequest {
+        let _ = self.selected_tx.publish(PreviewRequest {
             generation,
             title,
             preview_archive_path,
@@ -371,10 +442,10 @@ impl PreviewWorker {
         preview_archive_path: String,
         preview_asset_key: String,
         distance: usize,
-    ) {
+    ) -> bool {
         let generation = self.next_generation;
         self.next_generation += 1;
-        let _ = self.prefetch_tx.send(PreviewRequest {
+        match self.prefetch_tx.try_send(PreviewRequest {
             generation,
             title,
             preview_archive_path,
@@ -382,27 +453,23 @@ impl PreviewWorker {
             requested_at: Instant::now(),
             requested_at_ms: self.trace_start.elapsed().as_millis() as u64,
             priority: PreviewPriority::Prefetch { distance },
-        });
-    }
-
-    pub fn drain(&self) -> Vec<PreviewResult> {
-        let mut out = Vec::new();
-        while let Ok(result) = self.rx.try_recv() {
-            out.push(result);
+        }) {
+            Ok(()) => true,
+            Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => false,
         }
-        out
     }
 
-    pub fn load_asset_pixels_timed(
-        &mut self,
-        preview_archive_path: &str,
-        preview_asset_key: &str,
-    ) -> Result<LoadedPreviewAsset, String> {
-        load_preview_asset_pixels_timed_with_scratch(
-            preview_archive_path,
-            preview_asset_key,
-            &mut self.sync_scratch,
-        )
+    pub fn take_latest_selected_result(&self) -> Option<PreviewResult> {
+        self.selected_rx.try_take()
+    }
+
+    pub fn take_prefetch_result(&self) -> Option<PreviewResult> {
+        self.prefetch_rx.try_recv().ok()
+    }
+
+    pub fn discard_ready_results(&self) {
+        let _ = self.take_latest_selected_result();
+        while self.take_prefetch_result().is_some() {}
     }
 
     pub fn load_decoded_cache_asset(
@@ -435,6 +502,12 @@ impl PreviewWorker {
             storage_format: PreviewStorageFormat::from_env(),
             resize_filter: resize.filter,
         })
+    }
+}
+
+impl Drop for PreviewWorker {
+    fn drop(&mut self) {
+        self.selected_tx.close();
     }
 }
 
@@ -474,19 +547,16 @@ where
 type SharedPreviewDecodedCache = Arc<Mutex<PreviewDecodedCache>>;
 
 fn preview_selected_thread(
-    rx: mpsc::Receiver<PreviewRequest>,
-    tx: mpsc::Sender<PreviewResult>,
+    rx: Arc<LatestMailbox<PreviewRequest>>,
+    tx: Arc<LatestMailbox<PreviewResult>>,
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewSelected);
     let mut scratch = PreviewArchiveScratch::default();
-    while let Ok(mut req) = rx.recv() {
-        while let Ok(next) = rx.try_recv() {
-            req = next;
-        }
+    while let Some(req) = rx.take_blocking() {
         let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
-        if tx.send(result).is_err() {
+        if !tx.publish(result) {
             break;
         }
     }
@@ -494,7 +564,7 @@ fn preview_selected_thread(
 
 fn preview_prefetch_thread(
     rx: mpsc::Receiver<PreviewRequest>,
-    tx: mpsc::Sender<PreviewResult>,
+    tx: mpsc::SyncSender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
 ) {
@@ -519,8 +589,9 @@ fn preview_prefetch_thread(
         prune_stale_prefetch_requests(&mut queue, newest_generation);
         if let Some(req) = pop_next_preview_request(&mut queue) {
             let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
-            if tx.send(result).is_err() {
-                break;
+            match tx.try_send(result) {
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+                Err(mpsc::TrySendError::Disconnected(_)) => break,
             }
         }
     }
@@ -2536,6 +2607,29 @@ mod tests {
     }
 
     #[test]
+    fn latest_mailbox_replaces_unstarted_selected_work() {
+        let mailbox = LatestMailbox::new();
+        assert!(mailbox.publish(queued_request(
+            1,
+            "old selected",
+            "old",
+            PreviewPriority::Selected,
+        )));
+        assert!(mailbox.publish(queued_request(
+            2,
+            "new selected",
+            "new",
+            PreviewPriority::Selected,
+        )));
+
+        let request = mailbox.take_blocking().expect("latest request");
+        assert_eq!(request.generation, 2);
+        assert_eq!(request.preview_asset_key, "new");
+        mailbox.close();
+        assert!(mailbox.take_blocking().is_none());
+    }
+
+    #[test]
     fn stale_prefetch_prune_keeps_selected_and_recent_generations() {
         let mut queue = vec![
             queued_request(1, "old selected", "selected", PreviewPriority::Selected),
@@ -3622,7 +3716,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         let result = loop {
-            if let Some(result) = worker.drain().into_iter().next() {
+            if let Some(result) = worker.take_latest_selected_result() {
                 break result;
             }
             assert!(
@@ -3777,7 +3871,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_worker_sync_load_reuses_index_pread_archive_file() {
+    fn preview_worker_async_load_reuses_index_pread_archive_file() {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-preview-worker-sync-open-cache-{}.mmlz4b",
             std::process::id()
@@ -3787,12 +3881,17 @@ mod tests {
         let path_text = path.display().to_string();
         let mut worker = PreviewWorker::new();
 
-        worker
-            .load_asset_pixels_timed(&path_text, "tiny")
-            .expect("first sync load");
-        worker
-            .load_asset_pixels_timed(&path_text, "tiny")
-            .expect("second sync load");
+        for generation in 0..2 {
+            worker.request_selected("tiny".to_string(), path_text.clone(), "tiny".to_string());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while worker.take_latest_selected_result().is_none() {
+                assert!(
+                    Instant::now() < deadline,
+                    "async selected load {generation} did not complete"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         assert_eq!(index_pread_archive_open_calls(&path_text), 1);
 
         let _ = std::fs::remove_file(preview_archive_sidecar_path(&path));
