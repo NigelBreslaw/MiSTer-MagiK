@@ -22,6 +22,7 @@ pub struct CatalogAuditRow {
     pub reason: String,
 }
 
+#[cfg(test)]
 pub(crate) fn audit_catalog_coverage(
     roots: &[String],
     profiles: &[LaunchProfile],
@@ -84,9 +85,9 @@ fn audit_game_directories(
         installed_cores,
         &BTreeSet::new(),
     )
-        .into_iter()
-        .map(|plan| (plan.game_dir_name.to_ascii_lowercase(), plan.decision))
-        .collect::<BTreeMap<_, _>>();
+    .into_iter()
+    .map(|plan| (plan.game_dir_name.to_ascii_lowercase(), plan.decision))
+    .collect::<BTreeMap<_, _>>();
     for fact in game_dirs {
         let name = fact.name.as_str();
         let path = &fact.path;
