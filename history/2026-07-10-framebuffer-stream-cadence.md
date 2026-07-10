@@ -8,8 +8,9 @@ Keep production framebuffer streaming `off`.
 
 The cadence instrumentation, deterministic desktop probes, macOS display-link
 controller, 1Hz Analytics chrome, formal gate, resolution profiles, and MiSTer
-scalar/NEON benchmark are implemented. The work found three independent failed
-rollout conditions:
+scalar/NEON investigation were implemented. The unsuccessful NEON production
+path was later removed. The work found three independent failed rollout
+conditions:
 
 1. Slint accepts the rendering notifier but emits no `AfterRendering` events in
    the compiled Skia Analytics window, so there is no formal presentation
@@ -85,10 +86,9 @@ The reported speedup was `0.685x`: NEON was slower. This decimator keeps one
 vector kernel pulls both pixels before narrowing. Both implementations meet the
 absolute 4ms/6ms limit, but NEON fails the 1.5x requirement decisively.
 
-`MISTER_FRAMEBUFFER_STREAM_SIMD=auto` therefore selects the faster fixed-target
-scalar implementation. Explicit `neon` remains available for measurement. The
-same stable-Rust cfg limitation applies to the existing screenshot-fade Rust
-NEON guards, so those paths must not be assumed active without their own runtime
+The faster fixed-target scalar implementation was therefore selected. The same
+stable-Rust cfg limitation applies to the existing screenshot-fade Rust NEON
+guards, so those paths must not be assumed active without their own runtime
 backend evidence.
 
 ### Standalone kernel search
@@ -122,6 +122,11 @@ p95; NEON improved about 8% at p50 and 9% at p95. All candidate checksums
 matched. The production Rust/device command then reported full-frame p95 of
 1.075ms scalar and 1.154ms NEON, with identical checksums. Its formal 1.5x NEON
 gate correctly remains failed and `auto` remains scalar.
+
+The failed decimator NEON implementation, runtime selector, in-app comparison
+command, and dedicated gate were subsequently removed. The standalone tool was
+trimmed to benchmark only the retained optimized scalar production kernel; the
+measurements above remain as historical decision evidence.
 
 ## Decision
 

@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -64,7 +64,6 @@ present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
 stream_secs=""
 stream_scale="${MISTER_FRAMEBUFFER_STREAM_SCALE:-off}"
-stream_simd="${MISTER_FRAMEBUFFER_STREAM_SIMD:-auto}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
@@ -148,11 +147,6 @@ while [[ $# -gt 0 ]]; do
       stream_scale="$2"
       shift 2
       ;;
-    --stream-simd)
-      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-simd needs auto or scalar" >&2; usage >&2; exit 2; fi
-      stream_simd="$2"
-      shift 2
-      ;;
     --frame-pacing-policy)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--frame-pacing-policy needs auto, strict, or vsync-integrity" >&2; usage >&2; exit 2; fi
       frame_pacing_policy="$2"
@@ -227,10 +221,6 @@ esac
 case "$stream_scale" in
   off|full|half|adaptive) ;;
   *) echo "--stream-scale must be off, full, half, or adaptive" >&2; exit 2 ;;
-esac
-case "$stream_simd" in
-  auto|scalar) ;;
-  *) echo "--stream-simd must be auto or scalar" >&2; exit 2 ;;
 esac
 case "$frame_pacing_policy" in
   auto|strict|vsync-integrity) ;;
@@ -623,7 +613,6 @@ run_boot_prelude() {
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
     printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
-    printf 'export MISTER_FRAMEBUFFER_STREAM_SIMD=%q\n' "$stream_simd"
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
@@ -725,7 +714,7 @@ start_stream_consumer() {
       ;;
     null-drain) stream_arg="--framebuffer-stream-drain-bench-secs" ;;
   esac
-  echo "==> Start framebuffer stream consumer mode=$stream_consumer seconds=$stream_seconds scale=$stream_scale simd=$stream_simd"
+  echo "==> Start framebuffer stream consumer mode=$stream_consumer seconds=$stream_seconds scale=$stream_scale"
   (
     cd "$HERE"
     MISTER_IP="${MISTER_IP:-192.168.1.117}" MISTER_FRAMEBUFFER_CADENCE_OUT="$local_cadence_tsv" cargo run --manifest-path desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
@@ -788,7 +777,6 @@ else
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
     printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
-    printf 'export MISTER_FRAMEBUFFER_STREAM_SIMD=%q\n' "$stream_simd"
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'

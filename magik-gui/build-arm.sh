@@ -131,7 +131,6 @@ case "$UI_SCOPE" in
     ;;
 esac
 export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
-export MISTER_ARM_NEON=1
 export MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
   git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
 )}"

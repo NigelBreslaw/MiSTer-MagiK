@@ -1,6 +1,4 @@
-use crate::framebuffer::downsample::{
-    configured_implementation, downsample_rgb565_2x, Rgb565FrameView,
-};
+use crate::framebuffer::downsample::{downsample_rgb565_2x, Rgb565FrameView};
 use mister_magik_framebuffer_stream::{
     write_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
 };
@@ -109,7 +107,6 @@ pub struct LatchSnapshotStats {
     pub raw_bytes: usize,
     pub output_width: usize,
     pub output_height: usize,
-    pub implementation: &'static str,
 }
 
 struct SnapshotMetrics {
@@ -119,7 +116,6 @@ struct SnapshotMetrics {
     full_frames: u64,
     half_frames: u64,
     raw_bytes: u64,
-    implementation: &'static str,
     adaptive_refinements: u64,
     refinement_late_us: Vec<u64>,
     last_refinement_width: usize,
@@ -137,7 +133,6 @@ impl SnapshotMetrics {
             full_frames: 0,
             half_frames: 0,
             raw_bytes: 0,
-            implementation: "none",
             adaptive_refinements: 0,
             refinement_late_us: Vec::with_capacity(32),
             last_refinement_width: 0,
@@ -362,7 +357,7 @@ pub fn publish_latch_snapshot(
     let refinement_due_us = REFINEMENT_DUE_US.load(Ordering::Acquire);
     let started = Instant::now();
     let mut pixels = take_snapshot_pixels();
-    let (width, height, implementation) = match scale {
+    let (width, height) = match scale {
         LatchStreamScale::Full => {
             let Some(pixel_count) = source.width.checked_mul(source.height) else {
                 recycle_snapshot_pixels(pixels);
@@ -378,15 +373,14 @@ pub fn publish_latch_snapshot(
                 };
                 pixels.extend_from_slice(row);
             }
-            (source.width, source.height, "copy")
+            (source.width, source.height)
         }
         LatchStreamScale::Half => {
-            let implementation = configured_implementation();
             let Ok(geometry) = downsample_rgb565_2x(source, &mut pixels) else {
                 recycle_snapshot_pixels(pixels);
                 return LatchSnapshotStats::default();
             };
-            (geometry.width, geometry.height, implementation.label())
+            (geometry.width, geometry.height)
         }
     };
     let Some(geometry) = frame_geometry(width, height) else {
@@ -429,7 +423,6 @@ pub fn publish_latch_snapshot(
         raw_bytes,
         output_width: width,
         output_height: height,
-        implementation,
     };
     record_snapshot_metrics(scale, stats, refinement_due_us, captured_at_us);
     stats
@@ -752,7 +745,6 @@ fn reset_snapshot_metrics() {
     metrics.full_frames = 0;
     metrics.half_frames = 0;
     metrics.raw_bytes = 0;
-    metrics.implementation = "none";
     metrics.adaptive_refinements = 0;
     metrics.refinement_late_us.clear();
     metrics.last_refinement_width = 0;
@@ -790,7 +782,6 @@ fn record_snapshot_metrics(
         LatchStreamScale::Half => {
             metrics.half_frames = metrics.half_frames.saturating_add(1);
             metrics.half_snapshot_us.push(stats.snapshot_us);
-            metrics.implementation = stats.implementation;
         }
     }
     metrics.raw_bytes = metrics.raw_bytes.saturating_add(stats.raw_bytes as u64);
@@ -833,7 +824,7 @@ fn report_snapshot_metrics(reason: &str) {
     crate::ui_logln!(
         "framebuffer_stream_snapshot_tsv\treason={reason}\tmode={:?}\timplementation={}\tframes={frames}\thalf_frames={}\tfull_frames={}\tsnapshot_p50_us={p50}\tsnapshot_p95_us={p95}\tsnapshot_max_us={max}\thalf_snapshot_p95_us={half_p95}\thalf_snapshot_max_us={half_max}\tfull_snapshot_p95_us={full_p95}\tfull_snapshot_max_us={full_max}\tadaptive_refinements={}\trefinement_late_p95_us={refinement_late_p95}\trefinement_late_max_us={refinement_late_max}\tlast_refinement_width={}\tlast_refinement_height={}\tavg_raw_bytes={avg_raw}\tcoalesced={coalesced}",
         configured_latch_mode(),
-        metrics.implementation,
+        "scalar",
         metrics.half_frames,
         metrics.full_frames,
         metrics.adaptive_refinements,

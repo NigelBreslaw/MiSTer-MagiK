@@ -585,33 +585,18 @@ Measure sustained resolution capability separately from that cadence gate:
 scripts/profile-framebuffer-stream-resolution.sh LABEL --secs 30 --deploy-device
 ```
 
-Prove the compiled RGB565 scalar/NEON implementations separately:
-
-```bash
-scripts/gate-framebuffer-stream-neon.sh LABEL --deploy-device
-```
-
-For quick kernel exploration without rebuilding or starting the Rust/Slint
-application, use the standalone Cortex-A9 microbenchmark:
+Measure the production RGB565 scalar decimator without rebuilding or starting
+the Rust/Slint application with the standalone Cortex-A9 microbenchmark:
 
 ```bash
 scripts/profile-rgb565-decimator.sh LABEL --samples 250 --runs 3 --cpu 0
 ```
 
-It builds one pure-C binary, runs the exact production kernels beside the
-candidate scalar/NEON shapes, verifies identical pixels and checksums, rotates
-kernel order, and writes raw plus aggregate TSV under
-`build/rgb565-decimator-bench/`. Use this for kernel selection, then confirm the
-winner with the production gate above.
-
-This gate is deliberately independent of stream averages. It compares exact
-checksums for contiguous 960x540, padded 960x540, and odd-sized inputs, then
-requires NEON p95/max no greater than 4/6ms and at least 1.5x scalar speedup.
-The July 10 follow-up tested pointer walking, restrict, unrolling, two-row
-interleaving, 32-bit scalar loads, `vld2`, `vuzp`, 16/32-output narrowing, and
-four prefetch distances. The optimized standalone production kernels measured
-1.010ms scalar p95 and 1.259ms NEON p95 at 960x540. Automatic dispatch therefore
-remains scalar.
+It builds one pure-C binary, compares the exact production kernel with a simple
+indexed reference for contiguous, padded, and odd inputs, and writes raw plus
+aggregate TSV under `build/rgb565-decimator-bench/`. The July 10 search measured
+the retained optimized scalar kernel at 1.010ms p95 for 960x540. The slower NEON
+experiment and its dedicated gate were removed after that result.
 
 The resolution matrix runs matched half, full, and adaptive null-drain/display
 profiles and reports payload, transport, applied/rendered cadence, producer
@@ -621,12 +606,12 @@ no more than 15ms after its scheduled refinement deadline. Full-resolution
 throughput is reported capability; it is not a prerequisite for adaptive
 half-resolution motion.
 
-The gate runs four otherwise identical Arcade `turbo-hold` profiles: no
-subscriber, scalar adaptive display, automatic-SIMD adaptive null drain, and
-automatic-SIMD adaptive Analytics display. The desktop display measurements
-include a three-second warmup before the requested measurement interval. Each
-device motion trace runs 25 seconds longer than that interval so desktop process
-and connection setup happen before the measured window ends.
+The gate runs three otherwise identical Arcade `turbo-hold` profiles: no
+subscriber, adaptive null drain, and adaptive Analytics display. The desktop
+display measurements include a three-second warmup before the requested
+measurement interval. Each device motion trace runs 25 seconds longer than that
+interval so desktop process and connection setup happen before the measured
+window ends.
 The Analytics consumer is the release-profile compiled Slint UI with the Skia
 renderer; debug or live-interpreted desktop numbers are diagnostic only.
 Passing requires at least 55 distinct `AfterRendering` and applied frames per
@@ -634,10 +619,10 @@ second in Analytics, at least 58 received/display and null-drain frames per
 second, render p95 no greater than 50ms, the native macOS display-link clock, a
 working Slint rendering notifier, render interval p95 no greater than 20ms, no
 gap over 34ms or consecutive gaps over 20ms, at least 27 rendered serials in
-every complete 500ms bucket, at most 10% desktop coalescing, NEON dispatch, half-size
-snapshot p95/max no greater than 4/6ms, full-size snapshot p95/max no greater
-than 10/15ms, and at least 1.5x half-size snapshot p95 speedup over scalar. The
-underlying profiles also retain the normal latch, pacing, and zero-drop gates.
+every complete 500ms bucket, at most 10% desktop coalescing, the scalar
+decimator, half-size snapshot p95/max no greater than 4/6ms, and full-size
+snapshot p95/max no greater than 10/15ms. The underlying profiles also retain
+the normal latch, pacing, and zero-drop gates.
 Because constant `turbo-hold` is needed to measure sustained stream throughput,
 the stream gate selects the explicit `vsync-integrity` pacing policy: normal
 60Hz scheduler jitter is diagnostic, while work over budget, wall frames over
