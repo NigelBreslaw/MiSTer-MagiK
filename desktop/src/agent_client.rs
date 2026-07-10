@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,11 @@ const AGENT_PORT: u16 = 7498;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+const SD_DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const SD_LIST_PROTOCOL_UNKNOWN: u8 = 0;
+const SD_LIST_PROTOCOL_V2: u8 = 1;
+const SD_LIST_PROTOCOL_V1: u8 = 2;
+static SD_LIST_PROTOCOL: AtomicU8 = AtomicU8::new(SD_LIST_PROTOCOL_UNKNOWN);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenSource {
@@ -335,11 +341,38 @@ pub fn fetch_sd_directory(
 ) -> Result<SdDirectoryListing, AgentError> {
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
-    let value = client.request(
-        "sd_list_dir",
-        json!({ "path": path, "show_hidden": show_hidden }),
-    )?;
-    parse_sd_directory(&value)
+    let args = json!({ "path": path, "show_hidden": show_hidden });
+    let started = Instant::now();
+    let value = match SD_LIST_PROTOCOL.load(Ordering::Acquire) {
+        SD_LIST_PROTOCOL_V1 => {
+            client.request_with_read_timeout("sd_list_dir", args, SD_DIRECTORY_REQUEST_TIMEOUT)?
+        }
+        SD_LIST_PROTOCOL_UNKNOWN | SD_LIST_PROTOCOL_V2 => {
+            match client.request_with_read_timeout(
+                "sd_list_dir_v2",
+                args.clone(),
+                SD_DIRECTORY_REQUEST_TIMEOUT,
+            ) {
+                Ok(value) => {
+                    SD_LIST_PROTOCOL.store(SD_LIST_PROTOCOL_V2, Ordering::Release);
+                    value
+                }
+                Err(AgentError::Command(message)) if message == "unknown cmd" => {
+                    SD_LIST_PROTOCOL.store(SD_LIST_PROTOCOL_V1, Ordering::Release);
+                    client.request_with_read_timeout(
+                        "sd_list_dir",
+                        args,
+                        SD_DIRECTORY_REQUEST_TIMEOUT,
+                    )?
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        _ => unreachable!("invalid SD list protocol state"),
+    };
+    let mut listing = parse_sd_directory(&value)?;
+    listing.round_trip_ms = started.elapsed().as_millis() as u64;
+    Ok(listing)
 }
 
 pub fn fetch_sd_item_detail(host: &str, path: &str) -> Result<SdItemDetail, AgentError> {
@@ -526,6 +559,15 @@ impl AgentClient {
     }
 
     fn request(&self, cmd: &str, args: Value) -> Result<Value, AgentError> {
+        self.request_with_read_timeout(cmd, args, REQUEST_TIMEOUT)
+    }
+
+    fn request_with_read_timeout(
+        &self,
+        cmd: &str,
+        args: Value,
+        read_timeout: Duration,
+    ) -> Result<Value, AgentError> {
         let addr = format!("{}:{AGENT_PORT}", self.host)
             .to_socket_addrs()
             .map_err(|err| AgentError::Unreachable(err.to_string()))?
@@ -538,7 +580,7 @@ impl AgentClient {
         let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         stream
-            .set_read_timeout(Some(REQUEST_TIMEOUT))
+            .set_read_timeout(Some(read_timeout))
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
         stream
             .set_write_timeout(Some(REQUEST_TIMEOUT))
@@ -1272,7 +1314,10 @@ fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
 }
 
 fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
-    if string_at(value, "/schema") != Some("mister-magik-sd-list-dir-v1") {
+    if !matches!(
+        string_at(value, "/schema"),
+        Some("mister-magik-sd-list-dir-v1" | "mister-magik-sd-list-dir-v2")
+    ) {
         return Err(AgentError::Protocol(
             "unexpected sd_list_dir response schema".to_string(),
         ));
@@ -1295,6 +1340,7 @@ fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
         path,
         entries,
         elapsed_ms,
+        round_trip_ms: 0,
     })
 }
 
@@ -1803,24 +1849,7 @@ fn parse_sd_entry(value: &Value) -> Result<SdEntry, AgentError> {
         }
         None => return Err(AgentError::Protocol("missing sd entry kind".to_string())),
     };
-    Ok(SdEntry {
-        name,
-        path,
-        kind,
-        size: value.pointer("/size").and_then(Value::as_u64).unwrap_or(0),
-        modified_unix_ms: value
-            .pointer("/modified_unix_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        readonly: value
-            .pointer("/readonly")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        hidden: value
-            .pointer("/hidden")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
+    Ok(SdEntry { name, path, kind })
 }
 
 fn metadata_row(label: &str, value: &str, kind: &str) -> SdMetadataRow {
@@ -2224,11 +2253,19 @@ mod tests {
 
         assert_eq!(listing.path, "/");
         assert_eq!(listing.elapsed_ms, 12);
+        assert_eq!(listing.round_trip_ms, 0);
         assert_eq!(listing.entries[0].kind, SdEntryKind::Directory);
         assert_eq!(listing.entries[1].kind, SdEntryKind::File);
-        assert_eq!(listing.entries[1].size, 42);
-        assert!(listing.entries[1].readonly);
-        assert!(listing.entries[1].hidden);
+
+        let v2 = parse_sd_directory(&json!({
+            "schema": "mister-magik-sd-list-dir-v2",
+            "path": "/games",
+            "elapsed_ms": 3,
+            "entries": [{"name": "NES", "path": "/games/NES", "kind": "directory"}]
+        }))
+        .expect("lightweight v2 directory response should parse");
+        assert_eq!(v2.entries.len(), 1);
+        assert_eq!(v2.entries[0].name, "NES");
 
         let err = parse_sd_directory(&json!({"schema": "wrong"}))
             .expect_err("schema mismatch should fail");

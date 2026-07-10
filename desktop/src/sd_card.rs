@@ -13,10 +13,6 @@ pub struct SdEntry {
     pub name: String,
     pub path: String,
     pub kind: SdEntryKind,
-    pub size: u64,
-    pub modified_unix_ms: u64,
-    pub readonly: bool,
-    pub hidden: bool,
 }
 
 impl SdEntry {
@@ -30,6 +26,7 @@ pub struct SdDirectoryListing {
     pub path: String,
     pub entries: Vec<SdEntry>,
     pub elapsed_ms: u64,
+    pub round_trip_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -320,6 +317,7 @@ impl SdCardBrowser {
             Ok(listing) => {
                 let entry_count = listing.entries.len();
                 let elapsed_ms = listing.elapsed_ms;
+                let round_trip_ms = listing.round_trip_ms;
                 self.directory_cache.insert(
                     path.clone(),
                     CachedDirectory::Loaded {
@@ -328,7 +326,9 @@ impl SdCardBrowser {
                     },
                 );
                 self.last_error.clear();
-                self.status = format!("Loaded {path}: {entry_count} entries in {elapsed_ms}ms");
+                self.status = format!(
+                    "Loaded {path}: {entry_count} entries in {elapsed_ms}ms agent / {round_trip_ms}ms total"
+                );
             }
             Err(err) => {
                 self.directory_cache
@@ -608,10 +608,6 @@ mod tests {
             name: name.to_string(),
             path: path.to_string(),
             kind: SdEntryKind::Directory,
-            size: 0,
-            modified_unix_ms: 0,
-            readonly: false,
-            hidden: false,
         }
     }
 
@@ -620,10 +616,6 @@ mod tests {
             name: name.to_string(),
             path: path.to_string(),
             kind: SdEntryKind::File,
-            size: 123,
-            modified_unix_ms: 0,
-            readonly: false,
-            hidden: false,
         }
     }
 
@@ -647,6 +639,7 @@ mod tests {
                     file("MiSTer.ini", "/MiSTer.ini"),
                 ],
                 elapsed_ms: 7,
+                round_trip_ms: 11,
             }),
         );
         assert!(browser.has_cached_directory(ROOT_PATH));
@@ -671,6 +664,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![dir("games", "/games")],
                 elapsed_ms: 2,
+                round_trip_ms: 4,
             }),
         );
 
@@ -684,6 +678,7 @@ mod tests {
                 path: "/games".to_string(),
                 entries: vec![file("test.rom", "/games/test.rom")],
                 elapsed_ms: 3,
+                round_trip_ms: 5,
             }),
         );
 
@@ -723,6 +718,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![],
                 elapsed_ms: 1,
+                round_trip_ms: 2,
             }),
         );
 
@@ -743,6 +739,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![dir("games", "/games")],
                 elapsed_ms: 1,
+                round_trip_ms: 2,
             }),
         );
         assert!(browser.has_cached_directory(ROOT_PATH));
@@ -759,6 +756,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![dir("stale", "/stale")],
                 elapsed_ms: 1,
+                round_trip_ms: 2,
             }),
         );
         assert!(browser.loading());
@@ -770,6 +768,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![dir(".hidden", "/.hidden")],
                 elapsed_ms: 1,
+                round_trip_ms: 2,
             }),
         );
         assert!(browser.has_cached_directory(ROOT_PATH));
@@ -797,6 +796,7 @@ mod tests {
                 path: ROOT_PATH.to_string(),
                 entries: vec![file("MiSTer.ini", "/MiSTer.ini")],
                 elapsed_ms: 1,
+                round_trip_ms: 2,
             }),
         );
 
