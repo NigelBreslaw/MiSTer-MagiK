@@ -1,0 +1,31 @@
+{
+  "bpp": 16,
+  "capture_source": {
+    "kind": "fb0"
+  },
+  "elapsed_ms": 65,
+  "height": 540,
+  "png_bytes": 13712,
+  "png_hex_bytes": 27424,
+  "png_path": "/Users/nigelb/slint/mister-slint/history/toolchain-bench/PERF-REVIEW-20260710-VIDEO-video_playback-fb.png",
+  "raw_bytes": 1036800,
+  "request_ms": 141,
+  "rgba_bytes": 2074140,
+  "schema": "mister-magik-framebuffer-capture-v1",
+  "source": "fb0",
+  "stride": 1920,
+  "timings": {
+    "dispatch_us": 19,
+    "geometry_us": 0,
+    "hex_encode_us": 306,
+    "png_total_us": 57277,
+    "png_wrap_us": 404,
+    "raw_read_us": 7776,
+    "request_received_uptime_ms": 642325,
+    "rgba_convert_us": 26653,
+    "total_us": 65392,
+    "zlib_encode_us": 29388
+  },
+  "transport": "agent",
+  "width": 960
+}
