@@ -105,6 +105,10 @@ impl DirtyRectList {
         self.rects[..self.len].iter().copied()
     }
 
+    pub fn as_slice(&self) -> &[DirtyRect] {
+        &self.rects[..self.len]
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -345,6 +349,7 @@ pub struct CachedFrameView<'a> {
     pixels: &'a [Rgb565Pixel],
     stride: usize,
     height: usize,
+    scanout_slot: Option<u8>,
 }
 
 impl<'a> CachedFrameView<'a> {
@@ -354,7 +359,16 @@ impl<'a> CachedFrameView<'a> {
             pixels,
             stride,
             height,
+            scanout_slot: None,
         }
+    }
+
+    pub fn with_scanout_slot(mut self, slot: u8) -> Self {
+        self.scanout_slot = Some(slot);
+        self
+    }
+    pub fn scanout_slot(self) -> Option<u8> {
+        self.scanout_slot
     }
 
     pub fn pixels(self) -> &'a [Rgb565Pixel] {
@@ -473,6 +487,8 @@ fn compose_rect_565_strided_to_cached(
 
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
+    scanout: Option<crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers>,
+    scanout_slot: usize,
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
@@ -482,6 +498,8 @@ impl UiFrameTarget {
     pub fn cached(geometry: FramebufferTargetGeometry) -> Self {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
+            scanout: None,
+            scanout_slot: 1,
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
@@ -489,6 +507,25 @@ impl UiFrameTarget {
     }
 
     pub fn open(geometry: FramebufferTargetGeometry) -> Self {
+        if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
+            match crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers::open(
+                geometry.render_w(),
+                geometry.render_h(),
+            ) {
+                Ok(scanout) => {
+                    crate::ui_logln!(
+                        "slint-render-target=plugin-cacheable-swapped fb-format={}",
+                        production_label()
+                    );
+                    let mut target = Self::cached(geometry);
+                    target.scanout = Some(scanout);
+                    return target;
+                }
+                Err(error) => crate::ui_errln!(
+                    "slint-render-target=plugin-cacheable-swapped unavailable error={error}"
+                ),
+            }
+        }
         crate::ui_logln!(
             "slint-render-target=cached fb-format={}",
             production_label()
@@ -502,7 +539,18 @@ impl UiFrameTarget {
         geometry: FramebufferTargetGeometry,
     ) -> PhysicalRegion {
         self.cached_stride = geometry.render_w();
-        renderer.render(&mut self.cached, geometry.render_w())
+        if let Some(scanout) = self.scanout.as_mut() {
+            self.scanout_slot ^= 1;
+            if let Err(error) = scanout.acquire(self.scanout_slot) {
+                crate::ui_errln!(
+                    "scanout-acquire-failed slot={} error={error}",
+                    self.scanout_slot + 1
+                );
+            }
+            renderer.render(scanout.pixels_mut(self.scanout_slot), geometry.render_w())
+        } else {
+            renderer.render(&mut self.cached, geometry.render_w())
+        }
     }
 
     #[cfg(mister_bench_scenes)]
@@ -583,6 +631,14 @@ impl UiFrameTarget {
     }
 
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
+        if let Some(scanout) = self.scanout.as_ref() {
+            return CachedFrameView::new(
+                scanout.pixels(self.scanout_slot),
+                self.cached_stride,
+                scanout.pixels(self.scanout_slot).len() / self.cached_stride,
+            )
+            .with_scanout_slot((self.scanout_slot + 1) as u8);
+        }
         let height = if self.cached_stride == 0 {
             0
         } else {
@@ -599,11 +655,19 @@ impl UiFrameTarget {
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
-        &mut self.cached
+        if let Some(scanout) = self.scanout.as_mut() {
+            scanout.pixels_mut(self.scanout_slot)
+        } else {
+            &mut self.cached
+        }
     }
 
     pub fn cached_565(&self) -> &[Rgb565Pixel] {
-        &self.cached
+        if let Some(scanout) = self.scanout.as_ref() {
+            scanout.pixels(self.scanout_slot)
+        } else {
+            &self.cached
+        }
     }
 
     pub fn into_cached_565(self) -> Vec<Rgb565Pixel> {
