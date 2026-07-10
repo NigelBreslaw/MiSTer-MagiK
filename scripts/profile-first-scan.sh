@@ -155,10 +155,17 @@ fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
+raw_log="$OUT_DIR/${LABEL}-launcher.log"
 artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
 emit_thread_sample_artifact_report() {
+  local raw_log_bytes=0
+  if [[ -f "$raw_log" ]]; then
+    raw_log_bytes="$(wc -c <"$raw_log" | tr -d ' ')"
+  fi
+  printf 'artifact_tsv\tlabel=%s\tkind=launcher_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
+    "$LABEL" "$raw_log" "$REMOTE_LOG" "$([[ -f "$raw_log" ]] && echo true || echo false)" "$raw_log_bytes"
   if [[ "$thread_sample_enabled" == "1" ]]; then
-    thread_sample_emit_artifacts | tee "$artifact_report"
+    thread_sample_emit_artifacts
   fi
 }
 cleanup() {
@@ -203,10 +210,11 @@ while (( SECONDS < deadline )); do
 done
 
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
+cp "$local_log" "$raw_log"
 thread_sample_stop
 thread_sample_collect
 if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
-  emit_thread_sample_artifact_report || true
+  emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan failed while saving the catalog; latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
@@ -214,21 +222,20 @@ fi
 ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
 saved_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_db_saved" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
 if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
-  emit_thread_sample_artifact_report || true
+  emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan did not complete both gates within ${TIMEOUT_SECS}s (library_ready=${ready_ms:-missing}, library_db_saved=${saved_ms:-missing}); latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
+gate_failed=0
 if ! first_scan_gate_check "$ready_ms" "$saved_ms"; then
-  emit_thread_sample_artifact_report || true
+  gate_failed=1
   if (( ready_ms > RAM_CATALOG_READY_GATE_MS )); then
     echo "first scan RAM catalog usable gate failed: library_ready=${ready_ms}ms > ${RAM_CATALOG_READY_GATE_MS}ms" >&2
   fi
   if (( saved_ms > DB_SAVE_GATE_MS )); then
     echo "first scan DB save gate failed: library_db_saved=${saved_ms}ms > ${DB_SAVE_GATE_MS}ms" >&2
   fi
-  tail -80 "$local_log" >&2 || true
-  exit 1
 fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
@@ -268,8 +275,11 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
 db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
 status="$("$MISTER" status 2>/dev/null || true)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "db_count" "0" "$db_count" >>"$TSV"
-emit_thread_sample_artifact_report
+emit_thread_sample_artifact_report | tee "$artifact_report"
 
 echo "appended to $TSV"
 echo "db_count=$db_count"
 printf '%s\n' "$status"
+if [[ "$gate_failed" -eq 1 ]]; then
+  exit 1
+fi
