@@ -124,9 +124,17 @@ matched. The production Rust/device command then reported full-frame p95 of
 gate correctly remains failed and `auto` remains scalar.
 
 The failed decimator NEON implementation, runtime selector, in-app comparison
-command, and dedicated gate were subsequently removed. The standalone tool was
-trimmed to benchmark only the retained optimized scalar production kernel; the
-measurements above remain as historical decision evidence.
+command, and dedicated gate were subsequently removed. The temporary standalone
+C tool was also removed in favour of a scalar-only bench-tools command that
+measures the exact production path without starting the UI.
+
+The scalar helper was re-evaluated in Rust before that cleanup was finalized.
+At 960x540, a safe iterator implementation measured 1.753/1.830ms p50/p95 and
+a raw-pointer Rust loop measured 2.226/2.449ms; both produced the exact expected
+checksum. The retained C helper then measured 0.925/1.170ms p50/p95 on the same
+bench-tools command, including exact checksums for padded and odd inputs. The
+helper therefore remains the sole target-specific exception; all selection,
+geometry validation, ownership, and stream orchestration remain Rust.
 
 ## Decision
 

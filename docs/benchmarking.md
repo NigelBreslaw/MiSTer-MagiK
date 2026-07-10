@@ -585,18 +585,18 @@ Measure sustained resolution capability separately from that cadence gate:
 scripts/profile-framebuffer-stream-resolution.sh LABEL --secs 30 --deploy-device
 ```
 
-Measure the production RGB565 scalar decimator without rebuilding or starting
-the Rust/Slint application with the standalone Cortex-A9 microbenchmark:
+Measure the exact production RGB565 scalar decimator without starting the
+Slint UI:
 
 ```bash
-scripts/profile-rgb565-decimator.sh LABEL --samples 250 --runs 3 --cpu 0
+scripts/mister run "/media/fat/mister-magik/mister-magik-fb framebuffer-stream-scalar-bench"
 ```
 
-It builds one pure-C binary, compares the exact production kernel with a simple
-indexed reference for contiguous, padded, and odd inputs, and writes raw plus
-aggregate TSV under `build/rgb565-decimator-bench/`. The July 10 search measured
-the retained optimized scalar kernel at 1.010ms p95 for 960x540. The slower NEON
-experiment and its dedicated gate were removed after that result.
+Build and deploy a release `--bench-tools` binary first. The command measures
+contiguous, padded, and odd inputs, and checks their deterministic checksums.
+The July 10 search retained the tiny C scalar helper only after two exact Rust
+production implementations measured materially slower on MiSTer. The slower
+NEON experiment and its dedicated gate were removed after that result.
 
 The resolution matrix runs matched half, full, and adaptive null-drain/display
 profiles and reports payload, transport, applied/rendered cadence, producer
