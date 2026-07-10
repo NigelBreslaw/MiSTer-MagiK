@@ -54,6 +54,41 @@ enum RebootMode {
     DirectResetNoSync,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdListProtocol {
+    Auto,
+    V1,
+    V2,
+}
+
+impl SdListProtocol {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "v1" => Ok(Self::V1),
+            "v2" => Ok(Self::V2),
+            _ => Err(format!("unsupported SD list protocol: {value}").into()),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::V1 => "v1",
+            Self::V2 => "v2",
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SdListOptions {
+    path: String,
+    protocol: SdListProtocol,
+    show_hidden: bool,
+    repeat: usize,
+    json: bool,
+}
+
 impl RebootMode {
     fn label(self) -> &'static str {
         match self {
@@ -1554,6 +1589,9 @@ fn agent_cli(args: &[String]) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(result)?);
             }
         }
+        "sd-list" => {
+            agent_sd_list(&args[1..])?;
+        }
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
         }
@@ -1586,8 +1624,126 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: scripts/mister agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: scripts/mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
+}
+
+fn parse_sd_list_options(args: &[String]) -> Result<SdListOptions> {
+    let mut path = None;
+    let mut protocol = SdListProtocol::Auto;
+    let mut show_hidden = false;
+    let mut repeat = 1_usize;
+    let mut json = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--protocol" => {
+                index += 1;
+                protocol = SdListProtocol::parse(
+                    args.get(index)
+                        .ok_or("agent sd-list --protocol needs auto, v1, or v2")?,
+                )?;
+            }
+            "--show-hidden" => show_hidden = true,
+            "--repeat" => {
+                index += 1;
+                repeat = args
+                    .get(index)
+                    .ok_or("agent sd-list --repeat needs a positive integer")?
+                    .parse::<usize>()?;
+                if repeat == 0 {
+                    return Err("agent sd-list --repeat must be positive".into());
+                }
+            }
+            "--json" => json = true,
+            option if option.starts_with('-') => {
+                return Err(format!("unknown agent sd-list option: {option}").into());
+            }
+            value => {
+                if path.replace(value.to_string()).is_some() {
+                    return Err("agent sd-list takes one PATH".into());
+                }
+            }
+        }
+        index += 1;
+    }
+    Ok(SdListOptions {
+        path: path.ok_or("agent sd-list needs PATH")?,
+        protocol,
+        show_hidden,
+        repeat,
+        json,
+    })
+}
+
+fn request_sd_list(
+    protocol: SdListProtocol,
+    path: &str,
+    show_hidden: bool,
+) -> Result<(SdListProtocol, agent_client::AgentResponse)> {
+    let args = json!({"path": path, "show_hidden": show_hidden});
+    match protocol {
+        SdListProtocol::V1 => Ok((
+            SdListProtocol::V1,
+            agent_request("sd_list_dir", args, Duration::from_secs(10))?,
+        )),
+        SdListProtocol::V2 => Ok((
+            SdListProtocol::V2,
+            agent_request("sd_list_dir_v2", args, Duration::from_secs(10))?,
+        )),
+        SdListProtocol::Auto => {
+            match agent_request("sd_list_dir_v2", args.clone(), Duration::from_secs(10)) {
+                Ok(reply) => Ok((SdListProtocol::V2, reply)),
+                Err(err) if err.to_string() == "unknown cmd" => Ok((
+                    SdListProtocol::V1,
+                    agent_request("sd_list_dir", args, Duration::from_secs(10))?,
+                )),
+                Err(err) => Err(err),
+            }
+        }
+    }
+}
+
+fn agent_sd_list(args: &[String]) -> Result<()> {
+    let options = parse_sd_list_options(args)?;
+    let mut measurements = Vec::with_capacity(options.repeat);
+    for run in 1..=options.repeat {
+        let (protocol, reply) =
+            request_sd_list(options.protocol, &options.path, options.show_hidden)?;
+        let result = reply.response.get("result").unwrap_or(&Value::Null);
+        let entries = result
+            .get("entries")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let agent_elapsed_ms = result
+            .get("elapsed_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let measurement = json!({
+            "run": run,
+            "requested_protocol": options.protocol.label(),
+            "protocol": protocol.label(),
+            "path": options.path,
+            "show_hidden": options.show_hidden,
+            "entries": entries,
+            "agent_elapsed_ms": agent_elapsed_ms,
+            "round_trip_ms": reply.elapsed_ms,
+        });
+        if !options.json {
+            println!(
+                "sd_list\trun={run}\tprotocol={}\tpath={}\tentries={entries}\tagent_ms={agent_elapsed_ms}\tround_trip_ms={}",
+                protocol.label(),
+                options.path,
+                reply.elapsed_ms
+            );
+        }
+        measurements.push(measurement);
+    }
+    if options.json {
+        println!("{}", serde_json::to_string_pretty(&measurements)?);
+    }
+    Ok(())
 }
 
 fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
@@ -4662,6 +4818,44 @@ fn unix_secs() -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn parses_sd_list_probe_options() {
+        let args = vec![
+            "/_Arcade".to_string(),
+            "--protocol".to_string(),
+            "v2".to_string(),
+            "--show-hidden".to_string(),
+            "--repeat".to_string(),
+            "5".to_string(),
+            "--json".to_string(),
+        ];
+        assert_eq!(
+            parse_sd_list_options(&args).unwrap(),
+            SdListOptions {
+                path: "/_Arcade".to_string(),
+                protocol: SdListProtocol::V2,
+                show_hidden: true,
+                repeat: 5,
+                json: true,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_sd_list_probe_options() {
+        assert!(parse_sd_list_options(&[]).is_err());
+        assert!(parse_sd_list_options(
+            &["/".to_string(), "--repeat".to_string(), "0".to_string(),]
+        )
+        .is_err());
+        assert!(parse_sd_list_options(&[
+            "/".to_string(),
+            "--protocol".to_string(),
+            "v3".to_string(),
+        ])
+        .is_err());
+    }
 
     #[test]
     fn framebuffer_capture_lz4_decode_is_exact_and_bounded_by_metadata() {
