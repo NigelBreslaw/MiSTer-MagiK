@@ -35,6 +35,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+const SD_FOLDER_LOADING_DELAY: Duration = Duration::from_millis(150);
+
 type SharedSdBrowser = Arc<Mutex<SdCardBrowser>>;
 type SharedLibraryBrowser = Arc<Mutex<LibraryBrowser>>;
 type SharedFramebufferCapture = Arc<Mutex<Option<agent_client::FramebufferCapture>>>;
@@ -5679,6 +5681,23 @@ fn spawn_live_sd_fetch(
     path: String,
     show_hidden: bool,
 ) {
+    let loading_instance = instance.clone();
+    let loading_browser = Arc::clone(&browser);
+    let loading_path = path.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SD_FOLDER_LOADING_DELAY);
+        let _ = slint::invoke_from_event_loop(move || {
+            let revealed = loading_browser.lock().is_ok_and(|mut browser| {
+                browser.reveal_loading_after(&loading_path, SD_FOLDER_LOADING_DELAY)
+            });
+            if revealed {
+                if let Some(instance) = loading_instance.upgrade() {
+                    apply_live_sd_state(&instance, &loading_browser);
+                }
+            }
+        });
+    });
+
     std::thread::spawn(move || {
         let result = fetch_sd_directory(&host, &path, show_hidden).map_err(|err| err.to_string());
         let _ = slint::invoke_from_event_loop(move || {
@@ -6193,6 +6212,23 @@ fn spawn_compiled_sd_fetch(
     path: String,
     show_hidden: bool,
 ) {
+    let loading_ui = ui.clone();
+    let loading_browser = Arc::clone(&browser);
+    let loading_path = path.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SD_FOLDER_LOADING_DELAY);
+        let _ = slint::invoke_from_event_loop(move || {
+            let revealed = loading_browser.lock().is_ok_and(|mut browser| {
+                browser.reveal_loading_after(&loading_path, SD_FOLDER_LOADING_DELAY)
+            });
+            if revealed {
+                if let Some(ui) = loading_ui.upgrade() {
+                    apply_compiled_sd_state(&ui, &loading_browser);
+                }
+            }
+        });
+    });
+
     std::thread::spawn(move || {
         let result = fetch_sd_directory(&host, &path, show_hidden).map_err(|err| err.to_string());
         let _ = slint::invoke_from_event_loop(move || {
