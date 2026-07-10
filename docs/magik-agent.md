@@ -63,6 +63,7 @@ scripts/mister agent ping
 scripts/mister agent status
 scripts/mister agent logs
 scripts/mister agent timeline
+scripts/mister agent sd-list /_Arcade --protocol auto --repeat 5
 scripts/mister agent diagnostics --out build/agent-diagnostics/sample
 scripts/mister agent framebuffer-capture build/fb0.png --json build/fb0.json
 scripts/mister agent deploy-magik-bin magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
