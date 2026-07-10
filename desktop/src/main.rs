@@ -154,6 +154,19 @@ type SharedFramebufferDisplayState = Arc<Mutex<FramebufferDisplayState>>;
 
 struct FramebufferRenderMetrics {
     supported: AtomicBool,
+    observer_ready: AtomicBool,
+    focused: AtomicBool,
+    occluded: AtomicBool,
+    lost_focus_during_measurement: AtomicBool,
+    occluded_during_measurement: AtomicBool,
+    monitor_refresh_millihertz: AtomicU64,
+    winit_events: AtomicU64,
+    winit_redraws: AtomicU64,
+    foreground_redraws: AtomicU64,
+    rendering_setup: AtomicU64,
+    rendering_before: AtomicU64,
+    rendering_after: AtomicU64,
+    rendering_teardown: AtomicU64,
     render_callbacks: AtomicU64,
     received: AtomicU64,
     applied: AtomicU64,
@@ -192,6 +205,19 @@ impl Default for FramebufferRenderMetrics {
     fn default() -> Self {
         Self {
             supported: AtomicBool::new(false),
+            observer_ready: AtomicBool::new(false),
+            focused: AtomicBool::new(false),
+            occluded: AtomicBool::new(false),
+            lost_focus_during_measurement: AtomicBool::new(false),
+            occluded_during_measurement: AtomicBool::new(false),
+            monitor_refresh_millihertz: AtomicU64::new(0),
+            winit_events: AtomicU64::new(0),
+            winit_redraws: AtomicU64::new(0),
+            foreground_redraws: AtomicU64::new(0),
+            rendering_setup: AtomicU64::new(0),
+            rendering_before: AtomicU64::new(0),
+            rendering_after: AtomicU64::new(0),
+            rendering_teardown: AtomicU64::new(0),
             render_callbacks: AtomicU64::new(0),
             received: AtomicU64::new(0),
             applied: AtomicU64::new(0),
@@ -213,6 +239,17 @@ impl Default for FramebufferRenderMetrics {
 impl FramebufferRenderMetrics {
     fn reset(&self) {
         self.cadence.reset();
+        self.winit_events.store(0, Ordering::Release);
+        self.winit_redraws.store(0, Ordering::Release);
+        self.foreground_redraws.store(0, Ordering::Release);
+        self.lost_focus_during_measurement
+            .store(false, Ordering::Release);
+        self.occluded_during_measurement
+            .store(false, Ordering::Release);
+        self.rendering_setup.store(0, Ordering::Release);
+        self.rendering_before.store(0, Ordering::Release);
+        self.rendering_after.store(0, Ordering::Release);
+        self.rendering_teardown.store(0, Ordering::Release);
         self.render_callbacks.store(0, Ordering::Release);
         self.applied_serial.store(0, Ordering::Release);
         self.received.store(0, Ordering::Release);
@@ -275,6 +312,36 @@ impl FramebufferRenderMetrics {
         prune_render_metrics(&mut state, now);
     }
 
+    #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
+    fn benchmark_ready(&self) -> bool {
+        self.observer_ready.load(Ordering::Acquire)
+            && self.received.load(Ordering::Acquire) > 0
+            && self.focused.load(Ordering::Acquire)
+            && !self.occluded.load(Ordering::Acquire)
+            && self.foreground_redraws.load(Ordering::Acquire) > 0
+    }
+
+    #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
+    fn benchmark_invalid_reason(&self) -> Option<&'static str> {
+        if !self.observer_ready.load(Ordering::Acquire) {
+            Some("redraw_observer_not_ready")
+        } else if self.received.load(Ordering::Acquire) == 0 {
+            Some("no_stream_frames")
+        } else if !self.focused.load(Ordering::Acquire) {
+            Some("window_unfocused")
+        } else if self.lost_focus_during_measurement.load(Ordering::Acquire) {
+            Some("window_lost_focus")
+        } else if self.occluded.load(Ordering::Acquire) {
+            Some("window_occluded")
+        } else if self.occluded_during_measurement.load(Ordering::Acquire) {
+            Some("window_was_occluded")
+        } else if self.foreground_redraws.load(Ordering::Acquire) == 0 {
+            Some("zero_foreground_redraws")
+        } else {
+            None
+        }
+    }
+
     fn snapshot(&self, now: Instant) -> FramebufferRenderSnapshot {
         let Ok(mut state) = self.state.lock() else {
             return FramebufferRenderSnapshot::default();
@@ -330,26 +397,51 @@ fn install_framebuffer_render_notifier(
 
     let redraw_metrics = Arc::clone(&metrics);
     window.on_winit_window_event(move |_window, event| {
+        redraw_metrics.winit_events.fetch_add(1, Ordering::Relaxed);
         match event {
             winit::event::WindowEvent::RedrawRequested => {
+                redraw_metrics.winit_redraws.fetch_add(1, Ordering::Relaxed);
+                if redraw_metrics.focused.load(Ordering::Acquire)
+                    && !redraw_metrics.occluded.load(Ordering::Acquire)
+                {
+                    redraw_metrics
+                        .foreground_redraws
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 redraw_metrics.mark_rendered(Instant::now(), CadenceEventKind::RedrawRequested)
             }
-            winit::event::WindowEvent::Focused(focused) => redraw_metrics.cadence.record(
-                CadenceEventKind::WindowFocused,
-                0,
-                0,
-                0,
-                0,
-                i64::from(*focused),
-            ),
-            winit::event::WindowEvent::Occluded(occluded) => redraw_metrics.cadence.record(
-                CadenceEventKind::WindowOccluded,
-                0,
-                0,
-                0,
-                0,
-                i64::from(*occluded),
-            ),
+            winit::event::WindowEvent::Focused(focused) => {
+                redraw_metrics.focused.store(*focused, Ordering::Release);
+                if !*focused {
+                    redraw_metrics
+                        .lost_focus_during_measurement
+                        .store(true, Ordering::Release);
+                }
+                redraw_metrics.cadence.record(
+                    CadenceEventKind::WindowFocused,
+                    0,
+                    0,
+                    0,
+                    0,
+                    i64::from(*focused),
+                );
+            }
+            winit::event::WindowEvent::Occluded(occluded) => {
+                redraw_metrics.occluded.store(*occluded, Ordering::Release);
+                if *occluded {
+                    redraw_metrics
+                        .occluded_during_measurement
+                        .store(true, Ordering::Release);
+                }
+                redraw_metrics.cadence.record(
+                    CadenceEventKind::WindowOccluded,
+                    0,
+                    0,
+                    0,
+                    0,
+                    i64::from(*occluded),
+                );
+            }
             _ => {}
         }
         EventResult::Propagate
@@ -359,16 +451,34 @@ fn install_framebuffer_render_notifier(
     let callback_metrics = Arc::clone(&metrics);
     if window
         .set_rendering_notifier(move |state, _graphics_api| match state {
-            slint::RenderingState::BeforeRendering => callback_metrics.cadence.record(
-                CadenceEventKind::BeforeRendering,
-                0,
-                0,
-                callback_metrics.applied_serial.load(Ordering::Acquire),
-                0,
-                0,
-            ),
+            slint::RenderingState::RenderingSetup => {
+                callback_metrics
+                    .rendering_setup
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            slint::RenderingState::BeforeRendering => {
+                callback_metrics
+                    .rendering_before
+                    .fetch_add(1, Ordering::Relaxed);
+                callback_metrics.cadence.record(
+                    CadenceEventKind::BeforeRendering,
+                    0,
+                    0,
+                    callback_metrics.applied_serial.load(Ordering::Acquire),
+                    0,
+                    0,
+                );
+            }
             slint::RenderingState::AfterRendering => {
+                callback_metrics
+                    .rendering_after
+                    .fetch_add(1, Ordering::Relaxed);
                 callback_metrics.mark_rendered(Instant::now(), CadenceEventKind::AfterRendering)
+            }
+            slint::RenderingState::RenderingTeardown => {
+                callback_metrics
+                    .rendering_teardown
+                    .fetch_add(1, Ordering::Relaxed);
             }
             _ => {}
         })
@@ -376,6 +486,7 @@ fn install_framebuffer_render_notifier(
     {
         metrics.supported.store(true, Ordering::Release);
     }
+    metrics.observer_ready.store(true, Ordering::Release);
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1458,8 +1569,64 @@ fn run_live_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Error>
     });
 
     instance.run()?;
-    print_framebuffer_display_bench(seconds, &render_metrics);
+    print_framebuffer_display_bench(seconds, &render_metrics, None);
     Ok(())
+}
+
+#[cfg(feature = "compiled-ui")]
+fn prepare_compiled_framebuffer_benchmark_window(
+    ui: &AppWindow,
+    metrics: Arc<FramebufferRenderMetrics>,
+) -> Result<(), Box<dyn Error>> {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::ComponentHandle;
+
+    let ui_weak = ui.as_weak();
+    slint::spawn_local(async move {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let Ok(winit_window) = ui.window().winit_window().await else {
+            return;
+        };
+        metrics
+            .focused
+            .store(winit_window.has_focus(), Ordering::Release);
+        if let Some(refresh_millihertz) = winit_window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+        {
+            metrics
+                .monitor_refresh_millihertz
+                .store(u64::from(refresh_millihertz), Ordering::Release);
+        }
+        install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
+
+        winit_window.set_visible(true);
+        #[cfg(target_os = "macos")]
+        let _ = macos_titlebar::activate_benchmark_window(&winit_window);
+        winit_window.focus_window();
+        winit_window.request_redraw();
+    })
+    .map_err(|err| format!("schedule framebuffer benchmark window setup: {err}"))?;
+    Ok(())
+}
+
+#[cfg(feature = "compiled-ui")]
+fn wait_for_framebuffer_benchmark_ready(
+    metrics: &FramebufferRenderMetrics,
+    timeout: Duration,
+) -> Result<(), &'static str> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if metrics.benchmark_ready() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Err(metrics
+        .benchmark_invalid_reason()
+        .unwrap_or("benchmark_window_not_ready"))
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -1470,9 +1637,9 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
     let ui = AppWindow::new()?;
     let capture = Arc::new(Mutex::new(None));
     let metrics = Arc::new(FramebufferRenderMetrics::default());
-    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
     let generation = Arc::new(AtomicU64::new(0));
     let control = Arc::new(Mutex::new(None));
+    let invalid_reason = Arc::new(Mutex::new(None::<String>));
 
     let stream_ui = ui.as_weak();
     let stream_capture = Arc::clone(&capture);
@@ -1500,13 +1667,32 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
         .set_selected_page("analytics".into());
     ui.global::<AnalyticsState>().set_live_stream(true);
     ui.global::<Actions>().invoke_live_stream_changed(true);
+    ui.show()?;
+    #[cfg(target_os = "macos")]
+    setup_macos_titlebar_for_compiled_ui(&ui);
+    prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
 
     let timer_metrics = Arc::clone(&metrics);
     let timer_ui = ui.as_weak();
+    let timer_invalid_reason = Arc::clone(&invalid_reason);
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(3));
-        timer_metrics.reset();
-        std::thread::sleep(Duration::from_secs(seconds));
+        match wait_for_framebuffer_benchmark_ready(&timer_metrics, Duration::from_secs(10)) {
+            Ok(()) => {
+                std::thread::sleep(Duration::from_secs(3));
+                timer_metrics.reset();
+                std::thread::sleep(Duration::from_secs(seconds));
+                if let Some(reason) = timer_metrics.benchmark_invalid_reason() {
+                    if let Ok(mut invalid) = timer_invalid_reason.lock() {
+                        *invalid = Some(reason.to_string());
+                    }
+                }
+            }
+            Err(reason) => {
+                if let Ok(mut invalid) = timer_invalid_reason.lock() {
+                    *invalid = Some(reason.to_string());
+                }
+            }
+        }
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = timer_ui.upgrade() {
                 ui.global::<Actions>().invoke_live_stream_changed(false);
@@ -1516,14 +1702,22 @@ fn run_compiled_framebuffer_display_bench(seconds: u64) -> Result<(), Box<dyn Er
     });
 
     ui.run()?;
-    print_framebuffer_display_bench(seconds, &metrics);
+    let invalid_reason = invalid_reason.lock().ok().and_then(|reason| reason.clone());
+    print_framebuffer_display_bench(seconds, &metrics, invalid_reason.as_deref());
     Ok(())
 }
 
-fn print_framebuffer_display_bench(seconds: u64, render_metrics: &FramebufferRenderMetrics) {
+fn print_framebuffer_display_bench(
+    seconds: u64,
+    render_metrics: &FramebufferRenderMetrics,
+    invalid_reason: Option<&str>,
+) {
     let snapshot = render_metrics.snapshot(Instant::now());
+    let invalid_reason = invalid_reason.unwrap_or("none");
     println!(
-        "framebuffer_display_bench_tsv\tseconds={seconds}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}",
+        "framebuffer_display_bench_tsv\tseconds={seconds}\tbuild_profile={}\tcompleted={}\tinvalid_reason={invalid_reason}\treceived={}\tapplied={}\trendered={}\trender_callbacks={}\treceived_fps={:.2}\tapplied_fps={:.2}\trendered_fps={:.2}\tcoalesced={}\trender_p95_ms={:.1}\tnotifier_supported={}\tobserver_ready={}\tfocused={}\toccluded={}\tlost_focus={}\twas_occluded={}\tmonitor_refresh_millihertz={}\twinit_events={}\twinit_redraws={}\tforeground_redraws={}\trendering_setup={}\trendering_before={}\trendering_after={}\trendering_teardown={}",
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+        u8::from(invalid_reason == "none"),
         snapshot.received,
         snapshot.applied,
         snapshot.rendered,
@@ -1534,6 +1728,29 @@ fn print_framebuffer_display_bench(seconds: u64, render_metrics: &FramebufferRen
         snapshot.coalesced,
         snapshot.latency_p95_ms,
         u8::from(snapshot.supported),
+        u8::from(render_metrics.observer_ready.load(Ordering::Acquire)),
+        u8::from(render_metrics.focused.load(Ordering::Acquire)),
+        u8::from(render_metrics.occluded.load(Ordering::Acquire)),
+        u8::from(
+            render_metrics
+                .lost_focus_during_measurement
+                .load(Ordering::Acquire),
+        ),
+        u8::from(
+            render_metrics
+                .occluded_during_measurement
+                .load(Ordering::Acquire),
+        ),
+        render_metrics
+            .monitor_refresh_millihertz
+            .load(Ordering::Relaxed),
+        render_metrics.winit_events.load(Ordering::Relaxed),
+        render_metrics.winit_redraws.load(Ordering::Relaxed),
+        render_metrics.foreground_redraws.load(Ordering::Relaxed),
+        render_metrics.rendering_setup.load(Ordering::Relaxed),
+        render_metrics.rendering_before.load(Ordering::Relaxed),
+        render_metrics.rendering_after.load(Ordering::Relaxed),
+        render_metrics.rendering_teardown.load(Ordering::Relaxed),
     );
     let cadence = render_metrics
         .cadence
@@ -6191,5 +6408,56 @@ mod tests {
         assert_eq!(state.last_rendered_serial, 1);
         assert_eq!(state.rendered_at.len(), 1);
         assert_eq!(state.latencies, [Duration::from_millis(10)]);
+    }
+
+    #[test]
+    fn framebuffer_benchmark_readiness_requires_visible_foreground_redraw() {
+        let metrics = FramebufferRenderMetrics::default();
+        assert_eq!(
+            metrics.benchmark_invalid_reason(),
+            Some("redraw_observer_not_ready")
+        );
+
+        metrics.observer_ready.store(true, Ordering::Release);
+        assert_eq!(metrics.benchmark_invalid_reason(), Some("no_stream_frames"));
+        metrics.received.store(1, Ordering::Release);
+        assert_eq!(metrics.benchmark_invalid_reason(), Some("window_unfocused"));
+        metrics.focused.store(true, Ordering::Release);
+        assert_eq!(
+            metrics.benchmark_invalid_reason(),
+            Some("zero_foreground_redraws")
+        );
+        metrics.foreground_redraws.store(1, Ordering::Release);
+
+        assert!(metrics.benchmark_ready());
+        assert_eq!(metrics.benchmark_invalid_reason(), None);
+    }
+
+    #[test]
+    fn framebuffer_benchmark_remembers_focus_and_occlusion_failures() {
+        let metrics = FramebufferRenderMetrics::default();
+        metrics.observer_ready.store(true, Ordering::Release);
+        metrics.received.store(1, Ordering::Release);
+        metrics.focused.store(true, Ordering::Release);
+        metrics.foreground_redraws.store(1, Ordering::Release);
+        metrics
+            .lost_focus_during_measurement
+            .store(true, Ordering::Release);
+
+        assert_eq!(
+            metrics.benchmark_invalid_reason(),
+            Some("window_lost_focus")
+        );
+
+        metrics
+            .lost_focus_during_measurement
+            .store(false, Ordering::Release);
+        metrics
+            .occluded_during_measurement
+            .store(true, Ordering::Release);
+        assert_eq!(
+            metrics.benchmark_invalid_reason(),
+            Some("window_was_occluded")
+        );
     }
 }

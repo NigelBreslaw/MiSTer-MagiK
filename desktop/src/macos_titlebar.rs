@@ -43,3 +43,26 @@ pub async fn setup_window(window: &slint::Window) -> Option<()> {
 
     Some(())
 }
+
+#[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
+pub fn activate_benchmark_window(window: &winit::window::Window) -> Option<()> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSView};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
+        return None;
+    };
+
+    // SAFETY: The AppKit view is owned by this live winit window. This helper
+    // runs from Slint's UI event loop on the macOS main thread.
+    let ns_view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
+    let ns_window = ns_view.window()?;
+    let mtm = MainThreadMarker::new()?;
+    let application = NSApplication::sharedApplication(mtm);
+    #[allow(deprecated)]
+    application.activateIgnoringOtherApps(true);
+    ns_window.makeKeyAndOrderFront(None);
+    ns_window.orderFrontRegardless();
+    Some(())
+}
