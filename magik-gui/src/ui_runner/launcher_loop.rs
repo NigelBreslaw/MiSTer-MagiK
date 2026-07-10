@@ -1433,11 +1433,15 @@ pub(super) fn run_launcher_loop(
                     catalog_load_timing_detail(&loaded),
                 );
                 if catalog_worker_enabled {
-                    print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    scheduler.start_catalog_worker(
+                    print_startup_event(
+                        start,
+                        "catalog_worker_deferred",
+                        format!("root={} reason=first_visible_copy", arcade_root),
+                    );
+                    catalog_session.defer_catalog_worker(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
-                        CatalogWorkerInitialCache::ProbeSqlite,
+                        catalog_worker_initial_cache_after_ui_probe(CatalogUiCacheProbe::Empty),
                     );
                 } else {
                     print_startup_event(
@@ -1455,11 +1459,20 @@ pub(super) fn run_launcher_loop(
                 crate::ui_errln!("arcade catalog cache load failed: {e}");
                 print_startup_event(start, "catalog_cache_load_failed", e);
                 if catalog_worker_enabled {
-                    print_startup_event(start, "catalog_worker_start", &arcade_root);
-                    scheduler.start_catalog_worker(
+                    let initial_cache = catalog_worker_initial_cache_after_ui_probe(
+                        CatalogUiCacheProbe::LoadFailed {
+                            sqlite_exists: sqlite_path.exists(),
+                        },
+                    );
+                    print_startup_event(
+                        start,
+                        "catalog_worker_deferred",
+                        format!("root={} reason=first_visible_copy", arcade_root),
+                    );
+                    catalog_session.defer_catalog_worker(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
-                        CatalogWorkerInitialCache::ProbeSqlite,
+                        initial_cache,
                     );
                 } else {
                     print_startup_event(
@@ -1708,8 +1721,6 @@ pub(super) fn run_launcher_loop(
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
-        let catalog_worker_delay =
-            lifecycle.catalog_worker_start_delay(catalog_background_validation_delay());
         let pad_changed_for_background = pad_changed_for_input.unwrap_or(false);
         let catalog_background_allowed = catalog_background_idle_gate.allow(
             CatalogBackgroundIdleInput {
@@ -1732,18 +1743,26 @@ pub(super) fn run_launcher_loop(
             },
             loop_start,
         );
+        let deferred_worker_policy = deferred_catalog_worker_start_policy(
+            catalog_ready,
+            frame_accounting.first_visible_copy_done(),
+            startup_return_waiting_for_catalog,
+            catalog_background_allowed,
+            lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
+        );
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
-            catalog_background_allowed,
+            deferred_worker_policy.allowed,
             loop_start,
-            catalog_worker_delay,
+            deferred_worker_policy.delay,
         ) {
             print_startup_event(start, "catalog_worker_start", &worker.root);
-            lifecycle.handle(
-                LauncherLifecycleInput::CatalogValidationStarted,
-                &mut lifecycle_effects,
+            let lifecycle_input = deferred_catalog_worker_lifecycle_input(
+                deferred_worker_policy.foreground,
+                worker.request,
             );
+            lifecycle.handle(lifecycle_input, &mut lifecycle_effects);
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
             scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
         }
@@ -4001,6 +4020,69 @@ fn catalog_background_validation_delay() -> Duration {
         .unwrap_or(DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogUiCacheProbe {
+    Empty,
+    LoadFailed { sqlite_exists: bool },
+}
+
+fn catalog_worker_initial_cache_after_ui_probe(
+    probe: CatalogUiCacheProbe,
+) -> CatalogWorkerInitialCache {
+    match probe {
+        CatalogUiCacheProbe::Empty => CatalogWorkerInitialCache::AlreadyProbedEmpty,
+        CatalogUiCacheProbe::LoadFailed {
+            sqlite_exists: true,
+        } => CatalogWorkerInitialCache::ProbeSqlite,
+        CatalogUiCacheProbe::LoadFailed {
+            sqlite_exists: false,
+        } => CatalogWorkerInitialCache::AlreadyProbedMissing,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeferredCatalogWorkerStartPolicy {
+    allowed: bool,
+    delay: Duration,
+    foreground: bool,
+}
+
+fn deferred_catalog_worker_start_policy(
+    catalog_ready: bool,
+    first_visible_copy_done: bool,
+    startup_return_waiting_for_catalog: bool,
+    background_allowed: bool,
+    background_delay: Duration,
+) -> DeferredCatalogWorkerStartPolicy {
+    if catalog_ready {
+        DeferredCatalogWorkerStartPolicy {
+            allowed: background_allowed,
+            delay: background_delay,
+            foreground: false,
+        }
+    } else {
+        DeferredCatalogWorkerStartPolicy {
+            allowed: first_visible_copy_done || startup_return_waiting_for_catalog,
+            delay: Duration::ZERO,
+            foreground: true,
+        }
+    }
+}
+
+fn deferred_catalog_worker_lifecycle_input(
+    foreground: bool,
+    request: CatalogWorkerRequest,
+) -> LauncherLifecycleInput {
+    if foreground {
+        LauncherLifecycleInput::CatalogBuilding {
+            foreground: request == CatalogWorkerRequest::ForceBuild,
+            has_stale_catalog: false,
+        }
+    } else {
+        LauncherLifecycleInput::CatalogValidationStarted
+    }
+}
+
 fn library_changed_test_dialog_choice_from_env(
     start: Instant,
 ) -> Option<launcher::LibraryChangedTestDialogChoice> {
@@ -5359,6 +5441,84 @@ mod tests {
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
             CatalogWorkerInitialCache::ProbeNavigationThenSqlite
         );
+    }
+
+    #[test]
+    pub(super) fn ui_catalog_probe_state_is_preserved_for_the_worker() {
+        assert_eq!(
+            catalog_worker_initial_cache_after_ui_probe(CatalogUiCacheProbe::Empty),
+            CatalogWorkerInitialCache::AlreadyProbedEmpty
+        );
+        assert_eq!(
+            catalog_worker_initial_cache_after_ui_probe(CatalogUiCacheProbe::LoadFailed {
+                sqlite_exists: false,
+            }),
+            CatalogWorkerInitialCache::AlreadyProbedMissing
+        );
+        assert_eq!(
+            catalog_worker_initial_cache_after_ui_probe(CatalogUiCacheProbe::LoadFailed {
+                sqlite_exists: true,
+            }),
+            CatalogWorkerInitialCache::ProbeSqlite
+        );
+    }
+
+    #[test]
+    pub(super) fn cold_catalog_worker_starts_after_first_copy_without_delay() {
+        let before_copy = deferred_catalog_worker_start_policy(
+            false,
+            false,
+            false,
+            false,
+            Duration::from_secs(2),
+        );
+        assert!(!before_copy.allowed);
+        assert_eq!(before_copy.delay, Duration::ZERO);
+        assert!(before_copy.foreground);
+
+        let after_copy =
+            deferred_catalog_worker_start_policy(false, true, false, false, Duration::from_secs(2));
+        assert!(after_copy.allowed);
+        assert_eq!(after_copy.delay, Duration::ZERO);
+        assert!(matches!(
+            deferred_catalog_worker_lifecycle_input(
+                after_copy.foreground,
+                CatalogWorkerRequest::ForceBuild,
+            ),
+            LauncherLifecycleInput::CatalogBuilding {
+                foreground: true,
+                has_stale_catalog: false,
+            }
+        ));
+    }
+
+    #[test]
+    pub(super) fn return_hydration_can_start_before_a_visible_copy() {
+        let policy =
+            deferred_catalog_worker_start_policy(false, false, true, false, Duration::from_secs(2));
+        assert!(policy.allowed);
+        assert_eq!(policy.delay, Duration::ZERO);
+        assert!(policy.foreground);
+    }
+
+    #[test]
+    pub(super) fn warm_catalog_worker_keeps_background_idle_policy() {
+        let delay = Duration::from_secs(2);
+        let blocked = deferred_catalog_worker_start_policy(true, true, false, false, delay);
+        assert!(!blocked.allowed);
+        assert_eq!(blocked.delay, delay);
+        assert!(!blocked.foreground);
+
+        let allowed = deferred_catalog_worker_start_policy(true, true, false, true, delay);
+        assert!(allowed.allowed);
+        assert_eq!(allowed.delay, delay);
+        assert!(matches!(
+            deferred_catalog_worker_lifecycle_input(
+                allowed.foreground,
+                CatalogWorkerRequest::CheckStamp,
+            ),
+            LauncherLifecycleInput::CatalogValidationStarted
+        ));
     }
 
     fn idle_catalog_background_input() -> CatalogBackgroundIdleInput {

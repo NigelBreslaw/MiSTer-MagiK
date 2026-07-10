@@ -40,21 +40,21 @@ impl RuntimeThreadRole {
 
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
-            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Any),
+            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             Self::CatalogForeground | Self::LibraryWalkerForeground => {
-                RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+                RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             }
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::PreviewSelected => RuntimeThreadPolicy::new(0, ThreadAffinity::Any),
+            Self::PreviewSelected => RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit),
             Self::PreviewPrefetch => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
             Self::FramebufferStream => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::Any),
+            Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit),
             Self::VideoDecode | Self::VideoAudio => {
-                RuntimeThreadPolicy::new(5, ThreadAffinity::Any)
+                RuntimeThreadPolicy::new(5, ThreadAffinity::Inherit)
             }
         }
     }
@@ -74,14 +74,16 @@ impl RuntimeThreadPolicy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThreadAffinity {
-    Any,
+    Inherit,
+    AllOnline,
     Cpu0,
 }
 
 impl ThreadAffinity {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Any => "any",
+            Self::Inherit => "inherit",
+            Self::AllOnline => "all-online",
             Self::Cpu0 => "cpu0",
         }
     }
@@ -96,9 +98,10 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
         let actual_nice = current_nice();
         let processor = current_processor();
         crate::catalog_logln!(
-            "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice=inherit\tactual_nice={}\taffinity=any\tprocessor={}\tnice_status=skipped\taffinity_status=skipped",
+            "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice=inherit\tactual_nice={}\taffinity=inherit\tallowed_cpus={}\tprocessor={}\tnice_status=skipped\taffinity_status=skipped",
             role.label(),
             actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
+            current_allowed_cpu_list(),
             processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string())
         );
         return;
@@ -109,11 +112,12 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
     let actual_nice = current_nice();
     let processor = current_processor();
     crate::catalog_logln!(
-        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tprocessor={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
+        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
         role.label(),
         policy.nice,
         actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
         policy.affinity.label(),
+        current_allowed_cpu_list(),
         processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string())
     );
 }
@@ -121,7 +125,7 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
 fn resolved_policy(role: RuntimeThreadRole) -> RuntimeThreadPolicy {
     let mut policy = role.default_policy();
     if affinity_disabled() {
-        policy.affinity = ThreadAffinity::Any;
+        policy.affinity = ThreadAffinity::Inherit;
     }
     policy
 }
@@ -164,14 +168,21 @@ fn apply_nice(_nice: i32) -> &'static str {
 #[cfg(target_os = "linux")]
 fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
     match affinity {
-        ThreadAffinity::Any => "skipped",
-        ThreadAffinity::Cpu0 => {
+        ThreadAffinity::Inherit => "skipped",
+        ThreadAffinity::AllOnline | ThreadAffinity::Cpu0 => {
             // SAFETY: cpu_set_t is a plain C bitset. sched_setaffinity with pid
             // 0 targets the current thread on Linux; failure is non-fatal.
             unsafe {
                 let mut set: libc::cpu_set_t = std::mem::zeroed();
                 libc::CPU_ZERO(&mut set);
-                libc::CPU_SET(0, &mut set);
+                let cpus = match affinity {
+                    ThreadAffinity::AllOnline => online_cpu_indices(libc::CPU_SETSIZE as usize),
+                    ThreadAffinity::Cpu0 => vec![0],
+                    ThreadAffinity::Inherit => unreachable!(),
+                };
+                for cpu in cpus {
+                    libc::CPU_SET(cpu, &mut set);
+                }
                 let rc = libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
                 if rc == 0 {
                     "ok"
@@ -180,6 +191,108 @@ fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
                 }
             }
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn online_cpu_count() -> usize {
+    // SAFETY: sysconf only reads the kernel's online processor count.
+    let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    usize::try_from(count).ok().filter(|count| *count > 0).unwrap_or(1)
+}
+
+#[cfg(target_os = "linux")]
+fn online_cpu_indices(capacity: usize) -> Vec<usize> {
+    std::fs::read_to_string("/sys/devices/system/cpu/online")
+        .ok()
+        .and_then(|online| parse_cpu_list(&online, capacity))
+        .filter(|cpus| !cpus.is_empty())
+        .unwrap_or_else(|| contiguous_cpu_indices(online_cpu_count(), capacity))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn contiguous_cpu_indices(online: usize, capacity: usize) -> Vec<usize> {
+    (0..online.max(1).min(capacity)).collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_cpu_list(value: &str, capacity: usize) -> Option<Vec<usize>> {
+    let mut cpus = Vec::new();
+    for field in value.trim().split(',') {
+        if field.is_empty() {
+            return None;
+        }
+        let (start, end) = if let Some((start, end)) = field.split_once('-') {
+            let start = start.parse::<usize>().ok()?;
+            let end = end.parse::<usize>().ok()?;
+            if start > end {
+                return None;
+            }
+            (start, end)
+        } else {
+            let cpu = field.parse::<usize>().ok()?;
+            (cpu, cpu)
+        };
+        if start < capacity {
+            for cpu in start..=end.min(capacity.saturating_sub(1)) {
+                cpus.push(cpu);
+            }
+        }
+    }
+    cpus.sort_unstable();
+    cpus.dedup();
+    Some(cpus)
+}
+
+#[cfg(target_os = "linux")]
+fn current_allowed_cpu_list() -> String {
+    // SAFETY: sched_getaffinity initializes the provided cpu_set_t for the
+    // current thread. Failure is reported as unknown telemetry.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut set);
+        if libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut set) != 0 {
+            return "unknown".to_string();
+        }
+        let allowed = (0..libc::CPU_SETSIZE as usize)
+            .filter(|cpu| libc::CPU_ISSET(*cpu, &set))
+            .collect::<Vec<_>>();
+        format_cpu_ranges(&allowed)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_allowed_cpu_list() -> String {
+    "unknown".to_string()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn format_cpu_ranges(cpus: &[usize]) -> String {
+    if cpus.is_empty() {
+        return "none".to_string();
+    }
+    let mut ranges = Vec::new();
+    let mut start = cpus[0];
+    let mut end = start;
+    for &cpu in &cpus[1..] {
+        if cpu == end + 1 {
+            end = cpu;
+            continue;
+        }
+        ranges.push(format_cpu_range(start, end));
+        start = cpu;
+        end = cpu;
+    }
+    ranges.push(format_cpu_range(start, end));
+    ranges.join(",")
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn format_cpu_range(start: usize, end: usize) -> String {
+    if start == end {
+        start.to_string()
+    } else {
+        format!("{start}-{end}")
     }
 }
 
@@ -219,7 +332,7 @@ mod tests {
     fn selected_preview_runs_at_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::PreviewSelected.default_policy(),
-            RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+            RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit)
         );
         assert_eq!(
             RuntimeThreadRole::PreviewPrefetch.default_policy(),
@@ -231,7 +344,7 @@ mod tests {
     fn launcher_ui_runs_above_default_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::LauncherUi.default_policy(),
-            RuntimeThreadPolicy::new(-10, ThreadAffinity::Any)
+            RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit)
         );
     }
 
@@ -253,7 +366,7 @@ mod tests {
     fn visible_media_download_runs_at_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::MediaDownload.default_policy(),
-            RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+            RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit)
         );
     }
 
@@ -265,9 +378,62 @@ mod tests {
         ] {
             assert_eq!(
                 role.default_policy(),
-                RuntimeThreadPolicy::new(0, ThreadAffinity::Any)
+                RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             );
         }
+    }
+
+    #[test]
+    fn every_role_has_the_expected_production_policy() {
+        let expected = [
+            (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::CatalogForeground, 0, ThreadAffinity::AllOnline),
+            (RuntimeThreadRole::LibraryWalker, 10, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::LibraryWalkerForeground,
+                0,
+                ThreadAffinity::AllOnline,
+            ),
+            (RuntimeThreadRole::PreviewSelected, 0, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::PreviewPrefetch, 10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::MediaWorker, 10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::MediaDownload, 0, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::MediaIndex, 10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::FramebufferStream, 10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
+        ];
+        for (role, nice, affinity) in expected {
+            assert_eq!(role.default_policy(), RuntimeThreadPolicy::new(nice, affinity));
+        }
+    }
+
+    #[test]
+    fn all_online_fallback_is_bounded_by_online_count_and_capacity() {
+        assert_eq!(contiguous_cpu_indices(2, 1024), vec![0, 1]);
+        assert_eq!(contiguous_cpu_indices(8, 4), vec![0, 1, 2, 3]);
+        assert_eq!(contiguous_cpu_indices(0, 1024), vec![0]);
+        assert!(contiguous_cpu_indices(2, 0).is_empty());
+    }
+
+    #[test]
+    fn linux_online_cpu_list_parses_ranges_noncontiguous_ids_and_capacity() {
+        assert_eq!(parse_cpu_list("0-1\n", 1024), Some(vec![0, 1]));
+        assert_eq!(parse_cpu_list("0,2-3,7\n", 1024), Some(vec![0, 2, 3, 7]));
+        assert_eq!(parse_cpu_list("7,1,3,3", 1024), Some(vec![1, 3, 7]));
+        assert_eq!(parse_cpu_list("0-7", 4), Some(vec![0, 1, 2, 3]));
+        assert_eq!(parse_cpu_list("4-7", 4), Some(Vec::new()));
+        assert_eq!(parse_cpu_list("3-1", 1024), None);
+        assert_eq!(parse_cpu_list("0,,2", 1024), None);
+    }
+
+    #[test]
+    fn allowed_cpu_lists_use_linux_range_notation() {
+        assert_eq!(format_cpu_ranges(&[]), "none");
+        assert_eq!(format_cpu_ranges(&[0]), "0");
+        assert_eq!(format_cpu_ranges(&[0, 1]), "0-1");
+        assert_eq!(format_cpu_ranges(&[0, 1, 3, 5, 6, 7]), "0-1,3,5-7");
     }
 
     #[test]
