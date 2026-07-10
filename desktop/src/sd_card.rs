@@ -102,6 +102,31 @@ impl SdItemDetail {
         }
     }
 
+    pub fn folder_for(path: &str) -> Self {
+        let path = normalize_ui_path(path);
+        let name = item_name(&path);
+        Self {
+            path: path.clone(),
+            title: name,
+            subtitle: "Folder on /media/fat".to_string(),
+            kind: "directory".to_string(),
+            icon_key: "folder-base".to_string(),
+            overview_rows: vec![
+                SdMetadataRow {
+                    label: "Path".to_string(),
+                    value: path,
+                    kind: "path".to_string(),
+                },
+                SdMetadataRow {
+                    label: "Type".to_string(),
+                    value: "directory".to_string(),
+                    kind: "text".to_string(),
+                },
+            ],
+            ..Self::empty()
+        }
+    }
+
     pub fn error_for(path: &str, error: String) -> Self {
         let name = item_name(path);
         let kind = fallback_kind_for_path(path);
@@ -244,6 +269,8 @@ impl SdCardBrowser {
     pub fn toggle_directory(&mut self, raw_path: &str) -> Option<String> {
         let path = normalize_ui_path(raw_path);
         self.current_path = path.clone();
+        self.detail_generation = self.detail_generation.saturating_add(1);
+        self.selected_detail = SdItemDetail::folder_for(&path);
         self.last_error.clear();
 
         if self.expanded_paths.remove(&path) {
@@ -649,6 +676,22 @@ mod tests {
         assert_eq!(browser.toggle_directory(ROOT_PATH), None);
         assert_eq!(browser.toggle_directory(ROOT_PATH), None);
         assert!(browser.status().contains("cached"));
+    }
+
+    #[test]
+    fn toggling_directory_shows_local_folder_detail() {
+        let mut browser = SdCardBrowser::new();
+
+        assert_eq!(
+            browser.toggle_directory("/_Arcade").as_deref(),
+            Some("/_Arcade")
+        );
+        let detail = browser.selected_detail();
+        assert_eq!(detail.path, "/_Arcade");
+        assert_eq!(detail.title, "_Arcade");
+        assert_eq!(detail.kind, "directory");
+        assert!(!detail.loading);
+        assert_eq!(detail.overview_rows[0].value, "/_Arcade");
     }
 
     #[test]
