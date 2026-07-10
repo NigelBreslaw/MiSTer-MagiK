@@ -60,6 +60,7 @@ fn main() {
             .flag("-mtune=cortex-a9")
             .flag("-mfpu=neon")
             .flag("-fno-tree-vectorize")
+            .flag("-fno-strict-aliasing")
             .warnings_into_errors(true)
             .compile("mister_magik_downsample_neon");
     }

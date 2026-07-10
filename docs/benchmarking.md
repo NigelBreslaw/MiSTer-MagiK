@@ -591,11 +591,27 @@ Prove the compiled RGB565 scalar/NEON implementations separately:
 scripts/gate-framebuffer-stream-neon.sh LABEL --deploy-device
 ```
 
+For quick kernel exploration without rebuilding or starting the Rust/Slint
+application, use the standalone Cortex-A9 microbenchmark:
+
+```bash
+scripts/profile-rgb565-decimator.sh LABEL --samples 250 --runs 3 --cpu 0
+```
+
+It builds one pure-C binary, runs the exact production kernels beside the
+candidate scalar/NEON shapes, verifies identical pixels and checksums, rotates
+kernel order, and writes raw plus aggregate TSV under
+`build/rgb565-decimator-bench/`. Use this for kernel selection, then confirm the
+winner with the production gate above.
+
 This gate is deliberately independent of stream averages. It compares exact
 checksums for contiguous 960x540, padded 960x540, and odd-sized inputs, then
 requires NEON p95/max no greater than 4/6ms and at least 1.5x scalar speedup.
-The July 10 Cortex-A9 run failed the speedup condition: scalar p95 was 1.011ms
-and NEON p95 was 1.476ms, so automatic dispatch remains scalar.
+The July 10 follow-up tested pointer walking, restrict, unrolling, two-row
+interleaving, 32-bit scalar loads, `vld2`, `vuzp`, 16/32-output narrowing, and
+four prefetch distances. The optimized standalone production kernels measured
+1.010ms scalar p95 and 1.259ms NEON p95 at 960x540. Automatic dispatch therefore
+remains scalar.
 
 The resolution matrix runs matched half, full, and adaptive null-drain/display
 profiles and reports payload, transport, applied/rendered cadence, producer

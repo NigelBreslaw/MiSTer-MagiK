@@ -49,6 +49,11 @@ and is intentionally not committed as raw benchmark output.
 | full | 56.01 | 89.3ms | 1,036,800 | 96,934 | 8.877/11.585ms | 110 |
 | adaptive motion | 59.67 | 24.0ms | 259,200 | 31,111 | 9.672/12.951ms | 0 |
 
+After optimizing the scalar decimator, a repeated half-stream null-drain run
+still measured 59.79fps with 9.598/12.035ms snapshot p95/max. The decimator
+microbenchmark improved, but the end-to-end snapshot did not: copying the full
+immutable hidden slot remains the dominant producer cost.
+
 The full profile proves that sustained 960x540 transport is about 56fps on this
 scene, not 60fps, and its long interval tail matches the previously visible
 pulse. Half/adaptive motion reaches the required average transport rate but
@@ -85,6 +90,38 @@ scalar implementation. Explicit `neon` remains available for measurement. The
 same stable-Rust cfg limitation applies to the existing screenshot-fade Rust
 NEON guards, so those paths must not be assumed active without their own runtime
 backend evidence.
+
+### Standalone kernel search
+
+A follow-up added `scripts/profile-rgb565-decimator.sh`, which builds a pure-C
+Cortex-A9 binary and runs it directly from `/tmp` on the MiSTer. It links the
+exact production C helper but avoids Rust, Slint, agent protocol, and app-startup
+noise. Each run validates exact pixels and checksums for contiguous, padded,
+and odd inputs before timing, rotates kernel order per sample, and pins the
+process to a selected CPU.
+
+The search covered scalar indexing, pointer walking, `restrict`, two-row
+interleaving, 2/8-way unrolling, and 32-bit loads; NEON `vld2`, `vuzp`, 16/32
+output narrowing, two-row interleaving, and software prefetch at 128, 256, 384,
+and 512 bytes ahead. A second CPU run preserved the ranking. Unrolling and
+two-row interleaving regressed scalar performance; `vld2` and `vuzp` regressed
+NEON performance. The winning production changes were scalar pointer walking
+and a 32-output NEON loop with a 256-byte prefetch. Odd strides use the same
+fast NEON loop because selecting every second row preserves alignment; a truly
+misaligned base falls back safely to scalar.
+
+Three runs of 250 samples on CPU 0 produced these aggregate 960x540 results:
+
+| Production implementation | mean p50 | mean p95 | observed max |
+| --- | ---: | ---: | ---: |
+| optimized scalar | 0.923ms | 1.010ms | 1.458ms |
+| optimized NEON | 1.133ms | 1.259ms | 1.791ms |
+
+Against the initial standalone run, scalar improved about 6% at p50 and 8% at
+p95; NEON improved about 8% at p50 and 9% at p95. All candidate checksums
+matched. The production Rust/device command then reported full-frame p95 of
+1.075ms scalar and 1.154ms NEON, with identical checksums. Its formal 1.5x NEON
+gate correctly remains failed and `auto` remains scalar.
 
 ## Decision
 
