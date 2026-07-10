@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|null-drain] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-scale off|full|half|adaptive] [--stream-simd auto|scalar] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -38,8 +38,8 @@ times, then A.
 second while the timed scenario runs.
 --selection-invert on|off toggles selected-row inversion for A/B cost runs.
 --stream-consumer starts a desktop framebuffer stream consumer during the
-timed window. desktop-bench decodes/RGBA-converts frames; null-drain reads the
-binary stream without desktop image conversion.
+timed window. desktop-bench decodes/RGBA-converts frames, desktop-display runs
+the real Analytics render path, and null-drain reads without image conversion.
 
 Do not use row-step `list-scroll` for arcade performance benchmarking. It does
 not reproduce real velocity scrolling.
@@ -62,6 +62,8 @@ selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
+stream_scale="${MISTER_FRAMEBUFFER_STREAM_SCALE:-off}"
+stream_simd="${MISTER_FRAMEBUFFER_STREAM_SIMD:-auto}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
@@ -130,8 +132,18 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --stream-consumer)
-      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-consumer needs none, desktop-bench, or null-drain" >&2; usage >&2; exit 2; fi
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-consumer needs none, desktop-bench, desktop-display, or null-drain" >&2; usage >&2; exit 2; fi
       stream_consumer="$2"
+      shift 2
+      ;;
+    --stream-scale)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-scale needs off, full, half, or adaptive" >&2; usage >&2; exit 2; fi
+      stream_scale="$2"
+      shift 2
+      ;;
+    --stream-simd)
+      if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--stream-simd needs auto or scalar" >&2; usage >&2; exit 2; fi
+      stream_simd="$2"
       shift 2
       ;;
     -h|--help) usage; exit 0 ;;
@@ -196,8 +208,16 @@ if [[ ! "$present_delay_us" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 case "$stream_consumer" in
-  none|desktop-bench|null-drain) ;;
-  *) echo "--stream-consumer must be none, desktop-bench, or null-drain" >&2; exit 2 ;;
+  none|desktop-bench|desktop-display|null-drain) ;;
+  *) echo "--stream-consumer must be none, desktop-bench, desktop-display, or null-drain" >&2; exit 2 ;;
+esac
+case "$stream_scale" in
+  off|full|half|adaptive) ;;
+  *) echo "--stream-scale must be off, full, half, or adaptive" >&2; exit 2 ;;
+esac
+case "$stream_simd" in
+  auto|scalar) ;;
+  *) echo "--stream-simd must be auto or scalar" >&2; exit 2 ;;
 esac
 case "$catalog_refresh" in
   default|off|force) ;;
@@ -224,8 +244,7 @@ local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-arcade-scroll-env.XXXXXX")"
 run_id="${label}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 stream_pid=""
-stream_frames=$((secs * 20))
-if [[ "$stream_frames" -lt 1 ]]; then stream_frames=1; fi
+stream_seconds="$secs"
 present_width="960"
 if [[ "$ui_fb_size" == "1280x720" ]]; then
   present_width="1280"
@@ -584,6 +603,8 @@ run_boot_prelude() {
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+    printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
+    printf 'export MISTER_FRAMEBUFFER_STREAM_SIMD=%q\n' "$stream_simd"
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
@@ -675,15 +696,20 @@ run_boot_prelude() {
 }
 
 start_stream_consumer() {
+  stream_features=()
   case "$stream_consumer" in
     none) return 0 ;;
-    desktop-bench) stream_arg="--framebuffer-stream-bench" ;;
-    null-drain) stream_arg="--framebuffer-stream-drain-bench" ;;
+    desktop-bench) stream_arg="--framebuffer-stream-bench-secs" ;;
+    desktop-display)
+      stream_arg="--framebuffer-stream-display-bench-secs"
+      stream_features=(--features skia-renderer)
+      ;;
+    null-drain) stream_arg="--framebuffer-stream-drain-bench-secs" ;;
   esac
-  echo "==> Start framebuffer stream consumer mode=$stream_consumer frames=$stream_frames"
+  echo "==> Start framebuffer stream consumer mode=$stream_consumer seconds=$stream_seconds scale=$stream_scale simd=$stream_simd"
   (
     cd "$HERE"
-    MISTER_IP="${MISTER_IP:-192.168.1.117}" cargo run --manifest-path desktop/Cargo.toml --locked -- "$stream_arg" "$stream_frames"
+    MISTER_IP="${MISTER_IP:-192.168.1.117}" cargo run --manifest-path desktop/Cargo.toml --locked "${stream_features[@]}" -- "$stream_arg" "$stream_seconds"
   ) >"$local_stream_tsv" 2>"$local_stream_log" &
   stream_pid="$!"
 }
@@ -695,8 +721,8 @@ finish_stream_consumer() {
   if kill -0 "$stream_pid" >/dev/null 2>&1; then
     kill "$stream_pid" >/dev/null 2>&1 || true
     wait "$stream_pid" >/dev/null 2>&1 || true
-    printf 'framebuffer_stream_bench_tsv\tmode=%s\tframes=%s\tcompleted=0\tinvalid_reason=consumer_timeout\n' \
-      "$stream_consumer" "$stream_frames" | tee -a "$local_stream_tsv"
+    printf 'framebuffer_stream_bench_tsv\tmode=%s\tseconds=%s\tcompleted=0\tinvalid_reason=consumer_timeout\n' \
+      "$stream_consumer" "$stream_seconds" | tee -a "$local_stream_tsv"
     return 14
   fi
   wait "$stream_pid"
@@ -742,6 +768,8 @@ else
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+    printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
+    printf 'export MISTER_FRAMEBUFFER_STREAM_SIMD=%q\n' "$stream_simd"
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_LAUNCHER_LOCK_SCREEN=arcade\n'

@@ -571,6 +571,33 @@ host-side raw-to-PNG capture paths. For live desktop inspection and FPS
 experiments, use the producer-side framebuffer stream (`framebuffer_stream_v1`)
 instead of repeated PNG or raw-frame polling; keep PNG capture for still
 artifacts and capture validation.
+
+Use the end-to-end latch-stream gate before changing the production stream
+default:
+
+```bash
+scripts/gate-framebuffer-stream-55fps.sh LABEL --secs 30 --deploy-device
+```
+
+The gate runs four otherwise identical Arcade `turbo-hold` profiles: no
+subscriber, scalar adaptive display, automatic-SIMD adaptive null drain, and
+automatic-SIMD adaptive Analytics display. The desktop display measurements
+include a three-second warmup before the requested measurement interval.
+Passing requires at least 55 distinct rendered and applied frames per second in
+Analytics, at least 58 frames per second through the null drain, render p95 no
+greater than 50ms, a working Slint rendering notifier, NEON dispatch, half-size
+snapshot p95/max no greater than 4/6ms, full-size snapshot p95/max no greater
+than 10/15ms, and at least 1.5x half-size snapshot p95 speedup over scalar. The
+underlying profiles also retain the normal latch, pacing, and zero-drop gates.
+
+The generated `*-framebuffer-stream.tsv` files report consumer measurements;
+the matching `*-arcade-scroll.log` files contain
+`framebuffer_stream_snapshot_tsv` producer timing. `rendered_fps` specifically
+means distinct stream image serials observed by Slint `AfterRendering`, not
+frames received, decompressed, or merely handed to the UI event loop. Keep the
+historical roughly-20fps monitor result as context only: it predates the latch
+producer and is not a like-for-like baseline for this gate.
+
 Build profiles and toolchain details live in `magik-gui/BUILD.md`.
 
 Bench scene documentation lives in `magik-gui/ui/bench/README.md`.
