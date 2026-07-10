@@ -453,8 +453,7 @@ fn blend_565_row_bucketed(
         dst.copy_from_slice(&current[..dst.len()]);
         return;
     }
-    let start = blend_565_row_platform(dst, previous, current, a);
-    for x in start..dst.len() {
+    for x in 0..dst.len() {
         dst[x] = blend_565_bucket(previous[x], current[x], a);
     }
 }
@@ -483,9 +482,8 @@ fn blend_565_row_with_black(
         }
         return;
     }
-    let start = blend_565_row_with_black_platform(dst, pixels, a, fade_in);
     let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
-    for x in start..dst.len() {
+    for x in 0..dst.len() {
         dst[x] = if fade_in {
             blend_565_bucket(black, pixels[x], a)
         } else {
@@ -505,183 +503,6 @@ fn preview_fade_fast_path_enabled() -> bool {
 
 fn preview_fade_fast_path_enabled_value(value: Option<&str>) -> bool {
     !matches!(value, Some("0" | "off" | "false" | "no" | "legacy"))
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-#[inline]
-fn blend_565_row_platform(
-    dst: &mut [Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    current: &[Rgb565Pixel],
-    alpha_bucket: u16,
-) -> usize {
-    let vector_len = dst.len().min(previous.len()).min(current.len()) & !3;
-    if vector_len == 0 {
-        return 0;
-    }
-    // SAFETY: vector_len is rounded down to a multiple of four within dst.len();
-    // it is also capped to previous/current lengths here, and alpha is clamped
-    // to the 1..=31 bucket range before reaching this platform helper.
-    unsafe { blend_565_row_neon_u32rb(dst, previous, current, vector_len, alpha_bucket) };
-    vector_len
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-unsafe fn blend_565_row_neon_u32rb(
-    dst: &mut [Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    current: &[Rgb565Pixel],
-    vector_len: usize,
-    alpha_bucket: u16,
-) {
-    use core::arch::arm::{
-        vaddq_u32, vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vmulq_n_u32, vorrq_u32,
-        vshrq_n_u32, vst1_u16,
-    };
-
-    debug_assert!(vector_len <= dst.len());
-    debug_assert!(vector_len <= previous.len());
-    debug_assert!(vector_len <= current.len());
-    debug_assert_eq!(vector_len % 4, 0);
-    debug_assert!(alpha_bucket <= 32);
-    let rb_mask = vdupq_n_u32(0xf81f);
-    let g_mask = vdupq_n_u32(0x07e0);
-    let alpha = alpha_bucket as u32;
-    let inv_alpha = 32 - alpha;
-    let previous = previous.as_ptr().cast::<u16>();
-    let current = current.as_ptr().cast::<u16>();
-    let dst = dst.as_mut_ptr().cast::<u16>();
-    let mut i = 0;
-    macro_rules! blend4 {
-        ($offset:expr) => {{
-            let prev = vmovl_u16(vld1_u16(previous.add($offset)));
-            let curr = vmovl_u16(vld1_u16(current.add($offset)));
-            let rb = vandq_u32(
-                vshrq_n_u32(
-                    vaddq_u32(
-                        vmulq_n_u32(vandq_u32(prev, rb_mask), inv_alpha),
-                        vmulq_n_u32(vandq_u32(curr, rb_mask), alpha),
-                    ),
-                    5,
-                ),
-                rb_mask,
-            );
-            let g = vandq_u32(
-                vshrq_n_u32(
-                    vaddq_u32(
-                        vmulq_n_u32(vandq_u32(prev, g_mask), inv_alpha),
-                        vmulq_n_u32(vandq_u32(curr, g_mask), alpha),
-                    ),
-                    5,
-                ),
-                g_mask,
-            );
-            vst1_u16(dst.add($offset), vmovn_u32(vorrq_u32(rb, g)));
-        }};
-    }
-    while i + 8 <= vector_len {
-        blend4!(i);
-        blend4!(i + 4);
-        i += 8;
-    }
-    while i + 4 <= vector_len {
-        blend4!(i);
-        i += 4;
-    }
-}
-
-#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
-#[inline(always)]
-fn blend_565_row_platform(
-    _dst: &mut [Rgb565Pixel],
-    _previous: &[Rgb565Pixel],
-    _current: &[Rgb565Pixel],
-    _alpha_bucket: u16,
-) -> usize {
-    0
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-#[inline]
-fn blend_565_row_with_black_platform(
-    dst: &mut [Rgb565Pixel],
-    pixels: &[Rgb565Pixel],
-    alpha_bucket: u16,
-    fade_in: bool,
-) -> usize {
-    let vector_len = dst.len().min(pixels.len()) & !3;
-    if vector_len == 0 {
-        return 0;
-    }
-    // SAFETY: vector_len is rounded down to a multiple of four within dst.len()
-    // and capped to pixels.len(); alpha is clamped to the 1..=31 bucket range.
-    unsafe { blend_565_row_with_black_neon(dst, pixels, vector_len, alpha_bucket, fade_in) };
-    vector_len
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-unsafe fn blend_565_row_with_black_neon(
-    dst: &mut [Rgb565Pixel],
-    pixels: &[Rgb565Pixel],
-    vector_len: usize,
-    alpha_bucket: u16,
-    fade_in: bool,
-) {
-    use core::arch::arm::{
-        vandq_u32, vdupq_n_u32, vld1_u16, vmovl_u16, vmovn_u32, vmulq_n_u32, vorrq_u32,
-        vshrq_n_u32, vst1_u16,
-    };
-
-    debug_assert!(vector_len <= dst.len());
-    debug_assert!(vector_len <= pixels.len());
-    debug_assert_eq!(vector_len % 4, 0);
-    debug_assert!(alpha_bucket <= 32);
-    let rb_mask = vdupq_n_u32(0xf81f);
-    let g_mask = vdupq_n_u32(0x07e0);
-    let factor = if fade_in {
-        alpha_bucket as u32
-    } else {
-        (32 - alpha_bucket) as u32
-    };
-    let pixels = pixels.as_ptr().cast::<u16>();
-    let dst = dst.as_mut_ptr().cast::<u16>();
-    let mut i = 0;
-    macro_rules! blend4 {
-        ($offset:expr) => {{
-            let src = vmovl_u16(vld1_u16(pixels.add($offset)));
-            let rb = vandq_u32(
-                vshrq_n_u32(vmulq_n_u32(vandq_u32(src, rb_mask), factor), 5),
-                rb_mask,
-            );
-            let g = vandq_u32(
-                vshrq_n_u32(vmulq_n_u32(vandq_u32(src, g_mask), factor), 5),
-                g_mask,
-            );
-            let blended = vmovn_u32(vorrq_u32(rb, g));
-            vst1_u16(dst.add($offset), blended);
-        }};
-    }
-    while i + 16 <= vector_len {
-        blend4!(i);
-        blend4!(i + 4);
-        blend4!(i + 8);
-        blend4!(i + 12);
-        i += 16;
-    }
-    while i + 4 <= vector_len {
-        blend4!(i);
-        i += 4;
-    }
-}
-
-#[cfg(not(all(target_arch = "arm", target_feature = "neon")))]
-fn blend_565_row_with_black_platform(
-    _dst: &mut [Rgb565Pixel],
-    _pixels: &[Rgb565Pixel],
-    _alpha_bucket: u16,
-    _fade_in: bool,
-) -> usize {
-    0
 }
 
 #[cfg(mister_experiments)]
