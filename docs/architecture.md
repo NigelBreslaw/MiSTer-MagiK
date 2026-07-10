@@ -122,6 +122,28 @@ Wire policy:
 - If the desktop detects a sequence gap or malformed delta, it must discard the
   partial frame and require a fresh keyframe.
 
+Latch-stream policy:
+
+- The latch renderer snapshots the immutable hidden slot only after the FPGA
+  post, route/status work, and committed-slot bookkeeping have succeeded. The
+  snapshot therefore includes Slint plus direct Arcade layers and describes
+  the exact composed frame that was committed for scan-out.
+- Latch snapshots are self-contained keyframes. During motion, adaptive mode
+  decimates RGB565 to 480x270; after 120ms without motion it publishes one
+  960x540 refinement from the last committed slot without issuing a synthetic
+  FPGA flip. Geometry changes are ordinary keyframe changes on the existing v1
+  wire protocol.
+- A bounded newest-wins producer queue prevents a slow encoder or client from
+  delaying presentation. The desktop mirrors that policy with a one-slot
+  decoded-image mailbox and at most one outstanding UI callback.
+- `MISTER_FRAMEBUFFER_STREAM_SCALE=off|full|half|adaptive` controls latch
+  publication. The current production default remains `off` until the real
+  device/desktop 55fps gate passes. `MISTER_FRAMEBUFFER_STREAM_SIMD=auto|scalar`
+  selects the Cortex-A9 NEON decimator or its scalar oracle for measurement.
+- Desktop display throughput counts distinct stream image serials observed by
+  Slint's `AfterRendering` notifier. Received or decoded frames are diagnostic
+  counters; they are not evidence that Analytics displayed those frames.
+
 Historical evidence:
 
 - `history/2026-5-2/framebuffer-experiments.md`

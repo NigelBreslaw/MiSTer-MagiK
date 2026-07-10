@@ -26,6 +26,7 @@ static COALESCED_FRAMES: AtomicU64 = AtomicU64::new(0);
 static FULL_SNAPSHOT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static REFINEMENT_DUE_US: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_POOL: OnceLock<Mutex<Vec<Vec<Rgb565Pixel>>>> = OnceLock::new();
+static SNAPSHOT_METRICS: OnceLock<Mutex<SnapshotMetrics>> = OnceLock::new();
 const REFINEMENT_DELAY_US: u64 = 120_000;
 
 struct ProducerState {
@@ -109,6 +110,34 @@ pub struct LatchSnapshotStats {
     pub output_width: usize,
     pub output_height: usize,
     pub implementation: &'static str,
+}
+
+struct SnapshotMetrics {
+    snapshot_us: Vec<u64>,
+    half_snapshot_us: Vec<u64>,
+    full_snapshot_us: Vec<u64>,
+    full_frames: u64,
+    half_frames: u64,
+    raw_bytes: u64,
+    implementation: &'static str,
+    coalesced_start: u64,
+    reported: bool,
+}
+
+impl SnapshotMetrics {
+    fn new() -> Self {
+        Self {
+            snapshot_us: Vec::with_capacity(2_048),
+            half_snapshot_us: Vec::with_capacity(2_048),
+            full_snapshot_us: Vec::with_capacity(32),
+            full_frames: 0,
+            half_frames: 0,
+            raw_bytes: 0,
+            implementation: "none",
+            coalesced_start: 0,
+            reported: false,
+        }
+    }
 }
 
 enum WorkerEvent {
@@ -385,14 +414,16 @@ pub fn publish_latch_snapshot(
             LatchStreamScale::Half => {}
         }
     }
-    LatchSnapshotStats {
+    let stats = LatchSnapshotStats {
         queued,
         snapshot_us,
         raw_bytes,
         output_width: width,
         output_height: height,
         implementation,
-    }
+    };
+    record_snapshot_metrics(scale, stats);
+    stats
 }
 
 pub fn publish_dense_rect(geometry: FrameGeometry, rect: FrameRect, pixels: &[Rgb565Pixel]) {
@@ -452,6 +483,7 @@ fn install_subscriber(stream: TcpStream) {
         crate::ui_errln!("framebuffer stream producer rejected extra subscriber");
         return;
     }
+    reset_snapshot_metrics();
     NEEDS_KEYFRAME.store(true, Ordering::Release);
     FULL_SNAPSHOT_REQUESTED.store(true, Ordering::Release);
     if !worker_queue().push_subscriber(stream) {
@@ -509,6 +541,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
                     clear_snapshot_requests();
+                    report_snapshot_metrics("subscriber-missing");
                     continue;
                 };
                 let needs_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel);
@@ -566,6 +599,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     &mut encoder,
                 ) {
                     crate::ui_errln!("framebuffer stream producer write failed: {err}");
+                    report_snapshot_metrics("write-failed");
                     subscriber = None;
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
@@ -579,6 +613,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 if let Some(stream) = subscriber.as_mut() {
                     if let Err(err) = write_heartbeat(stream) {
                         crate::ui_errln!("framebuffer stream producer heartbeat failed: {err}");
+                        report_snapshot_metrics("heartbeat-failed");
                         subscriber = None;
                         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                         NEEDS_KEYFRAME.store(true, Ordering::Release);
@@ -590,6 +625,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
         }
     }
     PENDING_FRAME.store(false, Ordering::Release);
+    report_snapshot_metrics("worker-stopped");
     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
     NEEDS_KEYFRAME.store(true, Ordering::Release);
     clear_snapshot_requests();
@@ -691,6 +727,91 @@ fn frame_geometry(width: usize, height: usize) -> Option<FrameGeometry> {
 fn clear_snapshot_requests() {
     FULL_SNAPSHOT_REQUESTED.store(false, Ordering::Release);
     REFINEMENT_DUE_US.store(0, Ordering::Release);
+}
+
+fn snapshot_metrics() -> &'static Mutex<SnapshotMetrics> {
+    SNAPSHOT_METRICS.get_or_init(|| Mutex::new(SnapshotMetrics::new()))
+}
+
+fn reset_snapshot_metrics() {
+    let Ok(mut metrics) = snapshot_metrics().lock() else {
+        return;
+    };
+    metrics.snapshot_us.clear();
+    metrics.half_snapshot_us.clear();
+    metrics.full_snapshot_us.clear();
+    metrics.full_frames = 0;
+    metrics.half_frames = 0;
+    metrics.raw_bytes = 0;
+    metrics.implementation = "none";
+    metrics.coalesced_start = COALESCED_FRAMES.load(Ordering::Relaxed);
+    metrics.reported = false;
+}
+
+fn record_snapshot_metrics(scale: LatchStreamScale, stats: LatchSnapshotStats) {
+    let Ok(mut metrics) = snapshot_metrics().lock() else {
+        return;
+    };
+    metrics.snapshot_us.push(stats.snapshot_us);
+    match scale {
+        LatchStreamScale::Full => {
+            metrics.full_frames = metrics.full_frames.saturating_add(1);
+            metrics.full_snapshot_us.push(stats.snapshot_us);
+        }
+        LatchStreamScale::Half => {
+            metrics.half_frames = metrics.half_frames.saturating_add(1);
+            metrics.half_snapshot_us.push(stats.snapshot_us);
+            metrics.implementation = stats.implementation;
+        }
+    }
+    metrics.raw_bytes = metrics.raw_bytes.saturating_add(stats.raw_bytes as u64);
+}
+
+fn report_snapshot_metrics(reason: &str) {
+    let Ok(mut metrics) = snapshot_metrics().lock() else {
+        return;
+    };
+    if metrics.reported {
+        return;
+    }
+    metrics.reported = true;
+    let frames = metrics.full_frames.saturating_add(metrics.half_frames);
+    let mut samples = metrics.snapshot_us.clone();
+    samples.sort_unstable();
+    let p50 = percentile_u64(&samples, 0.50);
+    let p95 = percentile_u64(&samples, 0.95);
+    let max = samples.last().copied().unwrap_or(0);
+    let mut half_samples = metrics.half_snapshot_us.clone();
+    half_samples.sort_unstable();
+    let half_p95 = percentile_u64(&half_samples, 0.95);
+    let half_max = half_samples.last().copied().unwrap_or(0);
+    let mut full_samples = metrics.full_snapshot_us.clone();
+    full_samples.sort_unstable();
+    let full_p95 = percentile_u64(&full_samples, 0.95);
+    let full_max = full_samples.last().copied().unwrap_or(0);
+    let avg_raw = if frames == 0 {
+        0
+    } else {
+        metrics.raw_bytes / frames
+    };
+    let coalesced = COALESCED_FRAMES
+        .load(Ordering::Relaxed)
+        .saturating_sub(metrics.coalesced_start);
+    crate::ui_logln!(
+        "framebuffer_stream_snapshot_tsv\treason={reason}\tmode={:?}\timplementation={}\tframes={frames}\thalf_frames={}\tfull_frames={}\tsnapshot_p50_us={p50}\tsnapshot_p95_us={p95}\tsnapshot_max_us={max}\thalf_snapshot_p95_us={half_p95}\thalf_snapshot_max_us={half_max}\tfull_snapshot_p95_us={full_p95}\tfull_snapshot_max_us={full_max}\tavg_raw_bytes={avg_raw}\tcoalesced={coalesced}",
+        configured_latch_mode(),
+        metrics.implementation,
+        metrics.half_frames,
+        metrics.full_frames,
+    );
+}
+
+fn percentile_u64(values: &[u64], percentile: f64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let rank = ((values.len() - 1) as f64 * percentile).round() as usize;
+    values[rank]
 }
 
 fn snapshot_pool() -> &'static Mutex<Vec<Vec<Rgb565Pixel>>> {
