@@ -73,14 +73,6 @@ struct FrameUpdate {
     captured_at_us: u64,
 }
 
-struct FrameJob {
-    geometry: FrameGeometry,
-    rect: FrameRect,
-    kind: FrameKind,
-    raw: Vec<u8>,
-    captured_at_us: u64,
-}
-
 enum WorkerEvent {
     Subscriber(TcpStream),
     Frame(FrameUpdate),
@@ -285,39 +277,6 @@ fn is_full_frame(geometry: FrameGeometry, rect: FrameRect) -> bool {
     rect.x == 0 && rect.y == 0 && rect.width == geometry.width && rect.height == geometry.height
 }
 
-fn latest_keyframe_job(state: &ProducerState, captured_at_us: u64) -> Option<FrameJob> {
-    if !state.has_full_frame_base {
-        return None;
-    }
-    let geometry = state.latest_geometry?;
-    Some(frame_job_from_pixels(
-        geometry,
-        FrameRect::full(geometry),
-        FrameKind::Keyframe,
-        &state.latest_pixels,
-        geometry.stride_pixels as usize,
-        captured_at_us,
-    ))
-}
-
-fn frame_job_from_pixels(
-    geometry: FrameGeometry,
-    rect: FrameRect,
-    kind: FrameKind,
-    pixels: &[Rgb565Pixel],
-    stride_pixels: usize,
-    captured_at_us: u64,
-) -> FrameJob {
-    let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, 0, 0);
-    FrameJob {
-        kind,
-        geometry,
-        rect,
-        raw,
-        captured_at_us,
-    }
-}
-
 fn worker_queue() -> &'static Arc<WorkerQueue> {
     WORKER_QUEUE.get_or_init(|| {
         let queue = Arc::new(WorkerQueue::new());
@@ -336,6 +295,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
     );
     let mut subscriber: Option<TcpStream> = None;
     let mut producer_state = ProducerState::new();
+    let mut encoder = StreamEncoder::new();
     let mut sequence = 0_u64;
     loop {
         match queue.recv_timeout(Duration::from_millis(500)) {
@@ -354,33 +314,47 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 let force_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel)
                     || sequence == 0
                     || sequence.is_multiple_of(KEYFRAME_INTERVAL_FRAMES);
-                let job = if force_keyframe {
-                    latest_keyframe_job(&producer_state, update.captured_at_us)
+                let job = if force_keyframe && producer_state.has_full_frame_base {
+                    producer_state.latest_geometry.map(|geometry| {
+                        (
+                            geometry,
+                            FrameRect::full(geometry),
+                            FrameKind::Keyframe,
+                            producer_state.latest_pixels.as_slice(),
+                            geometry.stride_pixels as usize,
+                        )
+                    })
                 } else {
                     None
-                }
-                .or_else(|| {
-                    Some(frame_job_from_pixels(
+                };
+                let (geometry, rect, kind, pixels, stride_pixels) = match job {
+                    Some(job) => job,
+                    None => (
                         update.geometry,
                         update.rect,
                         FrameKind::RectDelta,
-                        &update.pixels,
+                        update.pixels.as_slice(),
                         update.rect.width as usize,
-                        update.captured_at_us,
-                    ))
-                });
-                let Some(job) = job else {
-                    NEEDS_KEYFRAME.store(true, Ordering::Release);
-                    continue;
+                    ),
                 };
-                if job.raw.is_empty() {
+                let raw = rgb565_rect_bytes(pixels, rect, stride_pixels, 0, 0);
+                if raw.as_ref().is_empty() {
                     if force_keyframe {
                         NEEDS_KEYFRAME.store(true, Ordering::Release);
                     }
                     continue;
                 }
                 sequence = sequence.saturating_add(1);
-                if let Err(err) = write_job(stream, sequence, job) {
+                if let Err(err) = write_job(
+                    stream,
+                    sequence,
+                    geometry,
+                    rect,
+                    kind,
+                    update.captured_at_us,
+                    raw.as_ref(),
+                    &mut encoder,
+                ) {
                     crate::ui_errln!("framebuffer stream producer write failed: {err}");
                     subscriber = None;
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
@@ -428,19 +402,62 @@ fn write_heartbeat(stream: &mut TcpStream) -> io::Result<()> {
     write_frame(stream, header, &[])
 }
 
-fn write_job(stream: &mut TcpStream, sequence: u64, job: FrameJob) -> io::Result<()> {
-    let payload = lz4_flex::compress_prepend_size(&job.raw);
+#[allow(clippy::too_many_arguments)]
+fn write_job(
+    stream: &mut TcpStream,
+    sequence: u64,
+    geometry: FrameGeometry,
+    rect: FrameRect,
+    kind: FrameKind,
+    captured_at_us: u64,
+    raw: &[u8],
+    encoder: &mut StreamEncoder,
+) -> io::Result<()> {
+    let payload = encoder.compress_size_prepended(raw)?;
     let header = FrameHeader {
-        kind: job.kind,
+        kind,
         flags: FLAG_LZ4_SIZE_PREPENDED,
         sequence,
-        timestamp_us: job.captured_at_us,
-        geometry: job.geometry,
-        rect: job.rect,
-        raw_bytes: job.raw.len() as u32,
+        timestamp_us: captured_at_us,
+        geometry,
+        rect,
+        raw_bytes: raw.len() as u32,
         payload_bytes: payload.len() as u32,
     };
-    write_frame(stream, header, &payload)
+    write_frame(stream, header, payload)
+}
+
+struct StreamEncoder {
+    table: lz4_flex::block::CompressTable,
+    output: Vec<u8>,
+}
+
+impl StreamEncoder {
+    fn new() -> Self {
+        Self {
+            table: lz4_flex::block::CompressTable::large(),
+            output: Vec::new(),
+        }
+    }
+
+    fn compress_size_prepended(&mut self, raw: &[u8]) -> io::Result<&[u8]> {
+        let capacity = 4usize
+            .checked_add(lz4_flex::block::get_maximum_output_size(raw.len()))
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "LZ4 payload too large"))?;
+        if self.output.len() < capacity {
+            self.output.resize(capacity, 0);
+        }
+        let raw_len = u32::try_from(raw.len())
+            .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "LZ4 input too large"))?;
+        self.output[..4].copy_from_slice(&raw_len.to_le_bytes());
+        let compressed = lz4_flex::block::compress_into_with_table(
+            raw,
+            &mut self.output[4..capacity],
+            &mut self.table,
+        )
+        .map_err(|err| io::Error::new(ErrorKind::InvalidData, err))?;
+        Ok(&self.output[..4 + compressed])
+    }
 }
 
 fn timestamp_us() -> u64 {
@@ -497,15 +514,37 @@ fn copy_rect_into_latest(
     }
 }
 
+enum Rgb565Bytes<'a> {
+    Borrowed(&'a [u8]),
+    Packed(Vec<u8>),
+}
+
+impl AsRef<[u8]> for Rgb565Bytes<'_> {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Packed(bytes) => bytes,
+        }
+    }
+}
+
 fn rgb565_rect_bytes(
     pixels: &[Rgb565Pixel],
     rect: FrameRect,
     stride_pixels: usize,
     src_x: usize,
     src_y: usize,
-) -> Vec<u8> {
+) -> Rgb565Bytes<'_> {
     let width = rect.width as usize;
     let height = rect.height as usize;
+    if src_x == 0
+        && src_y == 0
+        && width == stride_pixels
+        && pixels.len() == width.saturating_mul(height)
+    {
+        #[cfg(target_endian = "little")]
+        return Rgb565Bytes::Borrowed(bytemuck::cast_slice(pixels));
+    }
     let mut out = Vec::with_capacity(width.saturating_mul(height).saturating_mul(2));
     for row in 0..height {
         let start = src_y
@@ -514,13 +553,13 @@ fn rgb565_rect_bytes(
             .saturating_add(src_x);
         let end = start.saturating_add(width);
         let Some(row_pixels) = pixels.get(start..end) else {
-            return Vec::new();
+            return Rgb565Bytes::Packed(Vec::new());
         };
         for pixel in row_pixels {
             out.extend_from_slice(&pixel.0.to_le_bytes());
         }
     }
-    out
+    Rgb565Bytes::Packed(out)
 }
 
 #[cfg(test)]
@@ -574,8 +613,8 @@ mod tests {
         };
 
         assert_eq!(
-            rgb565_rect_bytes(&pixels, rect, 2, 0, 0),
-            vec![0x34, 0x12, 0xcd, 0xab]
+            rgb565_rect_bytes(&pixels, rect, 2, 0, 0).as_ref(),
+            &[0x34, 0x12, 0xcd, 0xab]
         );
     }
 
@@ -590,9 +629,30 @@ mod tests {
         };
 
         assert_eq!(
-            rgb565_rect_bytes(&pixels, rect, 4, 1, 1),
-            vec![5, 0, 6, 0, 9, 0, 10, 0]
+            rgb565_rect_bytes(&pixels, rect, 4, 1, 1).as_ref(),
+            &[5, 0, 6, 0, 9, 0, 10, 0]
         );
+    }
+
+    #[test]
+    fn stream_encoder_reuses_size_prepended_lz4_format() {
+        let raw = (0..4096).map(|value| value as u8).collect::<Vec<_>>();
+        let mut encoder = StreamEncoder::new();
+
+        let payload = encoder
+            .compress_size_prepended(&raw)
+            .expect("compress RGB565 bytes")
+            .to_vec();
+
+        assert_eq!(
+            lz4_flex::decompress_size_prepended(&payload).expect("decode payload"),
+            raw
+        );
+        let capacity = encoder.output.capacity();
+        let _ = encoder
+            .compress_size_prepended(&[7; 128])
+            .expect("reuse encoder");
+        assert_eq!(encoder.output.capacity(), capacity);
     }
 
     #[test]
