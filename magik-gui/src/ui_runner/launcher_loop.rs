@@ -2819,6 +2819,17 @@ pub(super) fn run_launcher_loop(
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
+        let stream_motion_before_render = slint_animation_active
+            || home_pan_present_active
+            || home_horizontal_input_held
+            || arcade_visual_changed_this_loop
+            || (nav.screen == Screen::Arcade && nav.arcade.is_scroll_active())
+            || (nav.screen == Screen::Arcade
+                && nav.arcade_filter.drawer_open
+                && nav.arcade_filter.is_scroll_active());
+        if !stream_motion_before_render {
+            let _ = launcher_presenter.publish_stream_refinement_if_due();
+        }
         let mut wake_reasons = LauncherWakeReasons::default();
         wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, launcher_redraw_pending);
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
@@ -3141,6 +3152,7 @@ pub(super) fn run_launcher_loop(
             arcade_list_rect,
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
+        let stream_motion_active = stream_motion_before_render || preview_transition_trace.active;
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -3149,6 +3161,7 @@ pub(super) fn run_launcher_loop(
                 frame_start_phase_us,
                 pre_render_pace,
                 frame_analytics_mode,
+                stream_motion_active,
             },
             LauncherPresentTargets {
                 layer_target: &layer_target,

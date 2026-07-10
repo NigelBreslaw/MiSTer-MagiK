@@ -23,7 +23,10 @@ static SUBSCRIBER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static NEEDS_KEYFRAME: AtomicBool = AtomicBool::new(true);
 static PENDING_FRAME: AtomicBool = AtomicBool::new(false);
 static COALESCED_FRAMES: AtomicU64 = AtomicU64::new(0);
+static FULL_SNAPSHOT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static REFINEMENT_DUE_US: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_POOL: OnceLock<Mutex<Vec<Vec<Rgb565Pixel>>>> = OnceLock::new();
+const REFINEMENT_DELAY_US: u64 = 120_000;
 
 struct ProducerState {
     latest_geometry: Option<FrameGeometry>,
@@ -88,6 +91,14 @@ enum FrameUpdateKind {
 pub enum LatchStreamScale {
     Full,
     Half,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LatchStreamMode {
+    Off,
+    Full,
+    Half,
+    Adaptive,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -255,15 +266,52 @@ pub fn subscriber_active() -> bool {
     SUBSCRIBER_ACTIVE.load(Ordering::Acquire)
 }
 
-pub fn configured_latch_scale() -> Option<LatchStreamScale> {
-    static SCALE: OnceLock<Option<LatchStreamScale>> = OnceLock::new();
-    *SCALE.get_or_init(
-        || match std::env::var("MISTER_FRAMEBUFFER_STREAM_SCALE").as_deref() {
-            Ok("full") | Ok("FULL") => Some(LatchStreamScale::Full),
-            Ok("half") | Ok("HALF") => Some(LatchStreamScale::Half),
-            _ => None,
-        },
-    )
+pub fn configured_latch_mode() -> LatchStreamMode {
+    static MODE: OnceLock<LatchStreamMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        parse_latch_stream_mode(
+            std::env::var("MISTER_FRAMEBUFFER_STREAM_SCALE")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+pub fn configured_latch_scale(motion_active: bool) -> Option<LatchStreamScale> {
+    latch_scale_for_mode(configured_latch_mode(), motion_active)
+}
+
+fn parse_latch_stream_mode(value: Option<&str>) -> LatchStreamMode {
+    match value {
+        Some("full" | "FULL") => LatchStreamMode::Full,
+        Some("half" | "HALF") => LatchStreamMode::Half,
+        Some("adaptive" | "ADAPTIVE") => LatchStreamMode::Adaptive,
+        _ => LatchStreamMode::Off,
+    }
+}
+
+fn latch_scale_for_mode(mode: LatchStreamMode, motion_active: bool) -> Option<LatchStreamScale> {
+    match mode {
+        LatchStreamMode::Off => None,
+        LatchStreamMode::Full => Some(LatchStreamScale::Full),
+        LatchStreamMode::Half => Some(LatchStreamScale::Half),
+        LatchStreamMode::Adaptive => Some(if motion_active {
+            LatchStreamScale::Half
+        } else {
+            LatchStreamScale::Full
+        }),
+    }
+}
+
+pub fn adaptive_full_snapshot_due() -> bool {
+    if configured_latch_mode() != LatchStreamMode::Adaptive || !subscriber_active() {
+        return false;
+    }
+    if FULL_SNAPSHOT_REQUESTED.load(Ordering::Acquire) {
+        return true;
+    }
+    let due = REFINEMENT_DUE_US.load(Ordering::Acquire);
+    due != 0 && timestamp_us() >= due
 }
 
 pub fn publish_latch_snapshot(
@@ -321,6 +369,21 @@ pub fn publish_latch_snapshot(
     if !queued {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(true, Ordering::Release);
+        clear_snapshot_requests();
+    } else {
+        match scale {
+            LatchStreamScale::Full => {
+                FULL_SNAPSHOT_REQUESTED.store(false, Ordering::Release);
+                REFINEMENT_DUE_US.store(0, Ordering::Release);
+            }
+            LatchStreamScale::Half if configured_latch_mode() == LatchStreamMode::Adaptive => {
+                REFINEMENT_DUE_US.store(
+                    captured_at_us.saturating_add(REFINEMENT_DELAY_US),
+                    Ordering::Release,
+                );
+            }
+            LatchStreamScale::Half => {}
+        }
     }
     LatchSnapshotStats {
         queued,
@@ -378,6 +441,7 @@ fn publish_rect(
     }) {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(true, Ordering::Release);
+        clear_snapshot_requests();
     }
 }
 
@@ -389,9 +453,11 @@ fn install_subscriber(stream: TcpStream) {
         return;
     }
     NEEDS_KEYFRAME.store(true, Ordering::Release);
+    FULL_SNAPSHOT_REQUESTED.store(true, Ordering::Release);
     if !worker_queue().push_subscriber(stream) {
         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
         NEEDS_KEYFRAME.store(true, Ordering::Release);
+        clear_snapshot_requests();
         return;
     }
     crate::ui_logln!("framebuffer stream producer subscriber connected");
@@ -442,6 +508,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     }
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    clear_snapshot_requests();
                     continue;
                 };
                 let needs_keyframe = NEEDS_KEYFRAME.swap(false, Ordering::AcqRel);
@@ -502,6 +569,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                     subscriber = None;
                     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                     NEEDS_KEYFRAME.store(true, Ordering::Release);
+                    clear_snapshot_requests();
                 }
                 if update.kind == FrameUpdateKind::SelfContainedKeyframe {
                     recycle_snapshot_pixels(update.pixels);
@@ -514,6 +582,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                         subscriber = None;
                         SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
                         NEEDS_KEYFRAME.store(true, Ordering::Release);
+                        clear_snapshot_requests();
                     }
                 }
             }
@@ -523,6 +592,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
     PENDING_FRAME.store(false, Ordering::Release);
     SUBSCRIBER_ACTIVE.store(false, Ordering::Release);
     NEEDS_KEYFRAME.store(true, Ordering::Release);
+    clear_snapshot_requests();
 }
 
 fn write_heartbeat(stream: &mut TcpStream) -> io::Result<()> {
@@ -616,6 +686,11 @@ fn frame_geometry(width: usize, height: usize) -> Option<FrameGeometry> {
         height: u32::try_from(height).ok()?,
         stride_pixels: u32::try_from(width).ok()?,
     })
+}
+
+fn clear_snapshot_requests() {
+    FULL_SNAPSHOT_REQUESTED.store(false, Ordering::Release);
+    REFINEMENT_DUE_US.store(0, Ordering::Release);
 }
 
 fn snapshot_pool() -> &'static Mutex<Vec<Vec<Rgb565Pixel>>> {
@@ -770,6 +845,20 @@ mod tests {
                 Rgb565Pixel(10)
             ]
         );
+    }
+
+    #[test]
+    fn adaptive_latch_scale_uses_half_for_motion_and_full_for_settle() {
+        assert_eq!(
+            latch_scale_for_mode(LatchStreamMode::Adaptive, true),
+            Some(LatchStreamScale::Half)
+        );
+        assert_eq!(
+            latch_scale_for_mode(LatchStreamMode::Adaptive, false),
+            Some(LatchStreamScale::Full)
+        );
+        assert_eq!(latch_scale_for_mode(LatchStreamMode::Off, true), None);
+        assert_eq!(parse_latch_stream_mode(Some("bogus")), LatchStreamMode::Off);
     }
 
     #[test]
