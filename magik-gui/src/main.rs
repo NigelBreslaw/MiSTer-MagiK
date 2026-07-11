@@ -1197,6 +1197,27 @@ fn run_fpga_latch_report() {
         status.active_height,
         status.active_stride
     );
+    match fpga.read_magik_scanout_mailbox_status() {
+        Ok(mailbox) => crate::ui_logln!(
+            "fpga_scanout_mailbox_status_tsv\tcmd=0x{:02x}\tsupported={}\tack_high=0x{:04x}\tack_low=0x{:04x}\tcapabilities=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpost_slot={}\tapply_count={}\terror_count={}\tepoch=0x{:08x}",
+            fpga::MAGIK_UIO_GET_SCANOUT_MAILBOX,
+            bool_tsv(mailbox.supported()),
+            mailbox.magic_hi,
+            mailbox.magic_lo,
+            mailbox.capabilities,
+            mailbox.active_sequence,
+            mailbox.pending_sequence,
+            bool_tsv((mailbox.flags & 0x0004) != 0),
+            mailbox.flags & 0x0003,
+            mailbox.apply_count,
+            mailbox.error_count,
+            mailbox.epoch
+        ),
+        Err(e) => crate::ui_logln!(
+            "fpga_scanout_mailbox_status_tsv\tcmd=0x{:02x}\tsupported=0\terror={e}",
+            fpga::MAGIK_UIO_GET_SCANOUT_MAILBOX
+        ),
+    }
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
