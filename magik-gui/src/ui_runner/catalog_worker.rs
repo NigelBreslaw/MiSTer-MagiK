@@ -1,6 +1,11 @@
 use super::*;
+use mister_magik_catalog::builder_protocol::{
+    BuilderSummary, CatalogBuilderEvent, CATALOG_BUILDER_PROTOCOL_VERSION,
+};
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_catalog::{arcade_catalog::ArcadeCatalog, catalog_stamp, catalog_summary};
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 pub(super) fn start_library_catalog_worker(
     root: String,
@@ -189,6 +194,10 @@ pub(super) fn start_library_catalog_worker(
                         library_db::CatalogProgress::indexing_building_catalog(),
                     );
                 }
+            }
+            if matches!(plan, CatalogWorkerPlan::CheckStamp | CatalogWorkerPlan::ForceBuild) {
+                run_catalog_builder_subprocess(&root, plan, execution_mode, &tx);
+                return;
             }
             if plan == CatalogWorkerPlan::ForceBuild {
                 if foreground_exclusive {
@@ -412,6 +421,185 @@ pub(super) fn start_library_catalog_worker(
         })
         .expect("spawn library-catalog");
     rx
+}
+
+fn run_catalog_builder_subprocess(
+    root: &str,
+    plan: CatalogWorkerPlan,
+    execution_mode: CatalogExecutionMode,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) {
+    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN")
+        .unwrap_or_else(|_| "/media/fat/mister-magik/mister-magik-catalog-builder".into());
+    let operation = match plan {
+        CatalogWorkerPlan::CheckStamp => "check",
+        CatalogWorkerPlan::ForceBuild
+            if execution_mode == CatalogExecutionMode::ForegroundExclusive =>
+        {
+            "build"
+        }
+        CatalogWorkerPlan::ForceBuild => "rebuild",
+        CatalogWorkerPlan::LoadOnly => return,
+    };
+    let mut child = match Command::new(&binary)
+        .arg(operation)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("start catalog builder {binary}: {error}"),
+            });
+            return;
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+            error: "catalog builder stdout was unavailable".into(),
+        });
+        return;
+    };
+    let mut handshake_seen = false;
+    let mut terminal_seen = false;
+    for line in BufReader::new(stdout).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: format!("read catalog builder event: {error}"),
+                });
+                break;
+            }
+        };
+        let event = match decode_builder_event(&line) {
+            Ok(event) => event,
+            Err(error) => {
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error });
+                break;
+            }
+        };
+        if !handshake_seen && !matches!(event, CatalogBuilderEvent::Handshake { .. }) {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: "catalog builder emitted an event before its handshake".into(),
+            });
+            break;
+        }
+        match event {
+            CatalogBuilderEvent::Handshake {
+                operation: child_operation,
+                ..
+            } if !handshake_seen && child_operation == operation => handshake_seen = true,
+            CatalogBuilderEvent::Handshake { .. } => {
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: "catalog builder emitted a duplicate or mismatched handshake".into(),
+                });
+                break;
+            }
+            CatalogBuilderEvent::Progress { title, detail, .. } => {
+                let percent = library_db::catalog_progress_percent_from_display(&title, &detail);
+                let _ = tx.send(CatalogWorkerMessage::Progress {
+                    title,
+                    detail,
+                    percent,
+                });
+            }
+            CatalogBuilderEvent::SystemDiscovered { system_id, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::SystemDiscovered { system_id });
+            }
+            CatalogBuilderEvent::Timing { name, detail, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::Timing { name, detail });
+            }
+            CatalogBuilderEvent::CatalogReady {
+                snapshot_path,
+                load_us,
+                ..
+            } => {
+                match library_db::load_arcade_catalog_from_snapshot(
+                    root,
+                    std::path::Path::new(&snapshot_path),
+                ) {
+                    Ok(loaded) => {
+                        let _ = tx.send(CatalogWorkerMessage::Ready {
+                            catalog: loaded.catalog,
+                            summary: None,
+                            load_us,
+                            source: CatalogSource::FreshBuild,
+                            durable_save_pending: true,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error });
+                    }
+                }
+            }
+            CatalogBuilderEvent::Persisted { summary, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::Persisted {
+                    summary: refresh_summary(summary),
+                });
+            }
+            CatalogBuilderEvent::Unchanged { summary, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::Unchanged {
+                    summary: refresh_summary(summary),
+                });
+            }
+            CatalogBuilderEvent::Changed { detail, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::Changed { detail });
+            }
+            CatalogBuilderEvent::Failure { stage, error, .. } => {
+                terminal_seen = true;
+                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                    error: format!("catalog builder {stage} failed: {error}"),
+                });
+            }
+            CatalogBuilderEvent::Done { .. } => {
+                terminal_seen = true;
+                let _ = tx.send(CatalogWorkerMessage::Done);
+            }
+        }
+    }
+    match child.wait() {
+        Ok(_status) if handshake_seen && terminal_seen => {}
+        Ok(status) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("catalog builder exited {status}; handshake={handshake_seen} terminal={terminal_seen}"),
+            });
+        }
+        Err(error) => {
+            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
+                error: format!("wait for catalog builder: {error}"),
+            });
+        }
+    }
+}
+
+fn decode_builder_event(line: &str) -> Result<CatalogBuilderEvent, String> {
+    let event = serde_json::from_str::<CatalogBuilderEvent>(line)
+        .map_err(|error| format!("invalid catalog builder event: {error}"))?;
+    if event.protocol() != CATALOG_BUILDER_PROTOCOL_VERSION {
+        return Err(format!(
+            "catalog builder protocol {} is incompatible",
+            event.protocol()
+        ));
+    }
+    Ok(event)
+}
+
+fn refresh_summary(value: BuilderSummary) -> library_db::LibraryRefreshSummary {
+    library_db::LibraryRefreshSummary {
+        skipped: value.skipped,
+        scan_us: value.scan_us,
+        discover_us: value.discover_us,
+        classify_us: value.classify_us,
+        import_us: value.import_us,
+        bytes: value.bytes,
+        normal_files: value.normal_files,
+        containers: value.containers,
+        entries: value.entries,
+        audit_rows: value.audit_rows,
+        discoveries: value.discoveries,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -884,6 +1072,18 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_builder_protocol_rejects_malformed_and_incompatible_events() {
+        assert!(decode_builder_event("not-json").is_err());
+        let incompatible = serde_json::json!({
+            "event": "done",
+            "protocol": CATALOG_BUILDER_PROTOCOL_VERSION + 1,
+        });
+        assert!(decode_builder_event(&incompatible.to_string())
+            .unwrap_err()
+            .contains("incompatible"));
+    }
 
     #[test]
     fn catalog_worker_uses_cached_database_without_refresh() {
