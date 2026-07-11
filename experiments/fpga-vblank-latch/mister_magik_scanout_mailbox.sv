@@ -113,7 +113,9 @@ module mister_magik_scanout_mailbox #(
 	assign axi_awlock  = 2'b00;
 	assign axi_awcache = 4'b1111;
 	assign axi_awprot  = 3'b000;
-	assign axi_awuser  = 5'b00001;
+	// Cyclone V ACP requires the shared bit and all four inner-cache
+	// attributes for coherent, cacheable CPU memory transactions.
+	assign axi_awuser  = 5'b11111;
 	assign axi_wid     = axi_awid;
 	assign axi_wstrb   = 16'hffff;
 	assign axi_wlast   = 1'b1;
@@ -123,7 +125,7 @@ module mister_magik_scanout_mailbox #(
 	assign axi_arlock  = 2'b00;
 	assign axi_arcache = 4'b1111;
 	assign axi_arprot  = 3'b000;
-	assign axi_aruser  = 5'b00001;
+	assign axi_aruser  = 5'b11111;
 
 	always @(posedge clk) begin
 		apply <= 1'b0;
