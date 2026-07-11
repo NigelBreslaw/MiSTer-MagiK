@@ -692,3 +692,26 @@ scripts/profile-library-io.sh LABEL --replace-label
   `MISTER_LIBRARY_BENCH_FORCE_REBUILD=1`.
 
 Use device evidence before claiming the catalog meets the performance gates.
+
+## Builder process boundary
+
+Catalog validation and writes run in the Slint-free
+`/media/fat/mister-magik/mister-magik-catalog-builder` executable. The launcher
+starts `check`, `build`, or `rebuild` and consumes versioned JSON-lines events
+from stdout; builder diagnostics are written to stderr. A cold build publishes
+a validated temporary navigation snapshot before durable SQLite publication so
+the launcher can become usable at the existing RAM-catalog gate. The existing
+SQLite, summary, navigation, stamp, and rebuild-marker formats remain the
+on-disk contract.
+
+Build or deploy only this component with:
+
+```bash
+scripts/build-catalog-builder.sh --device
+scripts/deploy-catalog-builder.sh
+scripts/profile-first-scan.sh LABEL --deploy-catalog --replace-label
+```
+
+Catalog-only deployment atomically replaces the builder and does not suspend or
+restart the launcher. A normal `scripts/deploy-rust.sh` deployment installs both
+executables.

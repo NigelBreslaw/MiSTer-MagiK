@@ -446,3 +446,8 @@ tracking, and CI details. Do not duplicate those details here.
 - Continue controller mapping and hot-plug polish.
 - Keep the fork patch surface small and documented in `../Main_MiSTer`
   `MAGIK_PATCHSET.md`.
+Catalog scanning, validation, and database publication are owned by the
+Slint-free `mister-magik-catalog-builder` subprocess. The frontend retains only
+catalog hydration/navigation behavior and translates the builder's versioned
+JSON-lines event stream into launcher lifecycle events. This keeps catalog
+optimization builds independently deployable without relinking Slint.
