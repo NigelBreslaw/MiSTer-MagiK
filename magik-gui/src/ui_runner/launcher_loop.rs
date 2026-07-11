@@ -1771,6 +1771,7 @@ pub(super) fn run_launcher_loop(
             deferred_worker_policy.allowed,
             loop_start,
             deferred_worker_policy.delay,
+            catalog_builder_lock_available,
         ) {
             print_startup_event(start, "catalog_worker_start", &worker.root);
             let lifecycle_input =

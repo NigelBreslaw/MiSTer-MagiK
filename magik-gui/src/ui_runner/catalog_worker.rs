@@ -4,8 +4,30 @@ use mister_magik_catalog::builder_protocol::{
 };
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_catalog::{arcade_catalog::ArcadeCatalog, catalog_stamp, catalog_summary};
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader};
+use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
+
+pub(super) fn catalog_builder_lock_available() -> bool {
+    let path = std::env::var_os("MISTER_CATALOG_BUILDER_LOCK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(mister_magik_catalog::builder_protocol::DEFAULT_CATALOG_BUILDER_LOCK_PATH)
+        });
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    };
+    // SAFETY: flock only acts on this owned file descriptor.
+    let acquired = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if acquired {
+        // SAFETY: releases the lock acquired immediately above.
+        let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    }
+    acquired
+}
 
 pub(super) fn start_library_catalog_worker(
     root: String,

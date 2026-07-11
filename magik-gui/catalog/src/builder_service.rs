@@ -133,7 +133,9 @@ impl BuilderLock {
     fn acquire() -> Result<Self, String> {
         let path = std::env::var_os("MISTER_CATALOG_BUILDER_LOCK")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp/mister-magik/catalog-builder.lock"));
+            .unwrap_or_else(|| {
+                PathBuf::from(crate::builder_protocol::DEFAULT_CATALOG_BUILDER_LOCK_PATH)
+            });
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create catalog builder lock directory: {e}"))?;

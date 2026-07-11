@@ -138,6 +138,10 @@ Warm boot with a usable cache:
 3. A matching current-schema SQLite catalog transitions through `FullSqlite`
    readiness without forcing a rebuild.
 4. Worker runs `CheckStamp`.
+   Before starting a deferred background check, the launcher probes the shared
+   catalog-builder exclusion lock. If a standalone builder owns the lock, the
+   check remains queued and retries after one second; no worker thread or
+   subprocess is started. The UI remains active throughout standalone builds.
 5. If the stored stamp matches the current root stamp, the worker reports
    `Unchanged` and does not rebuild.
 6. If the stamp is missing, stale, or cannot be checked, the worker reports

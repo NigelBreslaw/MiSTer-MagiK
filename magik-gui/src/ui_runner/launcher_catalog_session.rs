@@ -151,6 +151,7 @@ impl LauncherCatalogSession {
         background_work_allowed: bool,
         loop_start: Instant,
         delay: Duration,
+        catalog_builder_available: impl FnOnce() -> bool,
     ) -> Option<CatalogWorkerStart> {
         if self.refresh_done || worker_running {
             return None;
@@ -166,6 +167,10 @@ impl LauncherCatalogSession {
             .start_after
             .get_or_insert_with(|| loop_start + delay);
         if loop_start < start_after {
+            return None;
+        }
+        if deferred.request == CatalogWorkerRequest::CheckStamp && !catalog_builder_available() {
+            deferred.start_after = Some(loop_start + Duration::from_secs(1));
             return None;
         }
         let deferred = self.deferred_worker.take()?;
@@ -1186,14 +1191,28 @@ mod tests {
         );
 
         assert!(session
-            .maybe_start_deferred_worker(false, false, true, now + delay, delay)
+            .maybe_start_deferred_worker(false, false, true, now + delay, delay, || true)
             .is_none());
         assert!(session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(20), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(20),
+                delay,
+                || true,
+            )
             .is_none());
 
         let worker = session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(70), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(70),
+                delay,
+                || true,
+            )
             .expect("deferred worker");
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
@@ -1204,7 +1223,14 @@ mod tests {
             CatalogExecutionMode::BackgroundInteractive
         );
         assert!(session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(200), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(200),
+                delay,
+                || true,
+            )
             .is_none());
     }
 
@@ -1222,22 +1248,100 @@ mod tests {
         );
 
         assert!(session
-            .maybe_start_deferred_worker(false, true, false, now + Duration::from_millis(70), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                false,
+                now + Duration::from_millis(70),
+                delay,
+                || true,
+            )
             .is_none());
         assert!(session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(80), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(80),
+                delay,
+                || true,
+            )
             .is_none());
 
         let worker = session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(140), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(140),
+                delay,
+                || true,
+            )
             .expect("deferred worker");
 
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
         assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
         assert!(session
-            .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(200), delay)
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(200),
+                delay,
+                || true,
+            )
             .is_none());
+    }
+
+    #[test]
+    fn deferred_stamp_check_waits_while_standalone_builder_holds_lock() {
+        let mut session = LauncherCatalogSession::new(false);
+        let now = Instant::now();
+        let delay = Duration::from_millis(50);
+        session.defer_catalog_worker(
+            "/media/fat/_Arcade".to_string(),
+            CatalogWorkerRequest::CheckStamp,
+            CatalogWorkerInitialCache::AlreadyLoadedReady,
+            CatalogExecutionMode::BackgroundInteractive,
+        );
+
+        assert!(session
+            .maybe_start_deferred_worker(false, true, true, now, delay, || {
+                panic!("lock must not be probed before validation delay")
+            })
+            .is_none());
+        assert!(session
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(60),
+                delay,
+                || false,
+            )
+            .is_none());
+        assert!(session
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(900),
+                delay,
+                || panic!("lock must not be reprobed before retry deadline"),
+            )
+            .is_none());
+        let worker = session
+            .maybe_start_deferred_worker(
+                false,
+                true,
+                true,
+                now + Duration::from_millis(1100),
+                delay,
+                || true,
+            )
+            .expect("deferred check after builder exits");
+        assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
     }
 
     #[test]
