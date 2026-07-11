@@ -165,6 +165,7 @@ def work_us(row: dict[str, int | float | str]) -> int:
         int(row.get("prepare_us", 0))
         + int(row.get("slint_render_us", 0))
         + int(row.get("custom_draw_us", 0))
+        + int(row.get("hidden_compose_us", 0))
         + int(row.get("fb_present_us", 0))
     )
 

@@ -27,6 +27,7 @@ def trace_metrics(path: Path) -> tuple[int, int, int]:
         integer(row, "prepare_us")
         + integer(row, "slint_render_us")
         + integer(row, "custom_draw_us")
+        + integer(row, "hidden_compose_us")
         + integer(row, "fb_present_us")
         for row in rows
     )
