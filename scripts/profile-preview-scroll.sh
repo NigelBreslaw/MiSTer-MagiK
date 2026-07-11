@@ -14,7 +14,7 @@ source "$HERE/scripts/bench-context-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--fade-mode default|legacy] [--replace-label]
+Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [--scenario NAME] [--skip-build|--deploy-device] [--cpu-profile] [--thread-sample] [--self-test] [--visual-captures N] [--allow-visibility-misses N] [--start-system ID] [--selected-index N] [--defer-start-system] [--skip-preview-warm] [--fade-mode default|legacy] [--replace-label]
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
@@ -47,6 +47,7 @@ label="preview-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 deploy="skip"
 self_test="0"
 visual_captures="4"
+allow_visibility_misses="0"
 allow_hotpath_misses="${MISTER_ALLOW_PREVIEW_HOTPATH_MISSES:-0}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
@@ -77,6 +78,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --visual-captures) visual_captures="${2:-}"; shift 2 ;;
+    --allow-visibility-misses) allow_visibility_misses="${2:-}"; shift 2 ;;
     --start-system)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--start-system needs a value" >&2; usage >&2; exit 2; fi
       start_system="$2"
@@ -130,6 +132,7 @@ if [[ "$remote_scenario" == "velocity-scroll" ]]; then remote_scenario="held-scr
 if [[ ! "$secs" =~ ^[0-9]+$ ]]; then echo "secs must be an integer" >&2; exit 2; fi
 if [[ ! "$label" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "label must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be an integer" >&2; exit 2; fi
+if [[ ! "$allow_visibility_misses" =~ ^[0-9]+$ ]]; then echo "--allow-visibility-misses must be an integer" >&2; exit 2; fi
 if [[ -n "$selected_index" && ! "$selected_index" =~ ^[0-9]+$ ]]; then echo "--selected-index must be an integer" >&2; exit 2; fi
 if [[ ! "$start_system" =~ ^[A-Za-z0-9_.-]+$ ]]; then echo "--start-system must contain only letters, numbers, _, ., or -" >&2; exit 2; fi
 case "$fade_mode" in default|legacy) ;; *) echo "--fade-mode must be default or legacy" >&2; exit 2 ;; esac
@@ -1083,7 +1086,7 @@ check_preview_hotpath_io_gate() {
 
 check_preview_visibility_gate() {
   local name="$1" tsv="$2"
-  awk -v name="$name" '
+  awk -v name="$name" -v allow="$allow_visibility_misses" '
     BEGIN { FS="\t" }
     NR == 1 {
       for (i = 1; i <= NF; i++) col[$i] = i
@@ -1112,11 +1115,11 @@ check_preview_visibility_gate() {
         printf "%s preview visibility gate failed: frames=0\n", name > "/dev/stderr"
         exit 6
       }
-      if (non_exact > 0) {
-        printf "%s preview visibility gate failed: frames=%d exact=%d non_exact=%d\n", name, n, exact, non_exact > "/dev/stderr"
+      if (non_exact > allow) {
+        printf "%s preview visibility gate failed: frames=%d exact=%d non_exact=%d allow=%d\n", name, n, exact, non_exact, allow > "/dev/stderr"
         exit 6
       }
-      printf "%s preview_visibility_gate frames=%d exact=%d non_exact=0\n", name, n, exact
+      printf "%s preview_visibility_gate frames=%d exact=%d non_exact=%d allow=%d\n", name, n, exact, non_exact, allow
     }
   ' "$tsv"
 }
