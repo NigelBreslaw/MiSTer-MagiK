@@ -2843,6 +2843,8 @@ fn apply_live_snapshot(
         "slint-status-freshness",
         &snapshot.slint_status_freshness,
     );
+    set(instance, "scanout-summary", &snapshot.scanout_summary);
+    set(instance, "scanout-detail", &snapshot.scanout_detail);
     set(instance, "catalog-summary", &snapshot.catalog_summary);
     set(instance, "screen-summary", &snapshot.screen_summary);
     set(instance, "input-summary", &snapshot.input_summary);
@@ -3873,6 +3875,8 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
     state.set_launcher_state(snapshot.launcher_state.as_str().into());
     state.set_visible_owner(snapshot.visible_owner.as_str().into());
     state.set_slint_status_freshness(snapshot.slint_status_freshness.as_str().into());
+    state.set_scanout_summary(snapshot.scanout_summary.as_str().into());
+    state.set_scanout_detail(snapshot.scanout_detail.as_str().into());
     state.set_catalog_summary(snapshot.catalog_summary.as_str().into());
     state.set_screen_summary(snapshot.screen_summary.as_str().into());
     state.set_input_summary(snapshot.input_summary.as_str().into());
