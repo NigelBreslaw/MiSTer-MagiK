@@ -66,7 +66,60 @@ pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> 
             }
         }
     }
+    append_mgl_system_descriptors(roots, &mut out, &mut seen);
     out
+}
+
+fn append_mgl_system_descriptors(
+    roots: &[String],
+    out: &mut Vec<InstalledCore>,
+    seen: &mut BTreeSet<String>,
+) {
+    let physical = out.clone();
+    for search_root in core_search_roots(roots) {
+        let Ok(entries) = std::fs::read_dir(search_root) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let descriptor_path = entry.path();
+            if !descriptor_path.is_file() || !path_ext_eq(&descriptor_path, "mgl") {
+                continue;
+            }
+            let Some(metadata) = crate::media_metadata::read_mgl_metadata(&descriptor_path) else {
+                continue;
+            };
+            let (Some(setname), Some(rbf)) = (metadata.setname, metadata.rbf) else {
+                continue;
+            };
+            let rbf_name = Path::new(&rbf)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(launch_profiles::canonical_core_id);
+            let Some(target) = rbf_name.and_then(|name| {
+                physical
+                    .iter()
+                    .find(|core| compact_system_name(&core.core_id) == compact_system_name(&name))
+            }) else {
+                continue;
+            };
+            let core_id = launch_profiles::canonical_core_id(&setname);
+            let key = format!("{}\t{}", core_id.to_ascii_lowercase(), target.path.display());
+            if seen.insert(key) {
+                out.push(InstalledCore {
+                    core_id,
+                    path: target.path.clone(),
+                });
+            }
+        }
+    }
+}
+
+pub(crate) fn compact_system_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
 }
 
 pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact> {
@@ -316,6 +369,29 @@ mod tests {
         assert_eq!(cores.len(), 1);
         assert_eq!(cores[0].core_id, "Gameboy");
         assert!(cores[0].path.ends_with("Gameboy_20260630.rbf"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_system_descriptors_keep_setname_and_resolve_real_rbf() {
+        let root = unique_temp_dir("discovery-mgl-system");
+        let console = root.join("_Console");
+        std::fs::create_dir_all(&console).expect("create console dir");
+        let rbf = console.join("Atari7800_20260630.rbf");
+        std::fs::write(&rbf, b"core").expect("write core");
+        std::fs::write(
+            console.join("Atari 2600.mgl"),
+            r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
+        )
+        .expect("write descriptor");
+
+        let cores = installed_cores_for_roots(&[root.display().to_string()]);
+        let descriptor = cores
+            .iter()
+            .find(|core| core.core_id == "Atari2600")
+            .expect("descriptor-backed system");
+
+        assert_eq!(descriptor.path, rbf);
         let _ = std::fs::remove_dir_all(root);
     }
 
