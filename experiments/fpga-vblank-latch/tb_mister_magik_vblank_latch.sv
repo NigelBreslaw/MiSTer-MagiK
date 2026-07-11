@@ -40,6 +40,7 @@ module tb_mister_magik_vblank_latch;
 	wire [15:0] drop_count;
 
 	integer apply_count = 0;
+	reg [7:0] requirement_coverage = 8'd0;
 	reg [15:0] captured_seq = 16'd0;
 	reg [31:0] captured_base = 32'd0;
 	reg [11:0] captured_width = 12'd0;
@@ -267,6 +268,7 @@ module tb_mister_magik_vblank_latch;
 
 		check_ack(SET_LATCH, 16'h4D47);
 		check_ack(GET_LATCH, 16'h4D48);
+		requirement_coverage[0] = 1'b1; // LATCH-001
 		check_unrelated_ack();
 
 		// Partial and unrelated payloads can stage data but cannot post a route.
@@ -276,6 +278,7 @@ module tb_mister_magik_vblank_latch;
 		idle_cycles(4);
 		if(pending || (post_count != 0) || (flip_count != 0) || (apply_count != 0))
 			fail("partial or unrelated command posted a route");
+		requirement_coverage[2] = 1'b1; // LATCH-003
 
 		// Exercise every payload word and prove no edge means no application.
 		send_route(16'hC02A, 32'h12345678, 12'd960, 12'd540,
@@ -290,6 +293,7 @@ module tb_mister_magik_vblank_latch;
 		   route_hmax !== 12'd970 || route_vmin !== 12'd22 ||
 		   route_vmax !== 12'd561 || route_stride !== 14'd1920)
 			fail("staged route fields mismatch");
+		requirement_coverage[1] = 1'b1; // LATCH-002
 		idle_cycles(6);
 		if((flip_count != 0) || (apply_count != 0)) fail("route applied without vblank edge");
 
@@ -302,10 +306,12 @@ module tb_mister_magik_vblank_latch;
 		   captured_hmax !== 12'd970 || captured_vmin !== 12'd22 ||
 		   captured_vmax !== 12'd561 || captured_stride !== 14'd1920)
 			fail("route was not captured atomically on apply");
+		requirement_coverage[3] = 1'b1; // LATCH-004
 
 		// Keeping vblank high must not create another apply.
 		idle_cycles(5);
 		if((flip_count != 1) || (apply_count != 1)) fail("level or falling vblank applied route");
+		requirement_coverage[7] = 1'b1; // LATCH-008
 
 		// A complete replacement while pending wins and accounts one dropped post.
 		// Stage it while vblank remains high, then prove the falling edge is inert.
@@ -326,6 +332,7 @@ module tb_mister_magik_vblank_latch;
 		   captured_base !== 32'h30002000 || captured_width !== 12'd640 ||
 		   captured_height !== 12'd480 || captured_stride !== 14'd1280)
 			fail("replacement route did not win atomically");
+		requirement_coverage[4] = 1'b1; // LATCH-005
 		lower_vblank();
 
 		// Exact status layout, including externally-owned active route fields.
@@ -346,6 +353,7 @@ module tb_mister_magik_vblank_latch;
 		expect_status(4'd9, 16'd720);
 		expect_status(4'd10, 16'd2560);
 		expect_status(4'd15, 16'd0);
+		requirement_coverage[5] = 1'b1; // LATCH-006
 
 		// Force the natural 16-bit wrap boundaries, then exercise them normally.
 		@(negedge clk_sys);
@@ -368,6 +376,10 @@ module tb_mister_magik_vblank_latch;
 		expect16(pending_seq, 16'h0000, "sequence wrap to zero");
 		raise_vblank_and_wait_for_flip(16'h0001, 4);
 		expect16(active_seq, 16'h0000, "active sequence wrap");
+		requirement_coverage[6] = 1'b1; // LATCH-007
+
+		if(requirement_coverage !== 8'hFF) fail("not all RTL requirement coverpoints hit");
+		$display("COVER LATCH-001..LATCH-008 all RTL requirements hit");
 
 		$display("PASS: mister_magik_vblank_latch protocol and vblank semantics");
 		$finish;
