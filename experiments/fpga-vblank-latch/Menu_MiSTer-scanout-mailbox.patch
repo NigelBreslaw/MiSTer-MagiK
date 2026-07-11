@@ -74,7 +74,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
  reg magik_vbl_meta = 0;
  reg magik_vbl_sys = 0;
  reg magik_vbl_old = 0;
-@@ -414,6 +461,20 @@ always@(posedge clk_sys) begin
+@@ -414,7 +461,21 @@ always@(posedge clk_sys) begin
  		MAGIK_LFB_PENDING <= 0;
  	end
 +	if(magik_mailbox_apply) begin
@@ -91,6 +91,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 +		LFB_STRIDE <= magik_mailbox_post_stride;
 +	end
  	coef_wr <= 0;
+ 	sl_r <= FB_EN ? 2'b00 : scanlines;
  
  `ifndef MISTER_DEBUG_NOHDMI
 @@ -466,5 +527,7 @@ always@(posedge clk_sys) begin

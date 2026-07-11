@@ -41,3 +41,17 @@ instance before adding the mailbox-owned 128-bit instance.
 - `experiments/fpga-vblank-latch/Menu_MiSTer-scanout-mailbox.patch`
 - `scripts/test-fpga-scanout-mailbox.sh`
 - `history/2026-07-11-production-zero-copy-baseline.md`
+
+## Current Menu master patch repair
+
+Manual workflow run `29144143796` passed the mailbox RTL test but failed before
+Quartus because the legacy latch patch had a duplicated `io_dout_sys` context
+line and omitted Menu master's newer `sl_r` and command `0x44` lines. The
+scanout patch likewise omitted `sl_r` from its insertion context. Both patches
+were recounted and verified in order against Menu_MiSTer commit
+`3c3634c0105d78f27aeba66b38966c50dbc42c9b`.
+
+This repair changes no generated logic or performance metric. Before: zero RBF
+artifacts from run `29144143796`. After locally: both patches apply in order and
+the mailbox RTL/bridge simulation passes. A replacement CI RBF remains required
+before device qualification.
