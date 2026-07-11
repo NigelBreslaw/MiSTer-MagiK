@@ -8,7 +8,7 @@ REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
-LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
+LOCAL_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 LOCAL_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 LOCAL_DIR="$ROOT/build/fpga-vblank-latch"
 LABEL="${MISTER_FPGA_LATCH_LABEL:-FPGA-LATCH-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -67,7 +67,7 @@ test -f "$LOCAL_RBF"
 echo "==> Reusing prebuilt experimental RBF: $LOCAL_RBF"
 
 if [[ ! -f "$LOCAL_KO" ]]; then
-  "$ROOT/scripts/build-plugin-probe-module.sh"
+  "$ROOT/scripts/build-scanout-slots-module.sh"
 else
   echo "==> Reusing existing scanout-slots module: $LOCAL_KO"
 fi
@@ -76,9 +76,9 @@ echo "==> Building Rust diagnostics binary"
 "$ROOT/magik-gui/build-arm.sh" --diagnostics --bench-tools
 
 test -f "$LOCAL_KO"
-if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/plugin-probe/modinfo.txt"; then
+if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/scanout-slots/modinfo.txt"; then
   echo "module vermagic does not target 5.15.1-MiSTer:" >&2
-  cat "$ROOT/build/plugin-probe/modinfo.txt" >&2
+  cat "$ROOT/build/scanout-slots/modinfo.txt" >&2
   exit 1
 fi
 

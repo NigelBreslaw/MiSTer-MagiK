@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SRC="${KERNEL_SRC:-/private/tmp/Linux-Kernel_MiSTer}"
-KERNEL_BUILD="${KERNEL_BUILD:-$ROOT/build/plugin-probe-kernel}"
-MODULE_DIR="$ROOT/kernel/plugin-probe"
-OUT_DIR="$ROOT/build/plugin-probe"
+KERNEL_BUILD="${KERNEL_BUILD:-$ROOT/build/scanout-slots-kernel}"
+MODULE_DIR="$ROOT/kernel/scanout-slots"
+OUT_DIR="$ROOT/build/scanout-slots"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
 LOCALVERSION="${LOCALVERSION:--MiSTer}"
 IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
@@ -13,7 +13,7 @@ IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/build-plugin-probe-module.sh
+  scripts/build-scanout-slots-module.sh
 
 Builds the production mister_magik_scanout_slots.ko against the MiSTer 5.15
 kernel source. Set KERNEL_SRC to override the source checkout.
@@ -84,9 +84,9 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
       DEBIAN_FRONTEND=noninteractive apt-get install -y flex bison bc libssl-dev libelf-dev kmod >/dev/null
     fi
     export KERNEL_SRC='$KERNEL_SRC'
-    export KERNEL_BUILD='/project/build/plugin-probe-kernel'
-    export MODULE_DIR='/project/kernel/plugin-probe'
-    export OUT_DIR='/project/build/plugin-probe'
+    export KERNEL_BUILD='/project/build/scanout-slots-kernel'
+    export MODULE_DIR='/project/kernel/scanout-slots'
+    export OUT_DIR='/project/build/scanout-slots'
     export CROSS_COMPILE='$CROSS_COMPILE'
     export LOCALVERSION='$LOCALVERSION'
     $build_commands

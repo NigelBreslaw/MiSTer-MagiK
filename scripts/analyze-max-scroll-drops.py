@@ -169,10 +169,6 @@ class FpgaLatchReport:
     flip_count: int
     post_count: int
     drop_count: int
-    mailbox_supported: bool = False
-    mailbox_apply_count: int = 0
-    mailbox_error_count: int = 0
-    mailbox_epoch: int = 0
 
 
 def parse_key_value_tsv(line: str) -> dict[str, str]:
@@ -187,27 +183,17 @@ def parse_key_value_tsv(line: str) -> dict[str, str]:
 def fpga_latch_report(path: Path | None) -> FpgaLatchReport | None:
     if path is None or not path.exists() or path.stat().st_size == 0:
         return None
-    latch_fields: dict[str, str] | None = None
-    mailbox_fields: dict[str, str] | None = None
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith("fpga_latch_status_tsv\t"):
-            latch_fields = parse_key_value_tsv(line)
-        elif line.startswith("fpga_scanout_mailbox_status_tsv\t"):
-            mailbox_fields = parse_key_value_tsv(line)
-    if latch_fields is None and mailbox_fields is None:
-        return None
-    latch_fields = latch_fields or {}
-    mailbox_fields = mailbox_fields or {}
-    return FpgaLatchReport(
-        supported=latch_fields.get("supported") == "1",
-        flip_count=int(latch_fields.get("flip_count", "0") or 0),
-        post_count=int(latch_fields.get("post_count", "0") or 0),
-        drop_count=int(latch_fields.get("drop_count", "0") or 0),
-        mailbox_supported=mailbox_fields.get("supported") == "1",
-        mailbox_apply_count=int(mailbox_fields.get("apply_count", "0") or 0),
-        mailbox_error_count=int(mailbox_fields.get("error_count", "0") or 0),
-        mailbox_epoch=int(mailbox_fields.get("epoch", "0") or 0, 0),
-    )
+        if not line.startswith("fpga_latch_status_tsv\t"):
+            continue
+        fields = parse_key_value_tsv(line)
+        return FpgaLatchReport(
+            supported=fields.get("supported") == "1",
+            flip_count=int(fields.get("flip_count", "0") or 0),
+            post_count=int(fields.get("post_count", "0") or 0),
+            drop_count=int(fields.get("drop_count", "0") or 0),
+        )
+    return None
 
 
 def counter_delta(before: int, after: int) -> int:
@@ -335,48 +321,15 @@ def print_summary(
         if fpga_before is not None and fpga_after is not None
         else 0
     )
-    mailbox_report_present = any(
-        report is not None and report.mailbox_supported
-        for report in (fpga_before, fpga_after)
-    )
-    mailbox_epoch_changed = (
-        fpga_before is not None
-        and fpga_after is not None
-        and fpga_before.mailbox_supported
-        and fpga_after.mailbox_supported
-        and fpga_before.mailbox_epoch != fpga_after.mailbox_epoch
-    )
-    mailbox_apply_delta = (
-        fpga_after.mailbox_apply_count
-        if mailbox_epoch_changed and fpga_after is not None
-        else counter_delta(
-            fpga_before.mailbox_apply_count, fpga_after.mailbox_apply_count
-        )
-        if fpga_before is not None
-        and fpga_after is not None
-        and fpga_before.mailbox_supported
-        and fpga_after.mailbox_supported
-        else 0
-    )
-    mailbox_error_count_max = max(
-        [
-            report.mailbox_error_count
-            for report in (fpga_before, fpga_after)
-            if report is not None and report.mailbox_supported
-        ],
-        default=0,
-    )
     fpga_counters_advanced = (
         fpga_before is None
         or fpga_after is None
         or (fpga_flip_delta > 0 and fpga_post_delta > 0)
-        or mailbox_apply_delta > 0
     )
     fpga_report_valid = (
         (not fpga_report_required or fpga_report_present)
         and (not fpga_report_present or fpga_report_supported)
         and fpga_drop_count_max == 0
-        and mailbox_error_count_max == 0
         and fpga_counters_advanced
     )
     visual_latch_misses = len(latch_misses) + buffer_failures + flip_failures
@@ -424,10 +377,6 @@ def print_summary(
         f"fpga_drop_count_max={fpga_drop_count_max} "
         f"fpga_flip_delta={fpga_flip_delta} "
         f"fpga_post_delta={fpga_post_delta} "
-        f"mailbox_report_present={1 if mailbox_report_present else 0} "
-        f"mailbox_epoch_changed={1 if mailbox_epoch_changed else 0} "
-        f"mailbox_apply_delta={mailbox_apply_delta} "
-        f"mailbox_error_count_max={mailbox_error_count_max} "
         f"fpga_counters_advanced={1 if fpga_counters_advanced else 0} "
         f"latch_margin_p50={percentile(latch_margins, 50)} "
         f"latch_margin_p95={percentile(latch_margins, 95)} "
@@ -562,8 +511,6 @@ def run_self_test() -> int:
     next_frame["main_present_route_us"] = "101"
     report_before = FpgaLatchReport(True, 100, 100, 0)
     report_after = FpgaLatchReport(True, 102, 102, 0)
-    mailbox_before = FpgaLatchReport(True, 100, 100, 0, True, 10, 0)
-    mailbox_after = FpgaLatchReport(True, 100, 100, 0, True, 12, 0)
     missed = dict(base)
     missed["present_phase_us"] = "16000"
     cadence_missed = dict(base)
@@ -590,9 +537,6 @@ def run_self_test() -> int:
     if print_summary("self-latch-pass", [base, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
         print("self-test expected latch pass", file=sys.stderr)
         return 1
-    if print_summary("self-mailbox-pass", [base, next_frame], [], 1, LATCH_BACKEND, mailbox_before, mailbox_after) != 0:
-        print("self-test expected mailbox counter pass", file=sys.stderr)
-        return 1
     if print_summary("self-latch-fail", [missed, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
         print("self-test expected latch failure", file=sys.stderr)
         return 1
@@ -608,10 +552,6 @@ def run_self_test() -> int:
     dropped_report = FpgaLatchReport(True, 102, 102, 1)
     if print_summary("self-latch-fpga-drop-fail", [base, next_frame], [], 1, LATCH_BACKEND, report_before, dropped_report) == 0:
         print("self-test expected latch FPGA drop failure", file=sys.stderr)
-        return 1
-    mailbox_error = FpgaLatchReport(True, 100, 100, 0, True, 12, 1)
-    if print_summary("self-mailbox-error-fail", [base, next_frame], [], 1, LATCH_BACKEND, mailbox_before, mailbox_error) == 0:
-        print("self-test expected mailbox FPGA error failure", file=sys.stderr)
         return 1
     deadline_only = dict(missed)
     deadline_only["wall_us"] = "16300"

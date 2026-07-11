@@ -6,25 +6,25 @@ MISTER="$ROOT/scripts/mister"
 REMOTE_DIR="/tmp/mister-magik-scanout-slots"
 REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
-LOCAL_REPORT="$ROOT/build/plugin-probe/scanout-slots-map-report.log"
-LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/scanout-slots-map-bandwidth.log"
-FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
+LOCAL_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
+LOCAL_REPORT="$ROOT/build/scanout-slots/scanout-slots-map-report.log"
+LOCAL_BANDWIDTH="$ROOT/build/scanout-slots/scanout-slots-map-bandwidth.log"
+FRAMES="${MISTER_SCANOUT_SLOTS_FRAMES:-120}"
 
 cleanup() {
   "$MISTER" run "rmmod mister_magik_scanout_slots 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-mkdir -p "$ROOT/build/plugin-probe"
+mkdir -p "$ROOT/build/scanout-slots"
 
-"$ROOT/scripts/build-plugin-probe-module.sh"
+"$ROOT/scripts/build-scanout-slots-module.sh"
 "$ROOT/magik-gui/build-arm.sh" --diagnostics --bench-tools
 
 test -f "$LOCAL_KO"
-if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/plugin-probe/modinfo.txt"; then
+if ! grep -q 'vermagic:.*5\.15\.1-MiSTer' "$ROOT/build/scanout-slots/modinfo.txt"; then
   echo "module vermagic does not target 5.15.1-MiSTer:" >&2
-  cat "$ROOT/build/plugin-probe/modinfo.txt" >&2
+  cat "$ROOT/build/scanout-slots/modinfo.txt" >&2
   exit 1
 fi
 

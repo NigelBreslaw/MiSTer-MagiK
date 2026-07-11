@@ -15,7 +15,6 @@ ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 catalog_refresh="${MISTER_CATALOG_REFRESH:-off}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
-true_zero_copy="${MISTER_TRUE_ZERO_COPY:-0}"
 
 usage() {
   cat <<'EOF'
@@ -53,7 +52,6 @@ while [[ $# -gt 0 ]]; do
     --present-delay-us) present_delay_us="${2:?}"; shift 2 ;;
     --catalog-refresh) catalog_refresh="${2:?}"; shift 2 ;;
     --present-backend) present_backend="${2:?}"; shift 2 ;;
-    --true-zero-copy) true_zero_copy=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     *) label="$1"; shift ;;
@@ -109,7 +107,6 @@ esac
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
   fi
   printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
-  printf 'export MISTER_TRUE_ZERO_COPY=%q\n' "$true_zero_copy"
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=home\n'
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=home-repeat-hold\n'
   printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"

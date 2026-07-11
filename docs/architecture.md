@@ -45,7 +45,7 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   to the output mode.
 - The default renderer is the FPGA vblank latch path when the MagiK Menu latch
   RBF and stock-kernel plugin support are available. It copies complete cached
-  RGB565 frames into plugin-exposed hidden slots, posts the selected physical
+  RGB565 frames into scanout-slot-module hidden slots, posts the selected physical
   address before vblank, then waits for vblank only as the pacing boundary for
   the next frame. The single-frame `/dev/fb0` dirty-copy path remains the
   fallback renderer and can be forced with `MISTER_PRESENT_BACKEND=fb0-dirty`;
@@ -61,10 +61,10 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   hidden-buffer copy/post deadline.
   The latch path requires the MagiK Menu latch RBF to be loaded from the active
   launcher through Main's `mister_magik_launch` command path and the
-  stock-kernel plugin probe module to be loaded. A copied RBF artifact alone
+  stock-kernel `mister_magik_scanout_slots` module to be loaded. A copied RBF artifact alone
   does not activate the fast path, and `load_core` from the launcher state does
   not prove the patched core is running.
-  Runtime proof comes from Main's cmdline, the plugin module, passive
+  Runtime proof comes from Main's cmdline, the scanout-slots module, passive
   `fpga-latch-report` magic for commands `0x57`/`0x58`, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
@@ -94,8 +94,9 @@ Important policy:
   new launcher paths that depend on Main request/ack present files or FIFO
   present commands.
 - Diagnose the fast path by checking the runtime state, not just the files on
-  disk: absence of `mister_magik_scanout` or `/dev/mister-magik-scanout` means
-  atomic cacheable scanout is not available, and benchmark traces must report
+  disk: absence of `mister_magik_scanout_slots` or
+  `/dev/mister-magik-scanout-slots` means the WC hidden slots are unavailable,
+  and benchmark traces must report
   `main_present_backend=fpga-vblank-latch-hidden` with status `ok` to prove the
   latch renderer is active.
 

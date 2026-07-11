@@ -797,9 +797,9 @@ mod linux {
     const AGENT_PORT: u16 = 7498;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
-    const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
-    const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
-    const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
+    const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
+    const SCANOUT_SLOTS_MIN_VERSION: u32 = 1;
+    const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
@@ -2098,7 +2098,7 @@ mod linux {
 
     enum FramebufferCaptureSource {
         Fb0,
-        FpgaLatchedPlugin {
+        FpgaLatchedScanoutSlots {
             active_base: u32,
             active_sequence: u16,
             pending_sequence: u16,
@@ -2115,14 +2115,14 @@ mod linux {
         fn label(&self) -> &'static str {
             match self {
                 Self::Fb0 => "fb0",
-                Self::FpgaLatchedPlugin { .. } => "fpga-latched-plugin",
+                Self::FpgaLatchedScanoutSlots { .. } => "fpga-latched-scanout-slots",
             }
         }
 
         fn json(&self) -> Value {
             match self {
                 Self::Fb0 => json!({"kind": self.label()}),
-                Self::FpgaLatchedPlugin {
+                Self::FpgaLatchedScanoutSlots {
                     active_base,
                     active_sequence,
                     pending_sequence,
@@ -2199,7 +2199,7 @@ mod linux {
     }
 
     fn read_framebuffer_capture() -> Result<FramebufferRead, String> {
-        read_fpga_latched_plugin_capture().or_else(|_| read_fb0_capture())
+        read_fpga_latched_scanout_slots_capture().or_else(|_| read_fb0_capture())
     }
 
     fn read_fb0_capture() -> Result<FramebufferRead, String> {
@@ -2217,13 +2217,12 @@ mod linux {
     }
 
     #[derive(Clone, Debug)]
-    struct PluginProbeRegion {
+    struct ScanoutSlotsRegion {
         index: usize,
         name: String,
         available: bool,
         phys: u32,
         len: usize,
-        dma_owned: bool,
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2248,9 +2247,9 @@ mod linux {
         }
     }
 
-    fn read_fpga_latched_plugin_capture() -> Result<FramebufferRead, String> {
-        if !Path::new(PLUGIN_PROBE_DEVICE).exists() {
-            return Err("plugin probe device is not present".to_string());
+    fn read_fpga_latched_scanout_slots_capture() -> Result<FramebufferRead, String> {
+        if !Path::new(SCANOUT_SLOTS_DEVICE).exists() {
+            return Err("scanout slots device is not present".to_string());
         }
         let mut fpga = FpgaIo::open().map_err(|err| format!("open FPGA IO: {err}"))?;
         let status = fpga
@@ -2266,12 +2265,12 @@ mod linux {
             bpp: 16,
         };
         let expected = geometry.bytes()?;
-        let region = plugin_region_for_phys(status.active_base, expected)?;
-        let raw = read_plugin_region_raw(&region, expected)?;
+        let region = scanout_slots_region_for_phys(status.active_base, expected)?;
+        let raw = read_scanout_slots_region_raw(&region, expected)?;
         Ok(FramebufferRead {
             raw,
             geometry,
-            source: FramebufferCaptureSource::FpgaLatchedPlugin {
+            source: FramebufferCaptureSource::FpgaLatchedScanoutSlots {
                 active_base: status.active_base,
                 active_sequence: status.active_sequence,
                 pending_sequence: status.pending_sequence,
@@ -2285,83 +2284,79 @@ mod linux {
         })
     }
 
-    fn plugin_region_for_phys(
+    fn scanout_slots_region_for_phys(
         active_base: u32,
         required_len: usize,
-    ) -> Result<PluginProbeRegion, String> {
-        let text = fs::read_to_string(PLUGIN_PROBE_DEVICE)
-            .map_err(|err| format!("read {PLUGIN_PROBE_DEVICE}: {err}"))?;
-        validate_plugin_probe_header(&text)?;
+    ) -> Result<ScanoutSlotsRegion, String> {
+        let text = fs::read_to_string(SCANOUT_SLOTS_DEVICE)
+            .map_err(|err| format!("read {SCANOUT_SLOTS_DEVICE}: {err}"))?;
+        validate_scanout_slots_header(&text)?;
         for line in text.lines() {
-            let Some(region) = parse_plugin_probe_region(line) else {
+            let Some(region) = parse_scanout_slots_region(line) else {
                 continue;
             };
             if region.phys != active_base {
                 continue;
             }
             if !region.available {
-                return Err(format!("plugin region {} is unavailable", region.name));
-            }
-            if region.dma_owned {
-                return Err(format!("plugin region {} is DMA-owned", region.name));
+                return Err(format!("scanout slot {} is unavailable", region.name));
             }
             if region.len < required_len {
                 return Err(format!(
-                    "plugin region {} has {} bytes, need {required_len}",
+                    "scanout slot {} has {} bytes, need {required_len}",
                     region.name, region.len
                 ));
             }
             return Ok(region);
         }
         Err(format!(
-            "no plugin probe region matches active base 0x{active_base:08x}"
+            "no scanout slot matches active base 0x{active_base:08x}"
         ))
     }
 
-    fn validate_plugin_probe_header(text: &str) -> Result<(), String> {
+    fn validate_scanout_slots_header(text: &str) -> Result<(), String> {
         let header = text
             .lines()
-            .find(|line| line.starts_with("plugin_probe_header_tsv\t"))
-            .ok_or_else(|| "plugin probe header is missing".to_string())?;
-        let version = plugin_tsv_field(header, "version")
+            .find(|line| line.starts_with("scanout_slots_header_tsv\t"))
+            .ok_or_else(|| "scanout slots header is missing".to_string())?;
+        let version = scanout_slots_tsv_field(header, "version")
             .and_then(|value| value.parse::<u32>().ok())
-            .ok_or_else(|| "plugin probe header version is missing".to_string())?;
-        if version < PLUGIN_PROBE_MIN_VERSION {
+            .ok_or_else(|| "scanout slots header version is missing".to_string())?;
+        if version < SCANOUT_SLOTS_MIN_VERSION {
             return Err(format!(
-                "plugin probe version {version} is older than {PLUGIN_PROBE_MIN_VERSION}"
+                "scanout slots version {version} is older than {SCANOUT_SLOTS_MIN_VERSION}"
             ));
         }
-        let region_offset_bytes = plugin_tsv_field(header, "region_offset_bytes")
+        let region_offset_bytes = scanout_slots_tsv_field(header, "region_offset_bytes")
             .and_then(|value| value.parse::<usize>().ok())
-            .ok_or_else(|| "plugin probe region offset is missing".to_string())?;
-        if region_offset_bytes != PLUGIN_PROBE_REGION_OFFSET_BYTES {
+            .ok_or_else(|| "scanout slots region offset is missing".to_string())?;
+        if region_offset_bytes != SCANOUT_SLOTS_REGION_OFFSET_BYTES {
             return Err(format!(
-                "plugin probe region offset {region_offset_bytes} is not {PLUGIN_PROBE_REGION_OFFSET_BYTES}"
+                "scanout slots region offset {region_offset_bytes} is not {SCANOUT_SLOTS_REGION_OFFSET_BYTES}"
             ));
         }
-        let cache_mode = plugin_tsv_field(header, "cache_mode")
-            .ok_or_else(|| "plugin probe cache mode is missing".to_string())?;
+        let cache_mode = scanout_slots_tsv_field(header, "cache_mode")
+            .ok_or_else(|| "scanout slots cache mode is missing".to_string())?;
         if cache_mode != "writecombine" {
-            return Err(format!("plugin probe cache mode is {cache_mode}"));
+            return Err(format!("scanout slots cache mode is {cache_mode}"));
         }
         Ok(())
     }
 
-    fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
-        if !line.starts_with("plugin_probe_region_tsv\t") {
+    fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
+        if !line.starts_with("scanout_slots_region_tsv\t") {
             return None;
         }
-        Some(PluginProbeRegion {
-            index: plugin_tsv_field(line, "index")?.parse().ok()?,
-            name: plugin_tsv_field(line, "name")?.to_string(),
-            available: plugin_tsv_field(line, "available")? == "1",
-            phys: parse_hex_u32(plugin_tsv_field(line, "phys")?)?,
-            len: plugin_tsv_field(line, "len")?.parse().ok()?,
-            dma_owned: plugin_tsv_field(line, "dma_owned")? == "1",
+        Some(ScanoutSlotsRegion {
+            index: scanout_slots_tsv_field(line, "index")?.parse().ok()?,
+            name: scanout_slots_tsv_field(line, "name")?.to_string(),
+            available: scanout_slots_tsv_field(line, "available")? == "1",
+            phys: parse_hex_u32(scanout_slots_tsv_field(line, "phys")?)?,
+            len: scanout_slots_tsv_field(line, "len")?.parse().ok()?,
         })
     }
 
-    fn plugin_tsv_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    fn scanout_slots_tsv_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         line.split('\t').skip(1).find_map(|field| {
             let (field_key, value) = field.split_once('=')?;
             (field_key == key).then_some(value)
@@ -2377,13 +2372,16 @@ mod linux {
         u32::from_str_radix(hex, 16).ok()
     }
 
-    fn read_plugin_region_raw(region: &PluginProbeRegion, len: usize) -> Result<Vec<u8>, String> {
-        let device = File::open(PLUGIN_PROBE_DEVICE)
-            .map_err(|err| format!("open {PLUGIN_PROBE_DEVICE}: {err}"))?;
+    fn read_scanout_slots_region_raw(
+        region: &ScanoutSlotsRegion,
+        len: usize,
+    ) -> Result<Vec<u8>, String> {
+        let device = File::open(SCANOUT_SLOTS_DEVICE)
+            .map_err(|err| format!("open {SCANOUT_SLOTS_DEVICE}: {err}"))?;
         let offset = region
             .index
-            .checked_mul(PLUGIN_PROBE_REGION_OFFSET_BYTES)
-            .ok_or_else(|| "plugin region offset overflow".to_string())?;
+            .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
+            .ok_or_else(|| "scanout-slot region offset overflow".to_string())?;
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -2396,13 +2394,13 @@ mod linux {
         };
         if mem == libc::MAP_FAILED {
             return Err(format!(
-                "mmap plugin region {}: {}",
+                "mmap scanout slot {}: {}",
                 region.name,
                 io::Error::last_os_error()
             ));
         }
         if mem.is_null() {
-            return Err(format!("mmap plugin region {} returned null", region.name));
+            return Err(format!("mmap scanout slot {} returned null", region.name));
         }
         let raw = unsafe { std::slice::from_raw_parts(mem.cast::<u8>(), len).to_vec() };
         unsafe {

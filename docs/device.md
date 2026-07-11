@@ -151,20 +151,17 @@ The known-good activation sequence is:
 
 1. Copy the CI artifact to
    `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`.
-2. Install the stock-kernel scanout module at
-   `/media/fat/mister-magik/mister_magik_scanout.ko`. A byte-identical copy at
-   the old `mister_magik_plugin_probe.ko` path is retained for one release so an
-   older deployed Main can still load the module.
+2. Install the stock-kernel scanout-slots module at
+   `/media/fat/mister-magik/mister_magik_scanout_slots.ko`.
 3. Deploy a MagiK Main fork that owns production latch startup. On boot or
    return to menu, the fork redirects `menu.rbf` to the persistent latch RBF,
-   re-execs itself on that core, loads the plugin module, then starts the
+   re-execs itself on that core, loads the scanout-slots module, then starts the
    launcher.
 
    `scripts/deploy-main-mister-experiment.sh` installs all three production
-   pieces: `MiSTer_MagiK`, `mister_magik_scanout.ko` (plus its compatibility
-   filename), and the CI-built
+   pieces: `MiSTer_MagiK`, `mister_magik_scanout_slots.ko`, and the CI-built
    latch RBF. `scripts/install-slint-boot.sh` refuses to arm MagiK boot if the
-   persistent latch RBF or plugin module is missing.
+   persistent latch RBF or scanout-slots module is missing.
 
 For one-shot diagnosis only, load that RBF through Main's MagiK launch command
 path, not with an external loader and not with `load_core` while the launcher is
@@ -185,10 +182,10 @@ active:
    experiments used `load_core` from the launcher state; Main stayed on the
    stock Menu path, so `supported=0` only proved the patched RBF was not active.
 
-Then load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
+Then load the stock-kernel scanout-slots module so MagiK has hidden RGB565 slots:
 
    ```bash
-   scripts/mister run "insmod /media/fat/mister-magik/mister_magik_scanout.ko"
+   scripts/mister run "insmod /media/fat/mister-magik/mister_magik_scanout_slots.ko"
    ```
 
 4. Start the launcher. The FPGA latch backend is the default when the RBF and
@@ -201,12 +198,10 @@ Then load the stock-kernel plugin probe module so MagiK has hidden RGB565 slots:
    Use `MISTER_PRESENT_BACKEND=fb0-dirty scripts/run-rust.sh launcher 0` only
    when intentionally forcing the legacy `/dev/fb0` fallback.
 
-   In atomic scanout mode, Slint and the direct preview/Arcade writers render
-   into the writable inactive cacheable slot. One ioctl cleans the dirty cache
-   ranges, transfers ownership, and publishes the FPGA descriptor; the mapping
-   stays write-revoked until the FPGA completion fence releases the prior slot.
-   The legacy latch fallback still copies cached RGB565 damage into alternating
-   write-combined hidden slots. The `/dev/fb0` fallback waits for vblank before copying dirty
+   Slint renders into cached RGB565 RAM. The latch presenter composes direct
+   preview/Arcade layers there, copies damage into alternating write-combined
+   hidden slots, and posts the selected physical address before vblank. The
+   `/dev/fb0` fallback waits for vblank before copying dirty
    rows into the live framebuffer. Latch mode keeps a larger late-frame headroom
    window for inactive or non-motion frames, but active Home horizontal motion
    stays frame-driven and avoids waiting a whole vblank before rendering.
@@ -222,8 +217,8 @@ fast-path proof; the launcher can still be a full-Slint composition while the
 final present goes through hidden buffers. The reliable proof signals are:
 
 - Main's cmdline contains the MagiK Menu latch RBF path.
-- `mister_magik_scanout` is present in `/proc/modules` and
-  `/dev/mister-magik-scanout` exists.
+- `mister_magik_scanout_slots` is present in `/proc/modules` and
+  `/dev/mister-magik-scanout-slots` exists.
 - Passive `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with
   `0x4d47` and `0x4d48` acks.
 - `flip_count` and `post_count` advance during a launcher run, with
