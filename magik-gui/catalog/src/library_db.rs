@@ -35,8 +35,8 @@ use crate::game_discovery::{
 };
 use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
-use crate::preview_worker;
 use crate::prepared_collections::PreparedCollectionId;
+use crate::preview_worker;
 use crate::software_identity::{
     console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
@@ -409,7 +409,8 @@ pub fn load_arcade_catalog_from_snapshot(
 ) -> Result<LibraryCatalogLoad, String> {
     let started = std::time::Instant::now();
     let projection = crate::catalog_navigation::read_catalog_navigation_snapshot(path)?;
-    let catalog = ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
+    let catalog =
+        ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
     Ok(LibraryCatalogLoad::from_precomputed(
         catalog,
         started.elapsed().as_micros() as u64,
@@ -1000,7 +1001,9 @@ fn build_catalog_from_scan_with_sources(
     let manifest_backed_systems = scan
         .profiles
         .iter()
-        .filter(|profile| profile.provenance.kind != crate::launch_profiles::RuleSourceKind::ConfStr)
+        .filter(|profile| {
+            profile.provenance.kind != crate::launch_profiles::RuleSourceKind::ConfStr
+        })
         .map(|profile| profile.system_id.clone())
         .collect::<HashSet<_>>();
     for discovery in discoveries.values() {
@@ -1226,14 +1229,13 @@ fn structured_launch_plan_for_discovery(
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
-    let profile = crate::catalog_scan::profile_for_path(
-        profiles,
-        Path::new(discovery.source_path.as_str()),
-    )
-    .or_else(|| {
-        profile_id_for_discovery(discovery)
-            .and_then(|profile_id| launch_profiles::profile_for_launch_target_id(profiles, profile_id))
-    })?;
+    let profile =
+        crate::catalog_scan::profile_for_path(profiles, Path::new(discovery.source_path.as_str()))
+            .or_else(|| {
+                profile_id_for_discovery(discovery).and_then(|profile_id| {
+                    launch_profiles::profile_for_launch_target_id(profiles, profile_id)
+                })
+            })?;
     let payload_path = discovery.launch_ref.as_str();
     let payload_rule = match discovery.source_kind {
         DiscoverySourceKind::ArchiveEntry => {
@@ -1245,9 +1247,10 @@ fn structured_launch_plan_for_discovery(
         },
         _ => None,
     };
-    let mount = if discovery.prepared.is_some_and(|prepared| {
-        prepared.collection_id == PreparedCollectionId::OneLoad64
-    }) {
+    let mount = if discovery
+        .prepared
+        .is_some_and(|prepared| prepared.collection_id == PreparedCollectionId::OneLoad64)
+    {
         launch_profiles::MountSpec::load_file(1)
     } else {
         payload_rule
@@ -1969,7 +1972,10 @@ mod tests {
 
         let amigavision_game = GameDiscovery {
             source_path: "/media/fat/games/Amiga/AmigaVision.hdf::Alien Breed".to_string(),
-            launch_ref: media_metadata::amigavision_game_launch_ref("Alien Breed"),
+            launch_ref: media_metadata::amigavision_game_launch_ref(
+                "listings/games.txt",
+                "Alien Breed",
+            ),
             source_kind: DiscoverySourceKind::CatalogEntry,
             title: "Alien Breed".to_string(),
             category: "Computer".to_string(),

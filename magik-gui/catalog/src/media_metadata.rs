@@ -190,7 +190,7 @@ pub(crate) fn collection_discoveries_from_listing_text(
         .filter(|line| !line.is_empty())
         .map(|title| GameDiscovery {
             source_path: format!("{}::{}::{title}", file.path.display(), listing.entry_path),
-            launch_ref: amigavision_game_launch_ref(title),
+            launch_ref: amigavision_game_launch_ref(&listing.entry_path, title),
             source_kind: DiscoverySourceKind::CatalogEntry,
             title: title.to_string(),
             category: profile.category.to_string(),
@@ -210,9 +210,8 @@ pub(crate) fn collection_discoveries_from_listing_text(
 }
 
 fn amigavision_prepared_provenance(file: &FoundFile) -> Option<PreparedLaunchProvenance> {
-    is_amigavision_installed_hdf_path(&file.path).then(|| {
-        PreparedLaunchProvenance::prepared(PreparedCollectionId::AmigaVision)
-    })
+    is_amigavision_installed_hdf_path(&file.path)
+        .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::AmigaVision))
 }
 
 pub(crate) fn normalize_match_path(path: &str) -> String {
@@ -313,9 +312,7 @@ fn inspect_mgl_xml(text: &str) -> Result<MglInspection, String> {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = e.name();
-                if name
-                    .as_ref()
-                    .eq_ignore_ascii_case(b"mistergamedescription")
+                if name.as_ref().eq_ignore_ascii_case(b"mistergamedescription")
                     || name.as_ref().eq_ignore_ascii_case(b"mistergamelist")
                 {
                     saw_root = true;
@@ -640,9 +637,14 @@ fn xml_general_ref_text(name: &[u8]) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn amigavision_game_launch_ref(title: &str) -> String {
+pub(crate) fn amigavision_game_launch_ref(listing_path: &str, title: &str) -> String {
+    let listing_kind = if listing_path.ends_with("demos.txt") {
+        "demos"
+    } else {
+        "games"
+    };
     format!(
-        "{AMIGAVISION_GAME_LAUNCH_PREFIX}{}",
+        "{AMIGAVISION_GAME_LAUNCH_PREFIX}{listing_kind}:{}",
         encode_launch_component(title)
     )
 }
@@ -667,8 +669,7 @@ pub(crate) fn is_amigavision_archive_path(path: &str) -> bool {
 
 pub(crate) fn is_amigavision_installed_hdf_path(path: &Path) -> bool {
     let path = normalize_match_path(&path.display().to_string());
-    path.ends_with("/games/amiga/amigavision.hdf")
-        || path.ends_with("/games/amiga/megaags.hdf")
+    path.ends_with("/games/amiga/amigavision.hdf") || path.ends_with("/games/amiga/megaags.hdf")
 }
 
 pub(crate) fn is_amigavision_save_media_path(path: &Path) -> bool {
@@ -1296,6 +1297,7 @@ mod tests {
         ));
         assert!(is_launcher_launch_ref(AMIGAVISION_LAUNCHER_REF));
         assert!(is_launcher_launch_ref(&amigavision_game_launch_ref(
+            "listings/games.txt",
             "4th & Inches (OCS)[en]"
         )));
     }
