@@ -7,6 +7,7 @@ use crate::library_db::{
     amigavision_installed_listings, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF,
     MRA_PREFIX_BYTES,
 };
+use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
 use quick_xml::XmlVersion;
@@ -95,7 +96,7 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
         setname: None,
         parent: None,
         covered_payload_path: None,
-        prepared: None,
+        prepared: amigavision_prepared_provenance(file),
         confidence: DiscoveryConfidence::CatalogMetadata,
     }
 }
@@ -176,10 +177,16 @@ pub(crate) fn collection_discoveries_from_listing_text(
             setname: None,
             parent: None,
             covered_payload_path: None,
-            prepared: None,
+            prepared: amigavision_prepared_provenance(file),
             confidence: DiscoveryConfidence::CatalogMetadata,
         })
         .collect()
+}
+
+fn amigavision_prepared_provenance(file: &FoundFile) -> Option<PreparedLaunchProvenance> {
+    is_amigavision_installed_hdf_path(&file.path).then(|| {
+        PreparedLaunchProvenance::prepared(PreparedCollectionId::AmigaVision)
+    })
 }
 
 pub(crate) fn normalize_match_path(path: &str) -> String {
@@ -508,7 +515,9 @@ pub(crate) fn is_amigavision_archive_path(path: &str) -> bool {
 }
 
 pub(crate) fn is_amigavision_installed_hdf_path(path: &Path) -> bool {
-    normalize_match_path(&path.display().to_string()).ends_with("/games/amiga/amigavision.hdf")
+    let path = normalize_match_path(&path.display().to_string());
+    path.ends_with("/games/amiga/amigavision.hdf")
+        || path.ends_with("/games/amiga/megaags.hdf")
 }
 
 pub(crate) fn is_amigavision_save_media_path(path: &Path) -> bool {

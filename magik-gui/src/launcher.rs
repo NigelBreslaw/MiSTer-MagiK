@@ -87,6 +87,11 @@ impl LaunchError {
         }
     }
 
+    #[cfg(feature = "ui")]
+    pub fn preparation(message: impl Into<String>) -> Self {
+        Self::new(message, false)
+    }
+
     pub fn spawned_mister(&self) -> bool {
         self.spawned_mister
     }
