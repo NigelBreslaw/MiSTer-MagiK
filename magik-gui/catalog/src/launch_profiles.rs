@@ -1452,6 +1452,7 @@ fn special_profiles() -> Vec<LaunchProfile> {
         mra_profile(),
         mgl_profile(),
         dos_mgl_profile(),
+        neon68k_mgl_profile(),
         saturn_profile(),
         psx_profile(),
         ao486_profile(),
@@ -1563,6 +1564,23 @@ fn dos_mgl_profile() -> LaunchProfile {
         collection_rules: Vec::new(),
         ignore_rules: Vec::new(),
         provenance: RuleProvenance::mgl("Installed DOS game launchers live under _DOS Games"),
+    }
+}
+
+fn neon68k_mgl_profile() -> LaunchProfile {
+    LaunchProfile {
+        id: "neon68k".into(),
+        system_id: "x68000".into(),
+        category: "Computer".into(),
+        title: "X68000 Games".into(),
+        core_name: "X68000".into(),
+        core_path: Some("_Computer/X68000".into()),
+        game_dirs: str_vec(&["X68000 Games"]),
+        payload_rules: vec![launcher_payload_rule()],
+        archive_entry_rules: Vec::new(),
+        collection_rules: Vec::new(),
+        ignore_rules: Vec::new(),
+        provenance: RuleProvenance::mgl("Installed X68000 game launchers use per-game MGL files"),
     }
 }
 

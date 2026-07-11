@@ -755,6 +755,7 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
         if !is_real_dir(path) {
             continue;
         }
+        push_prepared_collection_targets(&mut targets, path);
         if is_direct_scan_root(path, profiles) {
             push_scan_target(&mut targets, path.to_path_buf());
             continue;
@@ -770,6 +771,21 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
         push_profile_game_dirs(&mut targets, &path.join("games"), profiles);
     }
     dedupe_existing_scan_targets(targets)
+}
+
+fn push_prepared_collection_targets(targets: &mut Vec<PathBuf>, configured_root: &Path) {
+    let storage_root = if ["games", "_Arcade", "_Games", "_DOS Games", "_LLAPI"]
+        .iter()
+        .any(|name| path_name_eq(configured_root, name))
+    {
+        configured_root.parent().unwrap_or(configured_root)
+    } else {
+        configured_root
+    };
+    push_scan_target(
+        targets,
+        storage_root.join("_Computer").join("X68000 Games"),
+    );
 }
 
 fn push_profile_game_dirs(
@@ -2255,6 +2271,42 @@ mod tests {
             .normal_files
             .iter()
             .any(|file| file.path == raw_media.display().to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scanner_discovers_preinstalled_x68000_game_mgls_under_computer() {
+        let root = unique_temp_dir("neon68k-mgl-scan");
+        let launcher_dir = root.join("_Computer/X68000 Games/Minor Bugs");
+        let payload_dir = root.join("games/X68000");
+        std::fs::create_dir_all(&launcher_dir).expect("create launcher dir");
+        std::fs::create_dir_all(&payload_dir).expect("create payload dir");
+        std::fs::write(payload_dir.join("Akumajou.hdf"), b"hdf").expect("write HDF");
+        let mgl = launcher_dir.join("Akumajou Dracula.mgl");
+        std::fs::write(
+            &mgl,
+            r#"<mistergamedescription><rbf>X68000</rbf><setname>Akumajou</setname><file path="../../../games/X68000/Akumajou.hdf"/></mistergamedescription>"#,
+        )
+        .expect("write MGL");
+        let cfg = BenchConfig {
+            roots: vec![root.join("games").display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let discovery = scan
+            .discoveries
+            .iter()
+            .find(|discovery| discovery.launch_ref == mgl.display().to_string())
+            .expect("discover X68000 MGL");
+
+        assert_eq!(discovery.platform_id, "x68000");
+        assert_eq!(discovery.setname.as_deref(), Some("Akumajou"));
+        assert_eq!(discovery.genre.as_deref(), Some("Minor Bugs"));
+        assert_eq!(
+            discovery.prepared.map(|value| value.collection_id),
+            Some(crate::prepared_collections::PreparedCollectionId::Neon68k)
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
