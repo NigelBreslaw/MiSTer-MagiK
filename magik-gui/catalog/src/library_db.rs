@@ -36,6 +36,7 @@ use crate::game_discovery::{
 use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
 use crate::preview_worker;
+use crate::prepared_collections::PreparedCollectionId;
 use crate::software_identity::{
     console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
@@ -1244,10 +1245,16 @@ fn structured_launch_plan_for_discovery(
         },
         _ => None,
     };
-    let mount = payload_rule
-        .as_ref()
-        .map(|rule| rule.mount)
-        .unwrap_or_else(|| launch_profiles::MountSpec::mount_image(0));
+    let mount = if discovery.prepared.is_some_and(|prepared| {
+        prepared.collection_id == PreparedCollectionId::OneLoad64
+    }) {
+        launch_profiles::MountSpec::load_file(1)
+    } else {
+        payload_rule
+            .as_ref()
+            .map(|rule| rule.mount)
+            .unwrap_or_else(|| launch_profiles::MountSpec::mount_image(0))
+    };
     Some(StructuredLaunchPlan {
         launch_ref: launch_ref.into(),
         title: discovery.title.clone().into(),

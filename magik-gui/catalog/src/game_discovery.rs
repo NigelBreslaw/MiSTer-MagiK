@@ -297,6 +297,9 @@ pub(crate) fn discovery_from_profile_file(
     } else {
         None
     };
+    let prepared = (profile.system_id == "c64")
+        .then(|| prepared_collections::oneload64_provenance(&file.path))
+        .flatten();
 
     GameDiscovery {
         source_path: source_path.clone(),
@@ -313,7 +316,7 @@ pub(crate) fn discovery_from_profile_file(
         setname: payload_setname,
         parent: None,
         covered_payload_path: None,
-        prepared: None,
+        prepared,
         confidence: profile_confidence(rule),
     }
 }
