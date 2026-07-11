@@ -19,7 +19,10 @@ export component LauncherTile inherits Rectangle {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
             font-size: 16px;
+            width: 100%;
             horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
 
             animate color { duration: 100ms; easing: Easing.ease-in-out; }
         }

@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const PROFILE_SET_VERSION: u32 = 7;
+pub const PROFILE_SET_VERSION: u32 = 8;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");

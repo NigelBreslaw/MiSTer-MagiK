@@ -1104,13 +1104,33 @@ fn sort_systems_by_title(systems: &mut [GameSystemEntry]) {
 
 pub fn system_title(id: &str) -> String {
     match id {
+        "acornatom" => "Acorn Atom".to_string(),
+        "acornelectron" => "Acorn Electron".to_string(),
+        "altair8800" => "Altair 8800".to_string(),
         "amiga" => "Amiga".to_string(),
+        "amstrad" => "Amstrad".to_string(),
+        "apple-ii" => "Apple II".to_string(),
+        "aquarius" => "Aquarius".to_string(),
         "arcade" => "Arcade".to_string(),
+        "arcadia" => "Arcadia".to_string(),
+        "archie" => "Archie".to_string(),
         "atari2600" => "Atari 2600".to_string(),
         "atari5200" => "Atari 5200".to_string(),
         "atari7800" => "Atari 7800".to_string(),
+        "atari800" => "Atari 800".to_string(),
         "atarilynx" => "Atari Lynx".to_string(),
+        "atarist" => "Atari ST".to_string(),
+        "bbcmicro" => "BBC Micro".to_string(),
+        "c128" => "C128".to_string(),
+        "c16" => "C16".to_string(),
+        "c64" => "C64".to_string(),
+        "casio_pv-1000" => "Casio PV-1000".to_string(),
+        "casio_pv-2000" => "Casio PV-2000".to_string(),
+        "channelf" => "Channel F".to_string(),
+        "coco2" => "CoCo 2".to_string(),
+        "coco3" => "CoCo 3".to_string(),
         "colecovision" => "ColecoVision".to_string(),
+        "creativision" => "CreatiVision".to_string(),
         "neogeo" | "neo-geo" | "snk-neo-geo" => "NeoGeo".to_string(),
         "neogeo-cd" => "NeoGeo CD".to_string(),
         "neogeopocket" => "NeoGeo Pocket".to_string(),
@@ -1122,7 +1142,9 @@ pub fn system_title(id: &str) -> String {
         "m72" | "irem-m72" => "Irem M72".to_string(),
         "m92" | "irem-m92" => "Irem M92".to_string(),
         "gameboy" => "Game Boy".to_string(),
+        "eg2000" => "EG2000".to_string(),
         "gba" => "GBA".to_string(),
+        "gba2p" => "GBA 2P".to_string(),
         "gbc" => "Game Boy Color".to_string(),
         "gb" => "Game Boy".to_string(),
         "nes" => "NES".to_string(),
@@ -1137,9 +1159,28 @@ pub fn system_title(id: &str) -> String {
         "s32x" => "Sega 32X".to_string(),
         "gamegear" => "Game Gear".to_string(),
         "intellivision" => "Intellivision".to_string(),
+        "jaguar" => "Jaguar".to_string(),
+        "maclc" => "Mac LC".to_string(),
+        "macplus" => "Mac Plus".to_string(),
+        "msx" => "MSX".to_string(),
+        "odyssey2" => "Odyssey 2".to_string(),
+        "oric" => "Oric".to_string(),
+        "pc88" => "PC-8801".to_string(),
+        "pet2001" => "PET 2001".to_string(),
+        "pokemonmini" => "Pokemon Mini".to_string(),
+        "ql" => "QL".to_string(),
+        "samcoupe" => "SAM Coupe".to_string(),
         "saturn" => "Saturn".to_string(),
+        "sgb" => "Super Game Boy".to_string(),
+        "supervision" => "Supervision".to_string(),
+        "tomytutor" => "Tomy Tutor".to_string(),
+        "trs-80" => "TRS-80".to_string(),
         "vectrex" => "Vectrex".to_string(),
+        "vic20" => "VIC-20".to_string(),
         "wonderswan" => "WonderSwan".to_string(),
+        "x68000" => "X68000".to_string(),
+        "zx-spectrum" => "ZX Spectrum".to_string(),
+        "zx81" => "ZX81".to_string(),
         "unknown" => "Unknown".to_string(),
         other => other
             .split(['-', '_'])
@@ -1357,6 +1398,27 @@ mod tests {
                 ("wonderswan".to_string(), "WonderSwan".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn deployed_runtime_system_ids_have_human_display_titles() {
+        let expected = [
+            ("acornatom", "Acorn Atom"),
+            ("acornelectron", "Acorn Electron"),
+            ("bbcmicro", "BBC Micro"),
+            ("casio_pv-2000", "Casio PV-2000"),
+            ("channelf", "Channel F"),
+            ("maclc", "Mac LC"),
+            ("pc88", "PC-8801"),
+            ("pet2001", "PET 2001"),
+            ("sgb", "Super Game Boy"),
+            ("tomytutor", "Tomy Tutor"),
+            ("vic20", "VIC-20"),
+            ("zx-spectrum", "ZX Spectrum"),
+        ];
+        for (id, title) in expected {
+            assert_eq!(system_title(id), title, "{id}");
+        }
     }
 
     #[test]
