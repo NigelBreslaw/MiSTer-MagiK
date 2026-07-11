@@ -12,6 +12,9 @@ const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
 pub struct LauncherStatus<'a> {
     pub scene: &'a str,
     pub screen: &'a str,
+    pub scanout_mode: &'a str,
+    pub scanout_state: &'a str,
+    pub scanout_atomic_enabled: bool,
     pub frames: u64,
     pub idle: bool,
     pub idle_loops: u64,
@@ -215,6 +218,9 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!("ts_unix_ms", ts_unix_ms);
     insert!("pid", pid);
     insert!("mode", "ui");
+    insert!("scanout_mode", status.scanout_mode);
+    insert!("scanout_state", status.scanout_state);
+    insert!("scanout_atomic_enabled", status.scanout_atomic_enabled);
     insert!("scene", status.scene);
     insert!("screen", status.screen);
     insert!("frames", status.frames);
@@ -560,6 +566,9 @@ mod tests {
             LauncherStatus {
                 scene: "launcher",
                 screen: "home",
+                scanout_mode: "auto",
+                scanout_state: "active",
+                scanout_atomic_enabled: true,
                 frames: 42,
                 idle: true,
                 idle_loops: 12,
@@ -715,6 +724,12 @@ mod tests {
         );
 
         assert_eq!(value["schema"], "mister-magik-slint-status-v1");
+        assert!(value["scanout_mode"].is_string());
+        assert!(matches!(
+            value["scanout_state"].as_str(),
+            Some("legacy" | "requested" | "target-ready" | "active" | "fallback")
+        ));
+        assert!(value["scanout_atomic_enabled"].is_boolean());
         assert_eq!(value["frame_budget"]["budget_us"], 16_667);
         assert_eq!(value["frame_budget"]["over_budget_total"], 2);
         assert_eq!(value["frame_budget"]["window_present_us"], 900);
@@ -834,6 +849,9 @@ mod tests {
         write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: "arcade",
+            scanout_mode: "legacy",
+            scanout_state: "legacy",
+            scanout_atomic_enabled: false,
             frames: 7,
             idle: false,
             idle_loops: 0,

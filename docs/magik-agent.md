@@ -93,6 +93,16 @@ from `mister-magik-fb` on local port `127.0.0.1:7499`; it does not poll or read
 `/dev/fb0`. Frames are RGB565 little-endian keyframes or dirty rect deltas, LZ4
 compressed per message, with heartbeat frames while idle.
 
+The stream handshake identifies its source as
+`producer-pre-ownership-transfer` with `ownership_safe=true`. This is a hard
+contract for atomic scanout: the producer copies the inspection snapshot before
+`SYNC_RANGES_AND_POST` revokes CPU access, and the agent never reads scanout
+pages or `/dev/fb0` to construct steady-state frames.
+
+The normal `status` response includes a `scanout` object with actual kernel
+module/device readiness plus the Slint-requested mode and runtime state
+(`legacy`, `requested`, `target-ready`, `active`, or `fallback`).
+
 `device_telemetry_stream_v1` is the lightweight desktop Real Time debug path.
 The desktop sends one authenticated JSON request on TCP `7498`, then the agent
 replies with a JSON `ok` line and keeps the connection in newline-delimited JSON

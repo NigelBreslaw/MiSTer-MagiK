@@ -518,6 +518,7 @@ impl UiFrameTarget {
                 geometry.render_h(),
             ) {
                 Ok(scanout) => {
+                    crate::framebuffer::plugin_probe::mark_atomic_scanout_target_ready();
                     crate::ui_logln!(
                         "slint-render-target=plugin-cacheable-swapped fb-format={}",
                         production_label()
@@ -526,9 +527,12 @@ impl UiFrameTarget {
                     target.scanout = Some(scanout);
                     return target;
                 }
-                Err(error) => crate::ui_errln!(
-                    "slint-render-target=plugin-cacheable-swapped unavailable error={error}"
-                ),
+                Err(error) => {
+                    crate::framebuffer::plugin_probe::disable_atomic_scanout();
+                    crate::ui_errln!(
+                        "slint-render-target=plugin-cacheable-swapped unavailable error={error}"
+                    );
+                }
             }
         }
         crate::ui_logln!(

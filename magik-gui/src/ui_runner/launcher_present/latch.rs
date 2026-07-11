@@ -143,7 +143,14 @@ impl PluginLatchFrameBuffers {
         let base2 = hidden_buffer_base(&buffer2, 2)?;
         let scanout =
             if mister_magik_fb::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
-                PluginScanoutRgb565Buffers::open_atomic(width, height).ok()
+                match PluginScanoutRgb565Buffers::open_atomic(width, height) {
+                    Ok(scanout) => Some(scanout),
+                    Err(error) => {
+                        mister_magik_fb::framebuffer::plugin_probe::disable_atomic_scanout();
+                        crate::ui_errln!("atomic-scanout-present-open-failed error={error}");
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -238,6 +245,7 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
             .arm_mailbox(fpga_status.capabilities)
             .map_err(|e| e.to_string())?;
         self.scanout_ready = true;
+        mister_magik_fb::framebuffer::plugin_probe::mark_atomic_scanout_active();
         Ok(true)
     }
 
