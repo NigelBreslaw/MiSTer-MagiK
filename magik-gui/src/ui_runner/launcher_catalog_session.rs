@@ -307,17 +307,13 @@ impl LauncherCatalogSession {
         effects
     }
 
-    pub(super) fn tick_games_found_counter(&mut self, now: Instant) -> Option<String> {
-        self.games_found_counter.tick(now)
-    }
-
     fn handle_progress(
         &mut self,
         context: CatalogWorkerMessageContext,
         title: String,
         detail: String,
         percent: i32,
-        now: Instant,
+        _now: Instant,
         effects: &mut CatalogSessionEffects,
     ) {
         let intent = CatalogProgressUiIntent::from_worker_progress(
@@ -365,7 +361,7 @@ impl LauncherCatalogSession {
         }
         let detail = self
             .games_found_counter
-            .progress_detail(&intent.title, &intent.detail, now);
+            .progress_detail(&intent.title, &intent.detail);
         effects.ui(intent.ui_with_detail(detail));
     }
 
@@ -512,63 +508,22 @@ fn duplicate_cached_catalog_ready(catalog_ready: bool, cached_before_refresh: bo
 #[derive(Debug, Default)]
 pub(super) struct GamesFoundCounter {
     displayed: usize,
-    target: usize,
-    active: bool,
-    last_tick: Option<Instant>,
-    phase: Option<CatalogCounterPhase>,
 }
 
 impl GamesFoundCounter {
-    fn progress_detail(&mut self, title: &str, detail: &str, now: Instant) -> Option<String> {
+    fn progress_detail(&mut self, title: &str, detail: &str) -> Option<String> {
         let phase = CatalogCounterPhase::for_title(title);
         let target = phase.and_then(|_| parse_games_found_detail(detail));
         let Some(target) = target else {
             self.reset();
             return None;
         };
-        let phase = phase.expect("phase exists when target parses");
-        if phase == CatalogCounterPhase::FullScan && target <= self.displayed {
-            return Some(format_games_found(self.displayed));
-        }
-        if !self.active || target < self.displayed {
-            self.displayed = self.displayed.min(target);
-            self.last_tick = Some(now);
-        }
-        self.target = target;
-        self.active = true;
-        self.phase = Some(phase);
-        Some(format_games_found(self.displayed))
-    }
-
-    fn tick(&mut self, now: Instant) -> Option<String> {
-        if !self.active || self.displayed >= self.target {
-            self.last_tick = Some(now);
-            return None;
-        }
-        let elapsed = self
-            .last_tick
-            .map(|last| now.duration_since(last))
-            .unwrap_or(Duration::from_millis(66));
-        let step = games_found_count_step(
-            self.displayed,
-            self.target,
-            elapsed,
-            self.phase.unwrap_or(CatalogCounterPhase::FullScan),
-        );
-        if step == 0 {
-            return None;
-        }
-        self.displayed = self.displayed.saturating_add(step).min(self.target);
-        self.last_tick = Some(now);
+        self.displayed = self.displayed.max(target);
         Some(format_games_found(self.displayed))
     }
 
     fn reset(&mut self) {
         self.displayed = 0;
-        self.target = 0;
-        self.active = false;
-        self.last_tick = None;
-        self.phase = None;
     }
 }
 
@@ -586,25 +541,6 @@ pub(super) fn counter_climb_target_is_sustained(target: usize) -> bool {
 
 pub(super) fn counter_climb_target_overtakes_visible(target: usize, displayed: usize) -> bool {
     target > displayed
-}
-
-fn games_found_count_step(
-    displayed: usize,
-    target: usize,
-    elapsed: Duration,
-    phase: CatalogCounterPhase,
-) -> usize {
-    if target <= displayed {
-        return 0;
-    }
-    let lag = target - displayed;
-    let elapsed_ms = elapsed.as_millis().max(1) as usize;
-    if phase == CatalogCounterPhase::Bootstrap {
-        let bootstrap_games_per_second = 55usize;
-        return ((bootstrap_games_per_second * elapsed_ms).div_ceil(1000)).clamp(1, lag);
-    }
-    let catchup_ms = 450usize;
-    ((lag * elapsed_ms).div_ceil(catchup_ms)).clamp(1, lag)
 }
 
 #[cfg(test)]
@@ -1293,39 +1229,17 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn games_found_counter_eases_toward_real_scan_count() {
-        let now = Instant::now();
+    pub(super) fn games_found_counter_reports_real_worker_counts() {
         let mut counter = GamesFoundCounter::default();
 
         assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 250", now),
-            Some("Games found: 0".to_string())
+            counter.progress_detail("Classifying library", "Games found: 250"),
+            Some("Games found: 250".to_string())
         );
         assert_eq!(
-            counter.tick(now + Duration::from_millis(66)),
-            Some("Games found: 37".to_string())
+            counter.progress_detail("Classifying library", "Games found: 500"),
+            Some("Games found: 500".to_string())
         );
-        assert_eq!(
-            counter.progress_detail(
-                "Classifying library",
-                "Games found: 500",
-                now + Duration::from_millis(132)
-            ),
-            Some("Games found: 37".to_string())
-        );
-        let next = counter
-            .tick(now + Duration::from_millis(198))
-            .expect("counter should move after the target increases");
-        let first_tick_count = parse_games_found_detail(&next).expect("parse counter detail");
-        assert!(first_tick_count > 37);
-        assert!(first_tick_count < 500);
-
-        let next = counter
-            .tick(now + Duration::from_millis(264))
-            .expect("counter should keep moving");
-        let count = parse_games_found_detail(&next).expect("parse counter detail");
-        assert!(count > first_tick_count);
-        assert!(count < 500);
     }
 
     #[test]
@@ -1340,58 +1254,30 @@ mod tests {
 
     #[test]
     pub(super) fn games_found_counter_accepts_bootstrap_title() {
-        let now = Instant::now();
         let mut counter = GamesFoundCounter::default();
 
         assert_eq!(
-            counter.progress_detail("Finding games", "Games found: 50", now),
-            Some("Games found: 0".to_string())
+            counter.progress_detail("Finding games", "Games found: 50"),
+            Some("Games found: 50".to_string())
         );
-        assert_eq!(
-            counter.tick(now + Duration::from_millis(66)),
-            Some("Games found: 4".to_string())
-        );
-    }
-
-    #[test]
-    pub(super) fn games_found_counter_uses_real_bootstrap_target() {
-        let now = Instant::now();
-        let mut counter = GamesFoundCounter::default();
-
-        assert_eq!(
-            counter.progress_detail("Finding games", "Games found: 911", now),
-            Some("Games found: 0".to_string())
-        );
-        assert_eq!(counter.target, 911);
-        for frame in 1..=20 {
-            counter.tick(now + Duration::from_millis(frame * 66));
-        }
-
-        assert!(counter.displayed > 50);
-        assert!(counter.displayed < 125);
     }
 
     #[test]
     pub(super) fn games_found_counter_does_not_drop_when_full_scan_starts_lower() {
-        let now = Instant::now();
         let mut counter = GamesFoundCounter::default();
 
-        counter.progress_detail("Finding games", "Games found: 911", now);
-        counter.displayed = 650;
-        counter.target = 911;
+        counter.progress_detail("Finding games", "Games found: 911");
         assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 50", now),
-            Some("Games found: 650".to_string())
+            counter.progress_detail("Classifying library", "Games found: 50"),
+            Some("Games found: 911".to_string())
         );
-        assert_eq!(counter.displayed, 650);
-        assert_eq!(counter.target, 911);
+        assert_eq!(counter.displayed, 911);
 
         assert_eq!(
-            counter.progress_detail("Classifying library", "Games found: 700", now),
-            Some("Games found: 650".to_string())
+            counter.progress_detail("Classifying library", "Games found: 1200"),
+            Some("Games found: 1200".to_string())
         );
-        assert_eq!(counter.target, 700);
-        assert_eq!(counter.phase, Some(CatalogCounterPhase::FullScan));
+        assert_eq!(counter.displayed, 1200);
     }
 
     #[test]
@@ -1402,34 +1288,15 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn games_found_counter_catches_large_lag_without_overshoot() {
-        let now = Instant::now();
-        let mut counter = GamesFoundCounter::default();
-
-        counter.progress_detail("Classifying library", "Games found: 1000", now);
-        for frame in 1..20 {
-            counter.tick(now + Duration::from_millis(frame * 66));
-        }
-
-        assert!(counter.displayed > 900);
-        assert!(counter.displayed <= 1000);
-    }
-
-    #[test]
     pub(super) fn games_found_counter_ignores_other_scan_phases() {
-        let now = Instant::now();
         let mut counter = GamesFoundCounter::default();
 
-        counter.progress_detail("Classifying library", "Games found: 100", now);
+        counter.progress_detail("Classifying library", "Games found: 100");
         assert_eq!(
-            counter.progress_detail(
-                "Saving library",
-                "Writing 0 of 100 games into SQLite...",
-                now
-            ),
+            counter.progress_detail("Saving library", "Writing 0 of 100 games into SQLite..."),
             None
         );
-        assert!(!counter.active);
+        assert_eq!(counter.displayed, 0);
     }
 
     #[test]

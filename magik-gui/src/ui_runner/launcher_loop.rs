@@ -745,10 +745,6 @@ impl LauncherWakeReasons {
     const BRIDGE_DIRTY: Self = Self(1 << 6);
     const CATALOG_MESSAGES_ACTIVE: Self = Self(1 << 7);
     const MEDIA_MESSAGE_SEEN: Self = Self(1 << 8);
-    const CATALOG_SCAN_VISIBLE: Self = Self(1 << 9);
-    const CATALOG_BACKGROUND_SCAN_VISIBLE: Self = Self(1 << 10);
-    const CATALOG_SCAN_REDRAW_DUE: Self = Self(1 << 11);
-    const CATALOG_GAMES_FOUND_DETAIL_CHANGED: Self = Self(1 << 12);
     const SLINT_ANIMATION_ACTIVE: Self = Self(1 << 13);
     const HOME_PAN_PRESENT_ACTIVE: Self = Self(1 << 14);
     const ARCADE_VISUAL_CHANGED_THIS_LOOP: Self = Self(1 << 15);
@@ -1635,7 +1631,6 @@ pub(super) fn run_launcher_loop(
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
-    let mut catalog_scan_redraw = CatalogScanRedraw::new();
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
@@ -2638,23 +2633,7 @@ pub(super) fn run_launcher_loop(
             .as_ref()
             .map(LauncherStatusTextSnapshot::bytes_len)
             .unwrap_or(0);
-        let games_found_detail_changed = if catalog_scan_visible && catalog_scan_percent < 0 {
-            catalog_session
-                .tick_games_found_counter(loop_start)
-                .is_some_and(|detail| {
-                    LauncherStatusPresenter::new(&bridge).sync_catalog_scan_detail(detail);
-                    true
-                })
-        } else {
-            false
-        };
-        let catalog_scan_redraw_due = catalog_scan_redraw.should_request(
-            catalog_scan_visible,
-            catalog_background_scan_visible,
-            catalog_scan_percent,
-            loop_start,
-        );
-        if launching || games_found_detail_changed || catalog_scan_redraw_due {
+        if launching {
             request_launcher_redraw!();
         }
         let active_arcade_games = if !launching && nav.screen == Screen::Arcade {
@@ -2873,22 +2852,6 @@ pub(super) fn run_launcher_loop(
                 || pending_catalog_ready.is_some(),
         );
         wake_reasons.insert_if(LauncherWakeReasons::MEDIA_MESSAGE_SEEN, media_message_seen);
-        wake_reasons.insert_if(
-            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
-            catalog_scan_visible,
-        );
-        wake_reasons.insert_if(
-            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
-            catalog_background_scan_visible,
-        );
-        wake_reasons.insert_if(
-            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
-            catalog_scan_redraw_due,
-        );
-        wake_reasons.insert_if(
-            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
-            games_found_detail_changed,
-        );
         wake_reasons.insert_if(
             LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
             slint_animation_active,
@@ -3968,50 +3931,6 @@ fn catalog_media_system_ids(catalog: &ArcadeCatalog) -> Vec<String> {
         .collect()
 }
 
-#[derive(Debug)]
-struct CatalogScanRedraw {
-    last_request: Instant,
-    period: Duration,
-}
-
-impl CatalogScanRedraw {
-    fn new() -> Self {
-        Self {
-            last_request: Instant::now() - catalog_scan_redraw_period(),
-            period: catalog_scan_redraw_period(),
-        }
-    }
-
-    fn should_request(
-        &mut self,
-        visible: bool,
-        background_visible: bool,
-        percent: i32,
-        now: Instant,
-    ) -> bool {
-        if !visible && !background_visible {
-            return false;
-        }
-        if visible && !background_visible && percent >= 0 {
-            return false;
-        }
-        if now.duration_since(self.last_request) < self.period {
-            return false;
-        }
-        self.last_request = now;
-        true
-    }
-}
-
-fn catalog_scan_redraw_period() -> Duration {
-    let fps = std::env::var("MISTER_CATALOG_SCAN_FPS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(15)
-        .clamp(1, 60);
-    Duration::from_millis((1000 / fps).max(1))
-}
-
 fn catalog_background_validation_delay() -> Duration {
     std::env::var("MISTER_CATALOG_BACKGROUND_DELAY_MS")
         .ok()
@@ -5017,38 +4936,6 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn catalog_scan_redraw_throttles_indeterminate_animation() {
-        let now = Instant::now();
-        let mut redraw = CatalogScanRedraw {
-            last_request: now,
-            period: Duration::from_millis(66),
-        };
-        assert!(!redraw.should_request(true, false, -1, now + Duration::from_millis(20)));
-        assert!(redraw.should_request(true, false, -1, now + Duration::from_millis(70)));
-    }
-
-    #[test]
-    pub(super) fn catalog_scan_redraw_skips_determinate_periodic_frames() {
-        let now = Instant::now();
-        let mut redraw = CatalogScanRedraw {
-            last_request: now - Duration::from_secs(1),
-            period: Duration::from_millis(66),
-        };
-        assert!(!redraw.should_request(true, false, 90, now));
-        assert!(!redraw.should_request(false, false, -1, now));
-    }
-
-    #[test]
-    pub(super) fn catalog_scan_redraw_animates_background_badge() {
-        let now = Instant::now();
-        let mut redraw = CatalogScanRedraw {
-            last_request: now - Duration::from_secs(1),
-            period: Duration::from_millis(66),
-        };
-        assert!(redraw.should_request(false, true, -1, now));
-    }
-
-    #[test]
     pub(super) fn cached_home_validation_progress_stays_hidden() {
         assert!(!catalog_scan_progress_visible(
             true,
@@ -5155,10 +5042,6 @@ mod tests {
             LauncherWakeReasons::BRIDGE_DIRTY,
             LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
             LauncherWakeReasons::MEDIA_MESSAGE_SEEN,
-            LauncherWakeReasons::CATALOG_SCAN_VISIBLE,
-            LauncherWakeReasons::CATALOG_BACKGROUND_SCAN_VISIBLE,
-            LauncherWakeReasons::CATALOG_SCAN_REDRAW_DUE,
-            LauncherWakeReasons::CATALOG_GAMES_FOUND_DETAIL_CHANGED,
             LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
             LauncherWakeReasons::HOME_PAN_PRESENT_ACTIVE,
             LauncherWakeReasons::HOME_HORIZONTAL_INPUT_HELD,

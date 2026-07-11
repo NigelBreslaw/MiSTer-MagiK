@@ -5,10 +5,6 @@ import { ScreenshotPackProgressRow } from "progress.slint";
 
 export component CatalogScanPopup inherits Rectangle {
     in property <int> s;
-    property <duration> tick: animation-tick();
-    property <float> phase: Math.mod(tick / 1ms, 1200) / 1200;
-    property <bool> determinate: MisterBridge.catalog-scan-percent >= 0;
-    property <int> scan-progress: Math.max(0, Math.min(100, MisterBridge.catalog-scan-percent));
     property <length> scan-osd-width: 56px * s;
     property <length> scan-horizontal-padding: 70px * s;
     property <length> scan-column-width: root.width > scan-osd-width
@@ -70,38 +66,6 @@ export component CatalogScanPopup inherits Rectangle {
                 font-size: 8px * s;
                 horizontal-alignment: center;
                 wrap: word-wrap;
-            }
-
-            Rectangle {
-                width: root.scan-progress-width;
-                height: 16px * s;
-                background: #0e0c14;
-                border-width: 1px;
-                border-color: #5c4a72;
-                clip: true;
-
-                if root.determinate : Rectangle {
-                    x: 2px * s;
-                    y: 2px * s;
-                    width: (parent.width - 4px * s) * root.scan-progress / 100;
-                    height: parent.height - 4px * s;
-                    background: #06d6a0;
-                }
-
-                if !root.determinate : Rectangle {
-                    width: 96px * s;
-                    height: parent.height - 4px * s;
-                    y: 2px * s;
-                    x: (parent.width - self.width) * root.phase;
-                    background: #06d6a0;
-                }
-            }
-
-            if root.determinate : Text {
-                text: root.scan-progress + "%";
-                color: #d7eef8;
-                font-size: 8px * s;
-                horizontal-alignment: center;
             }
 
             if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
@@ -179,8 +143,6 @@ export component StartupSplash inherits Rectangle {
 
 export component BackgroundScanBadge inherits Rectangle {
     property <int> s: MisterUi.scale;
-    property <duration> tick: animation-tick();
-    property <float> phase-ms: Math.mod(tick / 1ms, 1000);
 
     width: 132px * s;
     height: 28px * s;
@@ -191,9 +153,7 @@ export component BackgroundScanBadge inherits Rectangle {
     border-color: #52647d;
 
     Text {
-        text: root.phase-ms < 250 ? "scanning" :
-            root.phase-ms < 500 ? "scanning." :
-            root.phase-ms < 750 ? "scanning.." : "scanning...";
+        text: "scanning...";
         color: #d7eef8;
         font-size: 8px * root.s;
         horizontal-alignment: center;
