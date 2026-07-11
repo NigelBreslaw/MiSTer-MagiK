@@ -444,7 +444,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let zero_copy = cached.scanout_slot() == Some(buffer_index);
         if atomic && !zero_copy {
             self.latch_state.mark_attempt_failed(buffer_index);
-            return Err("atomic scanout render target did not own the selected slot".to_string());
+            return Err(format!(
+                "atomic scanout render target did not own the selected slot rendered={:?} selected={buffer_index}",
+                cached.scanout_slot()
+            ));
         }
         if zero_copy {
             for rect in plan.restore_rects.iter() {
