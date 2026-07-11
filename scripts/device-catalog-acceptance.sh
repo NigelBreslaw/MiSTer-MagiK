@@ -8,6 +8,10 @@ REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_NAVIGATION="/media/fat/mister-magik/library.nav.lz4b"
 REMOTE_ASSETS="/media/fat/mister-magik/assets"
+EXPECTED_DURABLE_GAMES=65538
+EXPECTED_VISIBLE_GAMES=63140
+EXPECTED_SYSTEMS=65
+EXPECTED_PC88_GAMES=3925
 SETTLE_SECS=5
 RACE_REFRESH=0
 
@@ -124,10 +128,20 @@ assert_eq "active library-refresh count" "0" "$refresh_count"
 remote "test -s '$REMOTE_DB'"
 echo "ok: $REMOTE_DB is present and non-empty"
 
-assert_gt_zero "durable game row count" "$(db_scalar "SELECT count(*) FROM game_rows;")"
+assert_eq "durable game row count" "$EXPECTED_DURABLE_GAMES" "$(db_scalar "SELECT count(*) FROM game_rows;")"
+assert_eq "PC-8801 game row count" "$EXPECTED_PC88_GAMES" "$(db_scalar "SELECT count(*) FROM games WHERE system_id='pc88';")"
+assert_eq "PC-8801 boot ROM game row count" "0" "$(db_scalar "SELECT count(*) FROM games WHERE system_id='pc88' AND lower(title)='boot';")"
 assert_gt_zero "durable discovery count" "$(db_scalar "SELECT CAST(value AS INTEGER) FROM meta WHERE key='discoveries';")"
 remote "test -s '$REMOTE_SUMMARY'"
 echo "ok: $REMOTE_SUMMARY is present and non-empty"
+summary_copy="$(mktemp)"
+trap 'rm -f "$summary_copy"' EXIT
+"$MISTER" get "$REMOTE_SUMMARY" "$summary_copy" >/dev/null
+read -r visible_games visible_systems < <(
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data["total_game_count"], len(data["systems"]))' "$summary_copy"
+)
+assert_eq "launcher-visible game count" "$EXPECTED_VISIBLE_GAMES" "$visible_games"
+assert_eq "launcher system count" "$EXPECTED_SYSTEMS" "$visible_systems"
 remote "test -s '$REMOTE_NAVIGATION'"
 echo "ok: $REMOTE_NAVIGATION is present and non-empty"
 

@@ -715,3 +715,8 @@ scripts/profile-first-scan.sh LABEL --deploy-catalog --replace-label
 Catalog-only deployment atomically replaces the builder and does not suspend or
 restart the launcher. A normal `scripts/deploy-rust.sh` deployment installs both
 executables.
+Runtime folder classification treats names, installed core identities, payload
+extensions, and support firmware as evidence. Strong normalized numeric-family
+aliases such as `PC88` and `PC8801` may learn the folder's observed payload
+extensions; extension-only ambiguity remains unclassified. Firmware such as
+`boot.rom` contributes evidence but is never emitted as a game row.

@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub const PROFILE_SET_VERSION: u32 = 6;
+pub const PROFILE_SET_VERSION: u32 = 7;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
@@ -826,6 +826,10 @@ fn runtime_core_candidates_by_dir_name<'a>(
     if !aliases.is_empty() {
         return aliases;
     }
+    let numeric_family = core_candidates_by_numeric_family_alias(game_dir_name, cores);
+    if !numeric_family.is_empty() {
+        return numeric_family;
+    }
     if let Some(base) = sinden_base_name(game_dir_name) {
         let candidates = core_candidates_by_name(&base, cores)
             .into_iter()
@@ -839,6 +843,53 @@ fn runtime_core_candidates_by_dir_name<'a>(
         }
     }
     Vec::new()
+}
+
+fn core_candidates_by_numeric_family_alias<'a>(
+    game_dir_name: &str,
+    cores: &'a [catalog_discovery::InstalledCore],
+) -> Vec<RuntimeCoreCandidate<'a>> {
+    let mut seen = BTreeSet::new();
+    cores
+        .iter()
+        .filter(|core| numeric_family_alias_matches(game_dir_name, &core.core_id))
+        .filter_map(|core| {
+            seen.insert(core.core_id.to_ascii_lowercase())
+                .then_some(RuntimeCoreCandidate {
+                    core,
+                    match_kind: RuntimeCoreMatchKind::Alias,
+                })
+        })
+        .collect()
+}
+
+fn numeric_family_alias_matches(left: &str, right: &str) -> bool {
+    fn parts(value: &str) -> Option<(String, String)> {
+        let compact = value
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>();
+        let digit = compact.find(|ch: char| ch.is_ascii_digit())?;
+        let (family, model) = compact.split_at(digit);
+        (!family.is_empty() && model.len() >= 2 && model.chars().all(|ch| ch.is_ascii_digit()))
+            .then(|| (family.to_string(), model.to_string()))
+    }
+    let Some((left_family, left_model)) = parts(left) else {
+        return false;
+    };
+    let Some((right_family, right_model)) = parts(right) else {
+        return false;
+    };
+    if left_family != right_family {
+        return false;
+    }
+    let (short, long) = if left_model.len() <= right_model.len() {
+        (&left_model, &right_model)
+    } else {
+        (&right_model, &left_model)
+    };
+    long.len() <= short.len() + 2 && long.starts_with(short)
 }
 
 fn core_candidates_by_game_dir_alias<'a>(
@@ -931,9 +982,12 @@ fn runtime_profile_for_match(
     let core = candidate.core;
     let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name)
         .or_else(|| {
-            matches!(candidate.match_kind, RuntimeCoreMatchKind::Exact)
-                .then(|| observed_runtime_payload_extensions(game_dir))
-                .filter(|extensions| !extensions.is_empty())
+            matches!(
+                candidate.match_kind,
+                RuntimeCoreMatchKind::Exact | RuntimeCoreMatchKind::Alias
+            )
+            .then(|| observed_runtime_payload_extensions(game_dir))
+            .filter(|extensions| !extensions.is_empty())
         })?;
     if !game_dir.has_zip_files
         && !game_dir
@@ -979,7 +1033,14 @@ fn runtime_profile_for_extensions(
         payload_rules: vec![payload_rule.clone()],
         archive_entry_rules: vec![payload_rule],
         collection_rules: Vec::new(),
-        ignore_rules: Vec::new(),
+        ignore_rules: vec![IgnoreRule {
+            file_names: str_vec(&["boot.rom"]),
+            extensions: Vec::new(),
+            reason: IgnoreReason::Bios,
+            provenance: RuleProvenance::magik(
+                "Runtime classification uses boot.rom as firmware evidence, not a game payload",
+            ),
+        }],
         provenance: RuleProvenance::conf_str(
             "Runtime top-level games folder matched an installed core",
         ),
@@ -1695,6 +1756,16 @@ pub(crate) fn canonical_core_id(stem: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_family_aliases_require_matching_family_and_close_model_prefix() {
+        assert!(numeric_family_alias_matches("PC8801", "PC88"));
+        assert!(numeric_family_alias_matches("pc-88", "PC8801"));
+        assert!(!numeric_family_alias_matches("Atari7800", "Atari5200"));
+        assert!(!numeric_family_alias_matches("PC88", "PC9801"));
+        assert!(!numeric_family_alias_matches("Loose88", "PC88"));
+        assert!(!numeric_family_alias_matches("X1", "X68000"));
+    }
     use crate::test_support::unique_temp_dir;
 
     #[test]
