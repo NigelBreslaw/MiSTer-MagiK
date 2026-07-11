@@ -2,6 +2,36 @@ use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use std::io;
 
+pub(in crate::ui_runner) enum LatchOverlayTarget<'a, B> {
+    Legacy(&'a mut B),
+    Scanout(mister_magik_fb::framebuffer::plugin_probe::ScanoutPixelsTarget<'a>),
+}
+
+impl<B: mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget>
+    mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget for LatchOverlayTarget<'_, B>
+{
+    fn copy_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<usize, mister_magik_fb::framebuffer::plugin_probe::PluginProbeError> {
+        match self {
+            Self::Legacy(target) => {
+                target.copy_rect_565_strided(x, y, w, h, src, src_stride_pixels, src_x, src_y)
+            }
+            Self::Scanout(target) => {
+                target.copy_rect_565_strided(x, y, w, h, src, src_stride_pixels, src_x, src_y)
+            }
+        }
+    }
+}
+
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
     fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus>;
 
@@ -13,6 +43,17 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
         fb_height: u16,
         geometry: crate::fpga::LatchedFbufGeometry,
     ) -> io::Result<(u16, u16)>;
+
+    fn bootstrap_scanout_mailbox(
+        &mut self,
+        _mailbox_phys: u32,
+        _epoch: u32,
+    ) -> io::Result<crate::fpga::ScanoutMailboxStatus> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "atomic scanout mailbox unavailable",
+        ))
+    }
 }
 
 impl LatchHardware for Fpga {
@@ -30,6 +71,14 @@ impl LatchHardware for Fpga {
     ) -> io::Result<(u16, u16)> {
         self.post_magik_latched_fbuf_rgb565(sequence, base_addr, fb_width, fb_height, geometry)
     }
+
+    fn bootstrap_scanout_mailbox(
+        &mut self,
+        mailbox_phys: u32,
+        epoch: u32,
+    ) -> io::Result<crate::fpga::ScanoutMailboxStatus> {
+        self.bootstrap_magik_scanout_mailbox(mailbox_phys, epoch)
+    }
 }
 
 pub(in crate::ui_runner) trait LatchFrameBuffers {
@@ -46,6 +95,34 @@ pub(in crate::ui_runner) trait LatchFrameBuffers {
     fn sync_zero_copy(&self, _slot_index: u8, _rects: &DirtyRectList) -> Result<(), String> {
         Ok(())
     }
+    fn prepare_atomic<H: LatchHardware>(&mut self, _hardware: &mut H) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn atomic_status(
+        &self,
+    ) -> Result<Option<mister_magik_fb::framebuffer::plugin_probe::ScanoutStatus>, String> {
+        Ok(None)
+    }
+    fn atomic_enabled(&self) -> bool {
+        false
+    }
+    fn atomic_post(
+        &self,
+        _slot_index: u8,
+        _sequence: u32,
+        _rects: &[DirtyRect],
+        _route: mister_magik_fb::framebuffer::plugin_probe::ScanoutPostRoute,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn scanout_target_mut(
+        &mut self,
+        _slot_index: u8,
+        _width: usize,
+        _height: usize,
+    ) -> Option<mister_magik_fb::framebuffer::plugin_probe::ScanoutPixelsTarget<'_>> {
+        None
+    }
 }
 
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
@@ -54,6 +131,7 @@ pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
     base1: u32,
     base2: u32,
     scanout: Option<PluginScanoutRgb565Buffers>,
+    scanout_ready: bool,
 }
 
 impl PluginLatchFrameBuffers {
@@ -63,11 +141,12 @@ impl PluginLatchFrameBuffers {
         let buffer2 = open_hidden_buffer(2, width, height, stride_bytes)?;
         let base1 = hidden_buffer_base(&buffer1, 1)?;
         let base2 = hidden_buffer_base(&buffer2, 2)?;
-        let scanout = if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
-            PluginScanoutRgb565Buffers::open(width, height).ok()
-        } else {
-            None
-        };
+        let scanout =
+            if mister_magik_fb::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
+                PluginScanoutRgb565Buffers::open_atomic(width, height).ok()
+            } else {
+                None
+            };
         let (base1, base2) = scanout
             .as_ref()
             .map(|s| (s.dma_addr(0), s.dma_addr(1)))
@@ -78,6 +157,7 @@ impl PluginLatchFrameBuffers {
             base1,
             base2,
             scanout,
+            scanout_ready: false,
         })
     }
 }
@@ -102,6 +182,15 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
     }
 
     fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_> {
+        if let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_ready) {
+            let slot = usize::from(slot_index - 1);
+            return Rgb565FrameView {
+                pixels: scanout.pixels(slot),
+                width,
+                height,
+                stride_pixels: scanout.stride_pixels(),
+            };
+        }
         let buffer = if slot_index == 1 {
             &self.buffer1
         } else {
@@ -132,6 +221,66 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    fn prepare_atomic<H: LatchHardware>(&mut self, hardware: &mut H) -> Result<bool, String> {
+        let Some(scanout) = self.scanout.as_ref() else {
+            return Ok(false);
+        };
+        if self.scanout_ready {
+            return Ok(true);
+        }
+        let (mailbox_phys, epoch) = scanout.mailbox().map_err(|e| e.to_string())?;
+        let fpga_status = hardware
+            .bootstrap_scanout_mailbox(mailbox_phys, epoch)
+            .map_err(|e| e.to_string())?;
+        scanout
+            .arm_mailbox(fpga_status.capabilities)
+            .map_err(|e| e.to_string())?;
+        self.scanout_ready = true;
+        Ok(true)
+    }
+
+    fn atomic_status(
+        &self,
+    ) -> Result<Option<mister_magik_fb::framebuffer::plugin_probe::ScanoutStatus>, String> {
+        self.scanout
+            .as_ref()
+            .filter(|_| self.scanout_ready)
+            .map(|scanout| scanout.status().map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    fn atomic_enabled(&self) -> bool {
+        self.scanout_ready
+    }
+
+    fn atomic_post(
+        &self,
+        slot_index: u8,
+        sequence: u32,
+        rects: &[DirtyRect],
+        route: mister_magik_fb::framebuffer::plugin_probe::ScanoutPostRoute,
+    ) -> Result<bool, String> {
+        let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_ready) else {
+            return Ok(false);
+        };
+        scanout
+            .sync_ranges_and_post(usize::from(slot_index - 1), sequence, rects, route)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    fn scanout_target_mut(
+        &mut self,
+        slot_index: u8,
+        width: usize,
+        height: usize,
+    ) -> Option<mister_magik_fb::framebuffer::plugin_probe::ScanoutPixelsTarget<'_>> {
+        self.scanout
+            .as_mut()
+            .filter(|_| self.scanout_ready)
+            .map(|scanout| scanout.target_mut(usize::from(slot_index - 1), width, height))
     }
 }
 
@@ -238,11 +387,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         input: LauncherFramePlan,
         hardware: &mut H,
         display_session: &mut LauncherDisplaySession,
+        stream_scale: Option<mister_magik_fb::framebuffer::stream::LatchStreamScale>,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
     where
         H: LatchHardware,
-        F: FnOnce(&mut B::Buffer, LatchPresentPlan) -> Result<(), String>,
+        F: FnOnce(LatchOverlayTarget<'_, B::Buffer>, LatchPresentPlan, bool) -> Result<(), String>,
     {
         if self.disabled {
             return Err(
@@ -250,45 +400,83 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             );
         }
 
+        let atomic = self.buffers.prepare_atomic(hardware)?;
         let status_start = Instant::now();
-        let before_status = hardware.read_latched_status().map_err(|e| e.to_string())?;
+        if atomic {
+            let status = self
+                .buffers
+                .atomic_status()?
+                .ok_or_else(|| "atomic scanout status unavailable".to_string())?;
+            self.latch_state.sync_hardware(
+                status.active_slot.map(|slot| slot as u8 + 1),
+                status.active_sequence as u16,
+                status.pending_slot.is_some(),
+                status.pending_sequence as u16,
+            );
+        } else {
+            let before_status = hardware.read_latched_status().map_err(|e| e.to_string())?;
+            self.sync_latch_state_from_status(before_status, display_session)?;
+        }
         let mut status_us = status_start.elapsed().as_micros() as u64;
-        self.sync_latch_state_from_status(before_status, display_session)?;
 
         let plan = self
             .latch_state
             .plan_next(input)
             .ok_or_else(|| "no writable hidden latch buffer".to_string())?;
         let buffer_index = plan.slot_index;
+        let written_rects = plan.written_rects();
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
         let rect_count = plan.restore_rects.len() as u32;
         let copied_rows = plan.restore_rects.iter().map(DirtyRect::rows).sum::<u32>();
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.buffers.base_addr(buffer_index);
-        let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
         let mut copied_bytes = 0usize;
         let zero_copy = cached.scanout_slot() == Some(buffer_index);
-        for rect in plan.restore_rects.iter() {
-            if zero_copy {
+        if atomic && !zero_copy {
+            self.latch_state.mark_attempt_failed(buffer_index);
+            return Err("atomic scanout render target did not own the selected slot".to_string());
+        }
+        if zero_copy {
+            for rect in plan.restore_rects.iter() {
                 copied_bytes = copied_bytes.saturating_add(rect.width() * rect.rows() as usize * 2);
-                continue;
             }
-            match B::copy_rect(buffer, cached, rect) {
-                Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
-                Err(e) => {
-                    self.latch_state.mark_attempt_failed(buffer_index);
-                    return Err(e);
+        } else {
+            let buffer = self.buffers.buffer_mut(buffer_index);
+            for rect in plan.restore_rects.iter() {
+                match B::copy_rect(buffer, cached, rect) {
+                    Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
+                    Err(e) => {
+                        self.latch_state.mark_attempt_failed(buffer_index);
+                        return Err(e);
+                    }
                 }
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
-        if let Err(e) = apply_overlays(buffer, plan) {
+        let overlay_result = if zero_copy {
+            let target = self
+                .buffers
+                .scanout_target_mut(buffer_index, self.width, self.height)
+                .ok_or_else(|| "atomic scanout overlay target unavailable".to_string())?;
+            apply_overlays(LatchOverlayTarget::Scanout(target), plan, true)
+        } else {
+            let buffer = self.buffers.buffer_mut(buffer_index);
+            apply_overlays(LatchOverlayTarget::Legacy(buffer), plan, false)
+        };
+        if let Err(e) = overlay_result {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(e);
         }
-        if zero_copy {
+        if let Some(scale) = stream_scale {
+            let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(
+                self.buffers
+                    .frame_view(buffer_index, self.width, self.height),
+                scale,
+            );
+        }
+        if zero_copy && !atomic {
             self.buffers
                 .sync_zero_copy(buffer_index, &plan.restore_rects)?;
         }
@@ -296,17 +484,48 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
         let post_start = Instant::now();
-        let ack = match hardware.post_latched_rgb565(
-            sequence,
-            base_addr,
-            self.width as u16,
-            self.height as u16,
-            self.latch_geometry,
-        ) {
-            Ok(ack) => ack,
-            Err(e) => {
-                self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(e.to_string());
+        let atomic_posted = if atomic && zero_copy {
+            let route = mister_magik_fb::framebuffer::plugin_probe::ScanoutPostRoute {
+                enable: true,
+                filter: false,
+                format: (mister_magik_fb::framebuffer::format::FB_FMT_565
+                    | mister_magik_fb::framebuffer::format::FB_FMT_RXB)
+                    as u8,
+                width: self.width as u16,
+                height: self.height as u16,
+                stride: self.latch_geometry.stride_bytes,
+                hmin: self.latch_geometry.xoff,
+                hmax: self.latch_geometry.right,
+                vmin: self.latch_geometry.yoff,
+                vmax: self.latch_geometry.bottom,
+            };
+            self.buffers.atomic_post(
+                buffer_index,
+                u32::from(sequence),
+                written_rects.as_slice(),
+                route,
+            )?
+        } else {
+            false
+        };
+        let ack = if atomic_posted {
+            (
+                crate::fpga::MAGIK_SCANOUT_MAILBOX_ARM_MAGIC,
+                crate::fpga::MAGIK_SCANOUT_MAILBOX_ARM_MAGIC,
+            )
+        } else {
+            match hardware.post_latched_rgb565(
+                sequence,
+                base_addr,
+                self.width as u16,
+                self.height as u16,
+                self.latch_geometry,
+            ) {
+                Ok(ack) => ack,
+                Err(e) => {
+                    self.latch_state.mark_attempt_failed(buffer_index);
+                    return Err(e.to_string());
+                }
             }
         };
         let post_us = post_start.elapsed().as_micros();
@@ -317,20 +536,41 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 return Err(e.to_string());
             }
         };
-        let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
+        let set_supported = atomic_posted
+            || ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
             || ack.1 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC;
 
         let status_start = Instant::now();
-        let after_status = match hardware.read_latched_status() {
-            Ok(status) => status,
-            Err(e) => {
-                self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(e.to_string());
-            }
+        let (status_supported, flip_count, status_magic_hi, status_magic_lo) = if atomic_posted {
+            let status = self
+                .buffers
+                .atomic_status()?
+                .ok_or_else(|| "atomic scanout status unavailable after post".to_string())?;
+            (
+                status.mailbox_armed
+                    && (status.pending_slot == Some(usize::from(buffer_index - 1))
+                        || (status.active_slot == Some(usize::from(buffer_index - 1))
+                            && status.active_sequence == u32::from(sequence))),
+                status.completion_count as u16,
+                crate::fpga::MAGIK_SCANOUT_MAILBOX_INFO_MAGIC,
+                crate::fpga::MAGIK_SCANOUT_MAILBOX_INFO_MAGIC,
+            )
+        } else {
+            let status = match hardware.read_latched_status() {
+                Ok(status) => status,
+                Err(e) => {
+                    self.latch_state.mark_attempt_failed(buffer_index);
+                    return Err(e.to_string());
+                }
+            };
+            (
+                status.supported(),
+                status.flip_count,
+                status.magic_hi,
+                status.magic_lo,
+            )
         };
         status_us = status_us.saturating_add(status_start.elapsed().as_micros() as u64);
-        let status_supported = after_status.supported();
-        let flip_count = after_status.flip_count;
 
         if !set_supported || !status_supported {
             self.latch_state.mark_attempt_failed(buffer_index);
@@ -341,8 +581,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 u8::from(status_supported),
                 ack.0,
                 ack.1,
-                after_status.magic_hi,
-                after_status.magic_lo
+                status_magic_hi,
+                status_magic_lo
             ));
         }
 
@@ -375,6 +615,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     }
 
     pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
+        if self.buffers.atomic_enabled() {
+            return false;
+        }
         if !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due() {
             return false;
         }
@@ -770,7 +1013,8 @@ mod tests {
             frame_plan(),
             hardware,
             display,
-            |_, _| Ok(()),
+            None,
+            |_, _, _| Ok(()),
         )
     }
 
@@ -792,7 +1036,8 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
-                |_, _| {
+                None,
+                |_, _, _| {
                     events.borrow_mut().push(TestEvent::Overlay);
                     Ok(())
                 },
@@ -828,7 +1073,11 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
-                |hidden, _| {
+                None,
+                |target, _, _| {
+                    let LatchOverlayTarget::Legacy(hidden) = target else {
+                        panic!("legacy test expected hidden target");
+                    };
                     hidden.pixels[0] = Rgb565Pixel(0x5aa5);
                     Ok(())
                 },

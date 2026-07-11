@@ -85,7 +85,7 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn copy_direct_preview_rect_to_hidden(
         &self,
-        hidden: &mut PluginHiddenRgb565Framebuffer,
+        hidden: &mut impl mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget,
         rect: DirtyRect,
     ) -> u32 {
         self.target
@@ -104,7 +104,7 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn copy_arcade_list_update_to_hidden(
         &self,
-        hidden: &mut PluginHiddenRgb565Framebuffer,
+        hidden: &mut impl mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget,
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {

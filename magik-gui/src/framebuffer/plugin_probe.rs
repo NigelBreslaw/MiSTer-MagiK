@@ -10,6 +10,9 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static ATOMIC_SCANOUT_DISABLED: AtomicBool = AtomicBool::new(false);
 
 pub const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
 pub const PLUGIN_SCANOUT_DEVICE: &str = "/dev/mister-magik-scanout";
@@ -17,11 +20,52 @@ pub const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
 pub const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_HIDDEN_SLOT_FRAME_BYTES: usize = 960 * 540 * 2;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanoutMode {
+    Auto,
+    Legacy,
+    Required,
+}
+
+impl ScanoutMode {
+    pub fn wants_atomic(self) -> bool {
+        !matches!(self, Self::Legacy)
+    }
+}
+
+pub fn configured_scanout_mode() -> ScanoutMode {
+    match std::env::var("MISTER_SCANOUT_MODE").ok().as_deref() {
+        Some("auto") => ScanoutMode::Auto,
+        Some("required") => ScanoutMode::Required,
+        Some("legacy") => ScanoutMode::Legacy,
+        Some(_) => ScanoutMode::Legacy,
+        None if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") => {
+            ScanoutMode::Required
+        }
+        None => ScanoutMode::Legacy,
+    }
+}
+
+pub fn atomic_scanout_runtime_enabled() -> bool {
+    configured_scanout_mode().wants_atomic() && !ATOMIC_SCANOUT_DISABLED.load(Ordering::Acquire)
+}
+
+pub fn disable_atomic_scanout() {
+    ATOMIC_SCANOUT_DISABLED.store(true, Ordering::Release);
+}
+
 const SCANOUT_SLOT_COUNT: usize = 2;
 const SCANOUT_MAX_RANGES: usize = 64;
 const SCANOUT_GET_CAPS: libc::c_ulong = 0x80184d20;
 const SCANOUT_ACQUIRE_CPU: libc::c_ulong = 0x40044d21;
 const SCANOUT_SYNC_DEVICE: libc::c_ulong = 0x42084d22;
+const SCANOUT_GET_CAPS_V2: libc::c_ulong = 0x80244d23;
+const SCANOUT_ARM_MAILBOX: libc::c_ulong = 0x40084d24;
+const SCANOUT_SYNC_RANGES_AND_POST: libc::c_ulong = 0x42344d25;
+const SCANOUT_GET_STATUS: libc::c_ulong = 0x80244d26;
+
+const SCANOUT_CAPABILITIES_V2: u32 = 0x0f;
+const NO_SLOT: u32 = u32::MAX;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -30,6 +74,19 @@ struct ScanoutCaps {
     slot_count: u32,
     slot_bytes: u32,
     mmap_stride: u32,
+    dma_addr: [u32; SCANOUT_SLOT_COUNT],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ScanoutCapsV2 {
+    abi_version: u32,
+    capabilities: u32,
+    slot_count: u32,
+    slot_bytes: u32,
+    mmap_stride: u32,
+    mailbox_phys: u32,
+    mailbox_epoch: u32,
     dma_addr: [u32; SCANOUT_SLOT_COUNT],
 }
 
@@ -47,6 +104,169 @@ struct ScanoutSync {
     ranges: [ScanoutRange; SCANOUT_MAX_RANGES],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ScanoutMailboxArm {
+    epoch: u32,
+    fpga_capabilities: u32,
+}
+
+#[repr(C)]
+struct ScanoutPost {
+    slot: u32,
+    range_count: u32,
+    sequence: u32,
+    enable: u32,
+    filter: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+    hmin: u32,
+    hmax: u32,
+    vmin: u32,
+    vmax: u32,
+    ranges: [ScanoutRange; SCANOUT_MAX_RANGES],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ScanoutStatusRaw {
+    mailbox_armed: u32,
+    active_sequence: u32,
+    pending_sequence: u32,
+    active_slot: u32,
+    pending_slot: u32,
+    slot_state: [u32; SCANOUT_SLOT_COUNT],
+    completion_count: u32,
+    error_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanoutSlotState {
+    CpuOwned,
+    DeviceQueued,
+    DeviceActive,
+    CpuReleased,
+    Unknown(u32),
+}
+
+impl From<u32> for ScanoutSlotState {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::CpuOwned,
+            1 => Self::DeviceQueued,
+            2 => Self::DeviceActive,
+            3 => Self::CpuReleased,
+            value => Self::Unknown(value),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanoutStatus {
+    pub mailbox_armed: bool,
+    pub active_sequence: u32,
+    pub pending_sequence: u32,
+    pub active_slot: Option<usize>,
+    pub pending_slot: Option<usize>,
+    pub slot_state: [ScanoutSlotState; SCANOUT_SLOT_COUNT],
+    pub completion_count: u32,
+    pub error_count: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanoutPostRoute {
+    pub enable: bool,
+    pub filter: bool,
+    pub format: u8,
+    pub width: u16,
+    pub height: u16,
+    pub stride: u16,
+    pub hmin: u16,
+    pub hmax: u16,
+    pub vmin: u16,
+    pub vmax: u16,
+}
+
+pub trait Rgb565BlitTarget {
+    #[allow(clippy::too_many_arguments)]
+    fn copy_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<usize, PluginProbeError>;
+}
+
+pub struct ScanoutPixelsTarget<'a> {
+    pixels: &'a mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    stride_pixels: usize,
+}
+
+impl<'a> ScanoutPixelsTarget<'a> {
+    pub fn new(
+        pixels: &'a mut [Rgb565Pixel],
+        width: usize,
+        height: usize,
+        stride_pixels: usize,
+    ) -> Self {
+        Self {
+            pixels,
+            width,
+            height,
+            stride_pixels,
+        }
+    }
+}
+
+impl Rgb565BlitTarget for ScanoutPixelsTarget<'_> {
+    fn copy_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<usize, PluginProbeError> {
+        validate_strided_copy(
+            self.width,
+            self.height,
+            x,
+            y,
+            w,
+            h,
+            src,
+            src_stride_pixels,
+            src_x,
+            src_y,
+        )?;
+        copy_rect_565_strided_pixels(
+            self.pixels,
+            self.stride_pixels,
+            x,
+            y,
+            w,
+            h,
+            src,
+            src_stride_pixels,
+            src_x,
+            src_y,
+        );
+        Ok(w * h * std::mem::size_of::<Rgb565Pixel>())
+    }
+}
+
 pub struct PluginScanoutRgb565Buffers {
     device: File,
     maps: [*mut Rgb565Pixel; SCANOUT_SLOT_COUNT],
@@ -54,26 +274,62 @@ pub struct PluginScanoutRgb565Buffers {
     frame_pixels: usize,
     stride_pixels: usize,
     dma_addr: [u32; SCANOUT_SLOT_COUNT],
+    mailbox: Option<(u32, u32)>,
 }
 
 impl PluginScanoutRgb565Buffers {
     pub fn open(width: usize, height: usize) -> io::Result<Self> {
+        Self::open_inner(width, height, false)
+    }
+
+    pub fn open_atomic(width: usize, height: usize) -> io::Result<Self> {
+        Self::open_inner(width, height, true)
+    }
+
+    fn open_inner(width: usize, height: usize, atomic: bool) -> io::Result<Self> {
         let device = OpenOptions::new()
             .read(true)
             .write(true)
             .open(PLUGIN_SCANOUT_DEVICE)?;
-        let mut caps = ScanoutCaps::default();
-        if unsafe { libc::ioctl(device.as_raw_fd(), SCANOUT_GET_CAPS, &mut caps) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
         let frame_pixels = width
             .checked_mul(height)
             .ok_or_else(|| io::Error::other("scanout geometry overflow"))?;
         let frame_bytes = frame_pixels
             .checked_mul(2)
             .ok_or_else(|| io::Error::other("scanout geometry overflow"))?;
-        if caps.abi_version != 1 || caps.slot_count != 2 || frame_bytes > caps.slot_bytes as usize {
-            return Err(io::Error::other("unsupported scanout capabilities"));
+        let (slot_bytes, mmap_stride, dma_addr, mailbox) = if atomic {
+            let mut caps = ScanoutCapsV2::default();
+            if unsafe { libc::ioctl(device.as_raw_fd(), SCANOUT_GET_CAPS_V2, &mut caps) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if caps.abi_version != 2
+                || caps.capabilities != SCANOUT_CAPABILITIES_V2
+                || caps.slot_count != 2
+                || caps.mailbox_phys == 0
+                || caps.mailbox_epoch == 0
+            {
+                return Err(io::Error::other("unsupported atomic scanout capabilities"));
+            }
+            (
+                caps.slot_bytes,
+                caps.mmap_stride,
+                caps.dma_addr,
+                Some((caps.mailbox_phys, caps.mailbox_epoch)),
+            )
+        } else {
+            let mut caps = ScanoutCaps::default();
+            if unsafe { libc::ioctl(device.as_raw_fd(), SCANOUT_GET_CAPS, &mut caps) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if caps.abi_version != 1 || caps.slot_count != 2 {
+                return Err(io::Error::other("unsupported scanout capabilities"));
+            }
+            (caps.slot_bytes, caps.mmap_stride, caps.dma_addr, None)
+        };
+        if frame_bytes > slot_bytes as usize {
+            return Err(io::Error::other(
+                "scanout slots are smaller than the render target",
+            ));
         }
         let mut maps: [*mut Rgb565Pixel; SCANOUT_SLOT_COUNT] =
             [std::ptr::null_mut(); SCANOUT_SLOT_COUNT];
@@ -85,7 +341,7 @@ impl PluginScanoutRgb565Buffers {
                     libc::PROT_READ | libc::PROT_WRITE,
                     libc::MAP_SHARED,
                     device.as_raw_fd(),
-                    (slot * caps.mmap_stride as usize) as libc::off_t,
+                    (slot * mmap_stride as usize) as libc::off_t,
                 )
             };
             if ptr == libc::MAP_FAILED {
@@ -104,8 +360,26 @@ impl PluginScanoutRgb565Buffers {
             map_len: frame_bytes,
             frame_pixels,
             stride_pixels: width,
-            dma_addr: caps.dma_addr,
+            dma_addr,
+            mailbox,
         })
+    }
+
+    pub fn mailbox(&self) -> io::Result<(u32, u32)> {
+        self.mailbox
+            .ok_or_else(|| io::Error::other("atomic scanout mailbox unavailable"))
+    }
+
+    pub fn arm_mailbox(&self, fpga_capabilities: u16) -> io::Result<()> {
+        let (_, epoch) = self.mailbox()?;
+        let arm = ScanoutMailboxArm {
+            epoch,
+            fpga_capabilities: u32::from(fpga_capabilities),
+        };
+        if unsafe { libc::ioctl(self.device.as_raw_fd(), SCANOUT_ARM_MAILBOX, &arm) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     pub fn dma_addr(&self, slot: usize) -> u32 {
@@ -119,6 +393,15 @@ impl PluginScanoutRgb565Buffers {
     }
     pub fn pixels_mut(&mut self, slot: usize) -> &mut [Rgb565Pixel] {
         unsafe { std::slice::from_raw_parts_mut(self.maps[slot], self.frame_pixels) }
+    }
+    pub fn target_mut(
+        &mut self,
+        slot: usize,
+        width: usize,
+        height: usize,
+    ) -> ScanoutPixelsTarget<'_> {
+        let stride_pixels = self.stride_pixels;
+        ScanoutPixelsTarget::new(self.pixels_mut(slot), width, height, stride_pixels)
     }
     pub fn acquire(&self, slot: usize) -> io::Result<()> {
         let value = slot as u32;
@@ -151,6 +434,93 @@ impl PluginScanoutRgb565Buffers {
         }
         Ok(())
     }
+
+    pub fn sync_ranges_and_post(
+        &self,
+        slot: usize,
+        sequence: u32,
+        rects: &[crate::framebuffer::target::DirtyRect],
+        route: ScanoutPostRoute,
+    ) -> io::Result<()> {
+        let mut request = ScanoutPost {
+            slot: slot as u32,
+            range_count: 0,
+            sequence,
+            enable: u32::from(route.enable),
+            filter: u32::from(route.filter),
+            format: u32::from(route.format),
+            width: u32::from(route.width),
+            height: u32::from(route.height),
+            stride: u32::from(route.stride),
+            hmin: u32::from(route.hmin),
+            hmax: u32::from(route.hmax),
+            vmin: u32::from(route.vmin),
+            vmax: u32::from(route.vmax),
+            ranges: [ScanoutRange::default(); SCANOUT_MAX_RANGES],
+        };
+        append_scanout_ranges(
+            &mut request.ranges,
+            &mut request.range_count,
+            rects,
+            self.stride_pixels,
+        )?;
+        if unsafe {
+            libc::ioctl(
+                self.device.as_raw_fd(),
+                SCANOUT_SYNC_RANGES_AND_POST,
+                &request,
+            )
+        } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn status(&self) -> io::Result<ScanoutStatus> {
+        let mut raw = ScanoutStatusRaw::default();
+        if unsafe { libc::ioctl(self.device.as_raw_fd(), SCANOUT_GET_STATUS, &mut raw) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(ScanoutStatus {
+            mailbox_armed: raw.mailbox_armed != 0,
+            active_sequence: raw.active_sequence,
+            pending_sequence: raw.pending_sequence,
+            active_slot: (raw.active_slot != NO_SLOT).then_some(raw.active_slot as usize),
+            pending_slot: (raw.pending_slot != NO_SLOT).then_some(raw.pending_slot as usize),
+            slot_state: raw.slot_state.map(ScanoutSlotState::from),
+            completion_count: raw.completion_count,
+            error_count: raw.error_count,
+        })
+    }
+}
+
+fn append_scanout_ranges(
+    output: &mut [ScanoutRange; SCANOUT_MAX_RANGES],
+    count: &mut u32,
+    rects: &[crate::framebuffer::target::DirtyRect],
+    stride_pixels: usize,
+) -> io::Result<()> {
+    if rects.len() > SCANOUT_MAX_RANGES {
+        return Err(io::Error::other(
+            "too many dirty ranges for atomic scanout post",
+        ));
+    }
+    for rect in rects {
+        if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 || rect.x1 > stride_pixels {
+            return Err(io::Error::other(
+                "invalid dirty rectangle for atomic scanout post",
+            ));
+        }
+        let start = (rect.y0 * stride_pixels + rect.x0) * 2;
+        let end = ((rect.y1 - 1) * stride_pixels + rect.x1) * 2;
+        output[*count as usize] = ScanoutRange {
+            offset: start as u32,
+            length: (end - start) as u32,
+        };
+        *count += 1;
+    }
+    Ok(())
 }
 
 impl Drop for PluginScanoutRgb565Buffers {
@@ -602,6 +972,82 @@ impl PluginHiddenRgb565Framebuffer {
     }
 }
 
+impl Rgb565BlitTarget for PluginHiddenRgb565Framebuffer {
+    fn copy_rect_565_strided(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        src: &[Rgb565Pixel],
+        src_stride_pixels: usize,
+        src_x: usize,
+        src_y: usize,
+    ) -> Result<usize, PluginProbeError> {
+        PluginHiddenRgb565Framebuffer::copy_rect_565_strided(
+            self,
+            x,
+            y,
+            w,
+            h,
+            src,
+            src_stride_pixels,
+            src_x,
+            src_y,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_strided_copy(
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    src: &[Rgb565Pixel],
+    src_stride_pixels: usize,
+    src_x: usize,
+    src_y: usize,
+) -> Result<(), PluginProbeError> {
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let x1 = x
+        .checked_add(w)
+        .ok_or_else(|| PluginProbeError::InvalidGeometry("target x overflow".to_string()))?;
+    let y1 = y
+        .checked_add(h)
+        .ok_or_else(|| PluginProbeError::InvalidGeometry("target y overflow".to_string()))?;
+    if x1 > width || y1 > height {
+        return Err(PluginProbeError::InvalidGeometry(format!(
+            "target x={x} y={y} w={w} h={h} exceeds {width}x{height}"
+        )));
+    }
+    let src_x1 = src_x
+        .checked_add(w)
+        .ok_or_else(|| PluginProbeError::InvalidGeometry("source x overflow".to_string()))?;
+    let src_y1 = src_y
+        .checked_add(h)
+        .ok_or_else(|| PluginProbeError::InvalidGeometry("source y overflow".to_string()))?;
+    if src_stride_pixels < src_x1 {
+        return Err(PluginProbeError::InvalidGeometry(format!(
+            "source stride {src_stride_pixels} is smaller than source x+w {src_x1}"
+        )));
+    }
+    let needed = src_stride_pixels
+        .checked_mul(src_y1)
+        .ok_or_else(|| PluginProbeError::InvalidGeometry("source size overflow".to_string()))?;
+    if src.len() < needed {
+        return Err(PluginProbeError::SourceTooShort {
+            needed,
+            actual: src.len(),
+        });
+    }
+    Ok(())
+}
+
 fn copy_full_frame_pixels(
     dst: &mut [Rgb565Pixel],
     dst_stride_pixels: usize,
@@ -761,6 +1207,51 @@ plugin_probe_region_tsv\tindex=2\tname=hidden-slot-2\tavailable=1\tphys=0x230000
 plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x00000000\tlen=1036800\tdma_owned=1\n",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn atomic_scanout_uapi_layout_matches_kernel_abi_v2() {
+        assert_eq!(std::mem::size_of::<ScanoutCaps>(), 24);
+        assert_eq!(std::mem::size_of::<ScanoutCapsV2>(), 36);
+        assert_eq!(std::mem::size_of::<ScanoutMailboxArm>(), 8);
+        assert_eq!(std::mem::size_of::<ScanoutPost>(), 564);
+        assert_eq!(std::mem::size_of::<ScanoutStatusRaw>(), 36);
+        assert_eq!(SCANOUT_GET_CAPS_V2, 0x8024_4d23);
+        assert_eq!(SCANOUT_SYNC_RANGES_AND_POST, 0x4234_4d25);
+        assert_eq!(SCANOUT_GET_STATUS, 0x8024_4d26);
+    }
+
+    #[test]
+    fn atomic_post_rejects_range_overflow_instead_of_truncating_damage() {
+        let rect = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 1,
+            y1: 1,
+        };
+        let rects = vec![rect; SCANOUT_MAX_RANGES + 1];
+        let mut output = [ScanoutRange::default(); SCANOUT_MAX_RANGES];
+        let mut count = 0;
+
+        assert!(append_scanout_ranges(&mut output, &mut count, &rects, 960).is_err());
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn scanout_pixel_target_updates_only_the_requested_strided_rect() {
+        let mut destination = vec![Rgb565Pixel(0); 6 * 4];
+        let source = (1..=12).map(Rgb565Pixel).collect::<Vec<_>>();
+        let mut target = ScanoutPixelsTarget::new(&mut destination, 6, 4, 6);
+
+        let bytes = target
+            .copy_rect_565_strided(2, 1, 3, 2, &source, 4, 1, 1)
+            .unwrap();
+
+        assert_eq!(bytes, 12);
+        assert_eq!(destination[6 + 2..6 + 5], source[5..8]);
+        assert_eq!(destination[12 + 2..12 + 5], source[9..12]);
+        assert!(destination[..6 + 2].iter().all(|pixel| pixel.0 == 0));
+        assert!(destination[12 + 5..].iter().all(|pixel| pixel.0 == 0));
     }
 
     #[test]

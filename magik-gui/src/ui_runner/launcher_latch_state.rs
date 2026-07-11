@@ -109,6 +109,19 @@ pub(super) struct LatchPresentPlan {
     arcade_after: Option<DirectLayerState>,
 }
 
+impl LatchPresentPlan {
+    pub(super) fn written_rects(self) -> DirtyRectList {
+        let mut written = self.restore_rects;
+        if let Some(rect) = self.preview_redraw {
+            push_without_covered_rect(&mut written, rect);
+        }
+        if let Some(update) = self.arcade_redraw {
+            push_without_covered_rect(&mut written, arcade_update_dirty_rect(&update));
+        }
+        written
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],
@@ -472,6 +485,27 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn written_rects_cover_base_preview_and_arcade_writes() {
+        let base = rect(0, 0, 2, 2);
+        let preview = rect(2, 0, 4, 2);
+        let arcade = rect(0, 2, 4, 4);
+        let plan = LatchPresentPlan {
+            slot_index: 1,
+            restore_rects: DirtyRectList::from_one(base),
+            preview_redraw: Some(preview),
+            arcade_redraw: Some(ArcadeListUpdate::Full(arcade)),
+            cached_damage: DirtyRectList::new(),
+            preview_after: None,
+            arcade_after: None,
+        };
+
+        let written = plan.written_rects();
+        assert!(written.iter().any(|candidate| candidate == base));
+        assert!(written.iter().any(|candidate| candidate == preview));
+        assert!(written.iter().any(|candidate| candidate == arcade));
     }
 
     #[test]
