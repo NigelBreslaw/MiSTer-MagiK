@@ -240,6 +240,10 @@ jobs:
             find build/fpga-signoff/patched -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0
           )
           scripts/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
+          cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
+          delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
+          printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" \
+            >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
 
       - name: Upload FPGA build evidence
         if: always()

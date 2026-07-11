@@ -334,7 +334,7 @@ def print_summary(
     )
     visual_latch_misses = len(latch_misses) + buffer_failures + flip_failures
     scheduler_wake_jitter_misses = len(cadence_misses)
-    latch_valid = not latch_rows or (
+    latch_valid = bool(latch_rows) and (
         len(latch_misses) == 0
         and buffer_failures == 0
         and flip_failures == 0
@@ -536,6 +536,14 @@ def run_self_test() -> int:
         return 1
     if print_summary("self-latch-pass", [base, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
         print("self-test expected latch pass", file=sys.stderr)
+        return 1
+    fallback = dict(base)
+    fallback["main_present_backend"] = "fb0-dirty"
+    fallback["main_present_status"] = "none"
+    fallback_next = dict(fallback)
+    fallback_next["frame"] = "32"
+    if print_summary("self-latch-backend-fail", [fallback, fallback_next], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
+        print("self-test expected latch backend failure", file=sys.stderr)
         return 1
     if print_summary("self-latch-fail", [missed, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) == 0:
         print("self-test expected latch failure", file=sys.stderr)

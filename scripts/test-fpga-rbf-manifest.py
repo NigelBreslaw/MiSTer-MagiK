@@ -16,9 +16,11 @@ class ManifestTest(unittest.TestCase):
     def fixture(self, root: Path) -> Path:
         rbf = root / "release.rbf"
         report = root / "reports/fit.rpt"
+        delta = root / "reports/quartus-delta-signoff.tsv"
         report.parent.mkdir()
         rbf.write_bytes(b"release-rbf")
         report.write_bytes(b"fit-report")
+        delta.write_bytes(b"quartus_delta_signoff_tsv\tvalid=1\n")
         sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
         metadata = root / "release.metadata.txt"
         metadata.write_text(
@@ -31,9 +33,11 @@ class ManifestTest(unittest.TestCase):
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
+                "signoff_valid=1",
                 "rbf_file=release.rbf",
                 "rbf_sha256=" + sha(rbf),
                 "report_sha256.reports/fit.rpt=" + sha(report),
+                "report_sha256.reports/quartus-delta-signoff.tsv=" + sha(delta),
             )) + "\n"
         )
         return metadata

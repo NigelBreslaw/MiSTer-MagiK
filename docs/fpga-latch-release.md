@@ -91,3 +91,7 @@ The current ignored local RBF has SHA-256
 metadata includes the retired mailbox patch and RTL. It is stale, is not the
 latch-only baseline, and is ineligible for release qualification or deployment.
 
+The extracted-latch candidate and its current qualification disposition are
+recorded in [FPGA latch release signoff](fpga-latch-release-signoff.md). A
+candidate hash listed there is not an approved commercial release while any
+custom-delta checklist item remains open.
