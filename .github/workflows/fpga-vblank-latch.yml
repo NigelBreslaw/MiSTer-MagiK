@@ -216,6 +216,12 @@ jobs:
           du -sh build/quartus-lite-17.0/docker-intelFPGA_lite || true
           docker system df || true
 
+      - name: Test scanout mailbox RTL
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes iverilog
+          scripts/test-fpga-scanout-mailbox.sh
+
       - name: Build vblank-latched RBF
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
