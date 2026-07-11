@@ -42,6 +42,44 @@ Preserving Slint's individual `PhysicalRegion` rectangles while retaining hard
 ownership produced work p99 8081 us. Home damage is already broad, so this did
 not reduce cache-clean cost. The change was reverted.
 
+## Slint 1.17 upstream review
+
+The Slint monorepo at revision
+`64a1241e4763e075b293b29d58d16c99f483d943` confirms that there is no
+additional software-renderer damage signal for this integration:
+
+- `SoftwareRenderer::render_buffer_impl` implements `SwappedBuffers` by
+  repainting the union of the current frame's damage and `prev_frame_dirty`.
+  That is the required two-buffer history, not an avoidable full-frame policy.
+- `TargetPixelBuffer::line_slice` exposes a mutable scanline to the renderer,
+  but it does not report the byte ranges actually written. Per-pixel
+  instrumentation would add work below the already available
+  `PhysicalRegion` signal.
+- The STM32 double-buffer example calls `clean_dcache_by_slice(work_fb)` for
+  the entire work buffer. It demonstrates the same cache-ownership transfer,
+  not a cheaper range-cleaning mechanism.
+- Slint's documented two-line-buffer DMA overlap belongs to push displays that
+  transfer rendered scanlines to a controller. MiSTer's FPGA continuously
+  scans a persistent framebuffer, so that approach would reintroduce a copy
+  rather than provide zero-copy scanout.
+- `cache-rendering-hint` is a renderer-dependent layer-cache hint. The Slint
+  software renderer does not implement cached subtree layers, so applying it
+  to the moving Home tiles cannot reduce this path.
+- More than two scanout buffers would require damage since the older contents
+  of each selected buffer. It increases the required damage history for this
+  workload and does not reduce cache maintenance.
+
+The review therefore leaves the measured result unchanged: Slint already
+provides the useful renderer-level damage, and the remaining cost is the
+Linux DMA ownership transfer plus hard mapping revocation for broad scrolling
+damage.
+
+Potential future work needs a materially different display or mapping design,
+such as hardware address-offset scrolling with a ring-shaped scanout surface,
+or a demonstrably cheaper kernel write-revocation mechanism. Either requires a
+new before/after qualification and must be compared with the same optimization
+on the legacy cached-RAM-to-WC path.
+
 ## Decision
 
 - Keep the coherent mailbox, ownership API, diagnostics, and opt-in path.
