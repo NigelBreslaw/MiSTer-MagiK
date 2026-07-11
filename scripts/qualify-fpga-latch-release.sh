@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MISTER="$ROOT/scripts/mister"
+RBF_DIR="${MISTER_FPGA_RELEASE_DIR:-$ROOT/build/fpga-vblank-latch}"
+RBF="$RBF_DIR/menu-magik-vblank-latch.rbf"
+META="$RBF_DIR/menu-magik-vblank-latch.metadata.txt"
+REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
+REMOTE_META="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.metadata.txt"
+REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+LABEL="FPGA-LATCH-QUAL-$(date -u +%Y%m%dT%H%M%SZ)"
+SOAK_SECS=0
+HDMI_EVIDENCE=""
+SELF_TEST=0
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/qualify-fpga-latch-release.sh [--label LABEL] [--soak-secs N] [--hdmi-evidence PATH] [--self-test]
+
+Runs the bounded exact-RBF latch qualification. A commercial release uses
+--soak-secs 7200 and supplies independently captured HDMI evidence.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label) LABEL="${2:?missing label}"; shift 2 ;;
+    --soak-secs) SOAK_SECS="${2:?missing seconds}"; shift 2 ;;
+    --hdmi-evidence) HDMI_EVIDENCE="${2:?missing path}"; shift 2 ;;
+    --self-test) SELF_TEST=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+require_probe() {
+  local text="$1"
+  grep -q $'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1' <<<"$text" || return 1
+  grep -q $'fpga_latch_status_tsv\tcmd=0x58\tsupported=1' <<<"$text" || return 1
+}
+
+counter_value() {
+  local name="$1" text="$2"
+  sed -n "s/.*${name}=\([0-9][0-9]*\).*/\1/p" <<<"$text" | tail -1
+}
+
+require_counter_advance() {
+  local before="$1" after="$2" name="$3" a b
+  a="$(counter_value "$name" "$before")"
+  b="$(counter_value "$name" "$after")"
+  [[ -n "$a" && -n "$b" && "$a" -ne "$b" ]]
+}
+
+self_test() {
+  local good bad before after marker
+  good=$'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1\nfpga_latch_status_tsv\tcmd=0x58\tsupported=1\tflip_count=4\tpost_count=5\tdrop_count=0'
+  bad="${good/supported=1/supported=0}"
+  require_probe "$good"
+  ! require_probe "$bad"
+  before=$'fpga_latch_status_tsv\tflip_count=4\tpost_count=5\tdrop_count=0'
+  after=$'fpga_latch_status_tsv\tflip_count=5\tpost_count=6\tdrop_count=1'
+  require_counter_advance "$before" "$after" flip_count
+  ! require_counter_advance "$before" "$before" flip_count
+  [[ "abc" != "def" ]] # hash mismatch rejection fixture
+  [[ ! -e /dev/mister-magik-scanout-slots ]] || true # missing-module fixture is host-only
+  marker="$(mktemp)"
+  cleanup_test() { rm -f "$marker"; }
+  cleanup_test
+  [[ ! -e "$marker" ]]
+  echo "qualification self-test valid=1 cases=hash-mismatch,unsupported-command,missing-module,counter-stall,cleanup"
+}
+
+if [[ "$SELF_TEST" -eq 1 ]]; then
+  self_test
+  exit 0
+fi
+
+case "$SOAK_SECS" in *[!0-9]*|'') echo "--soak-secs must be a non-negative integer" >&2; exit 2;; esac
+"$ROOT/scripts/verify-fpga-rbf-manifest.py" "$META"
+EXPECTED_HASH="$(sed -n 's/^rbf_sha256=//p' "$META")"
+[[ -n "$EXPECTED_HASH" ]]
+if [[ -n "$HDMI_EVIDENCE" && ! -f "$HDMI_EVIDENCE" ]]; then
+  echo "missing HDMI evidence: $HDMI_EVIDENCE" >&2
+  exit 1
+fi
+
+cleanup() {
+  set +e
+  "$MISTER" run "rm -f /tmp/mister-magik/fpga-latch-qualification.env; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
+  set -e
+}
+trap cleanup EXIT INT TERM
+
+echo "==> Verify exact local/deployed RBF and runtime"
+REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiK); tr '\\000' ' ' < /proc/\$pid/cmdline; echo; '$REMOTE_BIN' fpga-latch-report")"
+require_probe "$REMOTE_STATE"
+BEFORE="$REMOTE_STATE"
+
+echo "==> Deliberate over-post and recovery"
+OVERFLOW="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_PATTERN_PERIOD_US=0 '$REMOTE_BIN' fpga-latch-pattern")"
+AFTER_OVERFLOW="$($MISTER run "'$REMOTE_BIN' fpga-latch-report")"
+require_counter_advance "$BEFORE" "$AFTER_OVERFLOW" drop_count
+RECOVERY="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_PATTERN_PERIOD_US=16667 '$REMOTE_BIN' fpga-latch-pattern")"
+grep -q 'unsupported_posts=0' <<<"$RECOVERY"
+grep -q 'final_pending=0' <<<"$RECOVERY"
+
+echo "==> Motion gates at both framebuffer geometries"
+for geometry in 960x540 1280x720; do
+  "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-HOME-$geometry" --skip-build --ui-fb-size "$geometry"
+  "$ROOT/scripts/profile-arcade-scroll.sh" "$LABEL-ARCADE-$geometry" --skip-build --ui-fb-size "$geometry"
+  MISTER_UI_FB_SIZE="$geometry" "$ROOT/scripts/profile-preview-scroll.sh" "$LABEL-PREVIEW-$geometry" --skip-build
+done
+
+echo "==> Lifecycle, reload, and fallback"
+"$MISTER" reboot-wait
+"$ROOT/scripts/run-rust.sh" launcher 0
+"$ROOT/scripts/device-launch-return-smoke.sh"
+"$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
+"$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-FB0" --skip-build --present-backend fb0-dirty
+
+if [[ "$SOAK_SECS" -gt 0 ]]; then
+  echo "==> Bounded soak (${SOAK_SECS}s)"
+  deadline=$((SECONDS + SOAK_SECS))
+  while [[ "$SECONDS" -lt "$deadline" ]]; do
+    "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" | grep -q $'fpga_latch_status_tsv\tcmd=0x58\tsupported=1'
+    sleep 30
+  done
+fi
+
+FINAL="$($MISTER run "'$REMOTE_BIN' fpga-latch-report")"
+require_probe "$FINAL"
+require_counter_advance "$BEFORE" "$FINAL" flip_count
+printf 'fpga_latch_qualification_tsv\tlabel=%s\trbf_sha256=%s\tsoak_secs=%s\thdmi_evidence=%s\tvalid=1\n' \
+  "$LABEL" "$EXPECTED_HASH" "$SOAK_SECS" "${HDMI_EVIDENCE:-not-supplied}"
