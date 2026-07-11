@@ -64,6 +64,28 @@ and pending sequences, slot/state, apply/error counters, and epoch. Existing
 `0x57`/`0x58` vblank-latch commands remain available as the compatibility
 fallback for one release.
 
+## Kernel ownership ABI
+
+The loadable `mister_magik_scanout.ko` module exposes ABI v2 without changing
+the stock kernel. `GET_CAPS_V2` returns the two pixel DMA addresses plus the
+mailbox physical address and epoch. Userspace bootstraps and verifies FPGA
+command `0x59`, then confirms that exact epoch with `ARM_MAILBOX`.
+
+`SYNC_RANGES_AND_POST` is the only production post operation. Under one kernel
+mutex it validates every range and route field, marks the slot device-queued,
+invalidates all PTEs for that slot, cleans only the submitted DMA ranges, and
+publishes the descriptor/control sequence. A fault on a queued or active slot
+returns `SIGBUS`; opening another fd or mapping again cannot bypass the state
+check. `ACQUIRE_CPU` refreshes the coherent completion fence and succeeds only
+for an already CPU-owned or FPGA-released slot. It performs the DMA API's
+device-to-CPU ownership transition before allowing page faults to map the slot
+again.
+
+The legacy `SYNC_DEVICE` ioctl remains available only before the mailbox is
+armed. This preserves the opt-in proof/fallback for one release while preventing
+one process from mixing advisory legacy synchronization with production hard
+ownership in the same session.
+
 ## Evidence basis
 
 The wiring follows Intel's Cyclone V HPS register map and design guidance:

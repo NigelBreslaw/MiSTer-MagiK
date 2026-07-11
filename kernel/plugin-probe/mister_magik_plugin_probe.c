@@ -13,7 +13,9 @@
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
+#include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <generated/utsrelease.h>
@@ -39,6 +41,18 @@
 #define REGION_COUNT 4UL
 #define REGION_OFFSET_PAGES 256UL
 
+#define MAILBOX_BYTES PAGE_SIZE
+#define MAILBOX_MAX_PHYS 0x3fffffffUL
+#define MAILBOX_CONTROL_WORD 0
+#define MAILBOX_DESC_A_WORD 16
+#define MAILBOX_DESC_B_WORD 32
+#define MAILBOX_COMPLETION_WORD 48
+#define MAILBOX_CONTROL_MAGIC 0x4d475343U
+#define MAILBOX_DESCRIPTOR_MAGIC 0x4d474452U
+#define MAILBOX_COMPLETION_MAGIC 0x4d47434dU
+#define MAILBOX_FPGA_CAPS 0x0103U
+#define NO_SLOT 0xffffffffU
+
 struct probe_region {
 	const char *name;
 	unsigned long phys;
@@ -56,6 +70,18 @@ static void *scanout_virt[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
 static dma_addr_t scanout_dma[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
 static const size_t scanout_slot_bytes = 1280UL * 720UL * 2UL;
 static const size_t scanout_map_bytes = PAGE_ALIGN(1280UL * 720UL * 2UL);
+static DEFINE_MUTEX(scanout_lock);
+static __u32 slot_state[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
+static unsigned long mailbox_page;
+static __u32 mailbox_phys;
+static __u32 mailbox_epoch;
+static bool mailbox_armed;
+static __u32 active_sequence;
+static __u32 pending_sequence;
+static __u32 active_slot = NO_SLOT;
+static __u32 pending_slot = NO_SLOT;
+static __u32 completion_count;
+static __u32 scanout_error_count;
 
 static int probe_open(struct inode *inode, struct file *file)
 {
@@ -164,12 +190,118 @@ static struct miscdevice probe_miscdev = {
 	.mode = 0600,
 };
 
+static void scanout_refresh_completion_locked(void)
+{
+	__u32 *words = (__u32 *)mailbox_page;
+	__u32 sequence_before, sequence_after, magic, epoch, completed_slot;
+
+	if (!mailbox_armed || !mailbox_page || pending_slot == NO_SLOT)
+		return;
+
+	sequence_before = READ_ONCE(words[MAILBOX_COMPLETION_WORD + 2]);
+	dma_rmb();
+	magic = READ_ONCE(words[MAILBOX_COMPLETION_WORD]);
+	epoch = READ_ONCE(words[MAILBOX_COMPLETION_WORD + 1]);
+	completed_slot = (READ_ONCE(words[MAILBOX_COMPLETION_WORD + 3]) >> 5) & 0x3;
+	dma_rmb();
+	sequence_after = READ_ONCE(words[MAILBOX_COMPLETION_WORD + 2]);
+
+	if (sequence_before != sequence_after || magic != MAILBOX_COMPLETION_MAGIC ||
+	    epoch != mailbox_epoch || sequence_after != pending_sequence)
+		return;
+	if (completed_slot != pending_slot || completed_slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT) {
+		scanout_error_count++;
+		return;
+	}
+
+	if (active_slot < MISTER_MAGIK_SCANOUT_SLOT_COUNT)
+		slot_state[active_slot] = MISTER_MAGIK_SCANOUT_SLOT_CPU_RELEASED;
+	slot_state[completed_slot] = MISTER_MAGIK_SCANOUT_SLOT_DEVICE_ACTIVE;
+	active_slot = completed_slot;
+	active_sequence = sequence_after;
+	pending_slot = NO_SLOT;
+	pending_sequence = 0;
+	completion_count++;
+}
+
+static int scanout_validate_ranges(const struct mister_magik_scanout_post *post)
+{
+	unsigned int i;
+
+	if (post->range_count > MISTER_MAGIK_SCANOUT_MAX_RANGES)
+		return -EINVAL;
+	for (i = 0; i < post->range_count; i++) {
+		__u32 offset = post->ranges[i].offset;
+		__u32 length = post->ranges[i].length;
+
+		if (!length || offset >= scanout_slot_bytes ||
+		    length > scanout_slot_bytes - offset)
+			return -EINVAL;
+	}
+	return 0;
+}
+
+static int scanout_validate_geometry(const struct mister_magik_scanout_post *post)
+{
+	if (!post->sequence || post->slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT ||
+	    post->enable > 1 || post->filter > 1 || post->format > 0x3f ||
+	    !post->width || post->width > 0xfff ||
+	    !post->height || post->height > 0xfff ||
+	    !post->stride || post->stride > 0x3fff ||
+	    post->hmin > 0xfff || post->hmax > 0xfff ||
+	    post->vmin > 0xfff || post->vmax > 0xfff ||
+	    post->hmin > post->hmax || post->vmin > post->vmax ||
+	    post->stride * post->height > scanout_slot_bytes)
+		return -EINVAL;
+	return scanout_validate_ranges(post);
+}
+
+static void scanout_publish_locked(const struct mister_magik_scanout_post *post)
+{
+	__u32 *words = (__u32 *)mailbox_page;
+	unsigned int descriptor_word = post->sequence & 1 ?
+		MAILBOX_DESC_B_WORD : MAILBOX_DESC_A_WORD;
+	unsigned int i;
+
+	for (i = 0; i < post->range_count; i++)
+		dma_sync_single_range_for_device(&scanout_pdev->dev,
+			scanout_dma[post->slot], post->ranges[i].offset,
+			post->ranges[i].length, DMA_TO_DEVICE);
+
+	WRITE_ONCE(words[descriptor_word], MAILBOX_DESCRIPTOR_MAGIC);
+	WRITE_ONCE(words[descriptor_word + 1], mailbox_epoch);
+	WRITE_ONCE(words[descriptor_word + 2], post->sequence);
+	WRITE_ONCE(words[descriptor_word + 3], (__u32)scanout_dma[post->slot]);
+	WRITE_ONCE(words[descriptor_word + 4],
+		(post->format & 0x3f) | ((post->filter & 1) << 6) |
+		((post->enable & 1) << 7) | ((post->slot & 0x3) << 8) |
+		((post->width & 0xfff) << 16));
+	WRITE_ONCE(words[descriptor_word + 5],
+		(post->height & 0xfff) | ((post->stride & 0x3fff) << 16));
+	WRITE_ONCE(words[descriptor_word + 6],
+		(post->hmin & 0xfff) | ((post->hmax & 0xfff) << 16));
+	WRITE_ONCE(words[descriptor_word + 7],
+		(post->vmin & 0xfff) | ((post->vmax & 0xfff) << 16));
+	dma_wmb();
+
+	WRITE_ONCE(words[MAILBOX_CONTROL_WORD], MAILBOX_CONTROL_MAGIC);
+	WRITE_ONCE(words[MAILBOX_CONTROL_WORD + 1], mailbox_epoch);
+	WRITE_ONCE(words[MAILBOX_CONTROL_WORD + 3], post->sequence & 1);
+	dma_wmb();
+	WRITE_ONCE(words[MAILBOX_CONTROL_WORD + 2], post->sequence);
+}
+
 static long scanout_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct mister_magik_scanout_caps caps = { };
+	struct mister_magik_scanout_caps_v2 caps_v2 = { };
+	struct mister_magik_scanout_mailbox_arm arm;
+	struct mister_magik_scanout_status status = { };
+	struct mister_magik_scanout_post *post;
 	struct mister_magik_scanout_sync sync;
 	__u32 slot;
 	unsigned int i;
+	int ret;
 
 	switch (cmd) {
 	case MISTER_MAGIK_SCANOUT_GET_CAPS:
@@ -180,35 +312,156 @@ static long scanout_ioctl(struct file *file, unsigned int cmd, unsigned long arg
 		for (i = 0; i < MISTER_MAGIK_SCANOUT_SLOT_COUNT; i++)
 			caps.dma_addr[i] = (__u32)scanout_dma[i];
 		return copy_to_user((void __user *)arg, &caps, sizeof(caps)) ? -EFAULT : 0;
+	case MISTER_MAGIK_SCANOUT_GET_CAPS_V2:
+		caps_v2.abi_version = MISTER_MAGIK_SCANOUT_ABI_VERSION_V2;
+		caps_v2.capabilities = MISTER_MAGIK_SCANOUT_CAP_RANGE_SYNC |
+			MISTER_MAGIK_SCANOUT_CAP_HARD_OWNERSHIP |
+			MISTER_MAGIK_SCANOUT_CAP_ATOMIC_POST |
+			MISTER_MAGIK_SCANOUT_CAP_ACP_MAILBOX;
+		caps_v2.slot_count = MISTER_MAGIK_SCANOUT_SLOT_COUNT;
+		caps_v2.slot_bytes = scanout_slot_bytes;
+		caps_v2.mmap_stride = scanout_map_bytes;
+		caps_v2.mailbox_phys = mailbox_phys;
+		caps_v2.mailbox_epoch = mailbox_epoch;
+		for (i = 0; i < MISTER_MAGIK_SCANOUT_SLOT_COUNT; i++)
+			caps_v2.dma_addr[i] = (__u32)scanout_dma[i];
+		return copy_to_user((void __user *)arg, &caps_v2, sizeof(caps_v2)) ? -EFAULT : 0;
+	case MISTER_MAGIK_SCANOUT_ARM_MAILBOX:
+		if (copy_from_user(&arm, (void __user *)arg, sizeof(arm)))
+			return -EFAULT;
+		if (arm.epoch != mailbox_epoch ||
+		    (arm.fpga_capabilities & MAILBOX_FPGA_CAPS) != MAILBOX_FPGA_CAPS)
+			return -EPROTO;
+		mutex_lock(&scanout_lock);
+		mailbox_armed = true;
+		mutex_unlock(&scanout_lock);
+		return 0;
 	case MISTER_MAGIK_SCANOUT_ACQUIRE_CPU:
 		if (copy_from_user(&slot, (void __user *)arg, sizeof(slot)))
 			return -EFAULT;
 		if (slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT)
 			return -EINVAL;
-		dma_sync_single_for_cpu(&scanout_pdev->dev, scanout_dma[slot],
+		mutex_lock(&scanout_lock);
+		scanout_refresh_completion_locked();
+		if (slot_state[slot] == MISTER_MAGIK_SCANOUT_SLOT_CPU_RELEASED) {
+			dma_sync_single_for_cpu(&scanout_pdev->dev, scanout_dma[slot],
 					scanout_slot_bytes, DMA_TO_DEVICE);
-		return 0;
+			slot_state[slot] = MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED;
+			ret = 0;
+		} else if (slot_state[slot] == MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED) {
+			ret = 0;
+		} else {
+			ret = -EBUSY;
+		}
+		mutex_unlock(&scanout_lock);
+		return ret;
 	case MISTER_MAGIK_SCANOUT_SYNC_DEVICE:
 		if (copy_from_user(&sync, (void __user *)arg, sizeof(sync)))
 			return -EFAULT;
 		if (sync.slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT ||
 		    sync.range_count > MISTER_MAGIK_SCANOUT_MAX_RANGES)
 			return -EINVAL;
+		mutex_lock(&scanout_lock);
+		if (mailbox_armed) {
+			mutex_unlock(&scanout_lock);
+			return -EOPNOTSUPP;
+		}
+		if (slot_state[sync.slot] != MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED) {
+			mutex_unlock(&scanout_lock);
+			return -EBUSY;
+		}
 		for (i = 0; i < sync.range_count; i++) {
 			__u32 offset = sync.ranges[i].offset;
 			__u32 length = sync.ranges[i].length;
 
 			if (!length || offset >= scanout_slot_bytes ||
-			    length > scanout_slot_bytes - offset)
+			    length > scanout_slot_bytes - offset) {
+				mutex_unlock(&scanout_lock);
 				return -EINVAL;
+			}
 			dma_sync_single_range_for_device(&scanout_pdev->dev,
 				scanout_dma[sync.slot], offset, length, DMA_TO_DEVICE);
 		}
+		mutex_unlock(&scanout_lock);
 		return 0;
+	case MISTER_MAGIK_SCANOUT_SYNC_RANGES_AND_POST:
+		post = memdup_user((void __user *)arg, sizeof(*post));
+		if (IS_ERR(post))
+			return PTR_ERR(post);
+		ret = scanout_validate_geometry(post);
+		if (ret)
+			goto post_out;
+		mutex_lock(&scanout_lock);
+		scanout_refresh_completion_locked();
+		if (!mailbox_armed) {
+			ret = -EPIPE;
+		} else if (pending_slot != NO_SLOT) {
+			ret = -EBUSY;
+		} else if (slot_state[post->slot] != MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED) {
+			ret = -EBUSY;
+		} else if (post->sequence == active_sequence) {
+			ret = -EINVAL;
+		} else {
+			slot_state[post->slot] = MISTER_MAGIK_SCANOUT_SLOT_DEVICE_QUEUED;
+			pending_slot = post->slot;
+			pending_sequence = post->sequence;
+			unmap_mapping_range(file->f_mapping,
+				post->slot * scanout_map_bytes, scanout_map_bytes, 1);
+			scanout_publish_locked(post);
+			ret = 0;
+		}
+		mutex_unlock(&scanout_lock);
+post_out:
+		kfree(post);
+		return ret;
+	case MISTER_MAGIK_SCANOUT_GET_STATUS:
+		mutex_lock(&scanout_lock);
+		scanout_refresh_completion_locked();
+		status.mailbox_armed = mailbox_armed ? 1 : 0;
+		status.active_sequence = active_sequence;
+		status.pending_sequence = pending_sequence;
+		status.active_slot = active_slot;
+		status.pending_slot = pending_slot;
+		for (i = 0; i < MISTER_MAGIK_SCANOUT_SLOT_COUNT; i++)
+			status.slot_state[i] = slot_state[i];
+		status.completion_count = completion_count;
+		status.error_count = scanout_error_count;
+		mutex_unlock(&scanout_lock);
+		return copy_to_user((void __user *)arg, &status, sizeof(status)) ? -EFAULT : 0;
 	default:
 		return -ENOTTY;
 	}
 }
+
+static vm_fault_t scanout_vma_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	unsigned long slot = (unsigned long)vma->vm_private_data - 1;
+	unsigned long slot_page = slot * (scanout_map_bytes >> PAGE_SHIFT);
+	unsigned long page_offset;
+	struct page *page;
+	vm_fault_t ret;
+
+	if (slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT || vmf->pgoff < slot_page)
+		return VM_FAULT_SIGBUS;
+	page_offset = vmf->pgoff - slot_page;
+	if (page_offset >= (scanout_slot_bytes >> PAGE_SHIFT))
+		return VM_FAULT_SIGBUS;
+
+	mutex_lock(&scanout_lock);
+	if (slot_state[slot] != MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED) {
+		mutex_unlock(&scanout_lock);
+		return VM_FAULT_SIGBUS;
+	}
+	page = virt_to_page((char *)scanout_virt[slot] + (page_offset << PAGE_SHIFT));
+	ret = vmf_insert_page(vma, vmf->address, page);
+	mutex_unlock(&scanout_lock);
+	return ret;
+}
+
+static const struct vm_operations_struct scanout_vm_ops = {
+	.fault = scanout_vma_fault,
+};
 
 static int scanout_mmap(struct file *file, struct vm_area_struct *vma)
 {
@@ -219,9 +472,10 @@ static int scanout_mmap(struct file *file, struct vm_area_struct *vma)
 	if (slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT ||
 	    byte_offset % scanout_map_bytes || size > scanout_slot_bytes)
 		return -EINVAL;
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
-	return remap_pfn_range(vma, vma->vm_start,
-			virt_to_pfn(scanout_virt[slot]), size, vma->vm_page_prot);
+	vma->vm_flags |= VM_MIXEDMAP | VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_ops = &scanout_vm_ops;
+	vma->vm_private_data = (void *)(unsigned long)(slot + 1);
+	return 0;
 }
 
 static const struct file_operations scanout_fops = {
@@ -246,9 +500,14 @@ static void free_scanout_slots(void)
 		return;
 	for (i = 0; i < MISTER_MAGIK_SCANOUT_SLOT_COUNT; i++) {
 		if (scanout_virt[i])
-			dma_free_noncoherent(&scanout_pdev->dev, scanout_map_bytes,
-				scanout_virt[i], scanout_dma[i], DMA_TO_DEVICE);
+				dma_free_noncoherent(&scanout_pdev->dev, scanout_map_bytes,
+					scanout_virt[i], scanout_dma[i], DMA_TO_DEVICE);
 		scanout_virt[i] = NULL;
+	}
+	if (mailbox_page) {
+		free_page(mailbox_page);
+		mailbox_page = 0;
+		mailbox_phys = 0;
 	}
 }
 
@@ -271,7 +530,28 @@ static int init_scanout_slots(void)
 			ret = -ENOMEM;
 			goto fail;
 		}
+		slot_state[i] = MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED;
 	}
+	mailbox_page = get_zeroed_page(GFP_KERNEL);
+	if (!mailbox_page) {
+		ret = -ENOMEM;
+		goto fail;
+	}
+	if (virt_to_phys((void *)mailbox_page) > MAILBOX_MAX_PHYS) {
+		ret = -ERANGE;
+		goto fail;
+	}
+	mailbox_phys = (__u32)virt_to_phys((void *)mailbox_page);
+	mailbox_epoch = get_random_u32();
+	if (!mailbox_epoch)
+		mailbox_epoch = 1;
+	mailbox_armed = false;
+	active_sequence = 0;
+	pending_sequence = 0;
+	active_slot = NO_SLOT;
+	pending_slot = NO_SLOT;
+	completion_count = 0;
+	scanout_error_count = 0;
 	ret = misc_register(&scanout_miscdev);
 	if (ret)
 		goto fail;
