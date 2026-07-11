@@ -238,6 +238,8 @@ pub(crate) fn discovery_from_profile_file(
             let profile = payload_profile.unwrap_or(profile);
             let setname = if profile.system_id == "neogeo" {
                 media_metadata::neogeo_mgl_setname(&file.path, mgl.file_path.as_deref())
+            } else if profile.id == "neon68k" {
+                mgl.setname.clone()
             } else {
                 None
             };
@@ -249,6 +251,16 @@ pub(crate) fn discovery_from_profile_file(
             let prepared = (profile.system_id == "dos"
                 && prepared_collections::validate_0mhz_mgl(&file.path).is_ok())
             .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
+            let prepared = prepared.or_else(|| {
+                (profile.id == "neon68k"
+                    && prepared_collections::validate_neon68k_mgl(&file.path).is_ok())
+                .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
+            });
+            let genre = if profile.id == "neon68k" {
+                prepared_collections::neon68k_source_category(&file.path)
+            } else {
+                None
+            };
             return GameDiscovery {
                 source_path: source_path.clone(),
                 launch_ref: source_path.clone(),
@@ -264,7 +276,7 @@ pub(crate) fn discovery_from_profile_file(
                     .unwrap_or_else(|| profile.core_name.to_string()),
                 hardware_id: profile.system_id.to_string(),
                 manufacturer: None,
-                genre: None,
+                genre,
                 year: None,
                 setname,
                 parent: None,
