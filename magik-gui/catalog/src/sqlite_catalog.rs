@@ -1259,7 +1259,9 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
-                    false,
+                    // The RAM catalog preserves first-ready latency, but the
+                    // durable DB must still materialize its launcher tables.
+                    true,
                 )
             };
         save_sqlite_scan_with_progress_using_writer(
