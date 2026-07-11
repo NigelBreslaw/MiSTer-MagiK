@@ -504,6 +504,9 @@ fn base_profiles_for_installed_cores(
         if !installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase()) {
             return None;
         }
+        if descriptor_dirs.contains(&catalog_discovery::compact_system_name(&profile.core_name)) {
+            return None;
+        }
         profile.game_dirs.retain(|dir| {
             !descriptor_dirs.contains(&catalog_discovery::compact_system_name(dir))
         });
