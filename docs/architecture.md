@@ -94,8 +94,8 @@ Important policy:
   new launcher paths that depend on Main request/ack present files or FIFO
   present commands.
 - Diagnose the fast path by checking the runtime state, not just the files on
-  disk: absence of `mister_magik_plugin_probe` means hidden plugin slots are not
-  available, and benchmark traces must report
+  disk: absence of `mister_magik_scanout` or `/dev/mister-magik-scanout` means
+  atomic cacheable scanout is not available, and benchmark traces must report
   `main_present_backend=fpga-vblank-latch-hidden` with status `ok` to prove the
   latch renderer is active.
 
