@@ -250,11 +250,13 @@ jobs:
             build/fpga-signoff/stock/menu-magik-vblank-latch.rbf
             build/fpga-signoff/stock/menu-magik-vblank-latch.metadata.txt
             build/fpga-signoff/stock/menu-magik-vblank-latch.build.log
+            build/fpga-signoff/stock/reports/*
             build/fpga-signoff/stock/Menu-work/output_files/*.rpt
             build/fpga-signoff/stock/Menu-work/output_files/*.summary
             build/fpga-signoff/patched/menu-magik-vblank-latch.rbf
             build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
             build/fpga-signoff/patched/menu-magik-vblank-latch.build.log
+            build/fpga-signoff/patched/reports/*
             build/fpga-signoff/patched/Menu-work/output_files/*.rpt
             build/fpga-signoff/patched/Menu-work/output_files/*.summary
             build/fpga-signoff/quartus-delta-signoff.tsv

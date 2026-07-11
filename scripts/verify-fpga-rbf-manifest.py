@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Verify a latch RBF and every report against its adjacent release metadata."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import sys
+from pathlib import Path
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
+
+
+def digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def verify(metadata_path: Path) -> dict[str, str]:
+    if not metadata_path.is_file():
+        raise ValueError(f"missing metadata: {metadata_path}")
+    fields: dict[str, str] = {}
+    for number, raw in enumerate(metadata_path.read_text().splitlines(), 1):
+        if not raw or "=" not in raw:
+            raise ValueError(f"invalid metadata line {number}")
+        key, value = raw.split("=", 1)
+        if key in fields:
+            raise ValueError(f"duplicate metadata key: {key}")
+        if STALE_RE.search(key) or STALE_RE.search(value):
+            raise ValueError(f"stale mailbox-era metadata: {key}")
+        fields[key] = value
+
+    required = {
+        "format", "magik_commit", "source_commit", "patch_sha256",
+        "latch_rtl_sha256", "quartus_seed", "quartus_version",
+        "workflow_url", "rbf_file", "rbf_sha256",
+    }
+    missing = sorted(required - fields.keys())
+    if missing:
+        raise ValueError("missing metadata fields: " + ", ".join(missing))
+    if fields["format"] != "mister-magik-fpga-release-v1":
+        raise ValueError("unsupported metadata format")
+    for name in ("magik_commit", "source_commit"):
+        if not COMMIT_RE.fullmatch(fields[name]):
+            raise ValueError(f"{name} must be a full commit SHA")
+    for name in ("patch_sha256", "latch_rtl_sha256", "rbf_sha256"):
+        if not SHA256_RE.fullmatch(fields[name]):
+            raise ValueError(f"invalid SHA-256 in {name}")
+    if any(key in fields for key in ("magik_status", "source_status")):
+        raise ValueError("release source tree was dirty")
+    if fields["quartus_seed"] != "1":
+        raise ValueError("release seed must be 1")
+    if not fields["quartus_version"].startswith("17.0"):
+        raise ValueError("release must use Quartus 17.0")
+    if not fields["workflow_url"].startswith("https://"):
+        raise ValueError("release workflow URL is not immutable evidence")
+
+    root = metadata_path.parent
+    rbf = root / fields["rbf_file"]
+    if not rbf.is_file() or digest(rbf) != fields["rbf_sha256"]:
+        raise ValueError("RBF hash mismatch")
+    reports = {key.removeprefix("report_sha256."): value for key, value in fields.items() if key.startswith("report_sha256.")}
+    if not reports:
+        raise ValueError("manifest contains no Quartus reports")
+    for relative, expected in reports.items():
+        if not SHA256_RE.fullmatch(expected):
+            raise ValueError(f"invalid report SHA-256: {relative}")
+        report = root / relative
+        if not report.is_file() or digest(report) != expected:
+            raise ValueError(f"report hash mismatch: {relative}")
+    return fields
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("metadata", type=Path)
+    args = parser.parse_args()
+    try:
+        fields = verify(args.metadata.resolve())
+    except (OSError, ValueError) as error:
+        print(f"FPGA manifest verification failed: {error}", file=sys.stderr)
+        return 1
+    print(f"FPGA manifest valid=1 rbf_sha256={fields['rbf_sha256']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
