@@ -2395,6 +2395,51 @@ mod tests {
     }
 
     #[test]
+    fn invalid_prepared_mgl_stays_generic_and_records_diagnostic() {
+        let root = unique_temp_dir("invalid-prepared-mgl");
+        let dos = root.join("_DOS Games");
+        std::fs::create_dir_all(&dos).expect("create DOS dir");
+        let mgl = dos.join("Broken Game.mgl");
+        std::fs::write(
+            &mgl,
+            r#"<mistergamedescription><rbf>Minimig</rbf><file path="missing.vhd"/><reset/></mistergamedescription>"#,
+        )
+        .expect("write invalid MGL");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let discovery = scan
+            .discoveries
+            .iter()
+            .find(|discovery| discovery.launch_ref == mgl.display().to_string())
+            .expect("retain generic MGL discovery");
+        assert!(discovery.prepared.is_none());
+        save_sqlite_scan(&cfg.sqlite_path, &scan).expect("save catalog");
+        let conn = rusqlite::Connection::open(&cfg.sqlite_path).expect("open catalog");
+        let diagnostic: (String, String, String) = conn
+            .query_row(
+                "SELECT collection_id,status,reason FROM prepared_launch_diagnostic_rows",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read prepared launch diagnostic");
+        assert_eq!(diagnostic.0, "0mhz");
+        assert_eq!(diagnostic.1, "invalid");
+        assert!(diagnostic.2.contains("expected AO486"));
+        let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
+            .expect("load generic fallback");
+        assert!(loaded
+            .catalog
+            .games
+            .iter()
+            .any(|game| game.mra_path.as_ref() == mgl.display().to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scanner_prunes_arcade_media_and_cores_but_keeps_arcade_game_mras() {
         let root = unique_temp_dir("target-arcade-game-dirs");
         let arcade_dir = root.join("_Arcade");

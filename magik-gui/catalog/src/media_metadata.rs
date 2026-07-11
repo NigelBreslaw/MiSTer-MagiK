@@ -1264,6 +1264,32 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_amigavision_install_is_not_published() {
+        let root = unique_temp_dir("amigavision-incomplete");
+        let amiga_dir = root.join("games/Amiga");
+        std::fs::create_dir_all(amiga_dir.join("listings")).expect("create listings");
+        std::fs::write(amiga_dir.join("AmigaVision.hdf"), b"hdf").expect("write HDF");
+        std::fs::write(amiga_dir.join("listings/games.txt"), "Agony\n")
+            .expect("write games listing");
+        std::fs::write(amiga_dir.join("listings/demos.txt"), "State of the Art\n")
+            .expect("write demos listing");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        assert!(scan.discoveries.iter().all(|discovery| {
+            discovery.launch_ref != AMIGAVISION_LAUNCHER_REF
+                && !discovery
+                    .launch_ref
+                    .starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn amigavision_archive_itself_is_not_a_launch_ref() {
         assert!(!is_launcher_launch_ref(
             "/media/fat/games/Amiga/AmigaVision-MiSTer.7z"
