@@ -108,9 +108,14 @@ impl LauncherScheduler {
         root: String,
         request: CatalogWorkerRequest,
         initial_cache: CatalogWorkerInitialCache,
+        execution_mode: CatalogExecutionMode,
     ) {
-        self.catalog =
-            CatalogJobState::Running(start_library_catalog_worker(root, request, initial_cache));
+        self.catalog = CatalogJobState::Running(start_library_catalog_worker(
+            root,
+            request,
+            initial_cache,
+            execution_mode,
+        ));
     }
 
     pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {

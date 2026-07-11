@@ -1215,6 +1215,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
+                    true,
                 )?;
                 projections = Some(build_catalog_projections_from_materialized_sqlite(
                     build_path, root, stamp,
@@ -1258,6 +1259,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
+                    false,
                 )
             };
         save_sqlite_scan_with_progress_using_writer(
@@ -1684,6 +1686,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
     software_hash_cache: SoftwareHashCache,
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
+    materialize_runtime_catalog: bool,
 ) -> Result<(), String> {
     let preview_paths = PreviewArchivePaths::from_paths(
         preview_worker::preview_archive_paths_for_catalog_projection(),
@@ -1703,6 +1706,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
         },
         None,
         progress,
+        materialize_runtime_catalog,
     )
     .map(|_| ())
 }
@@ -1796,7 +1800,7 @@ fn write_sqlite_scan_with_sources(
     root: &Path,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryCatalogLoad, String> {
-    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress)?
+    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress, true)?
         .ok_or_else(|| "saved catalog was not returned".to_string())
 }
 
@@ -1806,6 +1810,7 @@ fn write_sqlite_scan_with_sources_inner(
     mut sources: SqliteScanSources<'_>,
     root: Option<&Path>,
     mut progress: ProgressCallback<'_>,
+    materialize_runtime_catalog: bool,
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let total_t = Instant::now();
     let mut conn = Connection::open(path).map_err(|e| format!("open sqlite: {e}"))?;
@@ -2634,37 +2639,48 @@ fn write_sqlite_scan_with_sources_inner(
             ),
         );
         report_sqlite_import_finalizing(&mut progress);
-        let projection_t = Instant::now();
-        let arcade_preview_projection = ArcadePreviewProjection::new(
-            sources
-                .preview_paths
-                .archive_for_platform("arcade")
-                .unwrap_or_default(),
-            sources
-                .preview_paths
-                .archive_for_platform("neogeo")
-                .unwrap_or_default(),
-        );
-        catalog_projection::materialize_arcade_ui_projections(&tx, &arcade_preview_projection)?;
-        report_library_import_timing("materialize_arcade_ui", projection_t, "");
-        let launcher_arcade_t = Instant::now();
-        catalog_projection::insert_arcade_launcher_catalog(&tx)?;
-        report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
-        let launcher_console_t = Instant::now();
-        let launcher_game_count =
-            catalog_projection::insert_console_launcher_catalog(&tx, launcher_rows)?;
-        report_library_import_timing(
-            "insert_launcher_console",
-            launcher_console_t,
-            format!("rows={launcher_game_count}"),
-        );
-        let launcher_plans_t = Instant::now();
-        let launcher_plan_count = catalog_projection::materialize_launcher_launch_plans(&tx)?;
-        report_library_import_timing(
-            "insert_launcher_launch_plans",
-            launcher_plans_t,
-            format!("rows={launcher_plan_count}"),
-        );
+        if materialize_runtime_catalog {
+            let projection_t = Instant::now();
+            let arcade_preview_projection = ArcadePreviewProjection::new(
+                sources
+                    .preview_paths
+                    .archive_for_platform("arcade")
+                    .unwrap_or_default(),
+                sources
+                    .preview_paths
+                    .archive_for_platform("neogeo")
+                    .unwrap_or_default(),
+            );
+            catalog_projection::materialize_arcade_ui_projections(
+                &tx,
+                &arcade_preview_projection,
+            )?;
+            report_library_import_timing("materialize_arcade_ui", projection_t, "");
+            let launcher_arcade_t = Instant::now();
+            catalog_projection::insert_arcade_launcher_catalog(&tx)?;
+            report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
+            let launcher_console_t = Instant::now();
+            let launcher_game_count =
+                catalog_projection::insert_console_launcher_catalog(&tx, launcher_rows)?;
+            report_library_import_timing(
+                "insert_launcher_console",
+                launcher_console_t,
+                format!("rows={launcher_game_count}"),
+            );
+            let launcher_plans_t = Instant::now();
+            let launcher_plan_count = catalog_projection::materialize_launcher_launch_plans(&tx)?;
+            report_library_import_timing(
+                "insert_launcher_launch_plans",
+                launcher_plans_t,
+                format!("rows={launcher_plan_count}"),
+            );
+        } else {
+            report_library_import_timing(
+                "materialize_runtime_catalog",
+                Instant::now(),
+                "skipped=precomputed_ram_catalog",
+            );
+        }
     }
     {
         let stage_t = Instant::now();

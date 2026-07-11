@@ -1308,7 +1308,9 @@ pub(super) fn run_launcher_loop(
         start,
     );
     let deferred_library_rebuild = consume_library_rebuild_marker(catalog_worker_enabled, start);
-    let mut catalog_session = LauncherCatalogSession::new(deferred_library_rebuild);
+    let mut catalog_session = LauncherCatalogSession::new(
+        deferred_library_rebuild || catalog_refresh_policy.force_requested(),
+    );
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
@@ -1336,8 +1338,18 @@ pub(super) fn run_launcher_loop(
                 request,
                 return_catalog_hydration_needed,
             ) {
+                let execution_mode = if request == CatalogWorkerRequest::ForceBuild {
+                    CatalogExecutionMode::ForegroundExclusive
+                } else {
+                    CatalogExecutionMode::BackgroundInteractive
+                };
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
-                scheduler.start_catalog_worker(arcade_root.clone(), request, initial_cache);
+                scheduler.start_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    initial_cache,
+                    execution_mode,
+                );
             } else {
                 let delay = catalog_background_validation_delay();
                 print_startup_event(
@@ -1350,7 +1362,12 @@ pub(super) fn run_launcher_loop(
                         delay.as_millis()
                     ),
                 );
-                catalog_session.defer_catalog_worker(arcade_root.clone(), request, initial_cache);
+                catalog_session.defer_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    initial_cache,
+                    CatalogExecutionMode::BackgroundInteractive,
+                );
             }
         } else {
             print_startup_event(
@@ -1391,6 +1408,7 @@ pub(super) fn run_launcher_loop(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         CatalogWorkerInitialCache::AlreadyLoadedReady,
+                        CatalogExecutionMode::ForegroundExclusive,
                     );
                 } else if request != CatalogWorkerRequest::LoadOnly {
                     let delay = catalog_background_validation_delay();
@@ -1408,6 +1426,7 @@ pub(super) fn run_launcher_loop(
                         arcade_root.clone(),
                         request,
                         CatalogWorkerInitialCache::AlreadyLoadedReady,
+                        CatalogExecutionMode::BackgroundInteractive,
                     );
                 } else {
                     print_startup_event(
@@ -1437,6 +1456,7 @@ pub(super) fn run_launcher_loop(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         catalog_worker_initial_cache_after_ui_probe(CatalogUiCacheProbe::Empty),
+                        CatalogExecutionMode::ForegroundExclusive,
                     );
                 } else {
                     print_startup_event(
@@ -1468,6 +1488,7 @@ pub(super) fn run_launcher_loop(
                         arcade_root.clone(),
                         CatalogWorkerRequest::ForceBuild,
                         initial_cache,
+                        CatalogExecutionMode::ForegroundExclusive,
                     );
                 } else {
                     print_startup_event(
@@ -1752,13 +1773,16 @@ pub(super) fn run_launcher_loop(
             deferred_worker_policy.delay,
         ) {
             print_startup_event(start, "catalog_worker_start", &worker.root);
-            let lifecycle_input = deferred_catalog_worker_lifecycle_input(
-                deferred_worker_policy.foreground,
-                worker.request,
-            );
+            let lifecycle_input =
+                deferred_catalog_worker_lifecycle_input(worker.execution_mode, worker.request);
             lifecycle.handle(lifecycle_input, &mut lifecycle_effects);
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-            scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
+            scheduler.start_catalog_worker(
+                worker.root,
+                worker.request,
+                worker.initial_cache,
+                worker.execution_mode,
+            );
         }
 
         if pending_catalog_ready.is_some() || !catalog_session.refresh_done() {
@@ -3832,13 +3856,19 @@ fn apply_catalog_session_effects(
                 print_startup_event(start, "catalog_worker_start", &worker.root);
                 lifecycle.handle(
                     LauncherLifecycleInput::CatalogBuilding {
-                        foreground: worker.request == CatalogWorkerRequest::ForceBuild,
+                        foreground: worker.execution_mode
+                            == CatalogExecutionMode::ForegroundExclusive,
                         has_stale_catalog: *catalog_ready,
                     },
                     lifecycle_effects,
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
-                scheduler.start_catalog_worker(worker.root, worker.request, worker.initial_cache);
+                scheduler.start_catalog_worker(
+                    worker.root,
+                    worker.request,
+                    worker.initial_cache,
+                    worker.execution_mode,
+                );
             }
         }
     }
@@ -3989,10 +4019,10 @@ fn deferred_catalog_worker_start_policy(
 }
 
 fn deferred_catalog_worker_lifecycle_input(
-    foreground: bool,
+    execution_mode: CatalogExecutionMode,
     request: CatalogWorkerRequest,
 ) -> LauncherLifecycleInput {
-    if foreground {
+    if execution_mode == CatalogExecutionMode::ForegroundExclusive {
         LauncherLifecycleInput::CatalogBuilding {
             foreground: request == CatalogWorkerRequest::ForceBuild,
             has_stale_catalog: false,
@@ -4923,11 +4953,11 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn ready_catalog_rebuild_progress_uses_background_badge() {
+    pub(super) fn ready_catalog_foreground_rebuild_uses_full_screen_progress() {
         for title in ["Indexing library", "Loading library"] {
-            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title, false);
-            assert!(!full_visible, "{title} should not cover a ready catalog");
-            assert!(catalog_background_scan_progress_visible(
+            let full_visible = catalog_scan_progress_visible(true, Screen::Home, title, true);
+            assert!(full_visible, "{title} should cover a foreground rebuild");
+            assert!(!catalog_background_scan_progress_visible(
                 true,
                 full_visible,
                 title
@@ -5365,7 +5395,7 @@ mod tests {
         assert_eq!(after_copy.delay, Duration::ZERO);
         assert!(matches!(
             deferred_catalog_worker_lifecycle_input(
-                after_copy.foreground,
+                CatalogExecutionMode::ForegroundExclusive,
                 CatalogWorkerRequest::ForceBuild,
             ),
             LauncherLifecycleInput::CatalogBuilding {
@@ -5397,7 +5427,7 @@ mod tests {
         assert_eq!(allowed.delay, delay);
         assert!(matches!(
             deferred_catalog_worker_lifecycle_input(
-                allowed.foreground,
+                CatalogExecutionMode::BackgroundInteractive,
                 CatalogWorkerRequest::CheckStamp,
             ),
             LauncherLifecycleInput::CatalogValidationStarted

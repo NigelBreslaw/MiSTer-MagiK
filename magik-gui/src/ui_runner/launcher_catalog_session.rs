@@ -9,12 +9,14 @@ pub(super) struct CatalogWorkerStart {
     pub(super) root: String,
     pub(super) request: CatalogWorkerRequest,
     pub(super) initial_cache: CatalogWorkerInitialCache,
+    pub(super) execution_mode: CatalogExecutionMode,
 }
 
 struct DeferredCatalogWorker {
     root: String,
     request: CatalogWorkerRequest,
     initial_cache: CatalogWorkerInitialCache,
+    execution_mode: CatalogExecutionMode,
     start_after: Option<Instant>,
 }
 
@@ -131,11 +133,13 @@ impl LauncherCatalogSession {
         root: String,
         request: CatalogWorkerRequest,
         initial_cache: CatalogWorkerInitialCache,
+        execution_mode: CatalogExecutionMode,
     ) {
         self.deferred_worker = Some(DeferredCatalogWorker {
             root,
             request,
             initial_cache,
+            execution_mode,
             start_after: None,
         });
     }
@@ -169,6 +173,7 @@ impl LauncherCatalogSession {
             root: deferred.root,
             request: deferred.request,
             initial_cache: deferred.initial_cache,
+            execution_mode: deferred.execution_mode,
         })
     }
 
@@ -301,6 +306,7 @@ impl LauncherCatalogSession {
                 root,
                 request: CatalogWorkerRequest::ForceBuild,
                 initial_cache: CatalogWorkerInitialCache::AlreadyLoadedReady,
+                execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
         ));
         effects.ui(catalog_rebuild_started_intent(self.foreground_update));
@@ -1176,6 +1182,7 @@ mod tests {
             "/media/fat/_Arcade".to_string(),
             CatalogWorkerRequest::CheckStamp,
             CatalogWorkerInitialCache::ProbeSqlite,
+            CatalogExecutionMode::BackgroundInteractive,
         );
 
         assert!(session
@@ -1192,6 +1199,10 @@ mod tests {
         assert_eq!(worker.root, "/media/fat/_Arcade");
         assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
         assert_eq!(worker.initial_cache, CatalogWorkerInitialCache::ProbeSqlite);
+        assert_eq!(
+            worker.execution_mode,
+            CatalogExecutionMode::BackgroundInteractive
+        );
         assert!(session
             .maybe_start_deferred_worker(false, true, true, now + Duration::from_millis(200), delay)
             .is_none());
@@ -1207,6 +1218,7 @@ mod tests {
             "/media/fat/_Arcade".to_string(),
             CatalogWorkerRequest::CheckStamp,
             CatalogWorkerInitialCache::ProbeSqlite,
+            CatalogExecutionMode::BackgroundInteractive,
         );
 
         assert!(session
