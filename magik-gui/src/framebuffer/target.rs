@@ -1,8 +1,11 @@
 use crate::framebuffer::format::production_label;
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
+const SCANOUT_FENCE_WAIT_TIMEOUT: Duration = Duration::from_millis(25);
+const SCANOUT_FENCE_POLL_INTERVAL: Duration = Duration::from_micros(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirtyRect {
@@ -489,6 +492,7 @@ pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
     scanout: Option<crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers>,
     scanout_slot: usize,
+    scanout_frame_valid: bool,
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
@@ -500,6 +504,7 @@ impl UiFrameTarget {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
             scanout: None,
             scanout_slot: 1,
+            scanout_frame_valid: false,
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
@@ -507,8 +512,8 @@ impl UiFrameTarget {
     }
 
     pub fn open(geometry: FramebufferTargetGeometry) -> Self {
-        if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
-            match crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers::open(
+        if crate::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
+            match crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers::open_atomic(
                 geometry.render_w(),
                 geometry.render_h(),
             ) {
@@ -539,18 +544,35 @@ impl UiFrameTarget {
         geometry: FramebufferTargetGeometry,
     ) -> PhysicalRegion {
         self.cached_stride = geometry.render_w();
-        if let Some(scanout) = self.scanout.as_mut() {
-            self.scanout_slot ^= 1;
-            if let Err(error) = scanout.acquire(self.scanout_slot) {
+        if crate::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
+            if let Some(scanout) = self.scanout.as_mut() {
+                let preferred = self.scanout_slot ^ 1;
+                let deadline = Instant::now() + SCANOUT_FENCE_WAIT_TIMEOUT;
+                let selected = loop {
+                    if let Some(slot) = [preferred, preferred ^ 1]
+                        .into_iter()
+                        .find(|slot| scanout.acquire(*slot).is_ok())
+                    {
+                        break Some(slot);
+                    }
+                    if Instant::now() >= deadline {
+                        break None;
+                    }
+                    std::thread::sleep(SCANOUT_FENCE_POLL_INTERVAL);
+                };
+                if let Some(slot) = selected {
+                    self.scanout_slot = slot;
+                    self.scanout_frame_valid = true;
+                    return renderer.render(scanout.pixels_mut(slot), geometry.render_w());
+                }
+                self.scanout_frame_valid = false;
                 crate::ui_errln!(
-                    "scanout-acquire-failed slot={} error={error}",
-                    self.scanout_slot + 1
+                    "scanout-acquire-failed no CPU-owned slot; rendering fallback frame"
                 );
             }
-            renderer.render(scanout.pixels_mut(self.scanout_slot), geometry.render_w())
-        } else {
-            renderer.render(&mut self.cached, geometry.render_w())
         }
+        self.scanout_frame_valid = false;
+        renderer.render(&mut self.cached, geometry.render_w())
     }
 
     #[cfg(mister_bench_scenes)]
@@ -631,7 +653,7 @@ impl UiFrameTarget {
     }
 
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
-        if let Some(scanout) = self.scanout.as_ref() {
+        if let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_frame_valid) {
             return CachedFrameView::new(
                 scanout.pixels(self.scanout_slot),
                 self.cached_stride,
@@ -655,7 +677,7 @@ impl UiFrameTarget {
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
-        if let Some(scanout) = self.scanout.as_mut() {
+        if let Some(scanout) = self.scanout.as_mut().filter(|_| self.scanout_frame_valid) {
             scanout.pixels_mut(self.scanout_slot)
         } else {
             &mut self.cached
@@ -663,7 +685,7 @@ impl UiFrameTarget {
     }
 
     pub fn cached_565(&self) -> &[Rgb565Pixel] {
-        if let Some(scanout) = self.scanout.as_ref() {
+        if let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_frame_valid) {
             scanout.pixels(self.scanout_slot)
         } else {
             &self.cached

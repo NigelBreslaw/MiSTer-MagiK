@@ -163,6 +163,7 @@ impl<L> LauncherPresenter<L> {
         };
 
         self.state = LauncherPresenterState::LatchUnavailable;
+        mister_magik_fb::framebuffer::plugin_probe::disable_atomic_scanout();
         self.fb0_route_pending = true;
         if !self.failure_logged {
             self.failure_logged = true;
@@ -289,24 +290,27 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let layer_target = self.targets.layer_target;
         let hardware = &mut *self.targets.hardware;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;
+        let stream_scale =
+            mister_magik_fb::framebuffer::stream::configured_latch_scale(self.stream_motion_active);
         let stats = latch.present_cached_full_frame(
             layer_target.cached_frame_view(),
             frame,
             hardware,
             self.display,
-            |hidden, plan| {
+            stream_scale,
+            |mut hidden, plan, _zero_copy| {
                 preview_redraw_rect = plan.preview_redraw;
                 arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
                     let started = Instant::now();
                     direct_preview_rows =
-                        layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                        layer_target.copy_direct_preview_rect_to_hidden(&mut hidden, rect);
                     hidden_preview_compose_us = started.elapsed().as_micros();
                 }
                 if let Some(update) = plan.arcade_redraw {
                     let started = Instant::now();
                     arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
-                        hidden,
+                        &mut hidden,
                         arcade_list_renderer,
                         update,
                     );
@@ -315,12 +319,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 Ok(())
             },
         )?;
-        if let Some(scale) =
-            mister_magik_fb::framebuffer::stream::configured_latch_scale(self.stream_motion_active)
-        {
-            let frame_view = latch.committed_frame_view(stats.buffer_index);
-            let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
-        }
         let presentation = latch_present_result(
             stats,
             hidden_preview_compose_us,
