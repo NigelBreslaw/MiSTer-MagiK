@@ -433,48 +433,16 @@ fn print_experiment_capabilities() {
 }
 
 fn run_library_refresh() {
-    let parent_boot = std::env::var_os("MISTER_MAGIK_PARENT").is_some();
-    let database_exists = usable_library_database_exists(&library_db::default_sqlite_path());
-    let force_foreground = std::env::var_os("MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH").is_some();
-    if should_defer_parent_boot_library_refresh(parent_boot, database_exists, force_foreground) {
-        crate::ui_logln!("library_refresh\tdeferred\tmissing_database_parent_boot");
-        return;
-    }
-    let lock_path = library_refresh_lock_path();
-    let lock = match LibraryRefreshLock::acquire(&lock_path) {
-        Ok(RefreshLockState::Acquired(lock)) => lock,
-        Ok(RefreshLockState::Active { pid }) => {
-            crate::ui_logln!("library_refresh\tskipped\tactive_pid={pid}");
-            return;
-        }
-        Err(e) => {
-            crate::ui_errln!("library_refresh\tfailed\tlock {e}");
+    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN")
+        .unwrap_or_else(|_| "/media/fat/mister-magik/mister-magik-catalog-builder".into());
+    match std::process::Command::new(&binary).arg("rebuild").status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            crate::ui_errln!("library_refresh\tfailed\tbuilder exited {status}");
             std::process::exit(1);
         }
-    };
-    let mut progress = |title: &str, detail: &str| {
-        crate::ui_logln!("library_refresh\tprogress\t{title}\t{detail}");
-    };
-    match library_db::rebuild_default_sqlite_database(Some(&mut progress)) {
-        Ok(summary) => {
-            drop(lock);
-            crate::ui_logln!(
-                "library_refresh\tdone\tskipped={} bytes={} scan_us={} discover_us={} classify_us={} import_us={} discoveries={} normal_files={} containers={} entries={}",
-                summary.skipped,
-                summary.bytes,
-                summary.scan_us,
-                summary.discover_us,
-                summary.classify_us,
-                summary.import_us,
-                summary.discoveries,
-                summary.normal_files,
-                summary.containers,
-                summary.entries
-            );
-        }
-        Err(e) => {
-            drop(lock);
-            crate::ui_errln!("library_refresh\tfailed\t{e}");
+        Err(error) => {
+            crate::ui_errln!("library_refresh\tfailed\tstart {binary}: {error}");
             std::process::exit(1);
         }
     }
