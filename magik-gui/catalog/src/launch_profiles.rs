@@ -1077,7 +1077,12 @@ fn runtime_profile_for_match(
     candidate: &RuntimeCoreCandidate<'_>,
 ) -> Option<LaunchProfile> {
     let core = candidate.core;
-    let extensions = runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name)
+    let folder_specific_extensions = (catalog_discovery::compact_system_name(&game_dir.name)
+        == "tgfx16cd")
+        .then(|| runtime_payload_extension_hints(&game_dir.name))
+        .and_then(runtime_extensions_from_iter);
+    let extensions = folder_specific_extensions
+        .or_else(|| runtime_payload_extensions_for_core_or_dir(&core.core_id, &game_dir.name))
         .or_else(|| {
             matches!(
                 candidate.match_kind,
@@ -1112,6 +1117,10 @@ fn runtime_profile_for_match(
         core,
         extensions,
     ))
+}
+
+fn runtime_extensions_from_iter(extensions: impl IntoIterator<Item = String>) -> Option<Vec<String>> {
+    runtime_extensions_from_set(extensions.into_iter().collect())
 }
 
 fn runtime_profile_for_extensions(

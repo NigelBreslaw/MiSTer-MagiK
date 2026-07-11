@@ -1224,8 +1224,14 @@ fn structured_launch_plan_for_discovery(
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
-    let profile_id = profile_id_for_discovery(discovery)?;
-    let profile = launch_profiles::profile_for_launch_target_id(profiles, profile_id)?;
+    let profile = crate::catalog_scan::profile_for_path(
+        profiles,
+        Path::new(discovery.source_path.as_str()),
+    )
+    .or_else(|| {
+        profile_id_for_discovery(discovery)
+            .and_then(|profile_id| launch_profiles::profile_for_launch_target_id(profiles, profile_id))
+    })?;
     let payload_path = discovery.launch_ref.as_str();
     let payload_rule = match discovery.source_kind {
         DiscoverySourceKind::ArchiveEntry => {
