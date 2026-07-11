@@ -165,7 +165,7 @@ pub struct LibraryCatalogLoad {
 }
 
 impl LibraryCatalogLoad {
-    pub(crate) fn from_precomputed(catalog: ArcadeCatalog, us: u64) -> Self {
+    pub fn from_precomputed(catalog: ArcadeCatalog, us: u64) -> Self {
         let rows = catalog.len();
         Self {
             catalog,
@@ -260,6 +260,15 @@ impl LibraryScanArtifact {
     ) -> Result<LibraryRefreshSummary, String> {
         let cfg = BenchConfig::production();
         save_scan_artifact_to_sqlite_with_projections(&cfg, self, root, progress)
+    }
+
+    pub fn save_default_sqlite_with_catalog_projection(
+        self,
+        catalog: &ArcadeCatalog,
+        progress: ProgressCallback<'_>,
+    ) -> Result<LibraryRefreshSummary, String> {
+        let cfg = BenchConfig::production();
+        save_scan_artifact_to_sqlite_with_catalog_projection(&cfg, self, catalog, progress)
     }
 }
 
@@ -391,6 +400,19 @@ pub fn load_arcade_catalog_from_navigation_projection(
         catalog_us,
         rows,
     }))
+}
+
+pub fn load_arcade_catalog_from_snapshot(
+    root: impl AsRef<Path>,
+    path: &Path,
+) -> Result<LibraryCatalogLoad, String> {
+    let started = std::time::Instant::now();
+    let projection = crate::catalog_navigation::read_catalog_navigation_snapshot(path)?;
+    let catalog = ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
+    Ok(LibraryCatalogLoad::from_precomputed(
+        catalog,
+        started.elapsed().as_micros() as u64,
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

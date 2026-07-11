@@ -28,6 +28,9 @@ pub mod media_identity;
 mod media_metadata;
 mod preview_archive;
 pub mod preview_worker;
+pub mod builder_protocol;
+#[cfg(feature = "builder")]
+pub mod builder_service;
 pub mod runtime_thread;
 mod software_identity;
 mod sqlite_catalog;

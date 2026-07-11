@@ -82,6 +82,14 @@ pub fn write_catalog_navigation_projection_for_catalog(
     write_catalog_navigation_projection_for_sqlite(sqlite_path, &projection)
 }
 
+pub fn write_catalog_navigation_snapshot(
+    path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &CatalogStamp,
+) -> Result<(), String> {
+    write_catalog_navigation_projection(path, &CatalogNavigationProjection::from_catalog(catalog, stamp))
+}
+
 pub(crate) fn write_catalog_navigation_projection_for_sqlite(
     sqlite_path: &Path,
     projection: &CatalogNavigationProjection,
@@ -122,6 +130,25 @@ pub fn read_catalog_navigation_projection(
         return Ok(None);
     }
     Ok(Some(projection))
+}
+
+pub fn read_catalog_navigation_snapshot(path: &Path) -> Result<CatalogNavigationProjection, String> {
+    let compressed = std::fs::read(path)
+        .map_err(|e| format!("read catalog navigation snapshot {}: {e}", path.display()))?;
+    if compressed.len() as u64 > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
+        return Err("catalog navigation snapshot exceeds compressed size limit".into());
+    }
+    let decoded = bounded_lz4::decompress_size_prepended(
+        &compressed,
+        MAX_CATALOG_NAVIGATION_BYTES,
+        "catalog navigation snapshot",
+    )?;
+    let projection = decode_navigation_projection(&decoded)?;
+    let embedded_stamp = CatalogStamp::from_lines(projection.catalog_stamp_lines.clone());
+    if !projection.matches(&embedded_stamp) {
+        return Err("catalog navigation snapshot has an invalid embedded stamp".into());
+    }
+    Ok(projection)
 }
 
 impl CatalogNavigationProjection {
