@@ -202,6 +202,28 @@ runtime profile with playable payloads. Unknown folders, missing cores,
 unsupported payload extensions, empty/media-only folders, and ambiguous aliases
 remain `catalog_audit` diagnostics instead of becoming launcher systems.
 
+Runtime system association is evidence-ranked. Top-level system `.mgl`
+descriptors are authoritative: `<setname>` names the distinct platform and
+`<rbf>` resolves its real backing core. Exact and punctuation-insensitive core
+names rank next, followed by narrowly documented aliases; shared extensions are
+only weak evidence and cannot override a descriptor or strong name match. This
+keeps variants such as GBC, Mega Duck, Atari 2600, and WonderSwan Color separate
+even though they share an RBF with another platform.
+
+After a strong association, the scanner may inspect bounded ZIP central
+directories to learn member extensions without decompressing payloads. Firmware
+can support association but never becomes a game. Numbered boot ROMs, BIOS,
+state/configuration files, tools, blank media, installers, support archives, and
+demos are excluded by the generic content-role classifier. Runtime-inferred
+systems require at least two remaining playable entries before appearing in
+the launcher; suppressed files and folders remain queryable through
+`catalog_audit`.
+
+TSConf is intentionally support-only when its folder contains `SDCard.zip` or
+`alt_roms.zip`. Its core mounts VHD virtual SD media; games inside those images
+cannot become individual launcher rows until MagiK can both index the image and
+select a deterministic internal title after boot.
+
 ## Discovery Dates
 
 The SQLite catalog stores nullable per-game `discovered_at_unix` metadata.
@@ -407,6 +429,10 @@ The audit records:
 - runtime-discovered folders that were cataloged, with source
   `runtime-discovered`,
 - collection ZIPs in loose-file-only profiles that will not be indexed.
+
+Audit rows also expose `evidence_source`, `evidence_confidence`, `content_role`,
+and `suppression_reason`, so an association or promotion decision can be
+explained without reproducing the scan.
 
 Audit rows are diagnostic only. They do not become launch rows until a real
 profile is added. The audit is part of the catalog stamp, so new cores from
