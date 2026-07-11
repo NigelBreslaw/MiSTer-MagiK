@@ -21,6 +21,17 @@ if [ ! -f /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf ]; the
   echo "Run scripts/deploy-main-mister-experiment.sh to install the CI-built latch RBF."
   exit 1
 fi
+META=/media/fat/mister-magik/experiments/menu-magik-vblank-latch.metadata.txt
+if [ ! -f "$META" ]; then
+  echo "ERROR: production latch RBF metadata is missing"
+  exit 1
+fi
+EXPECTED=$(sed -n "s/^rbf_sha256=//p" "$META")
+ACTUAL=$(sha256sum /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf | awk "{print \$1}")
+if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "ERROR: production latch RBF does not match adjacent metadata"
+  exit 1
+fi
 if [ ! -f /media/fat/mister-magik/mister_magik_scanout_slots.ko ]; then
   echo "ERROR: production scanout-slots module is missing"
   echo "Run scripts/deploy-main-mister-experiment.sh to install the plugin module."

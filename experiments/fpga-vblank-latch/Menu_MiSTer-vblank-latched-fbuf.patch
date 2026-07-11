@@ -1,106 +1,109 @@
 diff --git a/sys/sys_top.v b/sys/sys_top.v
+index 5f9dfa4..cce2e73 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -352,2 +352,32 @@ reg [15:0] io_dout_sys;
+@@ -350,14 +350,85 @@ reg [12:0] arc2x = 0;
+ reg [12:0] arc2y = 0;
+ reg [15:0] io_dout_sys;
  
-+// MiSTer MagiK experiment: queue an HPS framebuffer route and apply it only
-+// on HDMI vblank. This keeps the existing UIO_SET_FBUF path unchanged while
-+// adding a diagnostics-only command for a vblank-latched presenter.
-+localparam MAGIK_UIO_SET_FBUF_LATCH = 8'h57;
-+localparam MAGIK_UIO_GET_FBUF_LATCH = 8'h58;
-+localparam MAGIK_FBUF_LATCH_MAGIC   = 16'h4D47; // "MG"
-+localparam MAGIK_FBUF_STATUS_MAGIC  = 16'h4D48; // "MH"
++reg  [7:0] cmd;
++reg        has_cmd;
++reg  [7:0] cnt = 0;
 +
-+reg        MAGIK_LFB_PENDING = 0;
-+reg        MAGIK_LFB_EN      = 0;
-+reg        MAGIK_LFB_FLT     = 0;
-+reg  [5:0] MAGIK_LFB_FMT     = 0;
-+reg [11:0] MAGIK_LFB_WIDTH   = 0;
-+reg [11:0] MAGIK_LFB_HEIGHT  = 0;
-+reg [11:0] MAGIK_LFB_HMIN    = 0;
-+reg [11:0] MAGIK_LFB_HMAX    = 0;
-+reg [11:0] MAGIK_LFB_VMIN    = 0;
-+reg [11:0] MAGIK_LFB_VMAX    = 0;
-+reg [31:0] MAGIK_LFB_BASE    = 0;
-+reg [13:0] MAGIK_LFB_STRIDE  = 0;
-+reg [15:0] MAGIK_LFB_PENDING_SEQ = 0;
-+reg [15:0] MAGIK_LFB_ACTIVE_SEQ  = 0;
-+reg [15:0] MAGIK_LFB_POST_COUNT  = 0;
-+reg [15:0] MAGIK_LFB_FLIP_COUNT  = 0;
-+reg [15:0] MAGIK_LFB_DROP_COUNT  = 0;
++wire        magik_response_valid;
++wire [15:0] magik_response_data;
++wire        magik_lfb_apply;
++wire        magik_lfb_en;
++wire        magik_lfb_flt;
++wire  [5:0] magik_lfb_fmt;
++wire [11:0] magik_lfb_width;
++wire [11:0] magik_lfb_height;
++wire [11:0] magik_lfb_hmin;
++wire [11:0] magik_lfb_hmax;
++wire [11:0] magik_lfb_vmin;
++wire [11:0] magik_lfb_vmax;
++wire [31:0] magik_lfb_base;
++wire [13:0] magik_lfb_stride;
++wire        magik_lfb_pending;
++wire [15:0] magik_lfb_pending_seq;
++wire [15:0] magik_lfb_active_seq;
++wire [15:0] magik_lfb_post_count;
++wire [15:0] magik_lfb_flip_count;
++wire [15:0] magik_lfb_drop_count;
 +
-+reg magik_vbl_meta = 0;
-+reg magik_vbl_sys = 0;
-+reg magik_vbl_old = 0;
-+wire magik_vbl_rise = ~magik_vbl_old & magik_vbl_sys;
++mister_magik_vblank_latch magik_vblank_latch
++(
++	.clk_sys(clk_sys),
++	.hdmi_vbl(hdmi_vbl),
++	.cmd_start(io_uio && io_strobe && !has_cmd),
++	.cmd_data(io_uio && io_strobe && has_cmd),
++	.cmd_id(has_cmd ? cmd : io_din[7:0]),
++	.word_index(cnt[3:0]),
++	.data_in(io_din),
++	.active_lfb_en(LFB_EN),
++	.active_lfb_base(LFB_BASE),
++	.active_lfb_width(LFB_WIDTH),
++	.active_lfb_height(LFB_HEIGHT),
++	.active_lfb_stride(LFB_STRIDE),
++	.response_valid(magik_response_valid),
++	.response_data(magik_response_data),
++	.apply(magik_lfb_apply),
++	.route_en(magik_lfb_en),
++	.route_flt(magik_lfb_flt),
++	.route_fmt(magik_lfb_fmt),
++	.route_width(magik_lfb_width),
++	.route_height(magik_lfb_height),
++	.route_hmin(magik_lfb_hmin),
++	.route_hmax(magik_lfb_hmax),
++	.route_vmin(magik_lfb_vmin),
++	.route_vmax(magik_lfb_vmax),
++	.route_base(magik_lfb_base),
++	.route_stride(magik_lfb_stride),
++	.pending(magik_lfb_pending),
++	.pending_seq(magik_lfb_pending_seq),
++	.active_seq(magik_lfb_active_seq),
++	.post_count(magik_lfb_post_count),
++	.flip_count(magik_lfb_flip_count),
++	.drop_count(magik_lfb_drop_count)
++);
++
  always@(posedge clk_sys) begin
-@@ -360,4 +390,24 @@ always@(posedge clk_sys) begin
+-	reg  [7:0] cmd;
+-	reg        has_cmd;
+-	reg  [7:0] cnt = 0;
+ 	reg        vs_d0,vs_d1,vs_d2;
+ 	reg  [4:0] acx_att;
  	reg  [7:0] fb_crc;
- 	reg  [1:0] sl_r;
  
-+	magik_vbl_meta <= hdmi_vbl;
-+	magik_vbl_sys <= magik_vbl_meta;
-+	magik_vbl_old <= magik_vbl_sys;
-+
-+	if(MAGIK_LFB_PENDING && magik_vbl_rise) begin
-+		LFB_EN     <= MAGIK_LFB_EN;
-+		LFB_FLT    <= MAGIK_LFB_FLT;
-+		LFB_FMT    <= MAGIK_LFB_FMT;
-+		LFB_WIDTH  <= MAGIK_LFB_WIDTH;
-+		LFB_HEIGHT <= MAGIK_LFB_HEIGHT;
-+		LFB_HMIN   <= MAGIK_LFB_HMIN;
-+		LFB_HMAX   <= MAGIK_LFB_HMAX;
-+		LFB_VMIN   <= MAGIK_LFB_VMIN;
-+		LFB_VMAX   <= MAGIK_LFB_VMAX;
-+		LFB_BASE   <= MAGIK_LFB_BASE;
-+		LFB_STRIDE <= MAGIK_LFB_STRIDE;
-+		MAGIK_LFB_ACTIVE_SEQ <= MAGIK_LFB_PENDING_SEQ;
-+		MAGIK_LFB_FLIP_COUNT <= MAGIK_LFB_FLIP_COUNT + 1'd1;
-+		MAGIK_LFB_PENDING <= 0;
++	if(magik_lfb_apply) begin
++		LFB_EN     <= magik_lfb_en;
++		LFB_FLT    <= magik_lfb_flt;
++		LFB_FMT    <= magik_lfb_fmt;
++		LFB_WIDTH  <= magik_lfb_width;
++		LFB_HEIGHT <= magik_lfb_height;
++		LFB_HMIN   <= magik_lfb_hmin;
++		LFB_HMAX   <= magik_lfb_hmax;
++		LFB_VMIN   <= magik_lfb_vmin;
++		LFB_VMAX   <= magik_lfb_vmax;
++		LFB_BASE   <= magik_lfb_base;
++		LFB_STRIDE <= magik_lfb_stride;
 +	end
  	coef_wr <= 0;
-@@ -398,3 +448,5 @@ always@(posedge clk_sys) begin
+ 
+ `ifndef MISTER_DEBUG_NOHDMI
+@@ -396,6 +467,7 @@ always@(posedge clk_sys) begin
+ 			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
+ `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
- 			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
-+			if(io_din[7:0] == MAGIK_UIO_SET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_LATCH_MAGIC;
-+			if(io_din[7:0] == MAGIK_UIO_GET_FBUF_LATCH) io_dout_sys <= MAGIK_FBUF_STATUS_MAGIC;
++			if(magik_response_valid) io_dout_sys <= magik_response_data;
  		end
-@@ -463,3 +515,38 @@ always@(posedge clk_sys) begin
+ 		else begin
+ 			cnt <= cnt + 1'd1;
+@@ -450,6 +522,7 @@ always@(posedge clk_sys) begin
+ 					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
-+			if(cmd == MAGIK_UIO_SET_FBUF_LATCH) begin
-+				case(cnt[3:0])
-+					0: {MAGIK_LFB_EN,MAGIK_LFB_FLT,MAGIK_LFB_FMT} <= {io_din[15], io_din[14], io_din[5:0]};
-+					1: MAGIK_LFB_BASE[15:0]  <= io_din[15:0];
-+					2: MAGIK_LFB_BASE[31:16] <= io_din[15:0];
-+					3: MAGIK_LFB_WIDTH       <= io_din[11:0];
-+					4: MAGIK_LFB_HEIGHT      <= io_din[11:0];
-+					5: MAGIK_LFB_HMIN        <= io_din[11:0];
-+					6: MAGIK_LFB_HMAX        <= io_din[11:0];
-+					7: MAGIK_LFB_VMIN        <= io_din[11:0];
-+					8: MAGIK_LFB_VMAX        <= io_din[11:0];
-+					9: MAGIK_LFB_STRIDE      <= io_din[13:0];
-+					10: begin
-+						MAGIK_LFB_PENDING_SEQ <= io_din;
-+						MAGIK_LFB_PENDING <= 1;
-+						MAGIK_LFB_POST_COUNT <= MAGIK_LFB_POST_COUNT + 1'd1;
-+						if(MAGIK_LFB_PENDING) MAGIK_LFB_DROP_COUNT <= MAGIK_LFB_DROP_COUNT + 1'd1;
-+					end
-+				endcase
-+			end
-+			if(cmd == MAGIK_UIO_GET_FBUF_LATCH) begin
-+				case(cnt[3:0])
-+					0: io_dout_sys <= MAGIK_LFB_ACTIVE_SEQ;
-+					1: io_dout_sys <= MAGIK_LFB_PENDING_SEQ;
-+					2: io_dout_sys <= {13'd0, MAGIK_LFB_PENDING, MAGIK_LFB_EN, LFB_EN};
-+					3: io_dout_sys <= MAGIK_LFB_FLIP_COUNT;
-+					4: io_dout_sys <= MAGIK_LFB_POST_COUNT;
-+					5: io_dout_sys <= MAGIK_LFB_DROP_COUNT;
-+					6: io_dout_sys <= LFB_BASE[15:0];
-+					7: io_dout_sys <= LFB_BASE[31:16];
-+					8: io_dout_sys <= LFB_WIDTH;
-+					9: io_dout_sys <= LFB_HEIGHT;
-+					10: io_dout_sys <= LFB_STRIDE;
-+				endcase
-+			end
++			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
+ 			if(cmd == 'h26) vol_att <= io_din[4:0];
+ 			if(cmd == 'h27) VSET <= io_din[11:0];

@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-OUT_DIR="$ROOT/build/fpga-vblank-latch"
+LATCH_RTL="$ROOT/experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv"
+OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
   MENU_DIR="$MISTER_MENU_DIR"
@@ -111,14 +112,20 @@ case "$APPLY_PATCH" in
       echo "patch does not apply cleanly to $MENU_ABS" >&2
       git -C "$WORK_DIR" apply --recount --check "$PATCH"
     fi
+    cp "$LATCH_RTL" "$WORK_DIR/sys/mister_magik_vblank_latch.sv"
+    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 
 {
+  echo "format=mister-magik-fpga-release-v1"
+  git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/magik_commit=/'
+  git -C "$ROOT" status --short --untracked-files=no 2>/dev/null | sed 's/^/magik_status=/'
   echo "source_dir=$MENU_ABS"
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
+  shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"
   echo "work_dir=$WORK_DIR"
   echo "quartus_mode=$QUARTUS_MODE"
@@ -126,6 +133,12 @@ esac
   echo "quartus_strace=${QUARTUS_STRACE:-0}"
   echo "quartus_docker_privileged=${QUARTUS_DOCKER_PRIVILEGED:-0}"
   echo "quartus_docker_empty_sys=${QUARTUS_DOCKER_EMPTY_SYS:-0}"
+  awk '/^-?set_global_assignment -name SEED / {print "quartus_seed="$NF}' "$WORK_DIR/menu.qsf" | tail -1
+  if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+    echo "workflow_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+  else
+    echo "workflow_url=local"
+  fi
 } > "$META_OUT"
 
 build_status=0
@@ -190,5 +203,19 @@ fi
 
 cp "$RBF_CANDIDATE" "$RBF_OUT"
 shasum -a 256 "$RBF_OUT" | awk '{print "rbf_sha256="$1}' >> "$META_OUT"
-echo "rbf=$RBF_OUT" >> "$META_OUT"
+echo "rbf_file=$(basename "$RBF_OUT")" >> "$META_OUT"
+quartus_version="$(sed -n 's/.*Version \([0-9][^ ]* Build [0-9][^ ]*\).*/\1/p' "$LOG_OUT" | head -1)"
+if [[ -z "$quartus_version" ]]; then
+  echo "Quartus version was not found in $LOG_OUT" >&2
+  exit 1
+fi
+echo "quartus_version=$quartus_version" >> "$META_OUT"
+rm -rf "$OUT_DIR/reports"
+mkdir -p "$OUT_DIR/reports"
+find "$WORK_DIR/output_files" -maxdepth 1 -type f \( -name '*.rpt' -o -name '*.summary' \) -exec cp {} "$OUT_DIR/reports/" \;
+find "$OUT_DIR/reports" -type f -print0 | sort -z | while IFS= read -r -d '' report; do
+  relative="reports/$(basename "$report")"
+  hash="$(shasum -a 256 "$report" | awk '{print $1}')"
+  echo "report_sha256.$relative=$hash" >> "$META_OUT"
+done
 echo "$RBF_OUT"

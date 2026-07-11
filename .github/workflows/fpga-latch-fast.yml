@@ -1,0 +1,55 @@
+name: FPGA latch fast gates
+
+on:
+  pull_request:
+    paths:
+      - "experiments/fpga-vblank-latch/**"
+      - "scripts/*fpga*latch*"
+      - "scripts/build-fpga-vblank-latch-core.sh"
+      - ".github/workflows/fpga-latch-fast.yml"
+  push:
+    paths:
+      - "experiments/fpga-vblank-latch/**"
+      - "scripts/*fpga*latch*"
+      - "scripts/build-fpga-vblank-latch-core.sh"
+      - ".github/workflows/fpga-latch-fast.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  latch-rtl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FPGA fast-gate tools
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator lcov
+      - name: Check out pinned Menu source
+        uses: actions/checkout@v4
+        with:
+          repository: MiSTer-devel/Menu_MiSTer
+          ref: cf4dfdee516fcaa6952bdd9fb47154e96c28567e
+          path: build/Menu_MiSTer
+      - name: Run warning-clean Icarus simulation
+        run: scripts/test-fpga-vblank-latch.sh
+      - name: Lint custom RTL
+        run: >-
+          verilator --lint-only --Wall --Wno-fatal
+          experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv
+      - name: Verify pinned patch integration and opcode ownership
+        run: scripts/check-fpga-latch-integration.py build/Menu_MiSTer
+      - name: Measure reachable custom RTL coverage
+        run: |
+          set -euo pipefail
+          build_dir="$(mktemp -d)"
+          trap 'rm -rf "$build_dir"' EXIT
+          verilator --cc --exe --build --timing --coverage-line \
+            --top-module tb_mister_magik_vblank_latch \
+            --Mdir "$build_dir/obj" \
+            experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv \
+            experiments/fpga-vblank-latch/tb_mister_magik_vblank_latch.sv \
+            "$GITHUB_WORKSPACE/experiments/fpga-vblank-latch/verilator_coverage_main.cpp"
+          (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
+          verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
+          scripts/check-fpga-latch-coverage.py "$build_dir/annotated"
