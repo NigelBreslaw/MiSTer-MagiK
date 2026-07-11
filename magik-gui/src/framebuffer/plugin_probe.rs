@@ -15,9 +15,9 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 static ATOMIC_SCANOUT_DISABLED: AtomicBool = AtomicBool::new(false);
 static ATOMIC_SCANOUT_STATE: AtomicU8 = AtomicU8::new(0);
 
-pub const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
+pub const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-scanout-slots";
 pub const PLUGIN_SCANOUT_DEVICE: &str = "/dev/mister-magik-scanout";
-pub const PLUGIN_PROBE_MIN_VERSION: u32 = 2;
+pub const PLUGIN_PROBE_MIN_VERSION: u32 = 1;
 pub const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
 pub const PLUGIN_HIDDEN_SLOT_FRAME_BYTES: usize = 960 * 540 * 2;
 
@@ -690,7 +690,7 @@ pub fn parse_plugin_probe_metadata(text: &str) -> Result<PluginProbeMetadata, Pl
 }
 
 pub fn parse_plugin_probe_header(line: &str) -> Option<PluginProbeHeader> {
-    if !line.starts_with("plugin_probe_header_tsv\t") {
+    if !line.starts_with("scanout_slots_header_tsv\t") {
         return None;
     }
     let mut name = None;
@@ -719,7 +719,7 @@ pub fn parse_plugin_probe_header(line: &str) -> Option<PluginProbeHeader> {
 }
 
 pub fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
-    if !line.starts_with("plugin_probe_region_tsv\t") {
+    if !line.starts_with("scanout_slots_region_tsv\t") {
         return None;
     }
     let mut index = None;
@@ -1220,11 +1220,9 @@ mod tests {
     fn metadata() -> PluginProbeMetadata {
         parse_plugin_probe_metadata(
             "\
-plugin_probe_header_tsv\tname=mister-magik-plugin-probe\tversion=2\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
-plugin_probe_region_tsv\tindex=0\tname=adjacent-fb-resource\tavailable=1\tphys=0x220fd200\tlen=1036800\tdma_owned=0\n\
-plugin_probe_region_tsv\tindex=1\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
-plugin_probe_region_tsv\tindex=2\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\tdma_owned=0\n\
-plugin_probe_region_tsv\tindex=3\tname=plugin-owned-dma\tavailable=0\tphys=0x00000000\tlen=1036800\tdma_owned=1\n",
+scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
+scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
+scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\tdma_owned=0\n",
         )
         .unwrap()
     }

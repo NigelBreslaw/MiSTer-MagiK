@@ -21,8 +21,8 @@ if [ ! -f /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf ]; the
   echo "Run scripts/deploy-main-mister-experiment.sh to install the CI-built latch RBF."
   exit 1
 fi
-if [ ! -f /media/fat/mister-magik/mister_magik_scanout.ko ]; then
-  echo "ERROR: production scanout plugin module is missing"
+if [ ! -f /media/fat/mister-magik/mister_magik_scanout_slots.ko ]; then
+  echo "ERROR: production scanout-slots module is missing"
   echo "Run scripts/deploy-main-mister-experiment.sh to install the plugin module."
   exit 1
 fi
