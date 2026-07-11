@@ -23,7 +23,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--thread-sample]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--deploy-catalog|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--thread-sample]
        scripts/profile-first-scan.sh --self-test
 
 Deletes the launcher catalog database and summary projection, reboots the
@@ -118,6 +118,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --self-test) first_scan_self_test; exit 0 ;;
     --deploy-device) DEPLOY="device"; shift ;;
+    --deploy-catalog) DEPLOY="catalog"; shift ;;
     --skip-build) DEPLOY="skip"; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
@@ -161,6 +162,7 @@ fi
 
 case "$DEPLOY" in
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
+  catalog) "$HERE/scripts/deploy-catalog-builder.sh" ;;
   skip) : ;;
 esac
 

@@ -27,6 +27,7 @@ CLEAN=0
 REBUILD_IMAGE="${MISTER_APPLE_CONTAINER_REBUILD_IMAGE:-0}"
 BIN_TARGET=""
 BIN_NAME="mister-magik-fb"
+MANIFEST_PATH=""
 
 CONTAINER_CPUS="$(apple_container_cpus)"
 
@@ -52,6 +53,7 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --video-lab  → include video comparison/fallback paths
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --bench-tools → include device benchmark commands
+  ./build-arm64-apple-container.sh --catalog-builder → build only the Slint-free catalog builder
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
   ./build-arm64-apple-container.sh --rebuild-image → rebuild the cross image
@@ -83,6 +85,13 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
+    --catalog-builder)
+      FEATURES=(builder)
+      BIN_TARGET="mister-magik-catalog-builder"
+      BIN_NAME="mister-magik-catalog-builder"
+      MANIFEST_PATH="catalog/Cargo.toml"
+      UI_SCOPE=all
+      ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
     --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
@@ -204,6 +213,9 @@ ensure_image
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
 BUILD_ARGS=(build --target "$TARGET" --profile "$PROFILE" --features "$FEATURE_LIST")
+if [ -n "$MANIFEST_PATH" ]; then
+  BUILD_ARGS+=(--manifest-path "$MANIFEST_PATH")
+fi
 if [ "$LOCKED" -eq 1 ]; then
   BUILD_ARGS+=(--locked)
 fi

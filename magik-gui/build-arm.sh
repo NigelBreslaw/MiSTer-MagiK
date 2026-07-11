@@ -59,6 +59,7 @@ FEATURES=(ui)
 FEATURE_LIST=""
 BIN_TARGET=""
 BIN_NAME="mister-magik-fb"
+MANIFEST_PATH=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 CLEAN=0
 add_feature() {
@@ -87,6 +88,13 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
+    --catalog-builder)
+      FEATURES=(builder)
+      BIN_TARGET="mister-magik-catalog-builder"
+      BIN_NAME="mister-magik-catalog-builder"
+      MANIFEST_PATH="catalog/Cargo.toml"
+      UI_SCOPE=all
+      ;;
     --clean) CLEAN=1 ;;
     --all-scenes) UI_SCOPE=all; add_feature experiments ;;
     --experiments) UI_SCOPE=all; add_feature experiments ;;
@@ -105,6 +113,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       echo "  ./build-arm.sh --video-lab   → include video comparison/fallback paths"
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
+      echo "  ./build-arm.sh --catalog-builder → build only the Slint-free catalog builder"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0
@@ -167,6 +176,9 @@ if [ "$CLEAN" -eq 1 ]; then
   cargo clean
 fi
 BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+if [ -n "$MANIFEST_PATH" ]; then
+  BUILD_ARGS+=(--manifest-path "$MANIFEST_PATH")
+fi
 if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
   BUILD_ARGS+=(--timings)
 fi
