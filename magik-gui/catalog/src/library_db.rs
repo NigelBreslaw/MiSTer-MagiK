@@ -44,7 +44,7 @@ use crate::software_identity::{
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
@@ -995,6 +995,26 @@ fn build_catalog_from_scan_with_sources(
 ) -> ArcadeCatalog {
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+    let mut playable_counts = HashMap::<String, usize>::new();
+    let mut manifest_backed_systems = HashSet::<String>::new();
+    for discovery in discoveries.values() {
+        let system_id = catalog_system_id_for_discovery(discovery);
+        *playable_counts.entry(system_id.clone()).or_default() += 1;
+        if !profile_id_for_discovery(discovery)
+            .is_some_and(|profile_id| profile_id.starts_with("runtime-"))
+        {
+            manifest_backed_systems.insert(system_id);
+        }
+    }
+    let promoted_systems = playable_counts
+        .iter()
+        .filter_map(|(system_id, count)| {
+            (*count >= 2
+                || manifest_backed_systems.contains(system_id)
+                || matches!(system_id.as_str(), "arcade" | "neogeo"))
+            .then_some(system_id.clone())
+        })
+        .collect::<HashSet<_>>();
     let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
     let software_metadata = load_mame_software_metadata(mame_sqlite_path);
     let arcade_metadata = load_arcade_machine_metadata_for_setnames(
@@ -1018,6 +1038,9 @@ fn build_catalog_from_scan_with_sources(
 
     for (key, discovery) in discoveries {
         if is_raw_arcade_zip_set_discovery(discovery) {
+            continue;
+        }
+        if !promoted_systems.contains(&catalog_system_id_for_discovery(discovery)) {
             continue;
         }
         let Some(projection) = projection_context.projection_for_discovery(&key, discovery) else {

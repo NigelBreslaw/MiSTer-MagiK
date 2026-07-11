@@ -22,6 +22,45 @@ pub struct CatalogAuditRow {
     pub reason: String,
 }
 
+impl CatalogAuditRow {
+    pub fn evidence_source(&self) -> &str {
+        match self.source.as_str() {
+            "mgl" => "mgl-setname",
+            "main-derived" | "main-source" => "core-mount-contract",
+            "runtime-discovered" if self.reason == "matched-catalog-profile" => {
+                "normalized-name-or-descriptor"
+            }
+            "runtime-discovered" => "runtime-observation",
+            _ => "unknown",
+        }
+    }
+
+    pub fn evidence_confidence(&self) -> &str {
+        match self.evidence_source() {
+            "mgl-setname" | "core-mount-contract" => "authoritative",
+            "normalized-name-or-descriptor" => "strong",
+            "runtime-observation" => "weak",
+            _ => "none",
+        }
+    }
+
+    pub fn content_role(&self) -> &str {
+        match self.catalog_status.as_str() {
+            "cataloged" => "playable-candidate",
+            "support-only" => "support",
+            _ => "unknown",
+        }
+    }
+
+    pub fn suppression_reason(&self) -> &str {
+        if self.catalog_status == "cataloged" {
+            ""
+        } else {
+            &self.reason
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn audit_catalog_coverage(
     roots: &[String],
