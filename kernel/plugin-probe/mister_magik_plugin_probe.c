@@ -72,7 +72,8 @@ static const size_t scanout_slot_bytes = 1280UL * 720UL * 2UL;
 static const size_t scanout_map_bytes = PAGE_ALIGN(1280UL * 720UL * 2UL);
 static DEFINE_MUTEX(scanout_lock);
 static __u32 slot_state[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
-static unsigned long mailbox_page;
+static void *mailbox_virt;
+static dma_addr_t mailbox_dma;
 static __u32 mailbox_phys;
 static __u32 mailbox_epoch;
 static bool mailbox_armed;
@@ -192,10 +193,10 @@ static struct miscdevice probe_miscdev = {
 
 static void scanout_refresh_completion_locked(void)
 {
-	__u32 *words = (__u32 *)mailbox_page;
+	__u32 *words = mailbox_virt;
 	__u32 sequence_before, sequence_after, magic, epoch, completed_slot;
 
-	if (!mailbox_armed || !mailbox_page || pending_slot == NO_SLOT)
+	if (!mailbox_armed || !mailbox_virt || pending_slot == NO_SLOT)
 		return;
 
 	sequence_before = READ_ONCE(words[MAILBOX_COMPLETION_WORD + 2]);
@@ -258,7 +259,7 @@ static int scanout_validate_geometry(const struct mister_magik_scanout_post *pos
 
 static void scanout_publish_locked(const struct mister_magik_scanout_post *post)
 {
-	__u32 *words = (__u32 *)mailbox_page;
+	__u32 *words = mailbox_virt;
 	unsigned int descriptor_word = post->sequence & 1 ?
 		MAILBOX_DESC_B_WORD : MAILBOX_DESC_A_WORD;
 	unsigned int i;
@@ -503,9 +504,11 @@ static void free_scanout_slots(void)
 					scanout_virt[i], scanout_dma[i], DMA_TO_DEVICE);
 		scanout_virt[i] = NULL;
 	}
-	if (mailbox_page) {
-		free_page(mailbox_page);
-		mailbox_page = 0;
+	if (mailbox_virt) {
+		dma_free_coherent(&scanout_pdev->dev, MAILBOX_BYTES,
+			mailbox_virt, mailbox_dma);
+		mailbox_virt = NULL;
+		mailbox_dma = 0;
 		mailbox_phys = 0;
 	}
 }
@@ -531,16 +534,17 @@ static int init_scanout_slots(void)
 		}
 		slot_state[i] = MISTER_MAGIK_SCANOUT_SLOT_CPU_OWNED;
 	}
-	mailbox_page = get_zeroed_page(GFP_KERNEL);
-	if (!mailbox_page) {
+	mailbox_virt = dma_alloc_coherent(&scanout_pdev->dev, MAILBOX_BYTES,
+		&mailbox_dma, GFP_KERNEL);
+	if (!mailbox_virt) {
 		ret = -ENOMEM;
 		goto fail;
 	}
-	if (virt_to_phys((void *)mailbox_page) > MAILBOX_MAX_PHYS) {
+	if (mailbox_dma > MAILBOX_MAX_PHYS) {
 		ret = -ERANGE;
 		goto fail;
 	}
-	mailbox_phys = (__u32)virt_to_phys((void *)mailbox_page);
+	mailbox_phys = (__u32)mailbox_dma;
 	mailbox_epoch = get_random_u32();
 	if (!mailbox_epoch)
 		mailbox_epoch = 1;
