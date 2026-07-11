@@ -1250,6 +1250,8 @@ mod linux {
             "schema": FRAMEBUFFER_STREAM_SCHEMA,
             "producer": "127.0.0.1",
             "producer_port": FRAMEBUFFER_PRODUCER_PORT,
+            "source": "producer-pre-ownership-transfer",
+            "ownership_safe": true,
             "encoding": "lz4-block-size-prepended",
             "format": "rgb565-le",
         });
@@ -1951,7 +1953,22 @@ mod linux {
             },
             "system": {
                 "uptime": read_trimmed("/proc/uptime"),
-            }
+            },
+            "scanout": scanout_status_json(),
+        })
+    }
+
+    fn scanout_status_json() -> Value {
+        let main_status = read_json_value("/tmp/mister-magik/main-status.json");
+        let slint_status = read_json_value("/tmp/mister-magik/status.json");
+        json!({
+            "module_loaded": Path::new("/sys/module/mister_magik_scanout").exists(),
+            "device_ready": Path::new("/dev/mister-magik-scanout").exists(),
+            "main_module_loaded": main_status.get("scanout_module_loaded").cloned().unwrap_or(Value::Null),
+            "main_device_ready": main_status.get("scanout_device_ready").cloned().unwrap_or(Value::Null),
+            "mode": slint_status.get("scanout_mode").cloned().unwrap_or(Value::Null),
+            "state": slint_status.get("scanout_state").cloned().unwrap_or(Value::Null),
+            "atomic_enabled": slint_status.get("scanout_atomic_enabled").cloned().unwrap_or(Value::Null),
         })
     }
 
@@ -1985,6 +2002,7 @@ mod linux {
                 "agent_tmp_log_tail": tail_text_value(LOG, 160),
                 "agent_persistent_log_tail": tail_text_value(PLOG, 160),
                 "boot_analytics_tail": tail_text_value("/tmp/mister-magik-boot-analytics.tsv", 80),
+                "scanout_proc_modules": tail_text_value("/proc/modules", 80),
             },
             "crashes": crash_reports_json(),
         })

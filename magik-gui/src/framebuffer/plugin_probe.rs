@@ -10,9 +10,10 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 static ATOMIC_SCANOUT_DISABLED: AtomicBool = AtomicBool::new(false);
+static ATOMIC_SCANOUT_STATE: AtomicU8 = AtomicU8::new(0);
 
 pub const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-plugin-probe";
 pub const PLUGIN_SCANOUT_DEVICE: &str = "/dev/mister-magik-scanout";
@@ -52,6 +53,25 @@ pub fn atomic_scanout_runtime_enabled() -> bool {
 
 pub fn disable_atomic_scanout() {
     ATOMIC_SCANOUT_DISABLED.store(true, Ordering::Release);
+    ATOMIC_SCANOUT_STATE.store(4, Ordering::Release);
+}
+
+pub fn mark_atomic_scanout_target_ready() {
+    ATOMIC_SCANOUT_STATE.fetch_max(2, Ordering::AcqRel);
+}
+
+pub fn mark_atomic_scanout_active() {
+    ATOMIC_SCANOUT_STATE.store(3, Ordering::Release);
+}
+
+pub fn scanout_runtime_state_label() -> &'static str {
+    match ATOMIC_SCANOUT_STATE.load(Ordering::Acquire) {
+        2 => "target-ready",
+        3 => "active",
+        4 => "fallback",
+        _ if configured_scanout_mode().wants_atomic() => "requested",
+        _ => "legacy",
+    }
 }
 
 const SCANOUT_SLOT_COUNT: usize = 2;
