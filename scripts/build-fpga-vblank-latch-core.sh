@@ -3,8 +3,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-MAILBOX_PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-scanout-mailbox.patch"
-MAILBOX_RTL="$ROOT/experiments/fpga-vblank-latch/mister_magik_scanout_mailbox.sv"
 OUT_DIR="$ROOT/build/fpga-vblank-latch"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -113,10 +111,6 @@ case "$APPLY_PATCH" in
       echo "patch does not apply cleanly to $MENU_ABS" >&2
       git -C "$WORK_DIR" apply --recount --check "$PATCH"
     fi
-    git -C "$WORK_DIR" apply --recount --check "$MAILBOX_PATCH"
-    git -C "$WORK_DIR" apply --recount --whitespace=nowarn "$MAILBOX_PATCH"
-    cp "$MAILBOX_RTL" "$WORK_DIR/sys/mister_magik_scanout_mailbox.sv"
-    printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_scanout_mailbox.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 
@@ -125,8 +119,6 @@ esac
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
-  shasum -a 256 "$MAILBOX_PATCH" | awk '{print "mailbox_patch_sha256="$1}'
-  shasum -a 256 "$MAILBOX_RTL" | awk '{print "mailbox_rtl_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"
   echo "work_dir=$WORK_DIR"
   echo "quartus_mode=$QUARTUS_MODE"
