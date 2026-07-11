@@ -4,7 +4,8 @@ ARCH ?= arm
 CROSS_COMPILE ?= arm-linux-gnueabihf-
 LOCALVERSION ?= -MiSTer
 
-obj-m += mister_magik_plugin_probe.o
+obj-m += mister_magik_scanout.o
+mister_magik_scanout-objs := mister_magik_plugin_probe.o
 ccflags-y += -fno-stack-protector
 
 .PHONY: all clean

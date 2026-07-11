@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * MiSTer MagiK stock-kernel plugin feasibility probe.
+ * MiSTer MagiK scanout plugin for the stock MiSTer kernel.
  *
- * Diagnostics only: exposes mmap ranges through a misc device and reports
- * metadata. It does not replace MiSTer_fb, change scanout, or install itself
- * persistently.
+ * /dev/mister-magik-scanout is the production interface. The historical
+ * /dev/mister-magik-plugin-probe diagnostics interface remains for one
+ * compatibility release; it does not own or alias the scanout allocations.
  */
 
 #include <linux/dma-mapping.h>
@@ -21,7 +21,7 @@
 
 #define DEVICE_NAME "mister-magik-plugin-probe"
 #define SCANOUT_DEVICE_NAME "mister-magik-scanout"
-#define PROBE_VERSION 3
+#define PROBE_VERSION 4
 
 #define FB_PHYS_BASE 0x22000000UL
 #define FB_CONTROL_BYTES 4096UL
@@ -49,10 +49,9 @@ struct probe_region {
 
 static atomic_t open_count = ATOMIC_INIT(0);
 static atomic_t mmap_count = ATOMIC_INIT(0);
-static void *dma_virt;
-static dma_addr_t dma_handle;
 static struct probe_region regions[REGION_COUNT];
 static struct platform_device *scanout_pdev;
+static bool probe_registered;
 static void *scanout_virt[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
 static dma_addr_t scanout_dma[MISTER_MAGIK_SCANOUT_SLOT_COUNT];
 static const size_t scanout_slot_bytes = 1280UL * 720UL * 2UL;
@@ -317,30 +316,20 @@ static int __init probe_init(void)
 		.dma_owned = true,
 	};
 
-	ret = misc_register(&probe_miscdev);
-	if (ret)
-		return ret;
-
 	ret = init_scanout_slots();
-	if (ret)
-		pr_warn("mister_magik_plugin_probe: cacheable scanout unavailable error=%d\n", ret);
-
-	ret = dma_set_mask_and_coherent(probe_miscdev.this_device, DMA_BIT_MASK(32));
 	if (ret) {
-		pr_warn("mister_magik_plugin_probe: 32-bit DMA mask rejected; plugin-owned-dma unavailable\n");
-	} else {
-		dma_virt = dma_alloc_wc(probe_miscdev.this_device, RGB565_MAP_BYTES,
-					&dma_handle, GFP_KERNEL);
-		if (dma_virt) {
-			regions[REGION_PLUGIN_DMA].phys = (unsigned long)dma_handle;
-			regions[REGION_PLUGIN_DMA].available = true;
-		} else {
-			pr_warn("mister_magik_plugin_probe: dma_alloc_wc failed; plugin-owned-dma unavailable\n");
-		}
+		pr_err("mister_magik_scanout: production scanout unavailable error=%d\n", ret);
+		return ret;
 	}
 
-	pr_info("mister_magik_plugin_probe: loaded /dev/%s version=%u\n",
-		DEVICE_NAME, PROBE_VERSION);
+	ret = misc_register(&probe_miscdev);
+	if (ret)
+		pr_warn("mister_magik_scanout: compatibility probe unavailable error=%d\n", ret);
+	else
+		probe_registered = true;
+
+	pr_info("mister_magik_scanout: loaded /dev/%s; compatibility_probe=%u version=%u\n",
+		SCANOUT_DEVICE_NAME, probe_registered ? 1 : 0, PROBE_VERSION);
 	return 0;
 }
 
@@ -352,16 +341,16 @@ static void __exit probe_exit(void)
 		platform_device_unregister(scanout_pdev);
 		scanout_pdev = NULL;
 	}
-	if (dma_virt)
-		dma_free_wc(probe_miscdev.this_device, RGB565_MAP_BYTES,
-			    dma_virt, dma_handle);
-	misc_deregister(&probe_miscdev);
-	pr_info("mister_magik_plugin_probe: unloaded\n");
+	if (probe_registered) {
+		misc_deregister(&probe_miscdev);
+		probe_registered = false;
+	}
+	pr_info("mister_magik_scanout: unloaded\n");
 }
 
 module_init(probe_init);
 module_exit(probe_exit);
 
-MODULE_DESCRIPTION("MiSTer MagiK stock-kernel plugin feasibility probe");
+MODULE_DESCRIPTION("MiSTer MagiK stock-kernel scanout plugin");
 MODULE_AUTHOR("MiSTer MagiK");
 MODULE_LICENSE("GPL v2");

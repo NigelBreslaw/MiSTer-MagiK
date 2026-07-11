@@ -15,8 +15,9 @@ usage() {
 Usage:
   scripts/build-plugin-probe-module.sh
 
-Builds the diagnostics-only mister_magik_plugin_probe.ko against the MiSTer
-5.15 kernel source. Set KERNEL_SRC to override the source checkout.
+Builds the production mister_magik_scanout.ko against the stock MiSTer 5.15
+kernel source. A compatibility copy named mister_magik_plugin_probe.ko is
+retained for one release. Set KERNEL_SRC to override the source checkout.
 EOF
 }
 
@@ -49,16 +50,17 @@ if [[ ! -f "$KERNEL_BUILD/.config" ]]; then
 fi
 make -C "$KERNEL_SRC" O="$KERNEL_BUILD" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" modules_prepare
 make -C "$MODULE_DIR" KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" all
-cp "$MODULE_DIR/mister_magik_plugin_probe.ko" "$OUT_DIR/mister_magik_plugin_probe.ko"
+cp "$MODULE_DIR/mister_magik_scanout.ko" "$OUT_DIR/mister_magik_scanout.ko"
+cp "$MODULE_DIR/mister_magik_scanout.ko" "$OUT_DIR/mister_magik_plugin_probe.ko"
 if command -v "${CROSS_COMPILE}modinfo" >/dev/null 2>&1; then
-  "${CROSS_COMPILE}modinfo" "$OUT_DIR/mister_magik_plugin_probe.ko" > "$OUT_DIR/modinfo.txt" || true
+  "${CROSS_COMPILE}modinfo" "$OUT_DIR/mister_magik_scanout.ko" > "$OUT_DIR/modinfo.txt" || true
 elif command -v modinfo >/dev/null 2>&1; then
-  modinfo "$OUT_DIR/mister_magik_plugin_probe.ko" > "$OUT_DIR/modinfo.txt" || true
+  modinfo "$OUT_DIR/mister_magik_scanout.ko" > "$OUT_DIR/modinfo.txt" || true
 else
   : > "$OUT_DIR/modinfo.txt"
 fi
-(cd "$OUT_DIR" && sha256sum mister_magik_plugin_probe.ko > SHA256SUMS)
-echo "$OUT_DIR/mister_magik_plugin_probe.ko"
+(cd "$OUT_DIR" && sha256sum mister_magik_scanout.ko mister_magik_plugin_probe.ko > SHA256SUMS)
+echo "$OUT_DIR/mister_magik_scanout.ko"
 EOS
 )
 
