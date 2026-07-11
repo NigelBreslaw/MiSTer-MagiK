@@ -1618,7 +1618,7 @@ mod linux {
         parse_proc_stat_processor(&text)
     }
 
-    fn parse_proc_stat_processor(text: &str) -> Option<u64> {
+    pub(super) fn parse_proc_stat_processor(text: &str) -> Option<u64> {
         // `comm` is parenthesized and may contain spaces, so count fields only
         // after its final closing delimiter. Processor is Linux stat field 39.
         text.rsplit_once(") ")?
@@ -3150,15 +3150,13 @@ mod linux {
     }
 
     fn current_status_pid(status: &Value, pids: &Value) -> Option<u64> {
-        let Some(status_pid) = status.get("pid").and_then(Value::as_u64) else {
-            return None;
-        };
+        let status_pid = status.get("pid").and_then(Value::as_u64)?;
         pids.as_array()
             .is_some_and(|pids| pids.iter().any(|pid| pid.as_u64() == Some(status_pid)))
             .then_some(status_pid)
     }
 
-    fn launcher_ui_pid(status: &Value, pids: &Value) -> Option<u64> {
+    pub(super) fn launcher_ui_pid(status: &Value, pids: &Value) -> Option<u64> {
         current_status_pid(status, pids).or_else(|| {
             let pids = pids.as_array()?;
             (pids.len() == 1).then(|| pids[0].as_u64()).flatten()
