@@ -1171,6 +1171,7 @@ impl CatalogProjectionBuildContext<'_> {
                 setname,
                 parent,
                 family_key,
+                prepared: discovery.prepared,
             },
         );
         if is_arcade {
@@ -1349,6 +1350,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
                 setname,
                 parent,
                 family_key: Some(family_key),
+                prepared: discovery.prepared,
             },
         ));
     }
@@ -1597,6 +1599,7 @@ mod tests {
             setname: Some(setname.to_string()),
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: crate::game_discovery::DiscoveryConfidence::PayloadPath,
         }
     }
@@ -1953,6 +1956,7 @@ mod tests {
             setname: None,
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: DiscoveryConfidence::ArchiveToc,
         };
 
@@ -1971,6 +1975,7 @@ mod tests {
             setname: None,
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
         };
 

@@ -4,6 +4,8 @@
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
 use crate::catalog_navigation::CatalogNavigationProjection;
+use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
+use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -187,9 +189,16 @@ pub struct StructuredLaunchPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedLaunchSelection {
+    pub collection_id: PreparedCollectionId,
+    pub launch_ref: Arc<str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchTarget {
     Path(Arc<str>),
     Structured(StructuredLaunchPlan),
+    Prepared(PreparedLaunchSelection),
     MissingStructured(Arc<str>),
 }
 
@@ -316,6 +325,14 @@ impl ArcadeCatalog {
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {
+        if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX)
+            || launch_ref == AMIGAVISION_LAUNCHER_REF
+        {
+            return LaunchTarget::Prepared(PreparedLaunchSelection {
+                collection_id: PreparedCollectionId::AmigaVision,
+                launch_ref: Arc::from(launch_ref),
+            });
+        }
         self.launch_plans_by_ref
             .get(launch_ref)
             .cloned()
@@ -1332,6 +1349,23 @@ mod tests {
         assert_eq!(catalog.system_game_count("amiga"), 1);
         assert_eq!(catalog.system_game_view("amiga").len(), 1);
         assert_eq!(catalog.system_preview_game_count("amiga"), 0);
+    }
+
+    #[test]
+    fn amigavision_refs_are_classified_as_prepared_targets() {
+        let catalog = ArcadeCatalog::new(PathBuf::new(), Vec::new(), Vec::new());
+
+        assert!(matches!(
+            catalog.launch_target_for_ref("magik-amigavision:Agony"),
+            LaunchTarget::Prepared(PreparedLaunchSelection {
+                collection_id: PreparedCollectionId::AmigaVision,
+                ..
+            })
+        ));
+        assert!(matches!(
+            catalog.launch_target_for_ref("magik-amigavision-launcher"),
+            LaunchTarget::Prepared(_)
+        ));
     }
 
     #[test]

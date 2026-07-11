@@ -2680,6 +2680,15 @@ fn execute_game_launch_with(
             false,
         ));
     }
+    if let LaunchTarget::Prepared(selection) = launch_target {
+        return Err(LaunchError::new(
+            format!(
+                "prepared {} launch must be resolved before Main handoff: {}",
+                selection.collection_id, selection.launch_ref
+            ),
+            false,
+        ));
+    }
     if let LaunchTarget::Path(path) = launch_target {
         if !io.target_exists(path) {
             return Err(LaunchError::new(
@@ -2730,6 +2739,12 @@ fn execute_game_launch_with(
         (true, LaunchTarget::Structured(plan)) => {
             format!("mister_magik_launch_plan_v1 {}\n", encode_launch_plan(plan))
         }
+        (true, LaunchTarget::Prepared(selection)) => {
+            return Err(LaunchError::new(
+                format!("prepared launch unresolved: {}", selection.launch_ref),
+                spawned,
+            ));
+        }
         (true, LaunchTarget::MissingStructured(launch_ref)) => {
             return Err(LaunchError::new(
                 format!("structured launch plan missing from catalog: {launch_ref}"),
@@ -2740,6 +2755,12 @@ fn execute_game_launch_with(
         (false, LaunchTarget::Structured(_)) => {
             return Err(LaunchError::new(
                 "structured launch plan requires MiSTer_MagiK".to_string(),
+                spawned,
+            ));
+        }
+        (false, LaunchTarget::Prepared(selection)) => {
+            return Err(LaunchError::new(
+                format!("prepared launch unresolved: {}", selection.launch_ref),
                 spawned,
             ));
         }

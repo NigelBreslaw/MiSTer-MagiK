@@ -7,6 +7,7 @@ use crate::library_db::{
     self, LibraryContainerEntry, AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF,
 };
 use crate::media_metadata;
+use crate::prepared_collections::PreparedLaunchProvenance;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
@@ -26,6 +27,7 @@ pub(crate) struct GameDiscovery {
     pub(crate) setname: Option<String>,
     pub(crate) parent: Option<String>,
     pub(crate) covered_payload_path: Option<String>,
+    pub(crate) prepared: Option<PreparedLaunchProvenance>,
     pub(crate) confidence: DiscoveryConfidence,
 }
 
@@ -216,6 +218,7 @@ pub(crate) fn discovery_from_profile_file(
                 setname: mra.setname,
                 parent: mra.parent,
                 covered_payload_path: None,
+                prepared: None,
                 confidence: if mra.platform.is_some() {
                     DiscoveryConfidence::MraHardware
                 } else {
@@ -262,6 +265,7 @@ pub(crate) fn discovery_from_profile_file(
                 setname,
                 parent: None,
                 covered_payload_path,
+                prepared: None,
                 confidence: DiscoveryConfidence::PayloadPath,
             };
         }
@@ -293,6 +297,7 @@ pub(crate) fn discovery_from_profile_file(
         setname: payload_setname,
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: profile_confidence(rule),
     }
 }
@@ -317,6 +322,7 @@ pub(crate) fn discovery_from_profile_archive_entry(
         setname: media_metadata::parenthesized_setname(&entry.entry_path),
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: match rule.provenance.kind {
             RuleSourceKind::MainSource | RuleSourceKind::Mgl | RuleSourceKind::Mra => {
                 DiscoveryConfidence::ArchiveToc
@@ -722,6 +728,7 @@ mod tests {
                 setname: None,
                 parent: None,
                 covered_payload_path: Some("/media/fat/games/NES/Mario.nes".to_string()),
+                prepared: None,
                 confidence: DiscoveryConfidence::PayloadPath,
             },
             payload("/media/fat/games/NES/Mario.nes"),
@@ -758,6 +765,7 @@ mod tests {
             setname: None,
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: DiscoveryConfidence::MraCore,
         };
 

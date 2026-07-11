@@ -95,6 +95,7 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
         setname: None,
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: DiscoveryConfidence::CatalogMetadata,
     }
 }
@@ -175,6 +176,7 @@ pub(crate) fn collection_discoveries_from_listing_text(
             setname: None,
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
         })
         .collect()
