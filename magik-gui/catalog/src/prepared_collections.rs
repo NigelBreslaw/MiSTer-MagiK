@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
-pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 3;
+pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 5;
 
 pub fn storage_roots_for_library_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut storage_roots = Vec::new();
@@ -220,7 +220,7 @@ pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenan
         ancestor
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| compact_name(name).contains("oneload64"))
+            .is_some_and(is_oneload64_install_name)
     })?;
     if !oneload64_root_has_signature(install_root) || oneload64_path_is_excluded(path, install_root)
     {
@@ -285,6 +285,10 @@ fn compact_name(value: &str) -> String {
         .collect()
 }
 
+fn is_oneload64_install_name(value: &str) -> bool {
+    compact_name(value).starts_with("oneload64")
+}
+
 pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
     let is_mgl = path
         .extension()
@@ -298,20 +302,34 @@ pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
         validate_neon68k_mgl(path)?;
         return Ok(true);
     }
+    let oneload64_install = path.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_oneload64_install_name)
+    });
     if path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("crt"))
-        && path.ancestors().any(|ancestor| {
-            ancestor
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| compact_name(name).contains("oneload64"))
-        })
+        && oneload64_install.is_some()
     {
+        let install_root = oneload64_install.expect("checked OneLoad64 ancestor");
         if !path.is_file() {
             return Err(format!(
                 "prepared C64 payload is missing: {}",
+                path.display()
+            ));
+        }
+        if !oneload64_root_has_signature(install_root) {
+            return Err(format!(
+                "OneLoad64 installation signature is missing: {}",
+                install_root.display()
+            ));
+        }
+        if oneload64_path_is_excluded(path, install_root) {
+            return Err(format!(
+                "prepared C64 payload is outside the primary OneLoad64 trees: {}",
                 path.display()
             ));
         }
@@ -350,7 +368,7 @@ pub(crate) fn diagnostic_for_candidate(
         ancestor
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| compact_name(name).contains("oneload64"))
+            .is_some_and(is_oneload64_install_name)
     })?;
     if oneload64_path_is_excluded(path, install_root) {
         return Some(PreparedLaunchDiagnostic {
@@ -560,12 +578,17 @@ mod tests {
         assert!(oneload64_provenance(&dump).is_none());
         assert!(oneload64_provenance(&alternative).is_none());
         assert!(oneload64_provenance(&extra).is_none());
+        assert_eq!(validate_prepared_launch_path(&primary), Ok(true));
+        assert!(validate_prepared_launch_path(&dump)
+            .expect_err("excluded prepared path should fail")
+            .contains("outside the primary"));
 
         let unmarked = dir.join("General C64 CRTs/Game.crt");
         std::fs::create_dir_all(unmarked.parent().expect("unmarked parent"))
             .expect("create unmarked dir");
         std::fs::write(&unmarked, b"crt").expect("write unmarked CRT");
         assert!(oneload64_provenance(&unmarked).is_none());
+        assert_eq!(validate_prepared_launch_path(&unmarked), Ok(false));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

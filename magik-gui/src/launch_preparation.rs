@@ -104,14 +104,20 @@ fn materialize_amigavision_game_launch_ref(
     launch_ref: &str,
     roots: &[String],
 ) -> Result<String, String> {
-    let encoded = launch_ref
+    let selection = launch_ref
         .strip_prefix(AMIGAVISION_GAME_LAUNCH_PREFIX)
+        .ok_or_else(|| format!("invalid AmigaVision launch ref: {launch_ref}"))?;
+    let (listing_kind, encoded) = selection
+        .split_once(':')
         .ok_or_else(|| format!("invalid AmigaVision launch ref: {launch_ref}"))?;
     let title = decode_launch_component(encoded)?;
     let install = resolve_amigavision_install(roots)?;
-    if !listing_contains_exact(&install.games_listing, &title)?
-        && !listing_contains_exact(&install.demos_listing, &title)?
-    {
+    let listing = match listing_kind {
+        "games" => &install.games_listing,
+        "demos" => &install.demos_listing,
+        _ => return Err(format!("invalid AmigaVision listing kind: {listing_kind}")),
+    };
+    if !listing_contains_exact(listing, &title)? {
         return Err(format!(
             "AmigaVision selection is no longer installed: {title}"
         ));
@@ -163,8 +169,9 @@ fn resolve_amigavision_install(roots: &[String]) -> Result<AmigaVisionInstall, S
 }
 
 fn listing_contains_exact(path: &Path, title: &str) -> Result<bool, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("read AmigaVision listing {}: {e}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|e| format!("read AmigaVision listing {}: {e}", path.display()))?;
+    let text = String::from_utf8_lossy(&bytes);
     Ok(text.lines().map(str::trim).any(|entry| entry == title))
 }
 
@@ -678,8 +685,11 @@ fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
 mod tests {
     use super::*;
 
-    const MINIMIG_MGL: &str =
-        "<mistergamedescription><rbf>_computer/minimig</rbf></mistergamedescription>";
+    fn minimig_mgl(hdf_name: &str) -> String {
+        format!(
+            "<mistergamedescription><rbf>_computer/minimig</rbf><file path=\"../games/Amiga/{hdf_name}\" index=\"0\"/></mistergamedescription>"
+        )
+    }
 
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         let path =
@@ -716,7 +726,7 @@ mod tests {
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(hdf.parent().unwrap()).expect("create hdf dir");
         std::fs::create_dir_all(&shared).expect("create shared dir");
-        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
+        std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
 
         let target = materialize_amigavision_game_launch_ref_at(
@@ -755,6 +765,19 @@ mod tests {
     }
 
     #[test]
+    fn amigavision_exact_title_validation_tolerates_unrelated_legacy_bytes() {
+        let root = unique_temp_dir("amigavision-lossy-listing");
+        let listing = root.join("games.txt");
+        std::fs::write(&listing, b"1869 (AGA)[en]\nLegacy \xff title\n")
+            .expect("write legacy listing");
+
+        assert!(listing_contains_exact(&listing, "1869 (AGA)[en]").expect("validate exact title"));
+        assert!(!listing_contains_exact(&listing, "Missing Game").expect("validate missing title"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn amigavision_same_title_launch_skips_rewrite() {
         reset_descriptor_stats();
         let root = unique_temp_dir("amigavision-launch-same-title");
@@ -764,7 +787,7 @@ mod tests {
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(&shared).expect("create shared dir");
-        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
+        std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
         std::fs::write(&ags_boot, "Agony\n").expect("write ags_boot");
         let mut permissions = std::fs::metadata(&ags_boot)
@@ -807,7 +830,7 @@ mod tests {
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(&shared).expect("create shared dir");
-        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
+        std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
         std::fs::write(&ags_boot, "Agony\n").expect("write stale ags_boot");
 
@@ -827,7 +850,7 @@ mod tests {
         let shared = root.join("games/Amiga/shared");
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
-        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
+        std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).expect("write mgl");
 
         let err =
             materialize_amigavision_game_launch_ref_at("Agony", &mgl, &hdf, &shared, &ags_boot)
@@ -848,7 +871,8 @@ mod tests {
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
         std::fs::create_dir_all(amiga.join("listings")).expect("create listings dir");
         std::fs::create_dir_all(amiga.join("shared")).expect("create shared dir");
-        std::fs::write(root.join("_Computer").join(mgl_name), MINIMIG_MGL).expect("write launcher");
+        std::fs::write(root.join("_Computer").join(mgl_name), minimig_mgl(hdf_name))
+            .expect("write launcher");
         std::fs::write(amiga.join(hdf_name), b"hdf").expect("write hdf");
         std::fs::write(amiga.join("listings/games.txt"), games).expect("write games listing");
         std::fs::write(amiga.join("listings/demos.txt"), demos).expect("write demos listing");
@@ -866,7 +890,7 @@ mod tests {
         );
         let roots = vec![root.join("games").display().to_string()];
 
-        let target = prepare_launch_ref_with_roots("magik-amigavision:Agony", &roots)
+        let target = prepare_launch_ref_with_roots("magik-amigavision:games:Agony", &roots)
             .expect("prepare installed title");
 
         assert_eq!(
@@ -878,7 +902,7 @@ mod tests {
                 .expect("read selector"),
             "Agony\n"
         );
-        let err = prepare_launch_ref_with_roots("magik-amigavision:agony", &roots)
+        let err = prepare_launch_ref_with_roots("magik-amigavision:games:agony", &roots)
             .expect_err("title matching must remain exact");
         assert!(err.contains("no longer installed"));
         let _ = std::fs::remove_dir_all(root);
@@ -897,7 +921,7 @@ mod tests {
         let roots = vec![root.join("_Computer").display().to_string()];
 
         let target =
-            prepare_launch_ref_with_roots("magik-amigavision:State%20of%20the%20Art", &roots)
+            prepare_launch_ref_with_roots("magik-amigavision:demos:State%20of%20the%20Art", &roots)
                 .expect("prepare legacy demo");
 
         assert_eq!(
@@ -924,7 +948,7 @@ mod tests {
             first.join("games").display().to_string(),
         ];
 
-        let target = prepare_launch_ref_with_roots("magik-amigavision:Agony", &roots)
+        let target = prepare_launch_ref_with_roots("magik-amigavision:games:Agony", &roots)
             .expect("prepare preferred root");
 
         assert_eq!(
@@ -944,7 +968,7 @@ mod tests {
             mister_magik_catalog::arcade_catalog::PreparedLaunchSelection {
                 collection_id:
                     mister_magik_catalog::prepared_collections::PreparedCollectionId::AmigaVision,
-                launch_ref: "magik-amigavision:Agony".into(),
+                launch_ref: "magik-amigavision:games:Agony".into(),
             },
         );
         let roots = vec![root.join("games").display().to_string()];

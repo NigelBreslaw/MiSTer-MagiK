@@ -2221,6 +2221,7 @@ pub(super) fn run_launcher_loop(
                             })
                     } else if auto_launch_selected
                         && !auto_launch_selected_done
+                        && launcher_auto_launch_gate_ready()
                         && catalog_ready
                         && nav.screen == Screen::Arcade
                     {
@@ -3557,6 +3558,15 @@ fn launcher_auto_launch_selected_enabled() -> bool {
     )
 }
 
+fn launcher_auto_launch_gate_ready() -> bool {
+    let value = std::env::var("MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE").ok();
+    launcher_auto_launch_gate_ready_from_value(value.as_deref())
+}
+
+fn launcher_auto_launch_gate_ready_from_value(path: Option<&str>) -> bool {
+    path.is_none_or(|path| path.trim().is_empty() || std::path::Path::new(path.trim()).is_file())
+}
+
 fn launcher_return_to_launcher_requested() -> bool {
     return_to_launcher_env_is_set(
         std::env::var("MISTER_MAGIK_RETURN_TO_LAUNCHER")
@@ -4387,6 +4397,26 @@ mod tests {
 
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.selected, 2);
+    }
+
+    #[test]
+    fn auto_launch_gate_waits_for_requested_file() {
+        let gate = std::env::temp_dir().join(format!(
+            "mister-magik-auto-launch-gate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&gate);
+        assert!(!launcher_auto_launch_gate_ready_from_value(Some(
+            gate.to_str().expect("gate path")
+        )));
+        std::fs::write(&gate, b"ready\n").expect("write launch gate");
+        assert!(launcher_auto_launch_gate_ready_from_value(Some(
+            gate.to_str().expect("gate path")
+        )));
+
+        let _ = std::fs::remove_file(gate);
+        assert!(launcher_auto_launch_gate_ready_from_value(None));
+        assert!(launcher_auto_launch_gate_ready_from_value(Some("  ")));
     }
 
     #[test]
