@@ -37,12 +37,8 @@ pub const UIO_AUDVOL: u16 = 0x26;
 // the stock command ranges used by the Menu core.
 pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x57;
 pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
-pub const MAGIK_UIO_SET_SCANOUT_MAILBOX: u16 = 0x59;
-pub const MAGIK_UIO_GET_SCANOUT_MAILBOX: u16 = 0x5a;
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = 0x4d47;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
-pub const MAGIK_SCANOUT_MAILBOX_ARM_MAGIC: u16 = 0x4d49;
-pub const MAGIK_SCANOUT_MAILBOX_INFO_MAGIC: u16 = 0x4d4a;
 
 // user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
 pub const CONF_VGA_SCALER: u16 = 0x0004;
@@ -425,68 +421,6 @@ impl Fpga {
         res
     }
 
-    pub fn bootstrap_magik_scanout_mailbox(
-        &mut self,
-        mailbox_phys: u32,
-        epoch: u32,
-    ) -> io::Result<ScanoutMailboxStatus> {
-        self.disable_io();
-        let support = self.cmd_capture(MAGIK_UIO_SET_SCANOUT_MAILBOX)?;
-        let stream_res: io::Result<()> = (|| {
-            self.spi_w(mailbox_phys as u16)?;
-            self.spi_w((mailbox_phys >> 16) as u16)?;
-            self.spi_w(epoch as u16)?;
-            self.spi_w((epoch >> 16) as u16)?;
-            self.spi_w(MAGIK_SCANOUT_MAILBOX_ARM_MAGIC)?;
-            Ok(())
-        })();
-        self.disable_io();
-        stream_res?;
-        if support.0 != MAGIK_SCANOUT_MAILBOX_ARM_MAGIC
-            && support.1 != MAGIK_SCANOUT_MAILBOX_ARM_MAGIC
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                format!(
-                    "scanout mailbox bootstrap unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
-                    support.0, support.1
-                ),
-            ));
-        }
-        let status = self.read_magik_scanout_mailbox_status()?;
-        if !status.supported() || status.epoch != epoch {
-            return Err(io::Error::other(format!(
-                "scanout mailbox verification failed supported={} epoch=0x{:08x} expected=0x{epoch:08x}",
-                status.supported(),
-                status.epoch
-            )));
-        }
-        Ok(status)
-    }
-
-    pub fn read_magik_scanout_mailbox_status(&mut self) -> io::Result<ScanoutMailboxStatus> {
-        let res = (|| {
-            let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_SCANOUT_MAILBOX)?;
-            let mut words = [0u16; 10];
-            for word in &mut words {
-                *word = self.spi_capture(0)?.1;
-            }
-            Ok(ScanoutMailboxStatus {
-                magic_hi,
-                magic_lo,
-                capabilities: words[0],
-                active_sequence: u32::from(words[1]) | (u32::from(words[2]) << 16),
-                pending_sequence: u32::from(words[3]) | (u32::from(words[4]) << 16),
-                flags: words[5],
-                apply_count: words[6],
-                error_count: words[7],
-                epoch: u32::from(words[8]) | (u32::from(words[9]) << 16),
-            })
-        })();
-        self.disable_io();
-        res
-    }
-
     pub fn post_magik_latched_fbuf_rgb565(
         &mut self,
         sequence: u16,
@@ -596,27 +530,6 @@ impl Fpga {
             route.mode(),
             route.set_vga_fb(),
         )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScanoutMailboxStatus {
-    pub magic_hi: u16,
-    pub magic_lo: u16,
-    pub capabilities: u16,
-    pub active_sequence: u32,
-    pub pending_sequence: u32,
-    pub flags: u16,
-    pub apply_count: u16,
-    pub error_count: u16,
-    pub epoch: u32,
-}
-
-impl ScanoutMailboxStatus {
-    pub fn supported(self) -> bool {
-        (self.magic_hi == MAGIK_SCANOUT_MAILBOX_INFO_MAGIC
-            || self.magic_lo == MAGIK_SCANOUT_MAILBOX_INFO_MAGIC)
-            && self.capabilities == 0x0103
     }
 }
 

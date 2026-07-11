@@ -7,8 +7,8 @@ REMOTE_DIR="/tmp/mister-magik-scanout-slots"
 REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
-LOCAL_REPORT="$ROOT/build/plugin-probe/plugin-map-report.log"
-LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/plugin-map-bandwidth.log"
+LOCAL_REPORT="$ROOT/build/plugin-probe/scanout-slots-map-report.log"
+LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/scanout-slots-map-bandwidth.log"
 FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
 
 cleanup() {
@@ -31,10 +31,10 @@ fi
 echo "==> Verifying stock kernel and module tools"
 "$MISTER" run "set -e; uname -r; test \"\$(uname -r)\" = '5.15.1-MiSTer'; command -v insmod; command -v rmmod; command -v modprobe >/dev/null"
 
-echo "==> Clearing any old probe module"
+echo "==> Clearing any old scanout-slots module"
 cleanup
 
-echo "==> Uploading diagnostics binary and probe module"
+echo "==> Uploading diagnostics binary and scanout-slots module"
 "$MISTER" run "pidof mister-magik-fb 2>/dev/null | xargs -r kill -9; mkdir -p /media/fat/mister-magik '$REMOTE_DIR'"
 "$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
@@ -43,11 +43,11 @@ echo "==> Uploading diagnostics binary and probe module"
 echo "==> Loading module"
 "$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-scanout-slots; grep '^mister_magik_scanout_slots ' /proc/modules"
 
-echo "==> Running plugin-map-report"
-"$MISTER" run "'$REMOTE_BIN' plugin-map-report" | tee "$LOCAL_REPORT"
+echo "==> Running scanout-slots-map-report"
+"$MISTER" run "'$REMOTE_BIN' scanout-slots-map-report" | tee "$LOCAL_REPORT"
 
-echo "==> Running plugin-map-bandwidth ($FRAMES frames)"
-"$MISTER" run "'$REMOTE_BIN' plugin-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
+echo "==> Running scanout-slots-map-bandwidth ($FRAMES frames)"
+"$MISTER" run "'$REMOTE_BIN' scanout-slots-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
 
 echo "==> Unloading module and restoring normal MagiK"
 cleanup

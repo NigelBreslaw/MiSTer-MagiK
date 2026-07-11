@@ -1,11 +1,8 @@
 use crate::framebuffer::format::production_label;
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
-const SCANOUT_FENCE_WAIT_TIMEOUT: Duration = Duration::from_millis(25);
-const SCANOUT_FENCE_POLL_INTERVAL: Duration = Duration::from_micros(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirtyRect {
@@ -106,10 +103,6 @@ impl DirtyRectList {
 
     pub fn iter(&self) -> impl Iterator<Item = DirtyRect> + '_ {
         self.rects[..self.len].iter().copied()
-    }
-
-    pub fn as_slice(&self) -> &[DirtyRect] {
-        &self.rects[..self.len]
     }
 
     pub fn len(&self) -> usize {
@@ -352,7 +345,6 @@ pub struct CachedFrameView<'a> {
     pixels: &'a [Rgb565Pixel],
     stride: usize,
     height: usize,
-    scanout_slot: Option<u8>,
 }
 
 impl<'a> CachedFrameView<'a> {
@@ -362,16 +354,7 @@ impl<'a> CachedFrameView<'a> {
             pixels,
             stride,
             height,
-            scanout_slot: None,
         }
-    }
-
-    pub fn with_scanout_slot(mut self, slot: u8) -> Self {
-        self.scanout_slot = Some(slot);
-        self
-    }
-    pub fn scanout_slot(self) -> Option<u8> {
-        self.scanout_slot
     }
 
     pub fn pixels(self) -> &'a [Rgb565Pixel] {
@@ -490,9 +473,6 @@ fn compose_rect_565_strided_to_cached(
 
 pub struct UiFrameTarget {
     cached: Vec<Rgb565Pixel>,
-    scanout: Option<crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers>,
-    scanout_slot: usize,
-    scanout_frame_valid: bool,
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
@@ -502,9 +482,6 @@ impl UiFrameTarget {
     pub fn cached(geometry: FramebufferTargetGeometry) -> Self {
         Self {
             cached: vec![Rgb565Pixel(0); geometry.render_w() * geometry.render_h()],
-            scanout: None,
-            scanout_slot: 1,
-            scanout_frame_valid: false,
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
@@ -512,29 +489,6 @@ impl UiFrameTarget {
     }
 
     pub fn open(geometry: FramebufferTargetGeometry) -> Self {
-        if crate::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
-            match crate::framebuffer::plugin_probe::PluginScanoutRgb565Buffers::open_atomic(
-                geometry.render_w(),
-                geometry.render_h(),
-            ) {
-                Ok(scanout) => {
-                    crate::framebuffer::plugin_probe::mark_atomic_scanout_target_ready();
-                    crate::ui_logln!(
-                        "slint-render-target=plugin-cacheable-swapped fb-format={}",
-                        production_label()
-                    );
-                    let mut target = Self::cached(geometry);
-                    target.scanout = Some(scanout);
-                    return target;
-                }
-                Err(error) => {
-                    crate::framebuffer::plugin_probe::disable_atomic_scanout();
-                    crate::ui_errln!(
-                        "slint-render-target=plugin-cacheable-swapped unavailable error={error}"
-                    );
-                }
-            }
-        }
         crate::ui_logln!(
             "slint-render-target=cached fb-format={}",
             production_label()
@@ -548,34 +502,6 @@ impl UiFrameTarget {
         geometry: FramebufferTargetGeometry,
     ) -> PhysicalRegion {
         self.cached_stride = geometry.render_w();
-        if crate::framebuffer::plugin_probe::atomic_scanout_runtime_enabled() {
-            if let Some(scanout) = self.scanout.as_mut() {
-                let preferred = self.scanout_slot ^ 1;
-                let deadline = Instant::now() + SCANOUT_FENCE_WAIT_TIMEOUT;
-                let selected = loop {
-                    if let Some(slot) = [preferred, preferred ^ 1]
-                        .into_iter()
-                        .find(|slot| scanout.acquire(*slot).is_ok())
-                    {
-                        break Some(slot);
-                    }
-                    if Instant::now() >= deadline {
-                        break None;
-                    }
-                    std::thread::sleep(SCANOUT_FENCE_POLL_INTERVAL);
-                };
-                if let Some(slot) = selected {
-                    self.scanout_slot = slot;
-                    self.scanout_frame_valid = true;
-                    return renderer.render(scanout.pixels_mut(slot), geometry.render_w());
-                }
-                self.scanout_frame_valid = false;
-                crate::ui_errln!(
-                    "scanout-acquire-failed no CPU-owned slot; rendering fallback frame"
-                );
-            }
-        }
-        self.scanout_frame_valid = false;
         renderer.render(&mut self.cached, geometry.render_w())
     }
 
@@ -657,14 +583,6 @@ impl UiFrameTarget {
     }
 
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
-        if let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_frame_valid) {
-            return CachedFrameView::new(
-                scanout.pixels(self.scanout_slot),
-                self.cached_stride,
-                scanout.pixels(self.scanout_slot).len() / self.cached_stride,
-            )
-            .with_scanout_slot((self.scanout_slot + 1) as u8);
-        }
         let height = if self.cached_stride == 0 {
             0
         } else {
@@ -681,19 +599,11 @@ impl UiFrameTarget {
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
-        if let Some(scanout) = self.scanout.as_mut().filter(|_| self.scanout_frame_valid) {
-            scanout.pixels_mut(self.scanout_slot)
-        } else {
-            &mut self.cached
-        }
+        &mut self.cached
     }
 
     pub fn cached_565(&self) -> &[Rgb565Pixel] {
-        if let Some(scanout) = self.scanout.as_ref().filter(|_| self.scanout_frame_valid) {
-            scanout.pixels(self.scanout_slot)
-        } else {
-            &self.cached
-        }
+        &self.cached
     }
 
     pub fn into_cached_565(self) -> Vec<Rgb565Pixel> {

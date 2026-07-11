@@ -1697,20 +1697,9 @@ impl LauncherFrameAccounting {
         } else {
             self.current_frame_budget_status()
         };
-        let scanout_mode =
-            match mister_magik_fb::framebuffer::plugin_probe::configured_scanout_mode() {
-                mister_magik_fb::framebuffer::plugin_probe::ScanoutMode::Auto => "auto",
-                mister_magik_fb::framebuffer::plugin_probe::ScanoutMode::Legacy => "legacy",
-                mister_magik_fb::framebuffer::plugin_probe::ScanoutMode::Required => "required",
-            };
         runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
-            scanout_mode,
-            scanout_state: mister_magik_fb::framebuffer::plugin_probe::scanout_runtime_state_label(
-            ),
-            scanout_atomic_enabled:
-                mister_magik_fb::framebuffer::plugin_probe::atomic_scanout_runtime_enabled(),
             frames,
             idle,
             idle_loops,

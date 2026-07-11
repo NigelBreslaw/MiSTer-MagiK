@@ -362,7 +362,7 @@ pub(super) fn compose_arcade_list_update(
 }
 
 pub(super) fn copy_arcade_list_update_to_hidden(
-    hidden: &mut impl mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget,
+    hidden: &mut ScanoutSlotsRgb565Framebuffer,
     renderer: &mut ArcadeListRenderer,
     update: ArcadeListUpdate,
 ) -> PresentCopyStats {

@@ -21,12 +21,12 @@ usage() {
 Usage:
   scripts/fpga-vblank-latch-real-ui-one-shot.sh [--capture] [--label LABEL] [--scroll-secs N]
 
-Deploys the diagnostics binary, plugin probe module, and prebuilt experimental
+Deploys the diagnostics binary, scanout-slots module, and prebuilt experimental
 vblank-latched Menu RBF; loads the RBF once through Main's MagiK launch command;
 runs FPGA latch diagnostics; then profiles the real launcher with
 MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden. The RBF must already exist at
 build/fpga-vblank-latch/menu-magik-vblank-latch.rbf from the manual CI workflow;
-this script does not build Quartus locally. Existing local plugin artifacts are
+this script does not build Quartus locally. Existing local scanout-slot artifacts are
 reused; the Rust diagnostics binary is rebuilt because normal deploys overwrite
 the same target path.
 
@@ -69,7 +69,7 @@ echo "==> Reusing prebuilt experimental RBF: $LOCAL_RBF"
 if [[ ! -f "$LOCAL_KO" ]]; then
   "$ROOT/scripts/build-plugin-probe-module.sh"
 else
-  echo "==> Reusing existing plugin module: $LOCAL_KO"
+  echo "==> Reusing existing scanout-slots module: $LOCAL_KO"
 fi
 
 echo "==> Building Rust diagnostics binary"
@@ -86,7 +86,7 @@ echo "==> Verifying stock runtime before one-shot experiment"
 "$MISTER" status
 "$MISTER" run "set -e; uname -r; test \"\$(uname -r)\" = '5.15.1-MiSTer'; command -v insmod; command -v rmmod; test ! -e /dev/mister-magik-scanout-slots || rmmod mister_magik_scanout_slots"
 
-echo "==> Uploading plugin module and experimental RBF"
+echo "==> Uploading scanout-slots module and experimental RBF"
 "$MISTER" run "mkdir -p /media/fat/mister-magik/experiments '$REMOTE_DIR'"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
 "$MISTER" put "$LOCAL_RBF" "$REMOTE_RBF"
@@ -104,7 +104,7 @@ echo "==> Uploading diagnostics binary"
 "$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
 "$MISTER" run "chmod +x '$REMOTE_BIN'; sync"
 
-echo "==> Loading plugin module"
+echo "==> Loading scanout-slots module"
 "$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-scanout-slots; grep '^mister_magik_scanout_slots ' /proc/modules"
 
 echo "==> Restarting Main-supervised launcher with FPGA latch backend"

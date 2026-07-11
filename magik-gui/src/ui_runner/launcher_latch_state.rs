@@ -109,19 +109,6 @@ pub(super) struct LatchPresentPlan {
     arcade_after: Option<DirectLayerState>,
 }
 
-impl LatchPresentPlan {
-    pub(super) fn written_rects(self) -> DirtyRectList {
-        let mut written = self.restore_rects;
-        if let Some(rect) = self.preview_redraw {
-            push_without_covered_rect(&mut written, rect);
-        }
-        if let Some(update) = self.arcade_redraw {
-            push_without_covered_rect(&mut written, arcade_update_dirty_rect(&update));
-        }
-        written
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],
@@ -193,15 +180,6 @@ impl TwoBufferLatchState {
     pub(super) fn plan_next(&self, input: LauncherFramePlan) -> Option<LatchPresentPlan> {
         let slot_index = self.select_writable_slot()?;
         Some(self.plan_for_slot(slot_index, input))
-    }
-
-    pub(super) fn plan_writable_slot(
-        &self,
-        slot_index: u8,
-        input: LauncherFramePlan,
-    ) -> Option<LatchPresentPlan> {
-        (self.slot(slot_index).hardware == LatchSlotHardwareState::Writable)
-            .then(|| self.plan_for_slot(slot_index, input))
     }
 
     pub(super) fn mark_post_success(&mut self, plan: LatchPresentPlan) {
@@ -497,27 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn written_rects_cover_base_preview_and_arcade_writes() {
-        let base = rect(0, 0, 2, 2);
-        let preview = rect(2, 0, 4, 2);
-        let arcade = rect(0, 2, 4, 4);
-        let plan = LatchPresentPlan {
-            slot_index: 1,
-            restore_rects: DirtyRectList::from_one(base),
-            preview_redraw: Some(preview),
-            arcade_redraw: Some(ArcadeListUpdate::Full(arcade)),
-            cached_damage: DirtyRectList::new(),
-            preview_after: None,
-            arcade_after: None,
-        };
-
-        let written = plan.written_rects();
-        assert!(written.iter().any(|candidate| candidate == base));
-        assert!(written.iter().any(|candidate| candidate == preview));
-        assert!(written.iter().any(|candidate| candidate == arcade));
-    }
-
-    #[test]
     fn first_posts_restore_full_frames_before_direct_layers() {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         all_writable(&mut state);
@@ -535,29 +492,6 @@ mod tests {
             .expect("second slot");
         assert_eq!(second.slot_index, 2);
         assert_eq!(second.restore_rects, DirtyRectList::from_one(full()));
-    }
-
-    #[test]
-    fn acquired_scanout_slot_overrides_legacy_next_slot_preference() {
-        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
-        all_writable(&mut state);
-
-        let plan = state
-            .plan_writable_slot(2, input(Some(full()), None, None, None, None))
-            .expect("acquired slot is writable");
-
-        assert_eq!(plan.slot_index, 2);
-        assert_eq!(plan.restore_rects, DirtyRectList::from_one(full()));
-    }
-
-    #[test]
-    fn acquired_scanout_slot_must_still_be_writable() {
-        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
-        state.sync_hardware(Some(1), 7, false, 0);
-
-        assert!(state
-            .plan_writable_slot(1, input(Some(full()), None, None, None, None))
-            .is_none());
     }
 
     #[test]
