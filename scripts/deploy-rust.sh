@@ -124,6 +124,8 @@ if [ -n "$REMOTE_BYTES" ]; then
 fi
 
 echo "==> Deployed ($PROFILE)."
+echo "==> Building and deploying catalog builder"
+"$HERE/scripts/deploy-catalog-builder.sh"
 echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
