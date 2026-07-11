@@ -25,10 +25,10 @@ pub(crate) fn collection_discoveries_from_container(
     profile: &LaunchProfile,
     rule: &CollectionRule,
 ) -> Vec<GameDiscovery> {
-    let mut out = Vec::new();
     if is_amigavision_archive_path(&file.path.display().to_string()) {
-        out.push(amigavision_launcher_discovery(file, profile));
+        return Vec::new();
     }
+    let mut out = Vec::new();
     for listing in &rule.listings {
         let text = match collection_listing_text(file, listing) {
             Some(text) => text,
@@ -48,6 +48,9 @@ pub(crate) fn installed_amigavision_discoveries_from_hdf(
     if !is_amigavision_installed_hdf_path(&file.path) {
         return None;
     }
+    if !is_complete_amigavision_install(&file.path) {
+        return None;
+    }
     let mut out = vec![amigavision_launcher_discovery(file, profile)];
     for listing in amigavision_installed_listings() {
         let Some(listing_path) = installed_amigavision_listing_path(&file.path, &listing) else {
@@ -61,6 +64,29 @@ pub(crate) fn installed_amigavision_discoveries_from_hdf(
         ));
     }
     Some(out)
+}
+
+fn is_complete_amigavision_install(hdf_path: &Path) -> bool {
+    let Some(amiga_dir) = hdf_path.parent() else {
+        return false;
+    };
+    if !amiga_dir.join("listings/games.txt").is_file()
+        || !amiga_dir.join("listings/demos.txt").is_file()
+        || !amiga_dir.join("shared").is_dir()
+    {
+        return false;
+    }
+    let Some(storage_root) = amiga_dir.parent().and_then(Path::parent) else {
+        return false;
+    };
+    ["Amiga.mgl", "Amiga 500.mgl", "MegaAGS.mgl"]
+        .iter()
+        .map(|name| storage_root.join("_Computer").join(name))
+        .any(|mgl| {
+            read_mgl_metadata(&mgl)
+                .and_then(|metadata| metadata.rbf)
+                .is_some_and(|rbf| crate::library_db::normalize_id(&rbf).ends_with("minimig"))
+        })
 }
 
 fn installed_amigavision_listing_path(
@@ -1149,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn amigavision_collection_adds_launcher_entry() {
+    fn amigavision_archive_does_not_publish_unlaunchable_entries() {
         let profiles = launch_profiles::builtin_profiles();
         let profile = profiles
             .iter()
@@ -1165,9 +1191,7 @@ mod tests {
         let discoveries =
             collection_discoveries_from_container(&file, profile, &profile.collection_rules[0]);
 
-        assert!(discoveries.iter().any(|discovery| {
-            discovery.title == "AmigaVision" && discovery.launch_ref == AMIGAVISION_LAUNCHER_REF
-        }));
+        assert!(discoveries.is_empty());
     }
 
     #[test]
@@ -1176,6 +1200,13 @@ mod tests {
         let amiga_dir = root.join("games/Amiga");
         let listings_dir = amiga_dir.join("listings");
         std::fs::create_dir_all(&listings_dir).expect("create listings dir");
+        std::fs::create_dir_all(amiga_dir.join("shared")).expect("create shared dir");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::write(
+            root.join("_Computer/Amiga.mgl"),
+            "<mistergamedescription><rbf>_Computer/Minimig</rbf></mistergamedescription>",
+        )
+        .expect("write launcher");
         std::fs::write(amiga_dir.join("AmigaVision.hdf"), "hdf").expect("write hdf");
         std::fs::write(amiga_dir.join("AmigaVision-Saves.hdf"), "saves").expect("write saves");
         std::fs::write(

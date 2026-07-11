@@ -2302,7 +2302,7 @@ mod tests {
 
         assert_eq!(discovery.platform_id, "x68000");
         assert_eq!(discovery.setname.as_deref(), Some("Akumajou"));
-        assert_eq!(discovery.genre.as_deref(), Some("Minor Bugs"));
+        assert_eq!(discovery.genre.as_deref(), Some("Neon68K / Minor Bugs"));
         assert_eq!(
             discovery.prepared.map(|value| value.collection_id),
             Some(crate::prepared_collections::PreparedCollectionId::Neon68k)
@@ -2359,6 +2359,22 @@ mod tests {
             )
             .expect("count prepared launches");
         assert_eq!(prepared_count, 2);
+        let generic_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM launch_provenance WHERE launch_quality='generic'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count generic launches");
+        assert_eq!(generic_count, 1);
+        let excluded_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM prepared_launch_diagnostic_rows WHERE collection_id='oneload64' AND status='excluded'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count excluded collection files");
+        assert_eq!(excluded_count, 1);
         let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
             .expect("load catalog");
         let game = loaded
@@ -2374,6 +2390,7 @@ mod tests {
         assert_eq!(plan.mount_kind.as_ref(), "load-file");
         assert_eq!(plan.mount_index, 1);
         assert_eq!(plan.payload_path.as_ref(), primary.display().to_string());
+        assert_eq!(game.category.as_ref(), "OneLoad64");
         let _ = std::fs::remove_dir_all(root);
     }
 

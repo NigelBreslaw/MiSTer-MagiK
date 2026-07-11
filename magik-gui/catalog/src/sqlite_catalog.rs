@@ -1911,6 +1911,12 @@ fn write_sqlite_scan_with_sources_inner(
             launch_quality TEXT NOT NULL,
             adapter_version INTEGER NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE prepared_launch_diagnostic_rows (
+            launch_id INTEGER PRIMARY KEY,
+            collection_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT NOT NULL
+        ) WITHOUT ROWID;
         CREATE VIEW launch_targets AS
             SELECT launch_target_rows.launch_id,
                    launch_target_rows.launch_id AS game_key_id,
@@ -2058,6 +2064,24 @@ fn write_sqlite_scan_with_sources_inner(
             FROM prepared_launch_rows
             JOIN games ON games.game_key_id = prepared_launch_rows.launch_id
             JOIN launch_plans ON launch_plans.launch_id = prepared_launch_rows.launch_id;
+        CREATE VIEW launch_provenance AS
+            SELECT launch_target_rows.launch_id,
+                   COALESCE(prepared_launch_rows.collection_id, '') AS collection_id,
+                   COALESCE(prepared_launch_rows.launch_quality, 'generic') AS launch_quality,
+                   COALESCE(prepared_launch_rows.adapter_version, 0) AS adapter_version
+            FROM launch_target_rows
+            LEFT JOIN prepared_launch_rows
+                   ON prepared_launch_rows.launch_id = launch_target_rows.launch_id;
+        CREATE VIEW prepared_launch_diagnostics AS
+            SELECT prepared_launch_diagnostic_rows.launch_id,
+                   games.game_id,
+                   games.title,
+                   games.system_id,
+                   prepared_launch_diagnostic_rows.collection_id,
+                   prepared_launch_diagnostic_rows.status,
+                   prepared_launch_diagnostic_rows.reason
+            FROM prepared_launch_diagnostic_rows
+            JOIN games ON games.game_key_id = prepared_launch_diagnostic_rows.launch_id;
         CREATE VIEW launch_plans_text AS SELECT * FROM launch_plans;
         CREATE TABLE launchable_identity_rows (
             game_key_id INTEGER NOT NULL,
@@ -2424,6 +2448,12 @@ fn write_sqlite_scan_with_sources_inner(
                  VALUES (?1,?2,?3,?4)",
             )
             .map_err(|e| format!("prepare prepared launch insert: {e}"))?;
+        let mut prepared_diagnostic_stmt = tx
+            .prepare(
+                "INSERT INTO prepared_launch_diagnostic_rows(launch_id,collection_id,status,reason)
+                 VALUES (?1,?2,?3,?4)",
+            )
+            .map_err(|e| format!("prepare prepared launch diagnostic insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
                 "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,category_string_id,source_string_id)
@@ -2631,6 +2661,18 @@ fn write_sqlite_scan_with_sources_inner(
                         prepared.adapter_version as i64
                     ])
                     .map_err(|e| format!("insert prepared launch: {e}"))?;
+            } else if let Some(diagnostic) = crate::prepared_collections::diagnostic_for_candidate(
+                Path::new(&discovery.source_path),
+                &discovery.platform_id,
+            ) {
+                prepared_diagnostic_stmt
+                    .execute(params![
+                        launch_id,
+                        diagnostic.collection_id.as_str(),
+                        diagnostic.status,
+                        diagnostic.reason
+                    ])
+                    .map_err(|e| format!("insert prepared launch diagnostic: {e}"))?;
             }
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
                 let (family_id, title, year, manufacturer, category, source) =
@@ -2704,6 +2746,7 @@ fn write_sqlite_scan_with_sources_inner(
         report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
         drop(target_stmt);
         drop(prepared_stmt);
+        drop(prepared_diagnostic_stmt);
         path_interner.flush(&tx)?;
         string_interner.flush(&tx)?;
         drop(region_stmt);

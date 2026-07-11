@@ -12,6 +12,7 @@ use crate::launch_profiles::{
 };
 use crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION;
 use std::path::Path;
+use walkdir::WalkDir;
 
 const STAMP_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const STAMP_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -95,6 +96,7 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
     for (idx, root) in roots.iter().enumerate() {
         append_path_signature(&mut lines, "root", idx, Path::new(root));
     }
+    append_prepared_collection_signatures(&mut lines, roots);
     lines.push("stamp-targets\t0".to_string());
     lines.push(format!("core-audit\t{}", audit_rows.len()));
     for (idx, row) in audit_rows.iter().enumerate() {
@@ -113,6 +115,101 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
     append_named_file_signature(&mut lines, "mame-metadata", mame_sqlite_path);
     append_named_file_signature(&mut lines, "hbmame-metadata", hbmame_sqlite_path);
     CatalogStamp { lines }
+}
+
+fn append_prepared_collection_signatures(lines: &mut Vec<String>, roots: &[String]) {
+    for (idx, root) in crate::prepared_collections::storage_roots_for_library_roots(roots)
+        .iter()
+        .enumerate()
+    {
+        append_filtered_tree_signature(
+            lines,
+            "prepared-0mhz",
+            idx,
+            &root.join("_DOS Games"),
+            |path| extension_is(path, "mgl"),
+        );
+        append_filtered_tree_signature(
+            lines,
+            "prepared-neon68k",
+            idx,
+            &root.join("_Computer/X68000 Games"),
+            |path| extension_is(path, "mgl"),
+        );
+        append_filtered_tree_signature(
+            lines,
+            "prepared-oneload64",
+            idx,
+            &root.join("games/C64"),
+            |path| {
+                extension_is(path, "crt")
+                    && path.components().any(|component| {
+                        component
+                            .as_os_str()
+                            .to_string_lossy()
+                            .to_ascii_lowercase()
+                            .replace([' ', '-', '_'], "")
+                            .contains("oneload64")
+                    })
+            },
+        );
+        for (name, path) in [
+            ("amigavision-mgl", root.join("_Computer/Amiga.mgl")),
+            ("amigavision-500-mgl", root.join("_Computer/Amiga 500.mgl")),
+            ("megaags-mgl", root.join("_Computer/MegaAGS.mgl")),
+            ("amigavision-hdf", root.join("games/Amiga/AmigaVision.hdf")),
+            ("megaags-hdf", root.join("games/Amiga/MegaAGS.hdf")),
+            ("amigavision-games", root.join("games/Amiga/listings/games.txt")),
+            ("amigavision-demos", root.join("games/Amiga/listings/demos.txt")),
+        ] {
+            append_named_file_signature(lines, &format!("prepared-{idx}-{name}"), &path);
+        }
+    }
+}
+
+fn append_filtered_tree_signature(
+    lines: &mut Vec<String>,
+    name: &str,
+    idx: usize,
+    root: &Path,
+    include: impl Fn(&Path) -> bool,
+) {
+    if !root.is_dir() {
+        lines.push(format!("{name}\t{idx}\t{}\tmissing", root.display()));
+        return;
+    }
+    let mut rows = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.file_type().is_file() && include(entry.path()))
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            Some((
+                entry.path().strip_prefix(root).ok()?.display().to_string(),
+                metadata.len(),
+                mtime_nanos(&metadata),
+            ))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hash = STAMP_HASH_OFFSET;
+    for (path, len, mtime) in &rows {
+        hash = fnv64_update(hash, path.as_bytes());
+        hash = fnv64_update(hash, &len.to_le_bytes());
+        hash = fnv64_update(hash, &mtime.to_le_bytes());
+    }
+    lines.push(format!(
+        "{name}\t{idx}\t{}\t{}\t{hash:016x}",
+        root.display(),
+        rows.len()
+    ));
+}
+
+fn extension_is(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
 }
 
 fn append_path_signature(lines: &mut Vec<String>, kind: &str, idx: usize, path: &Path) {
@@ -192,6 +289,27 @@ mod tests {
             compute_catalog_stamp_for_paths(&roots, &root.join("mame"), &root.join("hbmame"));
 
         assert_ne!(first.fingerprint_hex(), second.fingerprint_hex());
+    }
+
+    #[test]
+    fn nested_prepared_launcher_change_invalidates_catalog_stamp() {
+        let root = unique_temp_dir("stamp-prepared-launcher");
+        let games = root.join("games");
+        let dos = root.join("_DOS Games");
+        std::fs::create_dir_all(&games).expect("create games dir");
+        std::fs::create_dir_all(&dos).expect("create DOS dir");
+        let launcher = dos.join("Doom.mgl");
+        std::fs::write(&launcher, b"first").expect("write launcher");
+        let mame = root.join("mame.sqlite3");
+        let hbmame = root.join("hbmame.sqlite3");
+        let roots = vec![games.display().to_string()];
+
+        let first = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
+        std::fs::write(&launcher, b"second-version").expect("update launcher");
+        let second = compute_catalog_stamp_for_paths(&roots, &mame, &hbmame);
+
+        assert_ne!(first.fingerprint(), second.fingerprint());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

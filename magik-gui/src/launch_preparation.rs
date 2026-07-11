@@ -52,6 +52,18 @@ pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarge
         LaunchTarget::Prepared(selection) => Ok(LaunchTarget::Path(
             prepare_launch_ref(&selection.launch_ref)?.into(),
         )),
+        LaunchTarget::Path(path) => {
+            mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
+                path.as_ref(),
+            ))?;
+            Ok(launch_target.clone())
+        }
+        LaunchTarget::Structured(plan) => {
+            mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
+                plan.payload_path.as_ref(),
+            ))?;
+            Ok(launch_target.clone())
+        }
         other => Ok(other.clone()),
     }
 }
@@ -106,14 +118,9 @@ fn materialize_amigavision_game_launch_ref(
 }
 
 fn resolve_amigavision_install(roots: &[String]) -> Result<AmigaVisionInstall, String> {
-    let mut storage_roots = Vec::<PathBuf>::new();
-    for root in roots {
-        let storage_root = storage_root_for_library_root(Path::new(root));
-        if !storage_roots.contains(&storage_root) {
-            storage_roots.push(storage_root);
-        }
-    }
-    for storage_root in storage_roots {
+    for storage_root in
+        mister_magik_catalog::prepared_collections::storage_roots_for_library_roots(roots)
+    {
         let amiga_dir = storage_root.join("games/Amiga");
         let games_listing = amiga_dir.join("listings/games.txt");
         let demos_listing = amiga_dir.join("listings/demos.txt");
@@ -145,21 +152,6 @@ fn resolve_amigavision_install(roots: &[String]) -> Result<AmigaVisionInstall, S
         "no complete AmigaVision or MegaAGS installation was found in configured library roots"
             .to_string(),
     )
-}
-
-fn storage_root_for_library_root(root: &Path) -> PathBuf {
-    let mut prefix = PathBuf::new();
-    for component in root.components() {
-        let value = component.as_os_str().to_string_lossy();
-        if matches!(
-            value.as_ref(),
-            "games" | "_Arcade" | "_DOS Games" | "_LLAPI" | "_Computer"
-        ) {
-            return prefix;
-        }
-        prefix.push(component.as_os_str());
-    }
-    root.to_path_buf()
 }
 
 fn listing_contains_exact(path: &Path, title: &str) -> Result<bool, String> {
