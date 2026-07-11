@@ -1954,21 +1954,14 @@ mod linux {
             "system": {
                 "uptime": read_trimmed("/proc/uptime"),
             },
-            "scanout": scanout_status_json(),
+            "scanout_slots": scanout_slots_status_json(),
         })
     }
 
-    fn scanout_status_json() -> Value {
-        let main_status = read_json_value("/tmp/mister-magik/main-status.json");
-        let slint_status = read_json_value("/tmp/mister-magik/status.json");
+    fn scanout_slots_status_json() -> Value {
         json!({
-            "module_loaded": Path::new("/sys/module/mister_magik_scanout").exists(),
-            "device_ready": Path::new("/dev/mister-magik-scanout").exists(),
-            "main_module_loaded": main_status.get("scanout_module_loaded").cloned().unwrap_or(Value::Null),
-            "main_device_ready": main_status.get("scanout_device_ready").cloned().unwrap_or(Value::Null),
-            "mode": slint_status.get("scanout_mode").cloned().unwrap_or(Value::Null),
-            "state": slint_status.get("scanout_state").cloned().unwrap_or(Value::Null),
-            "atomic_enabled": slint_status.get("scanout_atomic_enabled").cloned().unwrap_or(Value::Null),
+            "module_loaded": Path::new("/sys/module/mister_magik_scanout_slots").exists(),
+            "device_ready": Path::new("/dev/mister-magik-scanout-slots").exists(),
         })
     }
 

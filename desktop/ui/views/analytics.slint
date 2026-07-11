@@ -316,7 +316,7 @@ export component AnalyticsPage {
                     width: 100%;
                     height: 44px;
                     border-width: 1px;
-                    border-color: DeviceState.scanout-summary == "Atomic scanout active" ? PrimerColors.fgColor-success : PrimerColors.borderColor-default;
+                    border-color: DeviceState.scanout-slots-summary == "Scanout slots ready" ? PrimerColors.fgColor-success : PrimerColors.borderColor-default;
                     border-radius: LayoutTokens.borderRadius-medium;
                     background: PrimerColors.bgColor-default;
 
@@ -326,9 +326,9 @@ export component AnalyticsPage {
                         spacing: 10px;
                         cross-axis-alignment: center;
 
-                        Text { text: "Scanout"; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; }
-                        Text { text: DeviceState.scanout-summary; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
-                        Text { horizontal-stretch: 1; text: DeviceState.scanout-detail; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; horizontal-alignment: right; overflow: elide; }
+                        Text { text: "Scanout slots"; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; }
+                        Text { text: DeviceState.scanout-slots-summary; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
+                        Text { horizontal-stretch: 1; text: DeviceState.scanout-slots-detail; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; horizontal-alignment: right; overflow: elide; }
                     }
                 }
 
