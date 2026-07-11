@@ -2,12 +2,39 @@
 
 use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
 pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 1;
+
+pub fn storage_roots_for_library_roots(roots: &[String]) -> Vec<PathBuf> {
+    let mut storage_roots = Vec::new();
+    for root in roots {
+        let storage_root = storage_root_for_library_root(Path::new(root));
+        if !storage_roots.contains(&storage_root) {
+            storage_roots.push(storage_root);
+        }
+    }
+    storage_roots
+}
+
+fn storage_root_for_library_root(root: &Path) -> PathBuf {
+    let mut prefix = PathBuf::new();
+    for component in root.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if matches!(
+            value.as_ref(),
+            "games" | "_Arcade" | "_Games" | "_DOS Games" | "_LLAPI" | "_Computer"
+        ) {
+            return prefix;
+        }
+        prefix.push(component.as_os_str());
+    }
+    root.to_path_buf()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreparedCollectionId {
@@ -54,6 +81,13 @@ pub struct PreparedLaunchProvenance {
     pub collection_id: PreparedCollectionId,
     pub launch_quality: LaunchQuality,
     pub adapter_version: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedLaunchDiagnostic {
+    pub(crate) collection_id: PreparedCollectionId,
+    pub(crate) status: &'static str,
+    pub(crate) reason: String,
 }
 
 impl PreparedLaunchProvenance {
@@ -221,6 +255,93 @@ fn compact_name(value: &str) -> String {
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
+    let is_mgl = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mgl"));
+    if is_mgl && path_has_component(path, "_DOS Games") {
+        validate_0mhz_mgl(path)?;
+        return Ok(true);
+    }
+    if is_mgl && path_has_component(path, "X68000 Games") {
+        validate_neon68k_mgl(path)?;
+        return Ok(true);
+    }
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("crt"))
+        && path.ancestors().any(|ancestor| {
+            ancestor
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| compact_name(name).contains("oneload64"))
+        })
+    {
+        if !path.is_file() {
+            return Err(format!("prepared C64 payload is missing: {}", path.display()));
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub(crate) fn diagnostic_for_candidate(
+    path: &Path,
+    platform_id: &str,
+) -> Option<PreparedLaunchDiagnostic> {
+    let is_mgl = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mgl"));
+    if is_mgl && platform_id == "dos" && path_has_component(path, "_DOS Games") {
+        return validate_0mhz_mgl(path)
+            .err()
+            .map(|reason| PreparedLaunchDiagnostic {
+                collection_id: PreparedCollectionId::ZeroMhz,
+                status: "invalid",
+                reason,
+            });
+    }
+    if is_mgl && path_has_component(path, "X68000 Games") {
+        return validate_neon68k_mgl(path)
+            .err()
+            .map(|reason| PreparedLaunchDiagnostic {
+                collection_id: PreparedCollectionId::Neon68k,
+                status: "invalid",
+                reason,
+            });
+    }
+    let install_root = path.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| compact_name(name).contains("oneload64"))
+    })?;
+    if oneload64_path_is_excluded(path, install_root) {
+        return Some(PreparedLaunchDiagnostic {
+            collection_id: PreparedCollectionId::OneLoad64,
+            status: "excluded",
+            reason: "non-primary OneLoad64 tree".to_string(),
+        });
+    }
+    (!oneload64_root_has_signature(install_root)).then(|| PreparedLaunchDiagnostic {
+        collection_id: PreparedCollectionId::OneLoad64,
+        status: "invalid",
+        reason: "OneLoad64 directory is missing its collection signature".to_string(),
+    })
+}
+
+fn path_has_component(path: &Path, expected: &str) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|component| component.eq_ignore_ascii_case(expected))
+    })
 }
 
 #[cfg(test)]

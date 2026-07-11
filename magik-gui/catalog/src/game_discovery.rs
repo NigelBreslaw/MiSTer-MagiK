@@ -256,8 +256,18 @@ pub(crate) fn discovery_from_profile_file(
                     && prepared_collections::validate_neon68k_mgl(&file.path).is_ok())
                 .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
             });
-            let genre = if profile.id == "neon68k" {
-                prepared_collections::neon68k_source_category(&file.path)
+            let genre = if prepared.is_some_and(|value| {
+                value.collection_id == PreparedCollectionId::ZeroMhz
+            }) {
+                Some("0MHz".to_string())
+            } else if prepared.is_some_and(|value| {
+                value.collection_id == PreparedCollectionId::Neon68k
+            }) {
+                Some(
+                    prepared_collections::neon68k_source_category(&file.path)
+                        .map(|category| format!("Neon68K / {category}"))
+                        .unwrap_or_else(|| "Neon68K".to_string()),
+                )
             } else {
                 None
             };
@@ -300,6 +310,9 @@ pub(crate) fn discovery_from_profile_file(
     let prepared = (profile.system_id == "c64")
         .then(|| prepared_collections::oneload64_provenance(&file.path))
         .flatten();
+    let genre = prepared
+        .is_some_and(|value| value.collection_id == PreparedCollectionId::OneLoad64)
+        .then(|| "OneLoad64".to_string());
 
     GameDiscovery {
         source_path: source_path.clone(),
@@ -311,7 +324,7 @@ pub(crate) fn discovery_from_profile_file(
         core_id: profile.core_name.to_string(),
         hardware_id: profile.system_id.to_string(),
         manufacturer: None,
-        genre: None,
+        genre,
         year: None,
         setname: payload_setname,
         parent: None,
@@ -641,6 +654,7 @@ mod tests {
         assert_eq!(discovery.platform_id, "dos");
         assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
         assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
+        assert_eq!(discovery.genre.as_deref(), Some("0MHz"));
         assert_eq!(
             discovery.prepared.map(|value| value.collection_id),
             Some(PreparedCollectionId::ZeroMhz)
