@@ -205,7 +205,11 @@ cp "$RBF_CANDIDATE" "$RBF_OUT"
 shasum -a 256 "$RBF_OUT" | awk '{print "rbf_sha256="$1}' >> "$META_OUT"
 echo "rbf_file=$(basename "$RBF_OUT")" >> "$META_OUT"
 quartus_version="$(sed -n 's/.*Version \([0-9][^ ]* Build [0-9][^ ]*\).*/\1/p' "$LOG_OUT" | head -1)"
-echo "quartus_version=${quartus_version:-17.0.0 Build 595}" >> "$META_OUT"
+if [[ -z "$quartus_version" ]]; then
+  echo "Quartus version was not found in $LOG_OUT" >&2
+  exit 1
+fi
+echo "quartus_version=$quartus_version" >> "$META_OUT"
 rm -rf "$OUT_DIR/reports"
 mkdir -p "$OUT_DIR/reports"
 find "$WORK_DIR/output_files" -maxdepth 1 -type f \( -name '*.rpt' -o -name '*.summary' \) -exec cp {} "$OUT_DIR/reports/" \;

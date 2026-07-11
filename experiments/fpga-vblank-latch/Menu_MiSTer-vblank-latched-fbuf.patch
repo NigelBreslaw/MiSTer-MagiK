@@ -2,7 +2,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index 5f9dfa4..cce2e73 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -350,14 +350,73 @@ reg [12:0] arc2x = 0;
+@@ -350,14 +350,85 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -24,6 +24,12 @@ index 5f9dfa4..cce2e73 100644
 +wire [11:0] magik_lfb_vmax;
 +wire [31:0] magik_lfb_base;
 +wire [13:0] magik_lfb_stride;
++wire        magik_lfb_pending;
++wire [15:0] magik_lfb_pending_seq;
++wire [15:0] magik_lfb_active_seq;
++wire [15:0] magik_lfb_post_count;
++wire [15:0] magik_lfb_flip_count;
++wire [15:0] magik_lfb_drop_count;
 +
 +mister_magik_vblank_latch magik_vblank_latch
 +(
@@ -52,7 +58,13 @@ index 5f9dfa4..cce2e73 100644
 +	.route_vmin(magik_lfb_vmin),
 +	.route_vmax(magik_lfb_vmax),
 +	.route_base(magik_lfb_base),
-+	.route_stride(magik_lfb_stride)
++	.route_stride(magik_lfb_stride),
++	.pending(magik_lfb_pending),
++	.pending_seq(magik_lfb_pending_seq),
++	.active_seq(magik_lfb_active_seq),
++	.post_count(magik_lfb_post_count),
++	.flip_count(magik_lfb_flip_count),
++	.drop_count(magik_lfb_drop_count)
 +);
 +
  always@(posedge clk_sys) begin
@@ -79,7 +91,7 @@ index 5f9dfa4..cce2e73 100644
  	coef_wr <= 0;
  
  `ifndef MISTER_DEBUG_NOHDMI
-@@ -396,6 +455,7 @@ always@(posedge clk_sys) begin
+@@ -396,6 +467,7 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -87,7 +99,7 @@ index 5f9dfa4..cce2e73 100644
  		end
  		else begin
  			cnt <= cnt + 1'd1;
-@@ -450,6 +510,7 @@ always@(posedge clk_sys) begin
+@@ -450,6 +522,7 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
