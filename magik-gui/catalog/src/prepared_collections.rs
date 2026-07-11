@@ -106,7 +106,7 @@ pub(crate) fn validate_0mhz_mgl(path: &Path) -> Result<MglInspection, String> {
         .rbf
         .as_deref()
         .ok_or_else(|| "0MHz MGL has no RBF".to_string())?;
-    if crate::library_db::normalize_id(rbf) != "ao486" {
+    if !crate::library_db::normalize_id(rbf).ends_with("ao486") {
         return Err(format!("0MHz MGL targets {rbf}, expected AO486"));
     }
     if inspection.files.is_empty() {
@@ -378,7 +378,7 @@ mod tests {
         std::fs::write(
             &mgl,
             r#"<mistergamedescription>
-                <rbf>AO486</rbf>
+                <rbf>_Computer/AO486</rbf>
                 <file delay="1" type="s" index="2" path="doom.vhd"/>
                 <file delay="1" type="s" index="4">disc.chd</file>
                 <reset delay="1"/>
