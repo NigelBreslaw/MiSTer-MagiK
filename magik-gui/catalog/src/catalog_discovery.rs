@@ -3,6 +3,8 @@
 use crate::catalog_scan::should_ignore_path;
 use crate::launch_profiles;
 use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +90,9 @@ fn append_mgl_system_descriptors(
             let Some(metadata) = crate::media_metadata::read_mgl_metadata(&descriptor_path) else {
                 continue;
             };
+            if metadata.file_path.is_some() {
+                continue;
+            }
             let (Some(setname), Some(rbf)) = (metadata.setname, metadata.rbf) else {
                 continue;
             };
@@ -120,6 +125,67 @@ pub(crate) fn compact_system_name(value: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .map(|ch| ch.to_ascii_lowercase())
         .collect()
+}
+
+/// Reads only bounded ZIP central-directory metadata. This is used solely
+/// after a folder has strong name/descriptor evidence, never to choose a core.
+pub(crate) fn archive_member_extensions_for_dir(path: &Path) -> BTreeSet<String> {
+    let mut extensions = BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return extensions;
+    };
+    for entry in entries.filter_map(Result::ok).take(4096) {
+        let archive = entry.path();
+        if archive.is_file() && path_ext_eq(&archive, "zip") {
+            let stem = archive
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if stem.contains("sdcard") || stem.contains("alt_roms") || stem.contains("empty_hdd") {
+                continue;
+            }
+            append_zip_member_extensions(&archive, &mut extensions);
+        }
+    }
+    extensions
+}
+
+fn append_zip_member_extensions(path: &Path, extensions: &mut BTreeSet<String>) {
+    let Ok(mut file) = File::open(path) else { return };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else { return };
+    if len < 22 { return; }
+    let tail_len = len.min(66_000) as usize;
+    if file.seek(SeekFrom::End(-(tail_len as i64))).is_err() { return; }
+    let mut tail = vec![0; tail_len];
+    if file.read_exact(&mut tail).is_err() { return; }
+    let Some(eocd) = crate::library_db::find_eocd(&tail) else { return };
+    let entries = usize::from(crate::library_db::le_u16(&tail[eocd + 10..eocd + 12])).min(4096);
+    let size = u64::from(crate::library_db::le_u32(&tail[eocd + 12..eocd + 16]));
+    let offset = u64::from(crate::library_db::le_u32(&tail[eocd + 16..eocd + 20]));
+    if offset.checked_add(size).is_none_or(|end| end > len)
+        || file.seek(SeekFrom::Start(offset)).is_err()
+    { return; }
+    for _ in 0..entries {
+        let mut header = [0; 46];
+        if file.read_exact(&mut header).is_err()
+            || crate::library_db::le_u32(&header[0..4]) != 0x0201_4b50
+        { return; }
+        let name_len = usize::from(crate::library_db::le_u16(&header[28..30]));
+        let extra_len = usize::from(crate::library_db::le_u16(&header[30..32]));
+        let comment_len = usize::from(crate::library_db::le_u16(&header[32..34]));
+        if name_len > 4096 { return; }
+        let mut name = vec![0; name_len];
+        if file.read_exact(&mut name).is_err() { return; }
+        if file.seek(SeekFrom::Current((extra_len + comment_len) as i64)).is_err() { return; }
+        let name = String::from_utf8_lossy(&name);
+        let member = Path::new(name.as_ref());
+        if !name.ends_with('/') && !should_ignore_hidden_path(member) {
+            if let Some(ext) = member.extension().and_then(|value| value.to_str()) {
+                extensions.insert(ext.to_ascii_lowercase());
+            }
+        }
+    }
 }
 
 pub(crate) fn top_level_game_dirs_for_roots(roots: &[String]) -> Vec<GameDirFact> {
@@ -392,6 +458,19 @@ mod tests {
             .expect("descriptor-backed system");
 
         assert_eq!(descriptor.path, rbf);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tsconf_support_archives_do_not_supply_payload_extensions() {
+        let root = unique_temp_dir("discovery-tsconf-support");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::write(root.join("SDCard.zip"), b"not needed for skip test")
+            .expect("write support archive");
+        std::fs::write(root.join("alt_roms.zip"), b"not needed for skip test")
+            .expect("write support archive");
+
+        assert!(archive_member_extensions_for_dir(&root).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
