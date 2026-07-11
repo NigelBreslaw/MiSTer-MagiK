@@ -10,6 +10,7 @@ use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
     core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
 };
+use crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION;
 use std::path::Path;
 
 const STAMP_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -81,6 +82,9 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
         format!("schema\t{SCHEMA_VERSION}"),
         format!("catalog-build\t{CATALOG_BUILD_VERSION}"),
         format!("profile-set\t{PROFILE_SET_VERSION}"),
+        format!(
+            "prepared-collection-adapters\t{PREPARED_COLLECTION_ADAPTER_VERSION}"
+        ),
         format!(
             "core-launch-manifest\t{}\t{:016x}",
             CORE_LAUNCH_MANIFEST_VERSION,

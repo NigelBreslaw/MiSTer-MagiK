@@ -9,6 +9,7 @@ use crate::arcade_catalog::{self, ArcadeCatalog};
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameMetadataKey};
 use crate::game_discovery::variant_score_from_haystack;
 use crate::library_db;
+use crate::prepared_collections::PreparedLaunchProvenance;
 use crate::software_identity::ConsolePreviewAsset;
 use rusqlite::{params, Transaction};
 use std::collections::HashMap;
@@ -54,6 +55,7 @@ pub(crate) struct CatalogProjectionRow {
     pub(crate) setname: String,
     pub(crate) parent: String,
     pub(crate) family_key: Option<String>,
+    pub(crate) prepared: Option<PreparedLaunchProvenance>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +64,7 @@ pub(crate) struct CatalogProjectionSource {
     pub(crate) setname: String,
     pub(crate) parent: String,
     pub(crate) family_key: Option<String>,
+    pub(crate) prepared: Option<PreparedLaunchProvenance>,
 }
 
 impl CatalogProjectionRow {
@@ -93,6 +96,7 @@ impl CatalogProjectionRow {
             setname: source.setname,
             parent: source.parent,
             family_key: source.family_key,
+            prepared: source.prepared,
         }
     }
 
@@ -170,6 +174,7 @@ pub(crate) fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
     rows.sort_by_cached_key(|row| {
         (
             row.game.title.to_ascii_lowercase(),
+            u8::from(row.prepared.is_none()),
             row.game.mra_path.to_ascii_lowercase(),
         )
     });
@@ -221,6 +226,9 @@ fn catalog_variant_score(row: &CatalogProjectionRow) -> i32 {
     .to_ascii_lowercase();
 
     let mut score = variant_score_from_haystack(&haystack);
+    if row.prepared.is_some() {
+        score += 10_000;
+    }
     if row.source_kind == "mra" && !row.setname.trim().is_empty() && row.parent.trim().is_empty() {
         score += 1000;
     }
@@ -482,6 +490,7 @@ pub(crate) fn materialize_launcher_launch_plans(tx: &Transaction<'_>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
     use crate::test_support::*;
 
     #[test]
@@ -523,6 +532,21 @@ mod tests {
         let games = collapse_catalog_variants(rows);
 
         assert_eq!(games.len(), 2);
+    }
+
+    #[test]
+    fn prepared_launch_sorts_before_generic_exact_title_without_collapsing() {
+        let generic = catalog_entry_row("Doom", "/media/fat/games/DOS/Doom.vhd");
+        let mut prepared = catalog_entry_row("Doom", "/media/fat/_DOS Games/Doom.mgl");
+        prepared.prepared = Some(PreparedLaunchProvenance::prepared(
+            PreparedCollectionId::ZeroMhz,
+        ));
+        let mut rows = vec![generic, prepared];
+
+        sort_catalog_projection_rows(&mut rows);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].game.mra_path.as_ref(), "/media/fat/_DOS Games/Doom.mgl");
     }
 
     #[test]

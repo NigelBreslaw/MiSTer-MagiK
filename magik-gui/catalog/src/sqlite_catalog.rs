@@ -987,6 +987,7 @@ pub(crate) fn load_joined_launcher_catalog(
                     setname: row.get::<_, String>(11)?,
                     parent: row.get::<_, String>(12)?,
                     family_key: None,
+                    prepared: None,
                 },
             ))
         })
@@ -1904,6 +1905,12 @@ fn write_sqlite_scan_with_sources_inner(
             delay_secs INTEGER,
             confidence_string_id INTEGER NOT NULL
         );
+        CREATE TABLE prepared_launch_rows (
+            launch_id INTEGER PRIMARY KEY,
+            collection_id TEXT NOT NULL,
+            launch_quality TEXT NOT NULL,
+            adapter_version INTEGER NOT NULL
+        ) WITHOUT ROWID;
         CREATE VIEW launch_targets AS
             SELECT launch_target_rows.launch_id,
                    launch_target_rows.launch_id AS game_key_id,
@@ -2039,6 +2046,18 @@ fn write_sqlite_scan_with_sources_inner(
             JOIN path_values_text source_paths ON source_paths.path_id = lt.source_path_id
             LEFT JOIN path_values_text launch_paths ON launch_paths.path_id = lt.launch_path_id
             LEFT JOIN path_values_text payload_paths ON payload_paths.path_id = lt.payload_path_id;
+        CREATE VIEW prepared_launches AS
+            SELECT prepared_launch_rows.launch_id,
+                   games.game_id,
+                   games.title,
+                   games.system_id,
+                   launch_plans.launch_ref,
+                   prepared_launch_rows.collection_id,
+                   prepared_launch_rows.launch_quality,
+                   prepared_launch_rows.adapter_version
+            FROM prepared_launch_rows
+            JOIN games ON games.game_key_id = prepared_launch_rows.launch_id
+            JOIN launch_plans ON launch_plans.launch_id = prepared_launch_rows.launch_id;
         CREATE VIEW launch_plans_text AS SELECT * FROM launch_plans;
         CREATE TABLE launchable_identity_rows (
             game_key_id INTEGER NOT NULL,
@@ -2399,6 +2418,12 @@ fn write_sqlite_scan_with_sources_inner(
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )
             .map_err(|e| format!("prepare launch target insert: {e}"))?;
+        let mut prepared_stmt = tx
+            .prepare(
+                "INSERT INTO prepared_launch_rows(launch_id,collection_id,launch_quality,adapter_version)
+                 VALUES (?1,?2,?3,?4)",
+            )
+            .map_err(|e| format!("prepare prepared launch insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
                 "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,category_string_id,source_string_id)
@@ -2543,6 +2568,7 @@ fn write_sqlite_scan_with_sources_inner(
                             setname: discovery.setname.clone().unwrap_or_default(),
                             parent: discovery.parent.clone().unwrap_or_default(),
                             family_key: software_family_key,
+                            prepared: discovery.prepared,
                         },
                     )
                     .with_launch_id(launch_id),
@@ -2596,6 +2622,16 @@ fn write_sqlite_scan_with_sources_inner(
                     string_interner.intern(confidence_str(discovery.confidence))
                 ])
                 .map_err(|e| format!("insert launch target: {e}"))?;
+            if let Some(prepared) = discovery.prepared {
+                prepared_stmt
+                    .execute(params![
+                        launch_id,
+                        prepared.collection_id.as_str(),
+                        prepared.launch_quality.as_str(),
+                        prepared.adapter_version as i64
+                    ])
+                    .map_err(|e| format!("insert prepared launch: {e}"))?;
+            }
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
                 let (family_id, title, year, manufacturer, category, source) =
                     mame_identity_projection(
@@ -2667,6 +2703,7 @@ fn write_sqlite_scan_with_sources_inner(
         }
         report_sqlite_import_progress(&mut progress, discovery_total, discovery_total);
         drop(target_stmt);
+        drop(prepared_stmt);
         path_interner.flush(&tx)?;
         string_interner.flush(&tx)?;
         drop(region_stmt);
@@ -5264,6 +5301,7 @@ mod tests {
             setname: Some("kof99".to_string()),
             parent: None,
             covered_payload_path: None,
+            prepared: None,
             confidence: crate::game_discovery::DiscoveryConfidence::ArchiveToc,
         };
 
@@ -5376,6 +5414,9 @@ mod tests {
             }
             crate::arcade_catalog::LaunchTarget::Path(path) => {
                 panic!("expected structured plan, got path {path}")
+            }
+            crate::arcade_catalog::LaunchTarget::Prepared(selection) => {
+                panic!("expected structured plan, got prepared {}", selection.launch_ref)
             }
             crate::arcade_catalog::LaunchTarget::MissingStructured(launch_ref) => {
                 panic!("expected structured plan, got missing {launch_ref}")

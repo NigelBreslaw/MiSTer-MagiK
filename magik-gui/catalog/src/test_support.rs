@@ -123,6 +123,7 @@ pub(crate) fn payload(path: &str) -> GameDiscovery {
         setname: None,
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -143,6 +144,7 @@ pub(crate) fn saturn_payload(path: &str) -> GameDiscovery {
         setname: None,
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -160,6 +162,7 @@ pub(crate) fn catalog_row(
         setname: setname.to_string(),
         parent: parent.to_string(),
         family_key: None,
+        prepared: None,
     }
 }
 
@@ -171,6 +174,7 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjection
         setname: String::new(),
         parent: String::new(),
         family_key: None,
+        prepared: None,
     }
 }
 
@@ -182,6 +186,7 @@ pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow
         setname: String::new(),
         parent: String::new(),
         family_key: None,
+        prepared: None,
     }
 }
 
@@ -430,6 +435,7 @@ pub(crate) fn mgl(source_path: &str, launch_ref: &str) -> GameDiscovery {
         setname: None,
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: DiscoveryConfidence::PayloadPath,
     }
 }
@@ -451,6 +457,7 @@ pub(crate) fn mra_discovery(idx: usize, title: &str) -> GameDiscovery {
         setname: Some(format!("game{idx:05}")),
         parent: None,
         covered_payload_path: None,
+        prepared: None,
         confidence: DiscoveryConfidence::MraCore,
     }
 }

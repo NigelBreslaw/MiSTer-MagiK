@@ -28,6 +28,7 @@ pub mod media_identity;
 mod media_metadata;
 mod preview_archive;
 pub mod preview_worker;
+pub mod prepared_collections;
 pub mod builder_protocol;
 #[cfg(feature = "builder")]
 pub mod builder_service;
