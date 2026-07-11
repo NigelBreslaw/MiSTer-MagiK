@@ -118,6 +118,9 @@ case "$APPLY_PATCH" in
 esac
 
 {
+  echo "format=mister-magik-fpga-release-v1"
+  git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/magik_commit=/'
+  git -C "$ROOT" status --short --untracked-files=no 2>/dev/null | sed 's/^/magik_status=/'
   echo "source_dir=$MENU_ABS"
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
@@ -130,6 +133,12 @@ esac
   echo "quartus_strace=${QUARTUS_STRACE:-0}"
   echo "quartus_docker_privileged=${QUARTUS_DOCKER_PRIVILEGED:-0}"
   echo "quartus_docker_empty_sys=${QUARTUS_DOCKER_EMPTY_SYS:-0}"
+  awk '/^-?set_global_assignment -name SEED / {print "quartus_seed="$NF}' "$WORK_DIR/menu.qsf" | tail -1
+  if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+    echo "workflow_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+  else
+    echo "workflow_url=local"
+  fi
 } > "$META_OUT"
 
 build_status=0
@@ -194,5 +203,15 @@ fi
 
 cp "$RBF_CANDIDATE" "$RBF_OUT"
 shasum -a 256 "$RBF_OUT" | awk '{print "rbf_sha256="$1}' >> "$META_OUT"
-echo "rbf=$RBF_OUT" >> "$META_OUT"
+echo "rbf_file=$(basename "$RBF_OUT")" >> "$META_OUT"
+quartus_version="$(sed -n 's/.*Version \([0-9][^ ]* Build [0-9][^ ]*\).*/\1/p' "$LOG_OUT" | head -1)"
+echo "quartus_version=${quartus_version:-17.0.0 Build 595}" >> "$META_OUT"
+rm -rf "$OUT_DIR/reports"
+mkdir -p "$OUT_DIR/reports"
+find "$WORK_DIR/output_files" -maxdepth 1 -type f \( -name '*.rpt' -o -name '*.summary' \) -exec cp {} "$OUT_DIR/reports/" \;
+find "$OUT_DIR/reports" -type f -print0 | sort -z | while IFS= read -r -d '' report; do
+  relative="reports/$(basename "$report")"
+  hash="$(shasum -a 256 "$report" | awk '{print $1}')"
+  echo "report_sha256.$relative=$hash" >> "$META_OUT"
+done
 echo "$RBF_OUT"
