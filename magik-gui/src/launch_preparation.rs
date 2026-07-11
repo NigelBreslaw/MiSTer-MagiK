@@ -48,9 +48,17 @@ pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
 }
 
 pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarget, String> {
+    let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
+    prepare_launch_target_with_roots(launch_target, &roots)
+}
+
+fn prepare_launch_target_with_roots(
+    launch_target: &LaunchTarget,
+    roots: &[String],
+) -> Result<LaunchTarget, String> {
     match launch_target {
         LaunchTarget::Prepared(selection) => Ok(LaunchTarget::Path(
-            prepare_launch_ref(&selection.launch_ref)?.into(),
+            prepare_launch_ref_with_roots(&selection.launch_ref, roots)?.into(),
         )),
         LaunchTarget::Path(path) => {
             mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
@@ -926,6 +934,34 @@ mod tests {
         assert!(!first.join("games/Amiga/shared/ags_boot").exists());
         let _ = std::fs::remove_dir_all(first);
         let _ = std::fs::remove_dir_all(second);
+    }
+
+    #[test]
+    fn prepared_target_resolves_to_real_mgl_before_handoff() {
+        let root = unique_temp_dir("amigavision-prepared-target");
+        write_complete_amigavision_install(&root, "AmigaVision.hdf", "Amiga.mgl", "Agony\n", "\n");
+        let target = LaunchTarget::Prepared(
+            mister_magik_catalog::arcade_catalog::PreparedLaunchSelection {
+                collection_id:
+                    mister_magik_catalog::prepared_collections::PreparedCollectionId::AmigaVision,
+                launch_ref: "magik-amigavision:Agony".into(),
+            },
+        );
+        let roots = vec![root.join("games").display().to_string()];
+
+        let prepared =
+            prepare_launch_target_with_roots(&target, &roots).expect("prepare launch target");
+
+        assert_eq!(
+            prepared,
+            LaunchTarget::Path(
+                root.join("_Computer/Amiga.mgl")
+                    .display()
+                    .to_string()
+                    .into()
+            )
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
