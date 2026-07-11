@@ -1992,6 +1992,41 @@ mod tests {
     }
 
     #[test]
+    fn scanner_uses_numeric_core_alias_and_boot_rom_evidence_for_pc8801() {
+        let root = unique_temp_dir("target-runtime-pc8801-alias");
+        install_test_console_core(&root, "PC88");
+        let game_dir = root.join("games/PC8801");
+        std::fs::create_dir_all(&game_dir).expect("create PC8801 dir");
+        std::fs::write(game_dir.join("boot.rom"), "firmware").expect("write boot ROM");
+        std::fs::write(game_dir.join("Ys.7z"), "archive").expect("write PC8801 game");
+        std::fs::write(game_dir.join("Thexder.7z"), "archive").expect("write PC8801 game");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+
+        let pc88_games = scan
+            .discoveries
+            .iter()
+            .filter(|discovery| discovery.platform_id == "pc88")
+            .map(|discovery| discovery.title.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pc88_games, BTreeSet::from(["Thexder", "Ys"]));
+        assert!(scan
+            .discoveries
+            .iter()
+            .all(|discovery| discovery.title != "boot"));
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.expected_game_dir == "games/PC8801"
+                && row.catalog_status == "cataloged"
+                && row.core_id == "PC88"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn cartridge_zip_entries_index_as_games() {
         let root = unique_temp_dir("sms-loose-vs-zip");
         install_test_console_core(&root, "SMS");
