@@ -69,7 +69,11 @@ wait_remote() {
 }
 
 tmp_env="$(mktemp)"
-trap 'rm -f "$tmp_env"' EXIT
+cleanup() {
+  rm -f "$tmp_env"
+  remote "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 cat >"$tmp_env" <<EOF
 export MISTER_CATALOG_REFRESH=off
 export MISTER_LAUNCHER_START_SCREEN=arcade

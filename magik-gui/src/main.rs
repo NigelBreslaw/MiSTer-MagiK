@@ -1377,11 +1377,15 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
     let mut post_samples = Vec::with_capacity(frames);
     let mut status_samples = Vec::with_capacity(frames);
     let mut unsupported_posts = 0usize;
-    let period = std::time::Duration::from_micros(16_667);
+    let period_us = std::env::var("MISTER_FPGA_LATCH_PATTERN_PERIOD_US")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(16_667);
+    let period = std::time::Duration::from_micros(period_us);
     let mut next_deadline = std::time::Instant::now();
 
     crate::ui_logln!(
-        "fpga_latch_pattern_header_tsv\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}\tbuffer1_phys=0x{base1:08x}\tbuffer2_phys=0x{base2:08x}",
+        "fpga_latch_pattern_header_tsv\tframes={frames}\tperiod_us={period_us}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={}\tbuffer1_phys=0x{base1:08x}\tbuffer2_phys=0x{base2:08x}",
         stride_bytes * height
     );
     crate::ui_logln!(

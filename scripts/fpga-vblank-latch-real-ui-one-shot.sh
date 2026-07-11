@@ -10,6 +10,7 @@ REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 LOCAL_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 LOCAL_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
+LOCAL_META="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt"
 LOCAL_DIR="$ROOT/build/fpga-vblank-latch"
 LABEL="${MISTER_FPGA_LATCH_LABEL:-FPGA-LATCH-$(date -u +%Y%m%dT%H%M%SZ)}"
 PATTERN_FRAMES="${MISTER_FPGA_LATCH_PATTERN_FRAMES:-180}"
@@ -64,6 +65,7 @@ if [[ ! -f "$LOCAL_RBF" ]]; then
   exit 1
 fi
 test -f "$LOCAL_RBF"
+"$ROOT/scripts/verify-fpga-rbf-manifest.py" "$LOCAL_META"
 echo "==> Reusing prebuilt experimental RBF: $LOCAL_RBF"
 
 if [[ ! -f "$LOCAL_KO" ]]; then
@@ -90,7 +92,8 @@ echo "==> Uploading scanout-slots module and experimental RBF"
 "$MISTER" run "mkdir -p /media/fat/mister-magik/experiments '$REMOTE_DIR'"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
 "$MISTER" put "$LOCAL_RBF" "$REMOTE_RBF"
-"$MISTER" run "chmod 600 '$REMOTE_KO'; sync"
+"$MISTER" put "$LOCAL_META" "$REMOTE_RBF.metadata.txt"
+"$MISTER" run "expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_RBF.metadata.txt'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test -n \"\$expected\"; test \"\$actual\" = \"\$expected\"; chmod 600 '$REMOTE_KO' '$REMOTE_RBF' '$REMOTE_RBF.metadata.txt'; sync"
 
 echo "==> Loading experimental Menu core through Main MagiK launch path"
 "$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\n' > /dev/MiSTer_cmd; sleep 4"

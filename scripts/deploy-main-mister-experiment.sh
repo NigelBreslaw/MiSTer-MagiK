@@ -54,8 +54,10 @@ GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
 PLUGIN_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 LATCH_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
+LATCH_META="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt"
 PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_scanout_slots.ko"
 LATCH_RBF_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
+LATCH_META_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.metadata.txt"
 
 if [[ ! -d "$MAIN_DIR" || ! -f "$MAIN_DIR/Makefile" ]]; then
   cat >&2 <<EOF
@@ -80,6 +82,7 @@ if [[ ! -f "$LATCH_RBF" ]]; then
   echo "Download it from the fpga-vblank-latch GitHub Actions workflow; do not build it locally." >&2
   exit 1
 fi
+"$ROOT/scripts/verify-fpga-rbf-manifest.py" "$LATCH_META"
 
 echo "==> Building magik-gui ($GUI_PROFILE)"
 "$GUI_DIR/build-arm.sh" "${GUI_BUILD_ARGS[@]}"
@@ -123,8 +126,9 @@ rm -f "$GUI_ART_RAW"
 "$ROOT/scripts/mister" run "mkdir -p /media/fat/mister-magik/experiments"
 "$ROOT/scripts/mister" put "$PLUGIN_KO" "$PLUGIN_REMOTE.upload"
 "$ROOT/scripts/mister" put "$LATCH_RBF" "$LATCH_RBF_REMOTE.upload"
+"$ROOT/scripts/mister" put "$LATCH_META" "$LATCH_META_REMOTE.upload"
 
-"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$LATCH_RBF_REMOTE'; rm -f /media/fat/mister-magik/mister_magik_scanout.ko /media/fat/mister-magik/mister_magik_plugin_probe.ko"
+"$ROOT/scripts/mister" run "expected=\$(sed -n 's/^rbf_sha256=//p' '$LATCH_META_REMOTE.upload'); actual=\$(sha256sum '$LATCH_RBF_REMOTE.upload' | awk '{print \$1}'); test -n \"\$expected\"; test \"\$actual\" = \"\$expected\"; mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; mv '$LATCH_META_REMOTE.upload' '$LATCH_META_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$LATCH_RBF_REMOTE' '$LATCH_META_REMOTE'; rm -f /media/fat/mister-magik/mister_magik_scanout.ko /media/fat/mister-magik/mister_magik_plugin_probe.ko"
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 "$ROOT/scripts/mister" run '
@@ -149,4 +153,5 @@ echo "    Or reboot later to let stock MiSTer hand off via MiSTer.ini main=MiSTe
 echo "    Production latch boot files:"
 echo "      $PLUGIN_REMOTE"
 echo "      $LATCH_RBF_REMOTE"
+echo "      $LATCH_META_REMOTE"
 echo "    Restore stock with scripts/restore-stock-boot.sh."
