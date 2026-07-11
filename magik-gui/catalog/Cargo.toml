@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK."
 
+[[bin]]
+name = "mister-magik-catalog-builder"
+path = "src/bin/catalog_builder.rs"
+required-features = ["builder"]
+
 [lints.rust]
 warnings = "deny"
 
@@ -18,3 +23,8 @@ rusqlite = { version = "0.40.0", default-features = false, features = ["bundled"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"
+
+[features]
+default = ["reader"]
+reader = []
+builder = ["reader"]

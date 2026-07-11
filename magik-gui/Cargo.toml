@@ -31,7 +31,7 @@ serde_json = "1"
 quick-xml = "0.41"
 swash = { version = "0.2.7", features = ["scale", "render"] }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
-mister-magik-catalog = { path = "catalog" }
+mister-magik-catalog = { path = "catalog", default-features = false, features = ["reader"] }
 mister-magik-ui = { path = "ui-generated", optional = true }
 ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
 

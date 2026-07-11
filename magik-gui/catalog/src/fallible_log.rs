@@ -4,6 +4,9 @@ use std::fmt;
 use std::io::{self, Write};
 
 pub(crate) fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
+    if std::env::var_os("MISTER_CATALOG_PROTOCOL_STDOUT").is_some() {
+        return stderr_line(args);
+    }
     let stdout = io::stdout();
     write_line(stdout.lock(), args)
 }
