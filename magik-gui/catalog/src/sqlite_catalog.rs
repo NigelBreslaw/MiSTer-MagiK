@@ -2567,7 +2567,13 @@ fn write_sqlite_scan_with_sources_inner(
             } else {
                 path_interner.intern_optional(launcher_path)
             };
-            let profile_id = profile_id_for_discovery(discovery);
+            let owning_profile = crate::catalog_scan::profile_for_path(
+                &scan.profiles,
+                Path::new(discovery.source_path.as_str()),
+            );
+            let profile_id = owning_profile
+                .map(|profile| profile.id.as_str())
+                .or_else(|| profile_id_for_discovery(discovery));
             let mount = launch_target_mount_for_discovery(discovery, profile_id, &scan.profiles);
             let mount_kind = mount.map(|mount| mount_kind_str(mount.kind));
             target_stmt
@@ -3307,8 +3313,15 @@ fn launch_target_mount_for_discovery(
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
-    let mount = profile_id
-        .and_then(|profile_id| launch_profiles::profile_for_launch_target_id(profiles, profile_id))
+    let mount = crate::catalog_scan::profile_for_path(
+        profiles,
+        Path::new(discovery.source_path.as_str()),
+    )
+        .or_else(|| {
+            profile_id.and_then(|profile_id| {
+                launch_profiles::profile_for_launch_target_id(profiles, profile_id)
+            })
+        })
         .and_then(|profile| match discovery.source_kind {
             DiscoverySourceKind::ArchiveEntry => profile
                 .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
