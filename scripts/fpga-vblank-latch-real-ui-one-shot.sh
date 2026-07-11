@@ -3,12 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
-REMOTE_DIR="/tmp/mister-magik-plugin-probe"
-REMOTE_KO="$REMOTE_DIR/mister_magik_plugin_probe.ko"
+REMOTE_DIR="/tmp/mister-magik-scanout-slots"
+REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
-LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
+LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
 LOCAL_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 LOCAL_DIR="$ROOT/build/fpga-vblank-latch"
 LABEL="${MISTER_FPGA_LATCH_LABEL:-FPGA-LATCH-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -49,11 +49,11 @@ mkdir -p "$LOCAL_DIR"
 
 restore_normal() {
   set +e
-  "$MISTER" run "rm -f '$REMOTE_ENV'; rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1
+  "$MISTER" run "rm -f '$REMOTE_ENV'; rmmod mister_magik_scanout_slots 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1
   "$MISTER" reboot-wait >/dev/null 2>&1
   "$ROOT/scripts/deploy-rust.sh" >/dev/null 2>&1
   "$ROOT/scripts/run-rust.sh" launcher 0 >/dev/null 2>&1
-  "$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; ! test -e /dev/mister-magik-plugin-probe; ! grep -q '^mister_magik_plugin_probe ' /proc/modules; pidof MiSTer_MagiK; pidof mister-magik-fb; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
+  "$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; ! test -e /dev/mister-magik-scanout-slots; ! grep -q '^mister_magik_scanout_slots ' /proc/modules; pidof MiSTer_MagiK; pidof mister-magik-fb; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
   set -e
 }
 trap restore_normal EXIT
@@ -84,7 +84,7 @@ fi
 
 echo "==> Verifying stock runtime before one-shot experiment"
 "$MISTER" status
-"$MISTER" run "set -e; uname -r; test \"\$(uname -r)\" = '5.15.1-MiSTer'; command -v insmod; command -v rmmod; test ! -e /dev/mister-magik-plugin-probe || rmmod mister_magik_plugin_probe"
+"$MISTER" run "set -e; uname -r; test \"\$(uname -r)\" = '5.15.1-MiSTer'; command -v insmod; command -v rmmod; test ! -e /dev/mister-magik-scanout-slots || rmmod mister_magik_scanout_slots"
 
 echo "==> Uploading plugin module and experimental RBF"
 "$MISTER" run "mkdir -p /media/fat/mister-magik/experiments '$REMOTE_DIR'"
@@ -105,7 +105,7 @@ echo "==> Uploading diagnostics binary"
 "$MISTER" run "chmod +x '$REMOTE_BIN'; sync"
 
 echo "==> Loading plugin module"
-"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-plugin-probe; grep '^mister_magik_plugin_probe ' /proc/modules"
+"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-scanout-slots; grep '^mister_magik_scanout_slots ' /proc/modules"
 
 echo "==> Restarting Main-supervised launcher with FPGA latch backend"
 MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden MISTER_LAUNCHER_START_SCREEN=home \

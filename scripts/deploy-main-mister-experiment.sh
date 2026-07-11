@@ -52,11 +52,9 @@ done
 
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik-fb"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
-PLUGIN_KO="$ROOT/build/plugin-probe/mister_magik_scanout.ko"
-PLUGIN_COMPAT_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
+PLUGIN_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
 LATCH_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
-PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_scanout.ko"
-PLUGIN_COMPAT_REMOTE="/media/fat/mister-magik/mister_magik_plugin_probe.ko"
+PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_scanout_slots.ko"
 LATCH_RBF_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 
 if [[ ! -d "$MAIN_DIR" || ! -f "$MAIN_DIR/Makefile" ]]; then
@@ -75,10 +73,6 @@ fi
 if [[ ! -f "$PLUGIN_KO" ]]; then
   echo "ERROR: missing production scanout module: $PLUGIN_KO" >&2
   echo "Build it with scripts/build-plugin-probe-module.sh before deploying production latch boot." >&2
-  exit 1
-fi
-if [[ ! -f "$PLUGIN_COMPAT_KO" ]]; then
-  echo "ERROR: missing one-release compatibility module copy: $PLUGIN_COMPAT_KO" >&2
   exit 1
 fi
 if [[ ! -f "$LATCH_RBF" ]]; then
@@ -128,10 +122,9 @@ rm -f "$GUI_ART_RAW"
 "$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
 "$ROOT/scripts/mister" run "mkdir -p /media/fat/mister-magik/experiments"
 "$ROOT/scripts/mister" put "$PLUGIN_KO" "$PLUGIN_REMOTE.upload"
-"$ROOT/scripts/mister" put "$PLUGIN_COMPAT_KO" "$PLUGIN_COMPAT_REMOTE.upload"
 "$ROOT/scripts/mister" put "$LATCH_RBF" "$LATCH_RBF_REMOTE.upload"
 
-"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$PLUGIN_COMPAT_REMOTE.upload' '$PLUGIN_COMPAT_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$PLUGIN_COMPAT_REMOTE' '$LATCH_RBF_REMOTE'"
+"$ROOT/scripts/mister" run "mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$LATCH_RBF_REMOTE'; rm -f /media/fat/mister-magik/mister_magik_scanout.ko /media/fat/mister-magik/mister_magik_plugin_probe.ko"
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 "$ROOT/scripts/mister" run '

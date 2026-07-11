@@ -3,16 +3,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
-REMOTE_DIR="/tmp/mister-magik-plugin-probe"
-REMOTE_KO="$REMOTE_DIR/mister_magik_plugin_probe.ko"
+REMOTE_DIR="/tmp/mister-magik-scanout-slots"
+REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_plugin_probe.ko"
+LOCAL_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
 LOCAL_REPORT="$ROOT/build/plugin-probe/plugin-map-report.log"
 LOCAL_BANDWIDTH="$ROOT/build/plugin-probe/plugin-map-bandwidth.log"
 FRAMES="${MISTER_PLUGIN_PROBE_FRAMES:-120}"
 
 cleanup() {
-  "$MISTER" run "rmmod mister_magik_plugin_probe 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
+  "$MISTER" run "rmmod mister_magik_scanout_slots 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -41,7 +41,7 @@ echo "==> Uploading diagnostics binary and probe module"
 "$MISTER" run "chmod +x '$REMOTE_BIN'; chmod 600 '$REMOTE_KO'; sync"
 
 echo "==> Loading module"
-"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-plugin-probe; grep '^mister_magik_plugin_probe ' /proc/modules"
+"$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-scanout-slots; grep '^mister_magik_scanout_slots ' /proc/modules"
 
 echo "==> Running plugin-map-report"
 "$MISTER" run "'$REMOTE_BIN' plugin-map-report" | tee "$LOCAL_REPORT"
@@ -53,7 +53,7 @@ echo "==> Unloading module and restoring normal MagiK"
 cleanup
 "$ROOT/scripts/deploy-rust.sh"
 "$ROOT/scripts/run-rust.sh" launcher 0
-"$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; ! test -e /dev/mister-magik-plugin-probe; ! grep -q '^mister_magik_plugin_probe ' /proc/modules; pidof MiSTer_MagiK; pidof mister-magik-fb; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true"
+"$MISTER" run "set -e; for i in \$(seq 1 20); do pidof mister-magik-fb >/dev/null 2>&1 && break; sleep 0.5; done; ! test -e /dev/mister-magik-scanout-slots; ! grep -q '^mister_magik_scanout_slots ' /proc/modules; pidof MiSTer_MagiK; pidof mister-magik-fb; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true"
 
 echo "==> Wrote:"
 echo "    $LOCAL_REPORT"
