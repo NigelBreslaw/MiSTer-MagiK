@@ -6,12 +6,13 @@ pub(super) fn start_library_catalog_worker(
     root: String,
     request: CatalogWorkerRequest,
     initial_cache: CatalogWorkerInitialCache,
+    execution_mode: CatalogExecutionMode,
 ) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("library-catalog".to_string())
         .spawn(move || {
-            apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+            apply_runtime_thread_policy(execution_mode.thread_role());
             let progress_tx = tx.clone();
             let mut progress_coalescer = CatalogProgressCoalescer::default();
             let mut progress = move |title: &str, detail: &str| {
@@ -158,20 +159,17 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             let plan = catalog_worker_plan(cache_state, request);
-            let first_catalog_build = plan == CatalogWorkerPlan::ForceBuild
-                && first_catalog_build_needs_foreground(cache_state);
-            if first_catalog_build {
-                // First database creation owns the machine until the RAM catalog is ready.
-                // Smooth scan-screen animation is secondary to meeting the first-scan gate.
-                apply_runtime_thread_policy(RuntimeThreadRole::CatalogForeground);
-            }
+            let foreground_exclusive =
+                plan == CatalogWorkerPlan::ForceBuild
+                    && execution_mode == CatalogExecutionMode::ForegroundExclusive;
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
                 detail: format!(
-                    "cache_state={} request={} plan={}",
+                    "cache_state={} request={} plan={} execution_mode={}",
                     cache_state.label(),
                     request.label(),
-                    plan.label()
+                    plan.label(),
+                    execution_mode.label()
                 ),
             });
             match plan {
@@ -193,7 +191,7 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             if plan == CatalogWorkerPlan::ForceBuild {
-                if first_catalog_build {
+                if foreground_exclusive {
                     let ram_artifact_result = library_db::scan_default_library_ram_foreground_with_events(
                         Some(&mut progress),
                         Some(&mut scan_events),
@@ -234,6 +232,12 @@ pub(super) fn start_library_catalog_worker(
                         load_us,
                         source: CatalogSource::FreshBuild,
                         durable_save_pending: true,
+                    });
+                    apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                        name: "catalog_execution_mode_transition".to_string(),
+                        detail: "from=foreground_exclusive to=background_interactive reason=library_ready"
+                            .to_string(),
                     });
                     let _ = tx.send(CatalogWorkerMessage::Timing {
                         name: "catalog_worker_ram_catalog".to_string(),
@@ -418,6 +422,28 @@ pub(super) enum CatalogWorkerRequest {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogExecutionMode {
+    ForegroundExclusive,
+    BackgroundInteractive,
+}
+
+impl CatalogExecutionMode {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::ForegroundExclusive => "foreground_exclusive",
+            Self::BackgroundInteractive => "background_interactive",
+        }
+    }
+
+    fn thread_role(self) -> RuntimeThreadRole {
+        match self {
+            Self::ForegroundExclusive => RuntimeThreadRole::CatalogForeground,
+            Self::BackgroundInteractive => RuntimeThreadRole::CatalogWorker,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogWorkerInitialCache {
     ProbeNavigationThenSqlite,
     ProbeSqlite,
@@ -489,10 +515,6 @@ fn catalog_worker_plan(
         },
         CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::ForceBuild,
     }
-}
-
-fn first_catalog_build_needs_foreground(cache_state: CatalogCacheState) -> bool {
-    !cache_state.has_usable_catalog()
 }
 
 pub(super) enum CatalogWorkerMessage {
@@ -904,16 +926,15 @@ mod tests {
     }
 
     #[test]
-    fn only_missing_or_empty_catalog_builds_use_foreground_scan() {
-        assert!(first_catalog_build_needs_foreground(
-            CatalogCacheState::Missing
-        ));
-        assert!(first_catalog_build_needs_foreground(
-            CatalogCacheState::Empty
-        ));
-        assert!(!first_catalog_build_needs_foreground(
-            CatalogCacheState::Ready
-        ));
+    fn execution_mode_selects_worker_thread_policy() {
+        assert_eq!(
+            CatalogExecutionMode::ForegroundExclusive.thread_role(),
+            RuntimeThreadRole::CatalogForeground
+        );
+        assert_eq!(
+            CatalogExecutionMode::BackgroundInteractive.thread_role(),
+            RuntimeThreadRole::CatalogWorker
+        );
     }
 
     #[test]

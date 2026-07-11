@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
+REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
+REMOTE_NAVIGATION="/media/fat/mister-magik/library.nav.lz4b"
 REMOTE_ASSETS="/media/fat/mister-magik/assets"
 SETTLE_SECS=5
 RACE_REFRESH=0
@@ -17,8 +19,8 @@ Checks the deployed MiSTer catalog state through scripts/mister:
   - exactly one launcher process
   - no active library-refresh after settling
   - non-empty library.sqlite3
-  - launcher_catalog exists
-  - screenshot packs project nonzero has_preview counts where installed
+  - current generic catalog facts contain games and discoveries
+  - current summary and navigation projections are present
   - screenshot packs remain runtime-only and are not indexed into asset tables
   - optional duplicate refresh race proves one refresh skips via single-flight
 USAGE
@@ -102,11 +104,6 @@ pack_exists_for_platform() {
   remote "if test -f '$REMOTE_ASSETS/${platform}-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'; then echo yes; else echo no; fi" | awk 'NF { value=$NF } END { print value }'
 }
 
-preview_count_for_platform() {
-  local platform="$1"
-  db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';"
-}
-
 arcade_pack_exists() {
   pack_exists_for_platform arcade
 }
@@ -127,20 +124,12 @@ assert_eq "active library-refresh count" "0" "$refresh_count"
 remote "test -s '$REMOTE_DB'"
 echo "ok: $REMOTE_DB is present and non-empty"
 
-launcher_catalog_tables="$(
-  db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';"
-)"
-assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
-
-if [ "$(arcade_pack_exists)" = "yes" ]; then
-  assert_gt_zero "arcade has_preview count" "$(preview_count_for_platform arcade)"
-fi
-if [ "$(pack_exists_for_platform neogeo)" = "yes" ]; then
-  assert_gt_zero "neogeo has_preview count" "$(preview_count_for_platform neogeo)"
-fi
-if [ "$(pack_exists_for_platform saturn)" = "yes" ]; then
-  assert_gt_zero "saturn has_preview count" "$(preview_count_for_platform saturn)"
-fi
+assert_gt_zero "durable game row count" "$(db_scalar "SELECT count(*) FROM game_rows;")"
+assert_gt_zero "durable discovery count" "$(db_scalar "SELECT CAST(value AS INTEGER) FROM meta WHERE key='discoveries';")"
+remote "test -s '$REMOTE_SUMMARY'"
+echo "ok: $REMOTE_SUMMARY is present and non-empty"
+remote "test -s '$REMOTE_NAVIGATION'"
+echo "ok: $REMOTE_NAVIGATION is present and non-empty"
 
 console_pack_count="$(
   remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number
