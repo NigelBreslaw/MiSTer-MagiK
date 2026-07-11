@@ -28,3 +28,19 @@ walkdir = "2"
 default = ["reader"]
 reader = []
 builder = ["reader"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+panic = "abort"
+
+[profile.release-device]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[profile.release-device-profile]
+inherits = "release-device"
+strip = false
+debug = true
