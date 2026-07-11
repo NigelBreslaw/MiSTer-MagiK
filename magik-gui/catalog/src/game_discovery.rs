@@ -523,6 +523,8 @@ pub(crate) fn catalog_system_id_for_discovery(discovery: &GameDiscovery) -> Stri
         "arcade".to_string()
     } else if discovery.platform_id.is_empty() {
         "unknown".to_string()
+    } else if discovery.platform_id == "amiga500" {
+        "amiga".to_string()
     } else {
         discovery.platform_id.clone()
     }
@@ -555,6 +557,14 @@ mod tests {
     use crate::launch_profiles;
     use crate::library_db::mtime_secs;
     use crate::test_support::*;
+
+    #[test]
+    fn amiga_500_content_joins_the_amiga_launcher_system() {
+        let mut discovery = payload("/media/fat/games/Amiga500/Game.adf");
+        discovery.platform_id = "amiga500".to_string();
+
+        assert_eq!(catalog_system_id_for_discovery(&discovery), "amiga");
+    }
 
     #[test]
     fn raw_profile_payloads_generate_virtual_games() {

@@ -287,17 +287,34 @@ fn generic_support_reason(path: &Path) -> Option<IgnoreReason> {
     let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
     let stem = path.file_stem()?.to_string_lossy().to_ascii_lowercase();
     let ext = path_ext(path).unwrap_or_default();
+    let support_directory = path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|part| {
+            matches!(
+                part.to_ascii_lowercase().as_str(),
+                "demo" | "demos" | "palette" | "palettes"
+            )
+        })
+    });
     let numbered_boot_rom = ext == "rom"
         && stem.strip_prefix("boot").is_some_and(|tail| {
             tail.is_empty() || tail.chars().all(|ch| ch.is_ascii_digit())
         });
+    let versioned_firmware_rom = ext == "rom"
+        && (stem.contains("kickstart")
+            || stem
+                .split('.')
+                .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit())));
     if numbered_boot_rom
+        || versioned_firmware_rom
         || name.contains("bios")
         || matches!(name.as_str(), "cd_bios.rom" | "riscos.rom")
     {
         return Some(IgnoreReason::Firmware);
     }
-    if matches!(ext.as_str(), "nvr" | "jce" | "jmc" | "srm" | "sav")
+    if matches!(
+        ext.as_str(),
+        "act" | "gbp" | "nvr" | "jce" | "jmc" | "srm" | "sav"
+    )
         || stem.contains("eeprom")
         || stem.contains("memorytrack")
     {
@@ -313,7 +330,8 @@ fn generic_support_reason(path: &Path) -> Option<IgnoreReason> {
     {
         return Some(IgnoreReason::InstallerOrBlankMedia);
     }
-    if (stem.contains("demo") && ext != "txt")
+    if support_directory
+        || (stem.contains("demo") && ext != "txt")
         || matches!(name.as_str(), "env.cas" | "galaxy.cas" | "spores.cas")
     {
         return Some(IgnoreReason::Demo);
@@ -2441,11 +2459,16 @@ mod tests {
 
         for path in [
             "boot0.rom",
+            "1.3.rom",
+            "Kickstart-1.3-r34.5.rom",
             "firmware_bios.rom",
             "machine.nvr",
+            "Palettes/BlackGreenBlueCyan.GBP",
+            "ntsc.act",
             "eeprom.jce",
             "bin2dsk.sh",
             "BlankTape.cas",
+            "Demos/Actually Named Like A Game.adf",
             "Example Demo.cas",
         ] {
             assert!(matches!(
