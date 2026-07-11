@@ -3214,6 +3214,14 @@ pub(super) fn run_launcher_loop(
             0
         };
         let latch_trace_flush_deferred = presentation.main_present_backend.is_latch();
+        if presentation.main_present_backend.is_latch()
+            && mister_magik_fb::framebuffer::plugin_probe::atomic_scanout_runtime_enabled()
+        {
+            // SwappedBuffers must visit the other render target after every post,
+            // even when Slint itself has no new damage. This replays the previous
+            // damage into that slot before direct preview/Arcade layers use it.
+            request_launcher_redraw!();
+        }
         if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));

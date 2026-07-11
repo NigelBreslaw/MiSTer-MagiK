@@ -427,10 +427,20 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         }
         let mut status_us = status_start.elapsed().as_micros() as u64;
 
-        let plan = self
-            .latch_state
-            .plan_next(input)
-            .ok_or_else(|| "no writable hidden latch buffer".to_string())?;
+        let plan = if atomic {
+            let rendered_slot = cached.scanout_slot().ok_or_else(|| {
+                "atomic scanout render target did not report an acquired slot".to_string()
+            })?;
+            self.latch_state
+                .plan_writable_slot(rendered_slot, input)
+                .ok_or_else(|| {
+                    format!("atomic scanout rendered slot is not writable slot={rendered_slot}")
+                })?
+        } else {
+            self.latch_state
+                .plan_next(input)
+                .ok_or_else(|| "no writable hidden latch buffer".to_string())?
+        };
         let buffer_index = plan.slot_index;
         let written_rects = plan.written_rects();
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
