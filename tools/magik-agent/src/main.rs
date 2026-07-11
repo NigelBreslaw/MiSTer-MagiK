@@ -54,6 +54,7 @@ fn decompress_lz4_block_exact(
 mod sd_browse {
     use quick_xml::events::{BytesStart, Event};
     use quick_xml::Reader as XmlReader;
+    use quick_xml::XmlVersion;
     use serde_json::{json, Value};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -537,7 +538,10 @@ mod sd_browse {
                 "path": path,
                 "kind": "attribute",
                 "name": format!("@{}", xml_name(attr.key.as_ref())),
-                "value": attr.unescape_value().unwrap_or_default().into_owned(),
+                "value": attr
+                    .normalized_value(XmlVersion::Implicit1_0)
+                    .unwrap_or_default()
+                    .into_owned(),
             }));
             *order += 1;
         }
