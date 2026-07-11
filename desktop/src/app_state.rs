@@ -17,6 +17,8 @@ pub struct DashboardSnapshot {
     pub launcher_state: String,
     pub visible_owner: String,
     pub slint_status_freshness: String,
+    pub scanout_summary: String,
+    pub scanout_detail: String,
     pub catalog_summary: String,
     pub screen_summary: String,
     pub input_summary: String,
@@ -40,6 +42,8 @@ impl DashboardSnapshot {
             launcher_state: "-".to_string(),
             visible_owner: "-".to_string(),
             slint_status_freshness: "-".to_string(),
+            scanout_summary: "Scanout status unknown".to_string(),
+            scanout_detail: "mode -; module -; device -".to_string(),
             catalog_summary: "-".to_string(),
             screen_summary: "-".to_string(),
             input_summary: "-".to_string(),
@@ -155,6 +159,36 @@ pub fn input_summary(slint_status: &Value) -> String {
     format!("{pads} pad(s); active: {active}")
 }
 
+pub fn scanout_labels(
+    mode: Option<&str>,
+    state: Option<&str>,
+    module_loaded: Option<bool>,
+    device_ready: Option<bool>,
+) -> (String, String) {
+    let summary = match state {
+        Some("active") => "Atomic scanout active",
+        Some("fallback") => "Legacy fallback active",
+        Some("target-ready") => "Atomic target ready",
+        Some("requested") => "Atomic scanout requested",
+        Some("legacy") => "Legacy scanout active",
+        _ => "Scanout status unknown",
+    };
+    let fact = |value: Option<bool>| match value {
+        Some(true) => "ready",
+        Some(false) => "missing",
+        None => "unknown",
+    };
+    (
+        summary.to_string(),
+        format!(
+            "mode {}; module {}; device {}",
+            mode.unwrap_or("unknown"),
+            fact(module_loaded),
+            fact(device_ready)
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +219,21 @@ mod tests {
         assert_eq!(
             ConnectionOutcome::ProtocolError.label(),
             "Unexpected agent response"
+        );
+    }
+
+    #[test]
+    fn scanout_labels_keep_runtime_state_and_hardware_facts_separate() {
+        assert_eq!(
+            scanout_labels(Some("auto"), Some("active"), Some(true), Some(true)),
+            (
+                "Atomic scanout active".to_string(),
+                "mode auto; module ready; device ready".to_string()
+            )
+        );
+        assert_eq!(
+            scanout_labels(Some("auto"), Some("fallback"), Some(false), Some(false)).0,
+            "Legacy fallback active"
         );
     }
 

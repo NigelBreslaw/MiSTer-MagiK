@@ -48,6 +48,8 @@ export global DeviceState {
     in-out property <string> launcher-state: "-";
     in-out property <string> visible-owner: "-";
     in-out property <string> slint-status-freshness: "-";
+    in-out property <string> scanout-summary: "Scanout status unknown";
+    in-out property <string> scanout-detail: "mode -; module -; device -";
     in-out property <string> catalog-summary: "-";
     in-out property <string> screen-summary: "-";
     in-out property <string> input-summary: "-";
@@ -139,7 +141,7 @@ export global AnalyticsState {
     in-out property <image> framebuffer-image;
     in-out property <int> framebuffer-width: 0;
     in-out property <int> framebuffer-height: 0;
-    in-out property <string> status: "Ready to capture /dev/fb0.";
+    in-out property <string> status: "Ready for producer stream or agent capture.";
     in-out property <string> last-error: "";
     in-out property <bool> loading: false;
     in-out property <bool> has-image: false;

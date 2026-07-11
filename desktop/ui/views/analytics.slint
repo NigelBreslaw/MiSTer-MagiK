@@ -33,7 +33,7 @@ import {
     TreeViewTrailingVisual,
 } from "../../vendor/github-app/packages/primer-slint/primer.slint";
 import { LayoutTokens, PrimerColors } from "../../vendor/github-app/packages/primer-slint/tokens.slint";
-import { Actions, AnalyticsState, DirtyRectOverlay, ProfileFrameBar, ProfileFrameSegment, ProfileHeatmapCell } from "../api.slint";
+import { Actions, AnalyticsState, DeviceState, DirtyRectOverlay, ProfileFrameBar, ProfileFrameSegment, ProfileHeatmapCell } from "../api.slint";
 import { ViewTitle } from "../components/chrome.slint";
 
 export component ProfileBudgetChart {
@@ -307,10 +307,30 @@ export component AnalyticsPage {
             if root.analytics-tab-index == 0: TableContainer {
                 vertical-stretch: 1;
                 title: "Framebuffer";
-                subtitle: "Current /dev/fb0 frame from the MiSTer agent.";
+                subtitle: "Producer-side launcher frames from the MiSTer agent.";
                 primary-action-label: AnalyticsState.loading ? "Capturing..." : "Capture framebuffer";
                 primary-action-variant: ButtonVariant.default;
                 primary-action => { Actions.capture-framebuffer(); }
+
+                Rectangle {
+                    width: 100%;
+                    height: 44px;
+                    border-width: 1px;
+                    border-color: DeviceState.scanout-summary == "Atomic scanout active" ? PrimerColors.fgColor-success : PrimerColors.borderColor-default;
+                    border-radius: LayoutTokens.borderRadius-medium;
+                    background: PrimerColors.bgColor-default;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+                        cross-axis-alignment: center;
+
+                        Text { text: "Scanout"; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; }
+                        Text { text: DeviceState.scanout-summary; color: PrimerColors.fgColor-default; font-size: LayoutTokens.text-body-size-small; font-weight: LayoutTokens.base-text-weight-semibold; }
+                        Text { horizontal-stretch: 1; text: DeviceState.scanout-detail; color: PrimerColors.fgColor-muted; font-size: LayoutTokens.text-body-size-small; horizontal-alignment: right; overflow: elide; }
+                    }
+                }
 
                 HorizontalLayout {
                     height: 32px;

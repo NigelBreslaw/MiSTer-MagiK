@@ -1316,6 +1316,13 @@ fn apply_agent_status(snapshot: &mut DashboardSnapshot, status: &Value) {
     snapshot.mac_address = string_at(status, "/network/mac").unwrap_or("-").to_string();
     snapshot.main_process = process_summary(status, "MiSTer_MagiK");
     snapshot.launcher_process = process_summary(status, "mister-magik-fb");
+    let scanout = status.pointer("/scanout").unwrap_or(&Value::Null);
+    (snapshot.scanout_summary, snapshot.scanout_detail) = crate::app_state::scanout_labels(
+        string_at(scanout, "/mode"),
+        string_at(scanout, "/state"),
+        scanout.pointer("/module_loaded").and_then(Value::as_bool),
+        scanout.pointer("/device_ready").and_then(Value::as_bool),
+    );
 }
 
 fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
@@ -1342,6 +1349,18 @@ fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
     snapshot.catalog_summary = catalog_summary(slint_status);
     snapshot.screen_summary = screen_summary(slint_status);
     snapshot.input_summary = input_summary(slint_status);
+    if string_at(slint_status, "/scanout_state").is_some() {
+        (snapshot.scanout_summary, snapshot.scanout_detail) = crate::app_state::scanout_labels(
+            string_at(slint_status, "/scanout_mode"),
+            string_at(slint_status, "/scanout_state"),
+            main_status
+                .pointer("/scanout_module_loaded")
+                .and_then(Value::as_bool),
+            main_status
+                .pointer("/scanout_device_ready")
+                .and_then(Value::as_bool),
+        );
+    }
 }
 
 fn parse_sd_directory(value: &Value) -> Result<SdDirectoryListing, AgentError> {
@@ -2207,7 +2226,8 @@ mod tests {
                 "operstate": "up",
                 "mac": "02:00:00:00:00:01"
             },
-            "processes": {"MiSTer_MagiK": [10, 11], "mister-magik-fb": []}
+            "processes": {"MiSTer_MagiK": [10, 11], "mister-magik-fb": []},
+            "scanout": {"module_loaded": true, "device_ready": true, "mode": "auto", "state": "active"}
         });
 
         apply_agent_status(&mut snapshot, &status);
@@ -2221,6 +2241,11 @@ mod tests {
         assert_eq!(snapshot.mac_address, "02:00:00:00:00:01");
         assert_eq!(snapshot.main_process, "2 running (10, 11)");
         assert_eq!(snapshot.launcher_process, "not running");
+        assert_eq!(snapshot.scanout_summary, "Atomic scanout active");
+        assert_eq!(
+            snapshot.scanout_detail,
+            "mode auto; module ready; device ready"
+        );
     }
 
     #[test]
@@ -2230,8 +2255,8 @@ mod tests {
             "processes": {"MiSTer_MagiK": [10], "mister-magik-fb": [20]},
             "files": {
                 "slint_status_current": true,
-                "main_status": {"visible_owner": "fb0", "launcher_state": "LauncherActive"},
-                "slint_status": {"screen": "Home", "scene": "launcher", "catalog_ready": true, "catalog_games": 5, "catalog_systems": 2, "input_pad_count": 1, "active_pad_name": "Pad"}
+                "main_status": {"visible_owner": "fb0", "launcher_state": "LauncherActive", "scanout_module_loaded": true, "scanout_device_ready": true},
+                "slint_status": {"screen": "Home", "scene": "launcher", "catalog_ready": true, "catalog_games": 5, "catalog_systems": 2, "input_pad_count": 1, "active_pad_name": "Pad", "scanout_mode": "auto", "scanout_state": "active"}
             }
         });
         apply_magik_status(&mut snapshot, &status);
@@ -2239,6 +2264,7 @@ mod tests {
         assert_eq!(snapshot.visible_owner, "fb0");
         assert_eq!(snapshot.launcher_state, "LauncherActive");
         assert_eq!(snapshot.catalog_summary, "ready; 5 games; 2 systems");
+        assert_eq!(snapshot.scanout_summary, "Atomic scanout active");
     }
 
     #[test]
