@@ -26,12 +26,15 @@ export component LauncherTile inherits Rectangle {
 
         if subtitle != "" : Text {
             text: subtitle;
-            color: #9080a8;
-            opacity: flat-focus-style ? (focused ? 1.0 : 0.0) : 1.0;
+            color: flat-focus-style
+                ? (focused ? #9080a8ff : #9080a800)
+                : #9080a8ff;
             font-size: 8px;
             horizontal-alignment: center;
 
-            animate opacity { duration: 100ms; easing: Easing.ease-in-out; }
+            // In the RGB565 software-renderer launcher mock, animating color alpha
+            // was slightly faster than animating Text opacity for this subtitle fade.
+            animate color { duration: 100ms; easing: Easing.ease-in-out; }
         }
     }
 }
