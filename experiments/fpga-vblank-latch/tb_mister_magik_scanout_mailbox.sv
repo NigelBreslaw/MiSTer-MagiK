@@ -47,8 +47,10 @@ module tb_mister_magik_scanout_mailbox;
 	reg rvalid = 0;
 
 	reg [127:0] control;
-	reg [127:0] descriptor0;
-	reg [127:0] descriptor1;
+	reg [127:0] descriptor_a0;
+	reg [127:0] descriptor_a1;
+	reg [127:0] descriptor_b0;
+	reg [127:0] descriptor_b1;
 	reg [127:0] completion;
 	reg read_queued = 0;
 	reg [31:0] read_address = 0;
@@ -86,8 +88,10 @@ module tb_mister_magik_scanout_mailbox;
 		begin
 			case (address - BASE)
 				32'h00: read_line = control;
-				32'h40: read_line = descriptor0;
-				32'h50: read_line = descriptor1;
+				32'h40: read_line = descriptor_a0;
+				32'h50: read_line = descriptor_a1;
+				32'h80: read_line = descriptor_b0;
+				32'h90: read_line = descriptor_b1;
 				default: read_line = 128'd0;
 			endcase
 		end
@@ -140,18 +144,39 @@ module tb_mister_magik_scanout_mailbox;
 		end
 	endtask
 
+	task automatic apply_at_vblank(input [31:0] expected_sequence);
+		begin
+			@(negedge clk); vblank <= 1;
+			repeat (4) @(negedge clk);
+			vblank <= 0;
+			wait (active_sequence == expected_sequence);
+			wait (completion[31:0] == 32'h4d47434d &&
+			      completion[95:64] == expected_sequence);
+			if (completion[63:32] != EPOCH)
+				$fatal(1, "sequence %0d completion used the wrong epoch", expected_sequence);
+		end
+	endtask
+
 	initial begin
 		control = {31'd0, 1'b0, 32'd1, EPOCH, 32'h4d475343};
-		descriptor0 = {32'h02000000, 32'd1, EPOCH, 32'h4d474452};
-		descriptor1 = {4'd0, 12'd539, 4'd0, 12'd0,
+		descriptor_a0 = {32'h02000000, 32'd1, EPOCH, 32'h4d474452};
+		descriptor_a1 = {4'd0, 12'd539, 4'd0, 12'd0,
 		               4'd0, 12'd959, 4'd0, 12'd0,
 		               2'd0, 14'd1920, 4'd0, 12'd540,
 		               4'd0, 12'd960, 6'd0, 2'd2, 1'b1, 1'b0, 6'd4};
+		descriptor_b0 = {32'h03000000, 32'd0, EPOCH, 32'h4d474452};
+		descriptor_b1 = {4'd0, 12'd539, 4'd0, 12'd0,
+		               4'd0, 12'd959, 4'd0, 12'd0,
+		               2'd0, 14'd1920, 4'd0, 12'd540,
+		               4'd0, 12'd960, 6'd0, 2'd1, 1'b1, 1'b0, 6'd4};
 		completion = 0;
 
 		repeat (4) @(posedge clk);
 		reset <= 0;
 		enable <= 1;
+		if (awcache != 4'b1111 || arcache != 4'b1111 ||
+		    awuser != 5'b11111 || aruser != 5'b11111)
+			$fatal(1, "ACP transactions are not coherent cacheable accesses");
 
 		wait_pending(1);
 		if (!post_enable || post_filter || post_format != 4 || post_slot != 2 ||
@@ -159,27 +184,34 @@ module tb_mister_magik_scanout_mailbox;
 		    post_stride != 1920 || post_hmax != 959 || post_vmax != 539)
 			$fatal(1, "descriptor fields were decoded incorrectly");
 
-		@(negedge clk); vblank <= 1;
-		repeat (4) @(negedge clk);
-		vblank <= 0;
-		wait (active_sequence == 1);
-		wait (completion[31:0] == 32'h4d47434d);
-		if (completion[63:32] != EPOCH || completion[95:64] != 1)
-			$fatal(1, "completion line did not publish epoch/sequence");
+		apply_at_vblank(1);
 
 		// Publish a torn descriptor. The control line changes before its
 		// descriptor, so the first poll must reject it. Once both match the
 		// stable re-read accepts sequence 2.
-		control[95:64] = 2;
+		control = {31'd0, 1'b1, 32'd2, EPOCH, 32'h4d475343};
 		repeat (80) @(posedge clk);
 		if (pending)
 			$fatal(1, "torn descriptor was staged");
-		descriptor0[95:64] = 2;
+		descriptor_b0[95:64] = 2;
 		wait_pending(2);
+		if (post_slot != 1 || post_base != 32'h03000000)
+			$fatal(1, "descriptor B was not selected for sequence 2");
+		apply_at_vblank(2);
 
-		if (error_count != 0)
+		// Reuse descriptor A only after B completed, matching the kernel's
+		// alternating descriptor-bank protocol.
+		descriptor_a0 = {32'h04000000, 32'd3, EPOCH, 32'h4d474452};
+		descriptor_a1[9:8] = 2'd2;
+		control = {31'd0, 1'b0, 32'd3, EPOCH, 32'h4d475343};
+		wait_pending(3);
+		if (post_slot != 2 || post_base != 32'h04000000)
+			$fatal(1, "descriptor A was not reused for sequence 3");
+		apply_at_vblank(3);
+
+		if (apply_count != 3 || error_count != 0)
 			$fatal(1, "unexpected AXI errors: %0d", error_count);
-		$display("PASS: coherent mailbox stage, vblank apply, completion, tear rejection");
+		$display("PASS: coherent ACP attributes, B/A/B staging, vblank apply, completion, tear rejection");
 		$finish;
 	end
 endmodule
