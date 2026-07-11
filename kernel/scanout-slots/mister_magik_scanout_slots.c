@@ -119,7 +119,7 @@ static ssize_t probe_read(struct file *file, char __user *buf, size_t len,
 
 	for (i = 0; i < REGION_COUNT; i++) {
 		used += scnprintf(tmp + used, 4096 - used,
-				  "scanout_slots_region_tsv\tindex=%d\tname=%s\tavailable=1\tphys=0x%08lx\tlen=%lu\tdma_owned=0\n",
+				  "scanout_slots_region_tsv\tindex=%d\tname=%s\tavailable=1\tphys=0x%08lx\tlen=%lu\n",
 				  i, regions[i].name, regions[i].phys, regions[i].len);
 	}
 

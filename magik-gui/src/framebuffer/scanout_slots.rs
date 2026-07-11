@@ -32,7 +32,6 @@ pub struct ScanoutSlotsRegion {
     pub available: bool,
     pub phys: String,
     pub len: usize,
-    pub dma_owned: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,9 +64,6 @@ pub enum ScanoutSlotsError {
         name: String,
         len: usize,
         required: usize,
-    },
-    RegionIsDmaOwned {
-        name: String,
     },
     InvalidGeometry(String),
     SourceTooShort {
@@ -115,12 +111,9 @@ impl std::fmt::Display for ScanoutSlotsError {
                 f,
                 "scanout slots region {name} has {len} bytes, need {required}"
             ),
-            Self::RegionIsDmaOwned { name } => {
-                write!(f, "scanout slots region {name} is plugin-owned DMA memory")
-            }
-            Self::InvalidGeometry(e) => write!(f, "invalid plugin hidden framebuffer geometry: {e}"),
+            Self::InvalidGeometry(e) => write!(f, "invalid scanout-slot framebuffer geometry: {e}"),
             Self::SourceTooShort { needed, actual } => {
-                write!(f, "plugin hidden source has {actual} pixels, need {needed}")
+                write!(f, "scanout-slot source has {actual} pixels, need {needed}")
             }
             Self::MmapFailed(e) => write!(f, "scanout slots mmap failed: {e}"),
             Self::MmapReturnedNull => write!(f, "scanout slots mmap returned a null address"),
@@ -193,7 +186,6 @@ pub fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
     let mut available = None;
     let mut phys = None;
     let mut len = None;
-    let mut dma_owned = None;
     for field in line.split('\t').skip(1) {
         let (key, value) = field.split_once('=')?;
         match key {
@@ -202,7 +194,6 @@ pub fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
             "available" => available = Some(value == "1"),
             "phys" => phys = Some(value.to_string()),
             "len" => len = value.parse::<usize>().ok(),
-            "dma_owned" => dma_owned = Some(value == "1"),
             _ => {}
         }
     }
@@ -212,7 +203,6 @@ pub fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
         available: available?,
         phys: phys?,
         len: len?,
-        dma_owned: dma_owned?,
     })
 }
 
@@ -584,9 +574,6 @@ fn scanout_hidden_region(
     if !region.available {
         return Err(ScanoutSlotsError::RegionUnavailable { name });
     }
-    if region.dma_owned {
-        return Err(ScanoutSlotsError::RegionIsDmaOwned { name });
-    }
     if region.len < required_len {
         return Err(ScanoutSlotsError::RegionTooSmall {
             name,
@@ -607,8 +594,8 @@ mod tests {
         parse_scanout_slots_metadata(
             "\
 scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
-scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
-scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\tdma_owned=0\n",
+scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\n\
+scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\n",
         )
         .unwrap()
     }
@@ -644,7 +631,7 @@ scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000
     }
 
     #[test]
-    fn hidden_region_selects_only_available_non_dma_slots() {
+    fn hidden_region_selects_available_slots() {
         let metadata = metadata();
         let region = scanout_hidden_region(
             &metadata,

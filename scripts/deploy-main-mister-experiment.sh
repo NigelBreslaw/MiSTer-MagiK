@@ -52,7 +52,7 @@ done
 
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik-fb"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
-PLUGIN_KO="$ROOT/build/plugin-probe/mister_magik_scanout_slots.ko"
+PLUGIN_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 LATCH_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_scanout_slots.ko"
 LATCH_RBF_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
@@ -72,7 +72,7 @@ fi
 
 if [[ ! -f "$PLUGIN_KO" ]]; then
   echo "ERROR: missing production scanout module: $PLUGIN_KO" >&2
-  echo "Build it with scripts/build-plugin-probe-module.sh before deploying production latch boot." >&2
+  echo "Build it with scripts/build-scanout-slots-module.sh before deploying production latch boot." >&2
   exit 1
 fi
 if [[ ! -f "$LATCH_RBF" ]]; then

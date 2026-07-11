@@ -26,9 +26,9 @@
 //!                        benchmark scanout slots mappings
 //!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
 //!     fpga-latch-post-report
-//!                        fill one plugin hidden slot and post it through FPGA latch
+//!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
-//!                        fill plugin hidden slots and vblank-latch them in FPGA
+//!                        fill scanout slots and vblank-latch them in FPGA
 //!     library-sql        inspect the SQLite library cache without sqlite3(1)
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -1084,7 +1084,6 @@ struct ScanoutSlotsRegion {
     available: bool,
     phys: String,
     len: usize,
-    dma_owned: bool,
 }
 
 #[cfg(feature = "diagnostics")]
@@ -1110,7 +1109,7 @@ fn run_scanout_slots_map_report() {
     let metadata = match read_scanout_slots_metadata() {
         Ok(metadata) => metadata,
         Err(e) => {
-            crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=read_probe\terror={e}");
+            crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=read_slots\terror={e}");
             std::process::exit(1);
         }
     };
@@ -1119,21 +1118,50 @@ fn run_scanout_slots_map_report() {
     }
 
     let regions = parse_scanout_slots_regions(&metadata);
-    if regions.is_empty() {
-        crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=parse_regions\terror=no regions");
+    if regions.len() != 2 {
+        crate::ui_errln!(
+            "scanout_slots_map_report\tfailed\tstage=parse_regions\terror=expected 2 regions, got {}",
+            regions.len()
+        );
         std::process::exit(1);
     }
-    for region in regions {
+    for region in &regions {
         let probe = ScanoutSlotsByteRange::probe(region.index, region.len);
+        let ok = probe.is_ok();
         crate::ui_logln!(
             "scanout_slots_map_mmap_tsv\tindex={}\tname={}\tavailable={}\trequested_len={}\tok={}\terror={}",
             region.index,
             region.name,
             bool_tsv(region.available),
             region.len,
-            bool_tsv(probe.is_ok()),
+            bool_tsv(ok),
             probe.err().map(|e| e.to_string()).unwrap_or_default()
         );
+        if !ok {
+            std::process::exit(1);
+        }
+    }
+
+    let invalid_index = ScanoutSlotsByteRange::probe(regions.len(), 4096);
+    let oversized = ScanoutSlotsByteRange::probe(0, regions[0].len.saturating_add(4096));
+    let invalid_index_rejected = invalid_index.is_err();
+    let oversized_rejected = oversized.is_err();
+    crate::ui_logln!(
+        "scanout_slots_map_reject_tsv\tcase=invalid-index\trejected={}\terror={}",
+        bool_tsv(invalid_index_rejected),
+        invalid_index
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default()
+    );
+    crate::ui_logln!(
+        "scanout_slots_map_reject_tsv\tcase=oversized\trejected={}\terror={}",
+        bool_tsv(oversized_rejected),
+        oversized.err().map(|e| e.to_string()).unwrap_or_default()
+    );
+    if !invalid_index_rejected || !oversized_rejected {
+        crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=reject_invalid_mapping");
+        std::process::exit(1);
     }
 }
 
@@ -1525,12 +1553,11 @@ fn run_scanout_slots_map_bandwidth() {
         }
     };
     for region in parse_scanout_slots_regions(&metadata) {
-        let case = format!("plugin-{}", region.name);
+        let case = format!("scanout-slots-{}", region.name);
         crate::ui_logln!(
-            "scanout_slots_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}\tdma_owned={}",
+            "scanout_slots_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}",
             region.index,
-            region.phys,
-            bool_tsv(region.dma_owned)
+            region.phys
         );
         if !region.available {
             print_scanout_slots_bandwidth_skip(&case, "region unavailable");
@@ -1604,7 +1631,7 @@ fn run_scanout_slots_map_bandwidth() {
             }
             Err(e) => print_scanout_slots_bandwidth_error(
                 "scanout-slots-hidden-copy-full-frame-buffer1",
-                &format!("open plugin hidden: {e}"),
+                &format!("open scanout slot: {e}"),
             ),
         }
     }
@@ -1660,7 +1687,6 @@ fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
     let mut available = None;
     let mut phys = None;
     let mut len = None;
-    let mut dma_owned = None;
     for field in line.split('\t').skip(1) {
         let (key, value) = field.split_once('=')?;
         match key {
@@ -1669,7 +1695,6 @@ fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
             "available" => available = Some(value == "1"),
             "phys" => phys = Some(value.to_string()),
             "len" => len = value.parse::<usize>().ok(),
-            "dma_owned" => dma_owned = Some(value == "1"),
             _ => {}
         }
     }
@@ -1679,7 +1704,6 @@ fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
         available: available?,
         phys: phys?,
         len: len?,
-        dma_owned: dma_owned?,
     })
 }
 
@@ -1933,7 +1957,7 @@ impl ScanoutSlotsByteRange {
         if len == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "zero-length plugin range",
+                "zero-length scanout-slot range",
             ));
         }
         let device = OpenOptions::new()
@@ -1943,7 +1967,10 @@ impl ScanoutSlotsByteRange {
         let offset = index
             .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
             .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "plugin offset overflow")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "scanout-slot offset overflow",
+                )
             })?;
         // SAFETY: fd refers to the scanout slots misc device; mapping length is
         // requested by diagnostics and unmapped in Drop.
@@ -1967,7 +1994,7 @@ impl ScanoutSlotsByteRange {
             }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                "plugin range mmap returned null",
+                "scanout-slot mmap returned null",
             ));
         }
         Ok(Self {
@@ -2458,8 +2485,8 @@ mod tests {
     fn scanout_slots_region_parser_reads_module_metadata() {
         let metadata = "\
 scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
-scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
-scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\tdma_owned=0\n";
+scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\n\
+scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\n";
 
         let regions = parse_scanout_slots_regions(metadata);
 
@@ -2472,7 +2499,6 @@ scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000
                     available: true,
                     phys: "0x22800000".to_string(),
                     len: 1_036_800,
-                    dma_owned: false,
                 },
                 ScanoutSlotsRegion {
                     index: 1,
@@ -2480,7 +2506,6 @@ scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000
                     available: true,
                     phys: "0x23000000".to_string(),
                     len: 1_036_800,
-                    dma_owned: false,
                 },
             ]
         );
