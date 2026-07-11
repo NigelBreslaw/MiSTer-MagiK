@@ -326,7 +326,7 @@ pub fn run_ui(f: &mut Fpga) {
     }
 
     let window = MinimalSoftwareWindow::new(
-        if std::env::var("MISTER_TRUE_ZERO_COPY").ok().as_deref() == Some("1") {
+        if mister_magik_fb::framebuffer::plugin_probe::configured_scanout_mode().wants_atomic() {
             RepaintBufferType::SwappedBuffers
         } else {
             RepaintBufferType::ReusedBuffer
