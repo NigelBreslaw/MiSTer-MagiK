@@ -996,15 +996,15 @@ fn build_catalog_from_scan_with_sources(
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
     let mut playable_counts = HashMap::<String, usize>::new();
-    let mut manifest_backed_systems = HashSet::<String>::new();
+    let manifest_backed_systems = scan
+        .profiles
+        .iter()
+        .filter(|profile| profile.provenance.kind != crate::launch_profiles::RuleSourceKind::ConfStr)
+        .map(|profile| profile.system_id.clone())
+        .collect::<HashSet<_>>();
     for discovery in discoveries.values() {
         let system_id = catalog_system_id_for_discovery(discovery);
         *playable_counts.entry(system_id.clone()).or_default() += 1;
-        if !profile_id_for_discovery(discovery)
-            .is_some_and(|profile_id| profile_id.starts_with("runtime-"))
-        {
-            manifest_backed_systems.insert(system_id);
-        }
     }
     let promoted_systems = playable_counts
         .iter()

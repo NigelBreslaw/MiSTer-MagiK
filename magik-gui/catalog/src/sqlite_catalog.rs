@@ -2413,18 +2413,18 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
         let discovery_total = discoveries.len();
         let mut playable_counts = HashMap::<String, usize>::new();
-        let mut manifest_backed_systems = HashSet::<String>::new();
+        let manifest_backed_systems = scan
+            .profiles
+            .iter()
+            .filter(|profile| profile.provenance.kind != RuleSourceKind::ConfStr)
+            .map(|profile| profile.system_id.clone())
+            .collect::<HashSet<_>>();
         for discovery in discoveries.values() {
             if is_raw_arcade_zip_set_discovery(discovery) {
                 continue;
             }
             let system_id = catalog_system_id_for_discovery(discovery);
             *playable_counts.entry(system_id.clone()).or_default() += 1;
-            if !profile_id_for_discovery(discovery)
-                .is_some_and(|profile_id| profile_id.starts_with("runtime-"))
-            {
-                manifest_backed_systems.insert(system_id);
-            }
         }
         let promoted_systems = playable_counts
             .iter()

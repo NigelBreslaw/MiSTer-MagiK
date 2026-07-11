@@ -1690,7 +1690,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1755,7 +1755,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("query launcher");
-        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1921,7 +1921,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("query spectrum launch target");
-        assert_eq!((systems, games, launcher_rows), (1, 1, 1));
+        assert_eq!((systems, games, launcher_rows), (0, 1, 0));
         assert_eq!(launch_target, ("load-file".to_string(), 1, 1));
         let _ = std::fs::remove_dir_all(root);
     }
