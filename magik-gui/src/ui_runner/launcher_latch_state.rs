@@ -195,6 +195,15 @@ impl TwoBufferLatchState {
         Some(self.plan_for_slot(slot_index, input))
     }
 
+    pub(super) fn plan_writable_slot(
+        &self,
+        slot_index: u8,
+        input: LauncherFramePlan,
+    ) -> Option<LatchPresentPlan> {
+        (self.slot(slot_index).hardware == LatchSlotHardwareState::Writable)
+            .then(|| self.plan_for_slot(slot_index, input))
+    }
+
     pub(super) fn mark_post_success(&mut self, plan: LatchPresentPlan) {
         let slot_index = plan.slot_index;
         let other_index = other_slot(slot_index);
@@ -526,6 +535,29 @@ mod tests {
             .expect("second slot");
         assert_eq!(second.slot_index, 2);
         assert_eq!(second.restore_rects, DirtyRectList::from_one(full()));
+    }
+
+    #[test]
+    fn acquired_scanout_slot_overrides_legacy_next_slot_preference() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+
+        let plan = state
+            .plan_writable_slot(2, input(Some(full()), None, None, None, None))
+            .expect("acquired slot is writable");
+
+        assert_eq!(plan.slot_index, 2);
+        assert_eq!(plan.restore_rects, DirtyRectList::from_one(full()));
+    }
+
+    #[test]
+    fn acquired_scanout_slot_must_still_be_writable() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        state.sync_hardware(Some(1), 7, false, 0);
+
+        assert!(state
+            .plan_writable_slot(1, input(Some(full()), None, None, None, None))
+            .is_none());
     }
 
     #[test]
