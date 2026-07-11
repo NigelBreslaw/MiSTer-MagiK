@@ -8,6 +8,7 @@ use crate::library_db::{
 };
 use crate::media_metadata;
 use crate::prepared_collections::PreparedLaunchProvenance;
+use crate::prepared_collections::{self, PreparedCollectionId};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
@@ -245,6 +246,9 @@ pub(crate) fn discovery_from_profile_file(
                     .display()
                     .to_string()
             });
+            let prepared = (profile.system_id == "dos"
+                && prepared_collections::validate_0mhz_mgl(&file.path).is_ok())
+            .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
             return GameDiscovery {
                 source_path: source_path.clone(),
                 launch_ref: source_path.clone(),
@@ -265,7 +269,7 @@ pub(crate) fn discovery_from_profile_file(
                 setname,
                 parent: None,
                 covered_payload_path,
-                prepared: None,
+                prepared,
                 confidence: DiscoveryConfidence::PayloadPath,
             };
         }
@@ -598,9 +602,11 @@ mod tests {
         let dos_dir = root.join("_DOS Games");
         std::fs::create_dir_all(&dos_dir).expect("create dos dir");
         let path = dos_dir.join("Doom (Ultimate).mgl");
+        let payload = dos_dir.join("Doom.vhd");
+        std::fs::write(&payload, b"vhd").expect("write DOS payload");
         std::fs::write(
             &path,
-            r#"<mistergamelist><rbf>AO486</rbf><file delay="1" type="s"/></mistergamelist>"#,
+            r#"<mistergamedescription><rbf>AO486</rbf><file delay="1" type="s" index="2" path="Doom.vhd"/><reset/></mistergamedescription>"#,
         )
         .expect("write dos mgl fixture");
         let meta = std::fs::metadata(&path).expect("stat dos mgl fixture");
@@ -620,6 +626,10 @@ mod tests {
         assert_eq!(discovery.platform_id, "dos");
         assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
         assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
+        assert_eq!(
+            discovery.prepared.map(|value| value.collection_id),
+            Some(PreparedCollectionId::ZeroMhz)
+        );
     }
 
     #[test]

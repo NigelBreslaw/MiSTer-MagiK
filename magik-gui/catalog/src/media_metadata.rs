@@ -237,6 +237,21 @@ pub(crate) struct MglMetadata {
     pub(crate) file_path: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MglFileAction {
+    pub(crate) path: String,
+    pub(crate) index: Option<u8>,
+    pub(crate) kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct MglInspection {
+    pub(crate) rbf: Option<String>,
+    pub(crate) setname: Option<String>,
+    pub(crate) files: Vec<MglFileAction>,
+    pub(crate) reset_count: usize,
+}
+
 pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     let file = File::open(path).ok()?;
     parse_mra_metadata_xml_reader(BufReader::new(file.take(MRA_PREFIX_BYTES as u64)))
@@ -249,6 +264,116 @@ pub(crate) fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
         .read_to_end(&mut data)
         .ok()?;
     parse_mgl_metadata_xml(&String::from_utf8_lossy(&data))
+}
+
+pub(crate) fn inspect_mgl(path: &Path) -> Result<MglInspection, String> {
+    let file = File::open(path).map_err(|e| format!("open MGL {}: {e}", path.display()))?;
+    let mut data = Vec::with_capacity(MGL_PREFIX_BYTES);
+    file.take(MGL_PREFIX_BYTES as u64)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("read MGL {}: {e}", path.display()))?;
+    inspect_mgl_xml(&String::from_utf8_lossy(&data))
+        .map_err(|e| format!("inspect MGL {}: {e}", path.display()))
+}
+
+fn inspect_mgl_xml(text: &str) -> Result<MglInspection, String> {
+    let mut reader = XmlReader::from_str(text);
+    let mut inspection = MglInspection::default();
+    let mut text_tag: Option<&'static str> = None;
+    let mut text_value = String::new();
+    let mut pending_file: Option<MglFileAction> = None;
+    let mut saw_root = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.name();
+                if name
+                    .as_ref()
+                    .eq_ignore_ascii_case(b"mistergamedescription")
+                    || name.as_ref().eq_ignore_ascii_case(b"mistergamelist")
+                {
+                    saw_root = true;
+                } else if name.as_ref().eq_ignore_ascii_case(b"rbf") {
+                    text_tag = Some("rbf");
+                    text_value.clear();
+                } else if name.as_ref().eq_ignore_ascii_case(b"setname") {
+                    text_tag = Some("setname");
+                    text_value.clear();
+                } else if name.as_ref().eq_ignore_ascii_case(b"file") {
+                    pending_file = Some(mgl_file_action_from_element(&e));
+                    text_tag = Some("file");
+                    text_value.clear();
+                } else if name.as_ref().eq_ignore_ascii_case(b"reset") {
+                    inspection.reset_count = inspection.reset_count.saturating_add(1);
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if e.name().as_ref().eq_ignore_ascii_case(b"file") {
+                    let action = mgl_file_action_from_element(&e);
+                    if !action.path.is_empty() {
+                        inspection.files.push(action);
+                    }
+                } else if e.name().as_ref().eq_ignore_ascii_case(b"reset") {
+                    inspection.reset_count = inspection.reset_count.saturating_add(1);
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if text_tag.is_some() {
+                    text_value.push_str(
+                        &e.xml10_content()
+                            .map_err(|error| format!("decode text: {error}"))?,
+                    );
+                }
+            }
+            Ok(Event::CData(e)) => {
+                if text_tag.is_some() {
+                    text_value.push_str(
+                        &e.xml10_content()
+                            .map_err(|error| format!("decode CDATA: {error}"))?,
+                    );
+                }
+            }
+            Ok(Event::End(e)) => {
+                if e.name().as_ref().eq_ignore_ascii_case(b"rbf") && text_tag == Some("rbf") {
+                    set_optional_trimmed(&mut inspection.rbf, &text_value);
+                    text_tag = None;
+                } else if e.name().as_ref().eq_ignore_ascii_case(b"setname")
+                    && text_tag == Some("setname")
+                {
+                    set_optional_trimmed(&mut inspection.setname, &text_value);
+                    text_tag = None;
+                } else if e.name().as_ref().eq_ignore_ascii_case(b"file")
+                    && text_tag == Some("file")
+                {
+                    if let Some(mut action) = pending_file.take() {
+                        if action.path.is_empty() {
+                            action.path = text_value.trim().to_string();
+                        }
+                        if !action.path.is_empty() {
+                            inspection.files.push(action);
+                        }
+                    }
+                    text_tag = None;
+                }
+                text_value.clear();
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => return Err(format!("invalid XML: {error}")),
+            _ => {}
+        }
+    }
+    if !saw_root {
+        return Err("missing mistergamedescription root".to_string());
+    }
+    Ok(inspection)
+}
+
+fn mgl_file_action_from_element(element: &BytesStart<'_>) -> MglFileAction {
+    MglFileAction {
+        path: xml_attr_value(element, b"path").unwrap_or_default(),
+        index: xml_attr_value(element, b"index").and_then(|value| value.parse().ok()),
+        kind: xml_attr_value(element, b"type"),
+    }
 }
 
 pub(crate) fn neogeo_mgl_setname(mgl_path: &Path, payload_path: Option<&str>) -> Option<String> {
