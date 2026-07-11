@@ -40,6 +40,7 @@ def verify(metadata_path: Path) -> dict[str, str]:
         "format", "magik_commit", "source_commit", "patch_sha256",
         "latch_rtl_sha256", "quartus_seed", "quartus_version",
         "workflow_url", "rbf_file", "rbf_sha256",
+        "signoff_valid",
     }
     missing = sorted(required - fields.keys())
     if missing:
@@ -60,6 +61,8 @@ def verify(metadata_path: Path) -> dict[str, str]:
         raise ValueError("release must use Quartus 17.0")
     if not fields["workflow_url"].startswith("https://"):
         raise ValueError("release workflow URL is not immutable evidence")
+    if fields["signoff_valid"] != "1":
+        raise ValueError("Quartus custom-delta signoff is not valid")
 
     root = metadata_path.parent
     rbf = root / fields["rbf_file"]
@@ -68,6 +71,8 @@ def verify(metadata_path: Path) -> dict[str, str]:
     reports = {key.removeprefix("report_sha256."): value for key, value in fields.items() if key.startswith("report_sha256.")}
     if not reports:
         raise ValueError("manifest contains no Quartus reports")
+    if "reports/quartus-delta-signoff.tsv" not in reports:
+        raise ValueError("manifest does not bind the Quartus delta-signoff report")
     for relative, expected in reports.items():
         if not SHA256_RE.fullmatch(expected):
             raise ValueError(f"invalid report SHA-256: {relative}")

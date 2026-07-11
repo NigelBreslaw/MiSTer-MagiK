@@ -103,7 +103,7 @@ fi
 
 cleanup() {
   set +e
-  "$MISTER" run "rm -f /tmp/mister-magik/fpga-latch-qualification.env; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
+  "$MISTER" run "rm -f /media/fat/mister-magik/launcher.env /tmp/mister-magik/fpga-latch-qualification.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
   set -e
 }
 trap cleanup EXIT INT TERM
@@ -116,11 +116,13 @@ BEFORE="$REMOTE_STATE"
 
 echo "==> Deliberate over-post and recovery"
 OVERFLOW="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_PATTERN_PERIOD_US=0 '$REMOTE_BIN' fpga-latch-pattern")"
-AFTER_OVERFLOW="$($MISTER run "'$REMOTE_BIN' fpga-latch-report")"
+AFTER_OVERFLOW="$($MISTER run "set -e; for i in \$(seq 1 10); do report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0'; then echo \"\$report\"; exit 0; fi; sleep 1; done; echo \"\$report\"; exit 1")"
 require_counter_advance "$BEFORE" "$AFTER_OVERFLOW" drop_count
 RECOVERY="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_PATTERN_PERIOD_US=16667 '$REMOTE_BIN' fpga-latch-pattern")"
 grep -q 'unsupported_posts=0' <<<"$RECOVERY"
-grep -q 'final_pending=0' <<<"$RECOVERY"
+$MISTER run "set -e; for i in \$(seq 1 10); do report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0'; then exit 0; fi; sleep 1; done; echo \"\$report\"; exit 1" >/dev/null
+$MISTER run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
+$MISTER run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiK 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0' && echo \"\$report\" | grep -q 'drop_count=0'; then exit 0; fi; fi; sleep 1; done; echo \"\${report:-no latch report}\"; exit 1" >/dev/null
 
 echo "==> Motion gates at both framebuffer geometries"
 for geometry in 960x540 1280x720; do

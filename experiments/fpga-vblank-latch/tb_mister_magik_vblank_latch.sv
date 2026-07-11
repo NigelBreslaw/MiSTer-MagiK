@@ -274,10 +274,11 @@ module tb_mister_magik_vblank_latch;
 		// Partial and unrelated payloads can stage data but cannot post a route.
 		send_word(SET_LATCH, 4'd0, 16'hC02A);
 		send_word(SET_LATCH, 4'd1, 16'h5678);
+		send_word(SET_LATCH, 4'd15, 16'hFFFF);
 		send_word(8'h56, 4'd10, 16'h9999);
 		idle_cycles(4);
 		if(pending || (post_count != 0) || (flip_count != 0) || (apply_count != 0))
-			fail("partial or unrelated command posted a route");
+			fail("partial, out-of-range, or unrelated word posted a route");
 		requirement_coverage[2] = 1'b1; // LATCH-003
 
 		// Exercise every payload word and prove no edge means no application.
