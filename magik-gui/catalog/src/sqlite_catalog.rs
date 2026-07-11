@@ -1848,7 +1848,11 @@ fn write_sqlite_scan_with_sources_inner(
             mount_kind TEXT NOT NULL,
             source TEXT NOT NULL,
             catalog_status TEXT NOT NULL,
-            reason TEXT NOT NULL
+            reason TEXT NOT NULL,
+            evidence_source TEXT NOT NULL,
+            evidence_confidence TEXT NOT NULL,
+            content_role TEXT NOT NULL,
+            suppression_reason TEXT NOT NULL
         );
         CREATE TABLE game_rows (
             game_key_id INTEGER PRIMARY KEY,
@@ -2341,8 +2345,8 @@ fn write_sqlite_scan_with_sources_inner(
         let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
-                "INSERT INTO catalog_audit(ordinal,core_id,core_path,expected_game_dir,extensions,mount_kind,source,catalog_status,reason)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO catalog_audit(ordinal,core_id,core_path,expected_game_dir,extensions,mount_kind,source,catalog_status,reason,evidence_source,evidence_confidence,content_role,suppression_reason)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             )
             .map_err(|e| format!("prepare catalog audit insert: {e}"))?;
         for (idx, row) in scan.audit_rows.iter().enumerate() {
@@ -2355,7 +2359,11 @@ fn write_sqlite_scan_with_sources_inner(
                 row.mount_kind.as_str(),
                 row.source.as_str(),
                 row.catalog_status.as_str(),
-                row.reason.as_str()
+                row.reason.as_str(),
+                row.evidence_source(),
+                row.evidence_confidence(),
+                row.content_role(),
+                row.suppression_reason()
             ])
             .map_err(|e| format!("insert catalog audit: {e}"))?;
         }
@@ -2402,9 +2410,35 @@ fn write_sqlite_scan_with_sources_inner(
             )
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
         let discovery_total = discoveries.len();
+        let mut playable_counts = HashMap::<String, usize>::new();
+        let mut manifest_backed_systems = HashSet::<String>::new();
+        for discovery in discoveries.values() {
+            if is_raw_arcade_zip_set_discovery(discovery) {
+                continue;
+            }
+            let system_id = catalog_system_id_for_discovery(discovery);
+            *playable_counts.entry(system_id.clone()).or_default() += 1;
+            if !profile_id_for_discovery(discovery)
+                .is_some_and(|profile_id| profile_id.starts_with("runtime-"))
+            {
+                manifest_backed_systems.insert(system_id);
+            }
+        }
+        let promoted_systems = playable_counts
+            .iter()
+            .filter_map(|(system_id, count)| {
+                (*count >= 2
+                    || manifest_backed_systems.contains(system_id)
+                    || matches!(system_id.as_str(), "arcade" | "neogeo"))
+                    .then_some(system_id.clone())
+            })
+            .collect::<HashSet<_>>();
         let mut system_rows = HashMap::<String, (String, String)>::new();
         for discovery in discoveries.values() {
             let system_id = catalog_system_id_for_discovery(discovery);
+            if !promoted_systems.contains(&system_id) {
+                continue;
+            }
             system_rows.entry(system_id.clone()).or_insert_with(|| {
                 (
                     system_title_for_discovery(discovery, &system_id),
@@ -2485,6 +2519,7 @@ fn write_sqlite_scan_with_sources_inner(
             if is_launcher_launch_ref(&plan_launch_ref)
                 && system_id != "arcade"
                 && system_id != "neogeo"
+                && promoted_systems.contains(&system_id)
             {
                 let software_family_key = software_identity
                     .as_ref()
