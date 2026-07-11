@@ -439,7 +439,6 @@ static vm_fault_t scanout_vma_fault(struct vm_fault *vmf)
 	unsigned long slot = (unsigned long)vma->vm_private_data - 1;
 	unsigned long slot_page = slot * (scanout_map_bytes >> PAGE_SHIFT);
 	unsigned long page_offset;
-	struct page *page;
 	vm_fault_t ret;
 
 	if (slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT || vmf->pgoff < slot_page)
@@ -453,8 +452,8 @@ static vm_fault_t scanout_vma_fault(struct vm_fault *vmf)
 		mutex_unlock(&scanout_lock);
 		return VM_FAULT_SIGBUS;
 	}
-	page = virt_to_page((char *)scanout_virt[slot] + (page_offset << PAGE_SHIFT));
-	ret = vmf_insert_page(vma, vmf->address, page);
+	ret = vmf_insert_pfn(vma, vmf->address,
+		virt_to_pfn((char *)scanout_virt[slot] + (page_offset << PAGE_SHIFT)));
 	mutex_unlock(&scanout_lock);
 	return ret;
 }
@@ -472,7 +471,7 @@ static int scanout_mmap(struct file *file, struct vm_area_struct *vma)
 	if (slot >= MISTER_MAGIK_SCANOUT_SLOT_COUNT ||
 	    byte_offset % scanout_map_bytes || size > scanout_slot_bytes)
 		return -EINVAL;
-	vma->vm_flags |= VM_MIXEDMAP | VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags |= VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP;
 	vma->vm_ops = &scanout_vm_ops;
 	vma->vm_private_data = (void *)(unsigned long)(slot + 1);
 	return 0;
@@ -608,8 +607,9 @@ static int __init probe_init(void)
 	else
 		probe_registered = true;
 
-	pr_info("mister_magik_scanout: loaded /dev/%s; compatibility_probe=%u version=%u\n",
-		SCANOUT_DEVICE_NAME, probe_registered ? 1 : 0, PROBE_VERSION);
+	pr_info("mister_magik_scanout: loaded /dev/%s; compatibility_probe=%u version=%u mailbox_phys=0x%08x\n",
+		SCANOUT_DEVICE_NAME, probe_registered ? 1 : 0, PROBE_VERSION,
+		mailbox_phys);
 	return 0;
 }
 
