@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
-pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 2;
+pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 3;
 
 pub fn storage_roots_for_library_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut storage_roots = Vec::new();
@@ -116,12 +116,40 @@ pub(crate) fn validate_0mhz_mgl(path: &Path) -> Result<MglInspection, String> {
         return Err("0MHz MGL has no reset action".to_string());
     }
     for action in &inspection.files {
-        let payload = resolve_mgl_payload_path(path, &action.path);
+        let payload = resolve_0mhz_payload_path(path, &action.path);
         if !payload.is_file() {
-            return Err(format!("0MHz MGL payload is missing: {}", payload.display()));
+            return Err(format!(
+                "0MHz MGL payload is missing: {}",
+                payload.display()
+            ));
         }
     }
     Ok(inspection)
+}
+
+pub(crate) fn resolve_0mhz_payload_path(mgl_path: &Path, payload: &str) -> PathBuf {
+    let local = resolve_mgl_payload_path(mgl_path, payload);
+    if local.is_file() || payload.starts_with('/') || payload.starts_with("games/") {
+        return local;
+    }
+
+    let Some(dos_games_root) = mgl_path.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("_DOS Games"))
+    }) else {
+        return local;
+    };
+    let Some(storage_root) = dos_games_root.parent() else {
+        return local;
+    };
+    let collection_payload = storage_root.join("games/AO486").join(payload);
+    if collection_payload.is_file() {
+        collection_payload
+    } else {
+        local
+    }
 }
 
 pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String> {
@@ -282,7 +310,10 @@ pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
         })
     {
         if !path.is_file() {
-            return Err(format!("prepared C64 payload is missing: {}", path.display()));
+            return Err(format!(
+                "prepared C64 payload is missing: {}",
+                path.display()
+            ));
         }
         return Ok(true);
     }
@@ -396,6 +427,36 @@ mod tests {
     }
 
     #[test]
+    fn zero_mhz_validation_resolves_split_launcher_and_payload_roots() {
+        let storage = fixture_dir("0mhz-split-root");
+        let launchers = storage.join("_DOS Games");
+        let payload = storage.join("games/AO486/media/doom/doom.vhd");
+        std::fs::create_dir_all(&launchers).expect("create launcher root");
+        std::fs::create_dir_all(payload.parent().expect("payload parent"))
+            .expect("create payload root");
+        std::fs::write(&payload, b"vhd").expect("write payload");
+        let mgl = launchers.join("Doom.mgl");
+        std::fs::write(
+            &mgl,
+            r#"<mistergamedescription>
+                <rbf>_computer/ao486</rbf>
+                <file type="s" index="2" path="media/doom/doom.vhd"/>
+                <reset delay="1"/>
+            </mistergamedescription>"#,
+        )
+        .expect("write mgl");
+
+        let inspection = validate_0mhz_mgl(&mgl).expect("validate split 0MHz layout");
+
+        assert_eq!(inspection.files.len(), 1);
+        assert_eq!(
+            resolve_0mhz_payload_path(&mgl, &inspection.files[0].path),
+            payload
+        );
+        let _ = std::fs::remove_dir_all(storage);
+    }
+
+    #[test]
     fn zero_mhz_validation_rejects_wrong_core_missing_payload_and_reset() {
         let dir = fixture_dir("0mhz-invalid");
         let wrong_core = dir.join("wrong-core.mgl");
@@ -447,7 +508,10 @@ mod tests {
         let inspection = validate_neon68k_mgl(&mgl).expect("validate Neon68K MGL");
 
         assert_eq!(inspection.setname.as_deref(), Some("Akumajou"));
-        assert_eq!(neon68k_source_category(&mgl).as_deref(), Some("Keyboard + Mouse"));
+        assert_eq!(
+            neon68k_source_category(&mgl).as_deref(),
+            Some("Keyboard + Mouse")
+        );
 
         let missing_setname = dir.join("missing-setname.mgl");
         std::fs::write(
