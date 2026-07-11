@@ -11,7 +11,7 @@ source "$HERE/scripts/thread-sampler-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--true-zero-copy] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -65,6 +65,7 @@ stream_consumer="${MISTER_FRAMEBUFFER_STREAM_CONSUMER:-none}"
 stream_secs=""
 stream_scale="${MISTER_FRAMEBUFFER_STREAM_SCALE:-off}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
+true_zero_copy="${MISTER_TRUE_ZERO_COPY:-0}"
 cpu_profile="0"
 cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
@@ -84,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
+    --true-zero-copy) true_zero_copy="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --present-backend)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--present-backend needs fpga-vblank-latch-hidden or fb0-dirty" >&2; usage >&2; exit 2; fi
@@ -283,8 +285,11 @@ import sys
 
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-slint = data.get("runtime", {}).get("slint_status", {})
+data = json.load(f)
+slint = data.get("runtime", {}).get("slint_status")
+if not isinstance(slint, dict):
+    print("composition_gate_tsv\tvalid=0\tinvalid_reason=missing_slint_status")
+    raise SystemExit(11)
 count = int(slint.get("composition_recovery_count") or 0)
 state = slint.get("composition_state") or ""
 kind = slint.get("last_composition_invariant_kind") or ""
@@ -612,6 +617,7 @@ run_boot_prelude() {
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+    printf 'export MISTER_TRUE_ZERO_COPY=%q\n' "$true_zero_copy"
     printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
     printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
     printf 'export MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES=1\n'
@@ -776,6 +782,7 @@ else
     printf 'export MISTER_FB_PRESENT_DELAY_US=%q\n' "$present_delay_us"
     printf 'export MISTER_CATALOG_REFRESH=%q\n' "$catalog_refresh"
     printf 'export MISTER_PRESENT_BACKEND=%q\n' "$present_backend"
+    printf 'export MISTER_TRUE_ZERO_COPY=%q\n' "$true_zero_copy"
     printf 'export MISTER_FRAMEBUFFER_STREAM_SCALE=%q\n' "$stream_scale"
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
     printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
