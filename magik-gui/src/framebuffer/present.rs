@@ -1,4 +1,5 @@
 use crate::framebuffer::mapped::MappedRgb565Framebuffer;
+use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::stream;
 use crate::framebuffer::target::{
     dirty_rect_is_broad, CachedFrameView, DirectPreviewView, DirtyRect, StridedFrameRegion,
@@ -250,7 +251,7 @@ pub fn copy_direct_preview_rect_565(
 }
 
 pub fn copy_direct_preview_rect_to_hidden(
-    hidden: &mut impl crate::framebuffer::plugin_probe::Rgb565BlitTarget,
+    hidden: &mut ScanoutSlotsRgb565Framebuffer,
     view: DirectPreviewView<'_>,
     rect: DirtyRect,
 ) -> u32 {

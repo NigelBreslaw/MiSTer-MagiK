@@ -21,9 +21,9 @@
 //!                        benchmark RGB565 copies into hidden framebuffer slots
 //!     fb-map-report      report framebuffer ioctl metadata and mmap reach
 //!     fb-map-bandwidth   compare fb0 and hidden-buffer write bandwidth
-//!     plugin-map-report  report stock-kernel plugin probe metadata
-//!     plugin-map-bandwidth
-//!                        benchmark plugin probe mappings
+//!     scanout-slots-map-report  report stock-kernel scanout slots metadata
+//!     scanout-slots-map-bandwidth
+//!                        benchmark scanout slots mappings
 //!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
 //!     fpga-latch-post-report
 //!                        fill one plugin hidden slot and post it through FPGA latch
@@ -127,9 +127,9 @@ use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
-use mister_magik_fb::framebuffer::plugin_probe::PluginHiddenRgb565Framebuffer;
-#[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
+#[cfg(all(feature = "diagnostics", feature = "ui"))]
+use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::{UiDisplay, UiDisplayPlan};
 use ui_runner::launcher_display_session::LauncherDisplaySession;
@@ -325,9 +325,9 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(feature = "diagnostics")]
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
-        "plugin-map-report" => run_plugin_map_report(),
+        "scanout-slots-map-report" => run_scanout_slots_map_report(),
         #[cfg(feature = "diagnostics")]
-        "plugin-map-bandwidth" => run_plugin_map_bandwidth(),
+        "scanout-slots-map-bandwidth" => run_scanout_slots_map_bandwidth(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -1071,14 +1071,14 @@ fn run_fb_map_bandwidth() {
 }
 
 #[cfg(feature = "diagnostics")]
-const PLUGIN_PROBE_DEVICE: &str = "/dev/mister-magik-scanout-slots";
+const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
 
 #[cfg(feature = "diagnostics")]
-const PLUGIN_PROBE_REGION_OFFSET_BYTES: usize = 1024 * 1024;
+const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
 
 #[cfg(feature = "diagnostics")]
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct PluginProbeRegion {
+struct ScanoutSlotsRegion {
     index: usize,
     name: String,
     available: bool,
@@ -1088,11 +1088,11 @@ struct PluginProbeRegion {
 }
 
 #[cfg(feature = "diagnostics")]
-fn run_plugin_map_report() {
+fn run_scanout_slots_map_report() {
     match MappedRgb565Framebuffer::raw_diagnostics() {
         Ok(raw) => {
             crate::ui_logln!(
-                "plugin_map_fb0_tsv\tid={}\tsmem_start=0x{:x}\tsmem_len={}\tline_length={}\txres={}\tyres={}\txres_virtual={}\tyres_virtual={}\tbpp={}",
+                "scanout_slots_map_fb0_tsv\tid={}\tsmem_start=0x{:x}\tsmem_len={}\tline_length={}\txres={}\tyres={}\txres_virtual={}\tyres_virtual={}\tbpp={}",
                 raw.id,
                 raw.smem_start,
                 raw.smem_len,
@@ -1104,13 +1104,13 @@ fn run_plugin_map_report() {
                 raw.bits_per_pixel
             );
         }
-        Err(e) => crate::ui_logln!("plugin_map_fb0_tsv\terror={e}"),
+        Err(e) => crate::ui_logln!("scanout_slots_map_fb0_tsv\terror={e}"),
     }
 
-    let metadata = match read_plugin_probe_metadata() {
+    let metadata = match read_scanout_slots_metadata() {
         Ok(metadata) => metadata,
         Err(e) => {
-            crate::ui_errln!("plugin_map_report\tfailed\tstage=read_probe\terror={e}");
+            crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=read_probe\terror={e}");
             std::process::exit(1);
         }
     };
@@ -1118,15 +1118,15 @@ fn run_plugin_map_report() {
         crate::ui_logln!("{line}");
     }
 
-    let regions = parse_plugin_probe_regions(&metadata);
+    let regions = parse_scanout_slots_regions(&metadata);
     if regions.is_empty() {
-        crate::ui_errln!("plugin_map_report\tfailed\tstage=parse_regions\terror=no regions");
+        crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=parse_regions\terror=no regions");
         std::process::exit(1);
     }
     for region in regions {
-        let probe = PluginProbeByteRange::probe(region.index, region.len);
+        let probe = ScanoutSlotsByteRange::probe(region.index, region.len);
         crate::ui_logln!(
-            "plugin_map_mmap_tsv\tindex={}\tname={}\tavailable={}\trequested_len={}\tok={}\terror={}",
+            "scanout_slots_map_mmap_tsv\tindex={}\tname={}\tavailable={}\trequested_len={}\tok={}\terror={}",
             region.index,
             region.name,
             bool_tsv(region.available),
@@ -1197,27 +1197,6 @@ fn run_fpga_latch_report() {
         status.active_height,
         status.active_stride
     );
-    match fpga.read_magik_scanout_mailbox_status() {
-        Ok(mailbox) => crate::ui_logln!(
-            "fpga_scanout_mailbox_status_tsv\tcmd=0x{:02x}\tsupported={}\tack_high=0x{:04x}\tack_low=0x{:04x}\tcapabilities=0x{:04x}\tactive_sequence={}\tpending_sequence={}\tpending={}\tpost_slot={}\tapply_count={}\terror_count={}\tepoch=0x{:08x}",
-            fpga::MAGIK_UIO_GET_SCANOUT_MAILBOX,
-            bool_tsv(mailbox.supported()),
-            mailbox.magic_hi,
-            mailbox.magic_lo,
-            mailbox.capabilities,
-            mailbox.active_sequence,
-            mailbox.pending_sequence,
-            bool_tsv((mailbox.flags & 0x0004) != 0),
-            mailbox.flags & 0x0003,
-            mailbox.apply_count,
-            mailbox.error_count,
-            mailbox.epoch
-        ),
-        Err(e) => crate::ui_logln!(
-            "fpga_scanout_mailbox_status_tsv\tcmd=0x{:02x}\tsupported=0\terror={e}",
-            fpga::MAGIK_UIO_GET_SCANOUT_MAILBOX
-        ),
-    }
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -1227,7 +1206,7 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
     let width = 960usize;
     let height = 540usize;
     let stride_bytes = rgb565_stride_bytes(width);
-    let mut buffer = match PluginHiddenRgb565Framebuffer::open(
+    let mut buffer = match ScanoutSlotsRgb565Framebuffer::open(
         HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
         width,
         height,
@@ -1235,7 +1214,9 @@ fn run_fpga_latch_post_report(fpga: &mut Fpga) {
     ) {
         Ok(buffer) => buffer,
         Err(e) => {
-            crate::ui_errln!("fpga_latch_post_report_failed\tstage=open_plugin_buffer\terror={e}");
+            crate::ui_errln!(
+                "fpga_latch_post_report_failed\tstage=open_scanout_slots_buffer\terror={e}"
+            );
             std::process::exit(1);
         }
     };
@@ -1323,7 +1304,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
     let width = 960usize;
     let height = 540usize;
     let stride_bytes = rgb565_stride_bytes(width);
-    let mut buffer1 = match PluginHiddenRgb565Framebuffer::open(
+    let mut buffer1 = match ScanoutSlotsRgb565Framebuffer::open(
         HiddenRgb565BufferIndex::new(1).expect("hidden slot 1 index"),
         width,
         height,
@@ -1335,7 +1316,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
             std::process::exit(1);
         }
     };
-    let mut buffer2 = match PluginHiddenRgb565Framebuffer::open(
+    let mut buffer2 = match ScanoutSlotsRgb565Framebuffer::open(
         HiddenRgb565BufferIndex::new(2).expect("hidden slot 2 index"),
         width,
         height,
@@ -1493,7 +1474,7 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
 }
 
 #[cfg(feature = "diagnostics")]
-fn run_plugin_map_bandwidth() {
+fn run_scanout_slots_map_bandwidth() {
     use slint::platform::software_renderer::Rgb565Pixel;
 
     let frames = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_FRAMES")
@@ -1516,11 +1497,11 @@ fn run_plugin_map_bandwidth() {
     let source_bytes_len = frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
 
     crate::ui_logln!(
-        "plugin_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
+        "scanout_slots_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
     );
 
     crate::ui_logln!(
-        "plugin_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+        "scanout_slots_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
     );
     match Fb0ByteRange::open(frame_bytes, 0, frame_bytes) {
         Ok(mut fb0_range) => {
@@ -1528,51 +1509,56 @@ fn run_plugin_map_bandwidth() {
                 let src_bytes = rgb565_as_bytes(src, source_bytes_len);
                 fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
             });
-            print_plugin_bandwidth_result("fb0-active", &result);
+            print_scanout_slots_bandwidth_result("fb0-active", &result);
         }
-        Err(e) => print_plugin_bandwidth_error("fb0-active", &format!("open range: {e}")),
+        Err(e) => print_scanout_slots_bandwidth_error("fb0-active", &format!("open range: {e}")),
     }
 
-    let metadata = match read_plugin_probe_metadata() {
+    let metadata = match read_scanout_slots_metadata() {
         Ok(metadata) => metadata,
         Err(e) => {
-            print_plugin_bandwidth_error("plugin-probe", &format!("read probe metadata: {e}"));
+            print_scanout_slots_bandwidth_error(
+                "scanout-slots",
+                &format!("read probe metadata: {e}"),
+            );
             return;
         }
     };
-    for region in parse_plugin_probe_regions(&metadata) {
+    for region in parse_scanout_slots_regions(&metadata) {
         let case = format!("plugin-{}", region.name);
         crate::ui_logln!(
-            "plugin_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}\tdma_owned={}",
+            "scanout_slots_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}\tdma_owned={}",
             region.index,
             region.phys,
             bool_tsv(region.dma_owned)
         );
         if !region.available {
-            print_plugin_bandwidth_skip(&case, "region unavailable");
+            print_scanout_slots_bandwidth_skip(&case, "region unavailable");
             continue;
         }
         if region.len < frame_bytes {
-            print_plugin_bandwidth_skip(
+            print_scanout_slots_bandwidth_skip(
                 &case,
                 &format!("region len {} is smaller than {frame_bytes}", region.len),
             );
             continue;
         }
-        match PluginProbeByteRange::open(region.index, frame_bytes) {
+        match ScanoutSlotsByteRange::open(region.index, frame_bytes) {
             Ok(mut range) => {
                 let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
                     let src_bytes = rgb565_as_bytes(src, source_bytes_len);
                     range.copy_from(src_bytes).map_err(|e| e.to_string())
                 });
-                print_plugin_bandwidth_result(&case, &result);
+                print_scanout_slots_bandwidth_result(&case, &result);
             }
-            Err(e) => print_plugin_bandwidth_error(&case, &format!("open plugin range: {e}")),
+            Err(e) => {
+                print_scanout_slots_bandwidth_error(&case, &format!("open scanout slot: {e}"))
+            }
         }
     }
 
     crate::ui_logln!(
-        "plugin_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+        "scanout_slots_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
     );
     match HiddenRgb565BufferIndex::new(1)
         .map_err(|e| e.to_string())
@@ -1586,22 +1572,23 @@ fn run_plugin_map_bandwidth() {
                     .copy_full_frame(src, width)
                     .map_err(|e| e.to_string())
             });
-            print_plugin_bandwidth_result("hidden-dev-mem-buffer1", &result);
+            print_scanout_slots_bandwidth_result("hidden-dev-mem-buffer1", &result);
         }
-        Err(e) => {
-            print_plugin_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}"))
-        }
+        Err(e) => print_scanout_slots_bandwidth_error(
+            "hidden-dev-mem-buffer1",
+            &format!("open hidden: {e}"),
+        ),
     }
 
     #[cfg(feature = "ui")]
     {
         crate::ui_logln!(
-            "plugin_map_bandwidth_case_tsv\tcase=plugin-hidden-copy-full-frame-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
+            "scanout_slots_map_bandwidth_case_tsv\tcase=scanout-slots-hidden-copy-full-frame-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
         );
         match HiddenRgb565BufferIndex::new(1)
             .map_err(|e| e.to_string())
             .and_then(|index| {
-                PluginHiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
+                ScanoutSlotsRgb565Framebuffer::open(index, width, height, stride_bytes)
                     .map_err(|e| e.to_string())
             }) {
             Ok(mut hidden) => {
@@ -1610,10 +1597,13 @@ fn run_plugin_map_bandwidth() {
                         .copy_full_frame(src, width)
                         .map_err(|e| e.to_string())
                 });
-                print_plugin_bandwidth_result("plugin-hidden-copy-full-frame-buffer1", &result);
+                print_scanout_slots_bandwidth_result(
+                    "scanout-slots-hidden-copy-full-frame-buffer1",
+                    &result,
+                );
             }
-            Err(e) => print_plugin_bandwidth_error(
-                "plugin-hidden-copy-full-frame-buffer1",
+            Err(e) => print_scanout_slots_bandwidth_error(
+                "scanout-slots-hidden-copy-full-frame-buffer1",
                 &format!("open plugin hidden: {e}"),
             ),
         }
@@ -1648,20 +1638,20 @@ fn fill_hidden_latch_pattern(
 }
 
 #[cfg(feature = "diagnostics")]
-fn read_plugin_probe_metadata() -> std::io::Result<String> {
-    fs::read_to_string(PLUGIN_PROBE_DEVICE)
+fn read_scanout_slots_metadata() -> std::io::Result<String> {
+    fs::read_to_string(SCANOUT_SLOTS_DEVICE)
 }
 
 #[cfg(feature = "diagnostics")]
-fn parse_plugin_probe_regions(metadata: &str) -> Vec<PluginProbeRegion> {
+fn parse_scanout_slots_regions(metadata: &str) -> Vec<ScanoutSlotsRegion> {
     metadata
         .lines()
-        .filter_map(parse_plugin_probe_region)
+        .filter_map(parse_scanout_slots_region)
         .collect()
 }
 
 #[cfg(feature = "diagnostics")]
-fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
+fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
     if !line.starts_with("scanout_slots_region_tsv\t") {
         return None;
     }
@@ -1683,7 +1673,7 @@ fn parse_plugin_probe_region(line: &str) -> Option<PluginProbeRegion> {
             _ => {}
         }
     }
-    Some(PluginProbeRegion {
+    Some(ScanoutSlotsRegion {
         index: index?,
         name: name?,
         available: available?,
@@ -1927,14 +1917,14 @@ impl Drop for Fb0ByteRange {
 }
 
 #[cfg(feature = "diagnostics")]
-struct PluginProbeByteRange {
+struct ScanoutSlotsByteRange {
     mem: *mut u8,
     len: usize,
     _device: File,
 }
 
 #[cfg(feature = "diagnostics")]
-impl PluginProbeByteRange {
+impl ScanoutSlotsByteRange {
     fn probe(index: usize, len: usize) -> std::io::Result<()> {
         Self::open(index, len).map(|_| ())
     }
@@ -1949,13 +1939,13 @@ impl PluginProbeByteRange {
         let device = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(PLUGIN_PROBE_DEVICE)?;
+            .open(SCANOUT_SLOTS_DEVICE)?;
         let offset = index
-            .checked_mul(PLUGIN_PROBE_REGION_OFFSET_BYTES)
+            .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "plugin offset overflow")
             })?;
-        // SAFETY: fd refers to the plugin probe misc device; mapping length is
+        // SAFETY: fd refers to the scanout slots misc device; mapping length is
         // requested by diagnostics and unmapped in Drop.
         let mem = unsafe {
             libc::mmap(
@@ -2002,7 +1992,7 @@ impl PluginProbeByteRange {
 }
 
 #[cfg(feature = "diagnostics")]
-impl Drop for PluginProbeByteRange {
+impl Drop for ScanoutSlotsByteRange {
     fn drop(&mut self) {
         // SAFETY: mem/len come from successful mmap and are unmapped once here.
         unsafe {
@@ -2012,13 +2002,13 @@ impl Drop for PluginProbeByteRange {
 }
 
 #[cfg(feature = "diagnostics")]
-fn print_plugin_bandwidth_result(case: &str, samples: &CopySamples) {
+fn print_scanout_slots_bandwidth_result(case: &str, samples: &CopySamples) {
     if let Some(error) = &samples.error {
-        print_plugin_bandwidth_error(case, error);
+        print_scanout_slots_bandwidth_error(case, error);
         return;
     }
     crate::ui_logln!(
-        "plugin_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
+        "scanout_slots_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
         samples.frames,
         samples.bytes_per_frame,
         samples.total_bytes,
@@ -2037,15 +2027,15 @@ fn print_plugin_bandwidth_result(case: &str, samples: &CopySamples) {
 }
 
 #[cfg(feature = "diagnostics")]
-fn print_plugin_bandwidth_error(case: &str, error: &str) {
+fn print_scanout_slots_bandwidth_error(case: &str, error: &str) {
     crate::ui_logln!(
-        "plugin_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
+        "scanout_slots_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
     );
 }
 
 #[cfg(feature = "diagnostics")]
-fn print_plugin_bandwidth_skip(case: &str, reason: &str) {
-    crate::ui_logln!("plugin_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
+fn print_scanout_slots_bandwidth_skip(case: &str, reason: &str) {
+    crate::ui_logln!("scanout_slots_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
 }
 
 #[cfg(feature = "diagnostics")]
@@ -2465,40 +2455,32 @@ mod tests {
 
     #[test]
     #[cfg(feature = "diagnostics")]
-    fn plugin_probe_region_parser_reads_module_metadata() {
+    fn scanout_slots_region_parser_reads_module_metadata() {
         let metadata = "\
 scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
 scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\tdma_owned=0\n\
 scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\tdma_owned=0\n";
 
-        let regions = parse_plugin_probe_regions(metadata);
+        let regions = parse_scanout_slots_regions(metadata);
 
         assert_eq!(
             regions,
             vec![
-                PluginProbeRegion {
+                ScanoutSlotsRegion {
                     index: 0,
-                    name: "adjacent-fb-resource".to_string(),
-                    available: true,
-                    phys: "0x220fd200".to_string(),
-                    len: 1_036_800,
-                    dma_owned: false,
-                },
-                PluginProbeRegion {
-                    index: 1,
                     name: "hidden-slot-1".to_string(),
                     available: true,
                     phys: "0x22800000".to_string(),
                     len: 1_036_800,
                     dma_owned: false,
                 },
-                PluginProbeRegion {
-                    index: 3,
-                    name: "plugin-owned-dma".to_string(),
-                    available: false,
-                    phys: "0x00000000".to_string(),
+                ScanoutSlotsRegion {
+                    index: 1,
+                    name: "hidden-slot-2".to_string(),
+                    available: true,
+                    phys: "0x23000000".to_string(),
                     len: 1_036_800,
-                    dma_owned: true,
+                    dma_owned: false,
                 },
             ]
         );

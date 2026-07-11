@@ -8,8 +8,8 @@ use crate::arcade_catalog::{
 };
 use crate::bitmap_text::{ConsoleFont, TextGradient};
 use mister_magik_fb::framebuffer::mapped::{pixel_to_rgb565, MappedRgb565Framebuffer, Pixel};
-use mister_magik_fb::framebuffer::plugin_probe::Rgb565BlitTarget;
 use mister_magik_fb::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
+use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use mister_magik_fb::framebuffer::target::{DirtyRect, UiFrameTarget};
 use slint::platform::software_renderer::Rgb565Pixel;
 
@@ -603,7 +603,7 @@ impl ArcadeListRenderer {
 
     pub(crate) fn copy_layer_to_hidden(
         &mut self,
-        hidden: &mut impl Rgb565BlitTarget,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
         redraw_selection_frame: bool,
     ) {
         for (viewport_y, h) in ARCADE_LIST_LAYER_COPY_BANDS {
@@ -806,7 +806,7 @@ impl ArcadeListRenderer {
 
     fn copy_viewport_band_to_hidden(
         &mut self,
-        hidden: &mut impl Rgb565BlitTarget,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
         viewport_y: usize,
         h: usize,
     ) {
@@ -856,7 +856,7 @@ impl ArcadeListRenderer {
 
     fn copy_surface_rect_to_hidden(
         &mut self,
-        hidden: &mut impl Rgb565BlitTarget,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -904,7 +904,7 @@ impl ArcadeListRenderer {
 
     fn copy_inverted_surface_rect_to_hidden(
         &mut self,
-        hidden: &mut impl Rgb565BlitTarget,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -960,7 +960,7 @@ impl ArcadeListRenderer {
         );
     }
 
-    fn copy_selection_frame_to_hidden(&mut self, hidden: &mut impl Rgb565BlitTarget) {
+    fn copy_selection_frame_to_hidden(&mut self, hidden: &mut ScanoutSlotsRgb565Framebuffer) {
         let rect = self.selection_rect();
         let color = ARCADE_SELECTION_FRAME_COLOR;
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
