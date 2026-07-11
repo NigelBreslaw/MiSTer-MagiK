@@ -92,6 +92,7 @@ def work_us(row: dict[str, str]) -> int:
         int_field(row, "prepare_us")
         + int_field(row, "slint_render_us")
         + int_field(row, "custom_draw_us")
+        + int_field(row, "hidden_compose_us")
         + int_field(row, "fb_present_us")
     )
 

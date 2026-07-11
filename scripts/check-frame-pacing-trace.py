@@ -74,6 +74,7 @@ def check_frame_pacing(
         int_field(row, "prepare_us")
         + int_field(row, "slint_render_us")
         + int_field(row, "custom_draw_us")
+        + int_field(row, "hidden_compose_us")
         + int_field(row, "fb_present_us")
         for row in measured
     )
@@ -98,6 +99,7 @@ def check_frame_pacing(
             int_field(row, "prepare_us")
             + int_field(row, "slint_render_us")
             + int_field(row, "custom_draw_us")
+            + int_field(row, "hidden_compose_us")
             + int_field(row, "fb_present_us")
         )
         if int_field(row, "wall_us") > 16667 and work <= 16667:
