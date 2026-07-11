@@ -2311,6 +2311,73 @@ mod tests {
     }
 
     #[test]
+    fn scanner_marks_only_primary_oneload64_crts_as_prepared() {
+        let root = unique_temp_dir("oneload64-scan");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write core");
+        let install = root.join("games/C64/OneLoad64 Games Collection v4");
+        let multi = install.join("MultiLoad64");
+        let dumps = install.join("Dumps");
+        let alternatives = install.join("AlternativeFormats");
+        for path in [&multi, &dumps, &alternatives] {
+            std::fs::create_dir_all(path).expect("create collection dir");
+        }
+        let primary = install.join("Impossible Mission.crt");
+        let multiload = multi.join("Summer Games.crt");
+        let dump = dumps.join("Dump.crt");
+        for path in [&primary, &multiload, &dump] {
+            std::fs::write(path, b"crt").expect("write CRT");
+        }
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let prepared_paths = scan
+            .discoveries
+            .iter()
+            .filter(|discovery| {
+                discovery.prepared.is_some_and(|prepared| {
+                    prepared.collection_id
+                        == crate::prepared_collections::PreparedCollectionId::OneLoad64
+                })
+            })
+            .map(|discovery| discovery.launch_ref.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(prepared_paths.contains(&primary.to_str().expect("primary path")));
+        assert!(prepared_paths.contains(&multiload.to_str().expect("multiload path")));
+        assert!(!prepared_paths.contains(&dump.to_str().expect("dump path")));
+        save_sqlite_scan(&cfg.sqlite_path, &scan).expect("save catalog");
+        let conn = rusqlite::Connection::open(&cfg.sqlite_path).expect("open catalog");
+        let prepared_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM prepared_launch_rows WHERE collection_id='oneload64'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count prepared launches");
+        assert_eq!(prepared_count, 2);
+        let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
+            .expect("load catalog");
+        let game = loaded
+            .catalog
+            .games
+            .iter()
+            .find(|game| game.title.as_ref() == "Impossible Mission")
+            .expect("find primary game");
+        let target = loaded.catalog.launch_target_for_ref(&game.mra_path);
+        let crate::arcade_catalog::LaunchTarget::Structured(plan) = target else {
+            panic!("expected structured OneLoad64 plan");
+        };
+        assert_eq!(plan.mount_kind.as_ref(), "load-file");
+        assert_eq!(plan.mount_index, 1);
+        assert_eq!(plan.payload_path.as_ref(), primary.display().to_string());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn scanner_prunes_arcade_media_and_cores_but_keeps_arcade_game_mras() {
         let root = unique_temp_dir("target-arcade-game-dirs");
         let arcade_dir = root.join("_Arcade");

@@ -2,6 +2,8 @@
 
 use std::fmt;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
@@ -144,6 +146,83 @@ pub(crate) fn neon68k_source_category(path: &Path) -> Option<String> {
         })
 }
 
+pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenance> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("crt"))
+    {
+        return None;
+    }
+    let install_root = path.ancestors().find(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| compact_name(name).contains("oneload64"))
+    })?;
+    if !oneload64_root_has_signature(install_root) || oneload64_path_is_excluded(path, install_root)
+    {
+        return None;
+    }
+    Some(PreparedLaunchProvenance::prepared(
+        PreparedCollectionId::OneLoad64,
+    ))
+}
+
+fn oneload64_root_has_signature(root: &Path) -> bool {
+    type SignatureCache = std::collections::HashMap<(std::path::PathBuf, u128), bool>;
+    static CACHE: OnceLock<Mutex<SignatureCache>> = OnceLock::new();
+    let modified = std::fs::metadata(root)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let key = (root.to_path_buf(), modified);
+    let cache = CACHE.get_or_init(|| Mutex::new(SignatureCache::new()));
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&key)
+        .copied()
+    {
+        return cached;
+    }
+    let valid = std::fs::read_dir(root).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_type().ok().is_some_and(|kind| kind.is_dir())
+                && matches!(
+                    compact_name(&entry.file_name().to_string_lossy()).as_str(),
+                    "multiload64" | "dumps" | "alternativeformats"
+                )
+        })
+    });
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, valid);
+    valid
+}
+
+fn oneload64_path_is_excluded(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).ok().is_some_and(|relative| {
+        relative.components().any(|component| {
+            matches!(
+                compact_name(&component.as_os_str().to_string_lossy()).as_str(),
+                "dumps" | "alternativeformats" | "extras" | "docs" | "documentation"
+            )
+        })
+    })
+}
+
+fn compact_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +347,40 @@ mod tests {
         assert!(validate_neon68k_mgl(&missing_hdf)
             .expect_err("missing HDF should fail")
             .contains("payload is missing"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn oneload64_requires_install_signature_and_excludes_non_primary_trees() {
+        let dir = fixture_dir("oneload64");
+        let install = dir.join("OneLoad64 Games Collection v4");
+        let multi = install.join("MultiLoad64");
+        let dumps = install.join("Dumps");
+        let alternatives = install.join("AlternativeFormats");
+        let extras = install.join("Extras");
+        for path in [&multi, &dumps, &alternatives, &extras] {
+            std::fs::create_dir_all(path).expect("create collection dir");
+        }
+        let primary = install.join("Impossible Mission.crt");
+        let multiload = multi.join("Summer Games.crt");
+        let dump = dumps.join("Dump.crt");
+        let alternative = alternatives.join("Alternative.crt");
+        let extra = extras.join("Extra.crt");
+        for path in [&primary, &multiload, &dump, &alternative, &extra] {
+            std::fs::write(path, b"crt").expect("write CRT");
+        }
+
+        assert!(oneload64_provenance(&primary).is_some());
+        assert!(oneload64_provenance(&multiload).is_some());
+        assert!(oneload64_provenance(&dump).is_none());
+        assert!(oneload64_provenance(&alternative).is_none());
+        assert!(oneload64_provenance(&extra).is_none());
+
+        let unmarked = dir.join("General C64 CRTs/Game.crt");
+        std::fs::create_dir_all(unmarked.parent().expect("unmarked parent"))
+            .expect("create unmarked dir");
+        std::fs::write(&unmarked, b"crt").expect("write unmarked CRT");
+        assert!(oneload64_provenance(&unmarked).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
