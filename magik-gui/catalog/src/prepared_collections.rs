@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
-pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 1;
+pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 2;
 
 pub fn storage_roots_for_library_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut storage_roots = Vec::new();
