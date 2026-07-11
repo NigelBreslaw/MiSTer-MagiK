@@ -922,7 +922,10 @@ fn core_candidates_by_name<'a>(
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for core in cores {
-        if !core.core_id.eq_ignore_ascii_case(name) {
+        if !core.core_id.eq_ignore_ascii_case(name)
+            && catalog_discovery::compact_system_name(&core.core_id)
+                != catalog_discovery::compact_system_name(name)
+        {
             continue;
         }
         let key = core.core_id.to_ascii_lowercase();

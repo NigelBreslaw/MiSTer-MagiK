@@ -224,6 +224,7 @@ pub(crate) struct MraMetadata {
 #[derive(Default)]
 pub(crate) struct MglMetadata {
     pub(crate) rbf: Option<String>,
+    pub(crate) setname: Option<String>,
     pub(crate) file_path: Option<String>,
 }
 
@@ -333,8 +334,10 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
     let mut reader = XmlReader::from_str(text);
     let mut metadata = MglMetadata::default();
     let mut in_rbf = false;
+    let mut in_setname = false;
     let mut in_file = false;
     let mut rbf_text = String::new();
+    let mut setname_text = String::new();
     let mut file_text = String::new();
     loop {
         match reader.read_event() {
@@ -343,6 +346,9 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 if tag.as_ref().eq_ignore_ascii_case(b"rbf") {
                     in_rbf = true;
                     rbf_text.clear();
+                } else if tag.as_ref().eq_ignore_ascii_case(b"setname") {
+                    in_setname = true;
+                    setname_text.clear();
                 } else if tag.as_ref().eq_ignore_ascii_case(b"file") && metadata.file_path.is_none()
                 {
                     in_file = true;
@@ -359,6 +365,8 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 if let Ok(value) = e.xml10_content() {
                     if in_rbf {
                         rbf_text.push_str(&value);
+                    } else if in_setname {
+                        setname_text.push_str(&value);
                     } else if in_file && metadata.file_path.is_none() {
                         file_text.push_str(&value);
                     }
@@ -368,6 +376,8 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 if let Ok(value) = e.xml10_content() {
                     if in_rbf {
                         rbf_text.push_str(&value);
+                    } else if in_setname {
+                        setname_text.push_str(&value);
                     } else if in_file && metadata.file_path.is_none() {
                         file_text.push_str(&value);
                     }
@@ -377,6 +387,8 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                 if let Some(value) = xml_general_ref_text(e.as_ref()) {
                     if in_rbf {
                         rbf_text.push_str(value);
+                    } else if in_setname {
+                        setname_text.push_str(value);
                     } else if in_file && metadata.file_path.is_none() {
                         file_text.push_str(value);
                     }
@@ -387,6 +399,10 @@ fn parse_mgl_metadata_xml(text: &str) -> Option<MglMetadata> {
                     set_optional_trimmed(&mut metadata.rbf, &rbf_text);
                     in_rbf = false;
                     rbf_text.clear();
+                } else if e.name().as_ref().eq_ignore_ascii_case(b"setname") {
+                    set_optional_trimmed(&mut metadata.setname, &setname_text);
+                    in_setname = false;
+                    setname_text.clear();
                 } else if e.name().as_ref().eq_ignore_ascii_case(b"file") {
                     if metadata.file_path.is_none() {
                         set_optional_trimmed(&mut metadata.file_path, &file_text);
@@ -843,6 +859,25 @@ mod tests {
             metadata.file_path.as_deref(),
             Some("games/NES/Super Mario Bros.nes")
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_metadata_parser_reads_system_setname() {
+        let root = unique_temp_dir("mgl-system-setname");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Atari 2600.mgl");
+        std::fs::write(
+            &path,
+            r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
+        )
+        .expect("write mgl fixture");
+
+        let metadata = read_mgl_metadata(&path).expect("read mgl metadata");
+
+        assert_eq!(metadata.rbf.as_deref(), Some("_Console/Atari7800"));
+        assert_eq!(metadata.setname.as_deref(), Some("Atari2600"));
+        assert_eq!(metadata.file_path, None);
         let _ = std::fs::remove_dir_all(root);
     }
 
