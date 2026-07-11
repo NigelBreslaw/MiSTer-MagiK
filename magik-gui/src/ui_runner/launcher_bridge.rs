@@ -671,9 +671,14 @@ fn active_system_header(
     } else {
         format!("{base_title} - {filter_label}")
     };
+    let hydrated_count = nav.active_arcade_game_count(catalog, &system.id);
     ActiveSystemHeader {
         title,
-        count: nav.active_arcade_game_count(catalog, &system.id),
+        count: if hydrated_count == 0 && system.count > 0 {
+            system.count
+        } else {
+            hydrated_count
+        },
     }
 }
 
@@ -902,6 +907,23 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Once;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn summary_only_system_header_keeps_known_game_count_while_rows_load() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![GameSystemEntry {
+                id: "pet2001".into(),
+                title: "PET 2001".into(),
+                count: 15,
+            }],
+        );
+        let nav = LauncherNav::new();
+
+        assert!(active_system_games_loading(&catalog, &nav));
+        assert_eq!(active_system_header(&catalog, &nav, 0).count, 15);
+    }
 
     #[test]
     fn launcher_bridge_key_tracks_arcade_search_suggestion() {
