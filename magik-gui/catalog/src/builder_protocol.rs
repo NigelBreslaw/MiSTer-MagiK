@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 1;
+pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str =
+    "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
