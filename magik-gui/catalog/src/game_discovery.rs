@@ -244,9 +244,18 @@ pub(crate) fn discovery_from_profile_file(
                 None
             };
             let covered_payload_path = mgl.file_path.as_deref().map(|payload| {
-                media_metadata::resolve_mgl_payload_path(&file.path, payload)
-                    .display()
-                    .to_string()
+                let path = if profile.system_id == "dos"
+                    && file.path.components().any(|component| {
+                        component
+                            .as_os_str()
+                            .to_str()
+                            .is_some_and(|value| value.eq_ignore_ascii_case("_DOS Games"))
+                    }) {
+                    prepared_collections::resolve_0mhz_payload_path(&file.path, payload)
+                } else {
+                    media_metadata::resolve_mgl_payload_path(&file.path, payload)
+                };
+                path.display().to_string()
             });
             let prepared = (profile.system_id == "dos"
                 && prepared_collections::validate_0mhz_mgl(&file.path).is_ok())
@@ -256,13 +265,13 @@ pub(crate) fn discovery_from_profile_file(
                     && prepared_collections::validate_neon68k_mgl(&file.path).is_ok())
                 .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
             });
-            let genre = if prepared.is_some_and(|value| {
-                value.collection_id == PreparedCollectionId::ZeroMhz
-            }) {
+            let genre = if prepared
+                .is_some_and(|value| value.collection_id == PreparedCollectionId::ZeroMhz)
+            {
                 Some("0MHz".to_string())
-            } else if prepared.is_some_and(|value| {
-                value.collection_id == PreparedCollectionId::Neon68k
-            }) {
+            } else if prepared
+                .is_some_and(|value| value.collection_id == PreparedCollectionId::Neon68k)
+            {
                 Some(
                     prepared_collections::neon68k_source_category(&file.path)
                         .map(|category| format!("Neon68K / {category}"))
