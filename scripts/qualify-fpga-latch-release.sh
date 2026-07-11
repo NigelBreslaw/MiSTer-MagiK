@@ -40,6 +40,18 @@ require_probe() {
   grep -q $'fpga_latch_status_tsv\tcmd=0x58\tsupported=1' <<<"$text" || return 1
 }
 
+require_equal_hash() {
+  [[ "$1" =~ ^[0-9a-f]{64}$ && "$1" == "$2" ]]
+}
+
+require_runtime() {
+  local text="$1" expected="$2"
+  grep -q "rbf_sha256=$expected" <<<"$text" || return 1
+  grep -q "main_rbf=$REMOTE_RBF" <<<"$text" || return 1
+  grep -q 'module_ready=1' <<<"$text" || return 1
+  grep -q 'device_ready=1' <<<"$text" || return 1
+}
+
 counter_value() {
   local name="$1" text="$2"
   sed -n "s/.*${name}=\([0-9][0-9]*\).*/\1/p" <<<"$text" | tail -1
@@ -53,7 +65,7 @@ require_counter_advance() {
 }
 
 self_test() {
-  local good bad before after marker
+  local good bad before after marker expected runtime
   good=$'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1\nfpga_latch_status_tsv\tcmd=0x58\tsupported=1\tflip_count=4\tpost_count=5\tdrop_count=0'
   bad="${good/supported=1/supported=0}"
   require_probe "$good"
@@ -62,8 +74,12 @@ self_test() {
   after=$'fpga_latch_status_tsv\tflip_count=5\tpost_count=6\tdrop_count=1'
   require_counter_advance "$before" "$after" flip_count
   ! require_counter_advance "$before" "$before" flip_count
-  [[ "abc" != "def" ]] # hash mismatch rejection fixture
-  [[ ! -e /dev/mister-magik-scanout-slots ]] || true # missing-module fixture is host-only
+  expected="$(printf 'a%.0s' {1..64})"
+  require_equal_hash "$expected" "$expected"
+  ! require_equal_hash "$expected" "$(printf 'b%.0s' {1..64})"
+  runtime=$'rbf_sha256='"$expected"$'\nmain_rbf=/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\nmodule_ready=1\ndevice_ready=1'
+  require_runtime "$runtime" "$expected"
+  ! require_runtime "${runtime/module_ready=1/module_ready=0}" "$expected"
   marker="$(mktemp)"
   cleanup_test() { rm -f "$marker"; }
   cleanup_test
@@ -93,7 +109,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "==> Verify exact local/deployed RBF and runtime"
-REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiK); tr '\\000' ' ' < /proc/\$pid/cmdline; echo; '$REMOTE_BIN' fpga-latch-report")"
+REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiK); cmdline=\$(tr '\\000' ' ' < /proc/\$pid/cmdline); echo \"\$cmdline\" | grep -Fq '$REMOTE_RBF'; echo rbf_sha256=\$actual; echo main_rbf='$REMOTE_RBF'; echo module_ready=1; echo device_ready=1; '$REMOTE_BIN' fpga-latch-report")"
+require_runtime "$REMOTE_STATE" "$EXPECTED_HASH"
 require_probe "$REMOTE_STATE"
 BEFORE="$REMOTE_STATE"
 
@@ -108,8 +125,8 @@ grep -q 'final_pending=0' <<<"$RECOVERY"
 echo "==> Motion gates at both framebuffer geometries"
 for geometry in 960x540 1280x720; do
   "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-HOME-$geometry" --skip-build --ui-fb-size "$geometry"
-  "$ROOT/scripts/profile-arcade-scroll.sh" "$LABEL-ARCADE-$geometry" --skip-build --ui-fb-size "$geometry"
-  MISTER_UI_FB_SIZE="$geometry" "$ROOT/scripts/profile-preview-scroll.sh" "$LABEL-PREVIEW-$geometry" --skip-build
+  "$ROOT/scripts/profile-arcade-scroll.sh" "$LABEL-ARCADE-$geometry" --skip-build --skip-boot-prelude --ui-fb-size "$geometry" --frame-pacing-policy vsync-integrity
+  MISTER_UI_FB_SIZE="$geometry" "$ROOT/scripts/profile-preview-scroll.sh" "$LABEL-PREVIEW-$geometry" --skip-build --visual-captures 0 --allow-visibility-misses 8
 done
 
 echo "==> Lifecycle, reload, and fallback"
@@ -117,15 +134,13 @@ echo "==> Lifecycle, reload, and fallback"
 "$ROOT/scripts/run-rust.sh" launcher 0
 "$ROOT/scripts/device-launch-return-smoke.sh"
 "$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
+"$MISTER" run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiK 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then exit 0; fi; sleep 1; done; exit 1"
 "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-FB0" --skip-build --present-backend fb0-dirty
+MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden "$ROOT/scripts/run-rust.sh" launcher 0
 
 if [[ "$SOAK_SECS" -gt 0 ]]; then
-  echo "==> Bounded soak (${SOAK_SECS}s)"
-  deadline=$((SECONDS + SOAK_SECS))
-  while [[ "$SECONDS" -lt "$deadline" ]]; do
-    "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" | grep -q $'fpga_latch_status_tsv\tcmd=0x58\tsupported=1'
-    sleep 30
-  done
+  echo "==> Bounded latch-motion soak (${SOAK_SECS}s)"
+  "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-SOAK" --skip-build --secs "$SOAK_SECS" --ui-fb-size 960x540
 fi
 
 FINAL="$($MISTER run "'$REMOTE_BIN' fpga-latch-report")"

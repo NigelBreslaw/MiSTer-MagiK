@@ -23,13 +23,17 @@ Info (332146): Worst-case hold slack is 0.249
     Info (332119): ========= =================== =====================
     Info (332119):     0.249               0.000 clk_sys
 Info (332114): Report Metastability: Found 5 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.800
+; Unconstrained Output Port Paths ; 10 ; 10 ;
 Info (332102): Design is not fully constrained for setup requirements
 Info (332102): Design is not fully constrained for hold requirements
 """
 
 CUSTOM_SYNC = """\
-Info: Synchronizer mister_magik_vblank_latch|vbl_sys
-Info: Mean Time Between Failures: 4.2e+12 years
+; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_meta ;
+; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_sys ;
+Info (332114): Report Metastability: Found 6 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.700
 """
 
 
@@ -84,7 +88,8 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("custom_synchronizer_missing", payload["invalid_reason"])
 
     def test_named_chain_without_mtbf_fails(self) -> None:
-        result, payload = self.run_check(BASE, BASE + "Info: Synchronizer mister_magik_vblank_latch|vbl_sys\n")
+        assignments = "; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_meta ;\n; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; vbl_sys ;\n"
+        result, payload = self.run_check(BASE, BASE + assignments)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_mtbf_missing", payload["invalid_reason"])
 

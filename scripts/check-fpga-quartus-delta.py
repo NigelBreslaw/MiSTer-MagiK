@@ -23,6 +23,9 @@ TABLE_ROW_RE = re.compile(rf"^\s*(?:Info \(\d+\):\s*)?({NUMBER})\s+({NUMBER})\s+
 CHAIN_COUNT_RE = re.compile(r"(?:Found|Found:)\s+(\d+)\s+synchronizer chains", re.IGNORECASE)
 MTBF_VALUE_RE = re.compile(rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s*(years?|seconds?|s)\b", re.IGNORECASE)
 UNCONSTRAINED_RE = re.compile(r"\bunconstrained\b|not fully constrained", re.IGNORECASE)
+UNCONSTRAINED_OUTPUT_RE = re.compile(r"Unconstrained Output Port Paths\s*;\s*(\d+)\s*;", re.IGNORECASE)
+UNCALCULATED_FRACTION_RE = re.compile(r"Fraction of Chains for which MTBFs Could Not be Calculated:\s*([0-9.]+)", re.IGNORECASE)
+SYNC_ASSIGN_RE = re.compile(r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED_IF_ASYNCHRONOUS.*;\s*(vbl_meta|vbl_sys)\s*;", re.IGNORECASE)
 RESOURCE_RE = re.compile(
     r"^\s*(Total (?:logic elements|registers|block memory bits|DSP Blocks))\s*[:;]\s*([\d,]+)",
     re.IGNORECASE,
@@ -31,6 +34,7 @@ RESOURCE_RE = re.compile(
 
 def normalize_space(value: str) -> str:
     value = re.sub(r"\s+File:\s+\S+\s+Line:\s+\d+\s*$", "", value, flags=re.IGNORECASE)
+    value = re.sub(r'Node "emu\|random\|lc0\|data[a-f]"', 'Node "emu|random|lc0|data*"', value, flags=re.IGNORECASE)
     return " ".join(value.split())
 
 
@@ -67,6 +71,9 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
     custom_sync_lines: list[int] = []
     custom_sync_mtbf = False
     resources: dict[str, int] = {}
+    sync_assignments: set[str] = set()
+    uncalculated_fractions: list[float] = []
+    unconstrained_output_paths: list[int] = []
     timing_section: str | None = None
     in_tns_table = False
 
@@ -102,7 +109,10 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
             if value is not None:
                 tns.append(value)
 
-        if UNCONSTRAINED_RE.search(line):
+        unconstrained_output = UNCONSTRAINED_OUTPUT_RE.search(line)
+        if unconstrained_output:
+            unconstrained_output_paths.append(int(unconstrained_output.group(1)))
+        elif UNCONSTRAINED_RE.search(line):
             unconstrained[normalize_space(line)] += 1
 
         chains = CHAIN_COUNT_RE.search(line)
@@ -111,6 +121,16 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
 
         if synchronizer_re.search(line):
             custom_sync_lines.append(index)
+
+        sync_assignment = SYNC_ASSIGN_RE.search(line)
+        if sync_assignment:
+            sync_assignments.add(sync_assignment.group(1).lower())
+
+        fraction = UNCALCULATED_FRACTION_RE.search(line)
+        if fraction:
+            value = finite_number(fraction.group(1))
+            if value is not None:
+                uncalculated_fractions.append(value)
 
         resource = RESOURCE_RE.search(line)
         if resource:
@@ -134,6 +154,9 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
         "custom_sync_seen": bool(custom_sync_lines),
         "custom_sync_mtbf": custom_sync_mtbf,
         "resources": resources,
+        "sync_assignments": sync_assignments,
+        "uncalculated_fractions": uncalculated_fractions,
+        "unconstrained_output_paths": unconstrained_output_paths,
     }
 
 
@@ -162,6 +185,13 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     added_unconstrained = counter_delta(stock_unconstrained, patched_unconstrained)
     if added_unconstrained:
         reasons.append("unconstrained_added")
+    stock_output_paths = stock["unconstrained_output_paths"]
+    patched_output_paths = patched["unconstrained_output_paths"]
+    assert isinstance(stock_output_paths, list) and isinstance(patched_output_paths, list)
+    if not stock_output_paths or not patched_output_paths:
+        reasons.append("unconstrained_output_summary_missing")
+    elif max(patched_output_paths) > max(stock_output_paths):
+        reasons.append("unconstrained_output_paths_added")
 
     slacks = patched["slacks"]
     assert isinstance(slacks, dict)
@@ -183,9 +213,25 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     assert isinstance(chain_counts, list)
     if not chain_counts or max(chain_counts) <= 0:
         reasons.append("synchronizer_report_missing")
-    if not patched["custom_sync_seen"]:
+    stock_chain_counts = stock["chain_counts"]
+    assert isinstance(stock_chain_counts, list)
+    sync_assignments = patched["sync_assignments"]
+    assert isinstance(sync_assignments, set)
+    custom_assignment_seen = sync_assignments == {"vbl_meta", "vbl_sys"}
+    stock_fractions = stock["uncalculated_fractions"]
+    patched_fractions = patched["uncalculated_fractions"]
+    assert isinstance(stock_fractions, list) and isinstance(patched_fractions, list)
+    custom_delta_calculable = (
+        bool(stock_chain_counts)
+        and bool(chain_counts)
+        and max(chain_counts) == max(stock_chain_counts) + 1
+        and bool(stock_fractions)
+        and bool(patched_fractions)
+        and min(patched_fractions) < min(stock_fractions)
+    )
+    if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
-    elif not patched["custom_sync_mtbf"]:
+    elif not custom_delta_calculable:
         reasons.append("custom_synchronizer_mtbf_missing")
 
     details = {
@@ -198,8 +244,10 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
         "patched_hold_slack_min": min(slacks["hold"]) if slacks["hold"] else None,
         "patched_tns_max_abs": max((abs(value) for value in tns), default=None),
         "patched_synchronizer_chains": max(chain_counts, default=None),
-        "custom_sync_seen": patched["custom_sync_seen"],
-        "custom_sync_mtbf": patched["custom_sync_mtbf"],
+        "custom_sync_seen": custom_assignment_seen,
+        "custom_sync_mtbf": custom_delta_calculable,
+        "stock_unconstrained_output_paths": max(stock_output_paths, default=None),
+        "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
         "stock_resources": stock["resources"],
         "patched_resources": patched["resources"],
     }

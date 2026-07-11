@@ -49,6 +49,6 @@ jobs:
             --Mdir "$build_dir/obj" \
             experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv \
             experiments/fpga-vblank-latch/tb_mister_magik_vblank_latch.sv
-          "$build_dir/obj/Vtb_mister_magik_vblank_latch" +verilator+coverage+file+"$build_dir/coverage.dat"
+          (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
           verilator_coverage --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
           scripts/check-fpga-latch-coverage.py "$build_dir/annotated"
