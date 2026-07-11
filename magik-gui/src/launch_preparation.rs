@@ -1,7 +1,8 @@
 //! Launch-ref classification and materialization before Main handoff.
 
+use crate::arcade_catalog::LaunchTarget;
 #[cfg(feature = "bench-tools")]
-use crate::{arcade_catalog::LaunchTarget, library_db};
+use crate::library_db;
 use std::cell::Cell;
 use std::fs::{self, File};
 #[cfg(any(feature = "bench-tools", all(test, not(target_os = "linux"))))]
@@ -14,10 +15,18 @@ use std::time::Instant;
 const VIRTUAL_LAUNCH_PREFIX: &str = "magik-plan:";
 const AMIGAVISION_GAME_LAUNCH_PREFIX: &str = "magik-amigavision:";
 const AMIGAVISION_LAUNCHER_REF: &str = "magik-amigavision-launcher";
-const AMIGAVISION_MGL_PATH: &str = "/media/fat/_Computer/Amiga.mgl";
-const AMIGAVISION_HDF_PATH: &str = "/media/fat/games/Amiga/AmigaVision.hdf";
-const AMIGAVISION_SHARED_DIR: &str = "/media/fat/games/Amiga/shared";
-const AMIGAVISION_AGS_BOOT: &str = "/media/fat/games/Amiga/shared/ags_boot";
+const AMIGAVISION_HDF_NAMES: &[&str] = &["AmigaVision.hdf", "MegaAGS.hdf"];
+const AMIGAVISION_MGL_NAMES: &[&str] = &["Amiga.mgl", "Amiga 500.mgl", "MegaAGS.mgl"];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AmigaVisionInstall {
+    mgl_path: PathBuf,
+    hdf_path: PathBuf,
+    shared_dir: PathBuf,
+    ags_boot_path: PathBuf,
+    games_listing: PathBuf,
+    demos_listing: PathBuf,
+}
 
 #[cfg(any(feature = "bench-tools", test))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,40 +43,129 @@ thread_local! {
 }
 
 pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
+    let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
+    prepare_launch_ref_with_roots(launch_ref, &roots)
+}
+
+pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarget, String> {
+    match launch_target {
+        LaunchTarget::Prepared(selection) => Ok(LaunchTarget::Path(
+            prepare_launch_ref(&selection.launch_ref)?.into(),
+        )),
+        other => Ok(other.clone()),
+    }
+}
+
+fn prepare_launch_ref_with_roots(launch_ref: &str, roots: &[String]) -> Result<String, String> {
     if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
         Err(format!(
             "structured launch ref must be resolved from catalog before launch: {launch_ref}"
         ))
     } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
-        materialize_amigavision_game_launch_ref(launch_ref)
+        materialize_amigavision_game_launch_ref(launch_ref, roots)
     } else if launch_ref == AMIGAVISION_LAUNCHER_REF {
-        materialize_amigavision_launcher_ref()
+        materialize_amigavision_launcher_ref(roots)
     } else {
         Ok(launch_ref.to_string())
     }
 }
 
-fn materialize_amigavision_launcher_ref() -> Result<String, String> {
+fn materialize_amigavision_launcher_ref(roots: &[String]) -> Result<String, String> {
+    let install = resolve_amigavision_install(roots)?;
     materialize_amigavision_launcher_ref_at(
-        Path::new(AMIGAVISION_MGL_PATH),
-        Path::new(AMIGAVISION_HDF_PATH),
-        Path::new(AMIGAVISION_SHARED_DIR),
-        Path::new(AMIGAVISION_AGS_BOOT),
+        &install.mgl_path,
+        &install.hdf_path,
+        &install.shared_dir,
+        &install.ags_boot_path,
     )
 }
 
-fn materialize_amigavision_game_launch_ref(launch_ref: &str) -> Result<String, String> {
+fn materialize_amigavision_game_launch_ref(
+    launch_ref: &str,
+    roots: &[String],
+) -> Result<String, String> {
     let encoded = launch_ref
         .strip_prefix(AMIGAVISION_GAME_LAUNCH_PREFIX)
         .ok_or_else(|| format!("invalid AmigaVision launch ref: {launch_ref}"))?;
     let title = decode_launch_component(encoded)?;
+    let install = resolve_amigavision_install(roots)?;
+    if !listing_contains_exact(&install.games_listing, &title)?
+        && !listing_contains_exact(&install.demos_listing, &title)?
+    {
+        return Err(format!(
+            "AmigaVision selection is no longer installed: {title}"
+        ));
+    }
     materialize_amigavision_game_launch_ref_at(
         &title,
-        Path::new(AMIGAVISION_MGL_PATH),
-        Path::new(AMIGAVISION_HDF_PATH),
-        Path::new(AMIGAVISION_SHARED_DIR),
-        Path::new(AMIGAVISION_AGS_BOOT),
+        &install.mgl_path,
+        &install.hdf_path,
+        &install.shared_dir,
+        &install.ags_boot_path,
     )
+}
+
+fn resolve_amigavision_install(roots: &[String]) -> Result<AmigaVisionInstall, String> {
+    let mut storage_roots = Vec::<PathBuf>::new();
+    for root in roots {
+        let storage_root = storage_root_for_library_root(Path::new(root));
+        if !storage_roots.contains(&storage_root) {
+            storage_roots.push(storage_root);
+        }
+    }
+    for storage_root in storage_roots {
+        let amiga_dir = storage_root.join("games/Amiga");
+        let games_listing = amiga_dir.join("listings/games.txt");
+        let demos_listing = amiga_dir.join("listings/demos.txt");
+        let shared_dir = amiga_dir.join("shared");
+        if !games_listing.is_file() || !demos_listing.is_file() || !shared_dir.is_dir() {
+            continue;
+        }
+        for hdf_name in AMIGAVISION_HDF_NAMES {
+            let hdf_path = amiga_dir.join(hdf_name);
+            if !hdf_path.is_file() {
+                continue;
+            }
+            for mgl_name in AMIGAVISION_MGL_NAMES {
+                let mgl_path = storage_root.join("_Computer").join(mgl_name);
+                if validate_amigavision_install(&mgl_path, &hdf_path).is_ok() {
+                    return Ok(AmigaVisionInstall {
+                        mgl_path,
+                        hdf_path,
+                        ags_boot_path: shared_dir.join("ags_boot"),
+                        shared_dir,
+                        games_listing,
+                        demos_listing,
+                    });
+                }
+            }
+        }
+    }
+    Err(
+        "no complete AmigaVision or MegaAGS installation was found in configured library roots"
+            .to_string(),
+    )
+}
+
+fn storage_root_for_library_root(root: &Path) -> PathBuf {
+    let mut prefix = PathBuf::new();
+    for component in root.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if matches!(
+            value.as_ref(),
+            "games" | "_Arcade" | "_DOS Games" | "_LLAPI" | "_Computer"
+        ) {
+            return prefix;
+        }
+        prefix.push(component.as_os_str());
+    }
+    root.to_path_buf()
+}
+
+fn listing_contains_exact(path: &Path, title: &str) -> Result<bool, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("read AmigaVision listing {}: {e}", path.display()))?;
+    Ok(text.lines().map(str::trim).any(|entry| entry == title))
 }
 
 fn materialize_amigavision_launcher_ref_at(
@@ -77,7 +175,12 @@ fn materialize_amigavision_launcher_ref_at(
     ags_boot_path: &Path,
 ) -> Result<String, String> {
     validate_amigavision_install(mgl_path, hdf_path)?;
-    fs::create_dir_all(shared_dir).map_err(|e| format!("create AmigaVision shared dir: {e}"))?;
+    if !shared_dir.is_dir() {
+        return Err(format!(
+            "AmigaVision shared directory is missing: {}",
+            shared_dir.display()
+        ));
+    }
     match fs::remove_file(ags_boot_path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -94,7 +197,12 @@ fn materialize_amigavision_game_launch_ref_at(
     ags_boot_path: &Path,
 ) -> Result<String, String> {
     validate_amigavision_install(mgl_path, hdf_path)?;
-    fs::create_dir_all(shared_dir).map_err(|e| format!("create AmigaVision shared dir: {e}"))?;
+    if !shared_dir.is_dir() {
+        return Err(format!(
+            "AmigaVision shared directory is missing: {}",
+            shared_dir.display()
+        ));
+    }
     let content = format!("{title}\n");
     if fs::read_to_string(ags_boot_path)
         .map(|existing| existing == content)
@@ -191,9 +299,18 @@ fn validate_amigavision_install(mgl_path: &Path, hdf_path: &Path) -> Result<(), 
             mgl_path.display()
         ));
     }
+    let mgl = fs::read_to_string(mgl_path)
+        .map_err(|e| format!("read AmigaVision launcher {}: {e}", mgl_path.display()))?;
+    let normalized = mgl.to_ascii_lowercase();
+    if !normalized.contains("<rbf") || !normalized.contains("minimig") {
+        return Err(format!(
+            "AmigaVision launcher does not target Minimig: {}",
+            mgl_path.display()
+        ));
+    }
     if !hdf_path.is_file() {
         return Err(format!(
-            "AmigaVision HDF is not installed: {}. Extract the AmigaVision MiSTer archive first.",
+            "AmigaVision HDF is not installed: {}",
             hdf_path.display()
         ));
     }
@@ -561,6 +678,9 @@ fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
 mod tests {
     use super::*;
 
+    const MINIMIG_MGL: &str =
+        "<mistergamedescription><rbf>_computer/minimig</rbf></mistergamedescription>";
+
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
         let path =
             std::env::temp_dir().join(format!("mister-magik-{label}-{}", std::process::id()));
@@ -595,7 +715,8 @@ mod tests {
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(hdf.parent().unwrap()).expect("create hdf dir");
-        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::create_dir_all(&shared).expect("create shared dir");
+        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
 
         let target = materialize_amigavision_game_launch_ref_at(
@@ -643,7 +764,7 @@ mod tests {
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(&shared).expect("create shared dir");
-        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
         std::fs::write(&ags_boot, "Agony\n").expect("write ags_boot");
         let mut permissions = std::fs::metadata(&ags_boot)
@@ -686,7 +807,7 @@ mod tests {
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
         std::fs::create_dir_all(&shared).expect("create shared dir");
-        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
         std::fs::write(&ags_boot, "Agony\n").expect("write stale ags_boot");
 
@@ -706,7 +827,7 @@ mod tests {
         let shared = root.join("games/Amiga/shared");
         let ags_boot = shared.join("ags_boot");
         std::fs::create_dir_all(mgl.parent().unwrap()).expect("create mgl dir");
-        std::fs::write(&mgl, "<mistergamedescription/>").expect("write mgl");
+        std::fs::write(&mgl, MINIMIG_MGL).expect("write mgl");
 
         let err =
             materialize_amigavision_game_launch_ref_at("Agony", &mgl, &hdf, &shared, &ags_boot)
@@ -714,6 +835,105 @@ mod tests {
 
         assert!(err.contains("AmigaVision HDF is not installed"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn write_complete_amigavision_install(
+        root: &Path,
+        hdf_name: &str,
+        mgl_name: &str,
+        games: &str,
+        demos: &str,
+    ) {
+        let amiga = root.join("games/Amiga");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(amiga.join("listings")).expect("create listings dir");
+        std::fs::create_dir_all(amiga.join("shared")).expect("create shared dir");
+        std::fs::write(root.join("_Computer").join(mgl_name), MINIMIG_MGL).expect("write launcher");
+        std::fs::write(amiga.join(hdf_name), b"hdf").expect("write hdf");
+        std::fs::write(amiga.join("listings/games.txt"), games).expect("write games listing");
+        std::fs::write(amiga.join("listings/demos.txt"), demos).expect("write demos listing");
+    }
+
+    #[test]
+    fn configured_roots_resolve_modern_install_and_validate_exact_title() {
+        let root = unique_temp_dir("amigavision-dynamic-modern");
+        write_complete_amigavision_install(
+            &root,
+            "AmigaVision.hdf",
+            "Amiga.mgl",
+            "Agony\nAlien Breed\n",
+            "State of the Art\n",
+        );
+        let roots = vec![root.join("games").display().to_string()];
+
+        let target = prepare_launch_ref_with_roots("magik-amigavision:Agony", &roots)
+            .expect("prepare installed title");
+
+        assert_eq!(
+            target,
+            root.join("_Computer/Amiga.mgl").display().to_string()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("games/Amiga/shared/ags_boot"))
+                .expect("read selector"),
+            "Agony\n"
+        );
+        let err = prepare_launch_ref_with_roots("magik-amigavision:agony", &roots)
+            .expect_err("title matching must remain exact");
+        assert!(err.contains("no longer installed"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_roots_support_legacy_install_names_and_demos() {
+        let root = unique_temp_dir("amigavision-dynamic-legacy");
+        write_complete_amigavision_install(
+            &root,
+            "MegaAGS.hdf",
+            "Amiga 500.mgl",
+            "Agony\n",
+            "State of the Art\n",
+        );
+        let roots = vec![root.join("_Computer").display().to_string()];
+
+        let target =
+            prepare_launch_ref_with_roots("magik-amigavision:State%20of%20the%20Art", &roots)
+                .expect("prepare legacy demo");
+
+        assert_eq!(
+            target,
+            root.join("_Computer/Amiga 500.mgl").display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_root_order_selects_one_install_deterministically() {
+        let first = unique_temp_dir("amigavision-root-first");
+        let second = unique_temp_dir("amigavision-root-second");
+        write_complete_amigavision_install(&first, "AmigaVision.hdf", "Amiga.mgl", "Agony\n", "\n");
+        write_complete_amigavision_install(
+            &second,
+            "AmigaVision.hdf",
+            "Amiga.mgl",
+            "Agony\n",
+            "\n",
+        );
+        let roots = vec![
+            second.join("games").display().to_string(),
+            first.join("games").display().to_string(),
+        ];
+
+        let target = prepare_launch_ref_with_roots("magik-amigavision:Agony", &roots)
+            .expect("prepare preferred root");
+
+        assert_eq!(
+            target,
+            second.join("_Computer/Amiga.mgl").display().to_string()
+        );
+        assert!(!first.join("games/Amiga/shared/ags_boot").exists());
+        let _ = std::fs::remove_dir_all(first);
+        let _ = std::fs::remove_dir_all(second);
     }
 
     #[test]

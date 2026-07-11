@@ -424,20 +424,37 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
     thread::Builder::new()
         .name("launch-handoff".to_string())
         .spawn(move || {
-            let result = if request.bench_iteration.is_some() {
-                let bench = launcher::execute_game_launch_handoff_bench(
-                    &request.launch_target,
-                    request.bench_delay,
-                    request.bench_mode,
-                );
-                LaunchWorkerResult {
-                    result: bench.result.clone(),
-                    bench: Some(bench),
+            let prep_started = Instant::now();
+            let prepared = crate::launch_preparation::prepare_launch_target(&request.launch_target);
+            let prep_us = prep_started.elapsed().as_micros() as u64;
+            let result = match prepared {
+                Ok(launch_target) if request.bench_iteration.is_some() => {
+                    let mut bench = launcher::execute_game_launch_handoff_bench(
+                        &launch_target,
+                        request.bench_delay,
+                        request.bench_mode,
+                    );
+                    bench.prepare_us = bench.prepare_us.saturating_add(prep_us);
+                    LaunchWorkerResult {
+                        result: bench.result.clone(),
+                        bench: Some(bench),
+                    }
                 }
-            } else {
-                LaunchWorkerResult {
-                    result: launcher::execute_game_launch(&request.launch_target),
+                Ok(launch_target) => LaunchWorkerResult {
+                    result: launcher::execute_game_launch(&launch_target),
                     bench: None,
+                },
+                Err(error) => {
+                    let result = Err(launcher::LaunchError::preparation(error));
+                    let bench =
+                        request
+                            .bench_iteration
+                            .map(|_| launcher::LaunchHandoffBenchResult {
+                                result: result.clone(),
+                                prepare_us: prep_us,
+                                handoff_us: 0,
+                            });
+                    LaunchWorkerResult { result, bench }
                 }
             };
             let _ = tx.send(result);
