@@ -9,6 +9,8 @@ OUT_DIR="$ROOT/build/scanout-slots"
 CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
 LOCALVERSION="${LOCALVERSION:--MiSTer}"
 IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
+PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
+KERNEL_REVISION="$(git -C "$KERNEL_SRC" rev-parse HEAD 2>/dev/null || true)"
 
 usage() {
   cat <<'EOF'
@@ -39,6 +41,14 @@ if [[ ! -d "$KERNEL_SRC" ]]; then
   echo "clone MiSTer-devel/Linux-Kernel_MiSTer branch MiSTer-v5.15 or set KERNEL_SRC" >&2
   exit 1
 fi
+if [[ ! "$KERNEL_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "kernel source must be a git checkout at an exact revision" >&2
+  exit 1
+fi
+if [[ "$KERNEL_REVISION" != "$PINNED_KERNEL_REVISION" ]]; then
+  echo "kernel source revision $KERNEL_REVISION is not pinned $PINNED_KERNEL_REVISION" >&2
+  exit 1
+fi
 
 mkdir -p "$KERNEL_BUILD" "$OUT_DIR"
 
@@ -51,19 +61,42 @@ make -C "$KERNEL_SRC" O="$KERNEL_BUILD" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" 
 make -C "$MODULE_DIR" KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" all
 cp "$MODULE_DIR/mister_magik_scanout_slots.ko" "$OUT_DIR/mister_magik_scanout_slots.ko"
 if command -v "${CROSS_COMPILE}modinfo" >/dev/null 2>&1; then
-  "${CROSS_COMPILE}modinfo" "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/modinfo.txt" || true
+  "${CROSS_COMPILE}modinfo" "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/modinfo.txt"
 elif command -v modinfo >/dev/null 2>&1; then
-  modinfo "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/modinfo.txt" || true
+  modinfo "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/modinfo.txt"
 else
-  : > "$OUT_DIR/modinfo.txt"
+  echo "modinfo is required to attest the module" >&2
+  exit 1
 fi
-(cd "$OUT_DIR" && sha256sum mister_magik_scanout_slots.ko > SHA256SUMS)
+kernel_config_sha256=$(sha256sum "$KERNEL_BUILD/.config" | awk '{print $1}')
+uapi_sha256=$(sha256sum "$MODULE_DIR/mister_magik_scanout_slots_uapi.h" | awk '{print $1}')
+source_sha256=$(cd "$MODULE_DIR" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h Makefile | sha256sum | awk '{print $1}')
+compiler_version=$("${CROSS_COMPILE}gcc" --version | sed -n '1p')
+module_sha256=$(sha256sum "$OUT_DIR/mister_magik_scanout_slots.ko" | awk '{print $1}')
+if command -v "${CROSS_COMPILE}nm" >/dev/null 2>&1; then
+  "${CROSS_COMPILE}nm" -u "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/imports.txt"
+elif command -v nm >/dev/null 2>&1; then
+  nm -u "$OUT_DIR/mister_magik_scanout_slots.ko" > "$OUT_DIR/imports.txt"
+else
+  echo "nm is required to attest imported kernel symbols" >&2
+  exit 1
+fi
+cat > "$OUT_DIR/provenance.txt" <<EOF
+kernel_revision=$KERNEL_REVISION
+kernel_config_sha256=$kernel_config_sha256
+uapi_sha256=$uapi_sha256
+source_sha256=$source_sha256
+compiler=$compiler_version
+module_sha256=$module_sha256
+vermagic=$(sed -n 's/^vermagic:[[:space:]]*//p' "$OUT_DIR/modinfo.txt")
+EOF
+(cd "$OUT_DIR" && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
 echo "$OUT_DIR/mister_magik_scanout_slots.ko"
 EOS
 )
 
 if command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
-  KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" MODULE_DIR="$MODULE_DIR" OUT_DIR="$OUT_DIR" \
+  KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD" MODULE_DIR="$MODULE_DIR" OUT_DIR="$OUT_DIR" KERNEL_REVISION="$KERNEL_REVISION" \
     CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" bash -lc "$build_commands"
   exit $?
 fi
@@ -89,5 +122,6 @@ container run --arch arm64 --rm --cpus 8 --memory 8g \
     export OUT_DIR='/project/build/scanout-slots'
     export CROSS_COMPILE='$CROSS_COMPILE'
     export LOCALVERSION='$LOCALVERSION'
+    export KERNEL_REVISION='$KERNEL_REVISION'
     $build_commands
   "

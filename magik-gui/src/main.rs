@@ -17,13 +17,9 @@
 //!     read               print live video mode + fb params
 //!     vsync-probe        print per-frame vsync/fallback pacing diagnostics
 //!     cpu-profile-smoke  burn CPU and verify profiler SVG output
-//!     hidden-fb-copy-bench
-//!                        benchmark RGB565 copies into hidden framebuffer slots
 //!     fb-map-report      report framebuffer ioctl metadata and mmap reach
-//!     fb-map-bandwidth   compare fb0 and hidden-buffer write bandwidth
+//!     fb-map-bandwidth   compare supported framebuffer write paths
 //!     scanout-slots-map-report  report stock-kernel scanout slots metadata
-//!     scanout-slots-map-bandwidth
-//!                        benchmark scanout slots mappings
 //!     fpga-latch-report  report FPGA vblank-latched framebuffer capability
 //!     fpga-latch-post-report
 //!                        fill one scanout slot and post it through FPGA latch
@@ -123,14 +119,15 @@ use fpga::{Fpga, UIO_GET_FB_PAR, UIO_GET_VRES};
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use fpga::{MAGIK_FBUF_LATCH_MAGIC, MAGIK_FBUF_STATUS_MAGIC};
 use mister_magik_fb::framebuffer::format::{production_label, rgb565_stride_bytes};
-#[cfg(feature = "diagnostics")]
-use mister_magik_fb::framebuffer::hidden::{HiddenRgb565BufferIndex, HiddenRgb565Framebuffer};
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::ownership::DisplayOwnerLock;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use mister_magik_fb::framebuffer::route::FramebufferRouteMode;
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
-use mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
+use mister_magik_fb::framebuffer::scanout_slots::{
+    read_scanout_slots_layout, HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer,
+    SCANOUT_SLOTS_DEVICE,
+};
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::{UiDisplay, UiDisplayPlan};
 use ui_runner::launcher_display_session::LauncherDisplaySession;
@@ -320,15 +317,11 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(feature = "diagnostics")]
         "cpu-profile-smoke" => run_cpu_profile_smoke(),
         #[cfg(feature = "diagnostics")]
-        "hidden-fb-copy-bench" => run_hidden_fb_copy_bench(),
-        #[cfg(feature = "diagnostics")]
         "fb-map-report" => run_fb_map_report(),
         #[cfg(feature = "diagnostics")]
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
-        #[cfg(feature = "diagnostics")]
-        "scanout-slots-map-bandwidth" => run_scanout_slots_map_bandwidth(),
         "library-refresh" => run_library_refresh(),
         "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
@@ -868,95 +861,6 @@ fn run_cpu_profile_smoke() {
 }
 
 #[cfg(feature = "diagnostics")]
-fn run_hidden_fb_copy_bench() {
-    use slint::platform::software_renderer::Rgb565Pixel;
-
-    let frames = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_FRAMES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
-        .unwrap_or(240)
-        .max(1);
-    let width = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_W")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(960);
-    let height = std::env::var("MISTER_HIDDEN_FB_COPY_BENCH_H")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(540);
-    let stride_bytes = rgb565_stride_bytes(width);
-    let bytes_per_copy = stride_bytes.saturating_mul(height);
-    let mut source = vec![Rgb565Pixel(0); width.saturating_mul(height)];
-    for (i, pixel) in source.iter_mut().enumerate() {
-        let x = i % width.max(1);
-        let y = i / width.max(1);
-        pixel.0 = (((x as u16) & 0x1f) << 11)
-            | (((y as u16) & 0x3f) << 5)
-            | ((x as u16 ^ y as u16) & 0x1f);
-    }
-
-    let index1 = HiddenRgb565BufferIndex::new(1).expect("hidden buffer 1 index");
-    let index2 = HiddenRgb565BufferIndex::new(2).expect("hidden buffer 2 index");
-    let mut buffer1 = match HiddenRgb565Framebuffer::open(index1, width, height, stride_bytes) {
-        Ok(buffer) => buffer,
-        Err(e) => {
-            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=1\terror={e}");
-            std::process::exit(1);
-        }
-    };
-    let mut buffer2 = match HiddenRgb565Framebuffer::open(index2, width, height, stride_bytes) {
-        Ok(buffer) => buffer,
-        Err(e) => {
-            crate::ui_errln!("hidden_fb_copy_bench\tfailed\tbuffer=2\terror={e}");
-            std::process::exit(1);
-        }
-    };
-
-    crate::ui_logln!("hidden_fb_copy_bench_header\tframe\tbuffer\tbytes\twall_us\tcpu_us\tmb_s");
-    let bench_start = std::time::Instant::now();
-    let mut total_wall_us = 0u128;
-    let mut total_cpu_us = 0u128;
-    for frame in 0..frames {
-        let buffer_index = if frame % 2 == 0 { 1 } else { 2 };
-        let target = if buffer_index == 1 {
-            &mut buffer1
-        } else {
-            &mut buffer2
-        };
-        let source_index = frame % source.len();
-        source[source_index].0 ^= 0xffff;
-        let cpu_start = thread_cpu_us();
-        let copy_start = std::time::Instant::now();
-        let copied_bytes = match target.copy_full_frame(&source, width) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                crate::ui_errln!(
-                    "hidden_fb_copy_bench\tfailed\tframe={frame}\tbuffer={buffer_index}\terror={e}"
-                );
-                std::process::exit(1);
-            }
-        };
-        let wall_us = copy_start.elapsed().as_micros() as u64;
-        let cpu_us = elapsed_thread_cpu_us(cpu_start);
-        total_wall_us += wall_us as u128;
-        total_cpu_us += cpu_us as u128;
-        let mb_s = mb_per_second(copied_bytes, wall_us);
-        crate::ui_logln!(
-            "hidden_fb_copy_bench_tsv\t{frame}\t{buffer_index}\t{copied_bytes}\t{wall_us}\t{cpu_us}\t{mb_s:.2}"
-        );
-    }
-    let elapsed_us = bench_start.elapsed().as_micros() as u128;
-    let total_bytes = (bytes_per_copy as u128).saturating_mul(frames as u128);
-    crate::ui_logln!(
-        "hidden_fb_copy_bench_summary\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\ttotal_bytes={total_bytes}\telapsed_us={elapsed_us}\tavg_wall_us={}\tavg_cpu_us={}\tavg_mb_s={:.2}",
-        total_wall_us / frames as u128,
-        total_cpu_us / frames as u128,
-        mb_per_second(total_bytes.min(usize::MAX as u128) as usize, elapsed_us as u64)
-    );
-}
-
-#[cfg(feature = "diagnostics")]
 fn run_fb_map_report() {
     let width = std::env::var("MISTER_FB_MAP_REPORT_W")
         .ok()
@@ -1022,7 +926,7 @@ fn run_fb_map_report() {
     );
     crate::ui_logln!(
         "fb_map_report_expected_tsv\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tframe_bytes={frame_bytes}\tdouble_bytes={double_bytes}\thidden_slot_bytes={}",
-        mister_magik_fb::framebuffer::hidden::MISTER_FB_SLOT_BYTES
+        1920usize * 1080 * 4
     );
 
     let full_reported = raw.smem_len;
@@ -1136,42 +1040,6 @@ fn run_fb_map_bandwidth() {
             ),
         );
     }
-
-    crate::ui_logln!(
-        "fb_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
-    );
-    match HiddenRgb565BufferIndex::new(1)
-        .map_err(|e| e.to_string())
-        .and_then(|index| {
-            HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
-                .map_err(|e| e.to_string())
-        }) {
-        Ok(mut hidden) => {
-            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                hidden
-                    .copy_full_frame(src, width)
-                    .map_err(|e| e.to_string())
-            });
-            print_bandwidth_result("hidden-dev-mem-buffer1", &result);
-        }
-        Err(e) => print_bandwidth_error("hidden-dev-mem-buffer1", &format!("open hidden: {e}")),
-    }
-}
-
-#[cfg(feature = "diagnostics")]
-const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
-
-#[cfg(feature = "diagnostics")]
-const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
-
-#[cfg(feature = "diagnostics")]
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ScanoutSlotsRegion {
-    index: usize,
-    name: String,
-    available: bool,
-    phys: String,
-    len: usize,
 }
 
 #[cfg(feature = "diagnostics")]
@@ -1194,34 +1062,40 @@ fn run_scanout_slots_map_report() {
         Err(e) => crate::ui_logln!("scanout_slots_map_fb0_tsv\terror={e}"),
     }
 
-    let metadata = match read_scanout_slots_metadata() {
-        Ok(metadata) => metadata,
-        Err(e) => {
-            crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=read_slots\terror={e}");
+    let device = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(SCANOUT_SLOTS_DEVICE)
+        .unwrap_or_else(|e| {
+            crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=open\terror={e}");
             std::process::exit(1);
-        }
-    };
-    for line in metadata.lines() {
-        crate::ui_logln!("{line}");
-    }
-
-    let regions = parse_scanout_slots_regions(&metadata);
-    if regions.len() != 2 {
-        crate::ui_errln!(
-            "scanout_slots_map_report\tfailed\tstage=parse_regions\terror=expected 2 regions, got {}",
-            regions.len()
-        );
+        });
+    let layout = read_scanout_slots_layout(&device).unwrap_or_else(|e| {
+        crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=get_layout\terror={e}");
         std::process::exit(1);
-    }
-    for region in &regions {
-        let probe = ScanoutSlotsByteRange::probe(region.index, region.len);
+    });
+    crate::ui_logln!(
+        "scanout_slots_layout_tsv\tabi_version={}\tslot_count={}\twidth={}\theight={}\tstride_bytes={}\tframe_bytes={}\tmap_bytes={}\tflags=0x{:x}",
+        layout.abi_version,
+        layout.slot_count,
+        layout.width,
+        layout.height,
+        layout.stride_bytes,
+        layout.frame_bytes,
+        layout.map_bytes,
+        layout.flags
+    );
+    for (index, slot) in layout.slots.iter().enumerate() {
+        let probe = ScanoutSlotsByteRange::probe(
+            slot.mmap_offset_bytes as usize,
+            layout.map_bytes as usize,
+        );
         let ok = probe.is_ok();
         crate::ui_logln!(
-            "scanout_slots_map_mmap_tsv\tindex={}\tname={}\tavailable={}\trequested_len={}\tok={}\terror={}",
-            region.index,
-            region.name,
-            bool_tsv(region.available),
-            region.len,
+            "scanout_slots_map_mmap_tsv\tindex={index}\tphys=0x{:08x}\toffset={}\trequested_len={}\tok={}\terror={}",
+            slot.physical_address,
+            slot.mmap_offset_bytes,
+            layout.map_bytes,
             bool_tsv(ok),
             probe.err().map(|e| e.to_string()).unwrap_or_default()
         );
@@ -1230,25 +1104,70 @@ fn run_scanout_slots_map_report() {
         }
     }
 
-    let invalid_index = ScanoutSlotsByteRange::probe(regions.len(), 4096);
-    let oversized = ScanoutSlotsByteRange::probe(0, regions[0].len.saturating_add(4096));
-    let invalid_index_rejected = invalid_index.is_err();
-    let oversized_rejected = oversized.is_err();
-    crate::ui_logln!(
-        "scanout_slots_map_reject_tsv\tcase=invalid-index\trejected={}\terror={}",
-        bool_tsv(invalid_index_rejected),
-        invalid_index
+    let rejection_cases = [
+        (
+            "invalid-index",
+            2 * 1_048_576,
+            layout.map_bytes as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+        ),
+        (
+            "oversized",
+            0,
+            layout.map_bytes as usize + 4096,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+        ),
+        (
+            "partial",
+            0,
+            layout.map_bytes as usize - 4096,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+        ),
+        (
+            "private",
+            0,
+            layout.map_bytes as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE,
+        ),
+        (
+            "executable",
+            0,
+            layout.map_bytes as usize,
+            libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+            libc::MAP_SHARED,
+        ),
+    ];
+    for (case, offset, len, prot, flags) in rejection_cases {
+        let result = ScanoutSlotsByteRange::probe_with(offset, len, prot, flags);
+        let errno = result
+            .as_ref()
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default()
-    );
-    crate::ui_logln!(
-        "scanout_slots_map_reject_tsv\tcase=oversized\trejected={}\terror={}",
-        bool_tsv(oversized_rejected),
-        oversized.err().map(|e| e.to_string()).unwrap_or_default()
-    );
-    if !invalid_index_rejected || !oversized_rejected {
-        crate::ui_errln!("scanout_slots_map_report\tfailed\tstage=reject_invalid_mapping");
+            .and_then(|error| error.raw_os_error())
+            .unwrap_or_default();
+        crate::ui_logln!(
+            "scanout_slots_map_reject_tsv\tcase={case}\trejected={}\terrno={errno}\terror={}",
+            bool_tsv(result.is_err()),
+            result.err().map(|e| e.to_string()).unwrap_or_default()
+        );
+        if errno != libc::EINVAL {
+            crate::ui_errln!(
+                "scanout_slots_map_report\tfailed\tstage=reject_invalid_mapping\tcase={case}\terrno={errno}"
+            );
+            std::process::exit(1);
+        }
+    }
+    let unknown_ioctl = unsafe { libc::ioctl(device.as_raw_fd(), 0) };
+    let unknown_errno = std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or_default();
+    if unknown_ioctl != -1 || unknown_errno != libc::ENOTTY {
+        crate::ui_errln!(
+            "scanout_slots_map_report\tfailed\tstage=reject_unknown_ioctl\tresult={unknown_ioctl}\terrno={unknown_errno}"
+        );
         std::process::exit(1);
     }
 }
@@ -1593,142 +1512,6 @@ fn run_fpga_latch_pattern(fpga: &mut Fpga) {
     }
 }
 
-#[cfg(feature = "diagnostics")]
-fn run_scanout_slots_map_bandwidth() {
-    use slint::platform::software_renderer::Rgb565Pixel;
-
-    let frames = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_FRAMES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .or_else(|| std::env::args().nth(2).and_then(|value| value.parse().ok()))
-        .unwrap_or(120)
-        .max(1);
-    let width = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_W")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(960);
-    let height = std::env::var("MISTER_PLUGIN_MAP_BANDWIDTH_H")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(540);
-    let stride_bytes = rgb565_stride_bytes(width);
-    let frame_bytes = stride_bytes.saturating_mul(height);
-    let mut source = make_rgb565_bench_source(width, height);
-    let source_bytes_len = frame_bytes.min(source.len() * std::mem::size_of::<Rgb565Pixel>());
-
-    crate::ui_logln!(
-        "scanout_slots_map_bandwidth_header\tcase\tframes\twidth\theight\tstride_bytes\tbytes_per_frame"
-    );
-
-    crate::ui_logln!(
-        "scanout_slots_map_bandwidth_case_tsv\tcase=fb0-active\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
-    );
-    match Fb0ByteRange::open(frame_bytes, 0, frame_bytes) {
-        Ok(mut fb0_range) => {
-            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                let src_bytes = rgb565_as_bytes(src, source_bytes_len);
-                fb0_range.copy_from(src_bytes).map_err(|e| e.to_string())
-            });
-            print_scanout_slots_bandwidth_result("fb0-active", &result);
-        }
-        Err(e) => print_scanout_slots_bandwidth_error("fb0-active", &format!("open range: {e}")),
-    }
-
-    let metadata = match read_scanout_slots_metadata() {
-        Ok(metadata) => metadata,
-        Err(e) => {
-            print_scanout_slots_bandwidth_error(
-                "scanout-slots",
-                &format!("read probe metadata: {e}"),
-            );
-            return;
-        }
-    };
-    for region in parse_scanout_slots_regions(&metadata) {
-        let case = format!("scanout-slots-{}", region.name);
-        crate::ui_logln!(
-            "scanout_slots_map_bandwidth_case_tsv\tcase={case}\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}\tindex={}\tphys={}",
-            region.index,
-            region.phys
-        );
-        if !region.available {
-            print_scanout_slots_bandwidth_skip(&case, "region unavailable");
-            continue;
-        }
-        if region.len < frame_bytes {
-            print_scanout_slots_bandwidth_skip(
-                &case,
-                &format!("region len {} is smaller than {frame_bytes}", region.len),
-            );
-            continue;
-        }
-        match ScanoutSlotsByteRange::open(region.index, frame_bytes) {
-            Ok(mut range) => {
-                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                    let src_bytes = rgb565_as_bytes(src, source_bytes_len);
-                    range.copy_from(src_bytes).map_err(|e| e.to_string())
-                });
-                print_scanout_slots_bandwidth_result(&case, &result);
-            }
-            Err(e) => {
-                print_scanout_slots_bandwidth_error(&case, &format!("open scanout slot: {e}"))
-            }
-        }
-    }
-
-    crate::ui_logln!(
-        "scanout_slots_map_bandwidth_case_tsv\tcase=hidden-dev-mem-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
-    );
-    match HiddenRgb565BufferIndex::new(1)
-        .map_err(|e| e.to_string())
-        .and_then(|index| {
-            HiddenRgb565Framebuffer::open(index, width, height, stride_bytes)
-                .map_err(|e| e.to_string())
-        }) {
-        Ok(mut hidden) => {
-            let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                hidden
-                    .copy_full_frame(src, width)
-                    .map_err(|e| e.to_string())
-            });
-            print_scanout_slots_bandwidth_result("hidden-dev-mem-buffer1", &result);
-        }
-        Err(e) => print_scanout_slots_bandwidth_error(
-            "hidden-dev-mem-buffer1",
-            &format!("open hidden: {e}"),
-        ),
-    }
-
-    #[cfg(feature = "ui")]
-    {
-        crate::ui_logln!(
-            "scanout_slots_map_bandwidth_case_tsv\tcase=scanout-slots-hidden-copy-full-frame-buffer1\tframes={frames}\twidth={width}\theight={height}\tstride_bytes={stride_bytes}\tbytes_per_frame={frame_bytes}"
-        );
-        match HiddenRgb565BufferIndex::new(1)
-            .map_err(|e| e.to_string())
-            .and_then(|index| {
-                ScanoutSlotsRgb565Framebuffer::open(index, width, height, stride_bytes)
-                    .map_err(|e| e.to_string())
-            }) {
-            Ok(mut hidden) => {
-                let result = run_copy_samples(frames, frame_bytes, &mut source, |src| {
-                    hidden
-                        .copy_full_frame(src, width)
-                        .map_err(|e| e.to_string())
-                });
-                print_scanout_slots_bandwidth_result(
-                    "scanout-slots-hidden-copy-full-frame-buffer1",
-                    &result,
-                );
-            }
-            Err(e) => print_scanout_slots_bandwidth_error(
-                "scanout-slots-hidden-copy-full-frame-buffer1",
-                &format!("open scanout slot: {e}"),
-            ),
-        }
-    }
-}
-
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 fn fill_hidden_latch_pattern(
     pixels: &mut [slint::platform::software_renderer::Rgb565Pixel],
@@ -1754,49 +1537,6 @@ fn fill_hidden_latch_pattern(
             pixels[y * width + x].0 = color;
         }
     }
-}
-
-#[cfg(feature = "diagnostics")]
-fn read_scanout_slots_metadata() -> std::io::Result<String> {
-    fs::read_to_string(SCANOUT_SLOTS_DEVICE)
-}
-
-#[cfg(feature = "diagnostics")]
-fn parse_scanout_slots_regions(metadata: &str) -> Vec<ScanoutSlotsRegion> {
-    metadata
-        .lines()
-        .filter_map(parse_scanout_slots_region)
-        .collect()
-}
-
-#[cfg(feature = "diagnostics")]
-fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
-    if !line.starts_with("scanout_slots_region_tsv\t") {
-        return None;
-    }
-    let mut index = None;
-    let mut name = None;
-    let mut available = None;
-    let mut phys = None;
-    let mut len = None;
-    for field in line.split('\t').skip(1) {
-        let (key, value) = field.split_once('=')?;
-        match key {
-            "index" => index = value.parse::<usize>().ok(),
-            "name" => name = Some(value.to_string()),
-            "available" => available = Some(value == "1"),
-            "phys" => phys = Some(value.to_string()),
-            "len" => len = value.parse::<usize>().ok(),
-            _ => {}
-        }
-    }
-    Some(ScanoutSlotsRegion {
-        index: index?,
-        name: name?,
-        available: available?,
-        phys: phys?,
-        len: len?,
-    })
 }
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2041,11 +1781,24 @@ struct ScanoutSlotsByteRange {
 
 #[cfg(feature = "diagnostics")]
 impl ScanoutSlotsByteRange {
-    fn probe(index: usize, len: usize) -> std::io::Result<()> {
-        Self::open(index, len).map(|_| ())
+    fn probe(offset: usize, len: usize) -> std::io::Result<()> {
+        Self::open(offset, len).map(|_| ())
     }
 
-    fn open(index: usize, len: usize) -> std::io::Result<Self> {
+    fn probe_with(offset: usize, len: usize, prot: i32, flags: i32) -> std::io::Result<()> {
+        Self::open_with(offset, len, prot, flags).map(|_| ())
+    }
+
+    fn open(offset: usize, len: usize) -> std::io::Result<Self> {
+        Self::open_with(
+            offset,
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+        )
+    }
+
+    fn open_with(offset: usize, len: usize, prot: i32, flags: i32) -> std::io::Result<Self> {
         if len == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2056,22 +1809,14 @@ impl ScanoutSlotsByteRange {
             .read(true)
             .write(true)
             .open(SCANOUT_SLOTS_DEVICE)?;
-        let offset = index
-            .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "scanout-slot offset overflow",
-                )
-            })?;
         // SAFETY: fd refers to the scanout slots misc device; mapping length is
         // requested by diagnostics and unmapped in Drop.
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
                 len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
+                prot,
+                flags,
                 device.as_raw_fd(),
                 offset as libc::off_t,
             )
@@ -2118,43 +1863,6 @@ impl Drop for ScanoutSlotsByteRange {
             libc::munmap(self.mem.cast::<libc::c_void>(), self.len);
         }
     }
-}
-
-#[cfg(feature = "diagnostics")]
-fn print_scanout_slots_bandwidth_result(case: &str, samples: &CopySamples) {
-    if let Some(error) = &samples.error {
-        print_scanout_slots_bandwidth_error(case, error);
-        return;
-    }
-    crate::ui_logln!(
-        "scanout_slots_map_bandwidth_summary_tsv\tcase={case}\tvalid=1\tframes={}\tbytes_per_frame={}\ttotal_bytes={}\tavg_wall_us={}\tp50_wall_us={}\tp95_wall_us={}\tp99_wall_us={}\tmax_wall_us={}\tavg_cpu_us={}\tp50_cpu_us={}\tp95_cpu_us={}\tp99_cpu_us={}\tmax_cpu_us={}\tavg_mb_s={:.2}\terror=",
-        samples.frames,
-        samples.bytes_per_frame,
-        samples.total_bytes,
-        avg_u64(&samples.wall_us),
-        percentile_u64(&samples.wall_us, 50),
-        percentile_u64(&samples.wall_us, 95),
-        percentile_u64(&samples.wall_us, 99),
-        samples.wall_us.iter().copied().max().unwrap_or_default(),
-        avg_u64(&samples.cpu_us),
-        percentile_u64(&samples.cpu_us, 50),
-        percentile_u64(&samples.cpu_us, 95),
-        percentile_u64(&samples.cpu_us, 99),
-        samples.cpu_us.iter().copied().max().unwrap_or_default(),
-        mb_per_second(samples.total_bytes, samples.wall_us.iter().copied().sum())
-    );
-}
-
-#[cfg(feature = "diagnostics")]
-fn print_scanout_slots_bandwidth_error(case: &str, error: &str) {
-    crate::ui_logln!(
-        "scanout_slots_map_bandwidth_summary_tsv\tcase={case}\tvalid=0\tframes=0\tbytes_per_frame=0\ttotal_bytes=0\tavg_wall_us=0\tp50_wall_us=0\tp95_wall_us=0\tp99_wall_us=0\tmax_wall_us=0\tavg_cpu_us=0\tp50_cpu_us=0\tp95_cpu_us=0\tp99_cpu_us=0\tmax_cpu_us=0\tavg_mb_s=0.00\terror={error}"
-    );
-}
-
-#[cfg(feature = "diagnostics")]
-fn print_scanout_slots_bandwidth_skip(case: &str, reason: &str) {
-    crate::ui_logln!("scanout_slots_map_bandwidth_skip_tsv\tcase={case}\treason={reason}");
 }
 
 #[cfg(feature = "diagnostics")]
@@ -2570,37 +2278,6 @@ mod tests {
         fs::write(&db, b"not empty").expect("write nonempty db");
         assert!(usable_library_database_exists(&db));
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    #[cfg(feature = "diagnostics")]
-    fn scanout_slots_region_parser_reads_module_metadata() {
-        let metadata = "\
-scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
-scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\n\
-scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\n";
-
-        let regions = parse_scanout_slots_regions(metadata);
-
-        assert_eq!(
-            regions,
-            vec![
-                ScanoutSlotsRegion {
-                    index: 0,
-                    name: "hidden-slot-1".to_string(),
-                    available: true,
-                    phys: "0x22800000".to_string(),
-                    len: 1_036_800,
-                },
-                ScanoutSlotsRegion {
-                    index: 1,
-                    name: "hidden-slot-2".to_string(),
-                    available: true,
-                    phys: "0x23000000".to_string(),
-                    len: 1_036_800,
-                },
-            ]
-        );
     }
 
     #[test]

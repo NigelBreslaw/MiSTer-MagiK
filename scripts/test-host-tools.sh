@@ -34,6 +34,7 @@ grep -q '^video_mode=8$' "$TMP/repaired.ini"
 for script in \
   "$ROOT/scripts/check-no-main-kill.sh" \
   "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
+  "$ROOT/scripts/check-scanout-slots-contract.sh" \
   "$ROOT/scripts/bench-context-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
@@ -229,6 +230,7 @@ PY
 
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+"$ROOT/scripts/check-scanout-slots-contract.sh"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
   -g '*.rs' \
   -g '!fallible_log.rs' >/dev/null; then

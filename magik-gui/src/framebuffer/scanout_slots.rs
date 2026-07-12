@@ -5,121 +5,83 @@
 //! uses them as Main-flippable hidden RGB565 buffers.
 
 use crate::framebuffer::format::rgb565_stride_bytes;
-use crate::framebuffer::hidden::{HiddenFramebufferError, HiddenRgb565BufferIndex};
 use slint::platform::software_renderer::Rgb565Pixel;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 
 pub const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
-pub const SCANOUT_SLOTS_MIN_VERSION: u32 = 1;
+pub const SCANOUT_SLOTS_ABI_VERSION: u32 = 1;
+pub const SCANOUT_SLOTS_SLOT_COUNT: usize = 2;
 pub const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
 pub const SCANOUT_SLOT_FRAME_BYTES: usize = 960 * 540 * 2;
+pub const SCANOUT_SLOT_MAP_BYTES: usize = 1_040_384;
+pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 = 1;
+const SCANOUT_SLOTS_GET_LAYOUT: libc::c_ulong = 0x8040_4d01;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScanoutSlotsHeader {
-    pub name: String,
-    pub version: u32,
-    pub uts_release: String,
-    pub region_offset_bytes: usize,
-    pub cache_mode: String,
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanoutSlotLayout {
+    pub physical_address: u32,
+    pub mmap_offset_bytes: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScanoutSlotsRegion {
-    pub index: usize,
-    pub name: String,
-    pub available: bool,
-    pub phys: String,
-    pub len: usize,
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScanoutSlotsLayout {
+    pub abi_version: u32,
+    pub slot_count: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride_bytes: u32,
+    pub frame_bytes: u32,
+    pub map_bytes: u32,
+    pub flags: u32,
+    pub slots: [ScanoutSlotLayout; SCANOUT_SLOTS_SLOT_COUNT],
+    pub reserved: [u32; 4],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScanoutSlotsMetadata {
-    pub header: ScanoutSlotsHeader,
-    pub regions: Vec<ScanoutSlotsRegion>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HiddenRgb565BufferIndex(u8);
+
+impl HiddenRgb565BufferIndex {
+    pub fn new(index: u8) -> Result<Self, ScanoutSlotsError> {
+        match index {
+            1 | 2 => Ok(Self(index)),
+            _ => Err(ScanoutSlotsError::InvalidBufferIndex { index }),
+        }
+    }
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScanoutSlotsError {
     Io(String),
-    MissingHeader,
-    UnsupportedVersion {
-        version: u32,
-        min_version: u32,
-    },
-    UnsupportedRegionStride {
-        region_offset_bytes: usize,
-    },
-    UnsupportedCacheMode {
-        cache_mode: String,
-    },
-    MissingRegion {
-        name: String,
-    },
-    RegionUnavailable {
-        name: String,
-    },
-    RegionTooSmall {
-        name: String,
-        len: usize,
-        required: usize,
-    },
+    InvalidBufferIndex { index: u8 },
+    InvalidLayout(String),
     InvalidGeometry(String),
-    SourceTooShort {
-        needed: usize,
-        actual: usize,
-    },
+    SourceTooShort { needed: usize, actual: usize },
     MmapFailed(String),
     MmapReturnedNull,
-    InvalidPhysicalAddress {
-        name: String,
-        phys: String,
-    },
 }
 
 impl std::fmt::Display for ScanoutSlotsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "scanout slots I/O failed: {e}"),
-            Self::MissingHeader => write!(f, "scanout slots metadata is missing a header"),
-            Self::UnsupportedVersion {
-                version,
-                min_version,
-            } => write!(
-                f,
-                "scanout slots version {version} is older than required version {min_version}"
-            ),
-            Self::UnsupportedRegionStride {
-                region_offset_bytes,
-            } => write!(
-                f,
-                "scanout slots region stride {region_offset_bytes} does not match expected {SCANOUT_SLOTS_REGION_OFFSET_BYTES}"
-            ),
-            Self::UnsupportedCacheMode { cache_mode } => {
-                write!(f, "scanout slots cache mode {cache_mode} is not writecombine")
+            Self::InvalidBufferIndex { index } => {
+                write!(f, "scanout slot index must be 1 or 2, got {index}")
             }
-            Self::MissingRegion { name } => write!(f, "scanout slots region {name} is missing"),
-            Self::RegionUnavailable { name } => {
-                write!(f, "scanout slots region {name} is unavailable")
-            }
-            Self::RegionTooSmall {
-                name,
-                len,
-                required,
-            } => write!(
-                f,
-                "scanout slots region {name} has {len} bytes, need {required}"
-            ),
+            Self::InvalidLayout(message) => write!(f, "invalid scanout slots layout: {message}"),
             Self::InvalidGeometry(e) => write!(f, "invalid scanout-slot framebuffer geometry: {e}"),
             Self::SourceTooShort { needed, actual } => {
                 write!(f, "scanout-slot source has {actual} pixels, need {needed}")
             }
             Self::MmapFailed(e) => write!(f, "scanout slots mmap failed: {e}"),
             Self::MmapReturnedNull => write!(f, "scanout slots mmap returned a null address"),
-            Self::InvalidPhysicalAddress { name, phys } => {
-                write!(f, "scanout slots region {name} has invalid physical address {phys}")
-            }
         }
     }
 }
@@ -132,78 +94,15 @@ impl From<io::Error> for ScanoutSlotsError {
     }
 }
 
-pub fn read_scanout_slots_metadata() -> Result<ScanoutSlotsMetadata, ScanoutSlotsError> {
-    parse_scanout_slots_metadata(&fs::read_to_string(SCANOUT_SLOTS_DEVICE)?)
-}
-
-pub fn parse_scanout_slots_metadata(text: &str) -> Result<ScanoutSlotsMetadata, ScanoutSlotsError> {
-    let header = text
-        .lines()
-        .find_map(parse_scanout_slots_header)
-        .ok_or(ScanoutSlotsError::MissingHeader)?;
-    let regions = text
-        .lines()
-        .filter_map(parse_scanout_slots_region)
-        .collect();
-    Ok(ScanoutSlotsMetadata { header, regions })
-}
-
-pub fn parse_scanout_slots_header(line: &str) -> Option<ScanoutSlotsHeader> {
-    if !line.starts_with("scanout_slots_header_tsv\t") {
-        return None;
+pub fn read_scanout_slots_layout(file: &File) -> Result<ScanoutSlotsLayout, ScanoutSlotsError> {
+    let mut layout = ScanoutSlotsLayout::default();
+    // SAFETY: layout is a writable fixed-layout C structure for the duration of ioctl.
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), SCANOUT_SLOTS_GET_LAYOUT, &mut layout) };
+    if result != 0 {
+        return Err(io::Error::last_os_error().into());
     }
-    let mut name = None;
-    let mut version = None;
-    let mut uts_release = None;
-    let mut region_offset_bytes = None;
-    let mut cache_mode = None;
-    for field in line.split('\t').skip(1) {
-        let (key, value) = field.split_once('=')?;
-        match key {
-            "name" => name = Some(value.to_string()),
-            "version" => version = value.parse::<u32>().ok(),
-            "uts_release" => uts_release = Some(value.to_string()),
-            "region_offset_bytes" => region_offset_bytes = value.parse::<usize>().ok(),
-            "cache_mode" => cache_mode = Some(value.to_string()),
-            _ => {}
-        }
-    }
-    Some(ScanoutSlotsHeader {
-        name: name?,
-        version: version?,
-        uts_release: uts_release?,
-        region_offset_bytes: region_offset_bytes?,
-        cache_mode: cache_mode?,
-    })
-}
-
-pub fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
-    if !line.starts_with("scanout_slots_region_tsv\t") {
-        return None;
-    }
-    let mut index = None;
-    let mut name = None;
-    let mut available = None;
-    let mut phys = None;
-    let mut len = None;
-    for field in line.split('\t').skip(1) {
-        let (key, value) = field.split_once('=')?;
-        match key {
-            "index" => index = value.parse::<usize>().ok(),
-            "name" => name = Some(value.to_string()),
-            "available" => available = Some(value == "1"),
-            "phys" => phys = Some(value.to_string()),
-            "len" => len = value.parse::<usize>().ok(),
-            _ => {}
-        }
-    }
-    Some(ScanoutSlotsRegion {
-        index: index?,
-        name: name?,
-        available: available?,
-        phys: phys?,
-        len: len?,
-    })
+    validate_scanout_slots_layout(&layout)?;
+    Ok(layout)
 }
 
 pub struct ScanoutSlotsRgb565Framebuffer {
@@ -212,7 +111,7 @@ pub struct ScanoutSlotsRgb565Framebuffer {
     width: usize,
     height: usize,
     stride_pixels: usize,
-    region: ScanoutSlotsRegion,
+    slot: ScanoutSlotLayout,
     _device: File,
 }
 
@@ -223,31 +122,31 @@ impl ScanoutSlotsRgb565Framebuffer {
         height: usize,
         stride_bytes: usize,
     ) -> Result<Self, ScanoutSlotsError> {
-        let metadata = read_scanout_slots_metadata()?;
-        Self::open_with_metadata(index, width, height, stride_bytes, &metadata)
-    }
-
-    fn open_with_metadata(
-        index: HiddenRgb565BufferIndex,
-        width: usize,
-        height: usize,
-        stride_bytes: usize,
-        metadata: &ScanoutSlotsMetadata,
-    ) -> Result<Self, ScanoutSlotsError> {
-        validate_scanout_slots_metadata(metadata)?;
-        let map_len = validate_scanout_slots_geometry(width, height, stride_bytes)
-            .map_err(|e| ScanoutSlotsError::InvalidGeometry(e.to_string()))?;
-        let region = scanout_hidden_region(metadata, index, map_len)?;
         let device = OpenOptions::new()
             .read(true)
             .write(true)
             .open(SCANOUT_SLOTS_DEVICE)?;
-        let offset = region
-            .index
-            .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
-            .ok_or(ScanoutSlotsError::UnsupportedRegionStride {
-                region_offset_bytes: usize::MAX,
-            })?;
+        let layout = read_scanout_slots_layout(&device)?;
+        Self::open_with_layout(index, width, height, stride_bytes, device, &layout)
+    }
+
+    fn open_with_layout(
+        index: HiddenRgb565BufferIndex,
+        width: usize,
+        height: usize,
+        stride_bytes: usize,
+        device: File,
+        layout: &ScanoutSlotsLayout,
+    ) -> Result<Self, ScanoutSlotsError> {
+        let frame_len = validate_scanout_slots_geometry(width, height, stride_bytes)?;
+        if frame_len != layout.frame_bytes as usize {
+            return Err(ScanoutSlotsError::InvalidGeometry(format!(
+                "requested frame has {frame_len} bytes, ABI requires {}",
+                layout.frame_bytes
+            )));
+        }
+        let slot = layout.slots[index.get() as usize - 1];
+        let map_len = layout.map_bytes as usize;
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -255,7 +154,7 @@ impl ScanoutSlotsRgb565Framebuffer {
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 device.as_raw_fd(),
-                offset as libc::off_t,
+                slot.mmap_offset_bytes as libc::off_t,
             )
         };
         if mem == libc::MAP_FAILED {
@@ -275,7 +174,7 @@ impl ScanoutSlotsRgb565Framebuffer {
             width,
             height,
             stride_pixels: stride_bytes / std::mem::size_of::<Rgb565Pixel>(),
-            region,
+            slot,
             _device: device,
         })
     }
@@ -411,12 +310,12 @@ impl ScanoutSlotsRgb565Framebuffer {
         Ok(w * h * std::mem::size_of::<Rgb565Pixel>())
     }
 
-    pub fn region(&self) -> &ScanoutSlotsRegion {
-        &self.region
+    pub fn slot(&self) -> &ScanoutSlotLayout {
+        &self.slot
     }
 
     pub fn physical_addr(&self) -> Result<u32, ScanoutSlotsError> {
-        parse_region_phys_u32(&self.region)
+        Ok(self.slot.physical_address)
     }
 
     pub fn pixels(&self) -> &[Rgb565Pixel] {
@@ -497,18 +396,6 @@ fn copy_rect_565_strided_pixels(
     }
 }
 
-pub fn parse_region_phys_u32(region: &ScanoutSlotsRegion) -> Result<u32, ScanoutSlotsError> {
-    let raw = region.phys.trim();
-    let hex = raw
-        .strip_prefix("0x")
-        .or_else(|| raw.strip_prefix("0X"))
-        .unwrap_or(raw);
-    u32::from_str_radix(hex, 16).map_err(|_| ScanoutSlotsError::InvalidPhysicalAddress {
-        name: region.name.clone(),
-        phys: region.phys.clone(),
-    })
-}
-
 impl Drop for ScanoutSlotsRgb565Framebuffer {
     fn drop(&mut self) {
         unsafe {
@@ -517,24 +404,32 @@ impl Drop for ScanoutSlotsRgb565Framebuffer {
     }
 }
 
-fn validate_scanout_slots_metadata(
-    metadata: &ScanoutSlotsMetadata,
-) -> Result<(), ScanoutSlotsError> {
-    if metadata.header.version < SCANOUT_SLOTS_MIN_VERSION {
-        return Err(ScanoutSlotsError::UnsupportedVersion {
-            version: metadata.header.version,
-            min_version: SCANOUT_SLOTS_MIN_VERSION,
-        });
-    }
-    if metadata.header.region_offset_bytes != SCANOUT_SLOTS_REGION_OFFSET_BYTES {
-        return Err(ScanoutSlotsError::UnsupportedRegionStride {
-            region_offset_bytes: metadata.header.region_offset_bytes,
-        });
-    }
-    if metadata.header.cache_mode != "writecombine" {
-        return Err(ScanoutSlotsError::UnsupportedCacheMode {
-            cache_mode: metadata.header.cache_mode.clone(),
-        });
+pub fn validate_scanout_slots_layout(layout: &ScanoutSlotsLayout) -> Result<(), ScanoutSlotsError> {
+    let expected = ScanoutSlotsLayout {
+        abi_version: SCANOUT_SLOTS_ABI_VERSION,
+        slot_count: SCANOUT_SLOTS_SLOT_COUNT as u32,
+        width: 960,
+        height: 540,
+        stride_bytes: 1920,
+        frame_bytes: SCANOUT_SLOT_FRAME_BYTES as u32,
+        map_bytes: SCANOUT_SLOT_MAP_BYTES as u32,
+        flags: SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
+        slots: [
+            ScanoutSlotLayout {
+                physical_address: 0x227e_9000,
+                mmap_offset_bytes: 0,
+            },
+            ScanoutSlotLayout {
+                physical_address: 0x22fd_2000,
+                mmap_offset_bytes: SCANOUT_SLOTS_REGION_OFFSET_BYTES as u32,
+            },
+        ],
+        reserved: [0; 4],
+    };
+    if *layout != expected {
+        return Err(ScanoutSlotsError::InvalidLayout(format!(
+            "expected {expected:?}, got {layout:?}"
+        )));
     }
     Ok(())
 }
@@ -543,45 +438,21 @@ fn validate_scanout_slots_geometry(
     width: usize,
     height: usize,
     stride_bytes: usize,
-) -> Result<usize, HiddenFramebufferError> {
+) -> Result<usize, ScanoutSlotsError> {
     if width == 0 || height == 0 {
-        return Err(HiddenFramebufferError::InvalidGeometry { width, height });
+        return Err(ScanoutSlotsError::InvalidGeometry(format!(
+            "invalid dimensions {width}x{height}"
+        )));
     }
     let min_stride_bytes = rgb565_stride_bytes(width);
     if stride_bytes < min_stride_bytes {
-        return Err(HiddenFramebufferError::InvalidStride {
-            stride_bytes,
-            min_stride_bytes,
-        });
+        return Err(ScanoutSlotsError::InvalidGeometry(format!(
+            "stride {stride_bytes} is smaller than {min_stride_bytes}"
+        )));
     }
     stride_bytes
         .checked_mul(height)
-        .ok_or(HiddenFramebufferError::AddressOverflow)
-}
-
-fn scanout_hidden_region(
-    metadata: &ScanoutSlotsMetadata,
-    index: HiddenRgb565BufferIndex,
-    required_len: usize,
-) -> Result<ScanoutSlotsRegion, ScanoutSlotsError> {
-    let name = format!("hidden-slot-{}", index.get());
-    let region = metadata
-        .regions
-        .iter()
-        .find(|region| region.name == name)
-        .cloned()
-        .ok_or_else(|| ScanoutSlotsError::MissingRegion { name: name.clone() })?;
-    if !region.available {
-        return Err(ScanoutSlotsError::RegionUnavailable { name });
-    }
-    if region.len < required_len {
-        return Err(ScanoutSlotsError::RegionTooSmall {
-            name,
-            len: region.len,
-            required: required_len,
-        });
-    }
-    Ok(region)
+        .ok_or_else(|| ScanoutSlotsError::InvalidGeometry("frame size overflow".to_string()))
 }
 
 #[cfg(test)]
@@ -590,84 +461,69 @@ mod tests {
 
     use super::*;
 
-    fn metadata() -> ScanoutSlotsMetadata {
-        parse_scanout_slots_metadata(
-            "\
-scanout_slots_header_tsv\tname=mister-magik-scanout-slots\tversion=1\tuts_release=5.15.1-MiSTer\topen_count=1\tmmap_count=0\tpage_size=4096\tregion_offset_pages=256\tregion_offset_bytes=1048576\tcache_mode=writecombine\n\
-scanout_slots_region_tsv\tindex=0\tname=hidden-slot-1\tavailable=1\tphys=0x22800000\tlen=1036800\n\
-scanout_slots_region_tsv\tindex=1\tname=hidden-slot-2\tavailable=1\tphys=0x23000000\tlen=1036800\n",
-        )
-        .unwrap()
+    fn layout() -> ScanoutSlotsLayout {
+        ScanoutSlotsLayout {
+            abi_version: SCANOUT_SLOTS_ABI_VERSION,
+            slot_count: 2,
+            width: 960,
+            height: 540,
+            stride_bytes: 1920,
+            frame_bytes: 1_036_800,
+            map_bytes: 1_040_384,
+            flags: SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
+            slots: [
+                ScanoutSlotLayout {
+                    physical_address: 0x227e_9000,
+                    mmap_offset_bytes: 0,
+                },
+                ScanoutSlotLayout {
+                    physical_address: 0x22fd_2000,
+                    mmap_offset_bytes: 1_048_576,
+                },
+            ],
+            reserved: [0; 4],
+        }
     }
 
     #[test]
-    fn parser_reads_header_and_regions() {
-        let metadata = metadata();
-
-        assert_eq!(metadata.header.version, 1);
-        assert_eq!(
-            metadata.header.region_offset_bytes,
-            SCANOUT_SLOTS_REGION_OFFSET_BYTES
-        );
-        assert_eq!(metadata.header.cache_mode, "writecombine");
-        assert_eq!(metadata.regions[0].name, "hidden-slot-1");
+    fn layout_matches_exact_kernel_contract() {
+        let layout = layout();
+        assert_eq!(std::mem::size_of::<ScanoutSlotsLayout>(), 64);
+        assert_eq!(layout.slots[0].physical_address, 0x227e_9000);
+        assert_eq!(layout.slots[1].physical_address, 0x22fd_2000);
+        validate_scanout_slots_layout(&layout).unwrap();
     }
 
     #[test]
-    fn validation_rejects_old_or_non_wc_contracts() {
-        let mut old_metadata = metadata();
-        old_metadata.header.version = 0;
+    fn validation_rejects_every_contract_mismatch() {
+        let mut wrong = layout();
+        wrong.abi_version = 0;
         assert!(matches!(
-            validate_scanout_slots_metadata(&old_metadata),
-            Err(ScanoutSlotsError::UnsupportedVersion { .. })
+            validate_scanout_slots_layout(&wrong),
+            Err(ScanoutSlotsError::InvalidLayout(_))
         ));
 
-        let mut uncached_metadata = metadata();
-        uncached_metadata.header.cache_mode = "uncached".to_string();
+        let mut wrong = layout();
+        wrong.slots[1].physical_address = 0x2300_0000;
         assert!(matches!(
-            validate_scanout_slots_metadata(&uncached_metadata),
-            Err(ScanoutSlotsError::UnsupportedCacheMode { .. })
+            validate_scanout_slots_layout(&wrong),
+            Err(ScanoutSlotsError::InvalidLayout(_))
+        ));
+
+        let mut wrong = layout();
+        wrong.reserved[0] = 1;
+        assert!(matches!(
+            validate_scanout_slots_layout(&wrong),
+            Err(ScanoutSlotsError::InvalidLayout(_))
         ));
     }
 
     #[test]
-    fn hidden_region_selects_available_slots() {
-        let metadata = metadata();
-        let region = scanout_hidden_region(
-            &metadata,
-            HiddenRgb565BufferIndex::new(2).unwrap(),
-            SCANOUT_SLOT_FRAME_BYTES,
-        )
-        .unwrap();
-
-        assert_eq!(region.index, 1);
-        assert_eq!(region.name, "hidden-slot-2");
-    }
-
-    #[test]
-    fn hidden_region_rejects_short_or_missing_slots() {
-        let mut metadata = metadata();
-        metadata.regions[0].len = 16;
-        assert!(matches!(
-            scanout_hidden_region(
-                &metadata,
-                HiddenRgb565BufferIndex::new(1).unwrap(),
-                SCANOUT_SLOT_FRAME_BYTES
-            ),
-            Err(ScanoutSlotsError::RegionTooSmall { .. })
-        ));
-
-        metadata
-            .regions
-            .retain(|region| region.name != "hidden-slot-1");
-        assert!(matches!(
-            scanout_hidden_region(
-                &metadata,
-                HiddenRgb565BufferIndex::new(1).unwrap(),
-                SCANOUT_SLOT_FRAME_BYTES
-            ),
-            Err(ScanoutSlotsError::MissingRegion { .. })
-        ));
+    fn buffer_index_accepts_only_two_slots() {
+        assert_eq!(HiddenRgb565BufferIndex::new(1).unwrap().get(), 1);
+        assert_eq!(HiddenRgb565BufferIndex::new(2).unwrap().get(), 2);
+        assert!(HiddenRgb565BufferIndex::new(0).is_err());
+        assert!(HiddenRgb565BufferIndex::new(3).is_err());
     }
 
     #[test]

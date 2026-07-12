@@ -8,8 +8,6 @@ REMOTE_KO="$REMOTE_DIR/mister_magik_scanout_slots.ko"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LOCAL_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 LOCAL_REPORT="$ROOT/build/scanout-slots/scanout-slots-map-report.log"
-LOCAL_BANDWIDTH="$ROOT/build/scanout-slots/scanout-slots-map-bandwidth.log"
-FRAMES="${MISTER_SCANOUT_SLOTS_FRAMES:-120}"
 
 cleanup() {
   "$MISTER" run "rmmod mister_magik_scanout_slots 2>/dev/null || true; rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
@@ -46,9 +44,6 @@ echo "==> Loading module"
 echo "==> Running scanout-slots-map-report"
 "$MISTER" run "'$REMOTE_BIN' scanout-slots-map-report" | tee "$LOCAL_REPORT"
 
-echo "==> Running scanout-slots-map-bandwidth ($FRAMES frames)"
-"$MISTER" run "'$REMOTE_BIN' scanout-slots-map-bandwidth '$FRAMES'" | tee "$LOCAL_BANDWIDTH"
-
 echo "==> Unloading module and restoring normal MagiK"
 cleanup
 "$ROOT/scripts/deploy-rust.sh"
@@ -57,4 +52,3 @@ cleanup
 
 echo "==> Wrote:"
 echo "    $LOCAL_REPORT"
-echo "    $LOCAL_BANDWIDTH"

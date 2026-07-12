@@ -40,6 +40,7 @@ export default defineConfig({
           items: [
             'architecture/boot-and-process',
             'architecture/framebuffer-and-hdmi',
+            'architecture/kernel-scanout-plugin',
             'architecture/launcher-lifecycle',
             'architecture/composition',
             'architecture/catalog-and-preview',

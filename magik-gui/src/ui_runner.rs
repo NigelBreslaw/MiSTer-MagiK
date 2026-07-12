@@ -67,8 +67,8 @@ use mister_magik_fb::framebuffer::target::{
     DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
-    format::rgb565_stride_bytes, hidden::HiddenRgb565BufferIndex,
-    scanout_slots::ScanoutSlotsRgb565Framebuffer,
+    format::rgb565_stride_bytes,
+    scanout_slots::{HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer},
 };
 use slint_ui::launcher::PreviewStatus;
 use std::cell::Cell;

@@ -3,8 +3,6 @@ pub mod copy;
 pub mod downsample;
 pub mod format;
 #[cfg(feature = "ui")]
-pub mod hidden;
-#[cfg(feature = "ui")]
 pub mod mapped;
 #[cfg(feature = "ui")]
 pub mod mode;

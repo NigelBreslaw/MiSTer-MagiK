@@ -127,9 +127,8 @@ and copy-path conclusions into one broad run.
   Report latch-visible metrics from the generated `*-launcher-home-scroll-drops.tsv`:
   latch deadline misses, visual latch misses, FPGA `drop_count`, latch margin,
   and the specific Home timing under test.
-- Hidden-copy claims: use the Home latch gate when the change affects normal
-  launcher presentation, and use the plugin-hidden copy microbench when the
-  claim is specifically about `PluginHiddenRgb565Framebuffer` copy mechanics.
+- Hidden-copy claims use the Home latch gate and its `latch_copy_p50/p95/p99`
+  measurements. The old plugin mapping microbench is retired.
   Report `latch_copy_p50/p95/p99` or the microbench copy timing, not Arcade
   list timing.
 - Arcade list or preview claims: use
