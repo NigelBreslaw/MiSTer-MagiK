@@ -15,15 +15,18 @@ ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
 catalog_refresh="${MISTER_CATALOG_REFRESH:-off}"
 present_backend="${MISTER_PRESENT_BACKEND:-fpga-vblank-latch-hidden}"
+menu="${MISTER_LAUNCHER_START_MENU:-root}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/gate-launcher-home-max-scroll-zero-drops.sh [LABEL] [--secs N] [--deploy-device|--skip-build] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--present-backend BACKEND]
+Usage: scripts/gate-launcher-home-max-scroll-zero-drops.sh [LABEL] [--secs N] [--menu root|consoles|handhelds|computers|snk-neogeo] [--deploy-device|--skip-build] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--present-backend BACKEND]
 
-Runs the real launcher Home screen horizontal system row with the
+Runs a real launcher horizontal menu row with the
 home-repeat-hold scenario for 30s by default. The scenario holds left/right
 through the normal launcher input path, including the real repeat delay and
-80ms repeat cadence, and reverses at the ends of the system row.
+80ms repeat cadence, and reverses at the ends of the selected menu row. Use
+--menu root for the five-item top level and --menu consoles (or another named
+submenu) for a longer hierarchy row.
 
 Use this gate for Home render/pan latch claims and for normal launcher hidden
 copy-path claims. Report the generated latch/drop row fields that match the
@@ -46,6 +49,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --secs) secs="${2:?}"; shift 2 ;;
+    --menu) menu="${2:?}"; shift 2 ;;
     --deploy-device) deploy="device"; shift ;;
     --skip-build) deploy="skip"; shift ;;
     --ui-fb-size) ui_fb_size="${2:?}"; shift 2 ;;
@@ -78,6 +82,10 @@ case "$catalog_refresh" in
   default|off|force) ;;
   *) echo "--catalog-refresh must be default, off, or force" >&2; exit 2 ;;
 esac
+case "$menu" in
+  root|consoles|handhelds|computers|snk-neogeo) ;;
+  *) echo "--menu must be root, consoles, handhelds, computers, or snk-neogeo" >&2; exit 2 ;;
+esac
 mkdir -p "$OUT_DIR"
 env_file="$(mktemp "${TMPDIR:-/tmp}/mister-magik-home-scroll-env.XXXXXX")"
 remote_trace="/tmp/${label}-launcher-home-scroll.tsv"
@@ -108,13 +116,16 @@ esac
   fi
   printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
   printf 'export MISTER_LAUNCHER_LOCK_SCREEN=home\n'
+  if [[ "$menu" != "root" ]]; then
+    printf 'export MISTER_LAUNCHER_START_MENU=%q\n' "$menu"
+  fi
   printf 'export MISTER_LAUNCHER_BENCH_SCENARIO=home-repeat-hold\n'
   printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
   printf 'export MISTER_PREVIEW_SCROLL_TRACE=%q\n' "$remote_trace"
 } >"$env_file"
 
 rm -f "$trace" "$log" "$status_json" "$drop_report" "$fpga_latch_before" "$fpga_latch_after"
-echo "==> Capture supervised launcher Home system-row home-repeat-hold secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us catalog_refresh=$catalog_refresh"
+echo "==> Capture supervised launcher menu-row home-repeat-hold menu=$menu secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us catalog_refresh=$catalog_refresh"
 if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
   "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$fpga_latch_before"
   echo "wrote $fpga_latch_before"
