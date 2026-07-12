@@ -1142,6 +1142,7 @@ pub(super) fn run_launcher_loop(
     animation_clock: &AnimationClock,
 ) {
     let start = Instant::now();
+    let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
@@ -1163,7 +1164,11 @@ pub(super) fn run_launcher_loop(
     let mut preview_initial_lists_ready = BTreeSet::new();
     let bench_starts_on_arcade = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
-    let benchmark_media_interaction_active = launcher_bench_scenario.is_some();
+    let media_benchmark_contention = media_benchmark_contention_enabled();
+    let benchmark_media_interaction_active = benchmark_media_interaction_gate_active(
+        launcher_bench_scenario.is_some(),
+        media_benchmark_contention,
+    );
     let env_start_screen = launcher_start_screen_from_env();
     let env_start_system = launcher_start_system_from_env();
     let env_start_menu = launcher_bench_scenario
@@ -1243,6 +1248,13 @@ pub(super) fn run_launcher_loop(
         "launcher_loop_start",
         format!("label={label} pads={}", pad.len()),
     );
+    if media_benchmark_contention {
+        print_startup_event(
+            start,
+            "media_benchmark_contention",
+            "active=1 benchmark_interaction_gate=disabled",
+        );
+    }
     if AUTO_CONTROLLER_SETUP_ENABLED {
         if let Some(idx) = pad.index_needing_setup() {
             let status = pad.db().registry_status(pad.info_at(idx));
@@ -3250,6 +3262,8 @@ pub(super) fn run_launcher_loop(
                 },
             },
             timing: LauncherFrameTiming {
+                startup_start: start,
+                startup_monotonic_us,
                 run_start,
                 loop_start,
                 frame_t0,
@@ -3454,6 +3468,26 @@ fn preview_scroll_exit_after_trace_deadline(run_start: Instant) -> Option<Instan
         .parse::<u64>()
         .ok()?;
     (secs > 0).then(|| run_start + Duration::from_secs(secs))
+}
+
+#[cfg(feature = "bench-tools")]
+fn media_benchmark_contention_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_MEDIA_BENCH_CONTENTION").as_deref(),
+        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
+    )
+}
+
+#[cfg(not(feature = "bench-tools"))]
+fn media_benchmark_contention_enabled() -> bool {
+    false
+}
+
+fn benchmark_media_interaction_gate_active(
+    benchmark_active: bool,
+    media_benchmark_contention: bool,
+) -> bool {
+    benchmark_active && !media_benchmark_contention
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4487,6 +4521,19 @@ mod tests {
     use crate::ui_effect_bench::{EffectFill, EffectTarget};
     #[cfg(mister_experiments)]
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
+
+    #[test]
+    fn media_benchmark_contention_disables_only_the_benchmark_media_gate() {
+        assert!(benchmark_media_interaction_gate_active(true, false));
+        assert!(!benchmark_media_interaction_gate_active(true, true));
+        assert!(!benchmark_media_interaction_gate_active(false, false));
+    }
+
+    #[cfg(not(feature = "bench-tools"))]
+    #[test]
+    fn production_build_cannot_enable_media_benchmark_contention() {
+        assert!(!media_benchmark_contention_enabled());
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

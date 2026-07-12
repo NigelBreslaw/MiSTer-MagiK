@@ -157,6 +157,11 @@ Latch-stream policy:
   display link. Display throughput counts distinct stream image serials at
   Slint `AfterRendering`. Received, decoded, applied, and redraw-submitted
   frames remain separate diagnostic counters.
+- Formal desktop display runs require the compiled Skia UI with
+  `SLINT_BACKEND=winit-skia`. The rendering notifier is registered only after
+  `show()` has created the native window, a redraw is requested, and notifier
+  readiness is not asserted until Slint delivers `RenderingSetup`; completed
+  display samples still require `AfterRendering` for an applied image serial.
 
 Historical evidence:
 
@@ -363,8 +368,15 @@ display without valid scan-out.
 
 ## Catalog And Preview Model
 
-The runtime catalog is SQLite-backed. The UI should load from the database and
-avoid scanning media during hot launcher paths.
+The finalized RAM navigation projection is the runtime catalog contract. A
+current stamped `library.nav.lz4b` is the preferred warm path; SQLite durably
+stores the same canonical compressed projection beside source facts so an
+interrupted sidecar publication can recover without semantic loss. Joined-SQL
+hydration is a degraded compatibility fallback and is never allowed to
+republish the adjacent projection pair. Schema 64 also retains populated
+materialized compatibility tables until release tools and benchmark selectors
+finish migrating; they are not the runtime owner. The UI must avoid scanning
+media during hot launcher paths.
 
 See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
 root stamp semantics, SQLite publish model, and benchmark gates.

@@ -21,7 +21,7 @@ const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
 const MAX_CATALOG_NAVIGATION_BYTES: usize = 64 * 1024 * 1024;
-const MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CATALOG_NAVIGATION_ITEMS: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -136,6 +136,34 @@ pub(crate) fn write_catalog_navigation_snapshot_with_timing(
         encoded_bytes,
         compressed_bytes,
     })
+}
+
+pub(crate) fn encode_catalog_navigation_for_storage(
+    catalog: &ArcadeCatalog,
+    stamp: &CatalogStamp,
+) -> Result<Vec<u8>, String> {
+    let projection = CatalogNavigationProjection::from_catalog(catalog, stamp);
+    let encoded = encode_navigation_projection(&projection)?;
+    Ok(lz4_flex::compress_prepend_size(&encoded))
+}
+
+pub(crate) fn decode_catalog_navigation_from_storage(
+    compressed: &[u8],
+    expected_stamp: &CatalogStamp,
+) -> Result<Option<CatalogNavigationProjection>, String> {
+    if compressed.len() as u64 > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
+        return Err(format!(
+            "embedded catalog navigation compressed size {} exceeds max {MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES}",
+            compressed.len()
+        ));
+    }
+    let decoded = bounded_lz4::decompress_size_prepended(
+        compressed,
+        MAX_CATALOG_NAVIGATION_BYTES,
+        "embedded catalog navigation",
+    )?;
+    let projection = decode_navigation_projection(&decoded)?;
+    Ok(projection.matches(expected_stamp).then_some(projection))
 }
 
 pub(crate) fn write_catalog_navigation_projection_for_sqlite(

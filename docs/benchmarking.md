@@ -53,6 +53,18 @@ for the run:
   records the expected local `profile`, `features`, path, and size, but runtime
   comparisons must account for possible stale profiling or alternate binaries.
 
+Production acceptance runners do not permit `deployed-unknown`.
+`profile-preview-scroll.sh`, `profile-library-io.sh`,
+`device-catalog-acceptance.sh`, and `profile-first-scan.sh` require the deployed
+SHA-256 to match the local binary and the local `.features` sidecar to
+match the declared feature set, including both launcher and catalog-builder
+contracts for first scan. ARM builds also emit a hash-bound
+`.build-receipt.tsv` beside each binary; it records the build-time source
+commit, dirty state, profile, feature set, and UI scope. Benchmark contracts
+reject a missing, stale, or mismatched receipt. Context rows separately record
+the checkout state at run time, so a dirty run remains reproducible evidence
+only when its diff is retained with the artifacts.
+
 Do not compare these as if they were the same artifact. A CPU-profile run must
 be read as profiling evidence, not production frame-time evidence, and the
 production `release-device` binary should be redeployed after any profiling
@@ -69,8 +81,8 @@ scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
 
 Current production targets on the reference MiSTer are:
 
-- `library_ready <= 57094ms`
-- `library_db_saved <= 72573ms`
+- `library_ready <= 94650ms`
+- `library_db_saved <= 121336ms`
 
 During first database creation, the catalog builder owns the machine. The
 catalog worker and library walker must run foreground, with nice `0` and
@@ -539,6 +551,39 @@ trace while media requests are pending. Use `frame_pacing` p95/p99 work,
 or status rows. Do not use "still 60fps" as proof; the app can remain vsync
 paced while losing CPU or SD-card headroom.
 
+The supported combined production-code gate is:
+
+```bash
+scripts/profile-media-arcade-contention.sh MEDIA-ARCADE-YYYYMMDD --deploy-device --secs 60 --replace-label
+```
+
+It keeps the installed catalog, starts one real media-download worker and one
+`human-turbo-hold` Arcade trace in the same launcher, and automatically records
+per-thread `/proc` evidence. The label-scoped directory under
+`build/media-cold-boot/` contains the launcher log, Arcade frame trace, status
+snapshots, FPGA latch reports, thread samples, frame-pacing and latch-drop
+reports, and `<LABEL>.media-arcade-contention.tsv`. The contention TSV compares
+media phase intervals and frame rows using the trace's `startup_elapsed_us`
+and absolute `monotonic_us` clocks; it does not infer overlap from the broad
+span between the first and last media event. Acceptance requires at least 300
+overlapped frames in total, including 180 download frames and 60 publish frames.
+At 60Hz these floors prove roughly five seconds of total contention, three
+seconds of network/hash work, and one second of exFAT copy/sync/rename work,
+rather than a coincidental frame at a phase boundary. Frame pacing is gated on
+the generated `<LABEL>.media-arcade-overlap.tsv` subset, not the full run.
+
+The same gate requires at least 10 selected-preview applies during those media
+operations, selected-preview apply p99 no greater than 250ms, only
+`exact`/`empty` cache states, and zero selected-preview failures. Launcher,
+media, and selected-preview thread samples must have non-zero CPU deltas in
+sampler intervals that overlap the same boot-monotonic contention window. The
+10-apply floor makes the tail statistic meaningful without requiring every
+turbo selection to decode instead of hitting the cache. The runner uses a
+normal supervised reboot because media/catalog writes and release evidence are
+not a fast development-reset case. A run is valid only after the launcher
+environment and volatile arming files have been checked clean; `cleanup_tsv`
+therefore precedes the final `validity_tsv` row.
+
 For screenshot-pack index work, run both:
 
 ```bash
@@ -627,7 +672,11 @@ measurement interval. Each device motion trace runs 25 seconds longer than that
 interval so desktop process and connection setup happen before the measured
 window ends.
 The Analytics consumer is the release-profile compiled Slint UI with the Skia
-renderer; debug or live-interpreted desktop numbers are diagnostic only.
+renderer and `SLINT_BACKEND=winit-skia`; debug, live-interpreted, or alternate
+backend numbers are diagnostic only. The benchmark installs its rendering
+notifier after `show()`, requests the first redraw, and accepts notifier
+readiness only after `RenderingSetup`. A run with no applied-image
+`AfterRendering` callback remains invalid even when receive/apply counters move.
 Passing requires at least 55 distinct `AfterRendering` and applied frames per
 second in Analytics, at least 58 received/display and null-drain frames per
 second, render p95 no greater than 50ms, the native macOS display-link clock, a
@@ -676,6 +725,11 @@ scripts/mister db
 scripts/mister db "SELECT count(*) FROM games"
 ```
 
+On the current reference SD card, `device-catalog-acceptance.sh` requires
+69,571 durable source game rows and 67,235 launcher-visible games. These are
+fixture identity checks, not general product limits; update them only with
+retained source/navigation count evidence from an intentional SD-card change.
+
 Release-device builds expose the read-only `library-sql` command used by
 `scripts/mister db`. Successful queries print normal result rows first and then
 append a `library_sql_timing_tsv` row for SQLite open, prepare, first-row,
@@ -686,11 +740,14 @@ performance.
 
 `profile-first-scan.sh` deletes the production catalog database plus
 `library.summary.json`, syncs, and reboots with
-`scripts/mister reboot-wait --direct-reset` because no further writes are
-expected before reset. It records first-frame/catalog-ready timings in
+the normal `scripts/mister reboot-wait` path. It collects canonical UI markers
+from `/tmp/mister-magik/events.jsonl`, falls back to the launcher log when
+needed, and explicitly labels standalone-builder fallback timings rather than
+mixing clocks. It records first-frame/catalog-ready timings in
 `history/toolchain-bench/results-first-scan.tsv`. The hard first-scan gates are
-`library_ready <= 57094ms` for RAM catalog usability and
-`library_db_saved <= 72573ms` for durable SQLite save completion. Anything above
+`library_ready <= 94650ms` for RAM catalog usability and
+`library_db_saved <= 121336ms` for durable SQLite save completion. These values
+were explicitly ratified on 2026-07-13; anything above
 either threshold fails the script. For cold catalog UX, prefer
 `bootstrap_counter_sustained_climb` over the first
 `bootstrap_counter_climb`: the latter is only the first meaningful target

@@ -4,8 +4,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_CATALOG_BUILDER="/media/fat/mister-magik/mister-magik-catalog-builder"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_REFRESH_LOG="/tmp/mister-magik-library-refresh.log"
+REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_NAV="/media/fat/mister-magik/library.nav.lz4b"
@@ -23,6 +26,8 @@ RAM_CATALOG_READY_GATE_MS=94650
 DB_SAVE_GATE_MS=121336
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/bench-context-lib.sh"
+source "$HERE/scripts/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -71,6 +76,201 @@ first_scan_commit_is_dirty() {
   first_scan_commit_is_dirty_from_statuses "$worktree_status" "$index_status"
 }
 
+first_scan_extract_complete_pair() {
+  local builder_log="$1" launcher_log="$2" events_log="${3:-}"
+  local ready_ms="" saved_ms="" ready_us="" saved_us="" event_pair="" event_pid="" event_boot_epoch_ms=""
+  if [[ -f "$events_log" ]]; then
+    if ! event_pair="$(first_scan_runtime_event_pair "$events_log")"; then
+      return 1
+    fi
+    IFS=$'\t' read -r ready_ms saved_ms event_pid event_boot_epoch_ms <<<"$event_pair"
+  fi
+  if [[ -f "$builder_log" ]]; then
+    ready_us="$(sed -n 's/.*"name":"builder_catalog_ready","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$builder_log" | tail -1)"
+    saved_us="$(sed -n 's/.*"name":"builder_persisted","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$builder_log" | tail -1)"
+  fi
+  if [[ "$ready_ms" =~ ^[0-9]+$ && "$saved_ms" =~ ^[0-9]+$ ]]; then
+    printf '%s\t%s\tlauncher-events\t%s\t%s\n' "$ready_ms" "$saved_ms" "${ready_us:-missing}" "${saved_us:-missing}"
+    return 0
+  fi
+  ready_ms=""
+  saved_ms=""
+  if [[ -f "$launcher_log" ]]; then
+    ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { value=$3; sub(/ms$/, "", value); latest=value } END { print latest }' "$launcher_log")"
+    saved_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_db_saved" { value=$3; sub(/ms$/, "", value); latest=value } END { print latest }' "$launcher_log")"
+  fi
+  if [[ "$ready_ms" =~ ^[0-9]+$ && "$saved_ms" =~ ^[0-9]+$ ]]; then
+    printf '%s\t%s\tlauncher-log\t%s\t%s\n' "$ready_ms" "$saved_ms" "${ready_us:-missing}" "${saved_us:-missing}"
+    return 0
+  fi
+  if [[ "$ready_us" =~ ^[0-9]+$ && "$saved_us" =~ ^[0-9]+$ ]]; then
+    printf '%s\t%s\tstandalone-builder\t%s\t%s\n' \
+      "$(( (ready_us + 500) / 1000 ))" "$(( (saved_us + 500) / 1000 ))" "$ready_us" "$saved_us"
+    return 0
+  fi
+  return 1
+}
+
+first_scan_runtime_event_pair() {
+  local events_log="$1"
+  python3 - "$events_log" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+relevant = []
+try:
+    source = open(path, encoding="utf-8", errors="replace")
+except OSError:
+    raise SystemExit(0)
+with source:
+    for line in source:
+        try:
+            row = json.loads(line)
+            event = str(row.get("event") or "")
+            detail = str(row.get("detail") or "")
+            pid = int(row["pid"])
+            boot_ms = int(row["ts_boot_ms"])
+            unix_ms = int(row["ts_unix_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if event not in {"library_ready", "library_db_saved"}:
+            continue
+        match = re.search(r"(?:^|\s)since_run_ui_ms=(\d+)(?:\s|$)", detail)
+        if match is None or pid <= 0 or boot_ms < 0 or unix_ms < boot_ms:
+            continue
+        relevant.append((event, int(match.group(1)), pid, boot_ms, unix_ms - boot_ms))
+
+if not relevant:
+    raise SystemExit(0)
+
+pids = {row[2] for row in relevant}
+boot_epochs = [row[4] for row in relevant]
+if len(pids) != 1 or max(boot_epochs) - min(boot_epochs) > 2_000:
+    raise SystemExit(2)
+
+saved_rows = [row for row in relevant if row[0] == "library_db_saved"]
+if not saved_rows:
+    raise SystemExit(0)
+saved = max(saved_rows, key=lambda row: row[3])
+ready_rows = [
+    row for row in relevant
+    if row[0] == "library_ready" and row[3] <= saved[3] and row[1] <= saved[1]
+]
+if not ready_rows:
+    raise SystemExit(0)
+ready = max(ready_rows, key=lambda row: row[3])
+boot_epoch_ms = round(sum(boot_epochs) / len(boot_epochs))
+print(f"{ready[1]}\t{saved[1]}\t{ready[2]}\t{boot_epoch_ms}")
+PY
+}
+
+first_scan_normalize_events() {
+  local events_log="$1"
+  python3 - "$events_log" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    source = open(path, encoding="utf-8", errors="replace")
+except OSError:
+    raise SystemExit(0)
+with source:
+    for line in source:
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        event = str(row.get("event") or "")
+        detail = str(row.get("detail") or "")
+        match = re.search(r"(?:^|\s)since_run_ui_ms=(\d+)(?:\s|$)", detail)
+        if not event or match is None:
+            continue
+        print(f"startup_timing\t{event}\t{match.group(1)}ms\t{detail} source=runtime-events")
+PY
+}
+
+first_scan_write_canonical_log() {
+  local output="$1" builder_log="$2" launcher_log="$3" events_log="${4:-}"
+  local pair ready_ms saved_ms marker_source ready_us saved_us normalized_events
+  pair="$(first_scan_extract_complete_pair "$builder_log" "$launcher_log" "$events_log")" || return 1
+  IFS=$'\t' read -r ready_ms saved_ms marker_source ready_us saved_us <<<"$pair"
+  normalized_events="$(mktemp)"
+  first_scan_normalize_events "$events_log" >"$normalized_events"
+  {
+    if [[ "$marker_source" == launcher-* ]]; then
+      printf 'startup_timing\tlibrary_ready\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$ready_ms" "$marker_source" "$ready_ms" "$ready_us"
+      printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$saved_ms" "$marker_source" "$saved_ms" "$saved_us"
+    else
+      printf 'startup_timing\tlibrary_ready\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$ready_ms" "$ready_us"
+      printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$saved_ms" "$saved_us"
+    fi
+    awk -F '\t' '!($1 == "startup_timing" && ($2 == "library_ready" || $2 == "library_db_saved"))' "$builder_log" "$launcher_log" "$normalized_events"
+  } >"$output"
+  rm -f "$normalized_events"
+}
+
+first_scan_marker_self_test() {
+  local tmp builder launcher events combined pair
+  tmp="$(mktemp -d)"
+  builder="$tmp/builder.log"
+  launcher="$tmp/launcher.log"
+  events="$tmp/events.jsonl"
+  combined="$tmp/combined.log"
+  printf '%s\n' '{"event":"timing","name":"builder_catalog_ready","detail":"elapsed_us=1000500"}' \
+    '{"event":"timing","name":"builder_persisted","detail":"elapsed_us=2000500"}' >"$builder"
+  : >"$launcher"
+  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  [[ "$pair" == $'1001\t2001\tstandalone-builder\t1000500\t2000500' ]]
+  printf 'startup_timing\tlibrary_ready\t1100ms\tgames=10\nstartup_timing\tlibrary_db_saved\t2200ms\tbytes=20\n' >"$launcher"
+  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  [[ "$pair" == $'1100\t2200\tlauncher-log\t1000500\t2000500' ]]
+  printf '%s\n' \
+    '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
+    '{"ts_unix_ms":102400,"ts_boot_ms":2400,"pid":42,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
+  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  [[ "$pair" == $'1200\t2400\tlauncher-events\t1000500\t2000500' ]]
+  first_scan_write_canonical_log "$combined" "$builder" "$launcher" "$events"
+  [[ "$(grep -c $'^startup_timing\tlibrary_ready\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tlibrary_db_saved\t' "$combined")" == "1" ]]
+  grep -q $'^startup_timing\tlibrary_ready\t1200ms\tsource=launcher-events elapsed_ms=1200 builder_elapsed_us=1000500$' "$combined"
+  if grep -q $'source=launcher-.* elapsed_us=' "$combined"; then
+    rm -rf "$tmp"
+    echo "first-scan canonical log mislabeled builder microseconds as the launcher clock" >&2
+    return 1
+  fi
+  printf '%s\n' \
+    '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
+    '{"ts_unix_ms":102400,"ts_boot_ms":2400,"pid":43,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
+  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+    rm -rf "$tmp"
+    echo "first-scan marker parser accepted runtime events from two launcher PIDs" >&2
+    return 1
+  fi
+  printf '%s\n' \
+    '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
+    '{"ts_unix_ms":202400,"ts_boot_ms":2400,"pid":42,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
+  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+    rm -rf "$tmp"
+    echo "first-scan marker parser accepted runtime events from two boot epochs" >&2
+    return 1
+  fi
+  printf 'startup_timing\tlibrary_ready\t1100ms\tgames=10\n' >"$launcher"
+  : >"$events"
+  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  [[ "$pair" == $'1001\t2001\tstandalone-builder\t1000500\t2000500' ]]
+  printf '%s\n' '{"event":"timing","name":"builder_catalog_ready","detail":"elapsed_us=1000500"}' >"$builder"
+  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+    rm -rf "$tmp"
+    echo "first-scan marker parser accepted two incomplete clocks" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
 first_scan_self_test() {
   first_scan_gate_check 56094 71573
   first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" "$DB_SAVE_GATE_MS"
@@ -94,8 +294,33 @@ first_scan_self_test() {
     echo "first-scan dirty helper ignored a staged source diff" >&2
     return 1
   fi
+  first_scan_marker_self_test
+  first_scan_identity_self_test
   first_scan_reset_artifact_self_test
   echo "profile-first-scan self-test ok"
+}
+
+first_scan_identity_self_test() {
+  local tmp binary hash bad_hash
+  tmp="$(mktemp -d)"
+  binary="$tmp/mister-magik-fb"
+  printf 'binary\n' >"$binary"
+  printf 'ui\n' >"$binary.features"
+  bench_context_write_build_receipt "$binary" "$HERE" release-device ui launcher
+  hash="$(bench_context_sha256_file "$binary")"
+  bench_context_require_binary_contract "$binary" "$hash" ui release-device launcher
+  if bench_context_require_binary_contract "$binary" "$hash" builder release-device launcher; then
+    rm -rf "$tmp"
+    echo "first-scan identity accepted the wrong feature contract" >&2
+    return 1
+  fi
+  bad_hash="${hash%?}$([[ "${hash: -1}" == "0" ]] && printf '1' || printf '0')"
+  if bench_context_require_binary_contract "$binary" "$bad_hash" ui release-device launcher; then
+    rm -rf "$tmp"
+    echo "first-scan identity accepted a deployed hash mismatch" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
 }
 
 first_scan_reset_artifact_self_test() {
@@ -203,11 +428,34 @@ echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=
 env_file="$(mktemp)"
 local_log="$(mktemp)"
 local_refresh_log="$(mktemp)"
+local_events="$(mktemp)"
 combined_log="$(mktemp)"
 raw_log="$OUT_DIR/${LABEL}-launcher.log"
 raw_refresh_log="$OUT_DIR/${LABEL}-catalog-builder.log"
+raw_events="$OUT_DIR/${LABEL}-events.jsonl"
 artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
+cleanup_report="$OUT_DIR/${LABEL}-cleanup.txt"
 launcher_suspended=0
+binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+catalog_builder_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
+deployment_state="verified"
+deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
+deployed_sha256="${deployed_sha256:-missing}"
+local_sha256="$(bench_context_sha256_file "$binary_path")"
+if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" ui release-device launcher; then
+  echo "first-scan launcher identity verification failed local=$local_sha256 deployed=$deployed_sha256 features=$(bench_context_binary_features "$binary_path") expected_features=ui" >&2
+  exit 1
+fi
+catalog_builder_deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_CATALOG_BUILDER" || true)"
+catalog_builder_deployed_sha256="${catalog_builder_deployed_sha256:-missing}"
+catalog_builder_local_sha256="$(bench_context_sha256_file "$catalog_builder_path")"
+if ! bench_context_require_binary_contract "$catalog_builder_path" "$catalog_builder_deployed_sha256" builder release-device all; then
+  echo "first-scan catalog-builder identity verification failed local=$catalog_builder_local_sha256 deployed=$catalog_builder_deployed_sha256 features=$(bench_context_binary_features "$catalog_builder_path") expected_features=builder" >&2
+  exit 1
+fi
+binary_fields="$(bench_context_binary_fields release-device launcher ui "$binary_path" production "$deployment_state" "$deployed_sha256")"
+catalog_builder_fields="$(bench_context_binary_fields release-device all builder "$catalog_builder_path" production "$deployment_state" "$catalog_builder_deployed_sha256")"
+source_fields="$(bench_context_source_fields "$HERE")"
 emit_thread_sample_artifact_report() {
   local raw_log_bytes=0
   if [[ -f "$raw_log" ]]; then
@@ -221,18 +469,31 @@ emit_thread_sample_artifact_report() {
   fi
   printf 'artifact_tsv\tlabel=%s\tkind=catalog_builder_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
     "$LABEL" "$raw_refresh_log" "$REMOTE_REFRESH_LOG" "$([[ -f "$raw_refresh_log" ]] && echo true || echo false)" "$raw_refresh_log_bytes"
+  printf 'artifact_tsv\tlabel=%s\tkind=runtime_events\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
+    "$LABEL" "$raw_events" "$REMOTE_EVENTS" "$([[ -f "$raw_events" ]] && echo true || echo false)" "$([[ -f "$raw_events" ]] && wc -c <"$raw_events" | tr -d ' ' || echo 0)"
+  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tdeploy=%s\t%s\t%s\n' "$LABEL" "$commit" "$DEPLOY" "$source_fields" "$binary_fields"
+  printf 'binary_context_tsv\tlabel=%s\trole=catalog-builder\t%s\n' "$LABEL" "$catalog_builder_fields"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     thread_sample_emit_artifacts
   fi
 }
-cleanup() {
-  rm -f "$local_log" "$local_refresh_log" "$combined_log" "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+profile_first_scan_cleanup() {
+  local cleanup_status=0
+  rm -f "$local_log" "$local_refresh_log" "$local_events" "$combined_log" "$env_file"
   if [[ "$launcher_suspended" == "1" ]]; then
-    mister_supervision_command "mister_magik_resume" 0.5 >/dev/null 2>&1 || true
+    mister_supervision_command "mister_magik_resume" 0.5 >/dev/null 2>&1 || cleanup_status=1
+    launcher_suspended=0
   fi
+  benchmark_cleanup_clear_launcher_env "$MISTER" 30 >/dev/null 2>&1 || cleanup_status=1
+  if benchmark_cleanup_assert_no_arming_files "$MISTER" "$cleanup_report"; then
+    printf 'cleanup_tsv\tlabel=%s\tvalid=1\tinvalid_reason=ok\n' "$LABEL" >>"$artifact_report"
+  else
+    printf 'cleanup_tsv\tlabel=%s\tvalid=0\tinvalid_reason=stale-arming-or-device-error\tdetail=%s\n' "$LABEL" "$cleanup_report" >>"$artifact_report"
+    cleanup_status=1
+  fi
+  return "$cleanup_status"
 }
-trap cleanup EXIT
+benchmark_cleanup_install profile_first_scan_cleanup
 : >"$env_file"
 if [[ -n "$SQLITE_BUILD_DIR" ]]; then
   printf 'export MISTER_LIBRARY_SQLITE_BUILD_DIR=%q\n' "$SQLITE_BUILD_DIR" >>"$env_file"
@@ -269,7 +530,7 @@ for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
     echo \"artifact_reset_tsv	$LABEL	missing	\$path	0\"
   fi
 done
-rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_REFRESH_LOG'
+rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_REFRESH_LOG' '$REMOTE_EVENTS'
 sync
 for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
   if [ -e \"\$path\" ]; then
@@ -297,12 +558,12 @@ deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
   "$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
+  "$MISTER" get "$REMOTE_EVENTS" "$local_events" >/dev/null 2>&1 || true
   if grep -q '"event":"failure"' "$local_refresh_log" ||
      grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
     break
   fi
-  if grep -q '"name":"builder_persisted"' "$local_refresh_log" &&
-     grep -q $'^startup_timing\tfirst_frame\t' "$local_log"; then
+  if first_scan_extract_complete_pair "$local_refresh_log" "$local_log" "$local_events" >/dev/null; then
     break
   fi
   sleep 2
@@ -310,8 +571,10 @@ done
 
 "$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
+"$MISTER" get "$REMOTE_EVENTS" "$local_events" >/dev/null 2>&1 || true
 cp "$local_log" "$raw_log"
 cp "$local_refresh_log" "$raw_refresh_log"
+cp "$local_events" "$raw_events"
 thread_sample_stop
 thread_sample_collect
 if grep -q '"event":"failure"' "$local_refresh_log" ||
@@ -321,15 +584,13 @@ if grep -q '"event":"failure"' "$local_refresh_log" ||
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
-ready_us="$(sed -n 's/.*"name":"builder_catalog_ready","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$local_refresh_log" | tail -1)"
-saved_us="$(sed -n 's/.*"name":"builder_persisted","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$local_refresh_log" | tail -1)"
-ready_ms="${ready_us:+$(( (ready_us + 500) / 1000 ))}"
-saved_ms="${saved_us:+$(( (saved_us + 500) / 1000 ))}"
-if [[ -n "$ready_ms" && -n "$saved_ms" ]]; then
-  printf 'startup_timing\tlibrary_ready\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$ready_ms" "$ready_us" >"$combined_log"
-  printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$saved_ms" "$saved_us" >>"$combined_log"
+if marker_pair="$(first_scan_extract_complete_pair "$local_refresh_log" "$local_log" "$local_events")"; then
+  IFS=$'\t' read -r ready_ms saved_ms marker_source ready_us saved_us <<<"$marker_pair"
+  first_scan_write_canonical_log "$combined_log" "$local_refresh_log" "$local_log" "$local_events"
+else
+  ready_ms=""
+  saved_ms=""
 fi
-cat "$local_refresh_log" "$local_log" >>"$combined_log"
 if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan did not complete both gates within ${TIMEOUT_SECS}s (library_ready=${ready_ms:-missing}, library_db_saved=${saved_ms:-missing}); latest log follows" >&2

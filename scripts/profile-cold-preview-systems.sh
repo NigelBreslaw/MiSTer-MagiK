@@ -59,22 +59,15 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-input_script_for_system() {
-  case "$1" in
-    arcade) printf 'a' ;;
-    neogeo) printf 'right,right,a' ;;
-    saturn) printf 'right,right,right,right,right,a' ;;
-    *) return 1 ;;
-  esac
-}
-
 write_env_for_system() {
-  local system="$1" input_script="$2"
+  local system="$1"
   env_file="$OUT_DIR/${label}-${system}.launcher.env"
   {
     printf 'export MISTER_CATALOG_REFRESH=default\n'
-    printf 'export MISTER_LAUNCHER_START_SCREEN=home\n'
-    printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=%q\n' "$input_script"
+    # Select by canonical catalog id after navigation hydration. Fixed Home
+    # tile offsets became invalid when hierarchical taxonomy landed.
+    printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_START_SYSTEM=%q\n' "$system"
     printf 'export MISTER_PREVIEW_TRACE=1\n'
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
@@ -124,7 +117,7 @@ summarize_log() {
     $1 == "startup_timing" && $2 == "preview_initial_list_ready" && field("system", "") == target_system && list_ready < 0 { list_ready = ms_value() }
     $1 == "startup_timing" && $2 == "preview_selected_candidate" && field("system", "") == target_system && candidate < 0 {
       candidate = ms_value()
-      selected_has_preview = field("has_preview", "unknown")
+      selected_has_preview = field("selected_has_preview", "unknown")
       asset_key = field("asset_key", "")
       candidate_title = field("title", "")
     }
@@ -140,7 +133,9 @@ summarize_log() {
     $1 == "startup_timing" && $2 == "preview_selected_applied" && field("system", "") == target_system && applied < 0 { applied = ms_value() }
     END {
       request_to_apply_ms = (request >= 0 && applied >= 0) ? applied - request : -1
-      pass = (system_entered >= 0 && list_ready >= 0 && candidate >= 0 && request >= 0 && decoded >= 0 && applied >= 0 && request_to_apply_ms >= 0 && request_to_apply_ms <= max_request_to_apply_ms && load_source == "index_pread") ? 1 : 0
+      preview_pass = (selected_has_preview == 1 && request >= 0 && decoded >= 0 && applied >= 0 && request_to_apply_ms >= 0 && request_to_apply_ms <= max_request_to_apply_ms && load_source == "index_pread")
+      no_candidate_pass = (selected_has_preview == 0 && request < 0 && decoded < 0 && applied < 0)
+      pass = (system_entered >= 0 && list_ready >= 0 && candidate >= 0 && (preview_pass || no_candidate_pass)) ? 1 : 0
       printf "preview_state_tsv\tlabel=%s\tsystem=%s\tfirst_frame_ms=%d\tinput_enabled_ms=%d\tsystem_entered_ms=%d\tinitial_list_ready_ms=%d\tselected_candidate_ms=%d\tselected_has_preview=%s\tpreview_requested_ms=%d\tpreview_decoded_ms=%d\tpreview_applied_ms=%d\trequest_to_apply_ms=%d\tpack_current_ms=%d\tfull_catalog_ms=%d\tload_source=%s\ttotal_us=%d\tread_us=%d\tdecode_us=%d\tage_us=%d\tasset_key=%s\tcandidate_title=%s\tmax_request_to_apply_ms=%d\tpass=%d\n",
         label, target_system, first_frame, input_enabled, system_entered, list_ready, candidate,
         selected_has_preview, request, decoded, applied, request_to_apply_ms, pack_current,
@@ -153,12 +148,9 @@ summarize_log() {
 IFS=',' read -r -a systems <<<"$systems_csv"
 all_pass="1"
 for system in "${systems[@]}"; do
-  input_script="$(input_script_for_system "$system")" || {
-    echo "unsupported system for scripted benchmark: $system" >&2
-    exit 2
-  }
+  [[ "$system" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "invalid system id: $system" >&2; exit 2; }
   local_log="$OUT_DIR/${label}-${system}.log"
-  write_env_for_system "$system" "$input_script"
+  write_env_for_system "$system"
   if [[ "$skip_reboot" == "1" ]]; then
     "$MISTER" run "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null
   else

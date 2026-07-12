@@ -15,6 +15,7 @@
 # Default installs the release-device (A3) binary.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$HERE/scripts/bench-context-lib.sh"
 REMOTE_DIR="/media/fat/mister-magik"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
 REMOTE_ART_DIR="$REMOTE_DIR/art"
@@ -23,6 +24,7 @@ LOCAL_SLINT_LOGO="$HERE/magik-gui/ui/art/slint-logo-pixel.png"
 
 PROFILE=release-device
 BUILD_FLAG=(--device)
+UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
 ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
@@ -32,17 +34,18 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       echo "ERROR: $arg was removed from scripts/deploy-rust.sh; deploy runtime here and use catalog/media build tools explicitly" >&2
       exit 2
       ;;
-    --all-scenes) BUILD_FLAG+=(--all-scenes) ;;
-    --experiments) BUILD_FLAG+=(--experiments) ;;
+    --all-scenes) UI_SCOPE=all; BUILD_FLAG+=(--all-scenes) ;;
+    --experiments) UI_SCOPE=all; BUILD_FLAG+=(--experiments) ;;
     --bench-tools) BUILD_FLAG+=(--bench-tools) ;;
     --diagnostics) BUILD_FLAG+=(--diagnostics) ;;
-    --ui-scope=*) BUILD_FLAG+=("$arg") ;;
+    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}"; BUILD_FLAG+=("$arg") ;;
     --ui-scope)
       i=$((i + 1))
       if [ "$i" -ge "${#ARGS[@]}" ]; then
         echo "ERROR: --ui-scope requires one of: launcher, arcade, all" >&2
         exit 2
       fi
+      UI_SCOPE="${ARGS[$i]}"
       BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
       ;;
     -h|--help)
@@ -122,6 +125,19 @@ REMOTE_BYTES="$(
 if [ -n "$REMOTE_BYTES" ]; then
   echo "==> Deployed binary size: $REMOTE_BYTES bytes ($(human_bytes "$REMOTE_BYTES"))"
 fi
+LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"
+REMOTE_SHA256="$(bench_context_remote_sha256 "$HERE/scripts/mister" "$REMOTE" || true)"
+REMOTE_SHA256="${REMOTE_SHA256:-missing}"
+BUILT_FEATURES="$(bench_context_binary_features "$BIN")"
+if ! bench_context_require_binary_contract "$BIN" "$REMOTE_SHA256" "$BUILT_FEATURES" "$PROFILE" "$UI_SCOPE" || [[ "$BUILT_FEATURES" == "missing" ]]; then
+  printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=0\n' \
+    "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" >&2
+  echo "ERROR: deployed MagiK binary does not match the local build contract" >&2
+  exit 1
+fi
+SOURCE_FIELDS="$(bench_context_source_fields "$HERE")"
+printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=1\t%s\n' \
+  "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"
 
 echo "==> Deployed ($PROFILE)."
 echo "==> Building and deploying catalog builder"

@@ -10,8 +10,8 @@ APIs, progress states, and benchmark expectations.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
-  Current cold first-scan acceptance is RAM catalog usable within 57094ms on
-  the target MiSTer and durable SQLite save complete within 72573ms. Anything
+  The ratified cold first-scan acceptance is RAM catalog usable within 94650ms
+  on the target MiSTer and durable SQLite save complete within 121336ms. Anything
   above either threshold fails `scripts/profile-first-scan.sh`.
 - First database creation is a foreground bootstrap job. The catalog worker and
   library walker must run at full priority with unrestricted CPU affinity until
@@ -117,6 +117,7 @@ Cold or reset database:
    point and records `library_ready`.
 7. The worker continues durable persistence in the background, creates SQLite
    under `/tmp/mister-magik/sqlite-build` for production `/media/fat` databases,
+   embeds the stamped canonical navigation projection in that database,
    publishes the completed file, then reports `Persisted` and records
    `library_db_saved`. Before reporting success, the catalog builder atomically
    writes `/media/fat/mister-magik/database-build-time.txt` with total build
@@ -125,16 +126,32 @@ Cold or reset database:
 8. Virtual launch cache materialization runs after readiness so it cannot extend
    first usable catalog time.
 
-The adjacent warm-start projections (`library.summary.json` and
-`library.nav.lz4b`) are derived from the materialized SQLite catalog after the
-database is published. Do not publish navigation rows from the pre-save RAM
-catalog: SQLite owns preferred arcade variant collapse and final list ordering,
-and the navigation sidecar must match those materialized rows exactly.
+The finalized RAM catalog owns preferred variant collapse, platform kinds,
+structured launch plans, preview identity, and final list ordering. The
+production writer stores its exact stamped navigation projection inside SQLite
+in the same transaction as the source facts. After the database is published,
+the adjacent warm-start projections
+(`library.summary.json` and `library.nav.lz4b`) are written from the same
+finalized catalog. If publication is interrupted between those steps, the
+embedded projection is the exact recovery source for recreating the pair.
 
-Compressed catalog sidecars are untrusted stored input: read their LZ4 decoded
-length before allocating, reject it above the owning format's bound, then decode
-into exactly that buffer. A malformed or oversized sidecar is treated as a
-failed warm cache and must not make the launcher allocate an unbounded buffer.
+Schema 64 temporarily retains populated `ui_arcade_*`,
+`launcher_catalog_rows`, and related materialized compatibility tables. Release
+acceptance, diagnostics, and benchmark selectors still query them while they
+are migrated to the canonical navigation contract. These tables are not the
+runtime source of truth and may be removed only after that selector migration
+lands with equivalent device coverage.
+
+Legacy/source-fact databases may still be readable through the joined-SQL
+fallback, but that result is explicitly degraded: preview keys and finalized
+ordering/variant semantics are not guaranteed. The launcher may use it to stay
+available, but must never publish it as a replacement summary/navigation pair.
+
+Compressed catalog projections, including the SQLite-embedded navigation blob,
+are untrusted stored input: read their LZ4 decoded length before allocating,
+reject it above the owning format's bound, then decode into exactly that buffer.
+A malformed, stale, or oversized projection is treated as a failed warm cache
+and must not make the launcher allocate an unbounded buffer.
 
 The Settings-screen `Reset Database` action removes the SQLite catalog, its
 adjacent `library.summary.json` and `library.nav.lz4b` projections, the
@@ -148,26 +165,31 @@ Warm boot with a usable cache:
 
 1. Launcher may load `library.summary.json` as a `SummaryProjection` so Home and
    system counts are usable immediately.
-2. After the first visible copy and configured warm-validation delay, the
+2. A current stamped `library.nav.lz4b` is the preferred full navigation path.
+   If it is absent or invalid, the worker opens SQLite and first attempts the
+   embedded canonical navigation payload before retained materialized
+   compatibility recovery. A corrupt embedded payload falls through without
+   making an otherwise readable database unusable.
+3. After the first visible copy and configured warm-validation delay, the
    scheduler starts the catalog worker. Summary-only boots use `ProbeSqlite` so
-   the full SQLite rows are hydrated; boots that already loaded the full SQLite
-   catalog use `AlreadyLoadedReady`.
-3. A matching current-schema SQLite catalog transitions through `FullSqlite`
+   full navigation is hydrated; boots that already loaded full navigation use
+   `AlreadyLoadedReady`.
+4. A matching current-schema SQLite catalog transitions through `FullSqlite`
    readiness without forcing a rebuild.
-4. Worker runs `CheckStamp`.
+5. Worker runs `CheckStamp`.
    Before starting a deferred background check, the launcher probes the shared
    catalog-builder exclusion lock. If a standalone builder owns the lock, the
    check remains queued and retries after one second; no worker thread or
    subprocess is started. The UI remains active throughout standalone builds.
-5. If the stored stamp matches the current root stamp, the worker reports
+6. If the stored stamp matches the current root stamp, the worker reports
    `Unchanged` and does not rebuild.
-6. If the stamp is missing, stale, or cannot be checked, the worker reports
+7. If the stamp is missing, stale, or cannot be checked, the worker reports
    `Changed` and exits. It must not run the full builder automatically.
-7. The launcher shows a `Library changed` confirmation dialog. `Continue` keeps
+8. The launcher shows a `Library changed` confirmation dialog. `Continue` keeps
    the current catalog for this session and writes
    `/media/fat/mister-magik/rebuild-on-next-boot`. `Rebuild` immediately starts
    a foreground `ForceBuild`.
-8. On the next MagiK boot, the launcher consumes the rebuild marker as a
+9. On the next MagiK boot, the launcher consumes the rebuild marker as a
    one-shot request and starts the foreground `Updating Library` flow instead of
    delayed ready-cache validation.
 
@@ -670,6 +692,9 @@ databases; changing them is a catalog/media artifact publish step.
 Production `/media/fat/mister-magik/library.sqlite3` builds use tmpfs by default:
 
 1. Build path: `/tmp/mister-magik/sqlite-build/.library.sqlite3.build.<pid>`.
+   The build transaction includes the exact compressed navigation projection
+   in `catalog_navigation_projection` row `id=0` and, during the compatibility
+   migration, still populates the materialized selector tables.
 2. Final temp path beside the DB:
    `/media/fat/mister-magik/.library.sqlite3.tmp.<pid>`.
 3. On success, copy/sync the completed tmpfs DB to the final temp path, sync it,

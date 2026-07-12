@@ -105,6 +105,7 @@ pub(super) fn start_library_catalog_worker(
             };
             let mut cache_state = CatalogCacheState::Missing;
             let mut cached_catalog_published = false;
+            let mut projection_repair_allowed = true;
             let mut projection_repair_catalog: Option<(ArcadeCatalog, catalog_stamp::CatalogStamp)> =
                 None;
             match initial_cache {
@@ -163,9 +164,18 @@ pub(super) fn start_library_catalog_worker(
                                         false,
                                     );
                                     cached_catalog_published = true;
-                                    if let Some(stamp) = loaded.stamp {
-                                        projection_repair_catalog =
-                                            Some((catalog_for_repair, stamp));
+                                    if loaded.projection_repair_safe {
+                                        if let Some(stamp) = loaded.stamp {
+                                            projection_repair_catalog =
+                                                Some((catalog_for_repair, stamp));
+                                        }
+                                    } else {
+                                        projection_repair_allowed = false;
+                                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                                            name: "catalog_navigation_repair_tsv".to_string(),
+                                            detail: "status=skipped_degraded_joined_fallback"
+                                                .to_string(),
+                                        });
                                     }
                                 }
                             }
@@ -200,8 +210,18 @@ pub(super) fn start_library_catalog_worker(
                                     false,
                                 );
                                 cached_catalog_published = true;
-                                if let Some(stamp) = loaded.stamp {
-                                    projection_repair_catalog = Some((catalog_for_repair, stamp));
+                                if loaded.projection_repair_safe {
+                                    if let Some(stamp) = loaded.stamp {
+                                        projection_repair_catalog =
+                                            Some((catalog_for_repair, stamp));
+                                    }
+                                } else {
+                                    projection_repair_allowed = false;
+                                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                                        name: "catalog_navigation_repair_tsv".to_string(),
+                                        detail: "status=skipped_degraded_joined_fallback"
+                                            .to_string(),
+                                    });
                                 }
                             }
                         }
@@ -269,6 +289,7 @@ pub(super) fn start_library_catalog_worker(
                     repair_navigation_projection_cache_after_ready(
                         &root,
                         projection_repair_catalog.as_ref(),
+                        projection_repair_allowed,
                         &tx,
                     );
                     return;
@@ -476,6 +497,7 @@ pub(super) fn start_library_catalog_worker(
                                     repair_navigation_projection_cache_after_ready(
                                         &root,
                                         projection_repair_catalog.as_ref(),
+                                        projection_repair_allowed,
                                         &tx,
                                     );
                                     return;
@@ -1004,12 +1026,18 @@ fn send_catalog_load_timing(
 fn repair_navigation_projection_cache_after_ready(
     root: &str,
     loaded_catalog: Option<&(ArcadeCatalog, catalog_stamp::CatalogStamp)>,
+    fallback_repair_allowed: bool,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
     if let Some((catalog, stamp)) = loaded_catalog {
         repair_navigation_projection_cache_for_catalog(catalog, stamp, tx);
-    } else {
+    } else if fallback_repair_allowed {
         repair_navigation_projection_cache(root, tx);
+    } else {
+        let _ = tx.send(CatalogWorkerMessage::Timing {
+            name: "catalog_navigation_repair_tsv".to_string(),
+            detail: "status=skipped_degraded_joined_fallback".to_string(),
+        });
     }
 }
 
@@ -1135,6 +1163,16 @@ fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorke
         }
     };
     let load_us = load_t.elapsed().as_micros();
+    if !loaded.projection_repair_safe {
+        let _ = tx.send(CatalogWorkerMessage::Timing {
+            name: "catalog_navigation_repair_tsv".to_string(),
+            detail: format!(
+                "status=skipped_degraded_joined_fallback elapsed_us={} load_us={load_us}",
+                started.elapsed().as_micros()
+            ),
+        });
+        return;
+    }
     let repair_t = Instant::now();
     let Some(loaded_stamp) = loaded.stamp.as_ref() else {
         let _ = tx.send(CatalogWorkerMessage::Timing {

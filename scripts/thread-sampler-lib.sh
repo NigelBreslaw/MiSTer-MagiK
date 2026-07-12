@@ -32,14 +32,22 @@ fi
 
 sample=0
 end_epoch=$(( $(date +%s) + duration_secs ))
+previous_sample_monotonic_us=0
 
-printf 'thread_sample_tsv\tsample\tts_unix\tpid\ttid\tthread_name\tstate\tprocessor\tutime_jiffies\tstime_jiffies\tutime_delta_jiffies\tstime_delta_jiffies\tvoluntary_ctxt_switches\tnonvoluntary_ctxt_switches\tvoluntary_delta\tnonvoluntary_delta\tvmrss_kb\tvmhwm_kb\tsched_exec_runtime_ms\tsched_nr_switches\tsched_wait_sum_ms\n' >"$out"
+printf 'thread_sample_tsv\tsample\tts_unix\tinterval_start_monotonic_us\tmonotonic_us\tpid\ttid\tthread_name\tstate\tprocessor\tutime_jiffies\tstime_jiffies\tutime_delta_jiffies\tstime_delta_jiffies\tvoluntary_ctxt_switches\tnonvoluntary_ctxt_switches\tvoluntary_delta\tnonvoluntary_delta\tvmrss_kb\tvmhwm_kb\tsched_exec_runtime_ms\tsched_nr_switches\tsched_wait_sum_ms\n' >"$out"
 
 while [ "$(date +%s)" -le "$end_epoch" ]; do
   pids="$(pidof "$process_name" 2>/dev/null || true)"
   set -- $pids
   pid="${1:-}"
   ts="$(date +%s)"
+  monotonic_us="$(awk '{ printf "%.0f", $1 * 1000000 }' /proc/uptime 2>/dev/null || true)"
+  case "$monotonic_us" in ''|*[!0-9]*) monotonic_us=0 ;; esac
+  interval_start_monotonic_us="$previous_sample_monotonic_us"
+  if [ "$interval_start_monotonic_us" -eq 0 ]; then
+    interval_start_monotonic_us="$monotonic_us"
+  fi
+  previous_sample_monotonic_us="$monotonic_us"
 
   if [ -n "$pid" ] && [ -d "/proc/$pid/task" ]; then
     sched_supported=0
@@ -106,8 +114,9 @@ while [ "$(date +%s)" -le "$end_epoch" ]; do
         nonvoluntary_delta=$(( nonvoluntary - prev_nonvoluntary ))
       fi
 
-      printf 'thread_sample_tsv\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$sample" "$ts" "$pid" "$tid" "$thread_name" "$state" "$processor" \
+      printf 'thread_sample_tsv\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sample" "$ts" "$interval_start_monotonic_us" "$monotonic_us" \
+        "$pid" "$tid" "$thread_name" "$state" "$processor" \
         "$utime" "$stime" "$utime_delta" "$stime_delta" "$voluntary" "$nonvoluntary" \
         "$voluntary_delta" "$nonvoluntary_delta" "$vmrss" "$vmhwm" \
         "$sched_exec" "$sched_switches" "$sched_wait" >>"$out"
@@ -278,10 +287,10 @@ thread_sample_self_test() {
   tmp="$(mktemp -d)"
   local tsv="$tmp/thread-sample.tsv"
   cat >"$tsv" <<'EOF'
-thread_sample_tsv	sample	ts_unix	pid	tid	thread_name	state	processor	utime_jiffies	stime_jiffies	utime_delta_jiffies	stime_delta_jiffies	voluntary_ctxt_switches	nonvoluntary_ctxt_switches	voluntary_delta	nonvoluntary_delta	vmrss_kb	vmhwm_kb	sched_exec_runtime_ms	sched_nr_switches	sched_wait_sum_ms
-thread_sample_tsv	0	1	10	10	mister-magik-fb	R	0	100	20	0	0	1	1	0	0	1000	2000	0	0	0
-thread_sample_tsv	1	2	10	10	mister-magik-fb	R	1	105	22	5	2	3	2	2	1	1100	2100	0	0	0
-thread_sample_tsv	1	2	10	11	mister-vsync	S	1	1	4	1	4	6	9	3	2	1100	2100	0	0	0
+thread_sample_tsv	sample	ts_unix	interval_start_monotonic_us	monotonic_us	pid	tid	thread_name	state	processor	utime_jiffies	stime_jiffies	utime_delta_jiffies	stime_delta_jiffies	voluntary_ctxt_switches	nonvoluntary_ctxt_switches	voluntary_delta	nonvoluntary_delta	vmrss_kb	vmhwm_kb	sched_exec_runtime_ms	sched_nr_switches	sched_wait_sum_ms
+thread_sample_tsv	0	1	1000000	1000000	10	10	mister-magik-fb	R	0	100	20	0	0	1	1	0	0	1000	2000	0	0	0
+thread_sample_tsv	1	2	1000000	2000000	10	10	mister-magik-fb	R	1	105	22	5	2	3	2	2	1	1100	2100	0	0	0
+thread_sample_tsv	1	2	1000000	2000000	10	11	mister-vsync	S	1	1	4	1	4	6	9	3	2	1100	2100	0	0	0
 EOF
   thread_sample_enabled=1
   thread_sample_local_tsv="$tsv"

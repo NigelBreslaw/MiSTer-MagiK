@@ -41,7 +41,7 @@ use crate::software_identity::{
 };
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -630,15 +630,41 @@ fn load_arcade_catalog_from_connection(
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
+    if let Some(stamp) = stamp.as_ref() {
+        if let Some(projection) = load_embedded_catalog_navigation(conn, stamp)? {
+            let query_us = query_t.elapsed().as_micros() as u64;
+            let rows = projection.games.len();
+            let catalog_t = Instant::now();
+            let catalog = ArcadeCatalog::from_navigation_projection(root, projection);
+            let catalog_us = catalog_t.elapsed().as_micros() as u64;
+            return Ok(LibraryCatalogLoad {
+                catalog,
+                stamp: Some(stamp.clone()),
+                projection_repair_safe: true,
+                us: started.elapsed().as_micros() as u64,
+                open_us,
+                schema_check_us,
+                query_us,
+                query_prepare_us: 0,
+                query_first_row_us: 0,
+                query_row_read_us: 0,
+                query_row_hydrate_us: 0,
+                launch_plans_us: 0,
+                systems_us: 0,
+                catalog_us,
+                rows,
+            });
+        }
+    }
     let mut query_timing = CatalogSqlQueryTiming::default();
-    let games = match load_materialized_launcher_catalog(conn) {
+    let (games, projection_repair_safe) = match load_materialized_launcher_catalog(conn) {
         Ok(Some(result)) => {
             query_timing = result.timing;
-            result.games
+            (result.games, true)
         }
         Ok(None) => match load_materialized_ui_catalog(conn) {
-            Ok(Some(games)) => games,
-            Ok(None) => load_joined_launcher_catalog(conn)?,
+            Ok(Some(games)) => (games, true),
+            Ok(None) => (load_joined_launcher_catalog(conn)?, false),
             Err(e) => return Err(e),
         },
         Err(e) => return Err(e),
@@ -664,6 +690,7 @@ fn load_arcade_catalog_from_connection(
     Ok(LibraryCatalogLoad {
         catalog,
         stamp,
+        projection_repair_safe,
         us: started.elapsed().as_micros() as u64,
         open_us,
         schema_check_us,
@@ -677,6 +704,63 @@ fn load_arcade_catalog_from_connection(
         catalog_us,
         rows,
     })
+}
+
+fn load_embedded_catalog_navigation(
+    conn: &Connection,
+    expected_stamp: &catalog_stamp::CatalogStamp,
+) -> Result<Option<catalog_navigation::CatalogNavigationProjection>, String> {
+    load_embedded_catalog_navigation_with_limit(
+        conn,
+        expected_stamp,
+        catalog_navigation::MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES,
+    )
+}
+
+fn load_embedded_catalog_navigation_with_limit(
+    conn: &Connection,
+    expected_stamp: &catalog_stamp::CatalogStamp,
+    max_compressed_bytes: u64,
+) -> Result<Option<catalog_navigation::CatalogNavigationProjection>, String> {
+    if !sqlite_physical_table_exists(conn, "catalog_navigation_projection")? {
+        return Ok(None);
+    }
+    // SQLite can answer length(blob) without materializing the BLOB. Check it
+    // before row.get::<Vec<u8>>() so corrupt databases cannot force an
+    // unbounded allocation before the navigation decoder's own limits run.
+    let compressed_len = conn
+        .query_row(
+            "SELECT length(bytes) FROM catalog_navigation_projection WHERE id=0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| format!("inspect embedded catalog navigation: {e}"))?;
+    let Some(compressed_len) = compressed_len else {
+        return Ok(None);
+    };
+    if compressed_len < 0 || compressed_len as u64 > max_compressed_bytes {
+        return Ok(None);
+    }
+    let bytes = conn
+        .query_row(
+            "SELECT bytes FROM catalog_navigation_projection WHERE id=0",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("read embedded catalog navigation: {e}"))?;
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    // The embedded payload is a recovery cache. Corruption or a stale payload
+    // must fall through to retained materialized tables (or, for legacy
+    // databases, the explicitly unsafe joined fallback) instead of making the
+    // otherwise readable source-fact database unusable.
+    match catalog_navigation::decode_catalog_navigation_from_storage(&bytes, expected_stamp) {
+        Ok(projection) => Ok(projection),
+        Err(_) => Ok(None),
+    }
 }
 
 fn load_system_platform_kinds(conn: &Connection) -> Result<HashMap<String, PlatformKind>, String> {
@@ -798,7 +882,10 @@ pub(crate) fn load_materialized_ui_catalog(
             "launcher catalog extras",
         )?);
     }
-    Ok(Some(games))
+    // The schema creates these projection tables even for source-fact or
+    // legacy writers that skip materialization. An empty table is therefore
+    // not evidence of a complete, repair-safe projection.
+    Ok((!games.is_empty()).then_some(games))
 }
 
 fn load_materialized_launcher_catalog(
@@ -807,13 +894,14 @@ fn load_materialized_launcher_catalog(
     if !sqlite_table_exists(conn, "launcher_catalog")? {
         return Ok(None);
     }
-    Ok(Some(query_game_entries_from_source_with_timing(
+    let result = query_game_entries_from_source_with_timing(
         conn,
         "launcher_catalog_text",
         "",
         "ordinal",
         "launcher catalog",
-    )?))
+    )?;
+    Ok((!result.games.is_empty()).then_some(result))
 }
 
 fn query_game_entries_from_source(
@@ -1351,6 +1439,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
+                    None,
                     true,
                 )?;
                 projections = Some(build_catalog_projections_from_materialized_sqlite(
@@ -1384,6 +1473,8 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
     }
 
     let discovery_history = DiscoveryHistory::load(path);
+    let canonical_navigation =
+        catalog_navigation::encode_catalog_navigation_for_storage(catalog, stamp)?;
     let bytes = {
         let mut writer =
             |build_path: &Path, scan: &LibraryScan, progress: &mut ProgressCallback<'_>| {
@@ -1395,12 +1486,12 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
-                    // The builder has already finalized the runtime catalog and
-                    // publishes it as the durable navigation projection. Keep
-                    // SQLite to source facts needed for validation/debugging;
-                    // rebuilding the same launcher projection here needlessly
-                    // delays durable publication on exFAT.
-                    false,
+                    Some(&canonical_navigation),
+                    // The embedded navigation payload is canonical. Retain the
+                    // materialized compatibility tables until every release,
+                    // acceptance, diagnostic, and benchmark selector has moved
+                    // to that canonical contract.
+                    true,
                 )
             };
         save_sqlite_scan_with_progress_using_writer(
@@ -1820,6 +1911,7 @@ pub(crate) fn write_sqlite_scan_with_catalog(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_sqlite_scan_without_catalog_rebuild(
     path: &Path,
     scan: &LibraryScan,
@@ -1827,6 +1919,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
     software_hash_cache: SoftwareHashCache,
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
+    canonical_navigation: Option<&[u8]>,
     materialize_runtime_catalog: bool,
 ) -> Result<(), String> {
     let preview_paths = PreviewArchivePaths::from_paths(
@@ -1847,6 +1940,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
         },
         None,
         progress,
+        canonical_navigation,
         materialize_runtime_catalog,
     )
     .map(|_| ())
@@ -1941,7 +2035,7 @@ fn write_sqlite_scan_with_sources(
     root: &Path,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryCatalogLoad, String> {
-    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress, true)?
+    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress, None, true)?
         .ok_or_else(|| "saved catalog was not returned".to_string())
 }
 
@@ -1951,6 +2045,7 @@ fn write_sqlite_scan_with_sources_inner(
     mut sources: SqliteScanSources<'_>,
     root: Option<&Path>,
     mut progress: ProgressCallback<'_>,
+    canonical_navigation: Option<&[u8]>,
     materialize_runtime_catalog: bool,
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let total_t = Instant::now();
@@ -2465,10 +2560,14 @@ fn write_sqlite_scan_with_sources_inner(
             id INTEGER PRIMARY KEY CHECK (id=0),
             bytes BLOB NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE catalog_navigation_projection (
+            id INTEGER PRIMARY KEY CHECK (id=0),
+            bytes BLOB NOT NULL
+        ) WITHOUT ROWID;
         "#,
     )
     .map_err(|e| format!("create sqlite schema: {e}"))?;
-    report_library_import_timing("schema", schema_t, "tables=14");
+    report_library_import_timing("schema", schema_t, "tables=15");
 
     let metadata_t = Instant::now();
     let mame_signature = library_db::file_signature(sources.mame_sqlite_path);
@@ -3002,6 +3101,19 @@ fn write_sqlite_scan_with_sources_inner(
                 stamp.lines().len(),
                 checkpoint.lines().len()
             ),
+        );
+    }
+    if let Some(canonical_navigation) = canonical_navigation {
+        let stage_t = Instant::now();
+        tx.execute(
+            "INSERT INTO catalog_navigation_projection(id,bytes) VALUES (0,?1)",
+            [canonical_navigation],
+        )
+        .map_err(|e| format!("insert embedded catalog navigation: {e}"))?;
+        report_library_import_timing(
+            "insert_catalog_navigation",
+            stage_t,
+            format!("bytes={}", canonical_navigation.len()),
         );
     }
     {
@@ -4640,6 +4752,176 @@ mod tests {
             ]
         );
         assert_navigation_catalog_matches_sqlite(&loaded.catalog, &navigation_catalog);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn production_projection_embeds_exact_navigation_for_sqlite_recovery() {
+        let root = unique_temp_dir("sqlite-embedded-navigation-recovery");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tembedded-navigation".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        let arcade_path = "/media/fat/_Arcade/Canonical Alpha.mra";
+        let saturn_path = "magik-plan:payload:/media/fat/games/Saturn/Nights.chd";
+        let games = vec![
+            arcade_game("Canonical Alpha")
+                .path(arcade_path)
+                .preview("canonical-alpha")
+                .year(1983)
+                .manufacturer("Example")
+                .category("Maze")
+                .build(),
+            arcade_game("Nights into Dreams")
+                .path(saturn_path)
+                .preview("nights-into-dreams")
+                .system_id("saturn")
+                .year(1996)
+                .manufacturer("Sega")
+                .category("Action")
+                .build(),
+        ];
+        let systems = vec![
+            GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 1,
+            },
+            GameSystemEntry {
+                id: "saturn".to_string(),
+                title: "Saturn".to_string(),
+                count: 1,
+            },
+        ];
+        let launch_plans = vec![StructuredLaunchPlan {
+            launch_ref: saturn_path.into(),
+            title: "Nights into Dreams".into(),
+            system_id: "saturn".into(),
+            core_path: "/media/fat/_Console/Saturn_20260601.rbf".into(),
+            payload_path: "/media/fat/games/Saturn/Nights.chd".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        }];
+        let expected = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+            PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            games,
+            systems,
+            launch_plans,
+            HashMap::from([
+                ("arcade".to_string(), PlatformKind::Arcade),
+                ("saturn".to_string(), PlatformKind::Console),
+            ]),
+        );
+
+        save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+            &db,
+            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Canonical Alpha")]),
+            &stamp,
+            &expected,
+            None,
+        )
+        .expect("save production catalog projection");
+        let conn = Connection::open(&db).expect("open production catalog");
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| row
+                .get::<_, i64>(0))
+                .expect("count compatibility arcade rows"),
+            1,
+            "production publication must retain selector compatibility tables"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT (SELECT count(*) FROM ui_arcade_preferred) +
+                        (SELECT count(*) FROM launcher_catalog_rows)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count compatibility launcher rows"),
+            1
+        );
+        assert!(
+            load_embedded_catalog_navigation_with_limit(&conn, &stamp, 1)
+                .expect("size-limited embedded navigation probe")
+                .is_none(),
+            "embedded BLOB length must be rejected before reading its payload"
+        );
+        drop(conn);
+        std::fs::remove_file(catalog_summary::summary_path_for_sqlite(&db))
+            .expect("remove summary sidecar");
+        std::fs::remove_file(catalog_navigation::navigation_path_for_sqlite(&db))
+            .expect("remove navigation sidecar");
+
+        let recovered =
+            load_arcade_catalog_from_sqlite_at(arcade_catalog::DEFAULT_ARCADE_ROOT, &db)
+                .expect("recover embedded canonical navigation");
+
+        assert!(recovered.projection_repair_safe);
+        assert_navigation_catalog_matches_sqlite(&expected, &recovered.catalog);
+        assert_eq!(
+            recovered.catalog.platform_kind("arcade"),
+            PlatformKind::Arcade
+        );
+        assert_eq!(
+            recovered.catalog.platform_kind("saturn"),
+            PlatformKind::Console
+        );
+
+        let conn = Connection::open(&db).expect("open embedded projection for corruption");
+        conn.execute(
+            "UPDATE catalog_navigation_projection SET bytes=?1 WHERE id=0",
+            [b"not-an-lz4-navigation".as_slice()],
+        )
+        .expect("corrupt embedded projection");
+        drop(conn);
+        let compatibility_fallback =
+            load_arcade_catalog_from_sqlite_at(arcade_catalog::DEFAULT_ARCADE_ROOT, &db)
+                .expect("fall through corrupt embedded projection");
+        assert!(compatibility_fallback.projection_repair_safe);
+        assert_eq!(compatibility_fallback.catalog.games.len(), 1);
+        assert_eq!(
+            compatibility_fallback.catalog.games[0].title.as_ref(),
+            "Canonical Alpha"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn joined_sqlite_fallback_is_marked_unsafe_for_projection_repair() {
+        let root = unique_temp_dir("sqlite-degraded-joined-fallback");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tjoined-fallback".to_string(),
+        ]);
+        let scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "Fallback Alpha")]);
+        write_sqlite_scan_without_catalog_rebuild(
+            &db,
+            &scan,
+            None,
+            SoftwareHashCache::load(&db),
+            None,
+            Some(&stamp),
+            None,
+            false,
+        )
+        .expect("write source-fact-only sqlite");
+
+        let loaded = load_arcade_catalog_from_sqlite_at(arcade_catalog::DEFAULT_ARCADE_ROOT, &db)
+            .expect("load joined fallback");
+
+        assert!(!loaded.projection_repair_safe);
+        assert!(loaded.catalog.games.iter().all(|game| !game.has_preview));
+        let repair_error = library_db::rewrite_catalog_projections_from_sqlite(
+            arcade_catalog::DEFAULT_ARCADE_ROOT,
+            &db,
+        )
+        .expect_err("degraded joined fallback must not be republished");
+        assert!(repair_error.contains("refusing to rewrite catalog projections"));
+        assert!(!catalog_summary::summary_path_for_sqlite(&db).exists());
+        assert!(!catalog_navigation::navigation_path_for_sqlite(&db).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
