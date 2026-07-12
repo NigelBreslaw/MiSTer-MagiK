@@ -10,7 +10,7 @@ CROSS_COMPILE="${CROSS_COMPILE:-arm-linux-gnueabihf-}"
 LOCALVERSION="${LOCALVERSION:--MiSTer}"
 IMAGE="${MISTER_ARM_BUILD_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
-KERNEL_REVISION="$(git -C "$KERNEL_SRC" rev-parse HEAD 2>/dev/null || true)"
+KERNEL_REVISION="$(git -c safe.directory='*' -C "$KERNEL_SRC" rev-parse --verify 'HEAD^{commit}')"
 
 usage() {
   cat <<'EOF'
