@@ -181,11 +181,22 @@ fn normalize_launch_path(path: &str) -> String {
     normalized.to_ascii_lowercase()
 }
 
+#[cfg(test)]
 pub(crate) fn discovery_from_profile_file(
     file: &FoundFile,
     profile: &LaunchProfile,
     rule: &PayloadRule,
     profiles: &[LaunchProfile],
+) -> GameDiscovery {
+    discovery_from_profile_file_with_prepared_index(file, profile, rule, profiles, None)
+}
+
+pub(crate) fn discovery_from_profile_file_with_prepared_index(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    rule: &PayloadRule,
+    profiles: &[LaunchProfile],
+    prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
 ) -> GameDiscovery {
     let source_path = file.path.display().to_string();
     if file.ext == "mra" {
@@ -255,7 +266,10 @@ pub(crate) fn discovery_from_profile_file(
                             .to_str()
                             .is_some_and(|value| value.eq_ignore_ascii_case("_DOS Games"))
                     }) {
-                    prepared_collections::resolve_0mhz_payload_path(&file.path, payload)
+                    prepared_index.map_or_else(
+                        || prepared_collections::resolve_0mhz_payload_path(&file.path, payload),
+                        |index| index.resolve_0mhz_payload_path(&file.path, payload),
+                    )
                 } else {
                     media_metadata::resolve_mgl_payload_path(&file.path, payload)
                 };
@@ -263,8 +277,22 @@ pub(crate) fn discovery_from_profile_file(
             });
             let prepared = (profile.system_id == "dos"
                 && inspection.as_ref().is_ok_and(|inspection| {
-                    prepared_collections::validate_0mhz_mgl_inspection(&file.path, inspection)
-                        .is_ok()
+                    prepared_index.map_or_else(
+                        || {
+                            prepared_collections::validate_0mhz_mgl_inspection(
+                                &file.path,
+                                inspection,
+                            )
+                        },
+                        |index| {
+                            prepared_collections::validate_0mhz_mgl_inspection_with_index(
+                                &file.path,
+                                inspection,
+                                index,
+                            )
+                        },
+                    )
+                    .is_ok()
                 }))
             .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
             let prepared = prepared.or_else(|| {
