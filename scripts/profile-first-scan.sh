@@ -18,8 +18,8 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
-RAM_CATALOG_READY_GATE_MS=97749
-DB_SAVE_GATE_MS=124620
+RAM_CATALOG_READY_GATE_MS=97393
+DB_SAVE_GATE_MS=124562
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/mister-supervision-lib.sh"
 

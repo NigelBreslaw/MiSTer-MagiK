@@ -115,6 +115,40 @@ struct WalkTargetStats {
     aborted: bool,
 }
 
+/// Aggregate time spent handing producer events to the bounded discovery
+/// channel. This deliberately measures the complete `SyncSender::send` call:
+/// with the channel's fixed capacity, sustained time here is producer
+/// backpressure rather than filesystem enumeration.
+#[derive(Default)]
+struct SyncSendStats {
+    elapsed_us: u64,
+    sends: usize,
+    slow_sends: usize,
+    max_us: u64,
+}
+
+impl SyncSendStats {
+    fn send(&mut self, tx: &mpsc::SyncSender<DiscoveryEvent>, event: DiscoveryEvent) -> bool {
+        let started = Instant::now();
+        let sent = tx.send(event).is_ok();
+        let elapsed_us = started.elapsed().as_micros() as u64;
+        self.elapsed_us = self.elapsed_us.saturating_add(elapsed_us);
+        self.sends = self.sends.saturating_add(1);
+        self.slow_sends = self
+            .slow_sends
+            .saturating_add(usize::from(elapsed_us >= 1_000));
+        self.max_us = self.max_us.max(elapsed_us);
+        sent
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.elapsed_us = self.elapsed_us.saturating_add(other.elapsed_us);
+        self.sends = self.sends.saturating_add(other.sends);
+        self.slow_sends = self.slow_sends.saturating_add(other.slow_sends);
+        self.max_us = self.max_us.max(other.max_us);
+    }
+}
+
 pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_role(roots, None, RuntimeThreadRole::LibraryWalker)
 }
@@ -213,7 +247,7 @@ fn walk_index_candidates(
     for target in targets {
         let stats = scan_target_candidates(&target, &profiles, &candidate_exts, |_| true);
         dirs += stats.dirs;
-        report_walk_target(&target, &stats);
+        report_walk_target(&target, &stats, 0, &SyncSendStats::default());
     }
     dirs
 }
@@ -247,7 +281,10 @@ fn walk_index_candidates_with_plan(
         ),
     );
     let mut dirs = 0usize;
+    let mut producer_us = 0u64;
+    let mut send_stats = SyncSendStats::default();
     for target in targets {
+        let mut target_send_stats = SyncSendStats::default();
         let stats = match target {
             PlannedScanTarget::Static {
                 path,
@@ -258,41 +295,45 @@ fn walk_index_candidates_with_plan(
                     profiles,
                     &candidate_exts,
                     game_dir_header.as_ref(),
-                    |file| tx.send(DiscoveryEvent::File(file)).is_ok(),
+                    |file| target_send_stats.send(tx, DiscoveryEvent::File(file)),
                 );
-                report_walk_target(&path, &stats);
+                let in_target_send_us = target_send_stats.elapsed_us;
                 if let Some(facts) = facts {
-                    if tx.send(DiscoveryEvent::GameDirFacts(facts)).is_err() {
+                    if !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts)) {
                         break;
                     }
                 }
+                producer_us =
+                    producer_us.saturating_add(stats.elapsed_us.saturating_sub(in_target_send_us));
+                report_walk_target(&path, &stats, in_target_send_us, &target_send_stats);
                 stats
             }
             PlannedScanTarget::Runtime(header) => {
                 let (stats, candidates) = scan_runtime_target_candidates(&header, plan);
-                report_walk_target(&header.path, &stats);
-                if tx
-                    .send(DiscoveryEvent::RuntimeDirectory(candidates))
-                    .is_err()
-                {
+                if !target_send_stats.send(tx, DiscoveryEvent::RuntimeDirectory(candidates)) {
                     break;
                 }
+                producer_us = producer_us.saturating_add(stats.elapsed_us);
+                report_walk_target(&header.path, &stats, 0, &target_send_stats);
                 stats
             }
             PlannedScanTarget::FactsOnly(header) => {
                 let (stats, facts) = scan_game_dir_facts_only(&header);
-                report_walk_target(&header.path, &stats);
-                if tx.send(DiscoveryEvent::GameDirFacts(facts)).is_err() {
+                if !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts)) {
                     break;
                 }
+                producer_us = producer_us.saturating_add(stats.elapsed_us);
+                report_walk_target(&header.path, &stats, 0, &target_send_stats);
                 stats
             }
         };
         dirs += stats.dirs;
+        send_stats.add(&target_send_stats);
         if stats.aborted {
             break;
         }
     }
+    report_walker_pipeline_breakdown(producer_us, &send_stats);
     dirs
 }
 
@@ -339,16 +380,31 @@ fn walk_index_candidates_streaming(
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> usize {
     let mut dirs = 0usize;
+    let mut producer_us = 0u64;
+    let mut send_stats = SyncSendStats::default();
     for target in targets {
+        let mut target_send_stats = SyncSendStats::default();
         let stats = scan_target_candidates(&target, profiles, candidate_exts, |file| {
-            tx.send(DiscoveryEvent::File(file)).is_ok()
+            target_send_stats.send(tx, DiscoveryEvent::File(file))
         });
         dirs += stats.dirs;
-        report_walk_target(&target, &stats);
+        producer_us = producer_us.saturating_add(
+            stats
+                .elapsed_us
+                .saturating_sub(target_send_stats.elapsed_us),
+        );
+        report_walk_target(
+            &target,
+            &stats,
+            target_send_stats.elapsed_us,
+            &target_send_stats,
+        );
+        send_stats.add(&target_send_stats);
         if stats.aborted {
             break;
         }
     }
+    report_walker_pipeline_breakdown(producer_us, &send_stats);
     dirs
 }
 
@@ -697,20 +753,47 @@ pub(crate) fn collect_runtime_candidates_after_overflow(
         files.push(file);
         true
     });
-    report_walk_target(&header.path, &stats);
+    report_walk_target(&header.path, &stats, 0, &SyncSendStats::default());
     files
 }
 
-fn report_walk_target(target: &Path, stats: &WalkTargetStats) {
+fn report_walk_target(
+    target: &Path,
+    stats: &WalkTargetStats,
+    in_target_send_us: u64,
+    send: &SyncSendStats,
+) {
+    let producer_us = stats.elapsed_us.saturating_sub(in_target_send_us);
     library_db::report_library_scan_timing(
         "walk_target",
         stats.elapsed_us,
         format!(
-            "path={} dirs={} files={} candidates={}",
+            "path={} dirs={} files={} candidates={} producer_us={} sync_send_us={} sync_sends={} sync_slow_sends={} sync_send_max_us={}",
             target.display(),
             stats.dirs,
             stats.files,
-            stats.candidates
+            stats.candidates,
+            producer_us,
+            send.elapsed_us,
+            send.sends,
+            send.slow_sends,
+            send.max_us,
+        ),
+    );
+}
+
+fn report_walker_pipeline_breakdown(producer_us: u64, send: &SyncSendStats) {
+    library_db::report_library_scan_timing(
+        "walker_producer",
+        producer_us,
+        format!("sync_send_us={} sync_sends={}", send.elapsed_us, send.sends,),
+    );
+    library_db::report_library_scan_timing(
+        "walker_sync_send",
+        send.elapsed_us,
+        format!(
+            "sends={} slow_sends={} max_us={} channel_capacity={}",
+            send.sends, send.slow_sends, send.max_us, DISCOVERY_EVENT_BUFFER,
         ),
     );
 }
@@ -782,10 +865,7 @@ fn push_prepared_collection_targets(targets: &mut Vec<PathBuf>, configured_root:
     } else {
         configured_root
     };
-    push_scan_target(
-        targets,
-        storage_root.join("_Computer").join("X68000 Games"),
-    );
+    push_scan_target(targets, storage_root.join("_Computer").join("X68000 Games"));
 }
 
 fn push_profile_game_dirs(
@@ -2375,8 +2455,8 @@ mod tests {
             )
             .expect("count excluded collection files");
         assert_eq!(excluded_count, 1);
-        let loaded = load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path)
-            .expect("load catalog");
+        let loaded =
+            load_arcade_catalog_from_sqlite_at(&root, &cfg.sqlite_path).expect("load catalog");
         let game = loaded
             .catalog
             .games

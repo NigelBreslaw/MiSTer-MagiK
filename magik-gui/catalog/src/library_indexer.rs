@@ -18,7 +18,7 @@ use crate::library_db::{
     LibraryScanEvent, ProgressCallback, ScanEventCallback,
 };
 use crate::media_metadata;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -120,6 +120,84 @@ struct ScanTimingStats {
     installed_collection_count: usize,
     collection_listing_us: u64,
     collection_listing_count: usize,
+    file_discovery_breakdown: HashMap<String, HashMap<String, FileDiscoveryTimingBucket>>,
+}
+
+#[derive(Default)]
+struct FileDiscoveryTimingBucket {
+    elapsed_us: u64,
+    calls: usize,
+    max_us: u64,
+}
+
+impl ScanTimingStats {
+    fn record_file_discovery(&mut self, profile_id: &str, extension: &str, elapsed_us: u64) {
+        self.file_discovery_us = self.file_discovery_us.saturating_add(elapsed_us);
+        self.file_discovery_count = self.file_discovery_count.saturating_add(1);
+
+        // Avoid allocating the profile/extension strings for every file. The
+        // common path performs borrowed lookups and allocates only when a new
+        // aggregate bucket is first observed.
+        let extensions = if let Some(extensions) = self.file_discovery_breakdown.get_mut(profile_id)
+        {
+            extensions
+        } else {
+            self.file_discovery_breakdown
+                .insert(profile_id.to_string(), HashMap::new());
+            self.file_discovery_breakdown
+                .get_mut(profile_id)
+                .expect("inserted file-discovery profile timing bucket")
+        };
+        let bucket = if let Some(bucket) = extensions.get_mut(extension) {
+            bucket
+        } else {
+            extensions.insert(extension.to_string(), FileDiscoveryTimingBucket::default());
+            extensions
+                .get_mut(extension)
+                .expect("inserted file-discovery extension timing bucket")
+        };
+        bucket.elapsed_us = bucket.elapsed_us.saturating_add(elapsed_us);
+        bucket.calls = bucket.calls.saturating_add(1);
+        bucket.max_us = bucket.max_us.max(elapsed_us);
+    }
+
+    fn report_file_discovery_breakdown(&self) {
+        let mut buckets = self
+            .file_discovery_breakdown
+            .iter()
+            .flat_map(|(profile_id, extensions)| {
+                extensions
+                    .iter()
+                    .map(move |(extension, bucket)| (profile_id, extension, bucket))
+            })
+            .collect::<Vec<_>>();
+        buckets.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+        for (profile_id, extension, bucket) in buckets {
+            library_db::report_library_scan_timing(
+                "file_discovery_profile_ext",
+                bucket.elapsed_us,
+                format!(
+                    "profile={} ext={} source_class={} calls={} avg_us={} max_us={}",
+                    profile_id,
+                    extension,
+                    file_discovery_source_class(extension),
+                    bucket.calls,
+                    bucket.elapsed_us / bucket.calls.max(1) as u64,
+                    bucket.max_us,
+                ),
+            );
+        }
+    }
+}
+
+fn file_discovery_source_class(extension: &str) -> &'static str {
+    if extension.eq_ignore_ascii_case("mra") {
+        "mra-metadata"
+    } else if extension.eq_ignore_ascii_case("mgl") {
+        "mgl-metadata"
+    } else {
+        "path-derived"
+    }
 }
 
 fn scan_library_with_progress_and_events(
@@ -277,8 +355,11 @@ fn scan_library_with_progress_and_events(
                         &payload_rule,
                         &profiles,
                     ));
-                    timing.file_discovery_us += discovery_t.elapsed().as_micros() as u64;
-                    timing.file_discovery_count += 1;
+                    timing.record_file_discovery(
+                        profile.id.as_str(),
+                        f.ext.as_str(),
+                        discovery_t.elapsed().as_micros() as u64,
+                    );
                 }
                 Some((
                     _,
@@ -385,6 +466,7 @@ fn scan_library_with_progress_and_events(
         timing.file_discovery_us,
         format!("files={}", timing.file_discovery_count),
     );
+    timing.report_file_discovery_breakdown();
     library_db::report_library_scan_timing(
         "classify_total",
         classify_t.elapsed().as_micros() as u64,
@@ -531,4 +613,32 @@ fn is_bootstrap_launcher_path(path: &Path) -> bool {
             .as_deref(),
         Some("mra" | "mgl")
     )
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn file_discovery_source_classes_separate_metadata_reads_from_paths() {
+        assert_eq!(file_discovery_source_class("mra"), "mra-metadata");
+        assert_eq!(file_discovery_source_class("MGL"), "mgl-metadata");
+        assert_eq!(file_discovery_source_class("crt"), "path-derived");
+    }
+
+    #[test]
+    fn file_discovery_timing_aggregates_by_profile_and_extension() {
+        let mut timing = ScanTimingStats::default();
+        timing.record_file_discovery("arcade", "mra", 12);
+        timing.record_file_discovery("arcade", "mra", 30);
+        timing.record_file_discovery("c64", "crt", 5);
+
+        assert_eq!(timing.file_discovery_us, 47);
+        assert_eq!(timing.file_discovery_count, 3);
+        let arcade = &timing.file_discovery_breakdown["arcade"]["mra"];
+        assert_eq!(arcade.elapsed_us, 42);
+        assert_eq!(arcade.calls, 2);
+        assert_eq!(arcade.max_us, 30);
+        assert_eq!(timing.file_discovery_breakdown["c64"]["crt"].calls, 1);
+    }
 }

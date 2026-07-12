@@ -38,33 +38,37 @@ pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> 
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     for search_root in core_search_roots(roots) {
-        if !search_root.is_dir() {
-            continue;
+        // MiSTer installs Console, Computer, and Arcade cores directly in
+        // their canonical roots. LLAPI additionally owns one canonical
+        // `cores/` child. Reading those directories by name avoids a recursive
+        // WalkDir plus an exFAT metadata round-trip for every non-core entry.
+        let mut directories = vec![search_root.clone()];
+        if path_name_eq(&search_root, "_LLAPI") {
+            directories.push(search_root.join("cores"));
         }
-        for entry in walkdir::WalkDir::new(search_root)
-            .follow_links(false)
-            .max_depth(3)
-            .into_iter()
-            .filter_entry(|entry| !should_ignore_hidden_path(entry.path()))
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if !entry.file_type().is_file() || !path_ext_eq(path, "rbf") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        for directory in directories {
+            let Ok(entries) = std::fs::read_dir(directory) else {
                 continue;
             };
-            if stem.eq_ignore_ascii_case("menu") {
-                continue;
-            }
-            let core_id = launch_profiles::canonical_core_id(stem);
-            let key = format!("{}\t{}", core_id.to_ascii_lowercase(), path.display());
-            if seen.insert(key) {
-                out.push(InstalledCore {
-                    core_id,
-                    path: path.to_path_buf(),
-                });
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if should_ignore_hidden_path(&path) || !path_ext_eq(&path, "rbf") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if stem.eq_ignore_ascii_case("menu") {
+                    continue;
+                }
+                let core_id = launch_profiles::canonical_core_id(stem);
+                let key = format!("{}\t{}", core_id.to_ascii_lowercase(), path.display());
+                if seen.insert(key) {
+                    out.push(InstalledCore {
+                        core_id,
+                        path: path.to_path_buf(),
+                    });
+                }
             }
         }
     }
@@ -84,7 +88,7 @@ fn append_mgl_system_descriptors(
         };
         for entry in entries.filter_map(Result::ok) {
             let descriptor_path = entry.path();
-            if !descriptor_path.is_file() || !path_ext_eq(&descriptor_path, "mgl") {
+            if !path_ext_eq(&descriptor_path, "mgl") {
                 continue;
             }
             let Some(metadata) = crate::media_metadata::read_mgl_metadata(&descriptor_path) else {
@@ -225,18 +229,25 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
         let mut entries = Vec::new();
         for entry in read_dir.filter_map(Result::ok) {
             let path = entry.path();
-            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if !metadata.is_dir() {
-                continue;
-            }
             let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
             if should_ignore_game_dir(name) {
                 continue;
             }
+            if entry
+                .file_type()
+                .ok()
+                .is_some_and(|file_type| file_type.is_symlink())
+            {
+                continue;
+            }
+            // `/games` is a directory namespace: every visible top-level
+            // entry names a system directory. Treat that layout as the source
+            // contract instead of issuing one synchronous exFAT metadata call
+            // per system (and per hidden AppleDouble sidecar) merely to prove
+            // the entry type. A non-directory header simply yields no facts
+            // when its bounded target scan runs.
             if excluded_names.contains(&name.to_ascii_lowercase()) {
                 continue;
             }
