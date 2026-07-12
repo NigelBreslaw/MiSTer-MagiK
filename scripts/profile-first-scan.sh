@@ -18,14 +18,15 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
-RAM_CATALOG_READY_GATE_MS=95467
-DB_SAVE_GATE_MS=121426
+NAMESPACE_BACKEND=""
+RAM_CATALOG_READY_GATE_MS=94650
+DB_SAVE_GATE_MS=121336
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/mister-supervision-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--deploy-catalog|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--thread-sample]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--deploy-catalog|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample]
        scripts/profile-first-scan.sh --self-test
 
 Deletes the launcher catalog database and summary projection, reboots the
@@ -125,6 +126,7 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
     --sqlite-build-dir) SQLITE_BUILD_DIR="${2:?}"; shift 2 ;;
+    --namespace-backend) NAMESPACE_BACKEND="${2:?}"; shift 2 ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --sqlite-publish-mode) echo "--sqlite-publish-mode was removed; library DB publishing has one supported path" >&2; exit 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -150,6 +152,13 @@ if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 fi
 if [[ ! "$TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
   echo "--timeout must be an integer number of seconds" >&2
+  exit 2
+fi
+if [[ -n "$NAMESPACE_BACKEND" &&
+      "$NAMESPACE_BACKEND" != "auto" &&
+      "$NAMESPACE_BACKEND" != "walkdir" &&
+      "$NAMESPACE_BACKEND" != "fd-relative" ]]; then
+  echo "--namespace-backend must be auto, walkdir, or fd-relative" >&2
   exit 2
 fi
 label="$LABEL"
@@ -227,6 +236,9 @@ trap cleanup EXIT
 : >"$env_file"
 if [[ -n "$SQLITE_BUILD_DIR" ]]; then
   printf 'export MISTER_LIBRARY_SQLITE_BUILD_DIR=%q\n' "$SQLITE_BUILD_DIR" >>"$env_file"
+fi
+if [[ -n "$NAMESPACE_BACKEND" ]]; then
+  printf 'export MISTER_LIBRARY_NAMESPACE_BACKEND=%q\n' "$NAMESPACE_BACKEND" >>"$env_file"
 fi
 printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
