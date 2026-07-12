@@ -48,8 +48,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_confirm_left_label("".into());
     bridge.set_confirm_right_label("".into());
     bridge.set_confirm_selected(0);
-    bridge.set_game_systems(ModelRc::new(VecModel::from(Vec::<
-        slint_ui::launcher::GameSystem,
+    bridge.set_menu_title("MiSTer MagiK".into());
+    bridge.set_menu_breadcrumb("".into());
+    bridge.set_menu_items(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::MenuItem,
     >::new())));
     bridge.set_home_scroll_repeat_active(false);
     bridge.set_home_scroll_held(false);
@@ -493,6 +495,8 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_home_scroll_held(nav.home_horizontal_held());
     bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active());
     bridge.set_home_scroll_x(nav.scroll_x);
+    bridge.set_menu_title(nav.current_menu_title().into());
+    bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
@@ -511,7 +515,7 @@ pub(super) fn sync_bridge_launcher(
         let games = active_system_game_view(catalog, nav);
         let header = active_system_header(catalog, nav, games.len());
         active_games_loading = active_system_games_loading(catalog, nav);
-        bridge.set_game_systems(models.game_systems(catalog, catalog_version, nav.selected));
+        bridge.set_menu_items(models.menu_items(nav, catalog_version));
         bridge.set_active_system_title(header.title.into());
         bridge.set_active_system_count(header.count as i32);
         active_games_for_preview = Some(games);
@@ -558,7 +562,7 @@ pub(super) fn sync_bridge_launcher_light(
     defer_selected_preview: bool,
     render_w: usize,
 ) {
-    models.sync_game_system_focus(nav.selected);
+    models.sync_menu_item_focus(nav.selected);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
     let active_games_len = active_arcade_games.as_ref().map_or_else(
@@ -611,6 +615,18 @@ pub(super) fn sync_bridge_launcher_light(
         nav.home_horizontal_repeat_active()
     );
     set_bridge_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
+    set_bridge_string_if_changed!(
+        bridge,
+        get_menu_title,
+        set_menu_title,
+        nav.current_menu_title()
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_menu_breadcrumb,
+        set_menu_breadcrumb,
+        nav.current_menu_breadcrumb()
+    );
     set_bridge_if_changed!(
         bridge,
         get_settings_focused,
@@ -712,19 +728,24 @@ pub(super) fn launcher_clock_text() -> String {
     }
 }
 
-pub(super) fn slint_game_systems(
-    catalog: &ArcadeCatalog,
-    selected: usize,
-) -> Rc<VecModel<slint_ui::launcher::GameSystem>> {
-    let rows: Vec<slint_ui::launcher::GameSystem> = catalog
-        .systems
+pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launcher::MenuItem>> {
+    let rows: Vec<slint_ui::launcher::MenuItem> = nav
+        .current_menu_items()
         .iter()
         .enumerate()
-        .map(|(index, system)| slint_ui::launcher::GameSystem {
-            id: system.id.clone().into(),
-            title: system.title.clone().into(),
-            count: system.count as i32,
-            focused: index == selected,
+        .map(|(index, item)| slint_ui::launcher::MenuItem {
+            id: item.id.clone().into(),
+            label: item.title.clone().into(),
+            subtitle: format!("{} games", item.count).into(),
+            focused: index == nav.selected,
+            node_kind: match item.kind {
+                crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
+                    slint_ui::launcher::MenuItemKind::Group
+                }
+                crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
+                    slint_ui::launcher::MenuItemKind::Collection
+                }
+            },
         })
         .collect();
     Rc::new(VecModel::from(rows))
@@ -735,10 +756,10 @@ pub(super) fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
 }
 
 pub(super) fn active_system<'a>(
-    catalog: &'a ArcadeCatalog,
-    nav: &LauncherNav,
-) -> Option<&'a arcade_catalog::GameSystemEntry> {
-    catalog.systems.get(nav.selected)
+    _catalog: &ArcadeCatalog,
+    nav: &'a LauncherNav,
+) -> Option<&'a crate::launcher_taxonomy::LauncherCollection> {
+    nav.active_collection()
 }
 
 pub(super) fn active_system_game_view<'a>(
@@ -866,8 +887,9 @@ fn sync_arcade_search_bridge_if_changed(
 }
 
 pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
-    active_system(catalog, nav)
-        .is_some_and(|system| system.count > 0 && catalog.system_game_count(&system.id) == 0)
+    active_system(catalog, nav).is_some_and(|system| {
+        system.count > 0 && catalog.system_game_count(&system.id) < system.count
+    })
 }
 
 pub(super) fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
@@ -904,6 +926,8 @@ impl SetupBridgeKey {
 #[derive(PartialEq, Eq)]
 pub(super) struct LauncherBridgeKey {
     pub(super) screen: Screen,
+    pub(super) menu_id: String,
+    active_collection_id: Option<String>,
     selected: usize,
     scroll_x: i32,
     home_scroll_repeat_active: bool,
@@ -932,6 +956,8 @@ impl LauncherBridgeKey {
     pub(super) fn from_nav(nav: &LauncherNav) -> Self {
         Self {
             screen: nav.screen,
+            menu_id: nav.current_menu_id().to_string(),
+            active_collection_id: nav.active_collection_id().map(str::to_string),
             selected: nav.selected,
             scroll_x: nav.scroll_x,
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
@@ -960,9 +986,9 @@ impl LauncherBridgeKey {
 
 #[derive(Default)]
 pub(super) struct LauncherBridgeModels {
-    game_systems_key: Option<usize>,
-    game_systems: Option<Rc<VecModel<slint_ui::launcher::GameSystem>>>,
-    game_systems_selected: Option<usize>,
+    menu_items_key: Option<(usize, String)>,
+    menu_items: Option<Rc<VecModel<slint_ui::launcher::MenuItem>>>,
+    menu_items_selected: Option<usize>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
 }
@@ -991,38 +1017,39 @@ impl LauncherBridgeModels {
 }
 
 impl LauncherBridgeModels {
-    pub(super) fn game_systems(
+    pub(super) fn menu_items(
         &mut self,
-        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
         catalog_version: usize,
-        selected: usize,
-    ) -> ModelRc<slint_ui::launcher::GameSystem> {
-        if self.game_systems_key != Some(catalog_version) {
-            self.game_systems = Some(slint_game_systems(catalog, selected));
-            self.game_systems_key = Some(catalog_version);
-            self.game_systems_selected = (selected < catalog.systems.len()).then_some(selected);
+    ) -> ModelRc<slint_ui::launcher::MenuItem> {
+        let key = (catalog_version, nav.current_menu_id().to_string());
+        if self.menu_items_key.as_ref() != Some(&key) {
+            self.menu_items = Some(slint_menu_items(nav));
+            self.menu_items_key = Some(key);
+            self.menu_items_selected =
+                (nav.selected < nav.current_menu_count()).then_some(nav.selected);
         } else {
-            self.sync_game_system_focus(selected);
+            self.sync_menu_item_focus(nav.selected);
         }
         ModelRc::from(
-            self.game_systems
+            self.menu_items
                 .as_ref()
-                .expect("game system model should be initialized")
+                .expect("launcher menu model should be initialized")
                 .clone(),
         )
     }
 
-    fn sync_game_system_focus(&mut self, selected: usize) {
+    fn sync_menu_item_focus(&mut self, selected: usize) {
         let model = self
-            .game_systems
+            .menu_items
             .as_ref()
-            .expect("game system model should be initialized");
+            .expect("launcher menu model should be initialized");
         let selected = (selected < model.row_count()).then_some(selected);
-        if self.game_systems_selected == selected {
+        if self.menu_items_selected == selected {
             return;
         }
 
-        if let Some(previous) = self.game_systems_selected {
+        if let Some(previous) = self.menu_items_selected {
             if let Some(mut row) = model.row_data(previous) {
                 row.focused = false;
                 model.set_row_data(previous, row);
@@ -1034,7 +1061,7 @@ impl LauncherBridgeModels {
                 model.set_row_data(current, row);
             }
         }
-        self.game_systems_selected = selected;
+        self.menu_items_selected = selected;
     }
 }
 
@@ -1061,10 +1088,40 @@ mod tests {
                 count: 15,
             }],
         );
-        let nav = LauncherNav::new();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "pet2001"));
 
         assert!(active_system_games_loading(&catalog, &nav));
         assert_eq!(active_system_header(&catalog, &nav, 0).count, 15);
+    }
+
+    #[test]
+    fn partially_hydrated_arcade_aggregate_stays_loading() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            vec![arcade_game("Arcade One").system_id("arcade").build()],
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "cps1".into(),
+                    title: "CPS-1".into(),
+                    count: 1,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+
+        assert_eq!(
+            catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+            1
+        );
+        assert_eq!(nav.active_collection().expect("Arcade collection").count, 2);
+        assert!(active_system_games_loading(&catalog, &nav));
     }
 
     #[test]
@@ -1089,12 +1146,12 @@ mod tests {
                 GameSystemEntry {
                     id: "one".into(),
                     title: "One".into(),
-                    count: 0,
+                    count: 1,
                 },
                 GameSystemEntry {
-                    id: "two".into(),
-                    title: "Two".into(),
-                    count: 0,
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 1,
                 },
             ],
         );
@@ -1147,41 +1204,83 @@ mod tests {
     }
 
     #[test]
-    fn game_system_focus_updates_rows_without_replacing_the_model() {
+    fn menu_item_focus_updates_rows_without_replacing_the_model() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             Vec::new(),
             vec![
                 GameSystemEntry {
-                    id: "one".into(),
-                    title: "One".into(),
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
                     count: 1,
                 },
                 GameSystemEntry {
-                    id: "two".into(),
-                    title: "Two".into(),
+                    id: "neogeo".into(),
+                    title: "NeoGeo".into(),
                     count: 2,
                 },
                 GameSystemEntry {
-                    id: "three".into(),
-                    title: "Three".into(),
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
                     count: 3,
                 },
             ],
         );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
         let mut models = LauncherBridgeModels::default();
-        let rows = models.game_systems(&catalog, 1, 0);
+        let rows = models.menu_items(&nav, 1);
 
         assert!(rows.row_data(0).expect("first row").focused);
         assert!(!rows.row_data(1).expect("second row").focused);
         assert!(!rows.row_data(2).expect("third row").focused);
 
-        let updated_rows = models.game_systems(&catalog, 1, 2);
+        nav.selected = 2;
+        let updated_rows = models.menu_items(&nav, 1);
 
         assert!(!rows.row_data(0).expect("first row").focused);
         assert!(!rows.row_data(1).expect("second row").focused);
         assert!(rows.row_data(2).expect("third row").focused);
         assert!(updated_rows.row_data(2).expect("updated third row").focused);
+    }
+
+    #[test]
+    fn menu_item_model_is_replaced_when_the_menu_level_changes() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "neogeo".into(),
+                    title: "NeoGeo".into(),
+                    count: 2,
+                },
+                GameSystemEntry {
+                    id: "amiga".into(),
+                    title: "Amiga".into(),
+                    count: 3,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let mut models = LauncherBridgeModels::default();
+        let root_rows = models.menu_items(&nav, 1);
+
+        assert!(nav.open_menu("computers"));
+        let computer_rows = models.menu_items(&nav, 1);
+
+        assert_ne!(root_rows.row_count(), computer_rows.row_count());
+        assert_eq!(computer_rows.row_count(), 1);
+        assert_eq!(
+            computer_rows.row_data(0).expect("computer vendor").label,
+            "Commodore"
+        );
     }
 
     #[test]
@@ -1212,8 +1311,8 @@ mod tests {
             ],
         );
         let mut nav = LauncherNav::new();
-        nav.screen = Screen::Arcade;
-        nav.selected = 1;
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_default_arcade(&catalog));
         let mut preview = PreviewState::new();
         let mut models = LauncherBridgeModels::default();
         let mut lifecycle = LauncherLifecycle::new(
@@ -1222,7 +1321,7 @@ mod tests {
             },
             Instant::now(),
         );
-        let rows = models.game_systems(&catalog, 1, 0);
+        let _ = models.menu_items(&nav, 1);
 
         sync_bridge_launcher_light(
             &app,
@@ -1242,8 +1341,6 @@ mod tests {
 
         assert_eq!(bridge.get_active_system_title().as_str(), "Arcade");
         assert_eq!(bridge.get_active_system_count(), 2);
-        assert!(!rows.row_data(0).expect("first row").focused);
-        assert!(rows.row_data(1).expect("second row").focused);
 
         let mut effects = LifecycleEffects::new();
         lifecycle.after_boot_splash_presented(
