@@ -279,6 +279,12 @@ pub struct StorageTelemetry {
     pub available_bytes: u64,
     pub total_bytes: u64,
     pub available_pct: f64,
+    pub device: String,
+    pub activity_valid: bool,
+    pub read_bytes_per_sec: u64,
+    pub write_bytes_per_sec: u64,
+    pub read_pct: f64,
+    pub write_pct: f64,
 }
 
 impl Default for FramebufferStreamState {
@@ -1243,6 +1249,17 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
             available_bytes: u64_at(&value, "/storage/available_bytes"),
             total_bytes: u64_at(&value, "/storage/total_bytes"),
             available_pct: f64_at(&value, "/storage/available_pct"),
+            device: string_at(&value, "/storage/device")
+                .unwrap_or_default()
+                .to_string(),
+            activity_valid: value
+                .pointer("/storage/activity_valid")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            read_bytes_per_sec: u64_at(&value, "/storage/read_bytes_per_sec"),
+            write_bytes_per_sec: u64_at(&value, "/storage/write_bytes_per_sec"),
+            read_pct: f64_at(&value, "/storage/read_pct"),
+            write_pct: f64_at(&value, "/storage/write_pct"),
         },
     })
 }
@@ -2147,7 +2164,7 @@ mod tests {
                 "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500,"recent_frames":[{"frame":120,"wall_us":17000,"prepare_us":100,"render_us":200,"custom_draw_us":300,"vsync_us":400,"present_us":500,"cpu_prepare_us":10,"cpu_render_us":20,"cpu_custom_draw_us":30,"cpu_vsync_us":1,"cpu_present_us":5,"process_cpu_us":80,"vsync_source":"vsync","vsync_miss_streak":1}]}},
                 "processes":{"mister-magik-fb":{"pids":[42],"rss_kb":100,"threads":7},"MiSTer_MagiK":{"pids":[9],"rss_kb":20,"threads":1}},
                 "network":{"rx_bytes_per_sec":123,"tx_bytes_per_sec":456},
-                "storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}
+                "storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0,"device":"mmcblk0","activity_valid":true,"read_bytes_per_sec":12500000,"write_bytes_per_sec":2500000,"read_pct":25.0,"write_pct":10.0}
             }"#,
         )
         .expect("telemetry should parse");
@@ -2163,6 +2180,24 @@ mod tests {
         assert_eq!(sample.magik.pids, vec![42]);
         assert_eq!(sample.network.tx_bytes_per_sec, 456);
         assert_eq!(sample.storage.available_pct, 50.0);
+        assert_eq!(sample.storage.device, "mmcblk0");
+        assert!(sample.storage.activity_valid);
+        assert_eq!(sample.storage.read_bytes_per_sec, 12_500_000);
+        assert_eq!(sample.storage.write_pct, 10.0);
+    }
+
+    #[test]
+    fn parse_device_telemetry_sample_defaults_missing_storage_activity() {
+        let sample = parse_device_telemetry_sample(
+            r#"{"schema":"mister-magik-device-telemetry-v1","seq":1,"storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}}"#,
+        )
+        .expect("older telemetry should parse");
+        assert_eq!(sample.storage.device, "");
+        assert!(!sample.storage.activity_valid);
+        assert_eq!(sample.storage.read_bytes_per_sec, 0);
+        assert_eq!(sample.storage.write_bytes_per_sec, 0);
+        assert_eq!(sample.storage.read_pct, 0.0);
+        assert_eq!(sample.storage.write_pct, 0.0);
     }
 
     #[test]

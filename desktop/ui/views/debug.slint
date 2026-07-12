@@ -405,6 +405,98 @@ component StoragePieChart inherits Rectangle {
     }
 }
 
+component StorageActivityLineChart inherits Rectangle {
+    private property <length> plot-x: 46px;
+    private property <length> plot-y: 12px;
+    private property <length> plot-w: self.width - 58px;
+    private property <length> plot-h: self.height - 34px;
+
+    width: 100%;
+    height: 116px;
+    border-width: 1px;
+    border-color: PrimerColors.borderColor-default;
+    border-radius: LayoutTokens.borderRadius-medium;
+    background: PrimerColors.bgColor-default;
+    clip: true;
+
+    for marker[i] in ["100%", "50%", "0%"] : Text {
+        x: marker == "100%" ? 2px : marker == "50%" ? 4px : 8px;
+        y: root.plot-y + i * root.plot-h / 2 - (i == 0 ? 2px : 7px);
+        text: marker;
+        color: PrimerColors.fgColor-muted;
+        font-size: 9px;
+    }
+
+    plot := Rectangle {
+        x: root.plot-x;
+        y: root.plot-y;
+        width: root.plot-w;
+        height: root.plot-h;
+        background: PrimerColors.bgColor-inset;
+        border-width: 1px;
+        border-color: PrimerColors.borderColor-muted;
+        clip: true;
+
+        for divider in 3 : Rectangle {
+            y: parent.height * (divider + 1) / 4;
+            width: parent.width;
+            height: 1px;
+            background: PrimerColors.borderColor-muted;
+            opacity: divider == 1 ? 0.55 : 0.35;
+        }
+
+        if RealtimeState.storage-read-path != "": Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-x: 0; viewbox-y: 0; viewbox-width: 100; viewbox-height: 100;
+            fit: fill;
+            commands: RealtimeState.storage-read-path;
+            fill: transparent;
+            stroke: #0969da;
+            stroke-width: 2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+
+        if RealtimeState.storage-write-path != "": Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-x: 0; viewbox-y: 0; viewbox-width: 100; viewbox-height: 100;
+            fit: fill;
+            commands: RealtimeState.storage-write-path;
+            fill: transparent;
+            stroke: #bc4c00;
+            stroke-width: 2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+    }
+
+    if RealtimeState.storage-read-path == "" && RealtimeState.storage-write-path == "": Text {
+        x: root.plot-x + 10px;
+        y: root.plot-y + 10px;
+        text: "Waiting for SD activity samples.";
+        color: PrimerColors.fgColor-muted;
+        font-size: LayoutTokens.text-body-size-small;
+    }
+
+    HorizontalLayout {
+        x: root.plot-x;
+        y: parent.height - 18px;
+        width: root.plot-w;
+        height: 14px;
+        spacing: 12px;
+        for item in [
+            { label: "Read", color: #0969da },
+            { label: "Write", color: #bc4c00 },
+        ] : HorizontalLayout {
+            spacing: 4px;
+            Rectangle { width: 14px; height: 2px; y: 6px; background: item.color; }
+            Text { text: item.label; color: PrimerColors.fgColor-muted; font-size: 9px; }
+        }
+    }
+}
+
 component MemoryPieChart inherits Rectangle {
     private property <angle> magik-sweep: RealtimeState.magik-memory-pct * 3.6deg;
     private property <angle> other-sweep: RealtimeState.other-memory-pct * 3.6deg;
@@ -834,9 +926,14 @@ component RealTimePanel inherits VerticalLayout {
 
             TableContainer {
                 title: "SD Card";
-                subtitle: RealtimeState.storage-total-label;
+                subtitle: RealtimeState.storage-activity-summary;
 
-                StoragePieChart { }
+                VerticalLayout {
+                    width: 100%;
+                    spacing: 8px;
+                    StoragePieChart { }
+                    StorageActivityLineChart { }
+                }
             }
         }
 
