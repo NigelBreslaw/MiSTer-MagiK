@@ -26,6 +26,7 @@ pub mod library_db;
 mod library_indexer;
 pub mod media_identity;
 mod media_metadata;
+mod namespace_walk;
 mod preview_archive;
 pub mod preview_worker;
 pub mod prepared_collections;

@@ -1,0 +1,688 @@
+//! Collection-independent namespace traversal backends.
+//!
+//! The established WalkDir backend streams entries directly to the caller.
+//! Linux can optionally avoid repeatedly resolving full directory paths by
+//! walking with `openat` and `getdents64`. The optional backend captures a
+//! bounded target before publishing it, so any syscall or budget failure can
+//! discard the partial capture and restart through the streaming backend.
+
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NamespaceEntryKind {
+    Directory,
+    File,
+    Other,
+}
+
+#[derive(Debug)]
+pub(crate) struct NamespaceEntry {
+    pub(crate) path: PathBuf,
+    pub(crate) kind: NamespaceEntryKind,
+    pub(crate) zip_signature: Option<(u64, i64)>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NamespaceWalkStats {
+    pub(crate) backend: &'static str,
+    pub(crate) fallback_reason: Option<String>,
+    pub(crate) dir_opens: usize,
+    pub(crate) read_calls: usize,
+    pub(crate) read_bytes: u64,
+    pub(crate) type_stats: usize,
+    pub(crate) captured_entries: usize,
+}
+
+impl NamespaceWalkStats {
+    pub(crate) fn add(&mut self, other: &Self) {
+        if self.backend != other.backend {
+            self.backend = "mixed";
+        }
+        if self.fallback_reason.is_none() {
+            self.fallback_reason.clone_from(&other.fallback_reason);
+        }
+        self.dir_opens = self.dir_opens.saturating_add(other.dir_opens);
+        self.read_calls = self.read_calls.saturating_add(other.read_calls);
+        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
+        self.type_stats = self.type_stats.saturating_add(other.type_stats);
+        self.captured_entries = self.captured_entries.saturating_add(other.captured_entries);
+    }
+}
+
+/// Visit a target without ever requiring the caller to retain its full
+/// namespace. `false` from the visitor stops immediately.
+///
+/// `auto` selects bounded fd-relative traversal on Linux and the established
+/// streaming backend elsewhere. Any fd-relative failure or capture-budget
+/// limit restarts the untouched target through streaming WalkDir.
+pub(crate) fn visit(
+    target: &Path,
+    max_depth: Option<usize>,
+    ignore: impl Fn(&Path) -> bool,
+    mut visitor: impl FnMut(&NamespaceEntry) -> bool,
+) -> NamespaceWalkStats {
+    let requested =
+        std::env::var("MISTER_LIBRARY_NAMESPACE_BACKEND").unwrap_or_else(|_| "auto".to_string());
+    if requested == "walkdir" {
+        return visit_walkdir(target, max_depth, &ignore, &mut visitor, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    if requested == "fd-relative" || requested == "auto" {
+        match linux::collect_fd_relative(target, max_depth, &ignore) {
+            Ok(capture) => {
+                for entry in &capture.entries {
+                    if !visitor(entry) {
+                        break;
+                    }
+                }
+                return capture.stats;
+            }
+            Err(reason) => {
+                return visit_walkdir(target, max_depth, &ignore, &mut visitor, Some(reason));
+            }
+        }
+    }
+
+    if requested == "auto" {
+        return visit_walkdir(target, max_depth, &ignore, &mut visitor, None);
+    }
+
+    let reason = if requested == "fd-relative" {
+        Some("fd-relative backend unsupported on this operating system".to_string())
+    } else {
+        Some(format!("unknown namespace backend {requested:?}"))
+    };
+    visit_walkdir(target, max_depth, &ignore, &mut visitor, reason)
+}
+
+fn visit_walkdir(
+    target: &Path,
+    max_depth: Option<usize>,
+    ignore: &dyn Fn(&Path) -> bool,
+    visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+    fallback_reason: Option<String>,
+) -> NamespaceWalkStats {
+    let mut builder = walkdir::WalkDir::new(target)
+        .follow_links(false)
+        .follow_root_links(false);
+    if let Some(max_depth) = max_depth {
+        builder = builder.max_depth(max_depth);
+    }
+    let mut visited_entries = 0usize;
+    for entry in builder
+        .into_iter()
+        .filter_entry(|entry| !ignore(entry.path()))
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path == target {
+            continue;
+        }
+        let kind = if entry.file_type().is_dir() {
+            NamespaceEntryKind::Directory
+        } else if entry.file_type().is_file() {
+            NamespaceEntryKind::File
+        } else {
+            NamespaceEntryKind::Other
+        };
+        let zip_signature = if kind == NamespaceEntryKind::File && is_zip_path(path) {
+            entry
+                .metadata()
+                .ok()
+                .map(|metadata| (metadata.len(), crate::library_db::mtime_secs(&metadata)))
+        } else {
+            None
+        };
+        visited_entries = visited_entries.saturating_add(1);
+        if !visitor(&NamespaceEntry {
+            path: path.to_path_buf(),
+            kind,
+            zip_signature,
+        }) {
+            break;
+        }
+    }
+    NamespaceWalkStats {
+        backend: if fallback_reason.is_some() {
+            "walkdir-fallback"
+        } else {
+            "walkdir"
+        },
+        fallback_reason,
+        dir_opens: 0,
+        read_calls: 0,
+        read_bytes: 0,
+        type_stats: 0,
+        captured_entries: visited_entries,
+    }
+}
+
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
+    if seconds < 0 || !(0..1_000_000_000).contains(&nanos) {
+        return 0;
+    }
+    i128::from(seconds)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(i128::from(nanos))
+        .min(i128::from(i64::MAX)) as i64
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{
+        is_zip_path, unix_timestamp_nanos, NamespaceEntry, NamespaceEntryKind, NamespaceWalkStats,
+    };
+    use std::ffi::{CString, OsString};
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::Path;
+
+    const GETDENTS_BUFFER_BYTES: usize = 128 * 1024;
+    const DIRENT64_HEADER_BYTES: usize = 19;
+    const MAX_CAPTURED_ENTRIES: usize = 65_536;
+    const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
+    const MAX_OPEN_DIRECTORY_FDS: usize = 64;
+
+    pub(super) struct NamespaceCapture {
+        pub(super) entries: Vec<NamespaceEntry>,
+        pub(super) stats: NamespaceWalkStats,
+    }
+
+    #[derive(Clone, Copy)]
+    struct CaptureBudget {
+        max_entries: usize,
+        max_path_bytes: usize,
+        max_open_fds: usize,
+    }
+
+    impl Default for CaptureBudget {
+        fn default() -> Self {
+            Self {
+                max_entries: MAX_CAPTURED_ENTRIES,
+                max_path_bytes: MAX_CAPTURED_PATH_BYTES,
+                max_open_fds: MAX_OPEN_DIRECTORY_FDS,
+            }
+        }
+    }
+
+    pub(super) fn collect_fd_relative(
+        target: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+    ) -> Result<NamespaceCapture, String> {
+        collect_fd_relative_with_budget(target, max_depth, ignore, CaptureBudget::default())
+    }
+
+    fn collect_fd_relative_with_budget(
+        target: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+        budget: CaptureBudget,
+    ) -> Result<NamespaceCapture, String> {
+        if max_depth == Some(0) || ignore(target) {
+            return Ok(NamespaceCapture {
+                entries: Vec::new(),
+                stats: NamespaceWalkStats {
+                    backend: "fd-relative",
+                    fallback_reason: None,
+                    dir_opens: 0,
+                    read_calls: 0,
+                    read_bytes: 0,
+                    type_stats: 0,
+                    captured_entries: 0,
+                },
+            });
+        }
+        if budget.max_open_fds == 0 {
+            return Err("capture budget: zero open directory fds".to_string());
+        }
+        let target_name = c_string(target.as_os_str().as_bytes(), "target path")?;
+        let raw_fd = unsafe {
+            libc::open(
+                target_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if raw_fd < 0 {
+            return Err(format!(
+                "open target {}: {}",
+                target.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let mut entries = Vec::new();
+        let mut captured_path_bytes = 0usize;
+        let mut stats = NamespaceWalkStats {
+            backend: "fd-relative",
+            fallback_reason: None,
+            dir_opens: 1,
+            read_calls: 0,
+            read_bytes: 0,
+            type_stats: 0,
+            captured_entries: 0,
+        };
+        collect_directory(
+            &root,
+            target,
+            0,
+            max_depth,
+            ignore,
+            &mut entries,
+            &mut captured_path_bytes,
+            &mut stats,
+            budget,
+        )?;
+        stats.captured_entries = entries.len();
+        Ok(NamespaceCapture { entries, stats })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_directory(
+        directory: &OwnedFd,
+        directory_path: &Path,
+        depth: usize,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+        entries: &mut Vec<NamespaceEntry>,
+        captured_path_bytes: &mut usize,
+        stats: &mut NamespaceWalkStats,
+        budget: CaptureBudget,
+    ) -> Result<(), String> {
+        let mut buffer = Vec::new();
+        buffer
+            .try_reserve_exact(GETDENTS_BUFFER_BYTES)
+            .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
+        buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
+        loop {
+            let read = unsafe {
+                libc::syscall(
+                    libc::SYS_getdents64,
+                    directory.as_raw_fd(),
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                )
+            };
+            stats.read_calls = stats.read_calls.saturating_add(1);
+            if read < 0 {
+                return Err(format!(
+                    "getdents64 {}: {}",
+                    directory_path.display(),
+                    io::Error::last_os_error()
+                ));
+            }
+            if read == 0 {
+                return Ok(());
+            }
+            let read = usize::try_from(read).map_err(|_| "negative getdents64 size")?;
+            stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
+            let mut offset = 0usize;
+            while offset < read {
+                if read - offset < DIRENT64_HEADER_BYTES {
+                    return Err(format!(
+                        "truncated getdents64 record in {}",
+                        directory_path.display()
+                    ));
+                }
+                let record_len =
+                    u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]) as usize;
+                if record_len <= DIRENT64_HEADER_BYTES || offset + record_len > read {
+                    return Err(format!(
+                        "invalid getdents64 record in {}",
+                        directory_path.display()
+                    ));
+                }
+                let record = &buffer[offset..offset + record_len];
+                offset += record_len;
+                let name_region = &record[DIRENT64_HEADER_BYTES..];
+                let name_len = name_region
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "unterminated getdents64 name in {}",
+                            directory_path.display()
+                        )
+                    })?;
+                let name = &name_region[..name_len];
+                if name.is_empty() || name == b"." || name == b".." {
+                    continue;
+                }
+                let child_path = directory_path.join(OsString::from_vec(name.to_vec()));
+                if ignore(&child_path) {
+                    continue;
+                }
+                if entries.len() >= budget.max_entries {
+                    return Err(format!(
+                        "capture budget: more than {} entries under {}",
+                        budget.max_entries,
+                        directory_path.display()
+                    ));
+                }
+                let child_path_bytes = child_path.as_os_str().as_bytes().len();
+                let next_path_bytes = captured_path_bytes
+                    .checked_add(child_path_bytes)
+                    .filter(|total| *total <= budget.max_path_bytes)
+                    .ok_or_else(|| {
+                        format!(
+                            "capture budget: more than {} path bytes under {}",
+                            budget.max_path_bytes,
+                            directory_path.display()
+                        )
+                    })?;
+                entries
+                    .try_reserve(1)
+                    .map_err(|error| format!("capture allocation: namespace entry: {error}"))?;
+                let child_name = c_string(name, "directory entry name")?;
+                let entry_depth = depth.saturating_add(1);
+                let mut stat = None;
+                let kind = match record[18] {
+                    libc::DT_DIR => NamespaceEntryKind::Directory,
+                    libc::DT_REG => NamespaceEntryKind::File,
+                    libc::DT_UNKNOWN => {
+                        stats.type_stats = stats.type_stats.saturating_add(1);
+                        let value = stat_entry(directory.as_raw_fd(), &child_name, &child_path)?;
+                        let kind = kind_from_mode(value.st_mode);
+                        stat = Some(value);
+                        kind
+                    }
+                    _ => NamespaceEntryKind::Other,
+                };
+                let zip_signature = if kind == NamespaceEntryKind::File && is_zip_path(&child_path)
+                {
+                    let value = match stat {
+                        Some(value) => value,
+                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path)?,
+                    };
+                    Some((
+                        u64::try_from(value.st_size).unwrap_or(0),
+                        unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
+                    ))
+                } else {
+                    None
+                };
+                entries.push(NamespaceEntry {
+                    path: child_path.clone(),
+                    kind,
+                    zip_signature,
+                });
+                *captured_path_bytes = next_path_bytes;
+                if kind == NamespaceEntryKind::Directory
+                    && max_depth.is_none_or(|limit| entry_depth < limit)
+                {
+                    if entry_depth >= budget.max_open_fds {
+                        return Err(format!(
+                            "capture budget: more than {} open directory fds under {}",
+                            budget.max_open_fds,
+                            child_path.display()
+                        ));
+                    }
+                    let raw_child = unsafe {
+                        libc::openat(
+                            directory.as_raw_fd(),
+                            child_name.as_ptr(),
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                        )
+                    };
+                    if raw_child < 0 {
+                        return Err(format!(
+                            "openat directory {}: {}",
+                            child_path.display(),
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    stats.dir_opens = stats.dir_opens.saturating_add(1);
+                    let child = unsafe { OwnedFd::from_raw_fd(raw_child) };
+                    collect_directory(
+                        &child,
+                        &child_path,
+                        entry_depth,
+                        max_depth,
+                        ignore,
+                        entries,
+                        captured_path_bytes,
+                        stats,
+                        budget,
+                    )?;
+                }
+            }
+        }
+    }
+
+    fn c_string(bytes: &[u8], description: &str) -> Result<CString, String> {
+        CString::new(bytes).map_err(|_| format!("NUL in {description}"))
+    }
+
+    fn stat_entry(directory: RawFd, name: &CString, path: &Path) -> Result<libc::stat, String> {
+        let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let result = unsafe {
+            libc::fstatat(
+                directory,
+                name.as_ptr(),
+                value.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result != 0 {
+            return Err(format!(
+                "fstatat {}: {}",
+                path.display(),
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(unsafe { value.assume_init() })
+    }
+
+    fn kind_from_mode(mode: libc::mode_t) -> NamespaceEntryKind {
+        match mode & libc::S_IFMT {
+            libc::S_IFDIR => NamespaceEntryKind::Directory,
+            libc::S_IFREG => NamespaceEntryKind::File,
+            _ => NamespaceEntryKind::Other,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn collect_with_budget_for_test(
+        target: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+        max_entries: usize,
+        max_path_bytes: usize,
+        max_open_fds: usize,
+    ) -> Result<NamespaceCapture, String> {
+        collect_fd_relative_with_budget(
+            target,
+            max_depth,
+            ignore,
+            CaptureBudget {
+                max_entries,
+                max_path_bytes,
+                max_open_fds,
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::unique_temp_dir;
+    use std::fs;
+
+    type SnapshotEntry = (PathBuf, NamespaceEntryKind, Option<(u64, i64)>);
+    type Snapshot = Vec<SnapshotEntry>;
+
+    fn walkdir_snapshot(
+        root: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+    ) -> (Snapshot, NamespaceWalkStats) {
+        let mut entries = Vec::new();
+        let stats = visit_walkdir(
+            root,
+            max_depth,
+            ignore,
+            &mut |entry| {
+                entries.push((
+                    entry.path.strip_prefix(root).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                ));
+                true
+            },
+            None,
+        );
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        (entries, stats)
+    }
+
+    #[test]
+    fn timestamp_nanos_matches_metadata_contract_edges() {
+        assert_eq!(
+            unix_timestamp_nanos(1_700_000_123, 456_789_012),
+            1_700_000_123_456_789_012
+        );
+        assert_eq!(unix_timestamp_nanos(-1, 999_999_999), 0);
+        assert_eq!(unix_timestamp_nanos(1, -1), 0);
+        assert_eq!(unix_timestamp_nanos(1, 1_000_000_000), 0);
+        assert_eq!(unix_timestamp_nanos(i64::MAX, 0), i64::MAX);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walkdir_root_symlink_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        let dir = unique_temp_dir("namespace-root-symlink");
+        let outside = dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("sentinel.rom"), b"sentinel").unwrap();
+        let link = dir.join("link");
+        symlink(&outside, &link).unwrap();
+
+        let (entries, _) = walkdir_snapshot(&link, None, &|_| false);
+        assert!(entries.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn walkdir_depth_and_ignore_are_streamed_exactly() {
+        let dir = unique_temp_dir("namespace-walkdir-depth");
+        fs::create_dir_all(dir.join("dir/deep")).unwrap();
+        fs::create_dir_all(dir.join("ignored")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("dir/two.rom"), b"two").unwrap();
+        fs::write(dir.join("dir/deep/three.rom"), b"three").unwrap();
+        fs::write(dir.join("ignored/hidden.rom"), b"hidden").unwrap();
+        let ignore = |path: &Path| path.file_name().is_some_and(|name| name == "ignored");
+
+        let (depth_zero, _) = walkdir_snapshot(&dir, Some(0), &ignore);
+        assert!(depth_zero.is_empty());
+        let (depth_one, _) = walkdir_snapshot(&dir, Some(1), &ignore);
+        assert!(depth_one
+            .iter()
+            .any(|entry| entry.0 == Path::new("one.rom")));
+        assert!(!depth_one
+            .iter()
+            .any(|entry| entry.0 == Path::new("dir/two.rom")));
+        let (depth_two, _) = walkdir_snapshot(&dir, Some(2), &ignore);
+        assert!(depth_two
+            .iter()
+            .any(|entry| entry.0 == Path::new("dir/two.rom")));
+        assert!(!depth_two
+            .iter()
+            .any(|entry| entry.0 == Path::new("dir/deep/three.rom")));
+        let (unbounded, _) = walkdir_snapshot(&dir, None, &ignore);
+        assert!(unbounded
+            .iter()
+            .any(|entry| entry.0 == Path::new("dir/deep/three.rom")));
+        assert!(!unbounded.iter().any(|entry| entry.0.starts_with("ignored")));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn fd_snapshot(
+        root: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+    ) -> Snapshot {
+        let mut entries = linux::collect_fd_relative(root, max_depth, ignore)
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| {
+                (
+                    entry.path.strip_prefix(root).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fd_relative_matches_walkdir_and_zip_signature() {
+        use crate::test_support::{set_file_mtime_for_test, write_stored_zip};
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = unique_temp_dir("namespace-fd-parity");
+        fs::create_dir_all(dir.join("dir/deep")).unwrap();
+        fs::create_dir_all(dir.join("ignored")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("dir/two.rom"), b"two").unwrap();
+        fs::write(dir.join("dir/deep/three.rom"), b"three").unwrap();
+        fs::write(dir.join("ignored/hidden.rom"), b"hidden").unwrap();
+        let zip = dir.join(std::ffi::OsString::from_vec(b"odd\x80.ZIP".to_vec()));
+        write_stored_zip(&zip, &[("game.rom", b"game")]);
+        set_file_mtime_for_test(&zip, 1_700_000_123, 456_789_012);
+        let ignore = |path: &Path| path.file_name().is_some_and(|name| name == "ignored");
+
+        for max_depth in [Some(0), Some(1), Some(2), None] {
+            let (walkdir, _) = walkdir_snapshot(&dir, max_depth, &ignore);
+            assert_eq!(fd_snapshot(&dir, max_depth, &ignore), walkdir);
+        }
+        let expected = fs::metadata(&zip).unwrap();
+        let signature = fd_snapshot(&dir, None, &ignore)
+            .into_iter()
+            .find_map(|entry| (entry.0.as_os_str() == zip.file_name().unwrap()).then_some(entry.2))
+            .flatten()
+            .unwrap();
+        assert_eq!(
+            signature,
+            (expected.len(), crate::library_db::mtime_secs(&expected))
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fd_capture_budget_fails_before_publishing() {
+        let dir = unique_temp_dir("namespace-fd-budget");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("nested/two.rom"), b"two").unwrap();
+
+        let error =
+            linux::collect_with_budget_for_test(&dir, None, &|_| false, 1, usize::MAX, usize::MAX)
+                .err()
+                .unwrap();
+        assert!(error.starts_with("capture budget:"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+}

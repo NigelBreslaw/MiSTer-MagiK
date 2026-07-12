@@ -7,6 +7,7 @@ use crate::launch_profiles::{
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
+use crate::namespace_walk::{self, NamespaceEntry, NamespaceEntryKind, NamespaceWalkStats};
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use std::collections::HashSet;
 use std::fs::File;
@@ -113,6 +114,7 @@ struct WalkTargetStats {
     candidates: usize,
     elapsed_us: u64,
     aborted: bool,
+    namespace: NamespaceWalkStats,
 }
 
 /// Aggregate time spent handing producer events to the bounded discovery
@@ -436,22 +438,14 @@ fn scan_target_candidates_with_facts(
         has_zip_files: false,
         payload_extensions: std::collections::BTreeSet::new(),
     });
-    for entry in walkdir::WalkDir::new(target)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| !should_ignore_path(e.path()))
-        .filter_map(Result::ok)
-    {
-        let p = entry.path();
-        if p == target {
-            continue;
-        }
-        if entry.file_type().is_dir() {
+    let namespace_stats = namespace_walk::visit(target, None, should_ignore_path, |entry| {
+        let p = entry.path.as_path();
+        if entry.kind == NamespaceEntryKind::Directory {
             dirs += 1;
-            continue;
+            return true;
         }
-        if !entry.file_type().is_file() {
-            continue;
+        if entry.kind != NamespaceEntryKind::File {
+            return true;
         }
         files += 1;
         let ext = p
@@ -477,12 +471,12 @@ fn scan_target_candidates_with_facts(
             }
         }
         if !is_source_index_extension(candidate_exts, p, &ext) {
-            continue;
+            return true;
         }
         if !is_index_candidate(profiles, p, &ext) {
-            continue;
+            return true;
         }
-        let (size, mtime_secs) = candidate_signature_for_walk_entry(p, &ext, &entry);
+        let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
         let file = FoundFile {
             path: p.to_path_buf(),
             ext,
@@ -492,9 +486,10 @@ fn scan_target_candidates_with_facts(
         candidates += 1;
         if !emit(file) {
             aborted = true;
-            break;
+            return false;
         }
-    }
+        true
+    });
     (
         WalkTargetStats {
             dirs,
@@ -502,6 +497,7 @@ fn scan_target_candidates_with_facts(
             candidates,
             elapsed_us: target_t.elapsed().as_micros() as u64,
             aborted,
+            namespace: namespace_stats,
         },
         facts,
     )
@@ -520,54 +516,48 @@ fn scan_runtime_target_candidates(
     let mut shallow_files = Vec::new();
     let mut deep_roots = Vec::new();
 
-    for entry in walkdir::WalkDir::new(&header.path)
-        .follow_links(false)
-        .max_depth(2)
-        .into_iter()
-        .filter_entry(|entry| !should_ignore_path(entry.path()))
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if path == header.path {
-            continue;
-        }
-        if entry.file_type().is_dir() {
-            dirs += 1;
-            if path
-                .strip_prefix(&header.path)
-                .ok()
-                .is_some_and(|relative| relative.components().count() == 2)
-            {
-                deep_roots.push(path.to_path_buf());
+    let shallow_namespace_stats =
+        namespace_walk::visit(&header.path, Some(2), should_ignore_path, |entry| {
+            let path = entry.path.as_path();
+            if entry.kind == NamespaceEntryKind::Directory {
+                dirs += 1;
+                if path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .is_some_and(|relative| relative.components().count() == 2)
+                {
+                    deep_roots.push(path.to_path_buf());
+                }
+                return true;
             }
-            continue;
-        }
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        files_seen += 1;
-        let ext = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext.eq_ignore_ascii_case("zip") {
-            has_zip_files = true;
-        } else {
-            has_payload_files = true;
-            if !ext.is_empty() {
-                payload_extensions.insert(ext.clone());
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
             }
-        }
-        let (size, mtime_secs) = candidate_signature_for_walk_entry(path, &ext, &entry);
-        let file = FoundFile {
-            path: path.to_path_buf(),
-            ext,
-            size,
-            mtime_secs,
-        };
-        shallow_files.push(file);
-    }
+            files_seen += 1;
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext.eq_ignore_ascii_case("zip") {
+                has_zip_files = true;
+            } else {
+                has_payload_files = true;
+                if !ext.is_empty() {
+                    payload_extensions.insert(ext.clone());
+                }
+            }
+            let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
+            let file = FoundFile {
+                path: path.to_path_buf(),
+                ext,
+                size,
+                mtime_secs,
+            };
+            shallow_files.push(file);
+            true
+        });
+    let mut namespace_stats = shallow_namespace_stats;
     let facts = GameDirFact {
         name: header.name.clone(),
         path: header.path.clone(),
@@ -583,6 +573,7 @@ fn scan_runtime_target_candidates(
                 candidates: 0,
                 elapsed_us: target_t.elapsed().as_micros() as u64,
                 aborted: false,
+                namespace: namespace_stats,
             },
             RuntimeDirectoryCandidates {
                 header: header.clone(),
@@ -600,38 +591,39 @@ fn scan_runtime_target_candidates(
         push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
     }
     for root in deep_roots {
-        for entry in walkdir::WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| !should_ignore_path(entry.path()))
-            .filter_map(Result::ok)
-        {
-            let path = entry.path();
-            if path == root {
-                continue;
-            }
-            if entry.file_type().is_dir() {
-                dirs += 1;
-                continue;
-            }
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            files_seen += 1;
-            let ext = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let (size, mtime_secs) = candidate_signature_for_walk_entry(path, &ext, &entry);
-            let file = FoundFile {
-                path: path.to_path_buf(),
-                ext,
-                size,
-                mtime_secs,
-            };
-            push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
-        }
+        let deep_namespace_stats =
+            namespace_walk::visit(&root, None, should_ignore_path, |entry| {
+                let path = entry.path.as_path();
+                if entry.kind == NamespaceEntryKind::Directory {
+                    dirs += 1;
+                    return true;
+                }
+                if entry.kind != NamespaceEntryKind::File {
+                    return true;
+                }
+                files_seen += 1;
+                let ext = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
+                let file = FoundFile {
+                    path: path.to_path_buf(),
+                    ext,
+                    size,
+                    mtime_secs,
+                };
+                push_runtime_candidate(
+                    &mut files,
+                    &mut overflowed,
+                    &candidate_exts,
+                    &profile,
+                    file,
+                );
+                true
+            });
+        namespace_stats.add(&deep_namespace_stats);
     }
     let stats = WalkTargetStats {
         dirs,
@@ -639,6 +631,7 @@ fn scan_runtime_target_candidates(
         candidates: files.len(),
         elapsed_us: target_t.elapsed().as_micros() as u64,
         aborted: false,
+        namespace: namespace_stats,
     };
     library_db::report_library_scan_timing(
         "runtime_buffer",
@@ -690,39 +683,32 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
     let mut has_payload_files = false;
     let mut has_zip_files = false;
     let mut payload_extensions = std::collections::BTreeSet::new();
-    for entry in walkdir::WalkDir::new(&header.path)
-        .follow_links(false)
-        .max_depth(2)
-        .into_iter()
-        .filter_entry(|entry| !should_ignore_path(entry.path()))
-        .filter_map(Result::ok)
-    {
-        let path = entry.path();
-        if path == header.path {
-            continue;
-        }
-        if entry.file_type().is_dir() {
-            dirs += 1;
-            continue;
-        }
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        files += 1;
-        let ext = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext.eq_ignore_ascii_case("zip") {
-            has_zip_files = true;
-        } else {
-            has_payload_files = true;
-            if !ext.is_empty() {
-                payload_extensions.insert(ext);
+    let namespace_stats =
+        namespace_walk::visit(&header.path, Some(2), should_ignore_path, |entry| {
+            let path = entry.path.as_path();
+            if entry.kind == NamespaceEntryKind::Directory {
+                dirs += 1;
+                return true;
             }
-        }
-    }
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
+            }
+            files += 1;
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext.eq_ignore_ascii_case("zip") {
+                has_zip_files = true;
+            } else {
+                has_payload_files = true;
+                if !ext.is_empty() {
+                    payload_extensions.insert(ext);
+                }
+            }
+            true
+        });
     (
         WalkTargetStats {
             dirs,
@@ -730,6 +716,7 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
             candidates: 0,
             elapsed_us: target_t.elapsed().as_micros() as u64,
             aborted: false,
+            namespace: namespace_stats,
         },
         GameDirFact {
             name: header.name.clone(),
@@ -768,7 +755,7 @@ fn report_walk_target(
         "walk_target",
         stats.elapsed_us,
         format!(
-            "path={} dirs={} files={} candidates={} producer_us={} sync_send_us={} sync_sends={} sync_slow_sends={} sync_send_max_us={}",
+            "path={} dirs={} files={} candidates={} producer_us={} sync_send_us={} sync_sends={} sync_slow_sends={} sync_send_max_us={} namespace_backend={} namespace_entries={} namespace_dir_opens={} namespace_reads={} namespace_bytes={} namespace_type_stats={} namespace_fallback={}",
             target.display(),
             stats.dirs,
             stats.files,
@@ -778,6 +765,13 @@ fn report_walk_target(
             send.sends,
             send.slow_sends,
             send.max_us,
+            stats.namespace.backend,
+            stats.namespace.captured_entries,
+            stats.namespace.dir_opens,
+            stats.namespace.read_calls,
+            stats.namespace.read_bytes,
+            stats.namespace.type_stats,
+            stats.namespace.fallback_reason.as_deref().unwrap_or("none"),
         ),
     );
 }
@@ -938,17 +932,12 @@ fn is_real_dir(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn candidate_signature_for_walk_entry(
-    path: &Path,
-    ext: &str,
-    entry: &walkdir::DirEntry,
-) -> (u64, i64) {
+fn candidate_signature_for_namespace_entry(entry: &NamespaceEntry, ext: &str) -> (u64, i64) {
     if ext.eq_ignore_ascii_case("zip") {
-        if let Ok(meta) = entry.metadata() {
-            return (meta.len(), library_db::mtime_secs(&meta));
+        if let Some(signature) = entry.zip_signature {
+            return signature;
         }
     }
-    let _ = path;
     (0, 0)
 }
 
