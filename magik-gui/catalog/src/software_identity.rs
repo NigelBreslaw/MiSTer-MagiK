@@ -809,6 +809,8 @@ pub(crate) fn preview_asset_pack_platform(path: &str) -> &'static str {
         "sms"
     } else if path.contains("megadrive-screenshots") {
         "megadrive"
+    } else if path.contains("amiga-screenshots") {
+        "amiga"
     } else if path.contains("saturn") {
         "saturn"
     } else {

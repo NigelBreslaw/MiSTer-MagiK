@@ -1608,6 +1608,7 @@ fn console_preview_archive_paths_from_env() -> Vec<String> {
         "MISTER_SMS_PREVIEW_ARCHIVE",
         "MISTER_MEGADRIVE_PREVIEW_ARCHIVE",
         "MISTER_SATURN_PREVIEW_ARCHIVE",
+        "MISTER_AMIGA_PREVIEW_ARCHIVE",
     ]
     .into_iter()
     .filter_map(|name| match std::env::var(name) {
