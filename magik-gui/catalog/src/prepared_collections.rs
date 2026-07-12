@@ -101,6 +101,14 @@ impl PreparedLaunchProvenance {
 
 pub(crate) fn validate_0mhz_mgl(path: &Path) -> Result<MglInspection, String> {
     let inspection = inspect_mgl(path)?;
+    validate_0mhz_mgl_inspection(path, &inspection)?;
+    Ok(inspection)
+}
+
+pub(crate) fn validate_0mhz_mgl_inspection(
+    path: &Path,
+    inspection: &MglInspection,
+) -> Result<(), String> {
     let rbf = inspection
         .rbf
         .as_deref()
@@ -123,7 +131,7 @@ pub(crate) fn validate_0mhz_mgl(path: &Path) -> Result<MglInspection, String> {
             ));
         }
     }
-    Ok(inspection)
+    Ok(())
 }
 
 pub(crate) fn resolve_0mhz_payload_path(mgl_path: &Path, payload: &str) -> PathBuf {
@@ -153,6 +161,14 @@ pub(crate) fn resolve_0mhz_payload_path(mgl_path: &Path, payload: &str) -> PathB
 
 pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String> {
     let inspection = inspect_mgl(path)?;
+    validate_neon68k_mgl_inspection(path, &inspection)?;
+    Ok(inspection)
+}
+
+pub(crate) fn validate_neon68k_mgl_inspection(
+    path: &Path,
+    inspection: &MglInspection,
+) -> Result<(), String> {
     let rbf = inspection
         .rbf
         .as_deref()
@@ -187,7 +203,7 @@ pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String>
     if hdf_count == 0 {
         return Err("Neon68K MGL has no HDF mount action".to_string());
     }
-    Ok(inspection)
+    Ok(())
 }
 
 pub(crate) fn neon68k_source_category(path: &Path) -> Option<String> {

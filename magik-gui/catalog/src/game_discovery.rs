@@ -229,7 +229,11 @@ pub(crate) fn discovery_from_profile_file(
         }
     }
     if file.ext == "mgl" {
-        if let Some(mgl) = media_metadata::read_mgl_metadata(&file.path) {
+        if let Some(document) = media_metadata::read_mgl_document(&file.path) {
+            let media_metadata::MglDocument {
+                metadata: mgl,
+                inspection,
+            } = document;
             let payload_profile = mgl
                 .file_path
                 .as_deref()
@@ -258,11 +262,17 @@ pub(crate) fn discovery_from_profile_file(
                 path.display().to_string()
             });
             let prepared = (profile.system_id == "dos"
-                && prepared_collections::validate_0mhz_mgl(&file.path).is_ok())
+                && inspection.as_ref().is_ok_and(|inspection| {
+                    prepared_collections::validate_0mhz_mgl_inspection(&file.path, inspection)
+                        .is_ok()
+                }))
             .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
             let prepared = prepared.or_else(|| {
                 (profile.id == "neon68k"
-                    && prepared_collections::validate_neon68k_mgl(&file.path).is_ok())
+                    && inspection.as_ref().is_ok_and(|inspection| {
+                        prepared_collections::validate_neon68k_mgl_inspection(&file.path, inspection)
+                            .is_ok()
+                    }))
                 .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
             });
             let genre = if prepared
@@ -503,17 +513,7 @@ pub(crate) fn covered_payload_paths(discoveries: &[GameDiscovery]) -> HashSet<St
         }
         if let Some(payload) = discovery.covered_payload_path.as_deref() {
             covered.insert(normalize_launch_path(payload));
-            continue;
         }
-        let path = Path::new(&discovery.source_path);
-        let Some(mgl) = media_metadata::read_mgl_metadata(path) else {
-            continue;
-        };
-        let Some(payload) = mgl.file_path.as_deref() else {
-            continue;
-        };
-        let resolved = media_metadata::resolve_mgl_payload_path(path, payload);
-        covered.insert(normalize_launch_path(&resolved.display().to_string()));
     }
     covered
 }
