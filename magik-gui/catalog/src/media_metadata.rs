@@ -262,6 +262,11 @@ pub(crate) struct MglMetadata {
     pub(crate) file_path: Option<String>,
 }
 
+pub(crate) struct MglDocument {
+    pub(crate) metadata: MglMetadata,
+    pub(crate) inspection: Result<MglInspection, String>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct MglFileAction {
     pub(crate) path: String,
@@ -283,22 +288,33 @@ pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
 }
 
 pub(crate) fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
-    let file = File::open(path).ok()?;
-    let mut data = Vec::with_capacity(MGL_PREFIX_BYTES);
-    file.take(MGL_PREFIX_BYTES as u64)
-        .read_to_end(&mut data)
-        .ok()?;
+    let data = read_mgl_prefix(path).ok()?;
     parse_mgl_metadata_xml(&String::from_utf8_lossy(&data))
 }
 
+pub(crate) fn read_mgl_document(path: &Path) -> Option<MglDocument> {
+    let data = read_mgl_prefix(path).ok()?;
+    let text = String::from_utf8_lossy(&data);
+    Some(MglDocument {
+        metadata: parse_mgl_metadata_xml(&text)?,
+        inspection: inspect_mgl_xml(&text)
+            .map_err(|error| format!("inspect MGL {}: {error}", path.display())),
+    })
+}
+
 pub(crate) fn inspect_mgl(path: &Path) -> Result<MglInspection, String> {
+    let data = read_mgl_prefix(path)?;
+    inspect_mgl_xml(&String::from_utf8_lossy(&data))
+        .map_err(|e| format!("inspect MGL {}: {e}", path.display()))
+}
+
+fn read_mgl_prefix(path: &Path) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|e| format!("open MGL {}: {e}", path.display()))?;
     let mut data = Vec::with_capacity(MGL_PREFIX_BYTES);
     file.take(MGL_PREFIX_BYTES as u64)
         .read_to_end(&mut data)
         .map_err(|e| format!("read MGL {}: {e}", path.display()))?;
-    inspect_mgl_xml(&String::from_utf8_lossy(&data))
-        .map_err(|e| format!("inspect MGL {}: {e}", path.display()))
+    Ok(data)
 }
 
 fn inspect_mgl_xml(text: &str) -> Result<MglInspection, String> {
@@ -1062,6 +1078,31 @@ mod tests {
             metadata.file_path.as_deref(),
             Some("../games/NES/Mario.nes")
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mgl_document_preserves_lenient_metadata_when_strict_inspection_fails() {
+        let root = unique_temp_dir("mgl-document-lenient");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let path = root.join("Fixture.mgl");
+        std::fs::write(
+            &path,
+            r#"<rbf>NES</rbf><file path="games/NES/Mario.nes"/>"#,
+        )
+        .expect("write rootless mgl fixture");
+
+        let document = read_mgl_document(&path).expect("read MGL document");
+
+        assert_eq!(document.metadata.rbf.as_deref(), Some("NES"));
+        assert_eq!(
+            document.metadata.file_path.as_deref(),
+            Some("games/NES/Mario.nes")
+        );
+        assert!(document
+            .inspection
+            .expect_err("rootless MGL must fail strict inspection")
+            .contains("missing mistergamedescription root"));
         let _ = std::fs::remove_dir_all(root);
     }
 
