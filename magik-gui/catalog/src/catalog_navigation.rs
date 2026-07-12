@@ -1,7 +1,8 @@
 //! Runtime navigation projection for fast launcher catalog hydration.
 
 use crate::arcade_catalog::{
-    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, StructuredLaunchPlan,
+    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, PlatformKind,
+    StructuredLaunchPlan,
 };
 use crate::bounded_lz4;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
@@ -14,8 +15,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 7;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB7\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 8;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB8\0";
 const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
@@ -52,6 +53,7 @@ pub struct NavigationSystem {
     pub id: String,
     pub title: String,
     pub count: usize,
+    pub platform_kind: PlatformKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,7 +216,13 @@ impl CatalogNavigationProjection {
             catalog_generation: catalog_stamp_fingerprint.clone(),
             catalog_stamp_fingerprint,
             catalog_stamp_lines: stamp.lines().to_vec(),
-            systems: catalog.systems.iter().map(NavigationSystem::from).collect(),
+            systems: catalog
+                .systems
+                .iter()
+                .map(|system| {
+                    NavigationSystem::from_system(system, catalog.platform_kind(&system.id))
+                })
+                .collect(),
             games: catalog.games.iter().map(NavigationGame::from).collect(),
             launch_plans: structured_launch_plans(catalog),
         }
@@ -229,12 +237,13 @@ impl CatalogNavigationProjection {
     }
 }
 
-impl From<&GameSystemEntry> for NavigationSystem {
-    fn from(system: &GameSystemEntry) -> Self {
+impl NavigationSystem {
+    fn from_system(system: &GameSystemEntry, platform_kind: PlatformKind) -> Self {
         Self {
             id: system.id.clone(),
             title: system.title.clone(),
             count: system.count,
+            platform_kind,
         }
     }
 }
@@ -575,6 +584,7 @@ fn encode_navigation_projection(
         write_string(&mut out, &system.id)?;
         write_string(&mut out, &system.title)?;
         write_u64(&mut out, system.count as u64);
+        out.push(system.platform_kind.encoded());
     }
     write_len(&mut out, compact.launch_defaults.len())?;
     for default in &compact.launch_defaults {
@@ -658,7 +668,7 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     for _ in 0..stamp_line_count {
         catalog_stamp_lines.push(reader.read_string()?);
     }
-    let system_count = read_navigation_count(&mut reader, 16, "systems")?;
+    let system_count = read_navigation_count(&mut reader, 17, "systems")?;
     let mut systems = Vec::new();
     reserve_navigation_vec(&mut systems, system_count, "systems")?;
     for _ in 0..system_count {
@@ -669,6 +679,8 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
                 .read_u64()?
                 .try_into()
                 .map_err(|_| "system count too large".to_string())?,
+            platform_kind: PlatformKind::from_encoded(reader.read_u8()?)
+                .ok_or_else(|| "navigation system platform kind is invalid".to_string())?,
         });
     }
     let launch_default_count = read_navigation_count(&mut reader, 14, "launch defaults")?;
@@ -1151,6 +1163,9 @@ mod tests {
         assert_eq!(hydrated.games[0].category.as_ref(), "Shooter");
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
+        assert_eq!(loaded.systems[0].platform_kind, PlatformKind::Arcade);
+        assert_eq!(hydrated.platform_kind("saturn"), PlatformKind::Console);
+        assert_eq!(hydrated.platform_kind("neogeo"), PlatformKind::Arcade);
         assert_eq!(hydrated.decade_option_count("arcade"), 1);
         assert_eq!(hydrated.manufacturer_option_count("arcade"), 1);
         assert_eq!(hydrated.category_option_count("arcade"), 1);
@@ -1234,7 +1249,7 @@ mod tests {
         let mut bytes = std::fs::read(&path).expect("read current projection");
         let mut decoded =
             lz4_flex::decompress_size_prepended(&bytes).expect("decompress current projection");
-        decoded[..8].copy_from_slice(b"MMNAVB6\0");
+        decoded[..8].copy_from_slice(b"MMNAVB7\0");
         bytes = lz4_flex::compress_prepend_size(&decoded);
         std::fs::write(&path, bytes).expect("write old schema projection");
 

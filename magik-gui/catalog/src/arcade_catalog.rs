@@ -6,6 +6,7 @@
 use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -22,6 +23,90 @@ pub const HOME_TILE_WIDTH: i32 = 191;
 pub const HOME_TILE_GAP: i32 = 16;
 /// Home list width inside the 18px left/right padding of the 960px UI.
 pub const HOME_LIST_VISIBLE_W: i32 = 924;
+pub const MENU_ARCADE_SYSTEM_ID: &str = "menu:arcade";
+pub const MENU_SNK_ARCADE_SYSTEM_ID: &str = "menu:snk-arcade";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformKind {
+    Arcade,
+    Console,
+    Handheld,
+    Computer,
+    #[default]
+    Unknown,
+}
+
+impl PlatformKind {
+    pub fn from_category(category: &str) -> Self {
+        match category.trim().to_ascii_lowercase().as_str() {
+            "arcade" => Self::Arcade,
+            "console" => Self::Console,
+            "handheld" => Self::Handheld,
+            "computer" => Self::Computer,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn inferred_for_system_id(system_id: &str) -> Self {
+        match system_id {
+            MENU_ARCADE_SYSTEM_ID
+            | MENU_SNK_ARCADE_SYSTEM_ID
+            | "arcade"
+            | "cps1"
+            | "capcom-cps1"
+            | "cps2"
+            | "capcom-cps2"
+            | "cps3"
+            | "capcom-cps3"
+            | "system16"
+            | "sega-system16"
+            | "system18"
+            | "sega-system18"
+            | "m72"
+            | "irem-m72"
+            | "m92"
+            | "irem-m92" => Self::Arcade,
+            "gb" | "gameboy" | "gameboy2p" | "gbc" | "gba" | "gba2p" | "sgb" | "sgb2"
+            | "pokemonmini" | "gamegear" | "atarilynx" | "neogeopocket" | "ngpc" | "wonderswan"
+            | "wonderswancolor" | "supervision" | "megaduck" => Self::Handheld,
+            "acornatom" | "acornelectron" | "bbcmicro" | "archie" | "apple-ii" | "macplus"
+            | "maclc" | "amiga" | "c64" | "c128" | "c16" | "vic20" | "pet2001" | "atari800"
+            | "atarist" | "zx81" | "zx-spectrum" | "ql" | "trs-80" | "coco2" | "coco3"
+            | "ao486" | "dos" | "msx" | "msx2" | "pc88" | "pc98" | "x68000" | "x1" | "sharp-x1"
+            | "fm7" | "fmtowns" | "amstrad" | "oric" | "samcoupe" | "aquarius" | "altair8800" => {
+                Self::Computer
+            }
+            "atari2600" | "atari5200" | "atari7800" | "jaguar" | "sg1000" | "sms" | "megadrive"
+            | "megacd" | "s32x" | "saturn" | "psx" | "nes" | "fds" | "snes" | "satellaview"
+            | "n64" | "tgfx16" | "tgfx16-cd" | "supergrafx" | "colecovision" | "intellivision"
+            | "vectrex" | "channelf" | "odyssey2" | "amigacd32" | "neogeo-cd" => Self::Console,
+            "neogeo" | "neo-geo" | "snk-neo-geo" => Self::Arcade,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub(crate) const fn encoded(self) -> u8 {
+        match self {
+            Self::Unknown => 0,
+            Self::Arcade => 1,
+            Self::Console => 2,
+            Self::Handheld => 3,
+            Self::Computer => 4,
+        }
+    }
+
+    pub(crate) fn from_encoded(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Unknown),
+            1 => Some(Self::Arcade),
+            2 => Some(Self::Console),
+            3 => Some(Self::Handheld),
+            4 => Some(Self::Computer),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
@@ -81,6 +166,7 @@ pub struct ArcadeCatalog {
     pub root: PathBuf,
     pub games: Arc<Vec<ArcadeGameEntry>>,
     pub systems: Vec<GameSystemEntry>,
+    platform_kinds: Arc<HashMap<String, PlatformKind>>,
     games_by_system: HashMap<String, Vec<usize>>,
     games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
     filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
@@ -105,6 +191,7 @@ pub struct ArcadeTextIndexBuildTiming {
 /// catalog itself can be moved to the launcher before text indexing begins.
 pub struct ArcadeTextIndexBuildJob {
     games: Arc<Vec<ArcadeGameEntry>>,
+    platform_kinds: Arc<HashMap<String, PlatformKind>>,
     lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
 }
 
@@ -117,8 +204,11 @@ impl ArcadeTextIndexBuildJob {
         if self.lazy_text_indexes.get().is_some() {
             return ArcadeTextIndexBuildTiming::default();
         }
-        let (indexes, mut timing) =
-            build_arcade_text_indexes_with_timing(&self.games, TextIndexBuildPacing::Interactive);
+        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(
+            &self.games,
+            &self.platform_kinds,
+            TextIndexBuildPacing::Interactive,
+        );
         timing.built = self.lazy_text_indexes.set(indexes).is_ok();
         if timing.built {
             timing
@@ -274,19 +364,59 @@ impl ArcadeCatalog {
         )
     }
 
+    pub fn new_with_deferred_text_indexes_and_platform_kinds(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kinds: HashMap<String, PlatformKind>,
+    ) -> Self {
+        Self::new_with_launch_plans_and_index_mode_and_platform_kinds(
+            root,
+            games,
+            systems,
+            launch_plans,
+            CatalogIndexMode::DeferredText,
+            platform_kinds,
+        )
+    }
+
     fn new_with_launch_plans_and_index_mode(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        index_mode: CatalogIndexMode,
+    ) -> Self {
+        let platform_kinds = inferred_platform_kinds(&systems);
+        Self::new_with_launch_plans_and_index_mode_and_platform_kinds(
+            root,
+            games,
+            systems,
+            launch_plans,
+            index_mode,
+            platform_kinds,
+        )
+    }
+
+    fn new_with_launch_plans_and_index_mode_and_platform_kinds(
         root: PathBuf,
         games: Vec<ArcadeGameEntry>,
         mut systems: Vec<GameSystemEntry>,
         launch_plans: Vec<StructuredLaunchPlan>,
         index_mode: CatalogIndexMode,
+        mut platform_kinds: HashMap<String, PlatformKind>,
     ) -> Self {
         sort_systems_by_title(&mut systems);
-        let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
+        fill_missing_platform_kinds(&systems, &mut platform_kinds);
+        let platform_kinds = Arc::new(platform_kinds);
+        let indexes =
+            build_arcade_catalog_indexes(&games, &platform_kinds, launch_plans, index_mode);
         Self {
             root,
             games: Arc::new(games),
             systems,
+            platform_kinds,
             games_by_system: indexes.games_by_system,
             games_by_filter: indexes.games_by_filter,
             filter_options_by_system: indexes.filter_options_by_system,
@@ -314,6 +444,11 @@ impl ArcadeCatalog {
         projection: CatalogNavigationProjection,
         index_mode: CatalogIndexMode,
     ) -> Self {
+        let platform_kinds = projection
+            .systems
+            .iter()
+            .map(|system| (system.id.clone(), system.platform_kind))
+            .collect();
         let games: Vec<ArcadeGameEntry> = projection
             .games
             .into_iter()
@@ -329,20 +464,14 @@ impl ArcadeCatalog {
             .into_iter()
             .map(StructuredLaunchPlan::from)
             .collect();
-        let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
-        Self {
-            root: root.into(),
-            games: Arc::new(games),
+        Self::new_with_launch_plans_and_index_mode_and_platform_kinds(
+            root.into(),
+            games,
             systems,
-            games_by_system: indexes.games_by_system,
-            games_by_filter: indexes.games_by_filter,
-            filter_options_by_system: indexes.filter_options_by_system,
-            preview_games_by_system: indexes.preview_games_by_system,
-            launch_plans_by_ref: indexes.launch_plans_by_ref,
-            search_keys: indexes.search_keys,
-            autocomplete: indexes.autocomplete,
-            lazy_text_indexes: Arc::new(OnceLock::new()),
-        }
+            launch_plans,
+            index_mode,
+            platform_kinds,
+        )
     }
 
     pub fn len(&self) -> usize {
@@ -351,6 +480,13 @@ impl ArcadeCatalog {
 
     pub fn is_empty(&self) -> bool {
         self.games.is_empty()
+    }
+
+    pub fn platform_kind(&self, system_id: &str) -> PlatformKind {
+        self.platform_kinds
+            .get(system_id)
+            .copied()
+            .unwrap_or_else(|| PlatformKind::inferred_for_system_id(system_id))
     }
 
     pub fn title_for_path(&self, mra_path: &str) -> &str {
@@ -505,7 +641,7 @@ impl ArcadeCatalog {
 
     fn lazy_text_indexes(&self) -> &ArcadeTextIndexes {
         self.lazy_text_indexes
-            .get_or_init(|| build_arcade_text_indexes(&self.games))
+            .get_or_init(|| build_arcade_text_indexes(&self.games, &self.platform_kinds))
     }
 
     pub fn text_indexes_ready(&self) -> bool {
@@ -523,6 +659,7 @@ impl ArcadeCatalog {
     pub fn text_index_build_job(&self) -> Option<ArcadeTextIndexBuildJob> {
         (!self.text_indexes_ready()).then(|| ArcadeTextIndexBuildJob {
             games: Arc::clone(&self.games),
+            platform_kinds: Arc::clone(&self.platform_kinds),
             lazy_text_indexes: Arc::clone(&self.lazy_text_indexes),
         })
     }
@@ -536,8 +673,11 @@ impl ArcadeCatalog {
         if was_ready {
             return ArcadeTextIndexBuildTiming::default();
         }
-        let (indexes, mut timing) =
-            build_arcade_text_indexes_with_timing(&self.games, TextIndexBuildPacing::Unthrottled);
+        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(
+            &self.games,
+            &self.platform_kinds,
+            TextIndexBuildPacing::Unthrottled,
+        );
         timing.built = self.lazy_text_indexes.set(indexes).is_ok();
         if !timing.built {
             ArcadeTextIndexBuildTiming::default()
@@ -673,6 +813,40 @@ enum CatalogIndexMode {
     DeferredText,
 }
 
+fn game_collection_ids<'a>(
+    game: &'a ArcadeGameEntry,
+    platform_kinds: &HashMap<String, PlatformKind>,
+) -> [Option<&'a str>; 3] {
+    let system_id = game.system_id.as_ref();
+    let mut ids = [Some(system_id), None, None];
+    let platform_kind = platform_kinds
+        .get(system_id)
+        .copied()
+        .unwrap_or_else(|| PlatformKind::inferred_for_system_id(system_id));
+    let belongs_to_arcade = system_id == "arcade"
+        || (platform_kind == PlatformKind::Arcade && !is_snk_arcade_system_id(system_id));
+    if belongs_to_arcade {
+        ids[1] = Some(MENU_ARCADE_SYSTEM_ID);
+    }
+    if belongs_to_arcade && manufacturer_has_snk_token(&game.manufacturer) {
+        ids[2] = Some(MENU_SNK_ARCADE_SYSTEM_ID);
+    }
+    ids
+}
+
+fn is_snk_arcade_system_id(system_id: &str) -> bool {
+    matches!(
+        system_id,
+        "neogeo" | "neo-geo" | "snk-neo-geo" | "neogeo-cd" | "neogeopocket" | "ngpc"
+    )
+}
+
+pub fn manufacturer_has_snk_token(manufacturer: &str) -> bool {
+    search_match_key(manufacturer)
+        .split_whitespace()
+        .any(|token| token == "snk")
+}
+
 #[derive(Clone, Debug)]
 struct ArcadeSearchKey {
     title: String,
@@ -695,6 +869,7 @@ struct SearchMatch {
 
 fn build_arcade_catalog_indexes(
     games: &[ArcadeGameEntry],
+    platform_kinds: &HashMap<String, PlatformKind>,
     launch_plans: Vec<StructuredLaunchPlan>,
     mode: CatalogIndexMode,
 ) -> ArcadeCatalogIndexes {
@@ -704,77 +879,82 @@ fn build_arcade_catalog_indexes(
     let mut preview_games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
     let mut text_indexes = match mode {
-        CatalogIndexMode::Eager => build_arcade_text_indexes(games),
+        CatalogIndexMode::Eager => build_arcade_text_indexes(games, platform_kinds),
         CatalogIndexMode::DeferredText => ArcadeTextIndexes::default(),
     };
 
     for (idx, game) in games.iter().enumerate() {
-        let system_id_string = game.system_id.to_string();
-        let system_id_arc = game.system_id.clone();
-        games_by_system
-            .entry(system_id_string.clone())
-            .or_default()
-            .push(idx);
-
-        let counts = filter_counts_by_system
-            .entry(system_id_string.clone())
-            .or_default();
-        if let Some(year) = game.year {
-            let decade = (year / 10) * 10;
-            games_by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: system_id_arc.clone(),
-                    kind: ArcadeFilterKindKey::Decade(decade),
-                })
+        for system_id in game_collection_ids(game, platform_kinds)
+            .into_iter()
+            .flatten()
+        {
+            let system_id_string = system_id.to_string();
+            let system_id_arc: Arc<str> = Arc::from(system_id);
+            games_by_system
+                .entry(system_id_string.clone())
                 .or_default()
                 .push(idx);
-            *counts.decades.entry(decade).or_default() += 1;
-        }
 
-        if !game.manufacturer.is_empty() {
-            games_by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: system_id_arc.clone(),
-                    kind: ArcadeFilterKindKey::Manufacturer(game.manufacturer.clone()),
-                })
-                .or_default()
-                .push(idx);
-        }
-        let manufacturer = game.manufacturer.trim();
-        if !manufacturer.is_empty() {
-            *counts
-                .manufacturers
-                .entry(manufacturer.to_string())
-                .or_default() += 1;
-        }
-
-        if !game.category.is_empty() {
-            games_by_filter
-                .entry(ArcadeFilterKey {
-                    system_id: system_id_arc,
-                    kind: ArcadeFilterKindKey::Category(game.category.clone()),
-                })
-                .or_default()
-                .push(idx);
-        }
-        let category = game.category.trim();
-        if !category.is_empty() {
-            *counts.categories.entry(category.to_string()).or_default() += 1;
-        }
-
-        if has_preview_image(game) {
-            let preview_indexes = preview_games_by_system
+            let counts = filter_counts_by_system
                 .entry(system_id_string.clone())
                 .or_default();
-            let best_by_key = preview_best_by_system.entry(system_id_string).or_default();
-            let key = preview_dedupe_key(&game.title);
-            if let Some(&preview_pos) = best_by_key.get(&key) {
-                if prefer_preview_game(game, &games[preview_indexes[preview_pos]]) {
-                    preview_indexes[preview_pos] = idx;
+            if let Some(year) = game.year {
+                let decade = (year / 10) * 10;
+                games_by_filter
+                    .entry(ArcadeFilterKey {
+                        system_id: system_id_arc.clone(),
+                        kind: ArcadeFilterKindKey::Decade(decade),
+                    })
+                    .or_default()
+                    .push(idx);
+                *counts.decades.entry(decade).or_default() += 1;
+            }
+
+            if !game.manufacturer.is_empty() {
+                games_by_filter
+                    .entry(ArcadeFilterKey {
+                        system_id: system_id_arc.clone(),
+                        kind: ArcadeFilterKindKey::Manufacturer(game.manufacturer.clone()),
+                    })
+                    .or_default()
+                    .push(idx);
+            }
+            let manufacturer = game.manufacturer.trim();
+            if !manufacturer.is_empty() {
+                *counts
+                    .manufacturers
+                    .entry(manufacturer.to_string())
+                    .or_default() += 1;
+            }
+
+            if !game.category.is_empty() {
+                games_by_filter
+                    .entry(ArcadeFilterKey {
+                        system_id: system_id_arc,
+                        kind: ArcadeFilterKindKey::Category(game.category.clone()),
+                    })
+                    .or_default()
+                    .push(idx);
+            }
+            let category = game.category.trim();
+            if !category.is_empty() {
+                *counts.categories.entry(category.to_string()).or_default() += 1;
+            }
+
+            if has_preview_image(game) {
+                let preview_indexes = preview_games_by_system
+                    .entry(system_id_string.clone())
+                    .or_default();
+                let best_by_key = preview_best_by_system.entry(system_id_string).or_default();
+                let key = preview_dedupe_key(&game.title);
+                if let Some(&preview_pos) = best_by_key.get(&key) {
+                    if prefer_preview_game(game, &games[preview_indexes[preview_pos]]) {
+                        preview_indexes[preview_pos] = idx;
+                    }
+                } else {
+                    best_by_key.insert(key, preview_indexes.len());
+                    preview_indexes.push(idx);
                 }
-            } else {
-                best_by_key.insert(key, preview_indexes.len());
-                preview_indexes.push(idx);
             }
         }
     }
@@ -815,8 +995,12 @@ fn build_arcade_catalog_indexes(
     }
 }
 
-fn build_arcade_text_indexes(games: &[ArcadeGameEntry]) -> ArcadeTextIndexes {
-    build_arcade_text_indexes_with_timing(games, TextIndexBuildPacing::Unthrottled).0
+fn build_arcade_text_indexes(
+    games: &[ArcadeGameEntry],
+    platform_kinds: &HashMap<String, PlatformKind>,
+) -> ArcadeTextIndexes {
+    build_arcade_text_indexes_with_timing(games, platform_kinds, TextIndexBuildPacing::Unthrottled)
+        .0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -835,6 +1019,7 @@ impl TextIndexBuildPacing {
 
 fn build_arcade_text_indexes_with_timing(
     games: &[ArcadeGameEntry],
+    platform_kinds: &HashMap<String, PlatformKind>,
     pacing: TextIndexBuildPacing,
 ) -> (ArcadeTextIndexes, ArcadeTextIndexBuildTiming) {
     let total_t = std::time::Instant::now();
@@ -848,7 +1033,7 @@ fn build_arcade_text_indexes_with_timing(
     let search_keys_us = search_t.elapsed().as_micros() as u64;
     let autocomplete_t = std::time::Instant::now();
     for (index, game) in games.iter().enumerate() {
-        autocomplete.add_game(game);
+        autocomplete.add_game(game, platform_kinds);
         pacing.after_game(index + 1);
     }
     let autocomplete_us = autocomplete_t.elapsed().as_micros() as u64;
@@ -998,31 +1183,28 @@ impl ArcadeAutocompleteIndex {
         self.words.is_empty()
     }
 
-    fn add_game(&mut self, game: &ArcadeGameEntry) {
-        self.add_words(&game.system_id, &game.title, AutocompleteSource::Title);
+    fn add_game(&mut self, game: &ArcadeGameEntry, platform_kinds: &HashMap<String, PlatformKind>) {
+        for system_id in game_collection_ids(game, platform_kinds)
+            .into_iter()
+            .flatten()
+        {
+            self.add_game_for_system(system_id, game);
+        }
+    }
+
+    fn add_game_for_system(&mut self, system_id: &str, game: &ArcadeGameEntry) {
+        self.add_words(system_id, &game.title, AutocompleteSource::Title);
+        self.add_words(system_id, &game.manufacturer, AutocompleteSource::Metadata);
+        self.add_words(system_id, &game.category, AutocompleteSource::Metadata);
         self.add_words(
-            &game.system_id,
-            &game.manufacturer,
-            AutocompleteSource::Metadata,
-        );
-        self.add_words(
-            &game.system_id,
-            &game.category,
-            AutocompleteSource::Metadata,
-        );
-        self.add_words(
-            &game.system_id,
+            system_id,
             mra_basename(&game.mra_path),
             AutocompleteSource::Path,
         );
         if let Some(year) = game.year {
+            self.add_word(system_id, &year.to_string(), AutocompleteSource::Metadata);
             self.add_word(
-                &game.system_id,
-                &year.to_string(),
-                AutocompleteSource::Metadata,
-            );
-            self.add_word(
-                &game.system_id,
+                system_id,
                 &format!("{}0s", year / 10),
                 AutocompleteSource::Metadata,
             );
@@ -1269,6 +1451,29 @@ pub fn systems_from_games(games: &[ArcadeGameEntry]) -> Vec<GameSystemEntry> {
         .collect();
     sort_systems_by_title(&mut systems);
     systems
+}
+
+fn inferred_platform_kinds(systems: &[GameSystemEntry]) -> HashMap<String, PlatformKind> {
+    systems
+        .iter()
+        .map(|system| {
+            (
+                system.id.clone(),
+                PlatformKind::inferred_for_system_id(&system.id),
+            )
+        })
+        .collect()
+}
+
+fn fill_missing_platform_kinds(
+    systems: &[GameSystemEntry],
+    platform_kinds: &mut HashMap<String, PlatformKind>,
+) {
+    for system in systems {
+        platform_kinds
+            .entry(system.id.clone())
+            .or_insert_with(|| PlatformKind::inferred_for_system_id(&system.id));
+    }
 }
 
 fn sort_systems_by_title(systems: &mut [GameSystemEntry]) {
@@ -2220,5 +2425,149 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn platform_kind_normalizes_profile_categories_and_infers_fixture_systems() {
+        assert_eq!(
+            PlatformKind::from_category(" Arcade "),
+            PlatformKind::Arcade
+        );
+        assert_eq!(
+            PlatformKind::from_category("CONSOLE"),
+            PlatformKind::Console
+        );
+        assert_eq!(
+            PlatformKind::from_category("Handheld"),
+            PlatformKind::Handheld
+        );
+        assert_eq!(
+            PlatformKind::from_category("computer"),
+            PlatformKind::Computer
+        );
+        assert_eq!(
+            PlatformKind::from_category("Launcher"),
+            PlatformKind::Unknown
+        );
+        assert_eq!(
+            PlatformKind::inferred_for_system_id("wonderswan"),
+            PlatformKind::Handheld
+        );
+        assert_eq!(
+            PlatformKind::inferred_for_system_id("cps1"),
+            PlatformKind::Arcade
+        );
+        assert_eq!(
+            PlatformKind::inferred_for_system_id("mystery"),
+            PlatformKind::Unknown
+        );
+    }
+
+    #[test]
+    fn snk_manufacturer_match_requires_a_whole_token() {
+        assert!(manufacturer_has_snk_token("SNK"));
+        assert!(manufacturer_has_snk_token("SNK (Rock-Ola license)"));
+        assert!(manufacturer_has_snk_token("Sega / SNK"));
+        assert!(!manufacturer_has_snk_token("SNKJ"));
+        assert!(!manufacturer_has_snk_token("snkplaymore"));
+    }
+
+    #[test]
+    fn virtual_arcade_collections_share_prebuilt_catalog_indexes() {
+        let mut snk_arcade = game(
+            "Metal Slug Arcade",
+            "/media/fat/_Arcade/Metal Slug Arcade.mra",
+            "metal-slug",
+            "arcade",
+        );
+        snk_arcade.manufacturer = "SNK (Rock-Ola license)".into();
+        snk_arcade.category = "Run and Gun".into();
+        snk_arcade.year = Some(1996);
+
+        let mut capcom_arcade = game(
+            "Cyberbots",
+            "/media/fat/_Arcade/Cyberbots.mra",
+            "cyberbots",
+            "cps2",
+        );
+        capcom_arcade.manufacturer = "Capcom".into();
+        capcom_arcade.category = "Fighter".into();
+        capcom_arcade.year = Some(1995);
+
+        let mut snk_cps = game("P.O.W.", "/media/fat/_Arcade/P.O.W..mra", "pow", "cps1");
+        snk_cps.manufacturer = "SNK".into();
+        snk_cps.category = "Beat 'em up".into();
+        snk_cps.year = Some(1988);
+
+        let mut neogeo = game(
+            "Metal Slug NeoGeo",
+            "/media/fat/games/NeoGeo/Metal Slug.neo",
+            "metal-slug-neogeo",
+            "neogeo",
+        );
+        neogeo.manufacturer = "SNK".into();
+        neogeo.category = "Run and Gun".into();
+        neogeo.year = Some(1996);
+
+        let mut saturn = game(
+            "Fighters Megamix",
+            "/media/fat/games/Saturn/Fighters Megamix.chd",
+            "fighters-megamix",
+            "saturn",
+        );
+        saturn.manufacturer = "Sega".into();
+        saturn.category = "Fighter".into();
+        saturn.year = Some(1996);
+
+        let games = vec![snk_arcade, capcom_arcade, snk_cps, neogeo, saturn];
+        let systems = systems_from_games(&games);
+        let catalog = ArcadeCatalog::new(PathBuf::from(DEFAULT_ARCADE_ROOT), games, systems);
+
+        assert_eq!(catalog.platform_kind("cps2"), PlatformKind::Arcade);
+        assert_eq!(catalog.platform_kind("saturn"), PlatformKind::Console);
+        assert_eq!(catalog.system_game_count(MENU_ARCADE_SYSTEM_ID), 3);
+        assert_eq!(catalog.system_game_count(MENU_SNK_ARCADE_SYSTEM_ID), 2);
+        assert_eq!(
+            catalog
+                .system_game_view(MENU_ARCADE_SYSTEM_ID)
+                .iter()
+                .map(|game| game.title.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["Metal Slug Arcade", "Cyberbots", "P.O.W."]
+        );
+        assert_eq!(
+            catalog
+                .system_game_view(MENU_SNK_ARCADE_SYSTEM_ID)
+                .iter()
+                .map(|game| game.title.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["Metal Slug Arcade", "P.O.W."]
+        );
+        assert_eq!(
+            catalog.filtered_game_count(MENU_ARCADE_SYSTEM_ID, &ArcadeFilter::Decade(1990)),
+            2
+        );
+        assert_eq!(
+            catalog.filtered_game_count(
+                MENU_SNK_ARCADE_SYSTEM_ID,
+                &ArcadeFilter::Category("Run and Gun".to_string())
+            ),
+            1
+        );
+        assert_eq!(catalog.system_preview_game_count(MENU_ARCADE_SYSTEM_ID), 3);
+        assert_eq!(
+            catalog.search_game_indexes(MENU_ARCADE_SYSTEM_ID, "cyberbots"),
+            vec![1]
+        );
+        assert!(catalog
+            .autocomplete
+            .words
+            .get("cyberbots")
+            .is_some_and(|stats| stats.system_scores.contains_key(MENU_ARCADE_SYSTEM_ID)));
+        assert!(catalog
+            .autocomplete
+            .words
+            .get("metal")
+            .is_some_and(|stats| stats.system_scores.contains_key(MENU_SNK_ARCADE_SYSTEM_ID)));
     }
 }

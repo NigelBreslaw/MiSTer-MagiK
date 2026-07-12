@@ -3,7 +3,9 @@
 //! This is deliberately TOC/header-only for archives. Indexing must never
 //! decompress full game libraries just to make the launcher searchable.
 
-use crate::arcade_catalog::{self, ArcadeCatalog, ArcadeGameMetadataKey, StructuredLaunchPlan};
+use crate::arcade_catalog::{
+    self, ArcadeCatalog, ArcadeGameMetadataKey, PlatformKind, StructuredLaunchPlan,
+};
 use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_config;
@@ -999,6 +1001,16 @@ fn build_catalog_from_scan_with_sources(
     mut software_hash_cache: SoftwareHashCache,
     discovery_history: Option<sqlite_catalog::DiscoveryHistory>,
 ) -> ArcadeCatalog {
+    let mut platform_kinds = scan
+        .profiles
+        .iter()
+        .map(|profile| {
+            (
+                profile.system_id.clone(),
+                PlatformKind::from_category(&profile.category),
+            )
+        })
+        .collect::<HashMap<_, _>>();
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
     let mut playable_counts = HashMap::<String, usize>::new();
@@ -1013,6 +1025,9 @@ fn build_catalog_from_scan_with_sources(
     for discovery in discoveries.values() {
         let system_id = catalog_system_id_for_discovery(discovery);
         *playable_counts.entry(system_id.clone()).or_default() += 1;
+        platform_kinds
+            .entry(system_id)
+            .or_insert_with(|| PlatformKind::from_category(&discovery.category));
     }
     let promoted_systems = playable_counts
         .iter()
@@ -1064,7 +1079,13 @@ fn build_catalog_from_scan_with_sources(
         }
     }
 
-    catalog_from_sqlite_launcher_projection_order(root, arcade_rows, launcher_rows, launch_plans)
+    catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
+        root,
+        arcade_rows,
+        launcher_rows,
+        launch_plans,
+        platform_kinds,
+    )
 }
 
 struct CatalogProjectionBuildContext<'a> {
@@ -1222,11 +1243,28 @@ fn launcher_category_for_discovery(discovery: &GameDiscovery) -> String {
     }
 }
 
+#[cfg(test)]
 fn catalog_from_sqlite_launcher_projection_order(
+    root: impl AsRef<Path>,
+    arcade_rows: Vec<CatalogProjectionRow>,
+    launcher_rows: Vec<CatalogProjectionRow>,
+    launch_plans: Vec<StructuredLaunchPlan>,
+) -> ArcadeCatalog {
+    catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
+        root,
+        arcade_rows,
+        launcher_rows,
+        launch_plans,
+        HashMap::new(),
+    )
+}
+
+fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
     root: impl AsRef<Path>,
     mut arcade_rows: Vec<CatalogProjectionRow>,
     mut launcher_rows: Vec<CatalogProjectionRow>,
     mut launch_plans: Vec<StructuredLaunchPlan>,
+    platform_kinds: HashMap<String, PlatformKind>,
 ) -> ArcadeCatalog {
     arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
@@ -1242,11 +1280,12 @@ fn catalog_from_sqlite_launcher_projection_order(
         .collect::<HashSet<_>>();
     launch_plans.retain(|plan| visible_refs.contains(plan.launch_ref.as_ref()));
     let systems = arcade_catalog::systems_from_games(&games);
-    ArcadeCatalog::new_with_deferred_text_indexes(
+    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
         root.as_ref().to_path_buf(),
         games,
         systems,
         launch_plans,
+        platform_kinds,
     )
 }
 
@@ -2094,6 +2133,20 @@ mod tests {
             catalog_game_snapshots(&ram_catalog),
             catalog_game_snapshots(&sqlite_catalog.catalog)
         );
+        for (system_id, expected) in [
+            ("arcade", PlatformKind::Arcade),
+            ("neogeo", PlatformKind::Arcade),
+            ("nes", PlatformKind::Console),
+            ("dos", PlatformKind::Computer),
+            ("amiga", PlatformKind::Computer),
+        ] {
+            assert_eq!(ram_catalog.platform_kind(system_id), expected);
+            assert_eq!(
+                sqlite_catalog.catalog.platform_kind(system_id),
+                expected,
+                "fresh and SQLite catalog platform kinds diverged for {system_id}"
+            );
+        }
         assert_eq!(ram_catalog.system_game_count("arcade"), 1);
         assert_eq!(ram_catalog.system_game_count("neogeo"), 2);
         let neogeo_game = ram_catalog

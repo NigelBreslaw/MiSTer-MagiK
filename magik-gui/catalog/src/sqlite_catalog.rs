@@ -1,7 +1,7 @@
 //! SQLite catalog import, publish, and loading.
 
 use crate::arcade_catalog::{
-    self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, StructuredLaunchPlan,
+    self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, PlatformKind, StructuredLaunchPlan,
 };
 use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_config::{
@@ -650,9 +650,16 @@ fn load_arcade_catalog_from_connection(
     let launch_plans_us = launch_plans_t.elapsed().as_micros() as u64;
     let systems_t = Instant::now();
     let systems = arcade_catalog::systems_from_games(&games);
+    let platform_kinds = load_system_platform_kinds(conn)?;
     let systems_us = systems_t.elapsed().as_micros() as u64;
     let catalog_t = Instant::now();
-    let catalog = ArcadeCatalog::new_with_deferred_text_indexes(root, games, systems, launch_plans);
+    let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+        root,
+        games,
+        systems,
+        launch_plans,
+        platform_kinds,
+    );
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
@@ -670,6 +677,21 @@ fn load_arcade_catalog_from_connection(
         catalog_us,
         rows,
     })
+}
+
+fn load_system_platform_kinds(conn: &Connection) -> Result<HashMap<String, PlatformKind>, String> {
+    let mut stmt = conn
+        .prepare("SELECT system_id, category FROM systems")
+        .map_err(|e| format!("prepare system platform kind query: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let system_id = row.get::<_, String>(0)?;
+            let category = row.get::<_, String>(1)?;
+            Ok((system_id, PlatformKind::from_category(&category)))
+        })
+        .map_err(|e| format!("query system platform kinds: {e}"))?;
+    rows.map(|row| row.map_err(|e| format!("read system platform kind row: {e}")))
+        .collect()
 }
 
 fn load_launcher_launch_plans(conn: &Connection) -> Result<Vec<StructuredLaunchPlan>, String> {
@@ -4382,12 +4404,17 @@ mod tests {
             assert_eq!(summary_system.id, sqlite_system.id);
             assert_eq!(summary_system.title, sqlite_system.title);
             assert_eq!(summary_system.count, sqlite_system.count);
+            assert_eq!(
+                summary_system.platform_kind,
+                loaded.catalog.platform_kind(&sqlite_system.id)
+            );
         }
         let arcade = summary
             .systems
             .iter()
             .find(|system| system.id == "arcade")
             .expect("arcade summary system");
+        assert_eq!(arcade.platform_kind, PlatformKind::Arcade);
         assert_eq!(arcade.supported_media, vec!["screenshots".to_string()]);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -4572,6 +4599,19 @@ mod tests {
                 .expect("current navigation");
         assert_eq!(navigation.games.len(), loaded.catalog.games.len());
         assert_eq!(navigation.systems.len(), loaded.catalog.systems.len());
+        assert_eq!(
+            loaded.catalog.platform_kind("saturn"),
+            PlatformKind::Console,
+            "SQLite systems.category must survive runtime hydration"
+        );
+        assert_eq!(
+            navigation
+                .systems
+                .iter()
+                .find(|system| system.id == "snes")
+                .map(|system| system.platform_kind),
+            Some(PlatformKind::Console)
+        );
         let navigation_catalog =
             ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", navigation);
 

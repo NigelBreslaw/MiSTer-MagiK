@@ -16,6 +16,7 @@ pub mod input_repeat;
 pub mod input_state;
 pub mod launch_preparation;
 pub mod launcher;
+pub mod launcher_taxonomy;
 pub mod licenses;
 pub mod media_update;
 pub mod raw565;
