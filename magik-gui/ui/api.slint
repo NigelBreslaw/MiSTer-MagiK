@@ -1,5 +1,6 @@
 // Rust <-> Slint bridge for MiSTer input and app state.
-import { ArcadeGame, GameSystem } from "arcade_game.slint";
+import { ArcadeGame } from "arcade_game.slint";
+import { MenuItem } from "launcher_menu.slint";
 
 export enum PreviewStatus {
     empty,
@@ -59,7 +60,7 @@ export global MisterBridge {
     in-out property <string> info-kernel-version;
     in-out property <string> info-database-build;
     in-out property <image> slint-logo-image;
-    // Home focus: selected system index, with settings-focused as the top cog target.
+    // Home focus: selected menu-item index, with settings-focused as the top cog target.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
     // Settings focus: 0=exit to MiSTer, 1=simple joystick, 2=reset database, 3=about, 4=licenses, 5=info.
@@ -77,7 +78,10 @@ export global MisterBridge {
     in-out property <string> confirm-right-label;
     // Dialog focus: 0=cancel, 1=confirm.
     in-out property <int> confirm-selected;
-    in-out property <[GameSystem]> game-systems;
+    // Current launcher hierarchy level. Root uses the product name and no breadcrumb.
+    in-out property <string> menu-title: "MiSTer MagiK";
+    in-out property <string> menu-breadcrumb;
+    in-out property <[MenuItem]> menu-items;
     // Scroll offset in logical pixels (0 = left); translates the Home six-tile ring.
     in-out property <bool> home-scroll-held;
     in-out property <bool> home-scroll-repeat-active;

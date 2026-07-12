@@ -7,8 +7,8 @@ export component HomeGrid inherits Rectangle {
     property <length> tile-width: 191px * s;
     property <length> tile-gap: 16px * s;
     property <length> tile-pitch: tile-width + tile-gap;
-    property <length> content-width: MisterBridge.game-systems.length * tile-width
-        + Math.max(0, MisterBridge.game-systems.length - 1) * tile-gap;
+    property <length> content-width: MisterBridge.menu-items.length * tile-width
+        + Math.max(0, MisterBridge.menu-items.length - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
     property <int> first-visible-index: floor(scroll-x / tile-pitch);
 
@@ -31,14 +31,33 @@ export component HomeGrid inherits Rectangle {
                     spacing: 12px * s;
                     cross-axis-alignment: center;
 
-                    Text {
-                        text: "MiSTer MagiK";
-                        color: #d7eef8;
-                        font-size: 16px * s;
-                        vertical-alignment: center;
-                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        background: transparent;
 
-                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                        VerticalLayout {
+                            spacing: 2px * s;
+                            alignment: center;
+
+                            Text {
+                                width: 100%;
+                                text: MisterBridge.menu-title;
+                                color: #d7eef8;
+                                font-size: 16px * s;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            if MisterBridge.menu-breadcrumb != "" : Text {
+                                width: 100%;
+                                text: MisterBridge.menu-breadcrumb;
+                                color: #8ca4b5;
+                                font-size: 8px * s;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
 
                     Text {
                         text: MisterBridge.clock-text;
@@ -72,17 +91,17 @@ export component HomeGrid inherits Rectangle {
                     // tile is already present while a slot is recycled across a pitch boundary.
                     // At the end, clamping aligns the final tile's right edge.
                     for slot in 6: LauncherTile {
-                        property <int> system-index: root.first-visible-index
+                        property <int> menu-index: root.first-visible-index
                             + Math.mod(Math.mod(slot - root.first-visible-index, 6) + 6, 6);
 
-                        visible: system-index < MisterBridge.game-systems.length;
-                        x: system-index * root.tile-pitch;
+                        visible: menu-index < MisterBridge.menu-items.length;
+                        x: menu-index * root.tile-pitch;
                         width: root.tile-width;
                         height: parent.height;
-                        label: MisterBridge.game-systems[system-index].title;
-                        subtitle: MisterBridge.game-systems[system-index].count + " games";
+                        label: MisterBridge.menu-items[menu-index].label;
+                        subtitle: MisterBridge.menu-items[menu-index].subtitle;
                         focused: !MisterBridge.settings-focused
-                            && MisterBridge.game-systems[system-index].focused;
+                            && MisterBridge.menu-items[menu-index].focused;
                         flat-focus-style: true;
                     }
                 }

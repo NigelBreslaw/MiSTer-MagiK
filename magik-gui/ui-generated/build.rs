@@ -43,6 +43,7 @@ fn main() {
         "../ui/api.slint",
         "build.rs",
         "../ui/arcade_game.slint",
+        "../ui/launcher_menu.slint",
         "../ui/arcade_list.slint",
         "../ui/components/launcher_chrome.slint",
         "../ui/components/overlays.slint",

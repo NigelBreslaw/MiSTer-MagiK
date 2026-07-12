@@ -1,0 +1,12 @@
+export enum MenuItemKind {
+    group,
+    collection,
+}
+
+export struct MenuItem {
+    id: string,
+    label: string,
+    subtitle: string,
+    focused: bool,
+    node-kind: MenuItemKind,
+}

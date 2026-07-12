@@ -7,6 +7,10 @@ use crate::arcade_catalog::{
 };
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
+use crate::launcher_taxonomy::{
+    LauncherCollection, LauncherMenuItem, LauncherMenuItemKind, LauncherTaxonomy,
+    LauncherTaxonomyToken, ROOT_MENU_ID,
+};
 use crate::library_db;
 use crate::settings::MagikSettings;
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
@@ -48,7 +52,7 @@ const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
-const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
+const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
 const SETTINGS_MAX_SELECTED: usize = 5;
 const LICENSES_MAX_SELECTED: usize = 2;
 const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
@@ -598,6 +602,13 @@ pub struct LauncherNav {
     pub arcade_filter: ArcadeFilterState,
     pub arcade_search: ArcadeSearchState,
     game_list_memory: HashMap<String, GameListMemory>,
+    collection_filters: HashMap<String, ArcadeFilter>,
+    collection_search_queries: HashMap<String, String>,
+    taxonomy: LauncherTaxonomy,
+    taxonomy_token: LauncherTaxonomyToken,
+    menu_path: Vec<String>,
+    menu_memory: HashMap<String, MenuViewportMemory>,
+    active_collection_id: Option<String>,
     repeat: RepeatNav,
     home_scroll: HomeScrollState,
     home_scroll_animation: SpringAnimation,
@@ -619,6 +630,13 @@ struct HomeScrollState {
 struct GameListMemory {
     selected: usize,
     scroll_y: i32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct MenuViewportMemory {
+    selected_item_id: Option<String>,
+    selected: usize,
+    scroll_x: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -686,7 +704,6 @@ pub struct ArcadeFilterState {
     pub visual_index: f32,
     pub active: ArcadeFilter,
     scroll: ArcadeNav,
-    game_list_memory: HashMap<String, GameListMemory>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -712,7 +729,6 @@ impl ArcadeFilterState {
             visual_index: 0.0,
             active: ArcadeFilter::All,
             scroll: ArcadeNav::with_row_height(ARCADE_ROW_HEIGHT),
-            game_list_memory: HashMap::new(),
         }
     }
 
@@ -792,10 +808,397 @@ impl LauncherNav {
             arcade_filter: ArcadeFilterState::new(),
             arcade_search: ArcadeSearchState::new(),
             game_list_memory: HashMap::new(),
+            collection_filters: HashMap::new(),
+            collection_search_queries: HashMap::new(),
+            taxonomy: LauncherTaxonomy::default(),
+            taxonomy_token: LauncherTaxonomyToken::default(),
+            menu_path: vec![ROOT_MENU_ID.to_string()],
+            menu_memory: HashMap::new(),
+            active_collection_id: None,
             repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
             home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
             prev: PadState::default(),
+        }
+    }
+
+    /// Rebuilds the cached launcher hierarchy when the catalog allocation or
+    /// system projection changes. Call this after publishing a catalog before
+    /// reading menu or active-collection state.
+    pub fn sync_launcher_taxonomy(&mut self, catalog: &ArcadeCatalog) -> bool {
+        let token = LauncherTaxonomyToken::from_catalog(catalog);
+        if self.taxonomy_token == token && self.taxonomy.matches_catalog(catalog) {
+            return false;
+        }
+
+        if self.screen == Screen::Home {
+            self.remember_current_menu_view();
+        }
+        let old_path = self.menu_path.clone();
+        let old_collection = self.active_collection_id.clone();
+        let had_active_collection = old_collection.is_some();
+        self.taxonomy = LauncherTaxonomy::from_catalog(catalog);
+        self.taxonomy_token = token;
+        for diagnostic in self.taxonomy.diagnostics() {
+            crate::ui_errln!("{diagnostic}");
+        }
+
+        self.menu_path = self.valid_menu_path_prefix(&old_path);
+        if self.menu_path.is_empty() {
+            self.menu_path.push(ROOT_MENU_ID.to_string());
+        }
+        self.active_collection_id = old_collection
+            .filter(|collection_id| self.taxonomy.collection(collection_id).is_some());
+        if let Some(collection_id) = self.active_collection_id.clone() {
+            if !self
+                .taxonomy
+                .collection_path_is_valid(&self.menu_path, &collection_id)
+            {
+                if let Some(destination) = self
+                    .taxonomy
+                    .primary_destination_for_collection(&collection_id)
+                {
+                    self.menu_path = destination.menu_path.clone();
+                }
+            }
+        }
+
+        if self.screen == Screen::Arcade && self.active_collection_id.is_none() {
+            if had_active_collection {
+                self.screen = Screen::Home;
+                self.restore_current_menu_view();
+                return true;
+            }
+            // Startup and benchmark paths can select the Arcade screen before
+            // the catalog is hydrated. That screen always means the root
+            // Arcade aggregate; `open_system` is the explicit compatibility
+            // path for selecting an individual legacy system.
+            let preserved_filter = self.arcade_filter.clone();
+            let preserved_search = self.arcade_search.clone();
+            let preserved_selected = self.arcade.selected;
+            let preserved_scroll_y = self.arcade.scroll_y;
+            if self.open_default_arcade_synced(catalog) {
+                let collection_id = self
+                    .active_collection_id
+                    .clone()
+                    .expect("default Arcade collection activated");
+                self.arcade_filter = preserved_filter;
+                self.arcade_search = preserved_search;
+                if self.arcade_search.is_active(&self.arcade_filter.active) {
+                    self.ensure_arcade_search_results(catalog, &collection_id);
+                }
+                let count = self.active_arcade_game_count(catalog, &collection_id);
+                self.arcade
+                    .restore_position(preserved_selected, preserved_scroll_y, count);
+            } else {
+                self.screen = Screen::Home;
+                self.active_collection_id = None;
+                self.restore_current_menu_view();
+            }
+        } else if self.screen == Screen::Home {
+            self.restore_current_menu_view();
+        }
+        true
+    }
+
+    pub fn launcher_taxonomy_token(&self) -> LauncherTaxonomyToken {
+        self.taxonomy_token
+    }
+
+    pub fn current_menu_id(&self) -> &str {
+        self.menu_path
+            .last()
+            .map(String::as_str)
+            .unwrap_or(ROOT_MENU_ID)
+    }
+
+    pub fn current_menu_title(&self) -> &str {
+        self.taxonomy
+            .menu(self.current_menu_id())
+            .map(|menu| menu.title.as_str())
+            .unwrap_or("MiSTer MagiK")
+    }
+
+    pub fn current_menu_breadcrumb(&self) -> &str {
+        let Some(parent_id) = self
+            .taxonomy
+            .menu(self.current_menu_id())
+            .and_then(|menu| menu.parent_id.as_deref())
+        else {
+            return "";
+        };
+        self.taxonomy
+            .menu(parent_id)
+            .map(|menu| menu.title.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn current_menu_items(&self) -> &[LauncherMenuItem] {
+        self.taxonomy
+            .menu(self.current_menu_id())
+            .map(|menu| menu.items.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn current_menu_count(&self) -> usize {
+        self.current_menu_items().len()
+    }
+
+    pub fn current_menu_game_count(&self) -> usize {
+        self.taxonomy
+            .menu(self.current_menu_id())
+            .map(|menu| menu.count)
+            .unwrap_or(0)
+    }
+
+    pub fn menu_path(&self) -> &[String] {
+        &self.menu_path
+    }
+
+    pub fn active_collection(&self) -> Option<&LauncherCollection> {
+        self.active_collection_id
+            .as_deref()
+            .and_then(|id| self.taxonomy.collection(id))
+    }
+
+    pub fn active_collection_id(&self) -> Option<&str> {
+        self.active_collection()
+            .map(|collection| collection.id.as_str())
+    }
+
+    pub fn active_collection_scope_id<'a>(&'a self, catalog: &'a ArcadeCatalog) -> &'a str {
+        self.active_collection_id().unwrap_or_else(|| {
+            catalog
+                .systems
+                .get(self.selected)
+                .map(|system| system.id.as_str())
+                .unwrap_or("")
+        })
+    }
+
+    fn effective_collection_id<'a>(&'a self, requested: &'a str) -> &'a str {
+        let Some(collection) = self.active_collection() else {
+            return requested;
+        };
+        if requested == collection.id
+            || requested == collection.legacy_system_id
+            || collection.system_id.as_deref() == Some(requested)
+        {
+            &collection.id
+        } else {
+            requested
+        }
+    }
+
+    pub fn open_menu(&mut self, menu_id: &str) -> bool {
+        let Some(path) = self.taxonomy.path_to_menu(menu_id) else {
+            return false;
+        };
+        if self.screen == Screen::Home {
+            self.remember_current_menu_view();
+        }
+        self.menu_path = path;
+        self.active_collection_id = None;
+        self.screen = Screen::Home;
+        self.settings_focused = false;
+        self.restore_current_menu_view();
+        true
+    }
+
+    pub fn open_system(&mut self, catalog: &ArcadeCatalog, system_id: &str) -> bool {
+        self.sync_launcher_taxonomy(catalog);
+        self.open_system_synced(catalog, system_id)
+    }
+
+    pub fn open_default_arcade(&mut self, catalog: &ArcadeCatalog) -> bool {
+        self.sync_launcher_taxonomy(catalog);
+        self.open_default_arcade_synced(catalog)
+    }
+
+    pub fn go_root(&mut self) {
+        if self.screen == Screen::Home {
+            self.remember_current_menu_view();
+        }
+        self.menu_path.clear();
+        self.menu_path.push(ROOT_MENU_ID.to_string());
+        self.active_collection_id = None;
+        self.screen = Screen::Home;
+        self.settings_focused = false;
+        self.restore_current_menu_view();
+    }
+
+    fn open_system_synced(&mut self, catalog: &ArcadeCatalog, system_id: &str) -> bool {
+        let Some(destination) = self
+            .taxonomy
+            .primary_destination_for_system(system_id)
+            .cloned()
+        else {
+            return false;
+        };
+        self.open_destination(catalog, destination.menu_path, &destination.collection_id)
+    }
+
+    fn open_default_arcade_synced(&mut self, catalog: &ArcadeCatalog) -> bool {
+        let Some(destination) = self
+            .taxonomy
+            .primary_destination_for_collection(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+            .cloned()
+        else {
+            return false;
+        };
+        self.open_destination(catalog, destination.menu_path, &destination.collection_id)
+    }
+
+    fn open_destination(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        menu_path: Vec<String>,
+        collection_id: &str,
+    ) -> bool {
+        if !self
+            .taxonomy
+            .collection_path_is_valid(&menu_path, collection_id)
+        {
+            return false;
+        }
+        if self.screen == Screen::Home {
+            self.remember_current_menu_view();
+        }
+        self.menu_path = menu_path;
+        self.restore_current_menu_view();
+        if let Some(index) = self
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == collection_id)
+        {
+            self.selected = index;
+            let menu_count = self.current_menu_count();
+            keep_home_visible(self.selected, &mut self.scroll_x, menu_count);
+            self.remember_current_menu_view();
+        }
+        self.activate_collection(catalog, collection_id)
+    }
+
+    fn activate_collection(&mut self, catalog: &ArcadeCatalog, collection_id: &str) -> bool {
+        let Some(collection) = self.taxonomy.collection(collection_id).cloned() else {
+            return false;
+        };
+        self.active_collection_id = Some(collection.id.clone());
+        let filter = self
+            .collection_filters
+            .get(&collection.id)
+            .cloned()
+            .unwrap_or_else(|| default_filter_for_system(catalog, &collection.id));
+        self.arcade_filter.active = filter;
+        if matches!(self.arcade_filter.active, ArcadeFilter::Search) {
+            self.arcade_search.query = self
+                .collection_search_queries
+                .get(&collection.id)
+                .cloned()
+                .unwrap_or_default();
+            self.ensure_arcade_search_results(catalog, &collection.id);
+        }
+        let count = self.active_arcade_game_count(catalog, &collection.id);
+        self.restore_game_list_state(&collection.id, count);
+        self.screen = Screen::Arcade;
+        if let Some(system_index) = catalog.systems.iter().position(|system| {
+            collection
+                .system_id
+                .as_deref()
+                .unwrap_or(&collection.legacy_system_id)
+                == system.id
+        }) {
+            // Transitional compatibility for loop/bridge code that still
+            // treats selected as a catalog-system index on the game screen.
+            self.selected = system_index;
+        }
+        true
+    }
+
+    fn valid_menu_path_prefix(&self, requested: &[String]) -> Vec<String> {
+        let mut valid = vec![ROOT_MENU_ID.to_string()];
+        for menu_id in requested.iter().skip(1) {
+            let parent = valid.last().expect("root menu path");
+            if self.taxonomy.menu(menu_id).is_none()
+                || !self.taxonomy.menu_contains_item(parent, menu_id)
+            {
+                break;
+            }
+            valid.push(menu_id.clone());
+        }
+        valid
+    }
+
+    fn remember_current_menu_view(&mut self) {
+        let menu_id = self.current_menu_id().to_string();
+        let selected_item_id = self
+            .current_menu_items()
+            .get(self.selected)
+            .map(|item| item.id.clone());
+        self.menu_memory.insert(
+            menu_id,
+            MenuViewportMemory {
+                selected_item_id,
+                selected: self.selected,
+                scroll_x: self.scroll_x,
+            },
+        );
+    }
+
+    fn restore_current_menu_view(&mut self) {
+        let menu_id = self.current_menu_id().to_string();
+        let count = self.current_menu_count();
+        let memory = self.menu_memory.get(&menu_id).cloned().unwrap_or_default();
+        if count == 0 {
+            self.selected = 0;
+            self.scroll_x = 0;
+        } else {
+            self.selected = memory
+                .selected_item_id
+                .as_deref()
+                .and_then(|selected_id| {
+                    self.current_menu_items()
+                        .iter()
+                        .position(|item| item.id == selected_id)
+                })
+                .unwrap_or(memory.selected.min(count - 1));
+            self.scroll_x = memory.scroll_x;
+            keep_home_visible(self.selected, &mut self.scroll_x, count);
+        }
+        self.home_scroll = HomeScrollState::default();
+        self.home_scroll_animation.snap_to(self.scroll_x as f64);
+        self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
+    }
+
+    fn pop_menu(&mut self) -> bool {
+        if self.menu_path.len() <= 1 {
+            return false;
+        }
+        self.remember_current_menu_view();
+        self.menu_path.pop();
+        self.active_collection_id = None;
+        self.settings_focused = false;
+        self.restore_current_menu_view();
+        true
+    }
+
+    fn leave_arcade(&mut self, to_root: bool, collection_id: &str) {
+        if !collection_id.is_empty() {
+            self.save_game_list_state(collection_id);
+            self.collection_filters
+                .insert(collection_id.to_string(), self.arcade_filter.active.clone());
+            if matches!(self.arcade_filter.active, ArcadeFilter::Search) {
+                self.collection_search_queries
+                    .insert(collection_id.to_string(), self.arcade_search.query.clone());
+            }
+        }
+        self.active_collection_id = None;
+        if to_root {
+            self.go_root();
+        } else {
+            self.screen = Screen::Home;
+            self.settings_focused = false;
+            self.restore_current_menu_view();
         }
     }
 
@@ -806,16 +1209,18 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
+        self.sync_launcher_taxonomy(catalog);
         let result = if self.confirm_action.is_some() {
             self.handle_confirm(now, frame_now)
         } else {
             match self.screen {
                 Screen::Home => self.handle_home(now, frame_now, catalog),
                 Screen::Controller => {
-                    if rising(now.btn_home, self.prev.btn_home)
-                        || rising(now.btn_b, self.prev.btn_b)
-                    {
+                    if rising(now.btn_home, self.prev.btn_home) {
+                        self.go_root();
+                    } else if rising(now.btn_b, self.prev.btn_b) {
                         self.screen = Screen::Home;
+                        self.restore_current_menu_view();
                     }
                     None
                 }
@@ -838,7 +1243,16 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let system_count = catalog.systems.len();
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.go_root();
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
+            self.pop_menu();
+            return None;
+        }
+
+        let item_count = self.current_menu_count();
         if self.repeat.tick_up(now.dpad_up, frame_now) {
             self.settings_focused = true;
         }
@@ -849,37 +1263,40 @@ impl LauncherNav {
             self.home_scroll = HomeScrollState::default();
             self.home_scroll_animation.snap_to(self.scroll_x as f64);
             if rising(now.btn_a, self.prev.btn_a) {
+                self.remember_current_menu_view();
                 self.settings_selected = 0;
                 self.screen = Screen::Settings;
             }
             return None;
         }
 
-        if system_count == 0 {
+        if item_count == 0 {
             self.home_scroll = HomeScrollState::default();
             self.scroll_x = 0;
             self.home_scroll_animation.snap_to(0.0);
             return None;
         }
 
-        if self.selected >= system_count {
-            self.selected = system_count - 1;
-            keep_home_visible(self.selected, &mut self.scroll_x, system_count);
+        if self.selected >= item_count {
+            self.selected = item_count - 1;
+            keep_home_visible(self.selected, &mut self.scroll_x, item_count);
             self.home_scroll_animation.snap_to(self.scroll_x as f64);
             self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
         }
-        self.update_home_scroll(now, frame_now, system_count);
+        self.update_home_scroll(now, frame_now, item_count);
 
         if rising(now.btn_a, self.prev.btn_a) {
-            if let Some(system) = catalog.systems.get(self.selected) {
-                self.arcade_filter.active = default_filter_for_system(catalog, &system.id);
-                let count = catalog.filtered_game_count(&system.id, &self.arcade_filter.active);
-                self.restore_game_list_state(&system.id, count);
-            } else {
-                self.arcade_filter.active = ArcadeFilter::All;
-                self.arcade.reset();
+            let item = self.current_menu_items().get(self.selected).cloned();
+            if let Some(item) = item {
+                match item.kind {
+                    LauncherMenuItemKind::Menu => {
+                        self.open_menu(&item.id);
+                    }
+                    LauncherMenuItemKind::Collection => {
+                        self.activate_collection(catalog, &item.id);
+                    }
+                }
             }
-            self.screen = Screen::Arcade;
         }
 
         None
@@ -1010,38 +1427,35 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let system_id = catalog
-            .systems
-            .get(self.selected)
-            .map(|system| system.id.as_str())
-            .unwrap_or("");
-        let count = self.active_arcade_game_count(catalog, system_id);
+        let collection_id = self.active_collection_scope_id(catalog).to_string();
+        let count = self.active_arcade_game_count(catalog, &collection_id);
 
         if self.arcade_filter.drawer_open {
-            return self.handle_arcade_filter(now, frame_now, catalog, system_id);
+            return self.handle_arcade_filter(now, frame_now, catalog, &collection_id);
         }
 
         if self.arcade_search.is_active(&self.arcade_filter.active) {
-            return self.handle_arcade_search(now, frame_now, catalog, system_id);
+            return self.handle_arcade_search(now, frame_now, catalog, &collection_id);
         }
 
-        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
-            if !system_id.is_empty() {
-                self.save_game_list_state(system_id);
-            }
-            self.screen = Screen::Home;
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.leave_arcade(true, &collection_id);
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
+            self.leave_arcade(false, &collection_id);
             return None;
         }
 
         if count == 0 {
             if rising(now.dpad_left, self.prev.dpad_left) {
-                self.open_arcade_filter(catalog, system_id);
+                self.open_arcade_filter(catalog, &collection_id);
             }
             return None;
         }
 
         if rising(now.dpad_left, self.prev.dpad_left) {
-            self.open_arcade_alphabet(catalog, system_id);
+            self.open_arcade_alphabet(catalog, &collection_id);
             return None;
         }
 
@@ -1058,7 +1472,7 @@ impl LauncherNav {
 
         if rising(now.btn_a, self.prev.btn_a) {
             return self
-                .active_arcade_game_at(catalog, system_id, self.arcade.selected)
+                .active_arcade_game_at(catalog, &collection_id, self.arcade.selected)
                 .map(|game| LauncherEvent {
                     action: LauncherAction::LaunchGame,
                     path: Some(game.mra_path.to_string()),
@@ -1078,10 +1492,7 @@ impl LauncherNav {
         self.ensure_arcade_search_results(catalog, system_id);
         let count = self.active_arcade_game_count(catalog, system_id);
         if rising(now.btn_home, self.prev.btn_home) {
-            if !system_id.is_empty() {
-                self.save_game_list_state(system_id);
-            }
-            self.screen = Screen::Home;
+            self.leave_arcade(true, system_id);
             return None;
         }
         match self.arcade_search.pane {
@@ -1166,10 +1577,7 @@ impl LauncherNav {
         }
         if rising(now.btn_home, self.prev.btn_home) {
             self.close_arcade_filter();
-            if !system_id.is_empty() {
-                self.save_game_list_state(system_id);
-            }
-            self.screen = Screen::Home;
+            self.leave_arcade(true, system_id);
             return None;
         }
         if rising(now.btn_b, self.prev.btn_b) {
@@ -1202,8 +1610,13 @@ impl LauncherNav {
     }
 
     fn handle_settings(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.go_root();
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Home;
+            self.restore_current_menu_view();
             return None;
         }
         if self.repeat.tick_down(now.dpad_down, frame_now)
@@ -1251,11 +1664,14 @@ impl LauncherNav {
     }
 
     fn handle_licenses(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.licenses_expanded = false;
+            self.licenses_scroll.reset();
+            self.go_root();
+            return None;
+        }
         if self.licenses_expanded {
-            if rising(now.btn_a, self.prev.btn_a)
-                || rising(now.btn_b, self.prev.btn_b)
-                || rising(now.btn_home, self.prev.btn_home)
-            {
+            if rising(now.btn_a, self.prev.btn_a) || rising(now.btn_b, self.prev.btn_b) {
                 self.licenses_expanded = false;
                 self.licenses_scroll.reset();
             } else {
@@ -1270,7 +1686,7 @@ impl LauncherNav {
             }
             return None;
         }
-        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+        if rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Settings;
             self.licenses_scroll.reset();
             return None;
@@ -1291,7 +1707,9 @@ impl LauncherNav {
     }
 
     fn handle_settings_subscreen(&mut self, now: &PadState) {
-        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.go_root();
+        } else if rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Settings;
         }
     }
@@ -1307,10 +1725,14 @@ impl LauncherNav {
     }
 
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        if rising(now.btn_b, self.prev.btn_b) || rising(now.btn_home, self.prev.btn_home) {
+        let home_pressed = rising(now.btn_home, self.prev.btn_home);
+        if rising(now.btn_b, self.prev.btn_b) || home_pressed {
             if self.confirm_action == Some(ConfirmAction::LibraryChanged) {
                 self.confirm_action = None;
                 self.confirm_selected = 0;
+                if home_pressed {
+                    self.go_root();
+                }
                 return Some(LauncherEvent {
                     action: LauncherAction::ContinueWithStaleLibrary,
                     path: None,
@@ -1318,6 +1740,9 @@ impl LauncherNav {
             }
             self.confirm_action = None;
             self.confirm_selected = 0;
+            if home_pressed {
+                self.go_root();
+            }
             return None;
         }
         let max_selected = confirm_max_selected(self.confirm_action);
@@ -1377,16 +1802,23 @@ impl LauncherNav {
             selected: self.arcade.selected,
             scroll_y: self.arcade.selected as i32 * self.arcade.row_height,
         };
-        self.game_list_memory.insert(system_id.to_string(), memory);
-        self.arcade_filter
-            .game_list_memory
-            .insert(filter_memory_key(&self.arcade_filter.active), memory);
+        self.game_list_memory.insert(
+            collection_filter_memory_key(system_id, &self.arcade_filter.active),
+            memory,
+        );
+        self.collection_filters
+            .insert(system_id.to_string(), self.arcade_filter.active.clone());
+        if matches!(self.arcade_filter.active, ArcadeFilter::Search) {
+            self.collection_search_queries
+                .insert(system_id.to_string(), self.arcade_search.query.clone());
+        }
     }
 
     fn restore_game_list_state(&mut self, system_id: &str, count: usize) {
         self.arcade_filter.drawer_open = false;
         self.arcade_filter.level = ArcadeFilterLevel::Top;
-        if let Some(memory) = self.game_list_memory.get(system_id).copied() {
+        let key = collection_filter_memory_key(system_id, &self.arcade_filter.active);
+        if let Some(memory) = self.game_list_memory.get(&key).copied() {
             self.arcade
                 .restore_position(memory.selected, memory.scroll_y, count);
         } else {
@@ -1395,6 +1827,7 @@ impl LauncherNav {
     }
 
     pub fn active_arcade_game_count(&self, catalog: &ArcadeCatalog, system_id: &str) -> usize {
+        let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
             && !self.arcade_search.query.is_empty()
             && self.arcade_search.result_system_id == system_id
@@ -1411,6 +1844,7 @@ impl LauncherNav {
         catalog: &'a ArcadeCatalog,
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
+        let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
             && !self.arcade_search.query.is_empty()
             && self.arcade_search.result_system_id == system_id
@@ -1439,6 +1873,7 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Vec<ArcadeDrawerItem> {
+        let system_id = self.effective_collection_id(system_id);
         match self.arcade_filter.level {
             ArcadeFilterLevel::Alphabet => self.arcade_alphabet_items(catalog, system_id),
             ArcadeFilterLevel::Top => self.arcade_filter_top_items(catalog, system_id),
@@ -1540,10 +1975,7 @@ impl LauncherNav {
         if self.arcade_filter.level == ArcadeFilterLevel::Top {
             if leave_arcade_from_top {
                 self.close_arcade_filter();
-                if !system_id.is_empty() {
-                    self.save_game_list_state(system_id);
-                }
-                self.screen = Screen::Home;
+                self.leave_arcade(false, system_id);
             }
         } else if self.arcade_filter.level == ArcadeFilterLevel::Alphabet {
             self.open_arcade_filter(catalog, system_id);
@@ -1712,13 +2144,11 @@ impl LauncherNav {
     ) {
         self.save_game_list_state(system_id);
         self.arcade_filter.active = filter;
+        self.collection_filters
+            .insert(system_id.to_string(), self.arcade_filter.active.clone());
         let count = catalog.filtered_game_count(system_id, &self.arcade_filter.active);
-        if let Some(memory) = self
-            .arcade_filter
-            .game_list_memory
-            .get(&filter_memory_key(&self.arcade_filter.active))
-            .copied()
-        {
+        let key = collection_filter_memory_key(system_id, &self.arcade_filter.active);
+        if let Some(memory) = self.game_list_memory.get(&key).copied() {
             self.arcade
                 .restore_position(memory.selected, memory.scroll_y, count);
         } else {
@@ -1730,15 +2160,18 @@ impl LauncherNav {
     fn enter_arcade_search(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
         self.save_game_list_state(system_id);
         self.arcade_filter.active = ArcadeFilter::Search;
+        self.collection_filters
+            .insert(system_id.to_string(), ArcadeFilter::Search);
         self.arcade_search.pane = ArcadeSearchPane::Keyboard;
+        self.arcade_search.query = self
+            .collection_search_queries
+            .get(system_id)
+            .cloned()
+            .unwrap_or_default();
         self.clear_arcade_search_results(system_id);
         let search_count = catalog.filtered_game_count(system_id, &self.arcade_filter.active);
-        if let Some(memory) = self
-            .arcade_filter
-            .game_list_memory
-            .get(&filter_memory_key(&self.arcade_filter.active))
-            .copied()
-        {
+        let key = collection_filter_memory_key(system_id, &self.arcade_filter.active);
+        if let Some(memory) = self.game_list_memory.get(&key).copied() {
             self.arcade
                 .restore_position(memory.selected, memory.scroll_y, search_count);
         } else {
@@ -1774,6 +2207,8 @@ impl LauncherNav {
     }
 
     fn refresh_arcade_search_results(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
+        let effective_collection_id = self.effective_collection_id(system_id).to_string();
+        let system_id = effective_collection_id.as_str();
         if self.arcade_search.query.is_empty() {
             self.clear_arcade_search_results(system_id);
             return;
@@ -1963,6 +2398,10 @@ fn filter_memory_key(filter: &ArcadeFilter) -> String {
     }
 }
 
+fn collection_filter_memory_key(collection_id: &str, filter: &ArcadeFilter) -> String {
+    format!("{collection_id}\0{}", filter_memory_key(filter))
+}
+
 fn default_filter_for_system(catalog: &ArcadeCatalog, system_id: &str) -> ArcadeFilter {
     let games = ArcadeFilter::Category("Games".to_string());
     if system_id == "amiga" && catalog.filtered_game_count(system_id, &games) > 0 {
@@ -2004,6 +2443,10 @@ pub struct LaunchReturnState {
     screen: String,
     system_id: String,
     system_index: usize,
+    #[serde(default)]
+    collection_id: Option<String>,
+    #[serde(default)]
+    menu_path: Vec<String>,
     game_path: String,
     game_index: usize,
     filter_kind: Option<String>,
@@ -2018,8 +2461,11 @@ pub fn capture_launch_return_state(
     if nav.screen != Screen::Arcade {
         return None;
     }
-    let system = catalog.systems.get(nav.selected)?;
-    let games = nav.active_arcade_game_view(catalog, &system.id);
+    let collection_id = nav.active_collection_scope_id(catalog);
+    if collection_id.is_empty() {
+        return None;
+    }
+    let games = nav.active_arcade_game_view(catalog, collection_id);
     let game_index = games
         .iter()
         .position(|game| game.mra_path.as_ref() == game_path)
@@ -2029,11 +2475,28 @@ pub fn capture_launch_return_state(
     } else {
         serialize_arcade_filter(&nav.arcade_filter.active)
     };
+    let legacy_system_id = nav
+        .active_collection()
+        .map(|collection| collection.legacy_system_id.as_str())
+        .or_else(|| {
+            catalog
+                .systems
+                .get(nav.selected)
+                .map(|system| system.id.as_str())
+        })
+        .unwrap_or("arcade");
+    let system_index = catalog
+        .systems
+        .iter()
+        .position(|system| system.id == legacy_system_id)
+        .unwrap_or(nav.selected.min(catalog.systems.len().saturating_sub(1)));
     Some(LaunchReturnState {
         schema_version: LAUNCH_RETURN_STATE_SCHEMA,
         screen: "arcade".to_string(),
-        system_id: system.id.clone(),
-        system_index: nav.selected,
+        system_id: legacy_system_id.to_string(),
+        system_index,
+        collection_id: Some(collection_id.to_string()),
+        menu_path: nav.menu_path.clone(),
         game_path: game_path.to_string(),
         game_index,
         filter_kind: Some(filter_kind),
@@ -2082,8 +2545,7 @@ fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
     remove_launch_return_state_at(path);
     match serde_json::from_str::<LaunchReturnState>(&text) {
         Ok(state)
-            if (state.schema_version == LAUNCH_RETURN_STATE_SCHEMA
-                || state.schema_version == 1)
+            if (1..=LAUNCH_RETURN_STATE_SCHEMA).contains(&state.schema_version)
                 && state.screen == "arcade" =>
         {
             Some(state)
@@ -2101,23 +2563,30 @@ pub fn apply_launch_return_state(
     catalog: &ArcadeCatalog,
     state: LaunchReturnState,
 ) -> bool {
-    let Some(system_index) = resolve_system_index(catalog, &state) else {
+    nav.sync_launcher_taxonomy(catalog);
+    let Some((menu_path, collection_id)) = resolve_return_destination(nav, catalog, &state) else {
         return false;
     };
-    let system_id = &catalog.systems[system_index].id;
+    if !nav.open_destination(catalog, menu_path, &collection_id) {
+        return false;
+    }
     let filter = state
         .filter_kind
         .as_deref()
         .and_then(|kind| deserialize_arcade_filter(kind, state.filter_value.as_deref()))
-        .filter(|filter| catalog.filtered_game_count(system_id, filter) > 0)
+        .filter(|filter| catalog.filtered_game_count(&collection_id, filter) > 0)
         .unwrap_or(ArcadeFilter::All);
     nav.arcade_filter.active = filter.clone();
+    nav.collection_filters
+        .insert(collection_id.clone(), filter.clone());
     if matches!(filter, ArcadeFilter::Search) {
         nav.arcade_search.query = state.filter_value.clone().unwrap_or_default();
-        nav.ensure_arcade_search_results(catalog, system_id);
+        nav.collection_search_queries
+            .insert(collection_id.clone(), nav.arcade_search.query.clone());
+        nav.ensure_arcade_search_results(catalog, &collection_id);
     }
     let (game_index, game_count) = {
-        let games = nav.active_arcade_game_view(catalog, system_id);
+        let games = nav.active_arcade_game_view(catalog, &collection_id);
         if games.is_empty() {
             return false;
         }
@@ -2130,7 +2599,6 @@ pub fn apply_launch_return_state(
         )
     };
 
-    nav.selected = system_index;
     nav.screen = Screen::Arcade;
     nav.arcade_filter.active = filter;
     nav.arcade_filter.drawer_open = false;
@@ -2141,6 +2609,40 @@ pub fn apply_launch_return_state(
         game_count,
     );
     true
+}
+
+fn resolve_return_destination(
+    nav: &LauncherNav,
+    catalog: &ArcadeCatalog,
+    state: &LaunchReturnState,
+) -> Option<(Vec<String>, String)> {
+    if let Some(collection_id) = state.collection_id.as_deref() {
+        if nav.taxonomy.collection(collection_id).is_some() {
+            if nav
+                .taxonomy
+                .collection_path_is_valid(&state.menu_path, collection_id)
+            {
+                return Some((state.menu_path.clone(), collection_id.to_string()));
+            }
+            if let Some(destination) = nav
+                .taxonomy
+                .primary_destination_for_collection(collection_id)
+            {
+                return Some((
+                    destination.menu_path.clone(),
+                    destination.collection_id.clone(),
+                ));
+            }
+        }
+    }
+
+    let system_index = resolve_system_index(catalog, state)?;
+    let system_id = &catalog.systems[system_index].id;
+    let destination = nav.taxonomy.primary_destination_for_system(system_id)?;
+    Some((
+        destination.menu_path.clone(),
+        destination.collection_id.clone(),
+    ))
 }
 
 fn serialize_arcade_filter(filter: &ArcadeFilter) -> (String, Option<String>) {
@@ -3227,6 +3729,31 @@ mod tests {
         )
     }
 
+    fn hierarchy_catalog() -> ArcadeCatalog {
+        arcade_catalog(
+            vec![
+                arcade_game("Metal Slug")
+                    .manufacturer("SNK (Rock-Ola license)")
+                    .build(),
+                arcade_game("Super Mario Bros").system_id("nes").build(),
+                arcade_game("Pocket Tennis")
+                    .system_id("neogeopocket")
+                    .build(),
+                arcade_game("Agony").system_id("amiga").build(),
+                arcade_game("Sonic").system_id("gamegear").build(),
+                arcade_game("Metal Slug AES").system_id("neogeo").build(),
+            ],
+            vec![
+                arcade_system("arcade", 1),
+                arcade_system("neogeo", 1),
+                arcade_system("nes", 1),
+                arcade_system("neogeopocket", 1),
+                arcade_system("gamegear", 1),
+                arcade_system("amiga", 1),
+            ],
+        )
+    }
+
     fn multi_game_catalog() -> ArcadeCatalog {
         let mut games = Vec::new();
         for i in 0..5 {
@@ -3425,10 +3952,12 @@ mod tests {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..10)
-                .map(|index| arcade_system(format!("system-{index}"), 0))
+                .map(|index| arcade_system(format!("system-{index}"), 1))
                 .collect(),
         );
         let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles:other"));
         let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
 
@@ -3711,6 +4240,8 @@ mod tests {
             screen: "arcade".to_string(),
             system_id: "arcade".to_string(),
             system_index: 0,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
             filter_kind: Some("decade".to_string()),
@@ -3931,6 +4462,8 @@ mod tests {
             screen: "arcade".to_string(),
             system_id: "arcade".to_string(),
             system_index: 0,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
             filter_kind: Some("search".to_string()),
@@ -3960,6 +4493,8 @@ mod tests {
             screen: "arcade".to_string(),
             system_id: "arcade".to_string(),
             system_index: 0,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
             filter_kind: Some("search".to_string()),
@@ -4309,6 +4844,217 @@ mod tests {
     }
 
     #[test]
+    fn hierarchy_a_enters_b_returns_one_level_and_home_returns_root() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "menu:consoles")
+            .expect("Consoles root item");
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
+        assert_eq!(nav.screen, Screen::Home);
+        release(&mut nav, &catalog, t0, 16);
+
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "menu:consoles:nintendo")
+            .expect("Nintendo menu item");
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_a = true),
+            t0 + Duration::from_millis(32),
+            &catalog,
+        );
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        assert_eq!(nav.current_menu_breadcrumb(), "Consoles");
+        release(&mut nav, &catalog, t0, 48);
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            t0 + Duration::from_millis(64),
+            &catalog,
+        );
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
+        release(&mut nav, &catalog, t0, 80);
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_home = true),
+            t0 + Duration::from_millis(96),
+            &catalog,
+        );
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn hierarchy_remembers_each_menu_view_independently() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![
+                arcade_system("arcade", 1),
+                arcade_system("atari2600", 1),
+                arcade_system("sms", 1),
+                arcade_system("psx", 1),
+                arcade_system("nes", 1),
+                arcade_system("tgfx16", 1),
+                arcade_system("colecovision", 1),
+                arcade_system("amiga", 1),
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "menu:consoles")
+            .expect("Consoles root item");
+        nav.scroll_x = home_max_scroll(nav.current_menu_count());
+        assert!(nav.open_menu("menu:consoles"));
+
+        nav.selected = nav.current_menu_count() - 1;
+        nav.scroll_x = home_max_scroll(nav.current_menu_count());
+        assert_eq!(
+            nav.current_menu_items()[nav.selected].id,
+            "menu:consoles:other"
+        );
+        assert!(nav.open_menu("menu:consoles:other"));
+
+        assert!(nav.pop_menu());
+        assert_eq!(nav.current_menu_id(), "menu:consoles");
+        assert_eq!(nav.selected, nav.current_menu_count() - 1);
+        assert_eq!(nav.scroll_x, home_max_scroll(nav.current_menu_count()));
+
+        assert!(nav.pop_menu());
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+        assert_eq!(nav.current_menu_items()[nav.selected].id, "menu:consoles");
+        assert_eq!(nav.scroll_x, home_max_scroll(nav.current_menu_count()));
+    }
+
+    #[test]
+    fn hierarchy_catalog_shrink_and_empty_catalog_return_to_a_valid_root() {
+        let initial = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&initial, "neogeopocket"));
+        assert_eq!(nav.screen, Screen::Arcade);
+
+        let computers_only = ArcadeCatalog::new(
+            PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![arcade_system("amiga", 1)],
+        );
+        nav.sync_launcher_taxonomy(&computers_only);
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+        assert!(nav.active_collection().is_none());
+        assert_eq!(nav.selected, 0);
+        assert_eq!(nav.scroll_x, 0);
+
+        let empty = ArcadeCatalog::new(
+            PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            Vec::new(),
+        );
+        nav.screen = Screen::Arcade;
+        nav.sync_launcher_taxonomy(&empty);
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+        assert_eq!(nav.current_menu_count(), 0);
+        assert!(nav.active_collection().is_none());
+    }
+
+    #[test]
+    fn bare_arcade_screen_startup_opens_the_root_arcade_collection() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.selected = catalog.systems.len().saturating_sub(1);
+
+        nav.sync_launcher_taxonomy(&catalog);
+
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(
+            nav.active_collection_id(),
+            Some(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+        );
+    }
+
+    #[test]
+    fn settings_b_returns_to_originating_menu_while_home_returns_root() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.settings_focused = true;
+
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
+        assert_eq!(nav.screen, Screen::Settings);
+        release(&mut nav, &catalog, t0, 16);
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            t0 + Duration::from_millis(32),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        release(&mut nav, &catalog, t0, 48);
+
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_home = true),
+            t0 + Duration::from_millis(64),
+            &catalog,
+        );
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn launch_return_restores_exact_shortcut_path_and_legacy_state_uses_primary_path() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("snk-neogeo"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "neogeopocket")
+            .expect("NeoGeo Pocket shortcut");
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
+        let state =
+            capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/Pocket Tennis.mra")
+                .expect("return state");
+        assert_eq!(state.collection_id.as_deref(), Some("neogeopocket"));
+        assert_eq!(state.menu_path, vec![ROOT_MENU_ID, "menu:snk-neogeo"]);
+
+        let mut restored = LauncherNav::new();
+        assert!(apply_launch_return_state(
+            &mut restored,
+            &catalog,
+            state.clone()
+        ));
+        assert_eq!(restored.menu_path(), &[ROOT_MENU_ID, "menu:snk-neogeo"]);
+
+        let mut legacy = state;
+        legacy.schema_version = 2;
+        legacy.collection_id = None;
+        legacy.menu_path.clear();
+        let mut legacy_restored = LauncherNav::new();
+        assert!(apply_launch_return_state(
+            &mut legacy_restored,
+            &catalog,
+            legacy
+        ));
+        assert_eq!(
+            legacy_restored.menu_path(),
+            &[ROOT_MENU_ID, "menu:handhelds", "menu:handhelds:snk"]
+        );
+    }
+
+    #[test]
     fn launcher_settings_opens_and_navigates_licenses() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
@@ -4465,9 +5211,8 @@ mod tests {
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
         let back = pad_with(|pad| pad.btn_b = true);
-        nav.selected = catalog_system_index(&catalog, "arcade");
 
-        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert!(nav.open_default_arcade(&catalog));
         assert_eq!(nav.screen, Screen::Arcade);
         assert!(nav
             .handle_input(
@@ -4504,9 +5249,7 @@ mod tests {
         let catalog = amiga_games_and_demos_catalog();
         let mut nav = LauncherNav::new();
 
-        assert!(nav
-            .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
-            .is_none());
+        assert!(nav.open_system(&catalog, "amiga"));
 
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(
@@ -4634,6 +5377,8 @@ mod tests {
             screen: "arcade".into(),
             system_id: "missing-system".into(),
             system_index: 99,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/missing.mra".into(),
             game_index: 99,
             filter_kind: Some("all".into()),
@@ -4659,6 +5404,8 @@ mod tests {
             screen: "arcade".into(),
             system_id: "arcade".into(),
             system_index: 0,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
             filter_kind: Some("all".into()),
@@ -4684,6 +5431,8 @@ mod tests {
             screen: "arcade".into(),
             system_id: "arcade".into(),
             system_index: 0,
+            collection_id: None,
+            menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
             filter_kind: Some("all".into()),
@@ -4765,6 +5514,28 @@ mod tests {
             .is_none());
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn home_closes_confirmation_and_returns_to_hierarchy_root() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.screen = Screen::Settings;
+        nav.confirm_action = Some(ConfirmAction::ResetDatabase);
+
+        assert!(nav
+            .handle_input(
+                &pad_with(|pad| pad.btn_home = true),
+                Instant::now(),
+                &catalog,
+            )
+            .is_none());
+
+        assert_eq!(nav.confirm_action, None);
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
     }
 
     #[test]
@@ -4932,7 +5703,7 @@ mod tests {
         let t0 = Instant::now();
 
         let press_a = pad_with(|pad| pad.btn_a = true);
-        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert!(nav.open_system(&catalog, "amiga"));
         assert_eq!(nav.screen, Screen::Arcade);
 
         assert!(nav

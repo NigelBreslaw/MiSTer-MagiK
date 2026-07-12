@@ -18,7 +18,7 @@ export component LauncherTile inherits Rectangle {
         Text {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            font-size: 16px;
+            font-size: label.character-count > 10 ? 12px : 16px;
             width: 100%;
             horizontal-alignment: center;
             vertical-alignment: center;
