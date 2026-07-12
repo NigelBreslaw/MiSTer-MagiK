@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 pub const PROFILE_SET_VERSION: u32 = 8;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
@@ -414,19 +415,53 @@ pub(crate) struct CatalogScanPlan {
 
 impl CatalogScanPlan {
     pub(crate) fn for_roots(roots: &[String]) -> Self {
-        let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
+        let ((installed_cores, core_us), (all_game_dir_headers, game_headers_us)) =
+            std::thread::scope(|scope| {
+                let cores = scope.spawn(|| {
+                    let started = Instant::now();
+                    let cores = catalog_discovery::installed_cores_for_roots(roots);
+                    (cores, started.elapsed().as_micros() as u64)
+                });
+                let game_headers = scope.spawn(|| {
+                    let started = Instant::now();
+                    let headers = catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
+                        roots,
+                        &BTreeSet::new(),
+                    );
+                    (headers, started.elapsed().as_micros() as u64)
+                });
+                (
+                    cores.join().expect("installed-core discovery"),
+                    game_headers.join().expect("game-directory discovery"),
+                )
+            });
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_cores",
+            core_us,
+            format!("cores={}", installed_cores.len()),
+        );
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_game_headers",
+            game_headers_us,
+            format!("headers={}", all_game_dir_headers.len()),
+        );
+        let profiles_started = Instant::now();
         let base_profiles = base_profiles_for_installed_cores(&installed_cores);
         let active_game_dirs = active_profile_game_dirs(&base_profiles);
-        let all_game_dir_headers =
-            catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
-                roots,
-                &BTreeSet::new(),
-            );
         let game_dir_headers = all_game_dir_headers
             .iter()
             .filter(|header| !active_game_dirs.contains(&header.name.to_ascii_lowercase()))
             .cloned()
             .collect::<Vec<_>>();
+        crate::library_db::report_library_scan_timing(
+            "scan_plan_profiles",
+            profiles_started.elapsed().as_micros() as u64,
+            format!(
+                "base_profiles={} runtime_headers={}",
+                base_profiles.len(),
+                game_dir_headers.len()
+            ),
+        );
         Self {
             installed_cores,
             all_game_dir_headers,
