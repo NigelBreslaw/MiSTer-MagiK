@@ -246,21 +246,23 @@ fn scan_library_with_progress_and_events(
                         continue;
                     }
                     let mut has_archive_entries = false;
-                    if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
-                        let archive_t = Instant::now();
-                        let scan = catalog_scan::scan_archive_toc(&f, format, profile);
-                        timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
-                        timing.archive_toc_count += 1;
-                        has_archive_entries = !scan.entries.is_empty();
-                        for entry in scan.entries {
-                            discoveries.push(discovery_from_profile_archive_entry(
-                                &entry,
-                                profile,
-                                &entry.rule,
-                            ));
-                            entries.push(entry);
+                    if !profile.archive_entry_rules.is_empty() {
+                        if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                            let archive_t = Instant::now();
+                            let scan = catalog_scan::scan_archive_toc(&f, format, profile);
+                            timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
+                            timing.archive_toc_count += 1;
+                            has_archive_entries = !scan.entries.is_empty();
+                            for entry in scan.entries {
+                                discoveries.push(discovery_from_profile_archive_entry(
+                                    &entry,
+                                    profile,
+                                    &entry.rule,
+                                ));
+                                entries.push(entry);
+                            }
+                            containers.push(scan.container);
                         }
-                        containers.push(scan.container);
                     }
                     if has_archive_entries {
                         continue;
