@@ -31,12 +31,12 @@ fn main() {
     bridge.set_licenses_expanded(expanded);
     bridge.set_license_lines(ModelRc::new(VecModel::from(
         [
-            "Made with Slint",
+            "FFmpeg 8.1.2",
             "",
-            "MiSTer MagiK uses Slint 1.17.0 under the GPL-3.0-only option.",
+            "MiSTer MagiK statically links selected FFmpeg libraries.",
             "",
-            "GNU GENERAL PUBLIC LICENSE",
-            "Version 3, 29 June 2007",
+            "GNU LESSER GENERAL PUBLIC LICENSE",
+            "Version 2.1, February 1999",
             "",
             "This is representative legal text used to verify the virtualized line layout.",
         ]

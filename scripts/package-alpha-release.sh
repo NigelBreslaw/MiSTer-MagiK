@@ -22,5 +22,29 @@ cp "$ROOT/LICENSE" "$OUT/LICENSE"
 cp "$ROOT/magik-gui/licenses/FFMPEG.txt" "$OUT/licenses/"
 cp "$ROOT/magik-gui/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
 cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
+cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
+MiSTer MagiK alpha distribution notices
+========================================
+
+MiSTer MagiK is GPL-3.0-or-later. This directory contains the full GPL text,
+plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, and generated
+normal-runtime Rust dependency notices in licenses/.
+
+The launcher uses Slint under its GPL-3.0-only option.
+EOF
+cat > "$OUT/SOURCE-OFFER.txt" <<EOF
+Corresponding source and relinking instructions
+===============================================
+
+MiSTer MagiK source (including build and installation scripts):
+  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)
+
+FFmpeg 8.1.2 source, used by this ui,video build:
+  https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
+The exact configure flags and cross-build procedure are in
+magik-gui/scripts/build-minimal-ffmpeg.sh at the source revision above. The
+MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
+needed to rebuild the application and relink it with a modified FFmpeg build.
+EOF
 
 echo "alpha release staged: $OUT"

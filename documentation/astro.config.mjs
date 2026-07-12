@@ -56,6 +56,10 @@ export default defineConfig({
             'contributing/naming-and-knowledge',
           ],
         },
+        {
+          label: 'Legal',
+          items: ['legal/licenses'],
+        },
       ],
       customCss: ['./src/styles/custom.css'],
     }),

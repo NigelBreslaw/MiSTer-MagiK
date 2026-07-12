@@ -1,0 +1,33 @@
+---
+title: Licenses and notices
+description: Complete license texts for MiSTer MagiK and the components bundled in its launcher.
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+MiSTer MagiK is GPL-3.0-or-later. The launcher’s Licenses screen presents the
+three directly bundled license texts below. Every distribution ZIP also carries
+the complete third-party inventory in `licenses/RUST-LIBRARIES.txt`.
+
+The launcher uses Slint under its GPL-3.0-only option. Its applicable GPL text
+is the MiSTer MagiK GPL below. The Rust inventory covers normal runtime
+dependencies for the ARM launcher build and is intentionally kept out of the
+launcher UI and this page.
+
+<CardGrid>
+  <Card title="MiSTer MagiK — GPL-3.0-or-later" icon="seti:license">
+    [Read the complete GPL notice](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/LICENSE).
+  </Card>
+  <Card title="FFmpeg — LGPL-2.1-or-later" icon="seti:license">
+    [Read the complete FFmpeg notice](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/magik-gui/licenses/FFMPEG.txt).
+  </Card>
+  <Card title="Press Start 2P — SIL OFL-1.1" icon="seti:font">
+    [Read the complete font notice](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/magik-gui/licenses/PRESS-START-2P.txt).
+  </Card>
+  <Card title="Rust runtime dependencies" icon="seti:rust">
+    [Download the complete generated inventory](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/magik-gui/licenses/RUST-LIBRARIES.txt).
+  </Card>
+</CardGrid>
+
+For a released build, use the inventory and source locations bundled with that
+specific ZIP rather than the moving `main` branch.

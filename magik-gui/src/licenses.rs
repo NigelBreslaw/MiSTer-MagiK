@@ -1,15 +1,8 @@
 use std::sync::OnceLock;
 
-pub const LICENSE_TITLES: [&str; 5] = [
-    "MiSTer MagiK",
-    "Made with Slint",
-    "Rust Libraries",
-    "FFmpeg",
-    "Press Start 2P",
-];
+pub const LICENSE_TITLES: [&str; 3] = ["MiSTer MagiK", "FFmpeg", "Press Start 2P"];
 
 const GPL3: &str = include_str!("../../LICENSE");
-const RUST_LIBRARIES: &str = include_str!("../licenses/RUST-LIBRARIES.txt");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
@@ -18,20 +11,13 @@ const LICENSE_VISIBLE_ROWS: usize = 40;
 pub fn text(index: usize) -> &'static str {
     match index {
         0 => GPL3,
-        1 => concat!(
-            "Made with Slint\n\n",
-            "MiSTer MagiK uses Slint 1.17.0 under Slint's GPL-3.0-only option. ",
-            "Slint is Copyright (c) SixtyFPS GmbH and Slint contributors.\n\n",
-            include_str!("../../LICENSE")
-        ),
-        2 => RUST_LIBRARIES,
-        3 => FFMPEG,
+        1 => FFMPEG,
         _ => PRESS_START_2P,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 5] = [const { OnceLock::new() }; 5];
+    static LINES: [OnceLock<Vec<String>>; 3] = [const { OnceLock::new() }; 3];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -99,11 +85,9 @@ mod tests {
     }
 
     #[test]
-    fn generated_runtime_inventory_covers_key_release_dependencies() {
-        for expected in ["slint 1.17.0", "ffmpeg-next 8.1.0", "serde 1.0.228"] {
-            assert!(RUST_LIBRARIES.contains(expected), "missing {expected}");
-        }
-        assert!(RUST_LIBRARIES.contains("Only normal runtime dependencies are included"));
-        assert!(!RUST_LIBRARIES.contains("Full license text: SPDX identifier above"));
+    fn app_surface_is_limited_to_directly_relevant_license_texts() {
+        assert_eq!(LICENSE_TITLES, ["MiSTer MagiK", "FFmpeg", "Press Start 2P"]);
+        assert!(FFMPEG.contains("FFmpeg 8.1.2"));
+        assert!(PRESS_START_2P.contains("SIL Open Font License"));
     }
 }
