@@ -34,6 +34,7 @@ const SCREENSHOT_PACK_SYSTEM_IDS: &[&str] = &[
     "sms",
     "megadrive",
     "saturn",
+    "amiga",
 ];
 
 pub(crate) struct LibraryIndexer<'a> {

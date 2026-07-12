@@ -94,6 +94,7 @@ Console screenshot packs live under:
 /media/fat/mister-magik/assets/sms-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/megadrive-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/amiga-screenshots-320x320.mmlz4b
 ```
 
 The current public pack size is `320x320`. Legacy fixed-name packs such as

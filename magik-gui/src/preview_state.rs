@@ -1916,6 +1916,8 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
         "neogeo"
     } else if path.contains("saturn-screenshots") {
         "saturn"
+    } else if path.contains("amiga-screenshots") {
+        "amiga"
     } else if path.contains("arcade-screenshots") {
         "arcade"
     } else {

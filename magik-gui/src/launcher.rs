@@ -869,11 +869,12 @@ impl LauncherNav {
         self.update_home_scroll(now, frame_now, system_count);
 
         if rising(now.btn_a, self.prev.btn_a) {
-            self.arcade_filter.active = ArcadeFilter::All;
             if let Some(system) = catalog.systems.get(self.selected) {
-                let count = catalog.system_game_count(&system.id);
+                self.arcade_filter.active = default_filter_for_system(catalog, &system.id);
+                let count = catalog.filtered_game_count(&system.id, &self.arcade_filter.active);
                 self.restore_game_list_state(&system.id, count);
             } else {
+                self.arcade_filter.active = ArcadeFilter::All;
                 self.arcade.reset();
             }
             self.screen = Screen::Arcade;
@@ -1923,6 +1924,15 @@ fn filter_memory_key(filter: &ArcadeFilter) -> String {
         ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
         ArcadeFilter::Manufacturer(manufacturer) => format!("manufacturer:{manufacturer}"),
         ArcadeFilter::Category(category) => format!("category:{category}"),
+    }
+}
+
+fn default_filter_for_system(catalog: &ArcadeCatalog, system_id: &str) -> ArcadeFilter {
+    let games = ArcadeFilter::Category("Games".to_string());
+    if system_id == "amiga" && catalog.filtered_game_count(system_id, &games) > 0 {
+        games
+    } else {
+        ArcadeFilter::All
     }
 }
 
@@ -3139,6 +3149,29 @@ mod tests {
                 .system_id("amiga")
                 .build()],
             vec![arcade_system("amiga", 1)],
+        )
+    }
+
+    fn amiga_games_and_demos_catalog() -> ArcadeCatalog {
+        arcade_catalog(
+            vec![
+                arcade_game("Agony")
+                    .path("magik-amigavision:games:Agony")
+                    .system_id("amiga")
+                    .category("Games")
+                    .build(),
+                arcade_game("Alien Breed")
+                    .path("magik-amigavision:games:Alien%20Breed")
+                    .system_id("amiga")
+                    .category("Games")
+                    .build(),
+                arcade_game("State of the Art")
+                    .path("magik-amigavision:demos:State%20of%20the%20Art")
+                    .system_id("amiga")
+                    .category("Demos")
+                    .build(),
+            ],
+            vec![arcade_system("amiga", 3)],
         )
     }
 
@@ -4379,6 +4412,25 @@ mod tests {
         assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.arcade.selected, 3);
         assert_eq!(nav.arcade.scroll_y, 3 * ARCADE_ROW_HEIGHT);
+    }
+
+    #[test]
+    fn amiga_opens_with_games_category_instead_of_games_and_demos() {
+        let catalog = amiga_games_and_demos_catalog();
+        let mut nav = LauncherNav::new();
+
+        assert!(nav
+            .handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog)
+            .is_none());
+
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(
+            nav.arcade_filter.active,
+            ArcadeFilter::Category("Games".to_string())
+        );
+        let visible = nav.active_arcade_game_view(&catalog, "amiga");
+        assert_eq!(visible.len(), 2);
+        assert!(visible.iter().all(|game| game.category.as_ref() == "Games"));
     }
 
     #[test]
