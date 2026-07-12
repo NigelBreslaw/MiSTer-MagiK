@@ -43,67 +43,74 @@ jobs:
     container: ubuntu:20.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - name: Bootstrap Git for provenance-preserving checkout
+        run: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git ca-certificates
 
-      - name: Check out pinned MiSTer kernel
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          repository: MiSTer-devel/Linux-Kernel_MiSTer
-          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
-          path: build/Linux-Kernel_MiSTer
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install kernel module tools
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-          git gcc-arm-linux-gnueabihf flex bison bc libssl-dev libelf-dev kmod
-          sparse coccinelle python3
+          make gcc-arm-linux-gnueabihf flex bison bc libssl-dev libelf-dev kmod
+          sparse python3
+
+      - name: Fetch pinned MiSTer kernel with provenance
+        run: |
+          set -eu
+          git init build/Linux-Kernel_MiSTer
+          git -C build/Linux-Kernel_MiSTer remote add origin https://github.com/MiSTer-devel/Linux-Kernel_MiSTer.git
+          git -C build/Linux-Kernel_MiSTer fetch --depth=1 origin f0fb626acadd07f0718934826b143b6e4c9ce81c
+          git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
 
       - name: Check one-job contract
         run: scripts/check-scanout-slots-contract.sh
 
       - name: Build and attest module
-        env:
-          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
-          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
-        run: scripts/build-scanout-slots-module.sh
+        run: >-
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
+          scripts/build-scanout-slots-module.sh
 
       - name: Warning-clean rebuild
-        env:
-          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
-          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
         run: >-
           make -C kernel/scanout-slots
-          KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD"
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
           ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
 
       - name: Sparse type check
-        env:
-          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
-          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
         run: >-
           make -C kernel/scanout-slots
-          KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD"
+          KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
           ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
           C=2 CHECK=sparse all
 
-      - name: Kernel style and semantic checks
-        env:
-          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
+      - name: Kernel style checks
         run: |
-          set -euo pipefail
-          "$KERNEL_SRC/scripts/checkpatch.pl" --no-tree --strict --file \
+          set -eu
+          "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file \
             kernel/scanout-slots/mister_magik_scanout_slots.c \
-            kernel/scanout-slots/mister_magik_scanout_slots_uapi.h
-          make -C "$KERNEL_SRC" O="$GITHUB_WORKSPACE/build/scanout-slots-kernel" \
-            M="$GITHUB_WORKSPACE/kernel/scanout-slots" \
-            ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- coccicheck MODE=report
+            kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
+            kernel/scanout-slots/mister_magik_scanout_platform.h \
+            kernel/scanout-slots/mister_magik_scanout_policy.h
 
       - name: Audit module imports and metadata
         run: |
-          set -euo pipefail
+          set -eu
           scripts/check-scanout-slots-contract.sh
           grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
           grep -q '^kernel_revision=f0fb626acadd07f0718934826b143b6e4c9ce81c$' build/scanout-slots/provenance.txt
+          grep -q '^source_dirty=0$' build/scanout-slots/provenance.txt
+          test "$(sed -n 's/^source_revision=//p' build/scanout-slots/provenance.txt)" = \
+            "$(sed -n 's/^observed_source_revision=//p' build/scanout-slots/provenance.txt)"
+          grep -q '^observed_source_dirty=0$' build/scanout-slots/provenance.txt
+          grep -q '^platform_contract_sha256=[0-9a-f]\{64\}$' build/scanout-slots/provenance.txt
 
       - name: Upload attested module
         uses: actions/upload-artifact@v7
@@ -119,7 +126,7 @@ jobs:
 
   clang-build:
     runs-on: ubuntu-24.04
-    container: ubuntu:20.04
+    container: ubuntu:22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -134,11 +141,11 @@ jobs:
       - name: Install Clang kernel tools
         run: >-
           apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
-          clang llvm lld flex bison bc libssl-dev libelf-dev
+          make clang llvm lld flex bison bc libssl-dev libelf-dev
 
       - name: Prepare pinned kernel with Clang
         run: |
-          set -euo pipefail
+          set -eu
           make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
             ARCH=arm LLVM=1 LOCALVERSION=-MiSTer MiSTer_defconfig
           make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
@@ -150,3 +157,25 @@ jobs:
           KERNEL_SRC="$GITHUB_WORKSPACE/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$GITHUB_WORKSPACE/build/scanout-slots-clang"
           ARCH=arm LLVM=1 WERROR=1 W=1 all
+
+  coccinelle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out pinned MiSTer kernel
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+
+      - name: Install semantic checker
+        run: sudo apt-get update && sudo apt-get install -y coccinelle
+
+      - name: Run Coccinelle reports
+        run: >-
+          make -C build/Linux-Kernel_MiSTer
+          M="$GITHUB_WORKSPACE/kernel/scanout-slots"
+          coccicheck MODE=report
