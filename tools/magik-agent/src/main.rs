@@ -1434,9 +1434,7 @@ mod linux {
             });
 
             let disk_device = backing_disk_for_path("/media/fat");
-            let disk_counters = disk_device
-                .as_deref()
-                .and_then(|device| read_disk_counters(device));
+            let disk_counters = disk_device.as_deref().and_then(read_disk_counters);
             let disk_activity = disk_activity_json(
                 self.previous_disk.as_ref(),
                 disk_device.as_deref(),
@@ -4314,7 +4312,7 @@ mod tests {
             sectors_written: 160,
         };
         assert_eq!(
-            linux::disk_rate_bytes_per_sec(previous, counters, Duration::from_secs(2)),
+            linux::disk_rate_bytes_per_sec(previous, counters, std::time::Duration::from_secs(2)),
             Some((5_120, 10_240))
         );
     }
@@ -4331,7 +4329,7 @@ mod tests {
             sectors_written: 201,
         };
         assert_eq!(
-            linux::disk_rate_bytes_per_sec(previous, reset, Duration::from_secs(1)),
+            linux::disk_rate_bytes_per_sec(previous, reset, std::time::Duration::from_secs(1)),
             None
         );
         assert_eq!(linux::throughput_percent(25_000_000, 50_000_000), 50.0);
