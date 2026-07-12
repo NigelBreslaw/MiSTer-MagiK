@@ -46,9 +46,6 @@ target/
 /main-mister/bin/
 /main-mister/releases/
 
-# Kernel plugin probe build output
-/kernel/plugin-probe/
-
 *.whl
 *.tar.gz
 *.tar.zst

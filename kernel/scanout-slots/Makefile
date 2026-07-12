@@ -5,7 +5,6 @@ CROSS_COMPILE ?= arm-linux-gnueabihf-
 LOCALVERSION ?= -MiSTer
 
 obj-m += mister_magik_scanout_slots.o
-ccflags-y += -fno-stack-protector
 
 .PHONY: all clean
 

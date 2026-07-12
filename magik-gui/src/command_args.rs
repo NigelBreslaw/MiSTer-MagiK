@@ -46,15 +46,11 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("cpu-profile-smoke", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
-    CommandSpec::new("hidden-fb-copy-bench", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
     CommandSpec::new("fb-map-report", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("fb-map-bandwidth", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("scanout-slots-map-report", CommandKind::PreFpga),
-    #[cfg(feature = "diagnostics")]
-    CommandSpec::new("scanout-slots-map-bandwidth", CommandKind::PreFpga),
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -273,11 +269,9 @@ mod tests {
             "read",
             "vsync-probe",
             "cpu-profile-smoke",
-            "hidden-fb-copy-bench",
             "fb-map-report",
             "fb-map-bandwidth",
             "scanout-slots-map-report",
-            "scanout-slots-map-bandwidth",
             "fpga-latch-report",
             "fpga-latch-post-report",
             "fpga-latch-pattern",
@@ -295,11 +289,9 @@ mod tests {
         assert_command_kind("read", CommandKind::Fpga);
         assert_command_kind("vsync-probe", CommandKind::PreFpga);
         assert_command_kind("cpu-profile-smoke", CommandKind::PreFpga);
-        assert_command_kind("hidden-fb-copy-bench", CommandKind::PreFpga);
         assert_command_kind("fb-map-report", CommandKind::PreFpga);
         assert_command_kind("fb-map-bandwidth", CommandKind::PreFpga);
         assert_command_kind("scanout-slots-map-report", CommandKind::PreFpga);
-        assert_command_kind("scanout-slots-map-bandwidth", CommandKind::PreFpga);
         assert_command_kind("fpga-latch-report", CommandKind::Fpga);
         #[cfg(feature = "ui")]
         assert_command_kind("fpga-latch-post-report", CommandKind::Fpga);

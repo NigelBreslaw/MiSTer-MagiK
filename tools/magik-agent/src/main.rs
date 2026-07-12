@@ -802,8 +802,8 @@ mod linux {
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
     const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
-    const SCANOUT_SLOTS_MIN_VERSION: u32 = 1;
-    const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
+    const SCANOUT_SLOTS_ABI_VERSION: u32 = 1;
+    const SCANOUT_SLOTS_GET_LAYOUT: c_ulong = 0x8040_4d01;
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
@@ -2380,9 +2380,31 @@ mod linux {
     struct ScanoutSlotsRegion {
         index: usize,
         name: String,
-        available: bool,
         phys: u32,
         len: usize,
+        mmap_offset_bytes: usize,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct ScanoutSlotLayout {
+        physical_address: u32,
+        mmap_offset_bytes: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct ScanoutSlotsLayout {
+        abi_version: u32,
+        slot_count: u32,
+        width: u32,
+        height: u32,
+        stride_bytes: u32,
+        frame_bytes: u32,
+        map_bytes: u32,
+        flags: u32,
+        slots: [ScanoutSlotLayout; 2],
+        reserved: [u32; 4],
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -2448,18 +2470,17 @@ mod linux {
         active_base: u32,
         required_len: usize,
     ) -> Result<ScanoutSlotsRegion, String> {
-        let text = fs::read_to_string(SCANOUT_SLOTS_DEVICE)
-            .map_err(|err| format!("read {SCANOUT_SLOTS_DEVICE}: {err}"))?;
-        validate_scanout_slots_header(&text)?;
-        for line in text.lines() {
-            let Some(region) = parse_scanout_slots_region(line) else {
-                continue;
+        let layout = read_scanout_slots_layout()?;
+        for (index, slot) in layout.slots.iter().enumerate() {
+            let region = ScanoutSlotsRegion {
+                index,
+                name: format!("hidden-slot-{}", index + 1),
+                phys: slot.physical_address,
+                len: layout.map_bytes as usize,
+                mmap_offset_bytes: slot.mmap_offset_bytes as usize,
             };
             if region.phys != active_base {
                 continue;
-            }
-            if !region.available {
-                return Err(format!("scanout slot {} is unavailable", region.name));
             }
             if region.len < required_len {
                 return Err(format!(
@@ -2474,82 +2495,66 @@ mod linux {
         ))
     }
 
-    fn validate_scanout_slots_header(text: &str) -> Result<(), String> {
-        let header = text
-            .lines()
-            .find(|line| line.starts_with("scanout_slots_header_tsv\t"))
-            .ok_or_else(|| "scanout slots header is missing".to_string())?;
-        let version = scanout_slots_tsv_field(header, "version")
-            .and_then(|value| value.parse::<u32>().ok())
-            .ok_or_else(|| "scanout slots header version is missing".to_string())?;
-        if version < SCANOUT_SLOTS_MIN_VERSION {
+    fn read_scanout_slots_layout() -> Result<ScanoutSlotsLayout, String> {
+        let device = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(SCANOUT_SLOTS_DEVICE)
+            .map_err(|err| format!("open {SCANOUT_SLOTS_DEVICE}: {err}"))?;
+        let mut layout = ScanoutSlotsLayout::default();
+        let result = unsafe { ioctl(device.as_raw_fd(), SCANOUT_SLOTS_GET_LAYOUT, &mut layout) };
+        if result != 0 {
             return Err(format!(
-                "scanout slots version {version} is older than {SCANOUT_SLOTS_MIN_VERSION}"
+                "get scanout slots layout: {}",
+                io::Error::last_os_error()
             ));
         }
-        let region_offset_bytes = scanout_slots_tsv_field(header, "region_offset_bytes")
-            .and_then(|value| value.parse::<usize>().ok())
-            .ok_or_else(|| "scanout slots region offset is missing".to_string())?;
-        if region_offset_bytes != SCANOUT_SLOTS_REGION_OFFSET_BYTES {
+        let expected = ScanoutSlotsLayout {
+            abi_version: SCANOUT_SLOTS_ABI_VERSION,
+            slot_count: 2,
+            width: 960,
+            height: 540,
+            stride_bytes: 1920,
+            frame_bytes: 1_036_800,
+            map_bytes: 1_040_384,
+            flags: 1,
+            slots: [
+                ScanoutSlotLayout {
+                    physical_address: 0x227e_9000,
+                    mmap_offset_bytes: 0,
+                },
+                ScanoutSlotLayout {
+                    physical_address: 0x22fd_2000,
+                    mmap_offset_bytes: 1_048_576,
+                },
+            ],
+            reserved: [0; 4],
+        };
+        if layout != expected {
             return Err(format!(
-                "scanout slots region offset {region_offset_bytes} is not {SCANOUT_SLOTS_REGION_OFFSET_BYTES}"
+                "scanout slots layout mismatch: expected {expected:?}, got {layout:?}"
             ));
         }
-        let cache_mode = scanout_slots_tsv_field(header, "cache_mode")
-            .ok_or_else(|| "scanout slots cache mode is missing".to_string())?;
-        if cache_mode != "writecombine" {
-            return Err(format!("scanout slots cache mode is {cache_mode}"));
-        }
-        Ok(())
-    }
-
-    fn parse_scanout_slots_region(line: &str) -> Option<ScanoutSlotsRegion> {
-        if !line.starts_with("scanout_slots_region_tsv\t") {
-            return None;
-        }
-        Some(ScanoutSlotsRegion {
-            index: scanout_slots_tsv_field(line, "index")?.parse().ok()?,
-            name: scanout_slots_tsv_field(line, "name")?.to_string(),
-            available: scanout_slots_tsv_field(line, "available")? == "1",
-            phys: parse_hex_u32(scanout_slots_tsv_field(line, "phys")?)?,
-            len: scanout_slots_tsv_field(line, "len")?.parse().ok()?,
-        })
-    }
-
-    fn scanout_slots_tsv_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-        line.split('\t').skip(1).find_map(|field| {
-            let (field_key, value) = field.split_once('=')?;
-            (field_key == key).then_some(value)
-        })
-    }
-
-    fn parse_hex_u32(raw: &str) -> Option<u32> {
-        let hex = raw
-            .trim()
-            .strip_prefix("0x")
-            .or_else(|| raw.trim().strip_prefix("0X"))
-            .unwrap_or(raw.trim());
-        u32::from_str_radix(hex, 16).ok()
+        Ok(layout)
     }
 
     fn read_scanout_slots_region_raw(
         region: &ScanoutSlotsRegion,
-        len: usize,
+        frame_len: usize,
     ) -> Result<Vec<u8>, String> {
-        let device = File::open(SCANOUT_SLOTS_DEVICE)
+        let device = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(SCANOUT_SLOTS_DEVICE)
             .map_err(|err| format!("open {SCANOUT_SLOTS_DEVICE}: {err}"))?;
-        let offset = region
-            .index
-            .checked_mul(SCANOUT_SLOTS_REGION_OFFSET_BYTES)
-            .ok_or_else(|| "scanout-slot region offset overflow".to_string())?;
         let mem = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
+                region.len,
+                libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 device.as_raw_fd(),
-                offset as libc::off_t,
+                region.mmap_offset_bytes as libc::off_t,
             )
         };
         if mem == libc::MAP_FAILED {
@@ -2562,9 +2567,9 @@ mod linux {
         if mem.is_null() {
             return Err(format!("mmap scanout slot {} returned null", region.name));
         }
-        let raw = unsafe { std::slice::from_raw_parts(mem.cast::<u8>(), len).to_vec() };
+        let raw = unsafe { std::slice::from_raw_parts(mem.cast::<u8>(), frame_len).to_vec() };
         unsafe {
-            libc::munmap(mem, len);
+            libc::munmap(mem, region.len);
         }
         Ok(raw)
     }

@@ -2,22 +2,29 @@
 /*
  * MiSTer MagiK production scanout-slot mappings.
  *
- * Exposes the two framebuffer-reserved hidden RGB565 slots through one
- * write-combined mapping interface. The FPGA vblank latch owns route changes;
- * this module neither allocates scanout memory nor creates cacheable aliases.
+ * Exposes exactly two framebuffer-reserved hidden RGB565 slots through one
+ * bounded write-combined mapping interface. The FPGA vblank latch owns route
+ * changes; this module neither allocates memory nor controls presentation.
  */
 
+#include <linux/build_bug.h>
+#include <linux/fb.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/slab.h>
+#include <linux/ioport.h>
+#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/string.h>
+#include <linux/uaccess.h>
 #include <generated/utsrelease.h>
 
-#define DEVICE_NAME "mister-magik-scanout-slots"
-#define SCANOUT_SLOTS_VERSION 1
+#include "mister_magik_scanout_slots_uapi.h"
 
+#define DEVICE_NAME "mister-magik-scanout-slots"
 #define FB_PHYS_BASE 0x22000000UL
+#define FB_VISIBLE_PHYS_BASE (FB_PHYS_BASE + PAGE_SIZE)
 #define RGB565_WIDTH 960UL
 #define RGB565_HEIGHT 540UL
 #define RGB565_STRIDE_BYTES 1920UL
@@ -25,157 +32,209 @@
 #define RGB565_MAP_BYTES PAGE_ALIGN(RGB565_FRAME_BYTES)
 #define HIDDEN_SLOT_BYTES (1920UL * 1080UL * 4UL)
 
-#define REGION_HIDDEN_SLOT1 0UL
-#define REGION_HIDDEN_SLOT2 1UL
-#define REGION_COUNT 2UL
 #define REGION_OFFSET_PAGES 256UL
+#define REGION_OFFSET_BYTES (REGION_OFFSET_PAGES * PAGE_SIZE)
 
-struct probe_region {
-	const char *name;
+struct scanout_slot {
 	unsigned long phys;
-	unsigned long len;
+	unsigned long mmap_pgoff;
 };
 
-static atomic_t open_count = ATOMIC_INIT(0);
-static atomic_t mmap_count = ATOMIC_INIT(0);
-static struct probe_region regions[REGION_COUNT];
-
-static int probe_open(struct inode *inode, struct file *file)
-{
-	atomic_inc(&open_count);
-	return 0;
-}
-
-static int probe_release(struct inode *inode, struct file *file)
-{
-	atomic_dec(&open_count);
-	return 0;
-}
-
-static void probe_vma_close(struct vm_area_struct *vma)
-{
-	atomic_dec(&mmap_count);
-}
-
-static const struct vm_operations_struct probe_vm_ops = {
-	.close = probe_vma_close,
+static const struct scanout_slot scanout_slots[] = {
+	{
+		.phys = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
+		.mmap_pgoff = 0,
+	},
+	{
+		.phys = FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL),
+		.mmap_pgoff = REGION_OFFSET_PAGES,
+	},
 };
 
-static int probe_mmap(struct file *file, struct vm_area_struct *vma)
+static struct resource *scanout_slot_resources[MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT];
+static struct resource framebuffer_resource;
+
+static const struct mister_magik_scanout_slots_layout scanout_slots_layout = {
+	.abi_version = MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION,
+	.slot_count = MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT,
+	.width = RGB565_WIDTH,
+	.height = RGB565_HEIGHT,
+	.stride_bytes = RGB565_STRIDE_BYTES,
+	.frame_bytes = RGB565_FRAME_BYTES,
+	.map_bytes = RGB565_MAP_BYTES,
+	.flags = MISTER_MAGIK_SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
+	.slots = {
+		{
+			.physical_address = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
+			.mmap_offset_bytes = 0,
+		},
+		{
+			.physical_address = FB_PHYS_BASE +
+				(HIDDEN_SLOT_BYTES * 2UL),
+			.mmap_offset_bytes = REGION_OFFSET_BYTES,
+		},
+	},
+};
+
+static int scanout_slots_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	unsigned long size = vma->vm_end - vma->vm_start;
-	unsigned long region_index = vma->vm_pgoff / REGION_OFFSET_PAGES;
-	unsigned long region_page_offset = vma->vm_pgoff % REGION_OFFSET_PAGES;
-	unsigned long offset = region_page_offset << PAGE_SHIFT;
-	struct probe_region *region;
-	unsigned long pfn;
+	const struct scanout_slot *slot = NULL;
+	unsigned int i;
 
-	if (region_index >= REGION_COUNT)
+	if (size != RGB565_MAP_BYTES || !(vma->vm_flags & VM_SHARED) ||
+	    !(vma->vm_flags & VM_READ) || !(vma->vm_flags & VM_WRITE) ||
+	    (vma->vm_flags & VM_EXEC))
 		return -EINVAL;
 
-	region = &regions[region_index];
-	if (!region->len)
-		return -ENODEV;
-
-	if (offset >= region->len)
+	for (i = 0; i < ARRAY_SIZE(scanout_slots); i++) {
+		if (vma->vm_pgoff == scanout_slots[i].mmap_pgoff) {
+			slot = &scanout_slots[i];
+			break;
+		}
+	}
+	if (!slot)
 		return -EINVAL;
-	if (size > region->len - offset)
-		return -EINVAL;
 
-	pfn = (region->phys >> PAGE_SHIFT) + region_page_offset;
 	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags &= ~(VM_EXEC | VM_MAYEXEC);
+	vma->vm_flags |= VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP |
+		VM_DONTCOPY;
 
-	if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot))
+	if (remap_pfn_range(vma, vma->vm_start, slot->phys >> PAGE_SHIFT,
+			    size, vma->vm_page_prot))
 		return -EAGAIN;
-
-	vma->vm_ops = &probe_vm_ops;
-	atomic_inc(&mmap_count);
 	return 0;
 }
 
-static ssize_t probe_read(struct file *file, char __user *buf, size_t len,
-			  loff_t *ppos)
+static long scanout_slots_ioctl(struct file *file, unsigned int command,
+				unsigned long argument)
 {
-	char *tmp;
-	size_t used = 0;
-	int i;
-	ssize_t ret;
-
-	tmp = kzalloc(4096, GFP_KERNEL);
-	if (!tmp)
-		return -ENOMEM;
-
-	used += scnprintf(tmp + used, 4096 - used,
-			  "scanout_slots_header_tsv\tname=%s\tversion=%u\tuts_release=%s\topen_count=%d\tmmap_count=%d\tpage_size=%lu\tregion_offset_pages=%lu\tregion_offset_bytes=%lu\tcache_mode=writecombine\n",
-			  DEVICE_NAME, SCANOUT_SLOTS_VERSION, UTS_RELEASE,
-			  atomic_read(&open_count), atomic_read(&mmap_count),
-			  PAGE_SIZE, REGION_OFFSET_PAGES,
-			  REGION_OFFSET_PAGES * PAGE_SIZE);
-	used += scnprintf(tmp + used, 4096 - used,
-			  "scanout_slots_expected_tsv\twidth=%lu\theight=%lu\tstride_bytes=%lu\tframe_bytes=%lu\thidden_slot_bytes=%lu\tfb_phys_base=0x%08lx\n",
-			  RGB565_WIDTH, RGB565_HEIGHT, RGB565_STRIDE_BYTES,
-			  RGB565_FRAME_BYTES, HIDDEN_SLOT_BYTES, FB_PHYS_BASE);
-
-	for (i = 0; i < REGION_COUNT; i++) {
-		used += scnprintf(tmp + used, 4096 - used,
-				  "scanout_slots_region_tsv\tindex=%d\tname=%s\tavailable=1\tphys=0x%08lx\tlen=%lu\n",
-				  i, regions[i].name, regions[i].phys, regions[i].len);
-	}
-
-	ret = simple_read_from_buffer(buf, len, ppos, tmp, used);
-	kfree(tmp);
-	return ret;
+	if (command != MISTER_MAGIK_SCANOUT_SLOTS_GET_LAYOUT)
+		return -ENOTTY;
+	if (copy_to_user((void __user *)argument, &scanout_slots_layout,
+			 sizeof(scanout_slots_layout)))
+		return -EFAULT;
+	return 0;
 }
 
-static const struct file_operations probe_fops = {
+static const struct file_operations scanout_slots_fops = {
 	.owner = THIS_MODULE,
-	.open = probe_open,
-	.release = probe_release,
-	.read = probe_read,
-	.mmap = probe_mmap,
+	.unlocked_ioctl = scanout_slots_ioctl,
+	.mmap = scanout_slots_mmap,
 	.llseek = no_llseek,
 };
 
-static struct miscdevice probe_miscdev = {
+static struct miscdevice scanout_slots_device = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = DEVICE_NAME,
-	.fops = &probe_fops,
+	.fops = &scanout_slots_fops,
 	.mode = 0600,
 };
 
-static int __init probe_init(void)
+static int scanout_slots_validate_platform(void)
 {
+	struct fb_info *info = registered_fb[0];
+	struct device_node *fb_node;
+	resource_size_t visible_end;
 	int ret;
 
-	regions[REGION_HIDDEN_SLOT1] = (struct probe_region) {
-		.name = "hidden-slot-1",
-		.phys = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
-		.len = RGB565_MAP_BYTES,
-	};
-	regions[REGION_HIDDEN_SLOT2] = (struct probe_region) {
-		.name = "hidden-slot-2",
-		.phys = FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL),
-		.len = RGB565_MAP_BYTES,
-	};
-
-	ret = misc_register(&probe_miscdev);
-	if (ret)
-		return ret;
-
-	pr_info("mister_magik_scanout_slots: loaded /dev/%s version=%u\n",
-		DEVICE_NAME, SCANOUT_SLOTS_VERSION);
+	if (strcmp(UTS_RELEASE, "5.15.1-MiSTer"))
+		return -ENODEV;
+	if (!of_machine_is_compatible("altr,socfpga-cyclone5"))
+		return -ENODEV;
+	fb_node = of_find_compatible_node(NULL, NULL, "MiSTer_fb");
+	if (!fb_node)
+		return -ENODEV;
+	ret = of_address_to_resource(fb_node, 0, &framebuffer_resource);
+	of_node_put(fb_node);
+	if (ret || framebuffer_resource.start != FB_PHYS_BASE ||
+	    resource_size(&framebuffer_resource) < HIDDEN_SLOT_BYTES)
+		return -ENODEV;
+	if (!info || strcmp(info->fix.id, "MiSTer_fb"))
+		return -ENODEV;
+	if (info->fix.smem_start != FB_PHYS_BASE &&
+	    info->fix.smem_start != FB_VISIBLE_PHYS_BASE)
+		return -ENODEV;
+	if (!info->fix.smem_len)
+		return -ENODEV;
+	visible_end = info->fix.smem_start + info->fix.smem_len;
+	if (visible_end < info->fix.smem_start ||
+	    visible_end > scanout_slots[0].phys)
+		return -ENODEV;
 	return 0;
 }
 
-static void __exit probe_exit(void)
+static void scanout_slots_release_resources(void)
 {
-	misc_deregister(&probe_miscdev);
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(scanout_slot_resources); i++) {
+		if (scanout_slot_resources[i]) {
+			release_mem_region(scanout_slots[i].phys, RGB565_MAP_BYTES);
+			scanout_slot_resources[i] = NULL;
+		}
+	}
+}
+
+static int scanout_slots_reserve_resources(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(scanout_slots); i++) {
+		scanout_slot_resources[i] =
+			request_mem_region(scanout_slots[i].phys,
+					   RGB565_MAP_BYTES, DEVICE_NAME);
+		if (!scanout_slot_resources[i]) {
+			scanout_slots_release_resources();
+			return -EBUSY;
+		}
+	}
+	return 0;
+}
+
+static int __init scanout_slots_init(void)
+{
+	int ret;
+
+	BUILD_BUG_ON(ARRAY_SIZE(scanout_slots) !=
+		     MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT);
+	BUILD_BUG_ON(sizeof(struct mister_magik_scanout_slots_layout) != 64);
+	BUILD_BUG_ON(RGB565_MAP_BYTES >= REGION_OFFSET_BYTES);
+	BUILD_BUG_ON((FB_PHYS_BASE + HIDDEN_SLOT_BYTES) & ~PAGE_MASK);
+	BUILD_BUG_ON((FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL)) & ~PAGE_MASK);
+
+	ret = scanout_slots_validate_platform();
+	if (ret) {
+		pr_err("mister_magik_scanout_slots: unsupported framebuffer platform\n");
+		return ret;
+	}
+	ret = scanout_slots_reserve_resources();
+	if (ret) {
+		pr_err("mister_magik_scanout_slots: scanout slots are not exclusively available\n");
+		return ret;
+	}
+
+	ret = misc_register(&scanout_slots_device);
+	if (ret) {
+		scanout_slots_release_resources();
+		return ret;
+	}
+
+	pr_info("mister_magik_scanout_slots: loaded /dev/%s ABI version=%u\n",
+		DEVICE_NAME, MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION);
+	return 0;
+}
+
+static void __exit scanout_slots_exit(void)
+{
+	misc_deregister(&scanout_slots_device);
+	scanout_slots_release_resources();
 	pr_info("mister_magik_scanout_slots: unloaded\n");
 }
 
-module_init(probe_init);
-module_exit(probe_exit);
+module_init(scanout_slots_init);
+module_exit(scanout_slots_exit);
 
 MODULE_DESCRIPTION("MiSTer MagiK write-combined scanout slot mappings");
 MODULE_AUTHOR("MiSTer MagiK");

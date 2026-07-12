@@ -1,0 +1,152 @@
+name: Kernel scanout slots
+
+on:
+  pull_request:
+    paths:
+      - "kernel/scanout-slots/**"
+      - "magik-gui/src/framebuffer/scanout_slots.rs"
+      - "tools/magik-agent/src/main.rs"
+      - "scripts/build-scanout-slots-module.sh"
+      - "scripts/check-scanout-slots-contract.sh"
+      - "scripts/deploy-main-mister-experiment.sh"
+      - "scripts/install-slint-boot.sh"
+      - "scripts/scanout-slots-one-shot.sh"
+      - "docs/kernel-scanout-plugin-assurance.md"
+      - "docs/benchmarking.md"
+      - "documentation/src/content/docs/architecture/framebuffer-and-hdmi.mdx"
+      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - ".github/workflows/kernel-scanout.yml"
+  push:
+    branches: [main]
+    paths:
+      - "kernel/scanout-slots/**"
+      - "magik-gui/src/framebuffer/scanout_slots.rs"
+      - "tools/magik-agent/src/main.rs"
+      - "scripts/build-scanout-slots-module.sh"
+      - "scripts/check-scanout-slots-contract.sh"
+      - "scripts/deploy-main-mister-experiment.sh"
+      - "scripts/install-slint-boot.sh"
+      - "scripts/scanout-slots-one-shot.sh"
+      - "docs/kernel-scanout-plugin-assurance.md"
+      - "docs/benchmarking.md"
+      - "documentation/src/content/docs/architecture/framebuffer-and-hdmi.mdx"
+      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - ".github/workflows/kernel-scanout.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-and-build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out pinned MiSTer kernel
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+
+      - name: Install kernel module tools
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          git gcc-arm-linux-gnueabihf flex bison bc libssl-dev libelf-dev kmod
+          sparse coccinelle python3
+
+      - name: Check one-job contract
+        run: scripts/check-scanout-slots-contract.sh
+
+      - name: Build and attest module
+        env:
+          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
+          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
+        run: scripts/build-scanout-slots-module.sh
+
+      - name: Warning-clean rebuild
+        env:
+          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
+          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
+        run: >-
+          make -C kernel/scanout-slots
+          KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD"
+          ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- W=1 all
+
+      - name: Sparse type check
+        env:
+          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
+          KERNEL_BUILD: ${{ github.workspace }}/build/scanout-slots-kernel
+        run: >-
+          make -C kernel/scanout-slots
+          KERNEL_SRC="$KERNEL_SRC" KERNEL_BUILD="$KERNEL_BUILD"
+          ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-
+          C=2 CHECK=sparse all
+
+      - name: Kernel style and semantic checks
+        env:
+          KERNEL_SRC: ${{ github.workspace }}/build/Linux-Kernel_MiSTer
+        run: |
+          set -euo pipefail
+          "$KERNEL_SRC/scripts/checkpatch.pl" --no-tree --strict --file \
+            kernel/scanout-slots/mister_magik_scanout_slots.c \
+            kernel/scanout-slots/mister_magik_scanout_slots_uapi.h
+          make -C "$KERNEL_SRC" O="$GITHUB_WORKSPACE/build/scanout-slots-kernel" \
+            M="$GITHUB_WORKSPACE/kernel/scanout-slots" \
+            ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- coccicheck MODE=report
+
+      - name: Audit module imports and metadata
+        run: |
+          set -euo pipefail
+          scripts/check-scanout-slots-contract.sh
+          grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
+          grep -q '^kernel_revision=f0fb626acadd07f0718934826b143b6e4c9ce81c$' build/scanout-slots/provenance.txt
+
+      - name: Upload attested module
+        uses: actions/upload-artifact@v7
+        with:
+          name: mister-magik-scanout-slots
+          path: |
+            build/scanout-slots/mister_magik_scanout_slots.ko
+            build/scanout-slots/modinfo.txt
+            build/scanout-slots/provenance.txt
+            build/scanout-slots/SHA256SUMS
+            build/scanout-slots/imports.txt
+          if-no-files-found: error
+
+  clang-build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out pinned MiSTer kernel
+        uses: actions/checkout@v7
+        with:
+          repository: MiSTer-devel/Linux-Kernel_MiSTer
+          ref: f0fb626acadd07f0718934826b143b6e4c9ce81c
+          path: build/Linux-Kernel_MiSTer
+
+      - name: Install Clang kernel tools
+        run: >-
+          apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y
+          clang llvm lld flex bison bc libssl-dev libelf-dev
+
+      - name: Prepare pinned kernel with Clang
+        run: |
+          set -euo pipefail
+          make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
+            ARCH=arm LLVM=1 LOCALVERSION=-MiSTer MiSTer_defconfig
+          make -C build/Linux-Kernel_MiSTer O="$GITHUB_WORKSPACE/build/scanout-slots-clang" \
+            ARCH=arm LLVM=1 LOCALVERSION=-MiSTer modules_prepare
+
+      - name: Build module with Clang warnings denied
+        run: >-
+          make -C kernel/scanout-slots
+          KERNEL_SRC="$GITHUB_WORKSPACE/build/Linux-Kernel_MiSTer"
+          KERNEL_BUILD="$GITHUB_WORKSPACE/build/scanout-slots-clang"
+          ARCH=arm LLVM=1 WERROR=1 W=1 all

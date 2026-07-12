@@ -9,9 +9,11 @@ Rust owns framebuffer setup while the launcher is active. Slint renders into
 cached RAM, then Rust copies dirty regions into the small write-combined
 `/dev/fb0`. The FPGA route selects which buffer is visible on HDMI.
 
-The `/dev/fb0` dirty-copy path is the supported fallback. The current
-hidden-buffer experiment is `fpga-vblank-latch-hidden`, which uses
-plugin-exposed hidden slots plus the experimental vblank-latched Menu RBF.
+The `/dev/fb0` dirty-copy path is the supported fallback. The normal fast path is
+`fpga-vblank-latch-hidden`, which copies completed frames into two narrowly
+mapped hidden slots before the FPGA applies the selected slot at vblank. See
+[why MiSTer MagiK uses a kernel plugin](../kernel-scanout-plugin/) for the
+boundary and safety rationale.
 
 ```mermaid
 flowchart LR

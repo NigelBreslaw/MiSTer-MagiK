@@ -53,9 +53,15 @@ done
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/$GUI_PROFILE/mister-magik-fb"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
 PLUGIN_KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
+PLUGIN_META="$ROOT/build/scanout-slots/provenance.txt"
 LATCH_RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 LATCH_META="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt"
 PLUGIN_REMOTE="/media/fat/mister-magik/mister_magik_scanout_slots.ko"
+PLUGIN_META_REMOTE="/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt"
+PINNED_KERNEL_REVISION="f0fb626acadd07f0718934826b143b6e4c9ce81c"
+PINNED_KERNEL_CONFIG_SHA256="7137fafad42831de17a46755f1bfcd3b56b6ac5922c1981a515ccd4ce6158068"
+PINNED_UAPI_SHA256="2d8dffc12b76c7346cbd6291ece440e824719ebb6b564192e3ba3f692eb8c5b9"
+PINNED_SOURCE_SHA256="2bd6b3cc4bc4718cbe7db18f88e10c0f5a37585821a9c47075ea4c65adef92fc"
 LATCH_RBF_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
 LATCH_META_REMOTE="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.metadata.txt"
 
@@ -72,9 +78,20 @@ EOF
   exit 1
 fi
 
-if [[ ! -f "$PLUGIN_KO" ]]; then
-  echo "ERROR: missing production scanout module: $PLUGIN_KO" >&2
+if [[ ! -f "$PLUGIN_KO" || ! -f "$PLUGIN_META" ]]; then
+  echo "ERROR: missing production scanout module or provenance" >&2
   echo "Build it with scripts/build-scanout-slots-module.sh before deploying production latch boot." >&2
+  exit 1
+fi
+PLUGIN_SHA256="$(sha256sum "$PLUGIN_KO" | awk '{print $1}')"
+if [[ "$(sed -n 's/^module_sha256=//p' "$PLUGIN_META")" != "$PLUGIN_SHA256" ]] ||
+   ! grep -q '^vermagic=5\.15\.1-MiSTer ' "$PLUGIN_META" ||
+   ! grep -q "^kernel_revision=$PINNED_KERNEL_REVISION$" "$PLUGIN_META" ||
+   ! grep -q "^kernel_config_sha256=$PINNED_KERNEL_CONFIG_SHA256$" "$PLUGIN_META" ||
+   ! grep -q "^uapi_sha256=$PINNED_UAPI_SHA256$" "$PLUGIN_META" ||
+   ! grep -q "^source_sha256=$PINNED_SOURCE_SHA256$" "$PLUGIN_META" ||
+   ! grep -q '^compiler=arm-linux-gnueabihf-gcc (Ubuntu 9\.4\.0' "$PLUGIN_META"; then
+  echo "ERROR: scanout module does not match its provenance or target kernel" >&2
   exit 1
 fi
 if [[ ! -f "$LATCH_RBF" ]]; then
@@ -125,10 +142,11 @@ rm -f "$GUI_ART_RAW"
 "$ROOT/scripts/mister" put "$MAIN_BIN" "$MAIN_REMOTE.upload"
 "$ROOT/scripts/mister" run "mkdir -p /media/fat/mister-magik/experiments"
 "$ROOT/scripts/mister" put "$PLUGIN_KO" "$PLUGIN_REMOTE.upload"
+"$ROOT/scripts/mister" put "$PLUGIN_META" "$PLUGIN_META_REMOTE.upload"
 "$ROOT/scripts/mister" put "$LATCH_RBF" "$LATCH_RBF_REMOTE.upload"
 "$ROOT/scripts/mister" put "$LATCH_META" "$LATCH_META_REMOTE.upload"
 
-"$ROOT/scripts/mister" run "expected=\$(sed -n 's/^rbf_sha256=//p' '$LATCH_META_REMOTE.upload'); actual=\$(sha256sum '$LATCH_RBF_REMOTE.upload' | awk '{print \$1}'); test -n \"\$expected\"; test \"\$actual\" = \"\$expected\"; mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; mv '$LATCH_META_REMOTE.upload' '$LATCH_META_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$LATCH_RBF_REMOTE' '$LATCH_META_REMOTE'; rm -f /media/fat/mister-magik/mister_magik_scanout.ko /media/fat/mister-magik/mister_magik_plugin_probe.ko"
+"$ROOT/scripts/mister" run "expected=\$(sed -n 's/^rbf_sha256=//p' '$LATCH_META_REMOTE.upload'); actual=\$(sha256sum '$LATCH_RBF_REMOTE.upload' | awk '{print \$1}'); plugin_expected=\$(sed -n 's/^module_sha256=//p' '$PLUGIN_META_REMOTE.upload'); plugin_actual=\$(sha256sum '$PLUGIN_REMOTE.upload' | awk '{print \$1}'); test -n \"\$expected\"; test \"\$actual\" = \"\$expected\"; test \"\$plugin_expected\" = '$PLUGIN_SHA256'; test \"\$plugin_actual\" = '$PLUGIN_SHA256'; echo \"rbf_sha256=\$expected\" >> '$PLUGIN_META_REMOTE.upload'; mv '$GUI_REMOTE.upload' '$GUI_REMOTE'; mv '$GUI_ART_REMOTE.upload' '$GUI_ART_REMOTE'; mv '$MAIN_REMOTE.upload' '$MAIN_REMOTE'; mv '$PLUGIN_REMOTE.upload' '$PLUGIN_REMOTE'; mv '$PLUGIN_META_REMOTE.upload' '$PLUGIN_META_REMOTE'; mv '$LATCH_RBF_REMOTE.upload' '$LATCH_RBF_REMOTE'; mv '$LATCH_META_REMOTE.upload' '$LATCH_META_REMOTE'; chmod +x '$GUI_REMOTE' '$MAIN_REMOTE'; chmod 600 '$PLUGIN_REMOTE' '$PLUGIN_META_REMOTE' '$LATCH_RBF_REMOTE' '$LATCH_META_REMOTE'"
 
 echo "==> Enabling stock inittab + MiSTer.ini main=MiSTer_MagiK boot"
 "$ROOT/scripts/mister" run '

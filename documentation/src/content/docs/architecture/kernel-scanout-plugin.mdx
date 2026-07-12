@@ -1,0 +1,68 @@
+---
+title: Why MiSTer MagiK Uses a Kernel Plugin
+description: Why two hidden scanout slots need one narrow stock-kernel mapping interface.
+sidebar:
+  order: 3
+---
+
+MiSTer MagiK uses a small kernel plugin for one reason: `/dev/fb0` exposes the
+live framebuffer, but not the two hidden framebuffer slots used to prepare the
+next 960x540 RGB565 frame before a vblank switch.
+
+The FPGA latch can select a completed hidden slot at vblank. It cannot give the
+Rust process a safe CPU mapping of that memory. Giving the launcher general
+`/dev/mem` access would expose unrelated physical memory, while maintaining a
+custom Linux kernel would make updates and recovery substantially harder.
+
+```mermaid
+flowchart LR
+  Rust["Cached Rust RGB565 frame"] --> Plugin["Root-only scanout-slots plugin"]
+  Plugin --> Slots["Two existing hidden framebuffer slots"]
+  Slots --> Latch["FPGA vblank latch"]
+  Latch --> HDMI["HDMI output"]
+  Rust --> Fallback["/dev/fb0 fallback"]
+  Fallback --> HDMI
+```
+
+## Exactly what the plugin does
+
+`/dev/mister-magik-scanout-slots` reports one immutable, versioned layout and
+maps either complete hidden slot with shared, read/write, non-executable,
+write-combined attributes. The device is mode `0600`, so only root can open it.
+
+The plugin does **not** allocate or copy memory. It does not select a framebuffer,
+wait for vblank, post a frame, recover the display, or control the FPGA. Those
+responsibilities remain in Rust, Main, and the small FPGA latch.
+
+Earlier investigations tried direct `/dev/mem`, cacheable aliases, DMA
+allocation, ownership and fence APIs, and an FPGA mailbox. They added states and
+failure modes without improving the production copy path, so none of those
+interfaces remain in the plugin.
+
+## Failure and fallback
+
+The plugin registers only on the expected `5.15.1-MiSTer` kernel and
+`MiSTer_fb` physical layout. The Rust and Agent clients reject any ABI, geometry,
+address, mapping-size, or reserved-field mismatch. If the module is missing or
+rejected, MiSTer MagiK uses the supported `/dev/fb0` dirty-copy fallback; the
+plugin is never required to recover or boot the machine.
+
+## How it is tested
+
+The current automated gates verify the exact C/Rust/Agent contract, reject
+retired source and binary surfaces, test the userspace layout and copy logic,
+and record module build provenance. A checked-in, manually invoked device runner
+performs deterministic mapping and rejection checks on the MiSTer. It uses
+bounded cleanup and never uses destructive reset-fault injection.
+
+The broader release assurance programme also calls for independent standards
+and contract review, dual-compiler kernel analysis, model and boundary checks,
+an instrumented ARM kernel under QEMU, sanitizer runs, short coverage-guided
+fuzzing, lifecycle repetition, and physical HDMI evidence. Fuzzing belongs only
+in QEMU on GitHub Actions or an optional local Linux runner—never on the MiSTer.
+Those layers are described as release gates, not as completed certification.
+
+See the [assurance contract](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/docs/kernel-scanout-plugin-assurance.md),
+[current architecture](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/docs/architecture.md),
+and [zero-copy retirement evidence](https://github.com/NigelBreslaw/MiSTer-MagiK/blob/main/history/2026-07-11-zero-copy-retirement.md)
+for the detailed requirements and history.
