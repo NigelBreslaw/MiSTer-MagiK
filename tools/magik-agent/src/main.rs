@@ -1394,10 +1394,28 @@ mod linux {
         pub(super) at: Option<Instant>,
     }
 
+    const SD_READ_BYTES_PER_SEC_AT_100_PCT: u64 = 50_000_000;
+    const SD_WRITE_BYTES_PER_SEC_AT_100_PCT: u64 = 25_000_000;
+    const DISK_SECTOR_BYTES: u64 = 512;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(super) struct DiskCounters {
+        pub(super) sectors_read: u64,
+        pub(super) sectors_written: u64,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct DiskSample {
+        device: String,
+        counters: DiskCounters,
+        at: Option<Instant>,
+    }
+
     #[derive(Default)]
     struct DeviceTelemetryStreamState {
         previous_cpu: Option<Vec<CpuTimes>>,
         previous_net: Option<NetSample>,
+        previous_disk: Option<DiskSample>,
     }
 
     impl DeviceTelemetryStreamState {
@@ -1414,6 +1432,25 @@ mod linux {
                 tx_bytes: fields[8],
                 at: Some(now),
             });
+
+            let disk_device = backing_disk_for_path("/media/fat");
+            let disk_counters = disk_device
+                .as_deref()
+                .and_then(|device| read_disk_counters(device));
+            let disk_activity = disk_activity_json(
+                self.previous_disk.as_ref(),
+                disk_device.as_deref(),
+                disk_counters,
+                now,
+            );
+            self.previous_disk =
+                disk_device
+                    .zip(disk_counters)
+                    .map(|(device, counters)| DiskSample {
+                        device,
+                        counters,
+                        at: Some(now),
+                    });
 
             let magik = process_telemetry("mister-magik-fb");
             let main = process_telemetry("MiSTer_MagiK");
@@ -1437,7 +1474,7 @@ mod linux {
                     "MiSTer_MagiK": main,
                 },
                 "network": network,
-                "storage": storage_json("/media/fat"),
+                "storage": storage_json("/media/fat", disk_activity),
                 "launcher": {
                     "status_current": slint_current,
                     "idle": slint_status.get("idle").cloned().unwrap_or(Value::Null),
@@ -1676,7 +1713,124 @@ mod linux {
         }
     }
 
-    fn storage_json(path: &str) -> Value {
+    pub(super) fn parse_backing_disk(mounts: &str, diskstats: &str, path: &str) -> Option<String> {
+        let source = mounts.lines().find_map(|line| {
+            let mut fields = line.split_whitespace();
+            let source = fields.next()?;
+            let mountpoint = fields.next()?;
+            (mountpoint == path).then_some(source)
+        });
+        if let Some(source) = source {
+            let base = source.rsplit('/').next().unwrap_or(source);
+            if let Some(index) = base.rfind('p') {
+                if base.starts_with("mmcblk")
+                    && base[index + 1..].chars().all(|c| c.is_ascii_digit())
+                {
+                    return Some(base[..index].to_string());
+                }
+            }
+            if base.starts_with("sd") {
+                return Some(
+                    base.trim_end_matches(|c: char| c.is_ascii_digit())
+                        .to_string(),
+                );
+            }
+        }
+        let candidates = diskstats
+            .lines()
+            .filter_map(|line| {
+                let device = line.split_whitespace().nth(2)?;
+                (device.starts_with("mmcblk")
+                    && !device.contains('p')
+                    && device[6..].chars().all(|c| c.is_ascii_digit()))
+                .then(|| device.to_string())
+            })
+            .collect::<Vec<_>>();
+        (candidates.len() == 1).then(|| candidates[0].clone())
+    }
+
+    fn backing_disk_for_path(path: &str) -> Option<String> {
+        let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
+        let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
+        parse_backing_disk(&mounts, &diskstats, path)
+    }
+
+    pub(super) fn parse_disk_counters(diskstats: &str, device: &str) -> Option<DiskCounters> {
+        diskstats.lines().find_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.get(2).copied() != Some(device) {
+                return None;
+            }
+            Some(DiskCounters {
+                sectors_read: fields.get(5)?.parse().ok()?,
+                sectors_written: fields.get(9)?.parse().ok()?,
+            })
+        })
+    }
+
+    fn read_disk_counters(device: &str) -> Option<DiskCounters> {
+        parse_disk_counters(&fs::read_to_string("/proc/diskstats").ok()?, device)
+    }
+
+    pub(super) fn disk_rate_bytes_per_sec(
+        previous: DiskCounters,
+        current: DiskCounters,
+        elapsed: Duration,
+    ) -> Option<(u64, u64)> {
+        if elapsed.is_zero()
+            || current.sectors_read < previous.sectors_read
+            || current.sectors_written < previous.sectors_written
+        {
+            return None;
+        }
+        let seconds = elapsed.as_secs_f64();
+        Some((
+            ((current.sectors_read - previous.sectors_read) as f64 * DISK_SECTOR_BYTES as f64
+                / seconds)
+                .round() as u64,
+            ((current.sectors_written - previous.sectors_written) as f64 * DISK_SECTOR_BYTES as f64
+                / seconds)
+                .round() as u64,
+        ))
+    }
+
+    pub(super) fn throughput_percent(bytes_per_sec: u64, ceiling: u64) -> f64 {
+        if ceiling == 0 {
+            return 0.0;
+        }
+        (bytes_per_sec as f64 * 100.0 / ceiling as f64).clamp(0.0, 100.0)
+    }
+
+    fn disk_activity_json(
+        previous: Option<&DiskSample>,
+        device: Option<&str>,
+        current: Option<DiskCounters>,
+        now: Instant,
+    ) -> Value {
+        let rates = previous
+            .zip(device)
+            .zip(current)
+            .filter(|((previous, device), _)| previous.device == *device)
+            .and_then(|((previous, _), current)| {
+                disk_rate_bytes_per_sec(
+                    previous.counters,
+                    current,
+                    now.saturating_duration_since(previous.at?),
+                )
+            });
+        let valid = rates.is_some();
+        let rates = rates.unwrap_or((0, 0));
+        json!({
+            "device": device.unwrap_or(""),
+            "activity_valid": valid,
+            "read_bytes_per_sec": rates.0,
+            "write_bytes_per_sec": rates.1,
+            "read_pct": throughput_percent(rates.0, SD_READ_BYTES_PER_SEC_AT_100_PCT),
+            "write_pct": throughput_percent(rates.1, SD_WRITE_BYTES_PER_SEC_AT_100_PCT),
+        })
+    }
+
+    fn storage_json(path: &str, activity: Value) -> Value {
         let Ok(c_path) = CString::new(path) else {
             return Value::Null;
         };
@@ -1691,13 +1845,17 @@ mod linux {
         let block_size = statvfs_value_to_u64(stats.f_frsize);
         let total_bytes = statvfs_value_to_u64(stats.f_blocks).saturating_mul(block_size);
         let available_bytes = statvfs_value_to_u64(stats.f_bavail).saturating_mul(block_size);
-        json!({
+        let mut storage = json!({
             "path": path,
             "total_bytes": total_bytes,
             "available_bytes": available_bytes,
             "used_bytes": total_bytes.saturating_sub(available_bytes),
             "available_pct": percent_of(available_bytes, total_bytes),
-        })
+        });
+        if let (Some(storage), Some(activity)) = (storage.as_object_mut(), activity.as_object()) {
+            storage.extend(activity.clone());
+        }
+        storage
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -4119,6 +4277,66 @@ mod tests {
         assert_eq!(rows[0].user, 1);
         assert_eq!(rows[1].system, 20);
         assert_eq!(rows[2].idle, 70);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_resolves_sd_backing_disk_and_fallback() {
+        let stats = "179 0 mmcblk0 1 0 2 0 3 0 4 0 0 0 0 0 0 0\n179 1 mmcblk0p1 1 0 2 0 3 0 4 0 0 0 0 0 0 0\n";
+        assert_eq!(
+            linux::parse_backing_disk(
+                "/dev/mmcblk0p1 /media/fat fuseblk rw 0 0\n",
+                stats,
+                "/media/fat"
+            ),
+            Some("mmcblk0".to_string())
+        );
+        assert_eq!(
+            linux::parse_backing_disk("root /media/fat fuseblk rw 0 0\n", stats, "/media/fat"),
+            Some("mmcblk0".to_string())
+        );
+        let ambiguous = format!("{stats}179 8 mmcblk1 1 0 2 0 3 0 4 0 0 0 0 0 0 0\n");
+        assert_eq!(
+            linux::parse_backing_disk("root /media/fat fuseblk rw 0 0\n", &ambiguous, "/media/fat"),
+            None
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_parses_diskstats_and_calculates_rates() {
+        let stats = "179 0 mmcblk0 10 2 100 4 20 6 200 8 0 10 12 0 0 0 0\n";
+        let counters = linux::parse_disk_counters(stats, "mmcblk0").unwrap();
+        assert_eq!(counters.sectors_read, 100);
+        assert_eq!(counters.sectors_written, 200);
+        let previous = linux::DiskCounters {
+            sectors_read: 80,
+            sectors_written: 160,
+        };
+        assert_eq!(
+            linux::disk_rate_bytes_per_sec(previous, counters, Duration::from_secs(2)),
+            Some((5_120, 10_240))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_disk_rate_rejects_reset_and_percent_clamps() {
+        let previous = linux::DiskCounters {
+            sectors_read: 100,
+            sectors_written: 200,
+        };
+        let reset = linux::DiskCounters {
+            sectors_read: 99,
+            sectors_written: 201,
+        };
+        assert_eq!(
+            linux::disk_rate_bytes_per_sec(previous, reset, Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(linux::throughput_percent(25_000_000, 50_000_000), 50.0);
+        assert_eq!(linux::throughput_percent(75_000_000, 50_000_000), 100.0);
+        assert_eq!(linux::throughput_percent(1, 0), 0.0);
     }
 
     #[cfg(target_os = "linux")]

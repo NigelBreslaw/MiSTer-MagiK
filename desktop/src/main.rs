@@ -724,6 +724,7 @@ struct RealtimeViewState {
     storage_total_label: String,
     storage_used_label: String,
     storage_empty_label: String,
+    storage_activity_summary: String,
     frame_hover: String,
     streaming: bool,
     combined_cpu_pct: f64,
@@ -737,6 +738,8 @@ struct RealtimeViewState {
     cpu_history: Vec<RealtimeChartPoint>,
     cpu0_path: String,
     cpu1_path: String,
+    storage_read_path: String,
+    storage_write_path: String,
     frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
     frame_samples: Vec<RealtimeFrameSampleView>,
@@ -1037,6 +1040,20 @@ fn realtime_view_from_history(
     let cpu1_history = realtime_core_history(history, 1);
     let cpu0_path = realtime_chart_path(&cpu0_history, REALTIME_HISTORY_CAPACITY);
     let cpu1_path = realtime_chart_path(&cpu1_history, REALTIME_HISTORY_CAPACITY);
+    let storage_read_history = history
+        .samples
+        .iter()
+        .filter(|sample| sample.storage.activity_valid)
+        .map(|sample| sample.storage.read_pct)
+        .collect::<Vec<_>>();
+    let storage_write_history = history
+        .samples
+        .iter()
+        .filter(|sample| sample.storage.activity_valid)
+        .map(|sample| sample.storage.write_pct)
+        .collect::<Vec<_>>();
+    let storage_read_path = realtime_chart_path(&storage_read_history, REALTIME_HISTORY_CAPACITY);
+    let storage_write_path = realtime_chart_path(&storage_write_history, REALTIME_HISTORY_CAPACITY);
     let frame_history = history
         .samples
         .iter()
@@ -1084,6 +1101,7 @@ fn realtime_view_from_history(
             storage_total_label: "-".to_string(),
             storage_used_label: "Used: 0GB".to_string(),
             storage_empty_label: "Free: 0GB".to_string(),
+            storage_activity_summary: "-".to_string(),
             frame_hover: String::new(),
             streaming,
             combined_cpu_pct: 0.0,
@@ -1097,6 +1115,8 @@ fn realtime_view_from_history(
             cpu_history,
             cpu0_path,
             cpu1_path,
+            storage_read_path,
+            storage_write_path,
             frame_history,
             phases: Vec::new(),
             frame_samples,
@@ -1125,6 +1145,11 @@ fn realtime_view_from_history(
         "Free: {}",
         format_storage_gb(sample.storage.available_bytes)
     );
+    let storage_activity_summary = if sample.storage.activity_valid {
+        storage_activity_summary(&sample.storage)
+    } else {
+        "Waiting for SD activity samples.".to_string()
+    };
     let frame_summary = format!(
         "{} frames, {} over budget, max {}",
         sample.frame_budget.window_frames,
@@ -1195,6 +1220,7 @@ fn realtime_view_from_history(
         storage_total_label,
         storage_used_label,
         storage_empty_label,
+        storage_activity_summary,
         frame_hover: String::new(),
         streaming,
         combined_cpu_pct: sample.combined_cpu_pct,
@@ -1208,6 +1234,8 @@ fn realtime_view_from_history(
         cpu_history,
         cpu0_path,
         cpu1_path,
+        storage_read_path,
+        storage_write_path,
         frame_history,
         phases,
         frame_samples,
@@ -1275,6 +1303,16 @@ fn realtime_core_history(history: &RealtimeHistory, core_index: usize) -> Vec<f6
         .iter()
         .filter_map(|sample| sample.cores.get(core_index).map(|core| core.busy_pct))
         .collect()
+}
+
+fn storage_activity_summary(storage: &agent_client::StorageTelemetry) -> String {
+    format!(
+        "Read {:.1}% ({}) / Write {:.1}% ({})",
+        storage.read_pct.clamp(0.0, 100.0),
+        format_decimal_byte_rate(storage.read_bytes_per_sec),
+        storage.write_pct.clamp(0.0, 100.0),
+        format_decimal_byte_rate(storage.write_bytes_per_sec),
+    )
 }
 
 fn realtime_chart_path(values: &[f64], capacity: usize) -> String {
@@ -1373,6 +1411,16 @@ fn format_us(us: u64) -> String {
 
 fn format_byte_rate(bytes: u64) -> String {
     format!("{}/s", format_byte_size(bytes))
+}
+
+fn format_decimal_byte_rate(bytes: u64) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB/s", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.1} KB/s", bytes as f64 / 1_000.0)
+    } else {
+        format!("{bytes} B/s")
+    }
 }
 
 fn format_storage_gb(bytes: u64) -> String {
@@ -4607,6 +4655,11 @@ fn apply_live_realtime_view(
     );
     set(
         instance,
+        "storage-activity-summary",
+        Value::String(SharedString::from(view.storage_activity_summary.as_str())),
+    );
+    set(
+        instance,
         "frame-hover",
         Value::String(SharedString::from(view.frame_hover.as_str())),
     );
@@ -4680,6 +4733,16 @@ fn apply_live_realtime_view(
         instance,
         "cpu1-path",
         Value::String(SharedString::from(view.cpu1_path.as_str())),
+    );
+    set(
+        instance,
+        "storage-read-path",
+        Value::String(SharedString::from(view.storage_read_path.as_str())),
+    );
+    set(
+        instance,
+        "storage-write-path",
+        Value::String(SharedString::from(view.storage_write_path.as_str())),
     );
     set(
         instance,
@@ -4853,6 +4916,7 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
     state.set_storage_total_label(view.storage_total_label.as_str().into());
     state.set_storage_used_label(view.storage_used_label.as_str().into());
     state.set_storage_empty_label(view.storage_empty_label.as_str().into());
+    state.set_storage_activity_summary(view.storage_activity_summary.as_str().into());
     state.set_frame_hover(view.frame_hover.as_str().into());
     state.set_combined_cpu_pct(view.combined_cpu_pct as f32);
     state.set_magik_memory_pct(view.magik_memory_pct as f32);
@@ -4877,6 +4941,8 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
     state.set_cpu_history(compiled_realtime_points(&view.cpu_history));
     state.set_cpu0_path(view.cpu0_path.as_str().into());
     state.set_cpu1_path(view.cpu1_path.as_str().into());
+    state.set_storage_read_path(view.storage_read_path.as_str().into());
+    state.set_storage_write_path(view.storage_write_path.as_str().into());
     state.set_frame_history(compiled_realtime_points(&view.frame_history));
     state.set_frame_phases(ModelRc::new(VecModel::from(
         view.phases
@@ -6859,6 +6925,12 @@ mod tests {
                 available_bytes: 137_000_000_000,
                 total_bytes: 512_000_000_000,
                 available_pct: 26.8,
+                device: "mmcblk0".to_string(),
+                activity_valid: true,
+                read_bytes_per_sec: 12_500_000,
+                write_bytes_per_sec: 2_500_000,
+                read_pct: 25.0,
+                write_pct: 10.0,
             },
         }
     }
@@ -6908,6 +6980,28 @@ mod tests {
         assert_eq!(view.storage_used_label, "Used: 375GB");
         assert_eq!(view.storage_empty_label, "Free: 137GB");
         assert_eq!(view.storage_used_pct, 73.2);
+        assert_eq!(
+            view.storage_activity_summary,
+            "Read 25.0% (12.5 MB/s) / Write 10.0% (2.5 MB/s)"
+        );
+        assert!(!view.storage_read_path.is_empty());
+        assert!(!view.storage_write_path.is_empty());
+    }
+
+    #[test]
+    fn realtime_view_waits_for_a_valid_storage_delta() {
+        let mut sample = telemetry_sample(1);
+        sample.storage.activity_valid = false;
+        let mut history = RealtimeHistory::default();
+        history.push(sample);
+
+        let view = realtime_view_from_history(&history, true, "");
+        assert_eq!(
+            view.storage_activity_summary,
+            "Waiting for SD activity samples."
+        );
+        assert!(view.storage_read_path.is_empty());
+        assert!(view.storage_write_path.is_empty());
     }
 
     #[test]
@@ -7025,6 +7119,36 @@ mod tests {
     fn storage_labels_use_decimal_gb() {
         assert_eq!(format_storage_gb(512_000_000_000), "512GB");
         assert_eq!(format_storage_gb(137_400_000_000), "137GB");
+    }
+
+    #[test]
+    fn storage_activity_summary_formats_idle_read_write_and_combined() {
+        let mut storage = agent_client::StorageTelemetry::default();
+        assert_eq!(
+            storage_activity_summary(&storage),
+            "Read 0.0% (0 B/s) / Write 0.0% (0 B/s)"
+        );
+        storage.read_bytes_per_sec = 1_048_576;
+        storage.activity_valid = true;
+        storage.read_pct = 2.1;
+        assert_eq!(
+            storage_activity_summary(&storage),
+            "Read 2.1% (1.0 MB/s) / Write 0.0% (0 B/s)"
+        );
+        storage.read_bytes_per_sec = 0;
+        storage.read_pct = 0.0;
+        storage.write_bytes_per_sec = 1_048_576;
+        storage.write_pct = 4.2;
+        assert_eq!(
+            storage_activity_summary(&storage),
+            "Read 0.0% (0 B/s) / Write 4.2% (1.0 MB/s)"
+        );
+        storage.read_bytes_per_sec = 2_097_152;
+        storage.read_pct = 4.2;
+        assert_eq!(
+            storage_activity_summary(&storage),
+            "Read 4.2% (2.1 MB/s) / Write 4.2% (1.0 MB/s)"
+        );
     }
 
     #[test]
