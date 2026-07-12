@@ -199,6 +199,9 @@ chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 python3 "$ROOT/scripts/png-to-slint-rgba.py" \
   "$ROOT/magik-gui/ui/art/arcade-cabinet-preview.png" \
   "$STAGE/mister-magik/art/arcade-cabinet-preview.rgba"
+python3 "$ROOT/scripts/png-to-slint-rgba.py" \
+  "$ROOT/magik-gui/ui/art/slint-logo-pixel.png" \
+  "$STAGE/mister-magik/art/slint-logo-pixel.rgba"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"

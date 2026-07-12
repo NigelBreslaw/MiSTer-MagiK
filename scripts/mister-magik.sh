@@ -9,6 +9,7 @@ APP_DIR="$FAT/mister-magik"
 MAIN_BIN="$FAT/MiSTer_MagiK"
 GUI_BIN="$APP_DIR/mister-magik-fb"
 ART_FILE="$APP_DIR/art/arcade-cabinet-preview.rgba"
+SLINT_LOGO_FILE="$APP_DIR/art/slint-logo-pixel.rgba"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
 
@@ -45,6 +46,10 @@ ensure_files() {
   fi
   if [ ! -f "$ART_FILE" ]; then
     say "ERROR: $ART_FILE is missing."
+    exit 1
+  fi
+  if [ ! -f "$SLINT_LOGO_FILE" ]; then
+    say "ERROR: $SLINT_LOGO_FILE is missing."
     exit 1
   fi
 }
