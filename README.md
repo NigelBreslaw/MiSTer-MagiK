@@ -19,6 +19,12 @@ play, you might just love it.
 MiSTer MagiK wants MiSTer to feel less like a configuration project and more
 like a magic cabinet.
 
+## Important Disclaimer
+
+MiSTer MagiK changes system configuration and controls low-level aspects of a
+MiSTer installation. Installing and using it is at your own risk. Back up your
+SD card and read the full [MiSTer MagiK disclaimer](disclaimer.md) before use.
+
 ## Built With Slint
 
 MiSTer MagiK is built with [Slint](https://slint.dev), a modern declarative UI
