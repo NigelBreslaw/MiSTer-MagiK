@@ -52,11 +52,10 @@ pub fn run(
         return check(protocol, &mut emit);
     }
 
-    apply_runtime_thread_policy(if operation == BuilderOperation::Build {
-        RuntimeThreadRole::CatalogForeground
-    } else {
-        RuntimeThreadRole::CatalogWorker
-    });
+    // Both creation and explicit rebuild own the dedicated full-screen catalog
+    // UI. Keep the coordinator eligible for both CPUs until CatalogReady; only
+    // checks and post-ready persistence belong to the background policy.
+    apply_runtime_thread_policy(RuntimeThreadRole::CatalogForeground);
     let scanned = {
         let protocol_output = RefCell::new(&mut emit);
         let mut scan_progress = |title: &str, detail: &str| {
