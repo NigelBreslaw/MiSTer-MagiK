@@ -2,7 +2,7 @@
 /*
  * MiSTer MagiK production scanout-slot mappings.
  *
- * Exposes exactly two framebuffer-reserved hidden RGB565 slots through one
+ * Exposes exactly two pinned-platform hidden RGB565 scanout slots through one
  * bounded write-combined mapping interface. The FPGA vblank latch owns route
  * changes; this module neither allocates memory nor controls presentation.
  */
@@ -16,24 +16,23 @@
 #include <linux/ioport.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/overflow.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <generated/utsrelease.h>
 
 #include "mister_magik_scanout_slots_uapi.h"
+#include "mister_magik_scanout_platform.h"
+#include "mister_magik_scanout_policy.h"
 
 #define DEVICE_NAME "mister-magik-scanout-slots"
-#define FB_PHYS_BASE 0x22000000UL
-#define FB_VISIBLE_PHYS_BASE (FB_PHYS_BASE + PAGE_SIZE)
-#define RGB565_WIDTH 960UL
-#define RGB565_HEIGHT 540UL
-#define RGB565_STRIDE_BYTES 1920UL
-#define RGB565_FRAME_BYTES (RGB565_STRIDE_BYTES * RGB565_HEIGHT)
-#define RGB565_MAP_BYTES PAGE_ALIGN(RGB565_FRAME_BYTES)
-#define HIDDEN_SLOT_BYTES (1920UL * 1080UL * 4UL)
-
-#define REGION_OFFSET_PAGES 256UL
-#define REGION_OFFSET_BYTES (REGION_OFFSET_PAGES * PAGE_SIZE)
+#define RGB565_WIDTH MISTER_MAGIK_PLATFORM_WIDTH
+#define RGB565_HEIGHT MISTER_MAGIK_PLATFORM_HEIGHT
+#define RGB565_STRIDE_BYTES MISTER_MAGIK_PLATFORM_STRIDE_BYTES
+#define RGB565_FRAME_BYTES MISTER_MAGIK_PLATFORM_FRAME_BYTES
+#define RGB565_MAP_BYTES MISTER_MAGIK_PLATFORM_MAP_BYTES
+#define REGION_OFFSET_BYTES MISTER_MAGIK_PLATFORM_SLOT1_SELECTOR_BYTES
+#define REGION_OFFSET_PAGES (REGION_OFFSET_BYTES / PAGE_SIZE)
 
 struct scanout_slot {
 	unsigned long phys;
@@ -42,16 +41,16 @@ struct scanout_slot {
 
 static const struct scanout_slot scanout_slots[] = {
 	{
-		.phys = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
+		.phys = MISTER_MAGIK_PLATFORM_SLOT0_PHYS,
 		.mmap_pgoff = 0,
 	},
 	{
-		.phys = FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL),
+		.phys = MISTER_MAGIK_PLATFORM_SLOT1_PHYS,
 		.mmap_pgoff = REGION_OFFSET_PAGES,
 	},
 };
 
-static struct resource *scanout_slot_resources[MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT];
+static void *scanout_slot_resources[MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT];
 static struct resource framebuffer_resource;
 
 static const struct mister_magik_scanout_slots_layout scanout_slots_layout = {
@@ -65,12 +64,11 @@ static const struct mister_magik_scanout_slots_layout scanout_slots_layout = {
 	.flags = MISTER_MAGIK_SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
 	.slots = {
 		{
-			.physical_address = FB_PHYS_BASE + HIDDEN_SLOT_BYTES,
+			.physical_address = MISTER_MAGIK_PLATFORM_SLOT0_PHYS,
 			.mmap_offset_bytes = 0,
 		},
 		{
-			.physical_address = FB_PHYS_BASE +
-				(HIDDEN_SLOT_BYTES * 2UL),
+			.physical_address = MISTER_MAGIK_PLATFORM_SLOT1_PHYS,
 			.mmap_offset_bytes = REGION_OFFSET_BYTES,
 		},
 	},
@@ -136,32 +134,42 @@ static int scanout_slots_validate_platform(void)
 {
 	struct fb_info *info = registered_fb[0];
 	struct device_node *fb_node;
-	resource_size_t visible_end;
+	unsigned int i;
 	int ret;
 
-	if (strcmp(UTS_RELEASE, "5.15.1-MiSTer"))
+	if (strcmp(UTS_RELEASE, MISTER_MAGIK_PLATFORM_KERNEL_RELEASE))
 		return -ENODEV;
-	if (!of_machine_is_compatible("altr,socfpga-cyclone5"))
+	if (!of_machine_is_compatible(MISTER_MAGIK_PLATFORM_MACHINE))
 		return -ENODEV;
-	fb_node = of_find_compatible_node(NULL, NULL, "MiSTer_fb");
+	fb_node = of_find_compatible_node(NULL, NULL,
+					  MISTER_MAGIK_PLATFORM_FB_COMPATIBLE);
 	if (!fb_node)
 		return -ENODEV;
 	ret = of_address_to_resource(fb_node, 0, &framebuffer_resource);
 	of_node_put(fb_node);
-	if (ret || framebuffer_resource.start != FB_PHYS_BASE ||
-	    resource_size(&framebuffer_resource) < HIDDEN_SLOT_BYTES)
+	if (ret ||
+	    framebuffer_resource.start != MISTER_MAGIK_PLATFORM_FB_DT_BASE ||
+	    resource_size(&framebuffer_resource) !=
+		MISTER_MAGIK_PLATFORM_FB_DT_BYTES)
 		return -ENODEV;
-	if (!info || strcmp(info->fix.id, "MiSTer_fb"))
+	if (!info || strcmp(info->fix.id, MISTER_MAGIK_PLATFORM_FB_ID))
 		return -ENODEV;
-	if (info->fix.smem_start != FB_PHYS_BASE &&
-	    info->fix.smem_start != FB_VISIBLE_PHYS_BASE)
+	if (info->fix.smem_start != MISTER_MAGIK_PLATFORM_FB_VISIBLE_BASE)
 		return -ENODEV;
 	if (!info->fix.smem_len)
 		return -ENODEV;
-	visible_end = info->fix.smem_start + info->fix.smem_len;
-	if (visible_end < info->fix.smem_start ||
-	    visible_end > scanout_slots[0].phys)
+	if (!mister_magik_scanout_ranges_valid(info->fix.smem_start,
+					       info->fix.smem_len,
+					      scanout_slots[0].phys,
+					      scanout_slots[1].phys,
+					      RGB565_MAP_BYTES, ULONG_MAX))
 		return -ENODEV;
+	for (i = 0; i < ARRAY_SIZE(scanout_slots); i++) {
+		if (region_intersects(scanout_slots[i].phys, RGB565_MAP_BYTES,
+				      IORESOURCE_SYSTEM_RAM,
+				      IORES_DESC_NONE) != REGION_DISJOINT)
+			return -ENODEV;
+	}
 	return 0;
 }
 
@@ -177,20 +185,39 @@ static void scanout_slots_release_resources(void)
 	}
 }
 
+static void *scanout_slots_request_resource(unsigned long start,
+					    unsigned long size,
+					    unsigned int index,
+					    void *context)
+{
+	(void)index;
+	(void)context;
+	return request_mem_region_exclusive(start, size, DEVICE_NAME);
+}
+
+static void scanout_slots_release_resource(unsigned long start,
+					   unsigned long size,
+					   void *resource,
+					   unsigned int index,
+					   void *context)
+{
+	(void)resource;
+	(void)index;
+	(void)context;
+	release_mem_region(start, size);
+}
+
 static int scanout_slots_reserve_resources(void)
 {
-	unsigned int i;
+	static const unsigned long starts[] = {
+		MISTER_MAGIK_PLATFORM_SLOT0_PHYS,
+		MISTER_MAGIK_PLATFORM_SLOT1_PHYS,
+	};
 
-	for (i = 0; i < ARRAY_SIZE(scanout_slots); i++) {
-		scanout_slot_resources[i] =
-			request_mem_region(scanout_slots[i].phys,
-					   RGB565_MAP_BYTES, DEVICE_NAME);
-		if (!scanout_slot_resources[i]) {
-			scanout_slots_release_resources();
-			return -EBUSY;
-		}
-	}
-	return 0;
+	return mister_magik_reserve_scanout_slots(starts, RGB565_MAP_BYTES,
+		scanout_slot_resources, ARRAY_SIZE(starts),
+		scanout_slots_request_resource, scanout_slots_release_resource,
+		NULL);
 }
 
 static int __init scanout_slots_init(void)
@@ -201,8 +228,12 @@ static int __init scanout_slots_init(void)
 		     MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT);
 	BUILD_BUG_ON(sizeof(struct mister_magik_scanout_slots_layout) != 64);
 	BUILD_BUG_ON(RGB565_MAP_BYTES >= REGION_OFFSET_BYTES);
-	BUILD_BUG_ON((FB_PHYS_BASE + HIDDEN_SLOT_BYTES) & ~PAGE_MASK);
-	BUILD_BUG_ON((FB_PHYS_BASE + (HIDDEN_SLOT_BYTES * 2UL)) & ~PAGE_MASK);
+	BUILD_BUG_ON(MISTER_MAGIK_PLATFORM_SLOT0_PHYS & ~PAGE_MASK);
+	BUILD_BUG_ON(MISTER_MAGIK_PLATFORM_SLOT1_PHYS & ~PAGE_MASK);
+	BUILD_BUG_ON(MISTER_MAGIK_PLATFORM_FRAME_BYTES !=
+		     RGB565_STRIDE_BYTES * RGB565_HEIGHT);
+	BUILD_BUG_ON(MISTER_MAGIK_PLATFORM_ABI_VERSION !=
+		     MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION);
 
 	ret = scanout_slots_validate_platform();
 	if (ret) {

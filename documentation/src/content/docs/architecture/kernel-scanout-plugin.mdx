@@ -41,8 +41,13 @@ interfaces remain in the plugin.
 
 ## Failure and fallback
 
-The plugin registers only on the expected `5.15.1-MiSTer` kernel and
-`MiSTer_fb` physical layout. The Rust and Agent clients reject any ABI, geometry,
+The stock device tree describes the visible 8 MiB framebuffer aperture, not the
+whole hidden scanout layout. The two hidden regions are instead bound to a
+reviewed, pinned kernel/driver/DT/Main/RBF platform contract. At load time the
+plugin requires that exact platform, rejects any System RAM intersection, and
+reserves both complete ranges exclusively before registering the device.
+
+The Rust and Agent clients reject any ABI, geometry,
 address, mapping-size, or reserved-field mismatch. If the module is missing or
 rejected, MiSTer MagiK uses the supported `/dev/fb0` dirty-copy fallback; the
 plugin is never required to recover or boot the machine.

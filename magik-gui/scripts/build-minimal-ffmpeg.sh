@@ -126,6 +126,7 @@ if [ "$FFMPEG_MODE" = "video-lab-swscale" ]; then
 else
   CONFIGURE_SW_SCALE=(--disable-swscale)
 fi
+CONFIGURE_SW_SCALE_FLAG="${CONFIGURE_SW_SCALE[0]}"
 "${RUNNER[@]}" \
   bash -lc '
 set -euo pipefail
@@ -154,7 +155,7 @@ rm -rf ../dist
   --enable-avcodec \
   --enable-avformat \
   --enable-avutil \
-  "$@" \
+  "$1" \
   --enable-decoder=h264 \
   --enable-decoder=aac \
   --enable-decoder=pcm_s16le \
@@ -162,11 +163,11 @@ rm -rf ../dist
   --enable-parser=h264 \
   --enable-demuxer=mov \
   --enable-protocol=file
-grep -q '^#define CONFIG_GPL 0$' config.h
-grep -q '^#define CONFIG_VERSION3 0$' config.h
-grep -q '^#define CONFIG_NONFREE 0$' config.h
+grep -q "^#define CONFIG_GPL 0$" config.h
+grep -q "^#define CONFIG_VERSION3 0$" config.h
+grep -q "^#define CONFIG_NONFREE 0$" config.h
 make -j"$(nproc)" install
-' bash "${CONFIGURE_SW_SCALE[@]}"
+' bash "$CONFIGURE_SW_SCALE_FLAG"
 
 touch "$STAMP"
 echo "==> minimal FFmpeg built: $DIST"
