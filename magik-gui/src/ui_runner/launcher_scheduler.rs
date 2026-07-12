@@ -120,13 +120,21 @@ impl LauncherScheduler {
 
     pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {
         out.clear();
+        let mut disconnected = false;
         if let CatalogJobState::Running(rx) = &self.catalog {
             for _ in 0..CATALOG_MESSAGES_PER_FRAME {
-                let Ok(message) = rx.try_recv() else {
-                    break;
-                };
-                out.push(message);
+                match rx.try_recv() {
+                    Ok(message) => out.push(message),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
             }
+        }
+        if disconnected {
+            self.catalog = CatalogJobState::Idle;
         }
     }
 
@@ -312,5 +320,19 @@ mod tests {
 
         scheduler.poll_catalog(&mut events);
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn catalog_poll_releases_disconnected_worker_after_buffer_is_drained() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(CatalogWorkerMessage::Done).unwrap();
+        drop(tx);
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(rx);
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(&mut events);
+        assert_eq!(events.len(), 1);
+        assert!(!scheduler.catalog_worker_running());
     }
 }

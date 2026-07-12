@@ -1762,7 +1762,7 @@ pub(super) fn run_launcher_loop(
             catalog_ready,
             frame_accounting.first_visible_copy_done(),
             startup_return_waiting_for_catalog,
-            catalog_background_allowed,
+            catalog_background_allowed || catalog_session.deferred_worker_hydrates_navigation(),
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
         );
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
@@ -2384,6 +2384,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle,
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    loop_start,
                                     start,
                                     ui.render_w(),
                                 );
@@ -2410,6 +2411,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle,
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    loop_start,
                                     start,
                                     ui.render_w(),
                                 );
@@ -3231,6 +3233,11 @@ pub(super) fn run_launcher_loop(
                 frames,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
+                search_index_state: if catalog.text_indexes_ready() {
+                    "ready"
+                } else {
+                    "building"
+                },
             },
             timing: LauncherFrameTiming {
                 run_start,
@@ -3515,6 +3522,7 @@ fn process_catalog_worker_message(
         lifecycle,
         lifecycle_effects,
         full_bridge_dirty,
+        loop_start,
         start,
         render_w,
     );
@@ -3527,6 +3535,12 @@ fn should_defer_catalog_message(
     stationary_edge_since: Option<Instant>,
     now: Instant,
 ) -> bool {
+    if matches!(
+        message,
+        CatalogWorkerMessage::Ready { catalog, .. } if !catalog.text_indexes_ready()
+    ) {
+        return false;
+    }
     if !catalog_ready
         || nav.screen != Screen::Arcade
         || !matches!(message, CatalogWorkerMessage::Ready { .. })
@@ -3588,10 +3602,15 @@ fn apply_pending_launch_return_state(
     catalog: &ArcadeCatalog,
     pending: &mut Option<launcher::LaunchReturnState>,
 ) -> bool {
-    let Some(state) = pending.take() else {
+    let Some(state) = pending.as_ref().cloned() else {
         return false;
     };
-    launcher::apply_launch_return_state(nav, catalog, state)
+    if launcher::apply_launch_return_state(nav, catalog, state) {
+        pending.take();
+        true
+    } else {
+        false
+    }
 }
 
 fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
@@ -3744,6 +3763,7 @@ fn apply_catalog_session_effects(
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
+    now: Instant,
     start: Instant,
     render_w: usize,
 ) {
@@ -3756,10 +3776,14 @@ fn apply_catalog_session_effects(
                 catalog: ready_catalog,
                 load_us: _,
                 source,
+                publication_ack,
             } => {
                 *catalog = ready_catalog;
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
+                if let Some(publication_ack) = publication_ack {
+                    let _ = publication_ack.send(());
+                }
                 apply_forced_arcade_selected(nav, catalog);
                 let return_restored =
                     apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
@@ -3771,6 +3795,10 @@ fn apply_catalog_session_effects(
                         catalog,
                         preview,
                     );
+                    // The preview hold is measured from return startup. If
+                    // navigation hydration already consumed that budget,
+                    // transition to reveal in this same worker-message turn.
+                    lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
                 }
                 lifecycle.handle(
                     LauncherLifecycleInput::CatalogReady {
@@ -3780,6 +3808,50 @@ fn apply_catalog_session_effects(
                     lifecycle_effects,
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+            }
+            CatalogSessionEffect::SearchIndexesReady {
+                text_index_token,
+                games,
+                source,
+                timing,
+            } => {
+                if catalog.text_index_token() != text_index_token || !catalog.text_indexes_ready() {
+                    print_startup_event(
+                        start,
+                        "arcade_search_index_stale_ignored",
+                        format!("token={text_index_token}"),
+                    );
+                    continue;
+                }
+                print_startup_event(
+                    start,
+                    "arcade_search_index_ready",
+                    format!(
+                        "token={text_index_token} built={} games={games} elapsed_us={} source={} search_keys_us={} autocomplete_us={}",
+                        u8::from(timing.built),
+                        timing.total_us,
+                        source.label(),
+                        timing.search_keys_us,
+                        timing.autocomplete_us
+                    ),
+                );
+                let return_restored =
+                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                if return_restored {
+                    emit_return_context_restored(
+                        lifecycle,
+                        lifecycle_effects,
+                        nav,
+                        catalog,
+                        preview,
+                    );
+                    lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
+                }
+                if let Some(system_id) = active_system(catalog, nav).map(|system| system.id.clone())
+                {
+                    nav.refresh_arcade_search_if_active(catalog, &system_id);
+                    *full_bridge_dirty = true;
+                }
             }
             CatalogSessionEffect::SyncCatalogBridge => {
                 let bridge_sync_t = Instant::now();
@@ -4447,6 +4519,7 @@ mod tests {
             load_us: 42,
             source: CatalogSource::FullSqlite,
             durable_save_pending: false,
+            publication_ack: None,
         }
     }
 
@@ -4479,6 +4552,34 @@ mod tests {
             &nav,
             None,
             now
+        ));
+    }
+
+    #[test]
+    pub(super) fn deferred_search_catalog_publishes_during_arcade_motion() {
+        let now = Instant::now();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade.handle_direction_input(1, 0, now, 2);
+        let source = catalog_for_media_systems(&["arcade"]);
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            source.root.clone(),
+            source.games.as_ref().clone(),
+            source.systems.clone(),
+            Vec::new(),
+        );
+        assert!(!catalog.text_indexes_ready());
+        let message = CatalogWorkerMessage::Ready {
+            catalog,
+            summary: None,
+            load_us: 42,
+            source: CatalogSource::NavigationProjection,
+            durable_save_pending: false,
+            publication_ack: None,
+        };
+
+        assert!(!should_defer_catalog_message(
+            &message, true, &nav, None, now
         ));
     }
 

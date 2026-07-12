@@ -17,25 +17,36 @@ fn send_ready_catalog(
     source: CatalogSource,
     durable_save_pending: bool,
 ) {
-    let prewarm = catalog.ensure_text_indexes_ready_with_timing();
-    let _ = tx.send(CatalogWorkerMessage::Timing {
-        name: "arcade_search_index_prewarm".to_string(),
-        detail: format!(
-            "built={} games={} elapsed_us={} source={} search_keys_us={} autocomplete_us={}",
-            u8::from(prewarm.built),
-            catalog.len(),
-            prewarm.total_us,
-            source.label(),
-            prewarm.search_keys_us,
-            prewarm.autocomplete_us
-        ),
-    });
+    let games = catalog.len();
+    let text_index_job = catalog.text_index_build_job();
+    let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
         catalog,
         summary,
         load_us,
         source,
         durable_save_pending,
+        publication_ack: Some(publication_tx),
+    });
+    if publication_rx.recv().is_err() {
+        return;
+    }
+    let Some(text_index_job) = text_index_job else {
+        return;
+    };
+    let text_index_token = text_index_job.text_index_token();
+    let _ = tx.send(CatalogWorkerMessage::SearchIndexBuildStarted {
+        text_index_token,
+        games,
+        source,
+    });
+    apply_runtime_thread_policy(RuntimeThreadRole::SearchIndex);
+    let timing = text_index_job.build_with_timing();
+    let _ = tx.send(CatalogWorkerMessage::SearchIndexesReady {
+        text_index_token,
+        games,
+        source,
+        timing,
     });
 }
 
@@ -93,6 +104,7 @@ pub(super) fn start_library_catalog_worker(
                 }
             };
             let mut cache_state = CatalogCacheState::Missing;
+            let mut cached_catalog_published = false;
             let mut projection_repair_catalog: Option<(ArcadeCatalog, catalog_stamp::CatalogStamp)> =
                 None;
             match initial_cache {
@@ -113,6 +125,7 @@ pub(super) fn start_library_catalog_worker(
                                 CatalogSource::NavigationProjection,
                                 false,
                             );
+                            cached_catalog_published = true;
                         }
                         Ok(None) => {
                             let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -149,6 +162,7 @@ pub(super) fn start_library_catalog_worker(
                                         CatalogSource::FullSqlite,
                                         false,
                                     );
+                                    cached_catalog_published = true;
                                     if let Some(stamp) = loaded.stamp {
                                         projection_repair_catalog =
                                             Some((catalog_for_repair, stamp));
@@ -183,6 +197,7 @@ pub(super) fn start_library_catalog_worker(
                                     CatalogSource::FullSqlite,
                                     false,
                                 );
+                                cached_catalog_published = true;
                                 if let Some(stamp) = loaded.stamp {
                                     projection_repair_catalog = Some((catalog_for_repair, stamp));
                                 }
@@ -232,6 +247,12 @@ pub(super) fn start_library_catalog_worker(
                     execution_mode.label()
                 ),
             });
+            if cached_catalog_published && plan == CatalogWorkerPlan::CheckStamp {
+                let _ = tx.send(CatalogWorkerMessage::HydrationDoneNeedsValidation {
+                    root,
+                });
+                return;
+            }
             match plan {
                 CatalogWorkerPlan::LoadOnly => {
                     let _ = tx.send(CatalogWorkerMessage::Done);
@@ -780,12 +801,27 @@ pub(super) enum CatalogWorkerMessage {
     SystemDiscovered {
         system_id: String,
     },
+    SearchIndexBuildStarted {
+        text_index_token: usize,
+        games: usize,
+        source: CatalogSource,
+    },
+    SearchIndexesReady {
+        text_index_token: usize,
+        games: usize,
+        source: CatalogSource,
+        timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
+    },
+    HydrationDoneNeedsValidation {
+        root: String,
+    },
     Ready {
         catalog: ArcadeCatalog,
         summary: Option<library_db::LibraryRefreshSummary>,
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
+        publication_ack: Option<mpsc::Sender<()>>,
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
@@ -1137,7 +1173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ready_catalog_is_search_prewarmed_before_delivery() {
+    fn ready_catalog_is_delivered_before_background_search_index_events() {
         use mister_magik_catalog::arcade_catalog::{ArcadeGameEntry, GameSystemEntry};
         use std::sync::Arc;
 
@@ -1165,30 +1201,61 @@ mod tests {
         assert!(!catalog.text_indexes_ready());
         let (tx, rx) = mpsc::channel();
 
-        send_ready_catalog(
-            &tx,
-            catalog,
-            None,
-            42,
-            CatalogSource::NavigationProjection,
-            false,
-        );
+        let worker = std::thread::spawn(move || {
+            send_ready_catalog(
+                &tx,
+                catalog,
+                None,
+                42,
+                CatalogSource::NavigationProjection,
+                false,
+            );
+        });
 
-        match rx.recv().expect("prewarm timing") {
-            CatalogWorkerMessage::Timing { name, detail } => {
-                assert_eq!(name, "arcade_search_index_prewarm");
-                assert!(detail.contains("built=1"), "{detail}");
-            }
-            _ => panic!("expected prewarm timing before ready catalog"),
-        }
-        match rx.recv().expect("ready catalog") {
-            CatalogWorkerMessage::Ready { catalog, .. } => {
-                assert!(catalog.text_indexes_ready());
-                assert_eq!(catalog.search_game_indexes("arcade", "capcom"), vec![0]);
-                assert!(!catalog.ensure_text_indexes_ready());
+        let delivered_catalog = match rx.recv().expect("ready catalog") {
+            CatalogWorkerMessage::Ready {
+                catalog,
+                publication_ack,
+                ..
+            } => {
+                publication_ack
+                    .expect("publication acknowledgement")
+                    .send(())
+                    .expect("acknowledge catalog publication");
+                catalog
             }
             _ => panic!("expected ready catalog"),
+        };
+        let token = match rx.recv().expect("search index build started") {
+            CatalogWorkerMessage::SearchIndexBuildStarted {
+                text_index_token,
+                games,
+                source,
+            } => {
+                assert_eq!(games, 1);
+                assert_eq!(source, CatalogSource::NavigationProjection);
+                text_index_token
+            }
+            _ => panic!("expected search index build start after ready catalog"),
+        };
+        match rx.recv().expect("search indexes ready") {
+            CatalogWorkerMessage::SearchIndexesReady {
+                text_index_token,
+                timing,
+                ..
+            } => {
+                assert_eq!(text_index_token, token);
+                assert!(timing.built);
+            }
+            _ => panic!("expected search index completion"),
         }
+        assert_eq!(delivered_catalog.text_index_token(), token);
+        assert!(delivered_catalog.text_indexes_ready());
+        worker.join().expect("background index worker");
+        assert_eq!(
+            delivered_catalog.search_game_indexes("arcade", "capcom"),
+            vec![0]
+        );
     }
 
     #[test]

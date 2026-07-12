@@ -7,6 +7,7 @@ pub enum RuntimeThreadRole {
     LauncherUi,
     CatalogWorker,
     CatalogForeground,
+    SearchIndex,
     LibraryWalker,
     LibraryWalkerForeground,
     PreviewSelected,
@@ -25,6 +26,7 @@ impl RuntimeThreadRole {
             Self::LauncherUi => "launcher-ui",
             Self::CatalogWorker => "catalog-worker",
             Self::CatalogForeground => "catalog-foreground",
+            Self::SearchIndex => "search-index",
             Self::LibraryWalker => "library-walker",
             Self::LibraryWalkerForeground => "library-walker-foreground",
             Self::PreviewSelected => "preview-selected",
@@ -42,6 +44,7 @@ impl RuntimeThreadRole {
         match self {
             Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
+            Self::SearchIndex => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::CatalogForeground | Self::LibraryWalkerForeground => {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             }
@@ -198,7 +201,10 @@ fn apply_affinity(affinity: ThreadAffinity) -> &'static str {
 fn online_cpu_count() -> usize {
     // SAFETY: sysconf only reads the kernel's online processor count.
     let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-    usize::try_from(count).ok().filter(|count| *count > 0).unwrap_or(1)
+    usize::try_from(count)
+        .ok()
+        .filter(|count| *count > 0)
+        .unwrap_or(1)
 }
 
 #[cfg(target_os = "linux")]
@@ -388,24 +394,39 @@ mod tests {
         let expected = [
             (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Inherit),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
-            (RuntimeThreadRole::CatalogForeground, 0, ThreadAffinity::AllOnline),
+            (
+                RuntimeThreadRole::CatalogForeground,
+                0,
+                ThreadAffinity::AllOnline,
+            ),
             (RuntimeThreadRole::LibraryWalker, 10, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::LibraryWalkerForeground,
                 0,
                 ThreadAffinity::AllOnline,
             ),
-            (RuntimeThreadRole::PreviewSelected, 0, ThreadAffinity::Inherit),
+            (
+                RuntimeThreadRole::PreviewSelected,
+                0,
+                ThreadAffinity::Inherit,
+            ),
             (RuntimeThreadRole::PreviewPrefetch, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::MediaWorker, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::MediaDownload, 0, ThreadAffinity::Inherit),
             (RuntimeThreadRole::MediaIndex, 10, ThreadAffinity::Cpu0),
-            (RuntimeThreadRole::FramebufferStream, 10, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::FramebufferStream,
+                10,
+                ThreadAffinity::Cpu0,
+            ),
             (RuntimeThreadRole::VideoDecode, 5, ThreadAffinity::Inherit),
             (RuntimeThreadRole::VideoAudio, 5, ThreadAffinity::Inherit),
         ];
         for (role, nice, affinity) in expected {
-            assert_eq!(role.default_policy(), RuntimeThreadPolicy::new(nice, affinity));
+            assert_eq!(
+                role.default_policy(),
+                RuntimeThreadPolicy::new(nice, affinity)
+            );
         }
     }
 

@@ -174,7 +174,13 @@ pub struct FrameBudgetSlowFrame {
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
     let _ = create_dir_all(DIR);
-    let row = event_value(name, &detail.to_string(), unix_ms(), std::process::id());
+    let row = event_value(
+        name,
+        &detail.to_string(),
+        unix_ms(),
+        boot_ms(),
+        std::process::id(),
+    );
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -193,14 +199,23 @@ pub fn write_launcher_status(status: LauncherStatus<'_>) {
     }
 }
 
-fn event_value(name: &str, detail: &str, ts_unix_ms: u128, pid: u32) -> Value {
+fn event_value(name: &str, detail: &str, ts_unix_ms: u128, ts_boot_ms: u64, pid: u32) -> Value {
     json!({
         "ts_unix_ms": ts_unix_ms,
+        "ts_boot_ms": ts_boot_ms,
         "source": "slint",
         "pid": pid,
         "event": name,
         "detail": detail,
     })
+}
+
+fn boot_ms() -> u64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|value| value.split_whitespace().next()?.parse::<f64>().ok())
+        .map(|seconds| (seconds * 1000.0).round() as u64)
+        .unwrap_or(0)
 }
 
 fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32) -> Value {
@@ -546,8 +561,9 @@ mod tests {
 
     #[test]
     fn event_value_uses_agent_readable_schema() {
-        let value = event_value("first_frame", "catalog_ready=true", 1234, 99);
+        let value = event_value("first_frame", "catalog_ready=true", 1234, 5678, 99);
         assert_eq!(value["ts_unix_ms"], 1234);
+        assert_eq!(value["ts_boot_ms"], 5678);
         assert_eq!(value["source"], "slint");
         assert_eq!(value["pid"], 99);
         assert_eq!(value["event"], "first_frame");
@@ -822,6 +838,7 @@ mod tests {
         assert_eq!(row["event"], name);
         assert_eq!(row["detail"], "detail=ok");
         assert!(row["ts_unix_ms"].as_u64().is_some());
+        assert!(row["ts_boot_ms"].as_u64().is_some());
         assert!(row["pid"].as_i64().is_some());
     }
 

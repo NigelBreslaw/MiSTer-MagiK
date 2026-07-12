@@ -115,7 +115,8 @@ component SearchKeyboard inherits Rectangle {
                 }
 
                 Text {
-                    text: MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion;
+                    text: MisterBridge.arcade-search-preparing ? "Preparing search…" :
+                        (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion);
                     color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
                     font-size: 11px * root.s;
                     vertical-alignment: center;
