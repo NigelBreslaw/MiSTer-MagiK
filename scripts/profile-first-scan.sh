@@ -5,6 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
+REMOTE_REFRESH_LOG="/tmp/mister-magik-library-refresh.log"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_NAV="/media/fat/mister-magik/library.nav.lz4b"
@@ -17,9 +18,10 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
-RAM_CATALOG_READY_GATE_MS=91299
-DB_SAVE_GATE_MS=118698
+RAM_CATALOG_READY_GATE_MS=106276
+DB_SAVE_GATE_MS=180778
 source "$HERE/scripts/thread-sampler-lib.sh"
+source "$HERE/scripts/mister-supervision-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -191,8 +193,12 @@ fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
+local_refresh_log="$(mktemp)"
+combined_log="$(mktemp)"
 raw_log="$OUT_DIR/${LABEL}-launcher.log"
+raw_refresh_log="$OUT_DIR/${LABEL}-catalog-builder.log"
 artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
+launcher_suspended=0
 emit_thread_sample_artifact_report() {
   local raw_log_bytes=0
   if [[ -f "$raw_log" ]]; then
@@ -200,13 +206,22 @@ emit_thread_sample_artifact_report() {
   fi
   printf 'artifact_tsv\tlabel=%s\tkind=launcher_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
     "$LABEL" "$raw_log" "$REMOTE_LOG" "$([[ -f "$raw_log" ]] && echo true || echo false)" "$raw_log_bytes"
+  local raw_refresh_log_bytes=0
+  if [[ -f "$raw_refresh_log" ]]; then
+    raw_refresh_log_bytes="$(wc -c <"$raw_refresh_log" | tr -d ' ')"
+  fi
+  printf 'artifact_tsv\tlabel=%s\tkind=catalog_builder_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
+    "$LABEL" "$raw_refresh_log" "$REMOTE_REFRESH_LOG" "$([[ -f "$raw_refresh_log" ]] && echo true || echo false)" "$raw_refresh_log_bytes"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     thread_sample_emit_artifacts
   fi
 }
 cleanup() {
-  rm -f "$local_log" "$env_file"
+  rm -f "$local_log" "$local_refresh_log" "$combined_log" "$env_file"
   "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+  if [[ "$launcher_suspended" == "1" ]]; then
+    mister_supervision_command "mister_magik_resume" 0.5 >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 : >"$env_file"
@@ -216,7 +231,24 @@ fi
 printf 'export MISTER_LIBRARY_BENCH_LABEL=%q\n' "$LABEL" >>"$env_file"
 printf 'export MISTER_LIBRARY_BENCH_ACTIVE_ITERATION=1\n' >>"$env_file"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
+echo "==> Quiescing launcher and standalone catalog builder before artifact reset"
+mister_suspend_launcher 1 >/dev/null
+launcher_suspended=1
 reset_report="$("$MISTER" run "
+builder_pids=\$(pidof mister-magik-catalog-builder 2>/dev/null || true)
+if [ -n \"\$builder_pids\" ]; then
+  kill \$builder_pids 2>/dev/null || true
+  attempts=0
+  while pidof mister-magik-catalog-builder >/dev/null 2>&1 && [ \$attempts -lt 20 ]; do
+    sleep 0.1
+    attempts=\$((attempts + 1))
+  done
+  builder_pids=\$(pidof mister-magik-catalog-builder 2>/dev/null || true)
+  if [ -n \"\$builder_pids\" ]; then
+    kill -9 \$builder_pids 2>/dev/null || true
+  fi
+fi
+rm -f /tmp/mister-magik/catalog-builder.lock
 for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
   if [ -e \"\$path\" ]; then
     bytes=\$(wc -c <\"\$path\" 2>/dev/null || echo 0)
@@ -225,42 +257,71 @@ for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
     echo \"artifact_reset_tsv	$LABEL	missing	\$path	0\"
   fi
 done
-rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' /tmp/mister-magik-library-refresh.log
+rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_REFRESH_LOG'
 sync
+for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+  if [ -e \"\$path\" ]; then
+    echo \"artifact reset failed: \$path was republished\" >&2
+    exit 1
+  fi
+done
+sleep 1
+for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+  if [ -e \"\$path\" ]; then
+    echo \"artifact reset failed after settle: \$path was republished\" >&2
+    exit 1
+  fi
+done
 ")"
 printf '%s\n' "$reset_report" | tee "$OUT_DIR/${LABEL}-artifact-reset.tsv"
-"$MISTER" reboot-wait --direct-reset
+## Main does not accept reboot requests while its launcher is suspended. Resume
+## without a settle delay, then immediately request the supervised reboot.
+mister_supervision_command "mister_magik_resume" 0 >/dev/null
+launcher_suspended=0
+"$MISTER" reboot-wait
 thread_sample_start "$LABEL" "first-scan" "$OUT_DIR" "$TIMEOUT_SECS"
 
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
+  "$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
-  if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  if grep -q '"event":"failure"' "$local_refresh_log" ||
+     grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
     break
   fi
-  if grep -q $'^startup_timing\tlibrary_ready\t' "$local_log" &&
-     grep -q $'^startup_timing\tlibrary_db_saved\t' "$local_log"; then
+  if grep -q '"name":"builder_persisted"' "$local_refresh_log" &&
+     grep -q $'^startup_timing\tfirst_frame\t' "$local_log"; then
     break
   fi
   sleep 2
 done
 
+"$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
 cp "$local_log" "$raw_log"
+cp "$local_refresh_log" "$raw_refresh_log"
 thread_sample_stop
 thread_sample_collect
-if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+if grep -q '"event":"failure"' "$local_refresh_log" ||
+   grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan failed while saving the catalog; latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
-ready_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_ready" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
-saved_ms="$(awk -F '\t' '$1 == "startup_timing" && $2 == "library_db_saved" { ms = $3; sub(/ms$/, "", ms); print ms; exit }' "$local_log")"
+ready_us="$(sed -n 's/.*"name":"builder_catalog_ready","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$local_refresh_log" | tail -1)"
+saved_us="$(sed -n 's/.*"name":"builder_persisted","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$local_refresh_log" | tail -1)"
+ready_ms="${ready_us:+$(( (ready_us + 500) / 1000 ))}"
+saved_ms="${saved_us:+$(( (saved_us + 500) / 1000 ))}"
+if [[ -n "$ready_ms" && -n "$saved_ms" ]]; then
+  printf 'startup_timing\tlibrary_ready\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$ready_ms" "$ready_us" >"$combined_log"
+  printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$saved_ms" "$saved_us" >>"$combined_log"
+fi
+cat "$local_refresh_log" "$local_log" >>"$combined_log"
 if [[ -z "$ready_ms" || -z "$saved_ms" ]]; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan did not complete both gates within ${TIMEOUT_SECS}s (library_ready=${ready_ms:-missing}, library_db_saved=${saved_ms:-missing}); latest log follows" >&2
-  tail -80 "$local_log" >&2 || true
+  tail -80 "$combined_log" >&2 || true
   exit 1
 fi
 gate_failed=0
@@ -306,7 +367,7 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
       print label, commit, "counter_plateau", plateau_ms, "from=" bootstrap_sustained_detail " to=" full_scan_climb_detail
     }
   }
-' "$local_log" >>"$TSV"
+' "$combined_log" >>"$TSV"
 
 db_count="$("$MISTER" db "SELECT count(*) FROM game_rows" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
 status="$("$MISTER" status 2>/dev/null || true)"
