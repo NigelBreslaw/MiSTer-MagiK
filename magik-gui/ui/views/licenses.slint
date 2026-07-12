@@ -1,4 +1,5 @@
 import { MisterBridge } from "../api.slint";
+import { ListView } from "std-widgets.slint";
 
 component LicenseRow inherits Rectangle {
     in property <string> label;
@@ -75,17 +76,20 @@ export component LicensesScreen inherits Rectangle {
             background: #12101a;
             border-width: 1px;
             border-color: #5c4a72;
-            Text {
+            ListView {
                 x: 12px;
-                y: 12px - Math.mod(MisterBridge.licenses-scroll-y, 10) * 1px;
+                y: 12px;
                 width: parent.width - 24px;
                 height: parent.height - 24px;
-                text: MisterBridge.licenses-text;
-                color: #d8d0e0;
-                font-size: 8px;
-                wrap: word-wrap;
-                overflow: clip;
-                vertical-alignment: top;
+                viewport-y: -MisterBridge.licenses-scroll-y * 1px;
+                for line in MisterBridge.license-lines : Text {
+                    text: line;
+                    color: #d8d0e0;
+                    font-size: 8px;
+                    height: 10px;
+                    overflow: clip;
+                    vertical-alignment: top;
+                }
             }
         }
         Text {

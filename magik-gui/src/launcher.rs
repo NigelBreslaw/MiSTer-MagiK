@@ -174,6 +174,7 @@ pub struct ArcadeNav {
     pub scroll_y: i32,
     pub visual_index: f32,
     row_height: i32,
+    step_rows: usize,
     scroll: ArcadeScrollState,
     scroll_animation: SpringAnimation,
     scroll_velocity_animation: SpringAnimation,
@@ -206,11 +207,16 @@ impl ArcadeNav {
     }
 
     fn with_row_height(row_height: i32) -> Self {
+        Self::with_row_height_and_step(row_height, 1)
+    }
+
+    fn with_row_height_and_step(row_height: i32, step_rows: usize) -> Self {
         Self {
             selected: 0,
             scroll_y: 0,
             visual_index: 0.0,
             row_height: row_height.max(1),
+            step_rows: step_rows.max(1),
             scroll: ArcadeScrollState::default(),
             scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
             scroll_velocity_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -506,9 +512,12 @@ impl ArcadeNav {
             return;
         }
         let next = if dir > 0 {
-            self.scroll.target_index.saturating_add(1).min(count - 1)
+            self.scroll
+                .target_index
+                .saturating_add(self.step_rows)
+                .min(count - 1)
         } else {
-            self.scroll.target_index.saturating_sub(1)
+            self.scroll.target_index.saturating_sub(self.step_rows)
         };
         if next == self.scroll.target_index {
             return;
@@ -580,9 +589,7 @@ pub struct LauncherNav {
     pub settings: MagikSettings,
     pub licenses_selected: usize,
     pub licenses_expanded: bool,
-    pub licenses_scroll_line: usize,
-    licenses_scroll_animation: SpringAnimation,
-    licenses_scroll_last_frame: Option<Instant>,
+    licenses_scroll: ArcadeNav,
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
     pub arcade: ArcadeNav,
@@ -774,9 +781,7 @@ impl LauncherNav {
             settings: MagikSettings::default(),
             licenses_selected: 0,
             licenses_expanded: false,
-            licenses_scroll_line: 0,
-            licenses_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
-            licenses_scroll_last_frame: None,
+            licenses_scroll: ArcadeNav::with_row_height_and_step(LICENSE_SCROLL_LINE_PX as i32, 3),
             confirm_action: None,
             confirm_selected: 0,
             arcade: ArcadeNav::new(),
@@ -1215,9 +1220,7 @@ impl LauncherNav {
             if self.settings_selected == 3 {
                 self.licenses_selected = 0;
                 self.licenses_expanded = false;
-                self.licenses_scroll_line = 0;
-                self.licenses_scroll_animation.snap_to(0.0);
-                self.licenses_scroll_last_frame = None;
+                self.licenses_scroll.reset();
                 self.screen = Screen::Licenses;
                 return None;
             }
@@ -1231,39 +1234,28 @@ impl LauncherNav {
     }
 
     fn handle_licenses(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        let delta = self
-            .licenses_scroll_last_frame
-            .replace(frame_now)
-            .map_or(Duration::ZERO, |previous| {
-                frame_now.saturating_duration_since(previous)
-            });
-        self.licenses_scroll_animation.advance(delta);
         if self.licenses_expanded {
             if rising(now.btn_a, self.prev.btn_a)
                 || rising(now.btn_b, self.prev.btn_b)
                 || rising(now.btn_home, self.prev.btn_home)
             {
                 self.licenses_expanded = false;
-                self.licenses_scroll_line = 0;
-                self.licenses_scroll_animation.snap_to(0.0);
-                self.licenses_scroll_last_frame = None;
-            } else if self.repeat.tick_down(now.dpad_down, frame_now) {
-                self.licenses_scroll_line = self
-                    .licenses_scroll_line
-                    .saturating_add(1)
-                    .min(crate::licenses::max_scroll_line(self.licenses_selected));
-                self.licenses_scroll_animation
-                    .set_target(self.licenses_scroll_line as f64 * LICENSE_SCROLL_LINE_PX);
-            } else if self.repeat.tick_up(now.dpad_up, frame_now) {
-                self.licenses_scroll_line = self.licenses_scroll_line.saturating_sub(1);
-                self.licenses_scroll_animation
-                    .set_target(self.licenses_scroll_line as f64 * LICENSE_SCROLL_LINE_PX);
+                self.licenses_scroll.reset();
+            } else {
+                let count = crate::licenses::max_scroll_line(self.licenses_selected) + 1;
+                self.licenses_scroll.handle_direction_input(
+                    arcade_dpad_dir(now),
+                    arcade_dpad_dir(&self.prev),
+                    frame_now,
+                    count,
+                );
+                self.licenses_scroll.tick(count, frame_now);
             }
             return None;
         }
         if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
             self.screen = Screen::Settings;
-            self.licenses_scroll_last_frame = None;
+            self.licenses_scroll.reset();
             return None;
         }
         if self.repeat.tick_down(now.dpad_down, frame_now)
@@ -1276,21 +1268,19 @@ impl LauncherNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             self.licenses_expanded = true;
-            self.licenses_scroll_line = 0;
-            self.licenses_scroll_animation.snap_to(0.0);
-            self.licenses_scroll_last_frame = Some(frame_now);
+            self.licenses_scroll.reset();
         }
         None
     }
 
     pub fn licenses_scroll_y(&self) -> i32 {
-        self.licenses_scroll_animation.value().round() as i32
+        self.licenses_scroll.scroll_y
     }
 
     pub fn licenses_scroll_active(&self) -> bool {
         self.screen == Screen::Licenses
             && self.licenses_expanded
-            && !self.licenses_scroll_animation.is_settled()
+            && self.licenses_scroll.is_scroll_active()
     }
 
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
@@ -4205,25 +4195,103 @@ mod tests {
         assert!(nav
             .handle_input(&down, t0 + Duration::from_millis(96), &catalog)
             .is_none());
-        assert_eq!(nav.licenses_scroll_line, 1);
+        assert_eq!(nav.licenses_scroll.selected, 3);
         assert!(nav.licenses_scroll_active());
         assert_eq!(
-            nav.licenses_scroll_animation.configuration(),
+            nav.licenses_scroll.scroll_animation.configuration(),
             SpringConfiguration::smooth()
         );
         release(&mut nav, &catalog, t0, 112);
-        assert!(nav.licenses_scroll_animation.value() > 0.0);
+        assert!(nav.licenses_scroll.scroll_animation.value() > 0.0);
         let back = pad_with(|pad| pad.btn_b = true);
         assert!(nav
             .handle_input(&back, t0 + Duration::from_millis(128), &catalog)
             .is_none());
         assert!(!nav.licenses_expanded);
-        assert_eq!(nav.licenses_scroll_line, 0);
+        assert_eq!(nav.licenses_scroll.selected, 0);
         release(&mut nav, &catalog, t0, 144);
         assert!(nav
             .handle_input(&back, t0 + Duration::from_millis(160), &catalog)
             .is_none());
         assert_eq!(nav.screen, Screen::Settings);
+    }
+
+    #[test]
+    fn license_hold_uses_arcade_continuous_scroll_transition() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Licenses;
+        nav.licenses_expanded = true;
+
+        let down = pad_with(|pad| pad.dpad_down = true);
+        assert!(nav.handle_input(&down, t0, &catalog).is_none());
+        assert_eq!(nav.licenses_scroll.selected, 3);
+        assert!(!nav.licenses_scroll.scroll.continuous_active);
+
+        assert!(nav
+            .handle_input(
+                &down,
+                t0 + ARCADE_QUICK_TAP_MAX + Duration::from_millis(1),
+                &catalog,
+            )
+            .is_none());
+        assert!(nav.licenses_scroll.scroll.continuous_active);
+        assert!(nav.licenses_scroll.scroll_animation.velocity() > 0.0);
+        assert_eq!(
+            nav.licenses_scroll.row_height,
+            LICENSE_SCROLL_LINE_PX as i32
+        );
+        assert_eq!(nav.licenses_scroll.step_rows, 3);
+
+        let release_at = t0 + ARCADE_QUICK_TAP_MAX + Duration::from_millis(17);
+        assert!(nav
+            .handle_input(&PadState::default(), release_at, &catalog)
+            .is_none());
+        assert!(!nav.licenses_scroll.scroll.continuous_active);
+        for frame in 1..=60 {
+            assert!(nav
+                .handle_input(
+                    &PadState::default(),
+                    release_at + Duration::from_millis(frame * 16),
+                    &catalog,
+                )
+                .is_none());
+        }
+        assert!(nav.licenses_scroll.is_settled());
+    }
+
+    #[test]
+    fn license_three_line_steps_respect_direction_and_bounds() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Licenses;
+        nav.licenses_expanded = true;
+        let down = pad_with(|pad| pad.dpad_down = true);
+        let up = pad_with(|pad| pad.dpad_up = true);
+
+        assert!(nav.handle_input(&down, t0, &catalog).is_none());
+        assert_eq!(nav.licenses_scroll.selected, 3);
+        release(&mut nav, &catalog, t0, 16);
+        assert!(nav
+            .handle_input(&up, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.licenses_scroll.selected, 0);
+        release(&mut nav, &catalog, t0, 48);
+        assert!(nav
+            .handle_input(&up, t0 + Duration::from_millis(64), &catalog)
+            .is_none());
+        assert_eq!(nav.licenses_scroll.selected, 0);
+
+        let count = crate::licenses::max_scroll_line(nav.licenses_selected) + 1;
+        nav.licenses_scroll.selected = count - 1;
+        nav.licenses_scroll.snap_to_selected();
+        release(&mut nav, &catalog, t0, 80);
+        assert!(nav
+            .handle_input(&down, t0 + Duration::from_millis(96), &catalog)
+            .is_none());
+        assert_eq!(nav.licenses_scroll.selected, count - 1);
     }
 
     #[test]

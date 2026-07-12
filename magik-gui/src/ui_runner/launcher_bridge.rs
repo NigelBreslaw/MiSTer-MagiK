@@ -38,9 +38,8 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_simple_joystick_handling(false);
     bridge.set_licenses_selected(0);
     bridge.set_licenses_expanded(false);
-    bridge.set_licenses_scroll_line(0);
     bridge.set_licenses_scroll_y(0);
-    bridge.set_licenses_text("".into());
+    bridge.set_license_lines(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
     bridge.set_confirm_visible(false);
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
@@ -417,15 +416,8 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
     bridge.set_licenses_selected(nav.licenses_selected as i32);
     bridge.set_licenses_expanded(nav.licenses_expanded);
-    bridge.set_licenses_scroll_line(nav.licenses_scroll_line as i32);
     bridge.set_licenses_scroll_y(nav.licenses_scroll_y());
-    bridge.set_licenses_text(
-        crate::licenses::visible_text(
-            nav.licenses_selected,
-            (nav.licenses_scroll_y().max(0) as usize) / 10,
-        )
-        .into(),
-    );
+    bridge.set_license_lines(models.license_lines(nav.licenses_selected));
     sync_arcade_list_geometry_bridge(&bridge, nav, render_w);
     if !(defer_selected_preview && nav.screen == Screen::Arcade) {
         bridge.set_arcade_selected(nav.arcade.selected as i32);
@@ -568,25 +560,13 @@ pub(super) fn sync_bridge_launcher_light(
     );
     set_bridge_if_changed!(
         bridge,
-        get_licenses_scroll_line,
-        set_licenses_scroll_line,
-        nav.licenses_scroll_line as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
         get_licenses_scroll_y,
         set_licenses_scroll_y,
         nav.licenses_scroll_y()
     );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_licenses_text,
-        set_licenses_text,
-        crate::licenses::visible_text(
-            nav.licenses_selected,
-            (nav.licenses_scroll_y().max(0) as usize) / 10,
-        )
-    );
+    if models.license_lines_index() != Some(nav.licenses_selected) {
+        bridge.set_license_lines(models.license_lines(nav.licenses_selected));
+    }
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, render_w);
     if !(defer_arcade_overlay_bridge && nav.screen == Screen::Arcade) {
         set_bridge_if_changed!(
@@ -855,7 +835,6 @@ pub(super) struct LauncherBridgeKey {
     simple_joystick_handling: bool,
     licenses_selected: usize,
     licenses_expanded: bool,
-    licenses_scroll_line: usize,
     licenses_scroll_y: i32,
     confirm_action: Option<launcher::ConfirmAction>,
     confirm_selected: usize,
@@ -883,7 +862,6 @@ impl LauncherBridgeKey {
             simple_joystick_handling: nav.settings.simple_joystick_handling,
             licenses_selected: nav.licenses_selected,
             licenses_expanded: nav.licenses_expanded,
-            licenses_scroll_line: nav.licenses_scroll_line,
             licenses_scroll_y: nav.licenses_scroll_y(),
             confirm_action: nav.confirm_action,
             confirm_selected: nav.confirm_selected,
@@ -905,6 +883,31 @@ pub(super) struct LauncherBridgeModels {
     game_systems_key: Option<usize>,
     game_systems: Option<Rc<VecModel<slint_ui::launcher::GameSystem>>>,
     game_systems_selected: Option<usize>,
+    license_lines_index: Option<usize>,
+    license_lines: Option<Rc<VecModel<SharedString>>>,
+}
+
+impl LauncherBridgeModels {
+    fn license_lines_index(&self) -> Option<usize> {
+        self.license_lines_index
+    }
+
+    fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
+        if self.license_lines_index != Some(index) {
+            let lines = crate::licenses::wrapped_lines(index)
+                .iter()
+                .map(|line| SharedString::from(line.as_str()))
+                .collect::<Vec<_>>();
+            self.license_lines = Some(Rc::new(VecModel::from(lines)));
+            self.license_lines_index = Some(index);
+        }
+        ModelRc::from(
+            self.license_lines
+                .as_ref()
+                .expect("license line model initialized")
+                .clone(),
+        )
+    }
 }
 
 impl LauncherBridgeModels {

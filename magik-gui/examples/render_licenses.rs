@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, PhysicalSize};
+use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 
 struct SnapshotPlatform(Rc<MinimalSoftwareWindow>);
 
@@ -29,10 +29,20 @@ fn main() {
     bridge.set_screen_mode(if state == "settings" { 3 } else { 4 });
     bridge.set_licenses_selected(1);
     bridge.set_licenses_expanded(expanded);
-    bridge.set_licenses_text(
-        "Made with Slint\n\nMiSTer MagiK uses Slint 1.17.0 under the GPL-3.0-only option.\n\nGNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n\nThis is representative long legal text used to verify wrapping and clipping."
-            .into(),
-    );
+    bridge.set_license_lines(ModelRc::new(VecModel::from(
+        [
+            "Made with Slint",
+            "",
+            "MiSTer MagiK uses Slint 1.17.0 under the GPL-3.0-only option.",
+            "",
+            "GNU GENERAL PUBLIC LICENSE",
+            "Version 3, 29 June 2007",
+            "",
+            "This is representative legal text used to verify the virtualized line layout.",
+        ]
+        .map(SharedString::from)
+        .to_vec(),
+    )));
     app.show().expect("show launcher");
     window.request_redraw();
 
