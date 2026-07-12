@@ -308,13 +308,13 @@ pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
             .and_then(|name| name.to_str())
             .is_some_and(is_oneload64_install_name)
     });
-    if path
+    if let Some(install_root) = path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("crt"))
-        && oneload64_install.is_some()
+        .then_some(oneload64_install)
+        .flatten()
     {
-        let install_root = oneload64_install.expect("checked OneLoad64 ancestor");
         if !path.is_file() {
             return Err(format!(
                 "prepared C64 payload is missing: {}",
