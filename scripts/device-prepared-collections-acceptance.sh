@@ -122,12 +122,17 @@ collection_count() {
 
 candidate_line() {
   local collection="$1" where_sql="$2"
+  candidate_line_at_offset "$collection" "$where_sql" 0
+}
+
+candidate_line_at_offset() {
+  local collection="$1" where_sql="$2" offset="$3"
   db "SELECT p.launch_id,g.title,g.system_id,g.genre,l.ordinal
       FROM prepared_launch_rows p
       JOIN games g ON g.game_key_id=p.launch_id
       JOIN launcher_catalog_rows l ON l.launch_id=p.launch_id
       WHERE p.collection_id=$(sql_string "$collection") $where_sql
-      ORDER BY l.ordinal LIMIT 1;" | library_sql_first_result_line
+      ORDER BY l.ordinal LIMIT 1 OFFSET $offset;" | library_sql_first_result_line
 }
 
 candidate_for_title() {
@@ -287,16 +292,22 @@ run_0mhz() {
 }
 
 run_neon68k() {
-  local count candidate path
+  local count candidate path index
   count="$(collection_count neon68k)"
   if [ "$count" -eq 0 ]; then
     echo "SKIP: neon68k is not installed"
-    SKIPPED=$((SKIPPED + 1))
+    SKIPPED=$((SKIPPED + 2))
     return
   fi
-  candidate="$(candidate_line neon68k '')"
-  path="$(IFS=$'\t'; read -r launch_id title system_id genre ordinal <<<"$candidate"; db "SELECT source_path FROM launch_plans WHERE launch_id=$launch_id;" | library_sql_first_result_line)"
-  run_case "neon68k-game" neon68k "$candidate" "\"event\":\"handoff_launch\",\"detail\":\"path=$path\""
+  if [ "$count" -lt 2 ]; then
+    echo "FAIL: neon68k needs at least two prepared games, found $count" >&2
+    return 1
+  fi
+  for index in 0 1; do
+    candidate="$(candidate_line_at_offset neon68k '' "$index")"
+    path="$(IFS=$'\t'; read -r launch_id title system_id genre ordinal <<<"$candidate"; db "SELECT source_path FROM launch_plans WHERE launch_id=$launch_id;" | library_sql_first_result_line)"
+    run_case "neon68k-game-$((index + 1))" neon68k "$candidate" "\"event\":\"handoff_launch\",\"detail\":\"path=$path\""
+  done
 }
 
 run_oneload64_case() {
@@ -316,6 +327,7 @@ run_oneload64() {
     SKIPPED=$((SKIPPED + 2))
     return
   fi
+  # Keep two distinct future launch cases: one primary CRT and one MultiLoad64 CRT.
   run_oneload64_case "oneload64-primary" "AND g.game_id NOT LIKE '%/MultiLoad64/%'"
   run_oneload64_case "oneload64-multiload" "AND g.game_id LIKE '%/MultiLoad64/%'"
 }
