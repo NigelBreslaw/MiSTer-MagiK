@@ -3,6 +3,7 @@
 pub mod arcade_catalog;
 mod bounded_lz4;
 pub mod catalog_build;
+pub mod catalog_build_record;
 pub mod catalog_checkpoint;
 pub mod catalog_classify;
 pub mod catalog_config;

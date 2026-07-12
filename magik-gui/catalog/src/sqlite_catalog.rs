@@ -372,7 +372,9 @@ fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
     let summary_path = catalog_summary::summary_path_for_sqlite(path);
     remove_file_if_exists(&summary_path, "catalog summary")?;
     let navigation_path = catalog_navigation::navigation_path_for_sqlite(path);
-    remove_file_if_exists(&navigation_path, "catalog navigation")
+    remove_file_if_exists(&navigation_path, "catalog navigation")?;
+    let duration_path = crate::catalog_build_record::duration_path_for_sqlite(path);
+    remove_file_if_exists(&duration_path, "catalog build duration")
 }
 
 fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
@@ -4721,12 +4723,15 @@ mod tests {
         assert!(db.exists(), "database should be published");
         assert!(summary_path.exists(), "summary should be published");
         assert!(navigation_path.exists(), "navigation should be published");
+        let duration_path = crate::catalog_build_record::duration_path_for_sqlite(&db);
+        std::fs::write(&duration_path, b"119\n").expect("write catalog build duration");
 
         remove_sqlite_database_at(&db).expect("remove database and summary");
 
         assert!(!db.exists(), "database should be removed");
         assert!(!summary_path.exists(), "summary should be removed");
         assert!(!navigation_path.exists(), "navigation should be removed");
+        assert!(!duration_path.exists(), "build duration should be removed");
         let _ = std::fs::remove_dir_all(root);
     }
 

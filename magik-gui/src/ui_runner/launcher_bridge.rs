@@ -93,14 +93,14 @@ fn kernel_version() -> String {
         .unwrap_or_else(|| "Kernel version unavailable".to_string())
 }
 
-pub(super) const DATABASE_BUILD_TIME_PATH: &str = "/media/fat/mister-magik/database-build-time.txt";
-
 fn last_database_build() -> String {
-    std::fs::read_to_string(DATABASE_BUILD_TIME_PATH)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "No completed database build recorded yet".to_string())
+    mister_magik_catalog::catalog_build_record::read_completed_build_duration(
+        &mister_magik_catalog::catalog_config::default_sqlite_path(),
+    )
+    .ok()
+    .flatten()
+    .map(mister_magik_catalog::catalog_build_record::format_duration)
+    .unwrap_or_else(|| "No completed database build recorded yet".to_string())
 }
 
 fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {

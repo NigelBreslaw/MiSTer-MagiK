@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const CATALOG_BUILDER_PROTOCOL_VERSION: u32 = 1;
-pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str =
-    "/tmp/mister-magik/catalog-builder.lock";
+pub const DEFAULT_CATALOG_BUILDER_LOCK_PATH: &str = "/tmp/mister-magik/catalog-builder.lock";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -73,6 +72,8 @@ impl CatalogBuilderEvent {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct BuilderSummary {
+    #[serde(default)]
+    pub completed_build_seconds: Option<u64>,
     pub skipped: bool,
     pub scan_us: u64,
     pub discover_us: u64,
@@ -89,6 +90,7 @@ pub struct BuilderSummary {
 impl From<crate::library_db::LibraryRefreshSummary> for BuilderSummary {
     fn from(value: crate::library_db::LibraryRefreshSummary) -> Self {
         Self {
+            completed_build_seconds: None,
             skipped: value.skipped,
             scan_us: value.scan_us,
             discover_us: value.discover_us,
@@ -116,6 +118,23 @@ mod tests {
             detail: "42 games found".into(),
         };
         let encoded = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn persisted_event_round_trips_completed_build_seconds() {
+        let event = CatalogBuilderEvent::Persisted {
+            protocol: CATALOG_BUILDER_PROTOCOL_VERSION,
+            summary: BuilderSummary {
+                completed_build_seconds: Some(119),
+                ..BuilderSummary::default()
+            },
+        };
+        let encoded = serde_json::to_string(&event).unwrap();
+
         assert_eq!(
             serde_json::from_str::<CatalogBuilderEvent>(&encoded).unwrap(),
             event

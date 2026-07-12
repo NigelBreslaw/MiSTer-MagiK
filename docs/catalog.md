@@ -28,6 +28,8 @@ APIs, progress states, and benchmark expectations.
   version, and catalog build version.
 - `magik-gui/catalog/src/catalog_stamp.rs` owns the warm validation stamp.
 - `magik-gui/catalog/src/catalog_store.rs` owns stamp persistence helpers.
+- `magik-gui/catalog/src/catalog_build_record.rs` owns the completed-build
+  duration sidecar used by the Info screen.
 - `magik-gui/catalog/src/library_db.rs` remains the compatibility facade for
   scanning, classification, SQLite build/publish, and public read APIs while the
   catalog modules continue to split out.
@@ -116,7 +118,10 @@ Cold or reset database:
 7. The worker continues durable persistence in the background, creates SQLite
    under `/tmp/mister-magik/sqlite-build` for production `/media/fat` databases,
    publishes the completed file, then reports `Persisted` and records
-   `library_db_saved`.
+   `library_db_saved`. Before reporting success, the catalog builder atomically
+   writes `/media/fat/mister-magik/database-build-time.txt` with total build
+   duration rounded to the nearest second. Both UI-triggered and standalone
+   builder runs use this path; the Info screen only reads and formats it.
 8. Virtual launch cache materialization runs after readiness so it cannot extend
    first usable catalog time.
 
@@ -132,7 +137,8 @@ into exactly that buffer. A malformed or oversized sidecar is treated as a
 failed warm cache and must not make the launcher allocate an unbounded buffer.
 
 The Settings-screen `Reset Database` action removes the SQLite catalog, its
-adjacent `library.summary.json` projection, and all recognized screenshot pack
+adjacent `library.summary.json` and `library.nav.lz4b` projections, the
+`database-build-time.txt` duration record, and all recognized screenshot pack
 files under `/media/fat/mister-magik/assets` before requesting the supervised
 reboot. It deletes size-qualified and legacy `<system>-screenshots*.mmlz4b`
 files for supported pack systems plus `.screenshot-media-state.json`; unrelated

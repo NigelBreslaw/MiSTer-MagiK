@@ -1,6 +1,7 @@
 use crate::builder_protocol::{
     BuilderSummary, CatalogBuilderEvent, CATALOG_BUILDER_PROTOCOL_VERSION,
 };
+use crate::catalog_build_record;
 use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
 use crate::library_db;
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
@@ -159,14 +160,24 @@ pub fn run(
     let summary = artifact
         .save_default_sqlite_with_catalog_projection(&catalog, Some(&mut progress))
         .map_err(|error| fail(protocol, "persist", error, &mut emit))?;
+    let completed_build_seconds = catalog_build_record::write_completed_build_duration(
+        &crate::catalog_config::default_sqlite_path(),
+        run_started.elapsed(),
+    )
+    .map_err(|error| fail(protocol, "build-duration", error, &mut emit))?;
     emit(CatalogBuilderEvent::Timing {
         protocol,
         name: "builder_persisted".into(),
-        detail: format!("elapsed_us={}", run_started.elapsed().as_micros()),
+        detail: format!(
+            "elapsed_us={} completed_build_seconds={completed_build_seconds}",
+            run_started.elapsed().as_micros()
+        ),
     });
+    let mut builder_summary = BuilderSummary::from(summary);
+    builder_summary.completed_build_seconds = Some(completed_build_seconds);
     emit(CatalogBuilderEvent::Persisted {
         protocol,
-        summary: summary.into(),
+        summary: builder_summary,
     });
     let _ = std::fs::remove_file(snapshot_path);
     emit(CatalogBuilderEvent::Done { protocol });
