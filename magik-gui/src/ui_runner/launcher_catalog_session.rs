@@ -51,6 +51,7 @@ pub(super) enum CatalogSessionEffect {
     },
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
+    Lifecycle(LauncherLifecycleInput),
     StartCatalogWorker(CatalogWorkerStart),
 }
 
@@ -212,6 +213,39 @@ impl LauncherCatalogSession {
                 percent,
             } => {
                 self.handle_progress(context, title, detail, percent, now, &mut effects);
+            }
+            CatalogWorkerMessage::LoadFailed { error } => {
+                self.refresh_done = true;
+                self.foreground_update = false;
+                self.refresh_failed = true;
+                self.deferred_worker = None;
+                self.games_found_counter.reset();
+                effects.push(CatalogSessionEffect::FinishMediaWorker);
+                effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.event("library_load_failed", error.clone());
+                effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogLoadFailed {
+                        error,
+                        has_stale_catalog: context.catalog_ready,
+                    },
+                ));
+            }
+            CatalogWorkerMessage::FreshCleanupStarted => {
+                effects.event("library_fresh_cleanup_started", "lock=acquired");
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogFreshCleanupStarted,
+                ));
+            }
+            CatalogWorkerMessage::FreshCleanupCompleted { removed } => {
+                effects.event(
+                    "library_fresh_cleanup_completed",
+                    format!("removed={removed}"),
+                );
+                effects.push(CatalogSessionEffect::Lifecycle(
+                    LauncherLifecycleInput::CatalogFreshCleanupCompleted,
+                ));
+                effects.ui(catalog_rebuild_started_intent(true));
             }
             CatalogWorkerMessage::SystemDiscovered { system_id } => {
                 effects.push(CatalogSessionEffect::MediaSystemDiscovered {
@@ -659,6 +693,7 @@ mod tests {
                 CatalogSessionEffect::MediaSystemDiscovered { .. } => "media-system-discovered",
                 CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => "request-rebuild-marker",
                 CatalogSessionEffect::Confirm(_) => "confirm",
+                CatalogSessionEffect::Lifecycle(_) => "lifecycle",
                 CatalogSessionEffect::StartCatalogWorker(_) => "start-worker",
             })
             .collect()
@@ -705,6 +740,7 @@ mod tests {
                     effect_names.push("request-rebuild-marker")
                 }
                 CatalogSessionEffect::Confirm(_) => effect_names.push("confirm"),
+                CatalogSessionEffect::Lifecycle(_) => effect_names.push("lifecycle"),
                 CatalogSessionEffect::StartCatalogWorker(_) => effect_names.push("start-worker"),
             }
         }

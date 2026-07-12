@@ -171,6 +171,17 @@ Warm boot with a usable cache:
    one-shot request and starts the foreground `Updating Library` flow instead of
    delayed ready-cache validation.
 
+If existing catalog artifacts cannot be loaded, the launcher lifecycle enters
+`CatalogLoadFailed` and shows `Library failed to load.` with the underlying
+error plus `Retry` and `Rebuild`. `Retry` is a strict read of the current
+artifacts and can never fall through to a build. `Rebuild` starts the dedicated
+`fresh-build` operation. After taking the catalog-builder lock, that operation
+removes the SQLite database, summary/navigation projections, build-duration
+record, recognized catalog temp files, stale ready snapshots, and rebuild
+marker before scanning from source. Screenshot packs and media state are not
+catalog artifacts and are preserved. A genuinely missing or empty first-boot
+catalog remains the normal automatic first-build path.
+
 The summary projection contains systems and counts, not per-game rows. Home may
 render from it immediately, and a user may enter Arcade from those tiles, but
 Arcade must treat the selected system as a loading state until the full SQLite
@@ -264,15 +275,23 @@ state is not persisted separately. Materialized list tables carry
 
 ## Worker Requests
 
-`CatalogWorkerRequest` has exactly three modes:
+`CatalogWorkerRequest` has five modes:
 
 - `LoadOnly`: use the already loaded cache and do no background validation.
+- `StrictLoad`: read the current SQLite catalog only; report a load failure for
+  missing, empty, or unreadable data and never build or delete anything.
 - `CheckStamp`: validate the ready cache after the UI is usable.
 - `ForceBuild`: run the full builder regardless of cache state.
+- `FreshBuild`: acquire the builder lock, delete catalog-owned artifacts, and
+  continue directly into a foreground scan/build.
 
 Missing, empty, and old-schema caches are not usable. They always plan
-`ForceBuild`, even when the request was `CheckStamp`, unless
-`MISTER_CATALOG_REFRESH=off` has disabled the catalog worker for a benchmark
+`ForceBuild`, even when the request was `CheckStamp`, except that `StrictLoad`
+always remains load-only and reports the failure. `FreshBuild` always uses its
+distinct destructive plan. These requests map to the four internal worker plans
+`LoadOnly`, `CheckStamp`, `ForceBuild`, and `FreshBuild`.
+
+`MISTER_CATALOG_REFRESH=off` disables the catalog worker for a benchmark
 restart.
 
 `MISTER_CATALOG_REFRESH` is the single launcher policy knob:

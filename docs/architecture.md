@@ -227,9 +227,30 @@ normal MiSTer loader path controls FPGA/core state and HDMI recovery.
 
 Launcher orchestration runs through an explicit Rust lifecycle state chart:
 
-```text
-BootSplash -> CatalogBuilding|CatalogReady -> Idle -> Launching -> Handoff|Recovered
-Recovered -> Idle
+```mermaid
+stateDiagram-v2
+    [*] --> BootSplash
+    BootSplash --> CatalogBuilding: catalog missing or empty
+    BootSplash --> CatalogReady: catalog loaded
+    BootSplash --> CatalogLoadFailed: existing catalog unreadable
+
+    CatalogReady --> CatalogLoadFailed: hydration/load fails
+    CatalogLoadFailed --> CatalogRetrying: Retry
+    CatalogRetrying --> CatalogReady: load succeeds
+    CatalogRetrying --> CatalogLoadFailed: load fails
+
+    CatalogLoadFailed --> FreshRebuilding: Rebuild
+    FreshRebuilding --> FreshRebuilding: builder lock acquired
+    FreshRebuilding --> FreshRebuilding: delete catalog artifacts
+    FreshRebuilding --> CatalogBuilding: cleanup complete
+    CatalogBuilding --> CatalogReady: fresh catalog ready
+    CatalogBuilding --> CatalogLoadFailed: recovery cannot produce a loadable catalog
+
+    CatalogReady --> Idle
+    Idle --> Launching
+    Launching --> Handoff
+    Launching --> Recovered
+    Recovered --> Idle
 ```
 
 `magik-gui/src/ui_runner/launcher_lifecycle.rs` owns lifecycle policy,
@@ -241,6 +262,10 @@ framebuffer presentation, route reassertion, and frame accounting.
 Lifecycle and scheduler internals should use explicit enum states for startup
 readiness, pending launch refs, and worker availability instead of parallel
 booleans or `Option` fields that can express impossible combinations.
+Library load recovery follows the same rule: the lifecycle state owns dialog
+text, Retry/Rebuild selection, strict retry, locked cleanup phases, and fresh
+build transitions. The frame loop renders the lifecycle view and executes its
+effects; it does not maintain a second recovery flag or choose worker policy.
 
 Startup reveal is part of that lifecycle state system. This Mermaid chart is
 the source of truth for whether HDMI should show splash, black, catalog

@@ -1307,6 +1307,7 @@ pub(super) fn run_launcher_loop(
         },
         start,
     );
+    lifecycle.set_catalog_root(arcade_root.clone());
     let deferred_library_rebuild = consume_library_rebuild_marker(catalog_worker_enabled, start);
     let mut catalog_session = LauncherCatalogSession::new(
         deferred_library_rebuild || catalog_refresh_policy.force_requested(),
@@ -1314,9 +1315,11 @@ pub(super) fn run_launcher_loop(
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
+    let mut catalog_recovery_prev = PadState::default();
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
+    let mut startup_load_error = None;
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
     if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
@@ -1472,13 +1475,15 @@ pub(super) fn run_launcher_loop(
             }
             Err(e) => {
                 crate::ui_errln!("arcade catalog cache load failed: {e}");
-                print_startup_event(start, "catalog_cache_load_failed", e);
-                if catalog_worker_enabled {
-                    let initial_cache = catalog_worker_initial_cache_after_ui_probe(
-                        CatalogUiCacheProbe::LoadFailed {
-                            sqlite_exists: sqlite_path.exists(),
-                        },
-                    );
+                print_startup_event(start, "catalog_cache_load_failed", &e);
+                if sqlite_path.exists()
+                    && !deferred_library_rebuild
+                    && !catalog_refresh_policy.force_requested()
+                {
+                    startup_load_error = Some(e);
+                    catalog_session.mark_refresh_done();
+                } else if catalog_worker_enabled {
+                    let initial_cache = CatalogWorkerInitialCache::AlreadyProbedMissing;
                     print_startup_event(
                         start,
                         "catalog_worker_deferred",
@@ -1555,12 +1560,13 @@ pub(super) fn run_launcher_loop(
         "No cached catalog; scanning library...".to_string()
     };
     LauncherStatusPresenter::new(&bridge).sync_catalog_scan(CatalogScanBridgeStatus::new(
-        initial_catalog_scan_visible(
-            catalog_ready,
-            arcade_catalog_required_at_start,
-            catalog_worker_enabled,
-            catalog_session.foreground_update(),
-        ),
+        startup_load_error.is_none()
+            && initial_catalog_scan_visible(
+                catalog_ready,
+                arcade_catalog_required_at_start,
+                catalog_worker_enabled,
+                catalog_session.foreground_update(),
+            ),
         false,
         catalog_scan_message(catalog_session.foreground_update()),
         catalog_scan_title,
@@ -1572,6 +1578,7 @@ pub(super) fn run_launcher_loop(
         &app,
         &pad,
         &nav,
+        &lifecycle,
         &setup,
         "",
         "",
@@ -1593,7 +1600,12 @@ pub(super) fn run_launcher_loop(
         ),
     );
     lifecycle_effects.clear();
-    let startup_catalog_state = if catalog_ready {
+    let startup_catalog_state = if let Some(error) = startup_load_error {
+        StartupCatalogState::LoadFailed {
+            error,
+            has_stale_catalog: false,
+        }
+    } else if catalog_ready {
         StartupCatalogState::Ready {
             source: startup_ready_catalog_source,
             validation_scheduled: scheduler.catalog_worker_running()
@@ -1601,6 +1613,7 @@ pub(super) fn run_launcher_loop(
         }
     } else {
         StartupCatalogState::Building {
+            mode: CatalogBuildMode::FirstBuild,
             foreground_catalog_update: catalog_session.foreground_update(),
             has_stale_catalog: false,
         }
@@ -1786,7 +1799,11 @@ pub(super) fn run_launcher_loop(
             );
         }
 
-        if pending_catalog_ready.is_some() || !catalog_session.refresh_done() {
+        if catalog_messages_need_polling(
+            pending_catalog_ready.is_some(),
+            catalog_session.refresh_done(),
+            scheduler.catalog_worker_running(),
+        ) {
             scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
 
@@ -2206,7 +2223,27 @@ pub(super) fn run_launcher_loop(
                     if let Some(script_state) = launcher_input_script.input_for() {
                         nav_state = script_state;
                     }
-                    let event = if scheduler.should_request_benchmark_launch()
+                    let recovery_dialog_visible =
+                        lifecycle.view().catalog_recovery_dialog().is_some();
+                    let recovery_prev =
+                        std::mem::replace(&mut catalog_recovery_prev, nav_state.clone());
+                    let event = if recovery_dialog_visible {
+                        let recovery_input = if nav_state.dpad_left && !recovery_prev.dpad_left {
+                            Some(LauncherLifecycleInput::CatalogRecoveryLeft)
+                        } else if nav_state.dpad_right && !recovery_prev.dpad_right {
+                            Some(LauncherLifecycleInput::CatalogRecoveryRight)
+                        } else if nav_state.btn_a && !recovery_prev.btn_a {
+                            Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
+                        } else {
+                            None
+                        };
+                        if let Some(input) = recovery_input {
+                            lifecycle.handle(input, &mut lifecycle_effects);
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            full_bridge_dirty = true;
+                        }
+                        None
+                    } else if scheduler.should_request_benchmark_launch()
                         && catalog_ready
                         && !launcher_bench_waiting_for_initial_preview
                         && nav.screen == Screen::Arcade
@@ -2248,6 +2285,7 @@ pub(super) fn run_launcher_loop(
                                     &app,
                                     &pad,
                                     &nav,
+                                    &lifecycle,
                                     &setup,
                                     scheduler.visible_loading_title(&loading_title),
                                     "Return to MiSTer MagiK after reboot",
@@ -2294,6 +2332,7 @@ pub(super) fn run_launcher_loop(
                                     &app,
                                     &pad,
                                     &nav,
+                                    &lifecycle,
                                     &setup,
                                     scheduler.visible_loading_title(&loading_title),
                                     "Restarting MiSTer",
@@ -2332,6 +2371,7 @@ pub(super) fn run_launcher_loop(
                                     &app,
                                     &pad,
                                     &nav,
+                                    &lifecycle,
                                     &setup,
                                     scheduler.visible_loading_title(&loading_title),
                                     "Restarting MiSTer",
@@ -2456,6 +2496,7 @@ pub(super) fn run_launcher_loop(
                             &app,
                             &pad,
                             &nav,
+                            &lifecycle,
                             &setup,
                             scheduler.launch_loading_title(),
                             "",
@@ -2528,6 +2569,7 @@ pub(super) fn run_launcher_loop(
                     &app,
                     &pad,
                     &nav,
+                    &lifecycle,
                     &setup,
                     scheduler.visible_loading_title(&loading_title),
                     "",
@@ -2549,6 +2591,7 @@ pub(super) fn run_launcher_loop(
                 sync_bridge_launcher_light(
                     &app,
                     &nav,
+                    &lifecycle,
                     &mut bridge_models,
                     &setup,
                     scheduler.visible_loading_title(&loading_title),
@@ -3556,6 +3599,14 @@ fn should_defer_catalog_message(
         })
 }
 
+fn catalog_messages_need_polling(
+    pending_catalog_ready: bool,
+    refresh_done: bool,
+    worker_running: bool,
+) -> bool {
+    pending_catalog_ready || !refresh_done || worker_running
+}
+
 fn update_catalog_ready_stationary_edge_since(
     nav: &LauncherNav,
     current: Option<Instant>,
@@ -3740,6 +3791,24 @@ fn apply_lifecycle_effects(
             LauncherEffect::ReturnToIdle => {
                 print_startup_event(start, "launcher_lifecycle_recovered", "state=idle");
             }
+            LauncherEffect::StartCatalogRetry { root } => {
+                print_startup_event(start, "catalog_retry_started", &root);
+                scheduler.start_catalog_worker(
+                    root,
+                    CatalogWorkerRequest::StrictLoad,
+                    CatalogWorkerInitialCache::ProbeSqlite,
+                    CatalogExecutionMode::ForegroundExclusive,
+                );
+            }
+            LauncherEffect::StartFreshCatalogBuild { root } => {
+                print_startup_event(start, "catalog_fresh_build_started", &root);
+                scheduler.start_catalog_worker(
+                    root,
+                    CatalogWorkerRequest::FreshBuild,
+                    CatalogWorkerInitialCache::AlreadyProbedMissing,
+                    CatalogExecutionMode::ForegroundExclusive,
+                );
+            }
         }
     }
 }
@@ -3860,6 +3929,7 @@ fn apply_catalog_session_effects(
                     app,
                     pad,
                     nav,
+                    lifecycle,
                     setup,
                     loading_title,
                     "",
@@ -3945,10 +4015,22 @@ fn apply_catalog_session_effects(
                 nav.confirm_selected = 0;
                 *full_bridge_dirty = true;
             }
+            CatalogSessionEffect::Lifecycle(input) => {
+                lifecycle.handle(input, lifecycle_effects);
+                apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+                *full_bridge_dirty = true;
+            }
             CatalogSessionEffect::StartCatalogWorker(worker) => {
                 print_startup_event(start, "catalog_worker_start", &worker.root);
                 lifecycle.handle(
                     LauncherLifecycleInput::CatalogBuilding {
+                        mode: if worker.request == CatalogWorkerRequest::FreshBuild {
+                            CatalogBuildMode::FreshRecovery
+                        } else if *catalog_ready {
+                            CatalogBuildMode::Update
+                        } else {
+                            CatalogBuildMode::FirstBuild
+                        },
                         foreground: worker.execution_mode
                             == CatalogExecutionMode::ForegroundExclusive,
                         has_stale_catalog: *catalog_ready,
@@ -4117,7 +4199,15 @@ fn deferred_catalog_worker_lifecycle_input(
 ) -> LauncherLifecycleInput {
     if execution_mode == CatalogExecutionMode::ForegroundExclusive {
         LauncherLifecycleInput::CatalogBuilding {
-            foreground: request == CatalogWorkerRequest::ForceBuild,
+            mode: if request == CatalogWorkerRequest::FreshBuild {
+                CatalogBuildMode::FreshRecovery
+            } else {
+                CatalogBuildMode::FirstBuild
+            },
+            foreground: matches!(
+                request,
+                CatalogWorkerRequest::ForceBuild | CatalogWorkerRequest::FreshBuild
+            ),
             has_stale_catalog: false,
         }
     } else {
@@ -4643,6 +4733,12 @@ mod tests {
         assert!(!should_defer_catalog_message(
             &message, true, &nav, None, now
         ));
+    }
+
+    #[test]
+    pub(super) fn recovery_worker_is_polled_after_startup_refresh_finished() {
+        assert!(catalog_messages_need_polling(false, true, true));
+        assert!(!catalog_messages_need_polling(false, true, false));
     }
 
     #[test]
@@ -5543,6 +5639,7 @@ mod tests {
             LauncherLifecycleInput::CatalogBuilding {
                 foreground: true,
                 has_stale_catalog: false,
+                ..
             }
         ));
     }

@@ -16,6 +16,7 @@ pub enum BuilderOperation {
     Check,
     Build,
     Rebuild,
+    FreshBuild,
 }
 
 impl BuilderOperation {
@@ -24,6 +25,7 @@ impl BuilderOperation {
             Self::Check => "check",
             Self::Build => "build",
             Self::Rebuild => "rebuild",
+            Self::FreshBuild => "fresh-build",
         }
     }
 }
@@ -51,6 +53,13 @@ pub fn run(
 
     if operation == BuilderOperation::Check {
         return check(protocol, &mut emit);
+    }
+
+    if operation == BuilderOperation::FreshBuild {
+        emit(CatalogBuilderEvent::FreshCleanupStarted { protocol });
+        let removed = library_db::remove_default_catalog_artifacts()
+            .map_err(|error| fail(protocol, "fresh-cleanup", error, &mut emit))?;
+        emit(CatalogBuilderEvent::FreshCleanupCompleted { protocol, removed });
     }
 
     // Both creation and explicit rebuild own the dedicated full-screen catalog

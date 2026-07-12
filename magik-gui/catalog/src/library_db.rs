@@ -487,6 +487,10 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
     sqlite_catalog::remove_default_sqlite_database()
 }
 
+pub fn remove_default_catalog_artifacts() -> Result<usize, String> {
+    sqlite_catalog::remove_default_catalog_artifacts()
+}
+
 pub fn load_virtual_launch_plans_for_system(
     system_id: &str,
     limit: usize,

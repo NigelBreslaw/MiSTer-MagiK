@@ -367,6 +367,117 @@ pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
     remove_sqlite_database_at(&path)
 }
 
+pub(crate) fn remove_default_catalog_artifacts() -> Result<usize, String> {
+    let sqlite_path = default_sqlite_path();
+    let build_dir = std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SQLITE_BUILD_DIR));
+    let snapshot_path = std::env::var_os("MISTER_CATALOG_READY_SNAPSHOT").map(PathBuf::from);
+    remove_catalog_artifacts_at(
+        &sqlite_path,
+        &build_dir,
+        snapshot_path.as_deref(),
+        Path::new("/tmp/mister-magik"),
+        Path::new("/media/fat/mister-magik/rebuild-on-next-boot"),
+    )
+}
+
+fn remove_catalog_artifacts_at(
+    sqlite_path: &Path,
+    build_dir: &Path,
+    configured_snapshot: Option<&Path>,
+    default_snapshot_dir: &Path,
+    rebuild_marker: &Path,
+) -> Result<usize, String> {
+    let mut removed = 0usize;
+    for (path, label) in [
+        (sqlite_path.to_path_buf(), "database"),
+        (
+            catalog_summary::summary_path_for_sqlite(sqlite_path),
+            "catalog summary",
+        ),
+        (
+            catalog_navigation::navigation_path_for_sqlite(sqlite_path),
+            "catalog navigation",
+        ),
+        (
+            crate::catalog_build_record::duration_path_for_sqlite(sqlite_path),
+            "catalog build duration",
+        ),
+        (rebuild_marker.to_path_buf(), "catalog rebuild marker"),
+    ] {
+        removed += usize::from(remove_file_if_exists_counted(&path, label)?);
+    }
+
+    let sqlite_name = sqlite_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("library.sqlite3");
+    if let Some(parent) = sqlite_path.parent() {
+        let sqlite_tmp_prefix = format!(".{sqlite_name}.tmp.");
+        let sqlite_journal = format!("{sqlite_name}-journal");
+        let sqlite_wal = format!("{sqlite_name}-wal");
+        let sqlite_shm = format!("{sqlite_name}-shm");
+        removed += remove_matching_files(parent, "catalog adjacent temp", |name| {
+            name.starts_with(&sqlite_tmp_prefix)
+                || name == sqlite_journal
+                || name == sqlite_wal
+                || name == sqlite_shm
+                || name == ".library.summary.json.tmp"
+                || name == ".library.nav.lz4b.tmp"
+                || name == ".library-build-seconds.tmp"
+        })?;
+    }
+    let build_prefix = format!(".{sqlite_name}.build.");
+    removed += remove_matching_files(build_dir, "catalog build temp", |name| {
+        name.starts_with(&build_prefix)
+    })?;
+    if let Some(snapshot) = configured_snapshot {
+        removed += usize::from(remove_file_if_exists_counted(
+            snapshot,
+            "configured catalog ready snapshot",
+        )?);
+    }
+    removed += remove_matching_files(default_snapshot_dir, "catalog ready snapshot", |name| {
+        name.starts_with("catalog-ready-") && name.ends_with(".nav.lz4b")
+    })?;
+    Ok(removed)
+}
+
+fn remove_matching_files(
+    dir: &Path,
+    label: &str,
+    mut matches: impl FnMut(&str) -> bool,
+) -> Result<usize, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("read {label} directory {}: {error}", dir.display())),
+    };
+    let mut removed = 0usize;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("read {label} entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("stat {label} {}: {error}", entry.path().display()))?;
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if file_type.is_file() && matches(&name) {
+            removed += usize::from(remove_file_if_exists_counted(&entry.path(), label)?);
+        }
+    }
+    Ok(removed)
+}
+
+fn remove_file_if_exists_counted(path: &Path, label: &str) -> Result<bool, String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("remove {label} {}: {error}", path.display())),
+    }
+}
+
 fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
     remove_file_if_exists(path, "database")?;
     let summary_path = catalog_summary::summary_path_for_sqlite(path);
@@ -4731,6 +4842,54 @@ mod tests {
         assert!(!summary_path.exists(), "summary should be removed");
         assert!(!navigation_path.exists(), "navigation should be removed");
         assert!(!duration_path.exists(), "build duration should be removed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fresh_cleanup_removes_only_catalog_owned_artifacts() {
+        let root = unique_temp_dir("fresh-catalog-cleanup");
+        let build_dir = root.join("build");
+        let snapshot_dir = root.join("snapshots");
+        let assets_dir = root.join("assets");
+        std::fs::create_dir_all(&build_dir).expect("create build dir");
+        std::fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+        std::fs::create_dir_all(&assets_dir).expect("create assets dir");
+        let db = root.join("library.sqlite3");
+        let marker = root.join("rebuild-on-next-boot");
+        let removable = [
+            db.clone(),
+            catalog_summary::summary_path_for_sqlite(&db),
+            catalog_navigation::navigation_path_for_sqlite(&db),
+            crate::catalog_build_record::duration_path_for_sqlite(&db),
+            root.join(".library.sqlite3.tmp.42"),
+            root.join("library.sqlite3-journal"),
+            root.join("library.sqlite3-wal"),
+            root.join("library.sqlite3-shm"),
+            root.join(".library.summary.json.tmp"),
+            root.join(".library.nav.lz4b.tmp"),
+            root.join(".library-build-seconds.tmp"),
+            build_dir.join(".library.sqlite3.build.42"),
+            snapshot_dir.join("catalog-ready-42.nav.lz4b"),
+            marker.clone(),
+        ];
+        for path in &removable {
+            std::fs::write(path, b"catalog").expect("write catalog artifact");
+        }
+        let screenshot = assets_dir.join("arcade-screenshots-320x320.mmlz4b");
+        let unrelated = root.join("notes.txt");
+        let unrelated_build = build_dir.join("keep.bin");
+        for path in [&screenshot, &unrelated, &unrelated_build] {
+            std::fs::write(path, b"keep").expect("write retained artifact");
+        }
+
+        let removed = remove_catalog_artifacts_at(&db, &build_dir, None, &snapshot_dir, &marker)
+            .expect("fresh cleanup");
+
+        assert_eq!(removed, removable.len());
+        assert!(removable.iter().all(|path| !path.exists()));
+        assert!(screenshot.exists());
+        assert!(unrelated.exists());
+        assert!(unrelated_build.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -8,6 +8,7 @@ source "$ROOT/scripts/library-sql-output-lib.sh"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
+REMOTE_ASSETS="/media/fat/mister-magik/assets"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
@@ -20,6 +21,7 @@ DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=120
 KEEP_TEMP=0
+RECOVERY_ONLY=0
 WARN_DELAY_SECS=5
 TEMP_MRA=""
 SOURCE_MRA=""
@@ -28,13 +30,14 @@ HAD_ENV=0
 
 usage() {
   cat <<'EOF'
-usage: scripts/device-catalog-destruction.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--keep-temp] [--no-warn-delay]
+usage: scripts/device-catalog-destruction.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--keep-temp] [--recovery-only] [--no-warn-delay]
 
 Destructively mutates /media/fat/mister-magik/library.sqlite3 on a real MiSTer:
 missing DB with any orphan summary projection, zero-byte DB, corrupt DB, bad
 marker plus bad DB, and a real _Arcade file-change detection path. The script
-does not back up the production DB; it verifies recovery and finishes with a
-forced library-refresh cleanup.
+does not back up the production DB; it verifies recovery. Failed runs and full
+runs finish with a forced library-refresh cleanup. A successful
+--recovery-only run keeps the fresh catalog produced by the tested Rebuild.
 EOF
 }
 
@@ -45,6 +48,7 @@ while [ "$#" -gt 0 ]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?--timeout needs seconds}"; shift 2 ;;
     --keep-temp) KEEP_TEMP=1; shift ;;
+    --recovery-only) RECOVERY_ONLY=1; shift ;;
     --no-warn-delay) WARN_DELAY_SECS=0; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -184,9 +188,19 @@ write_launcher_env() {
   env_file="$(mktemp)"
   {
     printf 'export MISTER_CATALOG_BACKGROUND_DELAY_MS=0\n'
-    if [ -n "$action" ]; then
-      printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE=%q\n' "$action"
-    fi
+    case "$action" in
+      continue|rebuild)
+        printf 'export MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE=%q\n' "$action"
+        ;;
+      load-retry)
+        printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=a\n'
+        ;;
+      load-rebuild)
+        printf 'export MISTER_LAUNCHER_INPUT_SCRIPT=right,a\n'
+        ;;
+      "") ;;
+      *) fail "unknown launcher test action $action" ;;
+    esac
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   rm -f "$env_file"
@@ -243,14 +257,16 @@ restore_launcher_env() {
 cleanup() {
   local rc=$?
   set +e
-  echo "== cleanup: removing destructive artifacts and rebuilding catalog"
+  echo "== cleanup: removing destructive artifacts and ensuring a healthy catalog"
   remove_temp_mra
   remote "rm -f $(sq "$REMOTE_MARKER")" >/dev/null 2>&1 || true
   restore_launcher_env
-  remote "$(sq "$REMOTE_BIN") library-refresh >/tmp/mister-magik-catalog-destruction-cleanup.log 2>&1" >/dev/null 2>&1 || {
-    echo "cleanup library-refresh failed; log follows" >&2
-    remote "tail -160 /tmp/mister-magik-catalog-destruction-cleanup.log 2>/dev/null || true" >&2 || true
-  }
+  if [ "$rc" -ne 0 ] || [ "$RECOVERY_ONLY" -eq 0 ]; then
+    remote "$(sq "$REMOTE_BIN") library-refresh >/tmp/mister-magik-catalog-destruction-cleanup.log 2>&1" >/dev/null 2>&1 || {
+      echo "cleanup library-refresh failed; log follows" >&2
+      remote "tail -160 /tmp/mister-magik-catalog-destruction-cleanup.log 2>/dev/null || true" >&2 || true
+    }
+  fi
   remote "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
   exit "$rc"
 }
@@ -317,7 +333,7 @@ record_file_change_bench() {
 require_first_run_scan() {
   local scenario="$1"
   wait_remote "$scenario first-run scan copy" "$TIMEOUT_SECS" \
-    "grep -q '\"catalog_scan_message\":\"Scanning for games' $(sq "$REMOTE_STATUS") && grep -q '\"catalog_scan_visible\":true' $(sq "$REMOTE_STATUS")"
+    "grep -q 'launcher_lifecycle_transition.*to=catalog-building' $(sq "$REMOTE_LOG") && grep -q 'catalog_progress_revealed' $(sq "$REMOTE_LOG")"
   assert_remote "$scenario did not show Library changed dialog" \
     "! grep -q '\"confirm_title\":\"Library changed\"' $(sq "$REMOTE_STATUS")"
 }
@@ -353,16 +369,17 @@ if [ "$(remote "if [ -f $(sq "$REMOTE_ENV") ]; then cp $(sq "$REMOTE_ENV") $(sq 
   HAD_ENV=1
 fi
 
-SOURCE_MRA="$(remote "find /media/fat/_Arcade -type f -name '*.mra' ! -name '*_mister-magik-it-*' 2>/dev/null | sort | head -1" | awk 'NF { print; exit }')"
+SOURCE_MRA="$(remote "find /media/fat/_Arcade -type f -name '*.mra' ! -name '._*' ! -name '*_mister-magik-it-*' 2>/dev/null | sort | head -1" | awk 'NF { print; exit }')"
 if [ -z "$SOURCE_MRA" ] || [[ "$SOURCE_MRA" != /media/fat/_Arcade/*.mra ]]; then
   fail "could not find source _Arcade MRA in launcher_catalog"
 fi
 TEMP_MRA="/media/fat/_Arcade/_mister-magik-it-${LABEL}.mra"
 
 echo "== device catalog destruction label=$LABEL source=$SOURCE_MRA temp=$TEMP_MRA"
-assert_db_count "launcher_catalog table exists" "1" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';"
+assert_db_count "launcher_catalog_rows table exists" "1" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog_rows';"
 assert_single_launcher
 
+if [ "$RECOVERY_ONLY" -eq 0 ]; then
 echo "== Missing DB recovery"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA") $(sq "$REMOTE_DB"); sync"
 restart_launcher ""
@@ -378,15 +395,35 @@ wait_remote "zero-byte orphan summary ignored" "$TIMEOUT_SECS" "grep -q 'catalog
 wait_remote "zero-byte DB detected" "$TIMEOUT_SECS" "grep -Eq 'catalog_cache_load_failed|catalog_cache_empty' $(sq "$REMOTE_LOG")"
 require_first_run_scan "zero-byte-db"
 require_ready_rebuild "zero-byte-db" "catalog_cache_load_failed"
+fi
 
 echo "== Corrupt DB recovery"
 remote "rm -f $(sq "$REMOTE_MARKER") $(sq "$TEMP_MRA"); printf 'not-a-sqlite-db-for-magik\n' > $(sq "$REMOTE_DB"); sync"
-restart_launcher ""
+SCREENSHOT_PACK_COUNT="$(remote "ls $(sq "$REMOTE_ASSETS")/*-screenshots*.mmlz4b 2>/dev/null | wc -l" | last_line)"
+restart_launcher "load-retry"
 wait_remote "corrupt orphan summary ignored" "$TIMEOUT_SECS" "grep -q 'catalog_summary_load.*status=sqlite_unusable' $(sq "$REMOTE_LOG")"
 wait_remote "corrupt DB detected" "$TIMEOUT_SECS" "grep -q 'catalog_cache_load_failed' $(sq "$REMOTE_LOG")"
-require_first_run_scan "corrupt-db"
-require_ready_rebuild "corrupt-db" "catalog_cache_load_failed"
+wait_remote "corrupt DB shows recovery dialog" "$TIMEOUT_SECS" "grep -q '\"confirm_title\":\"Library failed to load.\"' $(sq "$REMOTE_STATUS")"
+wait_remote "strict retry attempted" "$TIMEOUT_SECS" "grep -q 'catalog_retry_started' $(sq "$REMOTE_LOG")"
+wait_remote "strict retry returned to dialog" "$TIMEOUT_SECS" "test \"\$(grep -c 'library_load_failed' $(sq "$REMOTE_LOG"))\" -ge 1 && grep -q '\"confirm_title\":\"Library failed to load.\"' $(sq "$REMOTE_STATUS")"
+assert_remote "strict retry preserved corrupt DB" "grep -q 'not-a-sqlite-db-for-magik' $(sq "$REMOTE_DB")"
+assert_remote "strict retry did not build" "! grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
 
+restart_launcher "load-rebuild"
+wait_remote "fresh rebuild cleanup started" "$TIMEOUT_SECS" "grep -q 'library_fresh_cleanup_started' $(sq "$REMOTE_LOG")"
+wait_remote "fresh rebuild cleanup completed" "$TIMEOUT_SECS" "grep -q 'library_fresh_cleanup_completed' $(sq "$REMOTE_LOG")"
+if [ "$RECOVERY_ONLY" -eq 1 ]; then
+  wait_remote "corrupt-db library ready" "$TIMEOUT_SECS" "grep -q 'library_ready' $(sq "$REMOTE_LOG")"
+  wait_remote "corrupt-db DB present" 15 "test -s $(sq "$REMOTE_DB")"
+  assert_single_launcher
+  assert_no_refresh_process
+  assert_remote "corrupt-db marker absent" "test ! -e $(sq "$REMOTE_MARKER")"
+else
+  require_ready_rebuild "corrupt-db" "catalog_cache_load_failed"
+fi
+assert_remote "fresh rebuild preserved screenshot packs" "test \"\$(ls $(sq "$REMOTE_ASSETS")/*-screenshots*.mmlz4b 2>/dev/null | wc -l)\" = $(sq "$SCREENSHOT_PACK_COUNT")"
+
+if [ "$RECOVERY_ONLY" -eq 0 ]; then
 echo "== Bad marker plus bad DB recovery"
 remote "printf 'stale marker from destruction test\n' > $(sq "$REMOTE_MARKER"); printf 'bad sqlite with marker\n' > $(sq "$REMOTE_DB"); sync"
 restart_launcher ""
@@ -409,5 +446,6 @@ assert_remote "file-change did not rebuild in same session" "! grep -q 'library_
 assert_single_launcher
 record_file_change_bench "file-change-continue"
 remote "rm -f $(sq "$REMOTE_MARKER")"
+fi
 
 echo "device catalog destruction: ok"
