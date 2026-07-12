@@ -209,6 +209,13 @@ echo "==> target triple: $TARGET"
 echo "==> build backend: apple-container"
 echo "==> build CPUs: $CONTAINER_CPUS"
 echo "==> build memory: $CONTAINER_MEMORY"
+STAGED_LICENSE="$PWD/LICENSE"
+if ! (set -o noclobber; : >"$STAGED_LICENSE") 2>/dev/null; then
+  echo "ERROR: refusing to overwrite existing $STAGED_LICENSE" >&2
+  exit 1
+fi
+trap 'rm -f "$STAGED_LICENSE"' EXIT
+cp "$REPO_ROOT/LICENSE" "$STAGED_LICENSE"
 ensure_image
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
