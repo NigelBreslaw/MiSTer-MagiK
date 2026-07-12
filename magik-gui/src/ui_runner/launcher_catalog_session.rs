@@ -223,7 +223,10 @@ impl LauncherCatalogSession {
                     &mut effects,
                 );
             }
-            CatalogWorkerMessage::Persisted { summary } => {
+            CatalogWorkerMessage::Persisted {
+                summary,
+                completed_build_seconds,
+            } => {
                 self.persisted_summary_seen = true;
                 self.refresh_done = true;
                 self.foreground_update = false;
@@ -231,12 +234,14 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
-                effects.ui(LauncherWorkerUiIntent::InfoDatabaseBuild(format!(
-                    "{} ms (scan {} ms, save {} ms)",
-                    (summary.scan_us + summary.import_us) / 1_000,
-                    summary.scan_us / 1_000,
-                    summary.import_us / 1_000,
-                )));
+                let seconds = completed_build_seconds.unwrap_or_else(|| {
+                    mister_magik_catalog::catalog_build_record::rounded_seconds(
+                        Duration::from_micros(summary.scan_us.saturating_add(summary.import_us)),
+                    )
+                });
+                effects.ui(LauncherWorkerUiIntent::InfoDatabaseBuild(
+                    mister_magik_catalog::catalog_build_record::format_duration(seconds),
+                ));
                 push_catalog_coverage_diagnostic(&summary, &mut effects);
                 effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
@@ -656,6 +661,19 @@ mod tests {
             .collect()
     }
 
+    fn database_build_values(effects: CatalogSessionEffects) -> Vec<String> {
+        effects
+            .into_effects()
+            .into_iter()
+            .filter_map(|effect| match effect {
+                CatalogSessionEffect::Ui(LauncherWorkerUiIntent::InfoDatabaseBuild(value)) => {
+                    Some(value)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn refresh_summary() -> library_db::LibraryRefreshSummary {
         library_db::LibraryRefreshSummary {
             skipped: false,
@@ -670,6 +688,26 @@ mod tests {
             audit_rows: 0,
             discoveries: 18,
         }
+    }
+
+    #[test]
+    fn persisted_catalog_displays_builder_duration_in_whole_seconds() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(true);
+        let values = database_build_values(session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Persisted {
+                summary: refresh_summary(),
+                completed_build_seconds: Some(119),
+            },
+            now,
+        ));
+
+        assert_eq!(values, vec!["119 seconds"]);
     }
 
     #[test]
@@ -734,6 +772,7 @@ mod tests {
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
+                completed_build_seconds: Some(119),
             },
             now,
         ));
@@ -810,6 +849,7 @@ mod tests {
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
+                completed_build_seconds: Some(119),
             },
             now,
         ));
@@ -846,7 +886,10 @@ mod tests {
                 screen: Screen::Home,
                 media_gate: None,
             },
-            CatalogWorkerMessage::Persisted { summary },
+            CatalogWorkerMessage::Persisted {
+                summary,
+                completed_build_seconds: Some(119),
+            },
             now,
         ));
 

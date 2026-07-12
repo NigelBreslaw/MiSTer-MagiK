@@ -319,6 +319,7 @@ pub(super) fn start_library_catalog_worker(
                         Ok(summary) => {
                             let _ = tx.send(CatalogWorkerMessage::Persisted {
                                 summary: summary.clone(),
+                                completed_build_seconds: None,
                             });
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_saved_catalog".to_string(),
@@ -389,6 +390,7 @@ pub(super) fn start_library_catalog_worker(
                     Ok(summary) => {
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
+                            completed_build_seconds: None,
                         });
                         let _ = tx.send(CatalogWorkerMessage::Timing {
                             name: "catalog_worker_saved_catalog".to_string(),
@@ -593,8 +595,10 @@ fn run_catalog_builder_subprocess(
                 }
             }
             CatalogBuilderEvent::Persisted { summary, .. } => {
+                let completed_build_seconds = summary.completed_build_seconds;
                 let _ = tx.send(CatalogWorkerMessage::Persisted {
                     summary: refresh_summary(summary),
+                    completed_build_seconds,
                 });
             }
             CatalogBuilderEvent::Unchanged { summary, .. } => {
@@ -785,6 +789,7 @@ pub(super) enum CatalogWorkerMessage {
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
+        completed_build_seconds: Option<u64>,
     },
     PersistenceFailed {
         error: String,
