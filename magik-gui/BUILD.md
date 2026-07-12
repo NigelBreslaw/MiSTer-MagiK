@@ -174,17 +174,10 @@ Every `build-arm.sh` run prints the binary size and appends a local row to
 matching build. The file is intentionally gitignored; formal benchmark byte
 history remains in `history/toolchain-bench/results.tsv`.
 
-After moving bench commands behind `bench-tools`, removing the standalone
-`audio-tone` path, and externalizing the arcade cabinet art, the measured ARM
+After moving bench commands behind `bench-tools` and removing the standalone
+`audio-tone` path, the measured ARM
 `release-device`/`ui` binary is 5,955,500 bytes. The `ui,bench-tools` variant is
 6,078,388 bytes, so the quarantined benchmark surface costs 122,888 bytes.
-
-The arcade cabinet art remains a checked-in PNG source asset, but deploy and
-package scripts convert it to `/media/fat/mister-magik/art/arcade-cabinet-preview.rgba`.
-That sidecar uses a tiny RLE RGBA format loaded with `slint::Image::from_rgba8`.
-Do not switch the device path to `slint::Image::load_from_path`: the MiSTer/ARM
-build intentionally uses Slint without `std`, and that API is not available
-there.
 
 ## Size analysis
 

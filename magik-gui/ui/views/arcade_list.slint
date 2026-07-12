@@ -141,12 +141,6 @@ export component ArcadeListScreen inherits Rectangle {
     property <int> s: MisterUi.scale;
     property <int> count: MisterBridge.active-system-count;
     property <bool> games-loading: MisterBridge.arcade-games-loading;
-    property <length> cabinet-width: 336px * s;
-    property <length> cabinet-height: 520px * s;
-    property <length> cabinet-screen-x: 8px * s;
-    property <length> cabinet-screen-y: 92px * s;
-    property <length> cabinet-screen-width: 320px * s;
-    property <length> cabinet-screen-height: 320px * s;
     background: #1a1424;
 
     HorizontalLayout {
@@ -253,27 +247,6 @@ export component ArcadeListScreen inherits Rectangle {
                     background: #120d1a;
                     border-width: 1px;
                     border-color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
-                    clip: true;
-                }
-            }
-
-            if !MisterBridge.arcade-search-active : Rectangle {
-                x: (parent.width - root.cabinet-width) / 2;
-                y: (parent.height - root.cabinet-height) / 2;
-                width: root.cabinet-width;
-                height: root.cabinet-height;
-
-                Image {
-                    width: parent.width;
-                    height: parent.height;
-                    source: MisterBridge.arcade-cabinet-image;
-                }
-
-                Rectangle {
-                    x: root.cabinet-screen-x;
-                    y: root.cabinet-screen-y;
-                    width: root.cabinet-screen-width;
-                    height: root.cabinet-screen-height;
                     clip: true;
                 }
             }
