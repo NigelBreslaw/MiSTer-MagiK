@@ -49,7 +49,9 @@ const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
-const SETTINGS_MAX_SELECTED: usize = 4;
+const SETTINGS_MAX_SELECTED: usize = 3;
+const LICENSES_MAX_SELECTED: usize = 4;
+const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
 pub const ARCADE_SEARCH_KEYS: [&str; 43] = [
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
@@ -111,6 +113,7 @@ pub enum Screen {
     Controller,
     Arcade,
     Settings,
+    Licenses,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -575,6 +578,11 @@ pub struct LauncherNav {
     pub settings_focused: bool,
     pub settings_selected: usize,
     pub settings: MagikSettings,
+    pub licenses_selected: usize,
+    pub licenses_expanded: bool,
+    pub licenses_scroll_line: usize,
+    licenses_scroll_animation: SpringAnimation,
+    licenses_scroll_last_frame: Option<Instant>,
     pub confirm_action: Option<ConfirmAction>,
     pub confirm_selected: usize,
     pub arcade: ArcadeNav,
@@ -764,6 +772,11 @@ impl LauncherNav {
             settings_focused: false,
             settings_selected: 0,
             settings: MagikSettings::default(),
+            licenses_selected: 0,
+            licenses_expanded: false,
+            licenses_scroll_line: 0,
+            licenses_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
+            licenses_scroll_last_frame: None,
             confirm_action: None,
             confirm_selected: 0,
             arcade: ArcadeNav::new(),
@@ -799,6 +812,7 @@ impl LauncherNav {
                 }
                 Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
                 Screen::Settings => self.handle_settings(now, frame_now),
+                Screen::Licenses => self.handle_licenses(now, frame_now),
             }
         };
         self.prev = now.clone();
@@ -1188,10 +1202,6 @@ impl LauncherNav {
         }
         if rising(now.btn_a, self.prev.btn_a) {
             if self.settings_selected == 1 {
-                self.screen = Screen::Controller;
-                return None;
-            }
-            if self.settings_selected == 2 {
                 let mut next_settings = self.settings.clone();
                 next_settings.simple_joystick_handling = !next_settings.simple_joystick_handling;
                 match next_settings.save() {
@@ -1202,14 +1212,85 @@ impl LauncherNav {
                 }
                 return None;
             }
+            if self.settings_selected == 3 {
+                self.licenses_selected = 0;
+                self.licenses_expanded = false;
+                self.licenses_scroll_line = 0;
+                self.licenses_scroll_animation.snap_to(0.0);
+                self.licenses_scroll_last_frame = None;
+                self.screen = Screen::Licenses;
+                return None;
+            }
             self.confirm_selected = if self.settings_selected == 0 { 1 } else { 0 };
             self.confirm_action = Some(match self.settings_selected {
                 0 => ConfirmAction::ExitToMister,
-                3 => ConfirmAction::ResetDatabase,
-                _ => ConfirmAction::Restart,
+                _ => ConfirmAction::ResetDatabase,
             });
         }
         None
+    }
+
+    fn handle_licenses(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+        let delta = self
+            .licenses_scroll_last_frame
+            .replace(frame_now)
+            .map_or(Duration::ZERO, |previous| {
+                frame_now.saturating_duration_since(previous)
+            });
+        self.licenses_scroll_animation.advance(delta);
+        if self.licenses_expanded {
+            if rising(now.btn_a, self.prev.btn_a)
+                || rising(now.btn_b, self.prev.btn_b)
+                || rising(now.btn_home, self.prev.btn_home)
+            {
+                self.licenses_expanded = false;
+                self.licenses_scroll_line = 0;
+                self.licenses_scroll_animation.snap_to(0.0);
+                self.licenses_scroll_last_frame = None;
+            } else if self.repeat.tick_down(now.dpad_down, frame_now) {
+                self.licenses_scroll_line = self
+                    .licenses_scroll_line
+                    .saturating_add(1)
+                    .min(crate::licenses::max_scroll_line(self.licenses_selected));
+                self.licenses_scroll_animation
+                    .set_target(self.licenses_scroll_line as f64 * LICENSE_SCROLL_LINE_PX);
+            } else if self.repeat.tick_up(now.dpad_up, frame_now) {
+                self.licenses_scroll_line = self.licenses_scroll_line.saturating_sub(1);
+                self.licenses_scroll_animation
+                    .set_target(self.licenses_scroll_line as f64 * LICENSE_SCROLL_LINE_PX);
+            }
+            return None;
+        }
+        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+            self.screen = Screen::Settings;
+            self.licenses_scroll_last_frame = None;
+            return None;
+        }
+        if self.repeat.tick_down(now.dpad_down, frame_now)
+            && self.licenses_selected < LICENSES_MAX_SELECTED
+        {
+            self.licenses_selected += 1;
+        }
+        if self.repeat.tick_up(now.dpad_up, frame_now) && self.licenses_selected > 0 {
+            self.licenses_selected -= 1;
+        }
+        if rising(now.btn_a, self.prev.btn_a) {
+            self.licenses_expanded = true;
+            self.licenses_scroll_line = 0;
+            self.licenses_scroll_animation.snap_to(0.0);
+            self.licenses_scroll_last_frame = Some(frame_now);
+        }
+        None
+    }
+
+    pub fn licenses_scroll_y(&self) -> i32 {
+        self.licenses_scroll_animation.value().round() as i32
+    }
+
+    pub fn licenses_scroll_active(&self) -> bool {
+        self.screen == Screen::Licenses
+            && self.licenses_expanded
+            && !self.licenses_scroll_animation.is_settled()
     }
 
     fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
@@ -4100,66 +4181,49 @@ mod tests {
     }
 
     #[test]
-    fn launcher_settings_can_open_controller_and_return_home() {
+    fn launcher_settings_opens_and_navigates_licenses() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
-
-        let up = pad_with(|pad| pad.dpad_up = true);
-        assert!(nav.handle_input(&up, t0, &catalog).is_none());
-        assert!(nav.settings_focused);
-        assert!(nav
-            .handle_input(
-                &PadState::default(),
-                t0 + Duration::from_millis(16),
-                &catalog,
-            )
-            .is_none());
-
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 3;
         let press_a = pad_with(|pad| pad.btn_a = true);
-        assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(32), &catalog)
-            .is_none());
-        assert_eq!(nav.screen, Screen::Settings);
-        assert_eq!(nav.settings_selected, 0);
-        assert!(nav
-            .handle_input(
-                &PadState::default(),
-                t0 + Duration::from_millis(48),
-                &catalog,
-            )
-            .is_none());
-
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.screen, Screen::Licenses);
+        release(&mut nav, &catalog, t0, 16);
         let down = pad_with(|pad| pad.dpad_down = true);
         assert!(nav
-            .handle_input(&down, t0 + Duration::from_millis(64), &catalog)
+            .handle_input(&down, t0 + Duration::from_millis(32), &catalog)
             .is_none());
-        assert_eq!(nav.settings_selected, 1);
+        assert_eq!(nav.licenses_selected, 1);
+        release(&mut nav, &catalog, t0, 48);
         assert!(nav
-            .handle_input(
-                &PadState::default(),
-                t0 + Duration::from_millis(80),
-                &catalog,
-            )
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .is_none());
-
+        assert!(nav.licenses_expanded);
+        release(&mut nav, &catalog, t0, 80);
         assert!(nav
-            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+            .handle_input(&down, t0 + Duration::from_millis(96), &catalog)
             .is_none());
-        assert_eq!(nav.screen, Screen::Controller);
-        assert!(nav
-            .handle_input(
-                &PadState::default(),
-                t0 + Duration::from_millis(112),
-                &catalog,
-            )
-            .is_none());
-
+        assert_eq!(nav.licenses_scroll_line, 1);
+        assert!(nav.licenses_scroll_active());
+        assert_eq!(
+            nav.licenses_scroll_animation.configuration(),
+            SpringConfiguration::smooth()
+        );
+        release(&mut nav, &catalog, t0, 112);
+        assert!(nav.licenses_scroll_animation.value() > 0.0);
         let back = pad_with(|pad| pad.btn_b = true);
         assert!(nav
             .handle_input(&back, t0 + Duration::from_millis(128), &catalog)
             .is_none());
-        assert_eq!(nav.screen, Screen::Home);
+        assert!(!nav.licenses_expanded);
+        assert_eq!(nav.licenses_scroll_line, 0);
+        release(&mut nav, &catalog, t0, 144);
+        assert!(nav
+            .handle_input(&back, t0 + Duration::from_millis(160), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Settings);
     }
 
     #[test]
@@ -4389,7 +4453,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = 2;
 
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());

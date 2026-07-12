@@ -86,6 +86,7 @@ mod frame_profile;
 mod input;
 mod launch_preparation;
 mod launcher;
+mod licenses;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]

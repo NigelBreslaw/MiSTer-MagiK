@@ -57,7 +57,9 @@ fn main() {
         "../ui/views/arcade_list.slint",
         "../ui/views/home.slint",
         "../ui/views/settings.slint",
+        "../ui/views/licenses.slint",
         "../ui/fonts/PressStart2P-Regular.ttf",
+        "../ui/fonts/PressStart2P-Regular.ttf.license",
         "../ui/icons/settings.svg",
     ];
     if bench_scenes {

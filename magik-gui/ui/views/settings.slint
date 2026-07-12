@@ -51,27 +51,21 @@ export component SettingsScreen inherits Rectangle {
             }
 
             SettingsRow {
-                label: "Controller Test";
-                detail: "Open joypad tester";
-                focused: MisterBridge.settings-selected == 1;
-            }
-
-            SettingsRow {
                 label: "Simple joystick handling";
                 detail: MisterBridge.simple-joystick-handling ? "On" : "Off";
-                focused: MisterBridge.settings-selected == 2;
+                focused: MisterBridge.settings-selected == 1;
             }
 
             SettingsRow {
                 label: "Reset Database";
                 detail: "Delete library database and reboot";
-                focused: MisterBridge.settings-selected == 3;
+                focused: MisterBridge.settings-selected == 2;
             }
 
             SettingsRow {
-                label: "Restart";
-                detail: "Reboot the MiSTer";
-                focused: MisterBridge.settings-selected == 4;
+                label: "Licenses";
+                detail: "Open source licenses and acknowledgements";
+                focused: MisterBridge.settings-selected == 3;
             }
 
             Rectangle { vertical-stretch: 1; background: transparent; }

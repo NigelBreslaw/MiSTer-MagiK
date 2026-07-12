@@ -162,6 +162,9 @@ rm -rf ../dist
   --enable-parser=h264 \
   --enable-demuxer=mov \
   --enable-protocol=file
+grep -q '^#define CONFIG_GPL 0$' config.h
+grep -q '^#define CONFIG_VERSION3 0$' config.h
+grep -q '^#define CONFIG_NONFREE 0$' config.h
 make -j"$(nproc)" install
 ' bash "${CONFIGURE_SW_SCALE[@]}"
 

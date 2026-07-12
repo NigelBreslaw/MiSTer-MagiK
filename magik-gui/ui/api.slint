@@ -51,7 +51,7 @@ export global MisterBridge {
     in-out property <string> last-raw-event;
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;
-    // Launcher navigation: 0=home, 1=controller test, 2=arcade list, 3=settings.
+    // Launcher navigation: 0=home, 1=controller test, 2=arcade list, 3=settings, 4=licenses.
     in-out property <int> screen-mode;
     in-out property <string> clock-text;
     in-out property <string> build-label;
@@ -59,9 +59,14 @@ export global MisterBridge {
     // Home focus: selected system index, with settings-focused as the top cog target.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
-    // Settings focus: 0=exit to MiSTer, 1=controller test, 2=simple joystick, 3=reset database, 4=restart.
+    // Settings focus: 0=exit to MiSTer, 1=simple joystick, 2=reset database, 3=licenses.
     in-out property <int> settings-selected;
     in-out property <bool> simple-joystick-handling;
+    in-out property <int> licenses-selected;
+    in-out property <bool> licenses-expanded;
+    in-out property <int> licenses-scroll-line;
+    in-out property <int> licenses-scroll-y;
+    in-out property <string> licenses-text;
     // Confirmation dialog.
     in-out property <bool> confirm-visible;
     in-out property <string> confirm-title;

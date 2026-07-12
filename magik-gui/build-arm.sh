@@ -221,4 +221,5 @@ if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
 fi
 
 BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/$BIN_NAME"
+printf '%s\n' "${FEATURE_LIST:-none}" >"$BIN.features"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"

@@ -283,6 +283,7 @@ fi
 MIRROR_BIN="$MIRROR_TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
 mkdir -p "$(dirname "$MIRROR_BIN")"
 cp "$BIN" "$MIRROR_BIN"
+printf '%s\n' "$FEATURE_LIST" >"$MIRROR_BIN.features"
 
 BYTES="$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")"
 echo "==> build OK: $BIN"
