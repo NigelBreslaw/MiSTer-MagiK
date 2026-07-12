@@ -20,6 +20,7 @@ REMOTE="$REMOTE_DIR/mister-magik-fb"
 REMOTE_ART_DIR="$REMOTE_DIR/art"
 DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
 LOCAL_CABINET="$HERE/magik-gui/ui/art/arcade-cabinet-preview.png"
+LOCAL_SLINT_LOGO="$HERE/magik-gui/ui/art/slint-logo-pixel.png"
 
 PROFILE=release-device
 BUILD_FLAG=(--device)
@@ -89,6 +90,14 @@ MISTER_IP="${MISTER_IP:-192.168.1.117}" \
 MISTER_PASS="${MISTER_PASS:-1}" \
   "$HERE/scripts/mister" put "$LOCAL_CABINET_RAW" "$REMOTE_ART_DIR/arcade-cabinet-preview.rgba" >/dev/null
 rm -f "$LOCAL_CABINET_RAW"
+
+echo "==> Deploying Slint logo -> $REMOTE_ART_DIR"
+LOCAL_SLINT_LOGO_RAW="$(mktemp "${TMPDIR:-/tmp}/slint-logo-pixel-rgba.XXXXXX")"
+python3 "$HERE/scripts/png-to-slint-rgba.py" "$LOCAL_SLINT_LOGO" "$LOCAL_SLINT_LOGO_RAW"
+MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+MISTER_PASS="${MISTER_PASS:-1}" \
+  "$HERE/scripts/mister" put "$LOCAL_SLINT_LOGO_RAW" "$REMOTE_ART_DIR/slint-logo-pixel.rgba" >/dev/null
+rm -f "$LOCAL_SLINT_LOGO_RAW"
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 DEPLOY_OUTPUT=""

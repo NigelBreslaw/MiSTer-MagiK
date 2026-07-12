@@ -28,6 +28,7 @@ pub(super) fn open_pads() -> PadPool {
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     load_cabinet_image(&bridge);
+    load_slint_logo_image(&bridge);
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
     bridge.set_build_label(build_label().into());
@@ -109,6 +110,16 @@ fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {
     match load_raw_rgba_image(std::path::Path::new(&path)) {
         Ok(image) => bridge.set_arcade_cabinet_image(image),
         Err(error) => crate::ui_errln!("launcher: failed to load cabinet image {path}: {error}"),
+    }
+}
+
+fn load_slint_logo_image(bridge: &slint_ui::launcher::MisterBridge) {
+    const DEFAULT_PATH: &str = "/media/fat/mister-magik/art/slint-logo-pixel.rgba";
+    match load_raw_rgba_image(std::path::Path::new(DEFAULT_PATH)) {
+        Ok(image) => bridge.set_slint_logo_image(image),
+        Err(error) => {
+            crate::ui_errln!("launcher: failed to load Slint logo {DEFAULT_PATH}: {error}")
+        }
     }
 }
 
