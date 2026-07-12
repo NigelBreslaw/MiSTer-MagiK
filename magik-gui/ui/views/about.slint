@@ -1,0 +1,66 @@
+component SlintPixelMark inherits Rectangle {
+    height: 72px;
+    horizontal-stretch: 1;
+    HorizontalLayout {
+        y: 0px;
+        width: parent.width;
+        height: 40px;
+        spacing: 4px;
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+        for color in [#06d6a0, #70e1f5, #f9c74f, #f28482, #c77dff] : Rectangle {
+            width: 40px;
+            height: 40px;
+            background: color;
+            border-width: 3px;
+            border-color: #0b0d14;
+        }
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+    }
+    Text {
+        x: 0px;
+        y: 46px;
+        width: parent.width;
+        text: "S L I N T";
+        color: #e8e0f0;
+        font-size: 16px;
+        horizontal-alignment: center;
+    }
+}
+
+export component AboutScreen inherits Rectangle {
+    background: #0b0d14;
+    VerticalLayout {
+        padding: 48px;
+        spacing: 24px;
+        Text {
+            text: "About";
+            color: #06d6a0;
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "MiSTer MagiK is an Unintuitive.com software production. Crafted with love in Finland by Nigel Breslaw.";
+            color: #e8e0f0;
+            font-size: 16px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Thanks to the MiSTer project for making all of this possible";
+            color: #b8acc8;
+            font-size: 16px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        SlintPixelMark { }
+        Text {
+            text: "Made with Slint. Delivering beautiful UI's on the most challenging of hardware www.slint.dev";
+            color: #70e1f5;
+            font-size: 16px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        Text { text: "B: back"; color: #6f8198; font-size: 8px; horizontal-alignment: center; }
+    }
+}

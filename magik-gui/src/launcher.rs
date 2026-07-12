@@ -49,7 +49,7 @@ const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 2;
-const SETTINGS_MAX_SELECTED: usize = 3;
+const SETTINGS_MAX_SELECTED: usize = 5;
 const LICENSES_MAX_SELECTED: usize = 2;
 const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
@@ -113,7 +113,9 @@ pub enum Screen {
     Controller,
     Arcade,
     Settings,
+    About,
     Licenses,
+    Info,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -817,6 +819,10 @@ impl LauncherNav {
                 }
                 Screen::Arcade => self.handle_arcade(now, frame_now, catalog),
                 Screen::Settings => self.handle_settings(now, frame_now),
+                Screen::About | Screen::Info => {
+                    self.handle_settings_subscreen(now);
+                    None
+                }
                 Screen::Licenses => self.handle_licenses(now, frame_now),
             }
         };
@@ -1218,10 +1224,18 @@ impl LauncherNav {
                 return None;
             }
             if self.settings_selected == 3 {
+                self.screen = Screen::About;
+                return None;
+            }
+            if self.settings_selected == 4 {
                 self.licenses_selected = 0;
                 self.licenses_expanded = false;
                 self.licenses_scroll.reset();
                 self.screen = Screen::Licenses;
+                return None;
+            }
+            if self.settings_selected == 5 {
+                self.screen = Screen::Info;
                 return None;
             }
             self.confirm_selected = if self.settings_selected == 0 { 1 } else { 0 };
@@ -1271,6 +1285,12 @@ impl LauncherNav {
             self.licenses_scroll.reset();
         }
         None
+    }
+
+    fn handle_settings_subscreen(&mut self, now: &PadState) {
+        if rising(now.btn_home, self.prev.btn_home) || rising(now.btn_b, self.prev.btn_b) {
+            self.screen = Screen::Settings;
+        }
     }
 
     pub fn licenses_scroll_y(&self) -> i32 {
@@ -4176,7 +4196,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         nav.screen = Screen::Settings;
-        nav.settings_selected = 3;
+        nav.settings_selected = 4;
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Licenses);
@@ -4214,6 +4234,32 @@ mod tests {
             .handle_input(&back, t0 + Duration::from_millis(160), &catalog)
             .is_none());
         assert_eq!(nav.screen, Screen::Settings);
+    }
+
+    #[test]
+    fn launcher_settings_opens_about_and_info_and_b_returns() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        let press_b = pad_with(|pad| pad.btn_b = true);
+
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 3;
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert_eq!(nav.screen, Screen::About);
+        release(&mut nav, &catalog, t0, 16);
+        assert!(nav
+            .handle_input(&press_b, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Settings);
+        release(&mut nav, &catalog, t0, 48);
+
+        nav.settings_selected = 5;
+        assert!(nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .is_none());
+        assert_eq!(nav.screen, Screen::Info);
     }
 
     #[test]

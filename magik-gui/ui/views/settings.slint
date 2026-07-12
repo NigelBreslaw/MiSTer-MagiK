@@ -5,14 +5,14 @@ component SettingsRow inherits Rectangle {
     in property <string> detail;
     in property <bool> focused;
 
-    height: 64px;
+    height: 52px;
     background: focused ? #2a2236 : #1e1828;
     border-width: focused ? 2px : 1px;
     border-color: focused ? #06d6a0 : #5c4a72;
 
     VerticalLayout {
-        padding: 12px;
-        spacing: 6px;
+        padding: 10px;
+        spacing: 4px;
 
         Text {
             text: label;
@@ -34,8 +34,8 @@ export component SettingsScreen inherits Rectangle {
     HorizontalLayout {
 
         VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
+            padding: 20px;
+            spacing: 8px;
 
             Text {
                 text: "MiSTer MagiK";
@@ -63,30 +63,24 @@ export component SettingsScreen inherits Rectangle {
             }
 
             SettingsRow {
-                label: "Licenses";
-                detail: "Open source licenses and acknowledgements";
+                label: "About";
+                detail: "MiSTer MagiK and Slint";
                 focused: MisterBridge.settings-selected == 3;
             }
 
-            Rectangle { vertical-stretch: 1; background: transparent; }
-
-            HorizontalLayout {
-                Text {
-                    text: MisterBridge.build-label;
-                    color: #6f8198;
-                    font-size: 8px;
-                    horizontal-alignment: left;
-                }
-
-                Rectangle { horizontal-stretch: 1; background: transparent; }
-
-                Text {
-                    text: MisterBridge.present-mode-label;
-                    color: #6f8198;
-                    font-size: 8px;
-                    horizontal-alignment: right;
-                }
+            SettingsRow {
+                label: "Licenses";
+                detail: "Open source licenses and acknowledgements";
+                focused: MisterBridge.settings-selected == 4;
             }
+
+            SettingsRow {
+                label: "Info";
+                detail: "Build, display, database, and kernel details";
+                focused: MisterBridge.settings-selected == 5;
+            }
+
+            Rectangle { vertical-stretch: 1; background: transparent; }
         }
     }
 }

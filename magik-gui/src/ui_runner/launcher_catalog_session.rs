@@ -231,6 +231,12 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
+                effects.ui(LauncherWorkerUiIntent::InfoDatabaseBuild(format!(
+                    "{} ms (scan {} ms, save {} ms)",
+                    (summary.scan_us + summary.import_us) / 1_000,
+                    summary.scan_us / 1_000,
+                    summary.import_us / 1_000,
+                )));
                 push_catalog_coverage_diagnostic(&summary, &mut effects);
                 effects.ui(LauncherWorkerUiIntent::HideCatalogBackgroundScan);
             }
@@ -609,6 +615,7 @@ mod tests {
                         LauncherWorkerUiIntent::CatalogScan(_) => "catalog-scan",
                         LauncherWorkerUiIntent::ClearCatalogScan => "clear-catalog-scan",
                         LauncherWorkerUiIntent::HideCatalogBackgroundScan => "hide-background-scan",
+                        LauncherWorkerUiIntent::InfoDatabaseBuild(_) => "info-database-build",
                         LauncherWorkerUiIntent::MediaProgress { .. } => "media-progress",
                         LauncherWorkerUiIntent::None => "none",
                     });
@@ -737,10 +744,14 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "ui",
                 "ui"
             ]
         );
-        assert_eq!(persisted_ui, vec!["hide-background-scan"]);
+        assert_eq!(
+            persisted_ui,
+            vec!["info-database-build", "hide-background-scan"]
+        );
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(!session.refresh_failed);
@@ -809,10 +820,14 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "ui",
                 "ui"
             ]
         );
-        assert_eq!(persisted_ui, vec!["hide-background-scan"]);
+        assert_eq!(
+            persisted_ui,
+            vec!["info-database-build", "hide-background-scan"]
+        );
         assert!(session.refresh_done());
         assert!(!session.foreground_update());
         assert!(!session.refresh_failed);
@@ -841,6 +856,7 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "ui",
                 "event",
                 "ui"
             ]
