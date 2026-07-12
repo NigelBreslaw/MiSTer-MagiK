@@ -1260,9 +1260,12 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
                     software_hash_cache,
                     discovery_history.clone(),
                     Some(stamp),
-                    // The RAM catalog preserves first-ready latency, but the
-                    // durable DB must still materialize its launcher tables.
-                    true,
+                    // The builder has already finalized the runtime catalog and
+                    // publishes it as the durable navigation projection. Keep
+                    // SQLite to source facts needed for validation/debugging;
+                    // rebuilding the same launcher projection here needlessly
+                    // delays durable publication on exFAT.
+                    false,
                 )
             };
         save_sqlite_scan_with_progress_using_writer(
