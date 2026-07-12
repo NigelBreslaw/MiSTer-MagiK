@@ -266,7 +266,10 @@ stateDiagram-v2
     HydrateReturnCatalog --> RestoreContext: navigation catalog loaded
     HoldBlackReturn --> RestoreContext: navigation catalog already loaded
     RestoreContext --> WaitRelevantPreview: restored selection known
-    WaitRelevantPreview --> RevealLauncher: selected preview exact, no preview exists, or preview wait times out
+    WaitRelevantPreview --> RevealLauncher: selected preview exact, no preview exists, or 250ms wait expires
+
+    HydrateReturnCatalog --> SearchIndexBuilding: background, after catalog publication
+    SearchIndexBuilding --> SearchIndexReady: never gates reveal or input
 
     RevealLauncher --> InputEnabled
     InputEnabled --> [*]
@@ -279,7 +282,7 @@ intended launcher frame is ready. Warm summary startup may defer background
 catalog validation so the first visible frame wins, but return-from-game treats
 navigation hydration as foreground reveal work: it starts immediately, even when
 normal refresh is disabled, because restoring the exact Arcade row requires
-hydrated navigation rows. Return-from-game may briefly wait for the selected
+hydrated navigation rows. Return-from-game may wait at most 250ms for the selected
 preview so the restored Arcade frame is complete, but preview readiness is not a
 hard visibility dependency: if the relevant preview never becomes exact, the
 launcher must reveal after the bounded preview hold rather than leaving HDMI
@@ -367,13 +370,16 @@ metadata terms such as `capcom` can match games by manufacturer. The search
 keyboard also exposes a one-word autocomplete suggestion above the keys; `Y`
 accepts the suggestion by replacing the current partial word and appending a
 space. Empty search shows the active system's full game list and must not build
-deferred text indexes on the Search entry frame. After the first visible frame,
-the background catalog worker builds those indexes before delivering the full
-catalog and logs `arcade_search_index_prewarm`; input handlers only consume
-ready indexes.
+deferred text indexes on the Search entry frame. The catalog worker publishes
+the navigation catalog first, then builds search keys and autocomplete on CPU0
+at background priority. Search opens and accepts input immediately; a non-empty
+query shows `Preparing search…` until the worker publishes
+`arcade_search_index_ready`, at which point the current query is refreshed.
+Search-index readiness never gates launcher reveal or input.
 While search is active, screenshot previews stay suppressed because the right
-pane is reserved for result navigation. Launch return state stores the search
-query and restores the filtered result list before selecting the returning game.
+pane is reserved for result navigation. Launch return state restores the search
+query immediately; if indexes are still building, the exact filtered selection
+is applied when results become ready without delaying reveal or input.
 
 Current rules:
 

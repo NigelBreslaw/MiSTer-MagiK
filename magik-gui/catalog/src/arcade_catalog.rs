@@ -79,7 +79,7 @@ pub struct ArcadeFilterOption {
 #[derive(Clone, Debug)]
 pub struct ArcadeCatalog {
     pub root: PathBuf,
-    pub games: Vec<ArcadeGameEntry>,
+    pub games: Arc<Vec<ArcadeGameEntry>>,
     pub systems: Vec<GameSystemEntry>,
     games_by_system: HashMap<String, Vec<usize>>,
     games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
@@ -88,7 +88,7 @@ pub struct ArcadeCatalog {
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
     search_keys: Vec<ArcadeSearchKey>,
     autocomplete: ArcadeAutocompleteIndex,
-    lazy_text_indexes: OnceLock<ArcadeTextIndexes>,
+    lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,6 +97,35 @@ pub struct ArcadeTextIndexBuildTiming {
     pub search_keys_us: u64,
     pub autocomplete_us: u64,
     pub total_us: u64,
+}
+
+/// O(1) background build handle detached from an [`ArcadeCatalog`].
+///
+/// It shares immutable game rows and the catalog's lazy index slot so the
+/// catalog itself can be moved to the launcher before text indexing begins.
+pub struct ArcadeTextIndexBuildJob {
+    games: Arc<Vec<ArcadeGameEntry>>,
+    lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
+}
+
+impl ArcadeTextIndexBuildJob {
+    pub fn text_index_token(&self) -> usize {
+        Arc::as_ptr(&self.lazy_text_indexes) as usize
+    }
+
+    pub fn build_with_timing(self) -> ArcadeTextIndexBuildTiming {
+        if self.lazy_text_indexes.get().is_some() {
+            return ArcadeTextIndexBuildTiming::default();
+        }
+        let (indexes, mut timing) =
+            build_arcade_text_indexes_with_timing(&self.games, TextIndexBuildPacing::Interactive);
+        timing.built = self.lazy_text_indexes.set(indexes).is_ok();
+        if timing.built {
+            timing
+        } else {
+            ArcadeTextIndexBuildTiming::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -256,7 +285,7 @@ impl ArcadeCatalog {
         let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
         Self {
             root,
-            games,
+            games: Arc::new(games),
             systems,
             games_by_system: indexes.games_by_system,
             games_by_filter: indexes.games_by_filter,
@@ -265,7 +294,7 @@ impl ArcadeCatalog {
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
-            lazy_text_indexes: OnceLock::new(),
+            lazy_text_indexes: Arc::new(OnceLock::new()),
         }
     }
 
@@ -303,7 +332,7 @@ impl ArcadeCatalog {
         let indexes = build_arcade_catalog_indexes(&games, launch_plans, index_mode);
         Self {
             root: root.into(),
-            games,
+            games: Arc::new(games),
             systems,
             games_by_system: indexes.games_by_system,
             games_by_filter: indexes.games_by_filter,
@@ -312,7 +341,7 @@ impl ArcadeCatalog {
             launch_plans_by_ref: indexes.launch_plans_by_ref,
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
-            lazy_text_indexes: OnceLock::new(),
+            lazy_text_indexes: Arc::new(OnceLock::new()),
         }
     }
 
@@ -393,11 +422,69 @@ impl ArcadeCatalog {
         scored.into_iter().map(|entry| entry.index).collect()
     }
 
+    /// Searches only when the text indexes are already available.
+    ///
+    /// Unlike [`Self::search_game_indexes`], this never builds indexes on the
+    /// caller and is therefore safe to use from the launcher event loop.
+    pub fn try_search_game_indexes(&self, system_id: &str, query: &str) -> Option<Vec<usize>> {
+        let needle = search_match_key(query);
+        let compact_needle = compact_search_match_key(query);
+        let tokens = search_query_tokens(&needle);
+        if needle.is_empty() && compact_needle.is_empty() {
+            return Some(self.system_game_indexes(system_id).to_vec());
+        }
+        let search_keys = self.try_search_keys()?;
+        let mut scored: Vec<SearchMatch> = self
+            .system_game_indexes(system_id)
+            .iter()
+            .copied()
+            .filter_map(|index| {
+                let score = search_keys
+                    .get(index)
+                    .and_then(|key| key.score(&tokens, &compact_needle))?;
+                Some(SearchMatch { index, score })
+            })
+            .collect();
+        scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.index.cmp(&b.index)));
+        Some(scored.into_iter().map(|entry| entry.index).collect())
+    }
+
     pub fn autocomplete_search_word(&self, system_id: &str, query: &str) -> String {
         let fragment = current_search_word(query);
         self.autocomplete()
             .suggest(system_id, fragment)
             .unwrap_or_default()
+    }
+
+    /// Returns an autocomplete suggestion only when its index is already
+    /// available, without performing work on the caller.
+    pub fn try_autocomplete_search_word(&self, system_id: &str, query: &str) -> Option<String> {
+        let fragment = current_search_word(query);
+        Some(
+            self.try_autocomplete()?
+                .suggest(system_id, fragment)
+                .unwrap_or_default(),
+        )
+    }
+
+    fn try_search_keys(&self) -> Option<&[ArcadeSearchKey]> {
+        if self.search_keys.len() == self.games.len() {
+            Some(&self.search_keys)
+        } else {
+            self.lazy_text_indexes
+                .get()
+                .map(|indexes| indexes.search_keys.as_slice())
+        }
+    }
+
+    fn try_autocomplete(&self) -> Option<&ArcadeAutocompleteIndex> {
+        if self.autocomplete.is_empty() && !self.games.is_empty() {
+            self.lazy_text_indexes
+                .get()
+                .map(|indexes| &indexes.autocomplete)
+        } else {
+            Some(&self.autocomplete)
+        }
     }
 
     fn search_keys(&self) -> &[ArcadeSearchKey] {
@@ -427,6 +514,19 @@ impl ArcadeCatalog {
             || self.lazy_text_indexes.get().is_some()
     }
 
+    /// Stable identity shared by catalog clones that publish the same lazy
+    /// text-index build. Used to discard stale worker completion messages.
+    pub fn text_index_token(&self) -> usize {
+        Arc::as_ptr(&self.lazy_text_indexes) as usize
+    }
+
+    pub fn text_index_build_job(&self) -> Option<ArcadeTextIndexBuildJob> {
+        (!self.text_indexes_ready()).then(|| ArcadeTextIndexBuildJob {
+            games: Arc::clone(&self.games),
+            lazy_text_indexes: Arc::clone(&self.lazy_text_indexes),
+        })
+    }
+
     pub fn ensure_text_indexes_ready(&self) -> bool {
         self.ensure_text_indexes_ready_with_timing().built
     }
@@ -436,7 +536,8 @@ impl ArcadeCatalog {
         if was_ready {
             return ArcadeTextIndexBuildTiming::default();
         }
-        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(&self.games);
+        let (indexes, mut timing) =
+            build_arcade_text_indexes_with_timing(&self.games, TextIndexBuildPacing::Unthrottled);
         timing.built = self.lazy_text_indexes.set(indexes).is_ok();
         if !timing.built {
             ArcadeTextIndexBuildTiming::default()
@@ -715,23 +816,40 @@ fn build_arcade_catalog_indexes(
 }
 
 fn build_arcade_text_indexes(games: &[ArcadeGameEntry]) -> ArcadeTextIndexes {
-    build_arcade_text_indexes_with_timing(games).0
+    build_arcade_text_indexes_with_timing(games, TextIndexBuildPacing::Unthrottled).0
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextIndexBuildPacing {
+    Unthrottled,
+    Interactive,
+}
+
+impl TextIndexBuildPacing {
+    fn after_game(self, completed_games: usize) {
+        if self == Self::Interactive && completed_games.is_multiple_of(16) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 fn build_arcade_text_indexes_with_timing(
     games: &[ArcadeGameEntry],
+    pacing: TextIndexBuildPacing,
 ) -> (ArcadeTextIndexes, ArcadeTextIndexBuildTiming) {
     let total_t = std::time::Instant::now();
     let mut search_keys = Vec::with_capacity(games.len());
     let mut autocomplete = ArcadeAutocompleteIndex::default();
     let search_t = std::time::Instant::now();
-    for game in games {
+    for (index, game) in games.iter().enumerate() {
         search_keys.push(ArcadeSearchKey::from_game(game));
+        pacing.after_game(index + 1);
     }
     let search_keys_us = search_t.elapsed().as_micros() as u64;
     let autocomplete_t = std::time::Instant::now();
-    for game in games {
+    for (index, game) in games.iter().enumerate() {
         autocomplete.add_game(game);
+        pacing.after_game(index + 1);
     }
     let autocomplete_us = autocomplete_t.elapsed().as_micros() as u64;
     (

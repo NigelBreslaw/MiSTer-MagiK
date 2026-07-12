@@ -21,7 +21,9 @@ stateDiagram-v2
   ReturnFromGame --> HoldBlackReturn
   HoldBlackReturn --> RestoreContext
   RestoreContext --> WaitRelevantPreview
-  WaitRelevantPreview --> RevealLauncher: exact preview or timeout
+  WaitRelevantPreview --> RevealLauncher: exact preview or 250ms timeout
+  HoldBlackReturn --> SearchIndexBuilding: catalog published
+  SearchIndexBuilding --> SearchIndexReady: background only
   RevealLauncher --> InputEnabled
   InputEnabled --> Idle
   Idle --> Launching
@@ -31,3 +33,5 @@ stateDiagram-v2
 ```
 
 Cold boot without a valid catalog shows the splash for at least two seconds. Warm boot and return-from-game keep HDMI black until a deliberate launcher frame is ready.
+
+Search keys and autocomplete form an independent background lifecycle. The navigation catalog, reveal, and input become ready first. Search can open and accept a query while indexing, showing “Preparing search…” until results become available.

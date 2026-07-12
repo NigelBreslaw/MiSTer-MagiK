@@ -273,7 +273,7 @@ pub(super) struct LauncherLifecycle {
 
 impl LauncherLifecycle {
     pub(super) const COLD_SPLASH_DURATION: Duration = Duration::from_secs(2);
-    pub(super) const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(1500);
+    pub(super) const RETURN_PREVIEW_HOLD_TIMEOUT: Duration = Duration::from_millis(250);
 
     pub(super) fn new(config: LauncherLifecycleConfig, now: Instant) -> Self {
         Self {

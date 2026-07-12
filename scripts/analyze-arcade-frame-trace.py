@@ -27,6 +27,7 @@ STRING_COLUMNS = {
     "main_present_backend",
     "main_present_status",
     "vsync_source",
+    "search_index_state",
 }
 PHASES = [
     "prepare_us",

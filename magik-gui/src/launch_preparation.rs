@@ -640,7 +640,10 @@ fn launch_prep_kind(launch_ref: &str) -> &'static str {
 #[cfg(feature = "bench-tools")]
 fn prepare_cold_launch_prep_ref(launch_ref: &str) {
     if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
-        let _ = fs::remove_file(AMIGAVISION_AGS_BOOT);
+        let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
+        if let Ok(install) = resolve_amigavision_install(&roots) {
+            let _ = fs::remove_file(install.ags_boot_path);
+        }
     }
 }
 

@@ -51,7 +51,7 @@ EOF
 secs="30"
 label="arcade-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
 scenario="turbo-hold"
-human_turbo_idle_frames="${MISTER_HUMAN_TURBO_IDLE_FRAMES:-30}"
+human_turbo_idle_frames="${MISTER_HUMAN_TURBO_IDLE_FRAMES:-0}"
 human_turbo_normal_frames="${MISTER_HUMAN_TURBO_NORMAL_FRAMES:-30}"
 human_turbo_pause_frames="${MISTER_HUMAN_TURBO_PAUSE_FRAMES:-30}"
 entry_before_a_wait_frames="${MISTER_ARCADE_ENTRY_BEFORE_A_WAIT_FRAMES:-12}"
@@ -70,7 +70,7 @@ cpu_profile_remote_svg=""
 boot_prelude="${MISTER_ARCADE_SCROLL_BOOT_PRELUDE:-1}"
 entry_open_gate_ms="${MISTER_ARCADE_ENTRY_OPEN_GATE_MS:-2000}"
 entry_gate_ms="${MISTER_ARCADE_ENTRY_GATE_MS:-100}"
-home_selected_index="${MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX:-7}"
+home_selected_index="${MISTER_ARCADE_ENTRY_HOME_SELECTED_INDEX:-8}"
 entry_input_script="${MISTER_ARCADE_ENTRY_INPUT_SCRIPT:-}"
 frame_pacing_p99_work_us="${MISTER_ARCADE_SCROLL_P99_WORK_US:-14500}"
 frame_pacing_p99_wall_us="${MISTER_ARCADE_SCROLL_P99_WALL_US:-16000}"
@@ -381,6 +381,82 @@ check_frame_pacing_gate() {
   "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario" "$policy"
 }
 
+check_search_index_overlap_gate() {
+  local name="$1" trace="$2" log="$3"
+  python3 - "$name" "$trace" "$log" <<'PY'
+import csv
+import re
+import sys
+
+name, trace_path, log_path = sys.argv[1:4]
+try:
+    log_text = open(log_path, encoding="utf-8", errors="replace").read()
+    with open(trace_path, encoding="utf-8") as f:
+        frames = list(csv.DictReader(f, delimiter="\t"))
+except FileNotFoundError as error:
+    print(f"search_index_overlap_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason=missing_artifact\tdetail={error.filename}")
+    raise SystemExit(9)
+
+def event_ms(event):
+    match = re.search(rf"startup_timing\t{re.escape(event)}\t([0-9]+)ms\t", log_text)
+    return int(match.group(1)) if match else None
+
+library_ms = event_ms("library_ready")
+start_ms = event_ms("arcade_search_index_build_started")
+ready_ms = event_ms("arcade_search_index_ready")
+failures = []
+if library_ms is None:
+    failures.append("missing_library_ready")
+if start_ms is None:
+    failures.append("missing_search_index_build_started")
+if ready_ms is None:
+    failures.append("missing_search_index_ready")
+if not failures:
+    if start_ms < library_ms:
+        failures.append("build_started_before_catalog_publication")
+    if ready_ms < start_ms:
+        failures.append("ready_before_build_started")
+    if ready_ms - start_ms > 30000:
+        failures.append(f"build_duration_after_30s={ready_ms - start_ms}")
+
+required_columns = ("elapsed_us", "selected", "search_index_state")
+if frames and any(column not in frames[0] for column in required_columns):
+    failures.append("missing_trace_columns")
+building_frames = []
+after_frames = []
+if not failures and frames:
+    for row in frames:
+        try:
+            selected = int(row["selected"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        state = row["search_index_state"]
+        if state not in ("building", "ready"):
+            failures.append(f"invalid_search_index_state={state}")
+            continue
+        if state == "building":
+            building_frames.append(selected)
+        elif state == "ready":
+            after_frames.append(selected)
+    if len(set(building_frames)) < 2:
+        failures.append("no_selection_progress_during_build")
+    if not after_frames:
+        failures.append("no_frame_after_search_index_ready")
+elif not frames:
+    failures.append("no_frames")
+
+detail = (
+    f"library_ms={library_ms} start_ms={start_ms} ready_ms={ready_ms} "
+    f"building_frames={len(building_frames)} building_selected={len(set(building_frames))} "
+    f"after_frames={len(after_frames)}"
+)
+if failures:
+    print(f"search_index_overlap_gate_tsv\tlabel={name}\tvalid=0\tinvalid_reason={';'.join(failures)}\tdetail={detail}")
+    raise SystemExit(9)
+print(f"search_index_overlap_gate_tsv\tlabel={name}\tvalid=1\tinvalid_reason=ok\tdetail={detail}")
+PY
+}
+
 gate_arcade_entry_trace() {
   local name="$1" trace="$2" log="$3" open_threshold="$4" interactive_threshold="$5" expected_run_id="${6:-}"
   python3 - "$name" "$trace" "$log" "$open_threshold" "$interactive_threshold" "$expected_run_id" <<'PY'
@@ -449,21 +525,6 @@ if re.search(r"startup_timing\tcatalog_navigation_load\t", log_text):
     failures.append("forbidden_catalog_navigation_load")
 if re.search(r"startup_timing\tcatalog_system_navigation_load\t", log_text):
     failures.append("forbidden_catalog_system_navigation_load")
-prewarms = list(re.finditer(r"startup_timing\tarcade_search_index_prewarm\t[^\n]*", log_text))
-prewarm = prewarms[0] if prewarms else None
-library_ready = re.search(r"startup_timing\tlibrary_ready\t[^\n]*", log_text)
-if prewarm is None:
-    failures.append("missing_arcade_search_index_prewarm")
-elif library_ready is None:
-    failures.append("missing_library_ready_for_search_prewarm")
-elif prewarm.start() > library_ready.start():
-    failures.append("late_arcade_search_index_prewarm")
-elif any(
-    event.start() > library_ready.start() and "built=1" in event.group(0)
-    for event in prewarms
-):
-    failures.append("post_ready_arcade_search_index_build")
-
 summary = " ".join(
     f"{event}_delta_ms={rows[event]['delta_ms']}"
     for event in required
@@ -579,6 +640,24 @@ frame	wall_us	prepare_us	slint_render_us	custom_draw_us	fb_present_us	vsync_sour
 EOF
   if check_frame_pacing_gate self-human-turbo-wall-fail "$tmpdir/pacing-human-turbo-wall-33ms.tsv" 14500 16000 16667 human-turbo-hold >/dev/null 2>&1; then
     echo "self-test expected human-turbo >33ms wall pacing failure" >&2
+    exit 1
+  fi
+  cat >"$tmpdir/search-overlap.tsv" <<'EOF'
+elapsed_us	selected	search_index_state
+1500000	0	building
+2000000	1	building
+3000000	2	building
+7000000	3	ready
+EOF
+  cat >"$tmpdir/search-overlap.log" <<'EOF'
+startup_timing	library_ready	1000ms	games=100
+startup_timing	arcade_search_index_build_started	1001ms	games=100
+startup_timing	arcade_search_index_ready	6500ms	built=1
+EOF
+  check_search_index_overlap_gate self-search-overlap "$tmpdir/search-overlap.tsv" "$tmpdir/search-overlap.log" >/dev/null
+  sed 's/6500ms/900ms/' "$tmpdir/search-overlap.log" >"$tmpdir/search-overlap-bad.log"
+  if check_search_index_overlap_gate self-search-overlap-bad "$tmpdir/search-overlap.tsv" "$tmpdir/search-overlap-bad.log" >/dev/null 2>&1; then
+    echo "self-test expected search index ordering failure" >&2
     exit 1
   fi
   cat >"$tmpdir/pacing-missing-column.tsv" <<'EOF'
@@ -885,5 +964,9 @@ if [[ "$latch_drop_status" -ne 0 ]]; then
 fi
 echo
 check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario" "$frame_pacing_policy"
+if [[ "$scenario" == "human-turbo-hold" ]]; then
+  echo
+  check_search_index_overlap_gate "$label" "$local_tsv" "$local_log"
+fi
 echo
 check_preview_exact_gate "$label" "$local_tsv"

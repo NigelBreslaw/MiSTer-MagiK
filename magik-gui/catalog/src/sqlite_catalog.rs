@@ -2496,7 +2496,7 @@ fn write_sqlite_scan_with_sources_inner(
                 (*count >= 2
                     || manifest_backed_systems.contains(system_id)
                     || matches!(system_id.as_str(), "arcade" | "neogeo"))
-                    .then_some(system_id.clone())
+                .then_some(system_id.clone())
             })
             .collect::<HashSet<_>>();
         let mut system_rows = HashMap::<String, (String, String)>::new();
@@ -2783,10 +2783,7 @@ fn write_sqlite_scan_with_sources_inner(
                     .archive_for_platform("neogeo")
                     .unwrap_or_default(),
             );
-            catalog_projection::materialize_arcade_ui_projections(
-                &tx,
-                &arcade_preview_projection,
-            )?;
+            catalog_projection::materialize_arcade_ui_projections(&tx, &arcade_preview_projection)?;
             report_library_import_timing("materialize_arcade_ui", projection_t, "");
             let launcher_arcade_t = Instant::now();
             catalog_projection::insert_arcade_launcher_catalog(&tx)?;
@@ -3402,28 +3399,26 @@ fn launch_target_mount_for_discovery(
     if launch_kind_for_discovery(discovery) != "virtual-mgl" {
         return None;
     }
-    let mount = crate::catalog_scan::profile_for_path(
-        profiles,
-        Path::new(discovery.source_path.as_str()),
-    )
-        .or_else(|| {
-            profile_id.and_then(|profile_id| {
-                launch_profiles::profile_for_launch_target_id(profiles, profile_id)
+    let mount =
+        crate::catalog_scan::profile_for_path(profiles, Path::new(discovery.source_path.as_str()))
+            .or_else(|| {
+                profile_id.and_then(|profile_id| {
+                    launch_profiles::profile_for_launch_target_id(profiles, profile_id)
+                })
             })
-        })
-        .and_then(|profile| match discovery.source_kind {
-            DiscoverySourceKind::ArchiveEntry => profile
-                .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
-                .map(|rule| rule.mount),
-            DiscoverySourceKind::PayloadFile => {
-                match profile.classify_path(Path::new(discovery.launch_ref.as_str())) {
-                    launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),
-                    _ => None,
+            .and_then(|profile| match discovery.source_kind {
+                DiscoverySourceKind::ArchiveEntry => profile
+                    .classify_archive_entry(Path::new(discovery.launch_ref.as_str()))
+                    .map(|rule| rule.mount),
+                DiscoverySourceKind::PayloadFile => {
+                    match profile.classify_path(Path::new(discovery.launch_ref.as_str())) {
+                        launch_profiles::ProfilePathClass::Payload { rule } => Some(rule.mount),
+                        _ => None,
+                    }
                 }
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| MountSpec::mount_image(0));
+                _ => None,
+            })
+            .unwrap_or_else(|| MountSpec::mount_image(0));
     Some(mount)
 }
 
@@ -4409,7 +4404,7 @@ mod tests {
             );
         }
 
-        for game in &sqlite_catalog.games {
+        for game in sqlite_catalog.games.iter() {
             assert_eq!(
                 navigation_catalog.title_for_path(game.mra_path.as_ref()),
                 sqlite_catalog.title_for_path(game.mra_path.as_ref())
@@ -5471,7 +5466,10 @@ mod tests {
                 panic!("expected structured plan, got path {path}")
             }
             crate::arcade_catalog::LaunchTarget::Prepared(selection) => {
-                panic!("expected structured plan, got prepared {}", selection.launch_ref)
+                panic!(
+                    "expected structured plan, got prepared {}",
+                    selection.launch_ref
+                )
             }
             crate::arcade_catalog::LaunchTarget::MissingStructured(launch_ref) => {
                 panic!("expected structured plan, got missing {launch_ref}")

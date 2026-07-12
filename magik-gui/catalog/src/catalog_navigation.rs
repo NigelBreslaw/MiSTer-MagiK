@@ -316,7 +316,7 @@ impl From<NavigationLaunchPlan> for StructuredLaunchPlan {
 fn structured_launch_plans(catalog: &ArcadeCatalog) -> Vec<NavigationLaunchPlan> {
     let mut seen = HashSet::new();
     let mut plans = Vec::new();
-    for game in &catalog.games {
+    for game in catalog.games.iter() {
         if !seen.insert(game.mra_path.to_string()) {
             continue;
         }

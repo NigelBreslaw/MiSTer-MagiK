@@ -756,6 +756,7 @@ fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &La
     bridge.set_arcade_search_active(nav.arcade_search.is_active(&nav.arcade_filter.active));
     bridge.set_arcade_search_query(nav.arcade_search.query.clone().into());
     bridge.set_arcade_search_suggestion(nav.arcade_search.suggestion.clone().into());
+    bridge.set_arcade_search_preparing(nav.arcade_search.preparing);
     bridge.set_arcade_search_key_selected(nav.arcade_search.selected_key as i32);
     bridge.set_arcade_search_pane(match nav.arcade_search.pane {
         launcher::ArcadeSearchPane::Keyboard => 0,
@@ -808,6 +809,12 @@ fn sync_arcade_search_bridge_if_changed(
         get_arcade_search_suggestion,
         set_arcade_search_suggestion,
         nav.arcade_search.suggestion.clone()
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_search_preparing,
+        set_arcade_search_preparing,
+        nav.arcade_search.preparing
     );
     set_bridge_if_changed!(
         bridge,
@@ -884,6 +891,7 @@ pub(super) struct LauncherBridgeKey {
     arcade_filter_active: arcade_catalog::ArcadeFilter,
     arcade_search_query: String,
     arcade_search_suggestion: String,
+    arcade_search_preparing: bool,
     arcade_search_selected_key: usize,
     arcade_search_pane: launcher::ArcadeSearchPane,
 }
@@ -911,6 +919,7 @@ impl LauncherBridgeKey {
             arcade_filter_active: nav.arcade_filter.active.clone(),
             arcade_search_query: nav.arcade_search.query.clone(),
             arcade_search_suggestion: nav.arcade_search.suggestion.clone(),
+            arcade_search_preparing: nav.arcade_search.preparing,
             arcade_search_selected_key: nav.arcade_search.selected_key,
             arcade_search_pane: nav.arcade_search.pane,
         }

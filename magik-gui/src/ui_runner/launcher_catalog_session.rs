@@ -31,6 +31,13 @@ pub(super) enum CatalogSessionEffect {
         catalog: ArcadeCatalog,
         load_us: u64,
         source: CatalogSource,
+        publication_ack: Option<mpsc::Sender<()>>,
+    },
+    SearchIndexesReady {
+        text_index_token: usize,
+        games: usize,
+        source: CatalogSource,
+        timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
     },
     SyncCatalogBridge,
     Ui(LauncherWorkerUiIntent),
@@ -114,6 +121,12 @@ impl LauncherCatalogSession {
 
     pub(super) fn refresh_done(&self) -> bool {
         self.refresh_done
+    }
+
+    pub(super) fn deferred_worker_hydrates_navigation(&self) -> bool {
+        self.deferred_worker.as_ref().is_some_and(|worker| {
+            worker.initial_cache == CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+        })
     }
 
     pub(super) fn mark_refresh_done(&mut self) {
@@ -206,12 +219,52 @@ impl LauncherCatalogSession {
                     media_gate: context.media_gate,
                 });
             }
+            CatalogWorkerMessage::SearchIndexBuildStarted {
+                text_index_token,
+                games,
+                source,
+            } => {
+                effects.event(
+                    "arcade_search_index_build_started",
+                    format!(
+                        "token={text_index_token} games={games} source={}",
+                        source.label()
+                    ),
+                );
+            }
+            CatalogWorkerMessage::SearchIndexesReady {
+                text_index_token,
+                games,
+                source,
+                timing,
+            } => {
+                effects.push(CatalogSessionEffect::SearchIndexesReady {
+                    text_index_token,
+                    games,
+                    source,
+                    timing,
+                });
+            }
+            CatalogWorkerMessage::HydrationDoneNeedsValidation { root } => {
+                self.refresh_done = false;
+                self.defer_catalog_worker(
+                    root,
+                    CatalogWorkerRequest::CheckStamp,
+                    CatalogWorkerInitialCache::AlreadyLoadedReady,
+                    CatalogExecutionMode::BackgroundInteractive,
+                );
+                effects.event(
+                    "catalog_validation_deferred_after_hydration",
+                    "reason=interactive_idle_gate",
+                );
+            }
             CatalogWorkerMessage::Ready {
                 catalog,
                 summary,
                 load_us,
                 source,
                 durable_save_pending,
+                publication_ack,
             } => {
                 self.handle_ready(
                     context.catalog_ready,
@@ -220,6 +273,7 @@ impl LauncherCatalogSession {
                     load_us,
                     source,
                     durable_save_pending,
+                    publication_ack,
                     &mut effects,
                 );
             }
@@ -395,6 +449,7 @@ impl LauncherCatalogSession {
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
+        publication_ack: Option<mpsc::Sender<()>>,
         effects: &mut CatalogSessionEffects,
     ) {
         let cached_before_refresh = summary.is_none() && !durable_save_pending;
@@ -411,6 +466,7 @@ impl LauncherCatalogSession {
                 catalog: ready_catalog,
                 load_us,
                 source,
+                publication_ack: publication_ack.clone(),
             });
             effects.event(
                 "library_ready",
@@ -434,6 +490,9 @@ impl LauncherCatalogSession {
             }
         }
         if duplicate_cached_catalog {
+            if let Some(publication_ack) = publication_ack {
+                let _ = publication_ack.send(());
+            }
             if self.refresh_failed || self.foreground_update {
                 self.refresh_done = true;
                 self.foreground_update = false;
@@ -588,6 +647,7 @@ mod tests {
             .map(|effect| match effect {
                 CatalogSessionEffect::StartupEvent(_) => "event",
                 CatalogSessionEffect::UseCatalog { .. } => "catalog",
+                CatalogSessionEffect::SearchIndexesReady { .. } => "search-indexes-ready",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
                 CatalogSessionEffect::Ui(_) => "ui",
                 CatalogSessionEffect::FinishMediaWorker => "finish-media",
@@ -613,6 +673,9 @@ mod tests {
             match effect {
                 CatalogSessionEffect::StartupEvent(_) => effect_names.push("event"),
                 CatalogSessionEffect::UseCatalog { .. } => effect_names.push("catalog"),
+                CatalogSessionEffect::SearchIndexesReady { .. } => {
+                    effect_names.push("search-indexes-ready")
+                }
                 CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
                 CatalogSessionEffect::Ui(intent) => {
                     effect_names.push("ui");
@@ -726,6 +789,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                publication_ack: None,
             },
             now,
         );
@@ -735,6 +799,42 @@ mod tests {
             vec!["request-media-seed", "catalog", "event", "ui", "sync"]
         );
         assert!(!session.refresh_done());
+    }
+
+    #[test]
+    fn hydrated_catalog_defers_validation_to_a_fresh_idle_gated_worker() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        let effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                screen: Screen::Arcade,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::HydrationDoneNeedsValidation {
+                root: "/media/fat".into(),
+            },
+            now,
+        );
+
+        assert_eq!(effect_names(effects), vec!["event"]);
+        assert!(!session.refresh_done());
+        assert!(session
+            .maybe_start_deferred_worker(false, true, false, now, Duration::ZERO, || true)
+            .is_none());
+        let worker = session
+            .maybe_start_deferred_worker(false, true, true, now, Duration::ZERO, || true)
+            .expect("validation worker after idle gate opens");
+        assert_eq!(worker.root, "/media/fat");
+        assert_eq!(worker.request, CatalogWorkerRequest::CheckStamp);
+        assert_eq!(
+            worker.initial_cache,
+            CatalogWorkerInitialCache::AlreadyLoadedReady
+        );
+        assert_eq!(
+            worker.execution_mode,
+            CatalogExecutionMode::BackgroundInteractive
+        );
     }
 
     #[test]
@@ -753,6 +853,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                publication_ack: None,
             },
             now,
         ));
@@ -812,6 +913,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                publication_ack: None,
             },
             now,
         ));
@@ -925,6 +1027,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: false,
+                publication_ack: None,
             },
             now,
         ));
@@ -975,6 +1078,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                publication_ack: None,
             },
             now,
         ));
@@ -1018,6 +1122,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                publication_ack: None,
             },
             now,
         );
@@ -1058,6 +1163,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                publication_ack: None,
             },
             now,
         );
@@ -1108,6 +1214,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                publication_ack: None,
             },
             now,
         );
@@ -1158,6 +1265,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                publication_ack: None,
             },
             now,
         );

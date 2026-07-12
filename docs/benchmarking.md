@@ -253,6 +253,11 @@ do not use that shortcut as evidence for the user-visible boot-to-Arcade flow.
 `human-turbo-hold` uses the same Main-supervised Arcade entry path and requires
 a bench-tools MagiK binary, so use `--deploy-device` when collecting pacing
 regression evidence from a fresh commit.
+It also gates deferred search indexing: catalog publication must precede index
+construction, selection must progress while the index is building, and the
+index must finish within the 30-second trace. This makes its frame-pacing and
+drop counters direct evidence for search-index contention rather than measuring
+only the already-prewarmed steady state.
 The script emits and enforces `frame_pacing_gate_tsv` for the 60fps/drop-frame
 contract and `preview_exact_gate_tsv` for the no-skipped-preview contract.
 For `human-turbo-hold`, the pacing gate treats small wall-time jitter above one
