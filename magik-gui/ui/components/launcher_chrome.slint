@@ -7,8 +7,8 @@ export component LauncherTile inherits Rectangle {
     in property <bool> flat-focus-style: false;
 
     border-width: 2px;
-    border-color: #315a55;
-    background: #1e1828;
+    border-color: #5a4973;
+    background: #2a2031;
 
     VerticalLayout {
         padding: 16px;
@@ -17,8 +17,8 @@ export component LauncherTile inherits Rectangle {
 
         Text {
             text: label;
-            color: focused ? #06d6a0 : #e8e0f0;
-            font-size: label.character-count > 10 ? 12px : 16px;
+            color: focused ? #06d6a0 : #9080a8;
+            font-size: 16px;
             width: 100%;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -29,9 +29,7 @@ export component LauncherTile inherits Rectangle {
 
         if subtitle != "" : Text {
             text: subtitle;
-            color: flat-focus-style
-                ? (focused ? #9080a8ff : #9080a800)
-                : #9080a8ff;
+            color: focused ? #d8d4dd : #9080a800;
             font-size: 8px;
             horizontal-alignment: center;
 
