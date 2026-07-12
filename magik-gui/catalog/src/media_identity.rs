@@ -16,6 +16,7 @@ const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
     ScreenshotPackId::Sms,
     ScreenshotPackId::MegaDrive,
     ScreenshotPackId::Saturn,
+    ScreenshotPackId::Amiga,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +29,7 @@ pub enum ScreenshotPackId {
     Sms,
     MegaDrive,
     Saturn,
+    Amiga,
 }
 
 impl ScreenshotPackId {
@@ -41,6 +43,7 @@ impl ScreenshotPackId {
             "sms" => Some(Self::Sms),
             "megadrive" => Some(Self::MegaDrive),
             "saturn" => Some(Self::Saturn),
+            "amiga" => Some(Self::Amiga),
             _ => None,
         }
     }
@@ -55,6 +58,7 @@ impl ScreenshotPackId {
             Self::Sms => "sms",
             Self::MegaDrive => "megadrive",
             Self::Saturn => "saturn",
+            Self::Amiga => "amiga",
         }
     }
 
@@ -118,6 +122,15 @@ impl ScreenshotAssetId {
 
     pub fn from_mame_software(list_name: &str, software_name: &str) -> Self {
         Self(format!("mame-software__{list_name}__{software_name}"))
+    }
+
+    pub fn from_amigavision_title(title: &str) -> Self {
+        let mut hash = 0xcbf29ce484222325_u64;
+        for byte in title.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Self(format!("amigavision__{hash:016x}"))
     }
 
     pub fn as_str(&self) -> &str {
@@ -323,6 +336,10 @@ mod tests {
         assert_eq!(
             ScreenshotAssetId::from_mame_software("nes", "smb").as_str(),
             "mame-software__nes__smb"
+        );
+        assert_eq!(
+            ScreenshotAssetId::from_amigavision_title("Alien Breed (OCS)[en]").as_str(),
+            "amigavision__667cdd86c04e1709"
         );
     }
 }

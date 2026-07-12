@@ -2175,7 +2175,11 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id,
                    game_detail_rows.year,
                    games.manufacturer,
-                   games.genre AS category,
+                   CASE
+                       WHEN games.system_id = 'amiga' AND games.genre = 'AmigaVision' THEN 'Games'
+                       WHEN games.system_id = 'amiga' AND games.genre = 'AmigaVision demos' THEN 'Demos'
+                       ELSE games.genre
+                   END AS category,
                    game_detail_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
