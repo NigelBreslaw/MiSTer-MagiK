@@ -6,6 +6,7 @@ pub(super) enum LauncherWorkerUiIntent {
     CatalogScan(CatalogScanBridgeStatus),
     ClearCatalogScan,
     HideCatalogBackgroundScan,
+    InfoDatabaseBuild(String),
     MediaProgress {
         progresses: ModelRc<slint_ui::launcher::ScreenshotPackProgress>,
         summary: String,
@@ -42,6 +43,10 @@ pub(super) fn sync_launcher_worker_ui_intent(
         }
         LauncherWorkerUiIntent::HideCatalogBackgroundScan => {
             status_presenter.sync_catalog_background_scan_visible(false);
+        }
+        LauncherWorkerUiIntent::InfoDatabaseBuild(value) => {
+            let _ = std::fs::write(launcher_bridge::DATABASE_BUILD_TIME_PATH, &value);
+            bridge.set_info_database_build(value.into());
         }
         LauncherWorkerUiIntent::MediaProgress {
             progresses,

@@ -130,7 +130,9 @@ fn launcher_screen_from_env(name: &str) -> Option<Screen> {
         "arcade" => Some(Screen::Arcade),
         "controller" | "controller-test" | "controller_test" => Some(Screen::Controller),
         "settings" => Some(Screen::Settings),
+        "about" => Some(Screen::About),
         "licenses" => Some(Screen::Licenses),
+        "info" => Some(Screen::Info),
         _ => None,
     }
 }

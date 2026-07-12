@@ -147,7 +147,9 @@ fn screen_label(screen: Screen) -> &'static str {
         Screen::Controller => "controller",
         Screen::Arcade => "arcade",
         Screen::Settings => "settings",
+        Screen::About => "about",
         Screen::Licenses => "licenses",
+        Screen::Info => "info",
     }
 }
 

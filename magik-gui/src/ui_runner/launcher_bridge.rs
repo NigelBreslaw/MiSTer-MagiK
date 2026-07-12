@@ -32,6 +32,8 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_screen_mode(0);
     bridge.set_build_label(build_label().into());
     bridge.set_present_mode_label("Mode=/dev/fb0".into());
+    bridge.set_info_kernel_version(kernel_version().into());
+    bridge.set_info_database_build(last_database_build().into());
     bridge.set_selected_index(0);
     bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
@@ -77,6 +79,28 @@ fn build_label() -> String {
     let build_number = env!("MISTER_MAGIK_BUILD_NUMBER");
     let build_time = env!("MISTER_MAGIK_BUILD_TIME");
     format!("Build {build_number}  {build_time}")
+}
+
+fn kernel_version() -> String {
+    std::process::Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|version| format!("Linux {}", version.trim()))
+        .filter(|version| version != "Linux ")
+        .unwrap_or_else(|| "Kernel version unavailable".to_string())
+}
+
+pub(super) const DATABASE_BUILD_TIME_PATH: &str = "/media/fat/mister-magik/database-build-time.txt";
+
+fn last_database_build() -> String {
+    std::fs::read_to_string(DATABASE_BUILD_TIME_PATH)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "No completed database build recorded yet".to_string())
 }
 
 fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {
@@ -404,7 +428,9 @@ pub(super) fn sync_bridge_launcher(
         Screen::Controller => 1,
         Screen::Arcade => 2,
         Screen::Settings => 3,
-        Screen::Licenses => 4,
+        Screen::About => 4,
+        Screen::Licenses => 5,
+        Screen::Info => 6,
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
@@ -506,7 +532,9 @@ pub(super) fn sync_bridge_launcher_light(
             Screen::Controller => 1,
             Screen::Arcade => 2,
             Screen::Settings => 3,
-            Screen::Licenses => 4,
+            Screen::About => 4,
+            Screen::Licenses => 5,
+            Screen::Info => 6,
         }
     );
     set_bridge_if_changed!(
