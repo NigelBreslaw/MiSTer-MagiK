@@ -72,6 +72,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     pub(super) search_index_state: &'static str,
+    pub(super) startup_start: Instant,
+    pub(super) startup_monotonic_us: u64,
     pub(super) run_start: Instant,
     pub(super) loop_start: Instant,
     pub(super) frame_t0: Instant,
@@ -158,6 +160,8 @@ pub(super) struct LauncherFrameIdentity {
 }
 
 pub(super) struct LauncherFrameTiming {
+    pub(super) startup_start: Instant,
+    pub(super) startup_monotonic_us: u64,
     pub(super) run_start: Instant,
     pub(super) loop_start: Instant,
     pub(super) frame_t0: Instant,
@@ -219,6 +223,8 @@ impl LauncherFrameSnapshotBuilder {
             selected: self.identity.selected,
             visual_index: self.identity.visual_index,
             search_index_state: self.identity.search_index_state,
+            startup_start: self.timing.startup_start,
+            startup_monotonic_us: self.timing.startup_monotonic_us,
             run_start: self.timing.run_start,
             loop_start: self.timing.loop_start,
             frame_t0: self.timing.frame_t0,
@@ -461,6 +467,8 @@ struct PreviewScrollTraceRow {
     status_write_duration_us: u128,
     wall_us: u128,
     search_index_state: &'static str,
+    startup_elapsed_us: u128,
+    monotonic_us: u128,
 }
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -580,7 +588,11 @@ impl PreviewScrollTraceRow {
             self.post_finish_tail_us
         );
         out.pop();
-        let _ = writeln!(out, "\t{}", self.search_index_state);
+        let _ = writeln!(
+            out,
+            "\t{}\t{}\t{}",
+            self.search_index_state, self.startup_elapsed_us, self.monotonic_us
+        );
     }
 }
 
@@ -686,6 +698,16 @@ fn preview_scroll_trace_row_from_frame(
         status_write_duration_us: runtime_status_write_us,
         wall_us,
         search_index_state: frame.search_index_state,
+        startup_elapsed_us: frame
+            .loop_start
+            .duration_since(frame.startup_start)
+            .as_micros(),
+        monotonic_us: u128::from(frame.startup_monotonic_us).saturating_add(
+            frame
+                .loop_start
+                .duration_since(frame.startup_start)
+                .as_micros(),
+        ),
     }
 }
 
@@ -1838,7 +1860,7 @@ fn dominant_frame_phase(
 
 #[cfg(target_os = "linux")]
 fn cpu_thread_us() -> Option<u64> {
-    cpu_clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
+    clock_us(libc::CLOCK_THREAD_CPUTIME_ID)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1848,7 +1870,7 @@ fn cpu_thread_us() -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn cpu_process_us() -> Option<u64> {
-    cpu_clock_us(libc::CLOCK_PROCESS_CPUTIME_ID)
+    clock_us(libc::CLOCK_PROCESS_CPUTIME_ID)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1856,8 +1878,11 @@ fn cpu_process_us() -> Option<u64> {
     None
 }
 
-#[cfg(target_os = "linux")]
-fn cpu_clock_us(clock_id: libc::clockid_t) -> Option<u64> {
+pub(super) fn monotonic_clock_us() -> Option<u64> {
+    clock_us(libc::CLOCK_MONOTONIC)
+}
+
+fn clock_us(clock_id: libc::clockid_t) -> Option<u64> {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -1915,6 +1940,8 @@ mod tests {
             selected: 0,
             visual_index: 0.0,
             search_index_state: "building",
+            startup_start: loop_start,
+            startup_monotonic_us: 1_000_000,
             run_start: loop_start,
             loop_start,
             frame_t0,
@@ -2018,6 +2045,8 @@ mod tests {
                 search_index_state: frame.search_index_state,
             },
             timing: LauncherFrameTiming {
+                startup_start: frame.startup_start,
+                startup_monotonic_us: frame.startup_monotonic_us,
                 run_start: frame.run_start,
                 loop_start: frame.loop_start,
                 frame_t0: frame.frame_t0,
@@ -2204,6 +2233,23 @@ mod tests {
         .write_tsv(&mut built_row);
 
         assert_eq!(built_row, expected_row);
+    }
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[test]
+    fn preview_trace_keeps_launcher_start_clock_when_benchmark_clock_is_rebased() {
+        let startup_start = Instant::now();
+        let loop_start = startup_start + Duration::from_millis(250);
+        let mut frame = presented_frame(45, loop_start, 16_000);
+        frame.startup_start = startup_start;
+        frame.startup_monotonic_us = 1_000_000;
+        frame.run_start = loop_start;
+
+        let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
+
+        assert_eq!(row.elapsed_us, 0);
+        assert_eq!(row.startup_elapsed_us, 250_000);
+        assert_eq!(row.monotonic_us, 1_250_000);
     }
 
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2427,7 +2473,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

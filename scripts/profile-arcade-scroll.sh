@@ -7,7 +7,11 @@ MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
+REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
+source "$HERE/scripts/bench-context-lib.sh"
+source "$HERE/scripts/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -246,6 +250,8 @@ local_cadence_tsv="$OUT_DIR/${label}-framebuffer-cadence.tsv"
 local_latch_before="$OUT_DIR/${label}-fpga-latch-before.log"
 local_latch_after="$OUT_DIR/${label}-fpga-latch-after.log"
 local_latch_drop_report="$OUT_DIR/${label}-arcade-latch-drops.tsv"
+run_context_file="$OUT_DIR/${label}-run-context.tsv"
+cleanup_report="$OUT_DIR/${label}-cleanup.txt"
 remote_entry_tsv="/tmp/${label}-arcade-entry.tsv"
 local_entry_tsv="$OUT_DIR/${label}-arcade-entry.tsv"
 local_entry_log="$OUT_DIR/${label}-arcade-entry.log"
@@ -830,20 +836,29 @@ finish_stream_consumer() {
   wait "$stream_pid"
 }
 
-cleanup() {
+profile_arcade_scroll_cleanup() {
+  local cleanup_status=0
   rm -f "$env_file"
   if [[ -n "$stream_pid" ]] && kill -0 "$stream_pid" >/dev/null 2>&1; then
     kill "$stream_pid" >/dev/null 2>&1 || true
     wait "$stream_pid" >/dev/null 2>&1 || true
   fi
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  benchmark_cleanup_clear_launcher_env "$MISTER" 30 >/dev/null 2>&1 || cleanup_status=1
+  if benchmark_cleanup_assert_no_arming_files "$MISTER" "$cleanup_report"; then
+    printf 'cleanup_tsv\tlabel=%s\tvalid=1\tinvalid_reason=ok\n' "$label" >>"$run_context_file"
+  else
+    printf 'cleanup_tsv\tlabel=%s\tvalid=0\tinvalid_reason=stale-arming-or-device-error\n' "$label" >>"$run_context_file"
+    cleanup_status=1
+  fi
+  return "$cleanup_status"
 }
-trap cleanup EXIT
 
 if [[ "$self_test" == "1" ]]; then
   run_arcade_entry_self_test
   exit 0
 fi
+
+benchmark_cleanup_install profile_arcade_scroll_cleanup
 
 case "$deploy" in
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
@@ -860,6 +875,30 @@ if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
     "$MISTER" deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
   fi
 fi
+
+profile="release-device"
+features="ui,bench-tools"
+runtime_type="bench-tools"
+deployment_state="verified"
+if [[ "$cpu_profile" == "1" ]]; then
+  profile="release-device-profile"
+  features="ui,profile,bench-tools"
+  runtime_type="profile"
+  deployment_state="verified"
+fi
+binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
+deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
+deployed_sha256="${deployed_sha256:-missing}"
+local_sha256="$(bench_context_sha256_file "$binary_path")"
+if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" "$features" "$profile" launcher; then
+  echo "arcade scroll binary contract verification failed local=$local_sha256 deployed=$deployed_sha256 features=$(bench_context_binary_features "$binary_path") expected_features=$features receipt=$(bench_context_build_receipt_status "$binary_path" "$features" "$profile" launcher)" >&2
+  exit 1
+fi
+binary_fields="$(bench_context_binary_fields "$profile" launcher "$features" "$binary_path" "$runtime_type" "$deployment_state" "$deployed_sha256")"
+commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+source_fields="$(bench_context_source_fields "$HERE")"
+printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tscenario=%s\tsecs=%s\tdeploy=%s\t%s\t%s\n' \
+  "$label" "$commit" "scripts/profile-arcade-scroll.sh ${ORIGINAL_ARGS[*]}" "$scenario" "$secs" "$deploy" "$source_fields" "$binary_fields" | tee "$run_context_file"
 
 if [[ "$boot_prelude" != "0" ]]; then
   run_boot_prelude

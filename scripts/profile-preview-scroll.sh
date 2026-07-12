@@ -11,6 +11,7 @@ REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/bench-context-lib.sh"
+source "$HERE/scripts/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -228,7 +229,16 @@ emit_artifact_row() {
 }
 
 emit_validity_row() {
-  local valid="$1" reason="$2" detail="${3:-}"
+  local valid="$1" reason="$2" detail="${3:-}" requested_reason="$2" requested_detail="${3:-}"
+  local cleanup_status=0
+  if profile_preview_cleanup_once; then
+    cleanup_status=0
+  else
+    cleanup_status=$?
+    valid="0"
+    reason="cleanup_failed"
+    detail="requested_reason=$requested_reason requested_detail=$requested_detail cleanup_report=$cleanup_report cleanup_status=$cleanup_status"
+  fi
   printf 'validity_tsv\tlabel=%s\tvalid=%s\tinvalid_reason=%s\tdetail=%s\n' \
     "$(tsv_value "$label")" "$valid" "$(tsv_value "$reason")" "$(tsv_value "$detail")"
 }
@@ -255,17 +265,14 @@ PY
 }
 
 emit_run_context_row() {
-  local commit command_text started_at profile features binary_path runtime_type deployment_state binary_fields
+  local commit command_text started_at profile features binary_path runtime_type deployment_state binary_fields deployed_sha source_fields
   commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   command_text="scripts/profile-preview-scroll.sh ${ORIGINAL_ARGS[*]}"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   profile="release-device"
   features="ui,bench-tools"
   runtime_type="bench-tools"
-  deployment_state="unverified-skip-build"
-  if [[ "$deploy" == "device" ]]; then
-    deployment_state="verified"
-  fi
+  deployment_state="verified"
   if [[ "$cpu_profile" == "1" ]]; then
     profile="release-device-profile"
     features="ui,profile,bench-tools"
@@ -273,26 +280,53 @@ emit_run_context_row() {
     deployment_state="verified"
   fi
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
-  binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type" "$deployment_state")"
+  deployed_sha="$(bench_context_remote_sha256 "$MISTER" /media/fat/mister-magik/mister-magik-fb || true)"
+  deployed_sha="${deployed_sha:-missing}"
+  if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha" "$features" "$profile" launcher; then
+    echo "preview-scroll binary identity verification failed local=$(bench_context_sha256_file "$binary_path") deployed=$deployed_sha features=$(bench_context_binary_features "$binary_path") expected_features=$features" >&2
+    return 1
+  fi
+  binary_fields="$(bench_context_binary_fields "$profile" "launcher" "$features" "$binary_path" "$runtime_type" "$deployment_state" "$deployed_sha")"
+  source_fields="$(bench_context_source_fields "$HERE")"
   if [[ "$thread_sample_enabled" == "1" ]]; then
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\tthread_sample=%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\t%s\tthread_sample=%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields" "$thread_sample_enabled"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$source_fields" "$binary_fields" "$thread_sample_enabled"
   else
-    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\n' \
+    printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tdevice=mister\tscenario=%s\tremote_scenario=%s\tsecs=%s\tdeploy=%s\tcpu_profile=%s\tvisual_captures=%s\tskip_preview_warm=%s\tfade_mode=%s\tstarted_at=%s\t%s\t%s\n' \
       "$(tsv_value "$label")" "$commit" "$(tsv_value "$command_text")" \
       "$(tsv_value "$scenario")" "$(tsv_value "$remote_scenario")" "$secs" "$deploy" \
-      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$binary_fields"
+      "$cpu_profile" "$visual_captures" "$skip_preview_warm" "$fade_mode" "$started_at" "$source_fields" "$binary_fields"
   fi
 }
 
-cleanup() {
+cleanup_report="$OUT_DIR/${label}-cleanup.txt"
+profile_preview_cleanup_complete=0
+profile_preview_cleanup_status=0
+profile_preview_cleanup_once() {
+  if [[ "$profile_preview_cleanup_complete" == "1" ]]; then
+    return "$profile_preview_cleanup_status"
+  fi
   rm -f "$env_file"
-  if [[ "$self_test" == "1" ]]; then return; fi
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  if [[ "$self_test" == "1" ]]; then
+    profile_preview_cleanup_complete=1
+    return 0
+  fi
+  if ! benchmark_cleanup_clear_launcher_env "$MISTER" 30; then
+    profile_preview_cleanup_status=1
+  fi
+  if ! benchmark_cleanup_assert_no_arming_files "$MISTER" "$cleanup_report"; then
+    profile_preview_cleanup_status=1
+  fi
+  printf 'cleanup_tsv\tlabel=%s\tvalid=%s\tinvalid_reason=%s\tdetail=%s\n' \
+    "$(tsv_value "$label")" "$([[ "$profile_preview_cleanup_status" == "0" ]] && echo 1 || echo 0)" \
+    "$([[ "$profile_preview_cleanup_status" == "0" ]] && echo ok || echo cleanup-failed)" \
+    "$(tsv_value "$cleanup_report")"
+  profile_preview_cleanup_complete=1
+  return "$profile_preview_cleanup_status"
 }
-trap cleanup EXIT
+benchmark_cleanup_install profile_preview_cleanup_once
 
 case "$deploy" in
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
@@ -1085,8 +1119,8 @@ check_preview_hotpath_io_gate() {
 }
 
 check_preview_visibility_gate() {
-  local name="$1" tsv="$2"
-  awk -v name="$name" -v allow="$allow_visibility_misses" '
+  local name="$1" tsv="$2" allow_initial_placeholder="${3:-0}"
+  awk -v name="$name" -v allow="$allow_visibility_misses" -v allow_initial_placeholder="$allow_initial_placeholder" '
     BEGIN { FS="\t" }
     NR == 1 {
       for (i = 1; i <= NF; i++) col[$i] = i
@@ -1100,7 +1134,8 @@ check_preview_visibility_gate() {
       n++
       state = $(col["cache_state"])
       states[state]++
-      if (state != "exact") {
+      initial_placeholder = (allow_initial_placeholder == 1 && n == 1 && state == "placeholder")
+      if (state != "exact" && !initial_placeholder) {
         non_exact++
         if (non_exact <= 10) {
           frame = ("frame" in col) ? $(col["frame"]) : n
@@ -1115,11 +1150,15 @@ check_preview_visibility_gate() {
         printf "%s preview visibility gate failed: frames=0\n", name > "/dev/stderr"
         exit 6
       }
+      if (exact == 0) {
+        printf "%s preview visibility gate failed: no exact frames after initial state\n", name > "/dev/stderr"
+        exit 6
+      }
       if (non_exact > allow) {
         printf "%s preview visibility gate failed: frames=%d exact=%d non_exact=%d allow=%d\n", name, n, exact, non_exact, allow > "/dev/stderr"
         exit 6
       }
-      printf "%s preview_visibility_gate frames=%d exact=%d non_exact=%d allow=%d\n", name, n, exact, non_exact, allow
+      printf "%s preview_visibility_gate frames=%d exact=%d non_exact=%d allow=%d initial_placeholder_allowed=%d\n", name, n, exact, non_exact, allow, allow_initial_placeholder
     }
   ' "$tsv"
 }
@@ -1246,6 +1285,25 @@ frame	cache_state
 1	exact
 EOF
   check_preview_visibility_gate selftest "$exact" >/dev/null
+  local initial_placeholder="$tmp/initial-placeholder.tsv"
+  cat >"$initial_placeholder" <<'EOF'
+frame	cache_state
+0	placeholder
+1	exact
+EOF
+  check_preview_visibility_gate selftest "$initial_placeholder" 1 >/dev/null
+  if check_preview_visibility_gate selftest "$initial_placeholder" 0 >/dev/null 2>&1; then
+    echo "preview visibility self-test accepted initial placeholder without opt-in" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
+  local placeholder_only="$tmp/placeholder-only.tsv"
+  printf 'frame\tcache_state\n0\tplaceholder\n' >"$placeholder_only"
+  if check_preview_visibility_gate selftest "$placeholder_only" 1 >/dev/null 2>&1; then
+    echo "preview visibility self-test accepted a placeholder-only trace" >&2
+    rm -rf "$tmp"
+    exit 1
+  fi
 
   local wall_wait_ok="$tmp/wall-wait-ok.tsv"
   local work_slow="$tmp/work-slow.tsv"
@@ -1302,6 +1360,14 @@ EOF
     rm -rf "$tmp"
     exit 1
   fi
+
+  local cleanup_output="$tmp/cleanup-output.txt"
+  profile_preview_cleanup_once >"$cleanup_output"
+  [[ ! -s "$cleanup_output" ]]
+  [[ "$profile_preview_cleanup_complete" == "1" ]]
+  [[ ! -e "$env_file" ]]
+  profile_preview_cleanup_once >>"$cleanup_output"
+  [[ ! -s "$cleanup_output" ]]
 
   rm -rf "$tmp"
   echo "profile-preview-scroll self-test ok"
@@ -1395,7 +1461,11 @@ fi
 echo
 check_preview_hotpath_cache_gate arcade "$arcade_log"
 check_preview_hotpath_io_gate arcade "$arcade_log"
-check_preview_visibility_gate arcade "$arcade_tsv"
+allow_initial_placeholder=0
+if [[ "$skip_preview_warm" -eq 1 ]]; then
+  allow_initial_placeholder=1
+fi
+check_preview_visibility_gate arcade "$arcade_tsv" "$allow_initial_placeholder"
 check_steady_work_gate arcade "$arcade_tsv"
 report_steady_wall_gate arcade "$arcade_tsv"
 emit_validity_row "1" "ok" "trace=$arcade_tsv log=$arcade_log"

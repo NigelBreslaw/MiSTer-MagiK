@@ -36,6 +36,7 @@ for script in \
   "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
   "$ROOT/scripts/check-scanout-slots-contract.sh" \
   "$ROOT/scripts/bench-context-lib.sh" \
+  "$ROOT/scripts/benchmark-cleanup-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
@@ -54,7 +55,10 @@ for script in \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
   "$ROOT/scripts/mister-supervision-lib.sh" \
   "$ROOT/scripts/profile-first-scan.sh" \
+  "$ROOT/scripts/profile-library-io.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
+  "$ROOT/scripts/profile-media-arcade-contention.sh" \
+  "$ROOT/scripts/profile-arcade-scroll.sh" \
   "$ROOT/scripts/profile-preview-index-refresh.sh" \
   "$ROOT/scripts/profile-preview-pack-decode.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
@@ -254,12 +258,48 @@ case "$profile_context" in
   *$'binary_scope=profile-launcher-scope'*$'runtime_type=profile'*$'deployment_state=verified'*$'production_restore_required=1'*) ;;
   *) echo "unexpected profile benchmark context: $profile_context" >&2; exit 1 ;;
 esac
+printf 'benchmark identity self-test\n' >"$TMP/identity.bin"
+printf 'ui\n' >"$TMP/identity.bin.features"
+bench_context_write_build_receipt "$TMP/identity.bin" "$ROOT" release-device ui launcher
+identity_sha="$(bench_context_sha256_file "$TMP/identity.bin")"
+[[ "${#identity_sha}" -eq 64 ]]
+bench_context_require_verified_identity verified "$identity_sha" "$identity_sha"
+bench_context_require_binary_contract "$TMP/identity.bin" "$identity_sha" ui release-device launcher
+if bench_context_require_binary_contract "$TMP/identity.bin" "$identity_sha" ui,bench-tools release-device launcher; then
+  echo "benchmark identity accepted the wrong feature receipt" >&2
+  exit 1
+fi
+printf 'tampered\n' >>"$TMP/identity.bin"
+tampered_identity_sha="$(bench_context_sha256_file "$TMP/identity.bin")"
+if bench_context_require_binary_contract "$TMP/identity.bin" "$tampered_identity_sha" ui release-device launcher; then
+  echo "benchmark identity accepted a build receipt bound to a different binary hash" >&2
+  exit 1
+fi
+bad_identity_sha="${identity_sha%?}$([[ "${identity_sha: -1}" == "0" ]] && printf '1' || printf '0')"
+if bench_context_require_verified_identity verified "$identity_sha" "$bad_identity_sha"; then
+  echo "benchmark identity accepted a hash mismatch" >&2
+  exit 1
+fi
+source_fields="$(bench_context_source_fields "$ROOT")"
+case "$source_fields" in
+  source_commit=*$'\tsource_commit_short='*$'\tsource_dirty='[01]) ;;
+  *) echo "unexpected source provenance: $source_fields" >&2; exit 1 ;;
+esac
+if rg -n 'sh -c "\$env \$remote library-refresh"' "$ROOT/scripts/profile-library-io.sh" >/dev/null; then
+  echo "library I/O profiler still samples a sh -c wrapper" >&2
+  exit 1
+fi
+bash "$ROOT/scripts/benchmark-cleanup-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/library-sql-output-lib.sh"
 "$ROOT/scripts/reboot-wait-lib.sh"
 "$ROOT/scripts/mister-fifo-lib.sh"
 "$ROOT/scripts/profile-first-scan.sh" --self-test
+"$ROOT/scripts/profile-library-io.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
+"$ROOT/scripts/profile-media-arcade-contention.sh" --self-test
+"$ROOT/scripts/profile-arcade-scroll.sh" --self-test
+"$ROOT/scripts/device-catalog-acceptance.sh" --self-test
 "$ROOT/scripts/profile-preview-pack-decode.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"

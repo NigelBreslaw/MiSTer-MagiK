@@ -153,6 +153,9 @@ pub(crate) struct LibraryScan {
 pub struct LibraryCatalogLoad {
     pub catalog: ArcadeCatalog,
     pub stamp: Option<catalog_stamp::CatalogStamp>,
+    /// True when this catalog contains enough canonical projection data to
+    /// recreate the adjacent summary/navigation pair without semantic loss.
+    pub projection_repair_safe: bool,
     pub us: u64,
     pub open_us: u64,
     pub schema_check_us: u64,
@@ -173,6 +176,7 @@ impl LibraryCatalogLoad {
         Self {
             catalog,
             stamp: None,
+            projection_repair_safe: true,
             us,
             open_us: 0,
             schema_check_us: 0,
@@ -390,6 +394,7 @@ pub fn load_arcade_catalog_from_navigation_projection(
     Ok(Some(LibraryCatalogLoad {
         catalog,
         stamp: Some(expected_stamp.clone()),
+        projection_repair_safe: true,
         us: started.elapsed().as_micros() as u64,
         open_us: read_us,
         schema_check_us: 0,
@@ -531,20 +536,32 @@ pub fn rewrite_default_catalog_projections(
     root: impl AsRef<Path>,
 ) -> Result<CatalogProjectionRewriteSummary, String> {
     let sqlite_path = default_sqlite_path();
-    let loaded = load_arcade_catalog_from_sqlite(root)?;
+    rewrite_catalog_projections_from_sqlite(root, &sqlite_path)
+}
+
+pub(crate) fn rewrite_catalog_projections_from_sqlite(
+    root: impl AsRef<Path>,
+    sqlite_path: &Path,
+) -> Result<CatalogProjectionRewriteSummary, String> {
+    let loaded = sqlite_catalog::load_arcade_catalog_from_sqlite_at(root, sqlite_path)?;
+    if !loaded.projection_repair_safe {
+        return Err(
+            "refusing to rewrite catalog projections from degraded joined-SQL fallback".to_string(),
+        );
+    }
     let stamp = loaded
         .stamp
         .as_ref()
         .ok_or_else(|| "sqlite catalog has no stamp".to_string())?;
     let repair_t = std::time::Instant::now();
-    sqlite_catalog::rewrite_catalog_projections_for_catalog(&sqlite_path, &loaded.catalog, stamp)?;
+    sqlite_catalog::rewrite_catalog_projections_for_catalog(sqlite_path, &loaded.catalog, stamp)?;
     let repair_us = repair_t.elapsed().as_micros() as u64;
     let summary_bytes = std::fs::metadata(crate::catalog_summary::summary_path_for_sqlite(
-        &sqlite_path,
+        sqlite_path,
     ))
     .map(|metadata| metadata.len())
     .unwrap_or(0);
-    let navigation_bytes = std::fs::metadata(navigation_path_for_sqlite(&sqlite_path))
+    let navigation_bytes = std::fs::metadata(navigation_path_for_sqlite(sqlite_path))
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     Ok(CatalogProjectionRewriteSummary {

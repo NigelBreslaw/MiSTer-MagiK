@@ -2,23 +2,41 @@
 
 use std::fmt;
 use std::io::{self, Write};
+use std::sync::{Mutex, OnceLock};
 
 pub(crate) fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
+    let _guard = log_line_lock().lock().unwrap_or_else(|error| error.into_inner());
+    stdout_line_unlocked(args)
+}
+
+fn stdout_line_unlocked(args: fmt::Arguments<'_>) -> io::Result<()> {
     if std::env::var_os("MISTER_CATALOG_PROTOCOL_STDOUT").is_some() {
-        return stderr_line(args);
+        return stderr_line_unlocked(args);
     }
     let stdout = io::stdout();
     write_line(stdout.lock(), args)
 }
 
 pub(crate) fn stderr_line(args: fmt::Arguments<'_>) -> io::Result<()> {
+    let _guard = log_line_lock().lock().unwrap_or_else(|error| error.into_inner());
+    stderr_line_unlocked(args)
+}
+
+fn stderr_line_unlocked(args: fmt::Arguments<'_>) -> io::Result<()> {
     let stderr = io::stderr();
     write_line(stderr.lock(), args)
 }
 
+fn log_line_lock() -> &'static Mutex<()> {
+    static LOG_LINE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOG_LINE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn write_line(mut writer: impl Write, args: fmt::Arguments<'_>) -> io::Result<()> {
-    writer.write_fmt(args)?;
-    writer.write_all(b"\n")
+    let mut line = Vec::new();
+    line.write_fmt(args)?;
+    line.push(b'\n');
+    writer.write_all(&line)
 }
 
 #[macro_export]

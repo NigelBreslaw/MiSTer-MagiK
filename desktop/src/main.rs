@@ -657,6 +657,12 @@ fn install_framebuffer_render_notifier(
                 callback_metrics
                     .rendering_setup
                     .fetch_add(1, Ordering::Relaxed);
+                // Treat notifier observation as ready only after Slint has
+                // entered the renderer lifecycle. A successful registration
+                // alone does not prove that this window will deliver frames.
+                callback_metrics
+                    .observer_ready
+                    .store(true, Ordering::Release);
             }
             slint::RenderingState::BeforeRendering => {
                 callback_metrics
@@ -690,9 +696,6 @@ fn install_framebuffer_render_notifier(
         .store(rendering_notifier_ready, Ordering::Release);
     metrics
         .supported
-        .store(rendering_notifier_ready, Ordering::Release);
-    metrics
-        .observer_ready
         .store(rendering_notifier_ready, Ordering::Release);
 }
 
@@ -1548,9 +1551,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .into(),
             );
         }
-        if std::env::var_os("SLINT_BACKEND").is_none() {
-            std::env::set_var("SLINT_BACKEND", default_slint_backend());
+        if let Some(backend) = std::env::var_os("SLINT_BACKEND") {
+            if backend != "winit-skia" {
+                return Err(format!(
+                    "desktop display benchmarks require SLINT_BACKEND=winit-skia, got {}",
+                    backend.to_string_lossy()
+                )
+                .into());
+            }
         }
+        // Formal display results have one renderer identity. Do not allow an
+        // ambient desktop backend to turn the benchmark into another test.
+        std::env::set_var("SLINT_BACKEND", "winit-skia");
         select_backend()?;
         #[cfg(feature = "compiled-ui")]
         return match args.source {
@@ -1974,8 +1986,11 @@ fn run_compiled_framebuffer_display_bench(
     ui.global::<AppState>()
         .set_selected_page("analytics".into());
     ui.global::<AnalyticsState>().set_live_stream(true);
-    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
     ui.show()?;
+    // Install after the native window exists. Installing before show() can
+    // report notifier readiness without ever delivering AfterRendering.
+    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
+    ui.window().request_redraw();
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
@@ -2056,8 +2071,9 @@ fn run_compiled_synthetic_display_bench(
     ui.global::<AnalyticsState>().set_live_stream(true);
     ui.global::<AnalyticsState>()
         .set_live_stream_summary("Synthetic 60fps SharedPixelBuffer source.".into());
-    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
     ui.show()?;
+    install_framebuffer_render_notifier(ui.window(), Arc::clone(&metrics));
+    ui.window().request_redraw();
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     prepare_compiled_framebuffer_benchmark_window(&ui, Arc::clone(&metrics))?;
