@@ -4,7 +4,6 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::UNIX_EPOCH;
 
 use crate::media_metadata::{inspect_mgl, resolve_mgl_payload_path, MglInspection};
 
@@ -232,15 +231,13 @@ pub(crate) fn oneload64_provenance(path: &Path) -> Option<PreparedLaunchProvenan
 }
 
 fn oneload64_root_has_signature(root: &Path) -> bool {
-    type SignatureCache = std::collections::HashMap<(std::path::PathBuf, u128), bool>;
+    // A catalog build runs in a fresh standalone process. The install root
+    // cannot meaningfully change underneath that one scan, so key this
+    // process-local fact by path instead of statting the same exFAT directory
+    // once for every CRT payload.
+    type SignatureCache = std::collections::HashMap<std::path::PathBuf, bool>;
     static CACHE: OnceLock<Mutex<SignatureCache>> = OnceLock::new();
-    let modified = std::fs::metadata(root)
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let key = (root.to_path_buf(), modified);
+    let key = root.to_path_buf();
     let cache = CACHE.get_or_init(|| Mutex::new(SignatureCache::new()));
     if let Some(cached) = cache
         .lock()
