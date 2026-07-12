@@ -1,19 +1,20 @@
 //! Compact catalog summary projection for warm launcher startup.
 
-use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::media_identity;
 use crate::preview_worker;
 use crate::sqlite_catalog;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 2;
+pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSummaryProjection {
@@ -33,6 +34,8 @@ pub struct CatalogSummarySystem {
     pub id: String,
     pub title: String,
     pub count: usize,
+    #[serde(default)]
+    pub platform_kind: PlatformKind,
     pub supported_media: Vec<String>,
 }
 
@@ -113,16 +116,23 @@ impl CatalogSummaryProjection {
                     id: system.id.clone(),
                     title: system.title.clone(),
                     count: system.count,
+                    platform_kind: catalog.platform_kind(&system.id),
                     supported_media: supported_media_for_system(&system.id),
                 })
                 .collect(),
             hot_games: catalog
-                .games
+                .system_game_view(MENU_ARCADE_SYSTEM_ID)
                 .iter()
-                .filter(|game| game.system_id.as_ref() == "arcade")
                 .map(CatalogSummaryGame::from)
                 .collect(),
         }
+    }
+
+    pub fn platform_kinds(&self) -> HashMap<String, PlatformKind> {
+        self.systems
+            .iter()
+            .map(|system| (system.id.clone(), system.platform_kind))
+            .collect()
     }
 }
 
@@ -148,7 +158,9 @@ impl From<&CatalogSummaryGame> for ArcadeGameEntry {
         let preview_archive_path: Arc<str> = if game.preview_asset_key.is_empty() {
             Arc::from("")
         } else {
-            Arc::from(preview_worker::preview_archive_path_for_system(&game.system_id))
+            Arc::from(preview_worker::preview_archive_path_for_system(
+                &game.system_id,
+            ))
         };
         Self {
             title: Arc::from(game.title.as_str()),
@@ -212,7 +224,10 @@ fn write_bytes_atomically_with(
                 temp_path.display()
             )
         })?;
-        crate::fs_fault::maybe_fault("catalog.summary.after_rename_before_parent_sync", final_path);
+        crate::fs_fault::maybe_fault(
+            "catalog.summary.after_rename_before_parent_sync",
+            final_path,
+        );
         sqlite_catalog::sync_parent_dir(final_path);
         Ok(())
     })();
