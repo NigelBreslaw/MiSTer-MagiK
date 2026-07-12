@@ -405,6 +405,7 @@ mod linux {
                     };
                     Some((
                         u64::try_from(value.st_size).unwrap_or(0),
+                        #[allow(clippy::unnecessary_cast)] // libc field widths vary by Unix target.
                         unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
                     ))
                 } else {

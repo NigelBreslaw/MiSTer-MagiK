@@ -26,7 +26,9 @@ class ManifestTest(unittest.TestCase):
         metadata.write_text(
             "\n".join((
                 "format=mister-magik-fpga-release-v1",
+                "platform_contract_sha256=" + "6" * 64,
                 "magik_commit=" + "1" * 40,
+                "builder_commit=" + "5" * 40,
                 "source_commit=" + "2" * 40,
                 "patch_sha256=" + "3" * 64,
                 "latch_rtl_sha256=" + "4" * 64,
@@ -34,6 +36,7 @@ class ManifestTest(unittest.TestCase):
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
                 "signoff_valid=1",
+                "build_date=260711",
                 "rbf_file=release.rbf",
                 "rbf_sha256=" + sha(rbf),
                 "report_sha256.reports/fit.rpt=" + sha(report),
@@ -61,6 +64,15 @@ class ManifestTest(unittest.TestCase):
             metadata.write_text(metadata.read_text().replace("quartus_seed=1", "quartus_seed=2"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             self.assertNotEqual(self.run_verify(Path(directory) / "missing.txt").returncode, 0)
+
+    def test_missing_or_invalid_platform_contract_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            valid = metadata.read_text()
+            metadata.write_text(valid.replace("platform_contract_sha256=" + "6" * 64 + "\n", ""))
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+            metadata.write_text(valid.replace("platform_contract_sha256=" + "6" * 64, "platform_contract_sha256=bad"))
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
     def test_mailbox_era_metadata_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

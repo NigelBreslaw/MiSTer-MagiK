@@ -170,7 +170,14 @@ elif [ "$PROFILE" = release-device ]; then
 fi
 
 BUILD_LOG="$(mktemp)"
-trap 'rm -f "$BUILD_LOG"' EXIT
+STAGED_LICENSE="$PWD/LICENSE"
+if ! (set -o noclobber; : >"$STAGED_LICENSE") 2>/dev/null; then
+  echo "ERROR: refusing to overwrite existing $STAGED_LICENSE" >&2
+  rm -f "$BUILD_LOG"
+  exit 1
+fi
+trap 'rm -f "$BUILD_LOG" "$STAGED_LICENSE"' EXIT
+cp "$PWD/../LICENSE" "$STAGED_LICENSE"
 if [ "$CLEAN" -eq 1 ]; then
   echo "==> cargo clean"
   cargo clean
