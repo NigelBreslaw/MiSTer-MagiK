@@ -371,14 +371,49 @@ root stamp semantics, SQLite publish model, and benchmark gates.
 
 ## Launcher Navigation Model
 
+The Home launcher is a dynamic hierarchy rather than a flat catalog-system
+row. Its root order is `Arcade`, `SNK NeoGeo`, `Consoles`, `Handhelds`, then
+`Computers`; empty leaves and their empty parent groups are removed. Console,
+handheld, and computer levels group installed systems by manufacturer or
+family, with an `Other` node retaining every catalogable system that has no
+explicit mapping. The catalog's normalized platform kind supplies that
+fallback, so adding a new core cannot silently make its games unreachable.
+
+`A` descends into a group or opens its game collection. `B` returns one menu
+level, while `Home` returns directly to the hierarchy root. Each level retains
+its selected tile and horizontal scroll position, and Settings returns to the
+level that opened it. Launch return state records the active collection and
+menu path; older system-only state is resolved to that system's primary path.
+SNK Arcade and NeoGeo Pocket are deliberate alternate routes: SNK Arcade is a
+pre-indexed subset of the normal Arcade catalog selected by an `SNK`
+manufacturer token, and NeoGeo Pocket is available from both SNK NeoGeo and
+Handhelds/SNK.
+
+The curated hierarchy is fixed; only empty branches are removed:
+
+| Level | Ordered children / owned system IDs |
+| --- | --- |
+| Root | Arcade; SNK NeoGeo; Consoles; Handhelds; Computers |
+| SNK NeoGeo | Arcade shortcut; NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`); NeoGeo Pocket (`neogeopocket`, `ngpc`) |
+| Consoles | Atari (`atari2600`, `atari5200`, `atari7800`, `jaguar`); Sega (`sg1000`, `sms`, `megadrive`, `megacd`, `s32x`, `saturn`); Sony (`psx`); Nintendo (`nes`, `fds`, `snes`, `satellaview`, `n64`); NEC (`tgfx16`, `tgfx16-cd`, `supergrafx`); Other |
+| Handhelds | Nintendo (`gb`, `gameboy`, `gameboy2p`, `gbc`, `gba`, `gba2p`, `sgb`, `sgb2`, `pokemonmini`); Sega (`gamegear`); Atari (`atarilynx`); SNK (`neogeopocket`, `ngpc`); Bandai (`wonderswan`, `wonderswancolor`); Other |
+| Computers | Acorn (`acornatom`, `acornelectron`, `bbcmicro`, `archie`); Apple (`apple-ii`, `macplus`, `maclc`); Commodore (`amiga`, `c64`, `c128`, `c16`, `vic20`, `pet2001`); Atari (`atari800`, `atarist`); Sinclair (`zx81`, `zx-spectrum`, `ql`); Tandy/Radio Shack (`trs-80`, `coco2`, `coco3`); DOS/PC (`ao486`, `dos`); Japanese Computers (`msx`, `msx2`, `pc88`, `pc98`, `x68000`, `x1`, `sharp-x1`, `fm7`, `fmtowns`); Other |
+
+After those explicit mappings, the catalog profile category determines the
+fallback: `Arcade` joins the root Arcade aggregate, `Console` goes to
+Consoles/Other, `Handheld` to Handhelds/Other, and `Computer` to
+Computers/Other. An unknown category is retained under Consoles/Other and emits
+a catalog diagnostic. No playable system is discarded by the taxonomy.
+
 Arcade drawer navigation starts with an A-Z jump list. From the closed Arcade
 game list, D-pad left opens the alphabet drawer; selecting a group jumps the
 game list to the first title in that group. Pressing left again from the
 alphabet drawer opens the hierarchical filter drawer. D-pad right descends into
 a filter group or applies the highlighted value; `A` is the same action. D-pad
 left backs out one filter level; `B` is the same action except at the filter
-top level, where left is a no-op and `B` returns to the Home launcher. `Home`
-always jumps back to the Home launcher from Arcade or any open drawer level.
+top level, where left is a no-op and `B` returns to the parent hierarchy
+level. `Home` always jumps back to the hierarchy root from Arcade or any open
+drawer level.
 The Rust-painted game list viewport shows ten 48 px rows and is 510 logical px
 wide, intentionally borrowing a little space across the old half-screen split
 so longer game titles remain visible without covering the centered preview

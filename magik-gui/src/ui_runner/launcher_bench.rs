@@ -111,6 +111,18 @@ pub(super) fn launcher_start_system_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub(super) fn launcher_start_menu_from_env() -> Option<String> {
+    std::env::var("MISTER_LAUNCHER_START_MENU")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "consoles" | "handhelds" | "computers" | "snk-neogeo"
+            )
+        })
+}
+
 pub(super) fn launcher_lock_screen_from_env() -> Option<Screen> {
     launcher_screen_from_env("MISTER_LAUNCHER_LOCK_SCREEN")
 }
@@ -213,12 +225,13 @@ pub(super) fn launcher_bench_step(
     state: &mut LauncherBenchState,
     now: Instant,
 ) -> bool {
+    nav.sync_launcher_taxonomy(catalog);
     match scenario {
         LauncherBenchScenario::Idle
         | LauncherBenchScenario::PreviewIdle
         | LauncherBenchScenario::LaunchHandoff => false,
         LauncherBenchScenario::HomeNav => {
-            let count = catalog.systems.len();
+            let count = nav.current_menu_count();
             if count == 0 {
                 return false;
             }
@@ -233,7 +246,7 @@ pub(super) fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::HomeRepeatHold => {
-            let count = catalog.systems.len();
+            let count = nav.current_menu_count();
             if count == 0 {
                 return false;
             }
@@ -259,7 +272,8 @@ pub(super) fn launcher_bench_step(
             true
         }
         LauncherBenchScenario::ModelSync => {
-            let count = catalog.systems.len();
+            nav.go_root();
+            let count = nav.current_menu_count();
             if count == 0 {
                 return false;
             }
@@ -273,8 +287,13 @@ pub(super) fn launcher_bench_step(
                 nav.screen = Screen::Home;
                 keep_bench_home_visible(&mut nav.scroll_x, nav.selected, count);
             } else {
-                nav.screen = Screen::Arcade;
-                let game_count = catalog.system_game_count(&catalog.systems[selected].id);
+                if !nav.open_default_arcade(catalog) {
+                    return false;
+                }
+                let game_count = nav
+                    .active_collection_id()
+                    .map(|id| catalog.system_game_count(id))
+                    .unwrap_or(0);
                 nav.arcade.selected = nav.arcade.selected.min(game_count.saturating_sub(1));
                 nav.arcade.snap_to_selected();
                 keep_bench_arcade_visible(
@@ -409,8 +428,7 @@ pub(super) fn launcher_bench_active_game_count(
     if let Some(count) = active_game_count {
         return Some(count);
     }
-    let system = catalog.systems.get(nav.selected)?;
-    Some(catalog.system_game_count(&system.id))
+    Some(catalog.system_game_count(nav.active_collection_id()?))
 }
 
 pub(super) fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count: usize) {
@@ -695,7 +713,7 @@ mod tests {
         let catalog = ArcadeCatalog::new(
             PathBuf::from("/media/fat/_Arcade"),
             Vec::new(),
-            vec![system("a"), system("b"), system("c")],
+            vec![system("arcade"), system("neogeo"), system("amiga")],
         );
         let mut nav = LauncherNav::new();
         let mut state = LauncherBenchState::default();

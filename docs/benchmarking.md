@@ -147,15 +147,15 @@ Performance-impact commits should name the one focused command used for
 before/after and the metric it owns. Benchmark/correctness commits may update
 the reporting surface without claiming a faster renderer.
 
-## Home System Row Scenarios
+## Launcher Menu Row Scenarios
 
 Use `home-repeat-hold` when measuring the experience of holding left or right
-on the Home system row. The scenario feeds held d-pad input through the normal
+on a launcher hierarchy row. The scenario feeds held d-pad input through the normal
 launcher input path, so it includes the real motion behavior: an immediate
 single-tap move using the reusable critically damped smooth spring, a
 200ms hold threshold, acceleration into frame-delta-driven motion at 1440px/s,
 then velocity-preserving spring settling onto a directional tile boundary after
-release. At either end of the system list it reverses direction, which keeps
+release. At either end of the menu it reverses direction, which keeps
 long traces exercising both left and right movement.
 
 ```bash
@@ -163,11 +163,17 @@ scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --laun
 ```
 
 Use the strict zero-drop gate when the symptom is visible missed frames while
-holding left/right across the Home system row:
+holding left/right across a launcher menu row. Run both the five-item root and
+a longer submenu for hierarchy changes:
 
 ```bash
 scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs 30 --skip-build
+scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL-CONSOLES --secs 30 --menu consoles --skip-build
 ```
+
+The gate sets the benchmark-only `MISTER_LAUNCHER_START_MENU` selector. Accepted
+values are `consoles`, `handhelds`, `computers`, and `snk-neogeo`; normal
+production launcher starts ignore this variable.
 
 The default gate follows the production renderer,
 `fpga-vblank-latch-hidden`, and collects passive `fpga-latch-report` samples
@@ -201,15 +207,15 @@ the posted buffers. Combined with zero latch deadline misses, alternating
 buffers, and consistent sampled flip-counter deltas, it is the latch visual
 smoothness signal. Use passive `fpga-latch-report` for before/after FPGA counters;
 `fpga-latch-post-report` posts a diagnostic latch request and can change the
-counters it reports. The shared trace schema predates the Home-row gate, so the
+counters it reports. The shared trace schema predates the menu-row gate, so the
 `selected` and `visual_index` columns still describe the Arcade list, not the
-Home system index; use the log/status
+launcher menu index; use the log/status
 `bench_scenario=home-repeat-hold` fields to confirm the Home benchmark path. The
 default `MISTER_CATALOG_REFRESH=off` isolates Home-row pacing from catalog
 refresh noise; pass `--catalog-refresh default` when deliberately measuring the
 normal startup mix.
 
-Use `home-nav` only for synthetic fixed-period Home-row stepping; it does not
+Use `home-nav` only for synthetic fixed-period menu-row stepping; it does not
 model the real d-pad repeat gate.
 
 ## Arcade And Preview Scenarios

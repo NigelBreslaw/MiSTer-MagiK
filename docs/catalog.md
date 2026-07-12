@@ -182,9 +182,12 @@ marker before scanning from source. Screenshot packs and media state are not
 catalog artifacts and are preserved. A genuinely missing or empty first-boot
 catalog remains the normal automatic first-build path.
 
-The summary projection contains systems and counts, not per-game rows. Home may
-render from it immediately, and a user may enter Arcade from those tiles, but
-Arcade must treat the selected system as a loading state until the full SQLite
+The summary projection contains systems, normalized platform kinds, and
+counts, not per-game rows. Home builds the same pruned manufacturer hierarchy
+from it immediately; full Arcade rows included in the hot seed also provide
+the `SNK` manufacturer shortcut count. A user may enter a collection from
+those tiles, but the game list must treat a selected non-hydrated collection as
+a loading state until the full SQLite
 rows hydrate. During that state the Rust-painted game list and preview requests
 stay paused, a Slint loading overlay covers the list viewport, and the overlay
 fades away when the hydrated rows are first presented. Arcade benchmarks that
@@ -291,15 +294,20 @@ always remains load-only and reports the failure. `FreshBuild` always uses its
 distinct destructive plan. These requests map to the four internal worker plans
 `LoadOnly`, `CheckStamp`, `ForceBuild`, and `FreshBuild`.
 
-`MISTER_CATALOG_REFRESH=off` disables the catalog worker for a benchmark
-restart.
+`MISTER_CATALOG_REFRESH=off` disables catalog validation and automatic builds
+for a benchmark restart. If the summary is unavailable but an SQLite artifact
+exists, the launcher still starts one deferred load-only worker after the first
+visible copy: a valid cache hydrates the UI, while an unusable cache enters the
+normal `CatalogLoadFailed` Retry/Rebuild flow. A genuinely missing cache stays
+missing and is not built under this policy.
 
 `MISTER_CATALOG_REFRESH` is the single launcher policy knob:
 
 - unset: normal behavior; ready caches get delayed `CheckStamp` validation,
 - `on`/`force`: force a full catalog rebuild,
-- `off`/`load-only`: use only the synchronous cache load and start no catalog
-  worker.
+- `off`/`load-only`: do not validate or build; use a summary immediately when
+  available, otherwise hydrate an existing SQLite cache after the first visible
+  copy.
 
 ## UI Progress Semantics
 
