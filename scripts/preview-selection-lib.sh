@@ -17,7 +17,20 @@ WITH system_rows AS (
     title,
     preview_asset_key,
     has_preview
-  FROM launcher_catalog
+  FROM (
+    SELECT p.ordinal, g.title, v.preview_asset_key, v.has_preview, s.value AS system_id
+    FROM ui_arcade_preferred p
+    JOIN ui_arcade_variants v
+      ON v.family_id = p.family_id
+     AND v.variant_ordinal = p.variant_ordinal
+    JOIN game_rows g ON g.game_key_id = v.launch_id
+    JOIN string_values s ON s.string_id = g.system_string_id
+    UNION ALL
+    SELECT l.ordinal, g.title, l.preview_asset_key, l.has_preview, s.value AS system_id
+    FROM launcher_catalog_rows l
+    JOIN game_rows g ON g.game_key_id = l.launch_id
+    JOIN string_values s ON s.string_id = g.system_string_id
+  ) launcher_rows
   WHERE system_id = '$quoted'
 )
 SELECT selected_index, title, preview_asset_key

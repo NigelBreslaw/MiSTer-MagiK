@@ -367,8 +367,10 @@ metadata terms such as `capcom` can match games by manufacturer. The search
 keyboard also exposes a one-word autocomplete suggestion above the keys; `Y`
 accepts the suggestion by replacing the current partial word and appending a
 space. Empty search shows the active system's full game list and must not build
-deferred text indexes on the Search entry frame; the launcher prewarms those
-indexes after the first visible frame and logs `arcade_search_index_prewarm`.
+deferred text indexes on the Search entry frame. After the first visible frame,
+the background catalog worker builds those indexes before delivering the full
+catalog and logs `arcade_search_index_prewarm`; input handlers only consume
+ready indexes.
 While search is active, screenshot previews stay suppressed because the right
 pane is reserved for result navigation. Launch return state stores the search
 query and restores the filtered result list before selecting the returning game.

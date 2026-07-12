@@ -213,7 +213,7 @@ launcher_ready() {
 }
 
 db_ok() {
-  "$MISTER" db "SELECT count(*) FROM launcher_catalog;" >/dev/null 2>&1
+  "$MISTER" catalog counts >/dev/null 2>&1
 }
 
 media_state_ok() {

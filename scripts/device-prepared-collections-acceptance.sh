@@ -127,9 +127,11 @@ candidate_line() {
 
 candidate_line_at_offset() {
   local collection="$1" where_sql="$2" offset="$3"
-  db "SELECT p.launch_id,g.title,g.system_id,g.genre,l.ordinal
+  db "SELECT p.launch_id,g.title,s.value,COALESCE(genre.value,''),l.ordinal
       FROM prepared_launch_rows p
-      JOIN games g ON g.game_key_id=p.launch_id
+      JOIN game_rows g ON g.game_key_id=p.launch_id
+      JOIN string_values s ON s.string_id=g.system_string_id
+      LEFT JOIN string_values genre ON genre.string_id=g.genre_string_id
       JOIN launcher_catalog_rows l ON l.launch_id=p.launch_id
       WHERE p.collection_id=$(sql_string "$collection") $where_sql
       ORDER BY l.ordinal LIMIT 1 OFFSET $offset;" | library_sql_first_result_line
@@ -144,8 +146,9 @@ system_index_before() {
   local system_id="$1" ordinal="$2"
   db "SELECT count(*)
       FROM launcher_catalog_rows l
-      JOIN games g ON g.game_key_id=l.launch_id
-      WHERE g.system_id=$(sql_string "$system_id") AND l.ordinal<$ordinal;" |
+      JOIN game_rows g ON g.game_key_id=l.launch_id
+      JOIN string_values s ON s.string_id=g.system_string_id
+      WHERE s.value=$(sql_string "$system_id") AND l.ordinal<$ordinal;" |
     library_sql_first_result_number
 }
 
@@ -305,7 +308,7 @@ run_neon68k() {
   fi
   for index in 0 1; do
     candidate="$(candidate_line_at_offset neon68k '' "$index")"
-    path="$(IFS=$'\t'; read -r launch_id title system_id genre ordinal <<<"$candidate"; db "SELECT source_path FROM launch_plans WHERE launch_id=$launch_id;" | library_sql_first_result_line)"
+    path="$(IFS=$'\t'; read -r launch_id title system_id genre ordinal <<<"$candidate"; "$MISTER" catalog launch-plan "$launch_id" | awk -F '\t' '$1 ~ /^[0-9]+$/ { print $10; exit }')"
     run_case "neon68k-game-$((index + 1))" neon68k "$candidate" "\"event\":\"handoff_launch\",\"detail\":\"path=$path\""
   done
 }
@@ -314,7 +317,7 @@ run_oneload64_case() {
   local case_id="$1" where_sql="$2" candidate launch_id payload
   candidate="$(candidate_line oneload64 "$where_sql")"
   IFS=$'\t' read -r launch_id _ <<<"$candidate"
-  payload="$(db "SELECT payload_path FROM launch_plans WHERE launch_id=$launch_id;" | library_sql_first_result_line)"
+  payload="$("$MISTER" catalog launch-plan "$launch_id" | awk -F '\t' '$1 ~ /^[0-9]+$/ { print $9; exit }')"
   run_case "$case_id" oneload64 "$candidate" "\"event\":\"handoff_launch_plan\",\"detail\":\"core="
   remote "grep -Fq $(sql_string "payload=$payload") '$REMOTE_EVENTS'"
 }

@@ -308,7 +308,7 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   }
 ' "$local_log" >>"$TSV"
 
-db_count="$("$MISTER" db "SELECT count(*) FROM games" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
+db_count="$("$MISTER" db "SELECT count(*) FROM game_rows" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
 status="$("$MISTER" status 2>/dev/null || true)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "db_count" "0" "$db_count" >>"$TSV"
 emit_thread_sample_artifact_report | tee "$artifact_report"

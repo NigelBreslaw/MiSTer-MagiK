@@ -91,6 +91,14 @@ pub struct ArcadeCatalog {
     lazy_text_indexes: OnceLock<ArcadeTextIndexes>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArcadeTextIndexBuildTiming {
+    pub built: bool,
+    pub search_keys_us: u64,
+    pub autocomplete_us: u64,
+    pub total_us: u64,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ArcadeGameView<'a> {
     Contiguous(&'a [ArcadeGameEntry]),
@@ -420,12 +428,21 @@ impl ArcadeCatalog {
     }
 
     pub fn ensure_text_indexes_ready(&self) -> bool {
+        self.ensure_text_indexes_ready_with_timing().built
+    }
+
+    pub fn ensure_text_indexes_ready_with_timing(&self) -> ArcadeTextIndexBuildTiming {
         let was_ready = self.text_indexes_ready();
         if was_ready {
-            return false;
+            return ArcadeTextIndexBuildTiming::default();
         }
-        let _ = self.lazy_text_indexes();
-        self.text_indexes_ready()
+        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(&self.games);
+        timing.built = self.lazy_text_indexes.set(indexes).is_ok();
+        if !timing.built {
+            ArcadeTextIndexBuildTiming::default()
+        } else {
+            timing
+        }
     }
 
     pub fn filtered_game_count(&self, system_id: &str, filter: &ArcadeFilter) -> usize {
@@ -698,16 +715,37 @@ fn build_arcade_catalog_indexes(
 }
 
 fn build_arcade_text_indexes(games: &[ArcadeGameEntry]) -> ArcadeTextIndexes {
+    build_arcade_text_indexes_with_timing(games).0
+}
+
+fn build_arcade_text_indexes_with_timing(
+    games: &[ArcadeGameEntry],
+) -> (ArcadeTextIndexes, ArcadeTextIndexBuildTiming) {
+    let total_t = std::time::Instant::now();
     let mut search_keys = Vec::with_capacity(games.len());
     let mut autocomplete = ArcadeAutocompleteIndex::default();
+    let search_t = std::time::Instant::now();
     for game in games {
         search_keys.push(ArcadeSearchKey::from_game(game));
+    }
+    let search_keys_us = search_t.elapsed().as_micros() as u64;
+    let autocomplete_t = std::time::Instant::now();
+    for game in games {
         autocomplete.add_game(game);
     }
-    ArcadeTextIndexes {
-        search_keys,
-        autocomplete,
-    }
+    let autocomplete_us = autocomplete_t.elapsed().as_micros() as u64;
+    (
+        ArcadeTextIndexes {
+            search_keys,
+            autocomplete,
+        },
+        ArcadeTextIndexBuildTiming {
+            built: false,
+            search_keys_us,
+            autocomplete_us,
+            total_us: total_t.elapsed().as_micros() as u64,
+        },
+    )
 }
 
 impl ArcadeSearchKey {

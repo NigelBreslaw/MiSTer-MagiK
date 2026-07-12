@@ -127,10 +127,10 @@ dump_failure_artifacts() {
   echo "== summary file =="
   remote "ls -l $(sq "$REMOTE_SUMMARY") 2>/dev/null || true" || true
   echo "== db counts =="
-  db "SELECT 'games', count(*) FROM games;" || true
-  db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
+  db --query "SELECT 'games', count(*) FROM game_rows;" \
+    --query "SELECT 'launcher_catalog', (SELECT count(*) FROM ui_arcade_preferred) + (SELECT count(*) FROM launcher_catalog_rows);" || true
   if [ -n "$TEMP_MRA" ]; then
-    db "SELECT 'temp_mra_launch', count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" || true
+    "$MISTER" catalog find-launch-ref "$TEMP_MRA" || true
   fi
 }
 
@@ -205,13 +205,20 @@ force_refresh() {
 }
 
 temp_mra_count() {
-  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | library_sql_first_result_number
+  "$MISTER" catalog find-launch-ref "$TEMP_MRA" | awk -F '\t' '
+    $4 ~ /^(path|structured|prepared|missing-structured)$/ { count++ }
+    END { print count + 0 }
+  '
 }
 
 assert_temp_mra_count() {
   local expected="$1"
-  assert_db_count "temp MRA launch row count" "$expected" \
-    "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");"
+  local actual
+  actual="$(temp_mra_count)"
+  if [ "$actual" != "$expected" ]; then
+    fail "temp MRA launch row count expected=$expected actual=$actual"
+  fi
+  echo "ok: temp MRA launch row count = $actual"
 }
 
 copy_temp_mra() {
@@ -346,7 +353,7 @@ if [ "$(remote "if [ -f $(sq "$REMOTE_ENV") ]; then cp $(sq "$REMOTE_ENV") $(sq 
   HAD_ENV=1
 fi
 
-SOURCE_MRA="$(db "SELECT launch_ref FROM launch_plans WHERE launch_ref LIKE '/media/fat/_Arcade/%.mra' AND launch_ref NOT LIKE '%_mister-magik-it-%' ORDER BY launch_ref LIMIT 1;" | library_sql_first_result_line)"
+SOURCE_MRA="$(remote "find /media/fat/_Arcade -type f -name '*.mra' ! -name '*_mister-magik-it-*' 2>/dev/null | sort | head -1" | awk 'NF { print; exit }')"
 if [ -z "$SOURCE_MRA" ] || [[ "$SOURCE_MRA" != /media/fat/_Arcade/*.mra ]]; then
   fail "could not find source _Arcade MRA in launcher_catalog"
 fi

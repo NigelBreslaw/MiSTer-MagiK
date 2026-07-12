@@ -142,10 +142,9 @@ dump_failure_artifacts() {
   echo "== audit rows =="
   db "SELECT catalog_status,core_id,expected_game_dir,reason FROM catalog_audit ORDER BY catalog_status,core_id LIMIT 80;" || true
   echo "== relevant counts =="
-  db "SELECT 'checkpoint', count(*) FROM catalog_discovery_checkpoint;" || true
-  db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
-  db "SELECT 'known_game', count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_KNOWN_GAME");" || true
-  db "SELECT 'known_payload', count(*) FROM launch_plans WHERE payload_path=$(sql_string "$TEMP_KNOWN_GAME");" || true
+  db --query "SELECT 'checkpoint', count(*) FROM catalog_discovery_checkpoint;" \
+    --query "SELECT 'launcher_catalog', (SELECT count(*) FROM ui_arcade_preferred) + (SELECT count(*) FROM launcher_catalog_rows);" || true
+  "$MISTER" catalog find-launch-ref "$TEMP_KNOWN_GAME" || true
 }
 
 wait_remote() {
@@ -332,8 +331,13 @@ restart_launcher "rebuild"
 wait_remote "known core drift detected" "$TIMEOUT_SECS" "grep -q 'library_changed_detected' $(sq "$REMOTE_LOG")"
 wait_remote "known core rebuild requested" "$TIMEOUT_SECS" "grep -q 'library_rebuild_requested.*source=dialog' $(sq "$REMOTE_LOG")"
 wait_remote "known core rebuild saved" "$TIMEOUT_SECS" "grep -q 'library_db_saved' $(sq "$REMOTE_LOG")"
-assert_db_count "known temporary game cataloged" "1" \
-  "SELECT count(*) FROM launch_plans WHERE payload_path=$(sql_string "$TEMP_KNOWN_GAME");"
+if ! "$MISTER" catalog find-launch-ref "$TEMP_KNOWN_GAME" | awk -F '\t' '
+  $4 ~ /^(path|structured|prepared|missing-structured)$/ { found=1 }
+  END { exit !found }
+'; then
+  fail "known temporary game was not cataloged"
+fi
+echo "ok: known temporary game cataloged"
 record_bench "known-core-immediate-rebuild"
 
 echo "== Unknown core with matching game dir continue"

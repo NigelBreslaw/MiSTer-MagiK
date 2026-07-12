@@ -6,6 +6,9 @@ library_sql_first_result_line() {
     NF == 0 { next }
     /\r$/ { sub(/\r$/, "") }
     /^library_sql_timing_tsv([[:space:]]|$)/ { next }
+    /^library_sql_result_tsv([[:space:]]|$)/ { next }
+    /^library_sql_batch_tsv([[:space:]]|$)/ { next }
+    /^library_sql_transport_tsv([[:space:]]|$)/ { next }
     header_seen == 0 { header_seen = 1; next }
     { print; exit }
   '
@@ -40,6 +43,12 @@ library_sql_output_self_test() {
   number="$(printf '%s' "$fixture" | library_sql_first_result_number)"
   if [ "$number" != "2240" ]; then
     echo "library SQL tabular parser failed: $number" >&2
+    return 1
+  fi
+  fixture=$'library_sql_result_tsv\t1\tbegin\tdeadbeef\ncount(*)\n7\nlibrary_sql_timing_tsv\t/path\t1\tdeadbeef\t1\t\t1\t1\t1\t1\t1\t1\t1\t1\nlibrary_sql_result_tsv\t1\tend\tdeadbeef\nlibrary_sql_batch_tsv\t1\t1\t2\n'
+  number="$(printf '%s' "$fixture" | library_sql_first_result_number)"
+  if [ "$number" != "7" ]; then
+    echo "library SQL batch marker parser failed: $number" >&2
     return 1
   fi
 }

@@ -596,8 +596,8 @@ run_catalog_mutation_acceptance() {
   local fixture_root="/tmp/mister-magik-acceptance-library"
   local fixture="$fixture_root/_Arcade"
   local sqlite="/tmp/mister-magik-acceptance-fixture.sqlite3"
-  local count_sql="SELECT count(*) FROM games WHERE title IN ('Acceptance One','Acceptance Two');"
-  local dump_sql="SELECT games.title, launch_plans.launch_ref, games.system_id FROM games JOIN launch_plans USING(game_id) WHERE games.title IN ('Acceptance One','Acceptance Two') ORDER BY games.title;"
+  local count_sql="SELECT count(*) FROM game_rows WHERE title IN ('Acceptance One','Acceptance Two');"
+  local dump_sql="SELECT g.title,magik_path(pv.chunk_id,pv.offset,pv.len,pc.uncompressed_len,pc.bytes) AS launch_ref,s.value AS system_id FROM game_rows g JOIN launch_target_rows lt ON lt.launch_id=g.game_key_id JOIN string_values s ON s.string_id=g.system_string_id JOIN path_values pv ON pv.path_id=lt.launch_path_id JOIN path_chunks pc ON pc.chunk_id=pv.chunk_id WHERE g.title IN ('Acceptance One','Acceptance Two') ORDER BY g.title;"
   remote "rm -rf '$fixture_root' '$sqlite'; mkdir -p '$fixture'; printf '<misterromdescription><setname>acceptance_one</setname></misterromdescription>\n' > '$fixture/Acceptance One.mra'"
   remote "MISTER_LIBRARY_ROOTS='$fixture_root' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-a.log 2>&1"
   local first_count
@@ -939,12 +939,12 @@ run_tier_catalog() {
   fi
 
   if remote "test -f '$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
-    count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='arcade';" || true)"
+    count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM (SELECT v.has_preview,s.value AS system_id FROM ui_arcade_preferred p JOIN ui_arcade_variants v ON v.family_id=p.family_id AND v.variant_ordinal=p.variant_ordinal JOIN game_rows g ON g.game_key_id=v.launch_id JOIN string_values s ON s.string_id=g.system_string_id UNION ALL SELECT l.has_preview,s.value FROM launcher_catalog_rows l JOIN game_rows g ON g.game_key_id=l.launch_id JOIN string_values s ON s.string_id=g.system_string_id) WHERE system_id='arcade';" || true)"
     assert_gt_zero "arcade has_preview count" "$count"
   fi
   for platform in neogeo saturn; do
     if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
-      count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM launcher_catalog WHERE system_id='$platform';" || true)"
+      count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM (SELECT v.has_preview,s.value AS system_id FROM ui_arcade_preferred p JOIN ui_arcade_variants v ON v.family_id=p.family_id AND v.variant_ordinal=p.variant_ordinal JOIN game_rows g ON g.game_key_id=v.launch_id JOIN string_values s ON s.string_id=g.system_string_id UNION ALL SELECT l.has_preview,s.value FROM launcher_catalog_rows l JOIN game_rows g ON g.game_key_id=l.launch_id JOIN string_values s ON s.string_id=g.system_string_id) WHERE system_id=$(sql_string "$platform");" || true)"
       assert_gt_zero "$platform has_preview count" "$count"
     fi
   done

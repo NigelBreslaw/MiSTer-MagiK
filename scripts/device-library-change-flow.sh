@@ -117,10 +117,10 @@ dump_failure_artifacts() {
   echo "== marker =="
   remote "test -e $(sq "$REMOTE_MARKER") && echo marker=present || echo marker=absent" || true
   echo "== db counts =="
-  db "SELECT 'games', count(*) FROM games;" || true
-  db "SELECT 'launcher_catalog', count(*) FROM launcher_catalog;" || true
+  db --query "SELECT 'games', count(*) FROM game_rows;" \
+    --query "SELECT 'launcher_catalog', (SELECT count(*) FROM ui_arcade_preferred) + (SELECT count(*) FROM launcher_catalog_rows);" || true
   if [ -n "$TEMP_MRA" ]; then
-    db "SELECT 'temp_mra_launch', count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" || true
+    "$MISTER" catalog find-launch-ref "$TEMP_MRA" || true
   fi
 }
 
@@ -191,13 +191,20 @@ force_refresh() {
 }
 
 temp_mra_count() {
-  db "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");" | library_sql_first_result_number
+  "$MISTER" catalog find-launch-ref "$TEMP_MRA" | awk -F '\t' '
+    $4 ~ /^(path|structured|prepared|missing-structured)$/ { count++ }
+    END { print count + 0 }
+  '
 }
 
 assert_temp_mra_count() {
   local expected="$1"
-  assert_db_count "temp MRA launch row count" "$expected" \
-    "SELECT count(*) FROM launch_plans WHERE launch_ref=$(sql_string "$TEMP_MRA");"
+  local actual
+  actual="$(temp_mra_count)"
+  if [ "$actual" != "$expected" ]; then
+    fail "temp MRA launch row count expected=$expected actual=$actual"
+  fi
+  echo "ok: temp MRA launch row count = $actual"
 }
 
 write_temp_mra() {
@@ -207,11 +214,11 @@ write_temp_mra() {
 
 assert_temp_new_discovery_projection() {
   assert_db_count "temp MRA game discovery timestamp" "1" \
-    "SELECT count(*) FROM games JOIN launch_plans ON launch_plans.game_id=games.game_id WHERE launch_plans.launch_ref=$(sql_string "$TEMP_MRA") AND games.discovered_at_unix IS NOT NULL;"
+    "SELECT count(*) FROM game_rows g JOIN game_detail_rows d ON d.game_key_id=g.game_key_id WHERE g.title=$(sql_string "$TEMP_TITLE") AND d.discovered_at_unix IS NOT NULL;"
   assert_db_count "temp MRA launcher catalog discovery timestamp" "1" \
-    "SELECT count(*) FROM launcher_catalog_text WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
+    "SELECT count(*) FROM launcher_catalog_rows l JOIN game_rows g ON g.game_key_id=l.launch_id JOIN game_detail_rows d ON d.game_key_id=g.game_key_id WHERE g.title=$(sql_string "$TEMP_TITLE") AND d.discovered_at_unix IS NOT NULL;"
   assert_db_count "temp MRA arcade list discovery timestamp" "1" \
-    "SELECT count(*) FROM ui_arcade_preferred_text WHERE launch_ref=$(sql_string "$TEMP_MRA") AND discovered_at_unix IS NOT NULL;"
+    "SELECT count(*) FROM ui_arcade_variants v JOIN ui_arcade_preferred p ON p.family_id=v.family_id AND p.variant_ordinal=v.variant_ordinal JOIN game_rows g ON g.game_key_id=v.launch_id JOIN game_detail_rows d ON d.game_key_id=g.game_key_id WHERE g.title=$(sql_string "$TEMP_TITLE") AND d.discovered_at_unix IS NOT NULL;"
 }
 
 remove_temp_mra() {
