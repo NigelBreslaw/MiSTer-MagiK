@@ -37,20 +37,20 @@ def verify(metadata_path: Path) -> dict[str, str]:
         fields[key] = value
 
     required = {
-        "format", "magik_commit", "source_commit", "patch_sha256",
+        "format", "platform_contract_sha256", "magik_commit", "builder_commit", "source_commit", "patch_sha256",
         "latch_rtl_sha256", "quartus_seed", "quartus_version",
         "workflow_url", "rbf_file", "rbf_sha256",
-        "signoff_valid",
+        "signoff_valid", "build_date",
     }
     missing = sorted(required - fields.keys())
     if missing:
         raise ValueError("missing metadata fields: " + ", ".join(missing))
     if fields["format"] != "mister-magik-fpga-release-v1":
         raise ValueError("unsupported metadata format")
-    for name in ("magik_commit", "source_commit"):
+    for name in ("magik_commit", "builder_commit", "source_commit"):
         if not COMMIT_RE.fullmatch(fields[name]):
             raise ValueError(f"{name} must be a full commit SHA")
-    for name in ("patch_sha256", "latch_rtl_sha256", "rbf_sha256"):
+    for name in ("platform_contract_sha256", "patch_sha256", "latch_rtl_sha256", "rbf_sha256"):
         if not SHA256_RE.fullmatch(fields[name]):
             raise ValueError(f"invalid SHA-256 in {name}")
     if any(key in fields for key in ("magik_status", "source_status")):
@@ -63,6 +63,8 @@ def verify(metadata_path: Path) -> dict[str, str]:
         raise ValueError("release workflow URL is not immutable evidence")
     if fields["signoff_valid"] != "1":
         raise ValueError("Quartus custom-delta signoff is not valid")
+    if not re.fullmatch(r"[0-9]{6}", fields["build_date"]):
+        raise ValueError("build_date must be a pinned YYMMDD value")
 
     root = metadata_path.parent
     rbf = root / fields["rbf_file"]
