@@ -1,7 +1,7 @@
 use crate::builder_protocol::{
     BuilderSummary, CatalogBuilderEvent, CATALOG_BUILDER_PROTOCOL_VERSION,
 };
-use crate::catalog_navigation::write_catalog_navigation_snapshot;
+use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
 use crate::library_db;
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use std::cell::RefCell;
@@ -89,19 +89,50 @@ pub fn run(
             stats.normal_files, stats.containers, stats.entries
         ),
     });
+    let audit_stamp_started = Instant::now();
     let artifact = scanned.complete_coverage_audit();
+    let audit_stamp_us = audit_stamp_started.elapsed().as_micros() as u64;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_deferred_audit_stamp".into(),
+        detail: format!(
+            "elapsed_us={} audit_rows={}",
+            audit_stamp_us,
+            artifact.stats().audit_rows
+        ),
+    });
     let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
     let started = Instant::now();
     let catalog = artifact.catalog(root);
     let load_us = started.elapsed().as_micros() as u64;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_catalog_projection".into(),
+        detail: format!("elapsed_us={} games={}", load_us, catalog.len()),
+    });
     let snapshot_path = snapshot_path();
     let snapshot_started = Instant::now();
     if let Some(parent) = snapshot_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| fail(protocol, "snapshot", error.to_string(), &mut emit))?;
     }
-    write_catalog_navigation_snapshot(&snapshot_path, &catalog, artifact.stamp())
-        .map_err(|error| fail(protocol, "snapshot", error, &mut emit))?;
+    let snapshot_timing =
+        write_catalog_navigation_snapshot_with_timing(&snapshot_path, &catalog, artifact.stamp())
+            .map_err(|error| fail(protocol, "snapshot", error, &mut emit))?;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_navigation_snapshot".into(),
+        detail: format!(
+            "conversion_us={} encode_us={} compress_us={} write_us={} total_us={} encoded_bytes={} compressed_bytes={}",
+            snapshot_timing.conversion_us,
+            snapshot_timing.encode_us,
+            snapshot_timing.compress_us,
+            snapshot_timing.write_us,
+            snapshot_timing.total_us,
+            snapshot_timing.encoded_bytes,
+            snapshot_timing.compressed_bytes,
+        ),
+    });
     emit(CatalogBuilderEvent::Timing {
         protocol,
         name: "builder_catalog_ready".into(),

@@ -23,6 +23,17 @@ const MAX_CATALOG_NAVIGATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CATALOG_NAVIGATION_ITEMS: usize = 100_000;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct NavigationSnapshotWriteTiming {
+    pub(crate) conversion_us: u64,
+    pub(crate) encode_us: u64,
+    pub(crate) compress_us: u64,
+    pub(crate) write_us: u64,
+    pub(crate) total_us: u64,
+    pub(crate) encoded_bytes: usize,
+    pub(crate) compressed_bytes: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogNavigationProjection {
     pub schema: u32,
@@ -87,7 +98,42 @@ pub fn write_catalog_navigation_snapshot(
     catalog: &ArcadeCatalog,
     stamp: &CatalogStamp,
 ) -> Result<(), String> {
-    write_catalog_navigation_projection(path, &CatalogNavigationProjection::from_catalog(catalog, stamp))
+    write_catalog_navigation_snapshot_with_timing(path, catalog, stamp).map(|_| ())
+}
+
+pub(crate) fn write_catalog_navigation_snapshot_with_timing(
+    path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &CatalogStamp,
+) -> Result<NavigationSnapshotWriteTiming, String> {
+    let total_started = std::time::Instant::now();
+    let conversion_started = std::time::Instant::now();
+    let projection = CatalogNavigationProjection::from_catalog(catalog, stamp);
+    let conversion_us = conversion_started.elapsed().as_micros() as u64;
+
+    let encode_started = std::time::Instant::now();
+    let encoded = encode_navigation_projection(&projection)?;
+    let encode_us = encode_started.elapsed().as_micros() as u64;
+    let encoded_bytes = encoded.len();
+
+    let compress_started = std::time::Instant::now();
+    let compressed = lz4_flex::compress_prepend_size(&encoded);
+    let compress_us = compress_started.elapsed().as_micros() as u64;
+    let compressed_bytes = compressed.len();
+
+    let write_started = std::time::Instant::now();
+    write_bytes_atomically(path, &compressed)?;
+    let write_us = write_started.elapsed().as_micros() as u64;
+
+    Ok(NavigationSnapshotWriteTiming {
+        conversion_us,
+        encode_us,
+        compress_us,
+        write_us,
+        total_us: total_started.elapsed().as_micros() as u64,
+        encoded_bytes,
+        compressed_bytes,
+    })
 }
 
 pub(crate) fn write_catalog_navigation_projection_for_sqlite(
@@ -105,7 +151,12 @@ pub fn read_catalog_navigation_projection(
     let compressed_len = match std::fs::metadata(path) {
         Ok(metadata) => metadata.len(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("inspect catalog navigation {}: {e}", path.display())),
+        Err(e) => {
+            return Err(format!(
+                "inspect catalog navigation {}: {e}",
+                path.display()
+            ))
+        }
     };
     if compressed_len > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
         return Err(format!(
@@ -132,7 +183,9 @@ pub fn read_catalog_navigation_projection(
     Ok(Some(projection))
 }
 
-pub fn read_catalog_navigation_snapshot(path: &Path) -> Result<CatalogNavigationProjection, String> {
+pub fn read_catalog_navigation_snapshot(
+    path: &Path,
+) -> Result<CatalogNavigationProjection, String> {
     let compressed = std::fs::read(path)
         .map_err(|e| format!("read catalog navigation snapshot {}: {e}", path.display()))?;
     if compressed.len() as u64 > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
@@ -622,7 +675,9 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
     let mut launch_defaults = HashMap::<String, NavigationLaunchDefault>::new();
     launch_defaults
         .try_reserve(launch_default_count)
-        .map_err(|err| format!("allocate navigation launch defaults ({launch_default_count}): {err}"))?;
+        .map_err(|err| {
+            format!("allocate navigation launch defaults ({launch_default_count}): {err}")
+        })?;
     for _ in 0..launch_default_count {
         let system_id = reader.read_string()?;
         let default = NavigationLaunchDefault {
@@ -785,11 +840,7 @@ fn read_navigation_count(
     Ok(count)
 }
 
-fn reserve_navigation_vec<T>(
-    values: &mut Vec<T>,
-    count: usize,
-    label: &str,
-) -> Result<(), String> {
+fn reserve_navigation_vec<T>(values: &mut Vec<T>, count: usize, label: &str) -> Result<(), String> {
     values
         .try_reserve_exact(count)
         .map_err(|err| format!("allocate navigation {label} ({count}): {err}"))
@@ -1113,6 +1164,33 @@ mod tests {
             ),
             LaunchTarget::Structured(_)
         ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn navigation_snapshot_timing_reports_each_write_phase() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-navigation-timing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let path = root.join("catalog-ready.nav.lz4b");
+        let stamp = stamp(&["root /media/fat/games"]);
+        let catalog = projection_catalog();
+
+        let timing = write_catalog_navigation_snapshot_with_timing(&path, &catalog, &stamp)
+            .expect("write timed snapshot");
+        let loaded = read_catalog_navigation_snapshot(&path).expect("read timed snapshot");
+
+        assert_eq!(
+            timing.compressed_bytes as u64,
+            path.metadata().unwrap().len()
+        );
+        assert!(timing.encoded_bytes > 0);
+        assert!(timing.compressed_bytes > 0);
+        assert_eq!(loaded.games.len(), catalog.games.len());
+        assert_eq!(loaded.launch_plans.len(), 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
