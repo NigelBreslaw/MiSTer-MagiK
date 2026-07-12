@@ -4,10 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/kernel/scanout-slots/mister_magik_scanout_slots.c"
 UAPI="$ROOT/kernel/scanout-slots/mister_magik_scanout_slots_uapi.h"
+PLATFORM="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
+POLICY="$ROOT/kernel/scanout-slots/mister_magik_scanout_policy.h"
 RUST="$ROOT/magik-gui/src/framebuffer/scanout_slots.rs"
 AGENT="$ROOT/tools/magik-agent/src/main.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
+DEPLOY="$ROOT/scripts/deploy-main-mister-experiment.sh"
+INSTALL="$ROOT/scripts/install-slint-boot.sh"
 
 require_text() {
   local file="$1" text="$2"
@@ -17,8 +21,28 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$RUST" "$AGENT" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$DOC"; do
   test -f "$file"
+done
+for value in \
+  4e08fb4e8125f865d10167d4c9d3fd87815f4f11 \
+  cf4dfdee516fcaa6952bdd9fb47154e96c28567e \
+  4bdd2bcee724bb988ab6a975c2532ccc39a4e2b5686fac6fe4c88528f9c55ba6 \
+  b810de3fdffbe79b8496e7eaa3967b07f6aa70a3d78dabb41c6428d72d994b1a \
+  69e0e312b226c004bfe7fced2cc1145954efa1110cee7a0f58de1528d52627a1 \
+  260711; do
+  require_text "$PLATFORM" "$value"
+  require_text "$DEPLOY" "$value"
+  require_text "$INSTALL" "$value"
+done
+for text in \
+  MISTER_MAGIK_PLATFORM_CONTRACT_ID \
+  MISTER_MAGIK_PLATFORM_KERNEL_REVISION \
+  MISTER_MAGIK_PLATFORM_FB_DRIVER_SHA256 \
+  MISTER_MAGIK_PLATFORM_DT_SHA256 \
+  MISTER_MAGIK_PLATFORM_SLOT0_PHYS \
+  MISTER_MAGIK_PLATFORM_SLOT1_PHYS; do
+  require_text "$PLATFORM" "$text"
 done
 
 for text in \
@@ -36,17 +60,29 @@ if [[ "$(sha256sum "$UAPI" | awk '{print $1}')" != \
   echo "scanout UAPI changed without updating the qualified contract" >&2
   exit 1
 fi
-source_sha256="$(cd "$ROOT/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h Makefile | sha256sum | awk '{print $1}')"
-if [[ "$source_sha256" != "2bd6b3cc4bc4718cbe7db18f88e10c0f5a37585821a9c47075ea4c65adef92fc" ]]; then
+source_sha256="$(cd "$ROOT/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
+if [[ "$source_sha256" != "b2f0aa6cf9db39c064b15d6ec735d0930fd4c9975fcae42ede07aeaf3c6f435b" ]]; then
   echo "scanout kernel source changed without updating the qualified contract" >&2
   exit 1
 fi
+policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"
+trap 'rm -f "$policy_test"' EXIT
+${CC:-cc} -std=c11 -Wall -Wextra -Werror \
+  "$ROOT/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
+"$policy_test"
+platform_sha256="$(sha256sum "$PLATFORM" | awk '{print $1}')"
+require_text "$DEPLOY" "$platform_sha256"
+require_text "$INSTALL" "$platform_sha256"
+require_text "$DEPLOY" "$source_sha256"
+require_text "$INSTALL" "$source_sha256"
+require_text "$DEPLOY" "main_binary_sha256"
+require_text "$INSTALL" "main_binary_sha256"
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
   require_text "$DOC" "$text"
 done
 
 if rg -n 'probe_|kzalloc|kmalloc|dma_|mailbox|ownership|fence|cacheable|workqueue|INIT_WORK|timer_setup|hrtimer_|debugfs|proc_create|sysfs|ioremap|request_irq|free_irq' \
-    "$SOURCE" "$UAPI"; then
+    "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY"; then
   echo "forbidden scanout-slot kernel surface found" >&2
   exit 1
 fi

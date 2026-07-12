@@ -68,9 +68,14 @@ jobs:
           git -C build/Linux-Kernel_MiSTer checkout --detach FETCH_HEAD
 
       - name: Check one-job contract
-        run: scripts/check-scanout-slots-contract.sh
+        run: |
+          scripts/check-scanout-slots-contract.sh
+          python3 scripts/test-scanout-platform-contract.py
 
       - name: Build and attest module
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_DIRTY: "0"
         run: >-
           KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$PWD/build/scanout-slots-kernel"

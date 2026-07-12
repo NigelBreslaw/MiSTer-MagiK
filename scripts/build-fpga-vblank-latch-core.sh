@@ -22,6 +22,9 @@ QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
 QUARTUS_DOCKER_MEMORY="${QUARTUS_DOCKER_MEMORY:-12g}"
 QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite-17.0/docker-intelFPGA_lite}"
 APPLY_PATCH="${MISTER_FPGA_APPLY_PATCH:-1}"
+BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-260711}"
+QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-4e08fb4e8125f865d10167d4c9d3fd87815f4f11}"
+PLATFORM_CONTRACT="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 usage() {
   cat <<'EOF'
@@ -60,6 +63,10 @@ abs_path() {
 if [[ ! -d "$MENU_DIR" ]]; then
   echo "missing Menu_MiSTer checkout: $MENU_DIR" >&2
   echo "set MISTER_MENU_DIR or populate reference/Menu_MiSTer" >&2
+  exit 1
+fi
+if [[ ! -f "$PLATFORM_CONTRACT" ]]; then
+  echo "missing scanout platform contract: $PLATFORM_CONTRACT" >&2
   exit 1
 fi
 
@@ -116,10 +123,35 @@ case "$APPLY_PATCH" in
     printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
+if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then
+  echo "MISTER_FPGA_BUILD_DATE must be a six-digit YYMMDD value" >&2
+  exit 2
+fi
+python3 - "$WORK_DIR/sys/build_id.tcl" "$BUILD_DATE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+date = sys.argv[2]
+source = path.read_text()
+updated, count = re.subn(
+    r'set buildDate "`define BUILD_DATE .*?"$',
+    f'set buildDate "`define BUILD_DATE \\"{date}\\""',
+    source,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("failed to pin Menu build_id.tcl timestamp")
+path.write_text(updated)
+PY
 
 {
   echo "format=mister-magik-fpga-release-v1"
-  git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/magik_commit=/'
+  shasum -a 256 "$PLATFORM_CONTRACT" | awk '{print "platform_contract_sha256="$1}'
+  echo "magik_commit=$QUALIFIED_MAGIK_REVISION"
+  git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/builder_commit=/'
   git -C "$ROOT" status --short --untracked-files=no 2>/dev/null | sed 's/^/magik_status=/'
   echo "source_dir=$MENU_ABS"
   git -C "$MENU_ABS" rev-parse HEAD 2>/dev/null | sed 's/^/source_commit=/'
@@ -127,6 +159,7 @@ esac
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"
+  echo "build_date=$BUILD_DATE"
   echo "work_dir=$WORK_DIR"
   echo "quartus_mode=$QUARTUS_MODE"
   echo "quartus_sh=$QUARTUS_CMD"

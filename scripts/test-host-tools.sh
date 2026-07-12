@@ -231,6 +231,7 @@ PY
 "$ROOT/scripts/check-no-main-kill.sh"
 "$ROOT/scripts/check-no-direct-arcade-scene.sh"
 "$ROOT/scripts/check-scanout-slots-contract.sh"
+python3 "$ROOT/scripts/test-scanout-platform-contract.py"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
   -g '*.rs' \
   -g '!fallible_log.rs' >/dev/null; then
