@@ -27,7 +27,6 @@ pub(super) fn open_pads() -> PadPool {
 
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    load_cabinet_image(&bridge);
     load_slint_logo_image(&bridge);
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
@@ -102,15 +101,6 @@ fn last_database_build() -> String {
     .flatten()
     .map(mister_magik_catalog::catalog_build_record::format_duration)
     .unwrap_or_else(|| "No completed database build recorded yet".to_string())
-}
-
-fn load_cabinet_image(bridge: &slint_ui::launcher::MisterBridge) {
-    const DEFAULT_PATH: &str = "/media/fat/mister-magik/art/arcade-cabinet-preview.rgba";
-    let path = std::env::var("MISTER_CABINET_IMAGE_PATH").unwrap_or_else(|_| DEFAULT_PATH.into());
-    match load_raw_rgba_image(std::path::Path::new(&path)) {
-        Ok(image) => bridge.set_arcade_cabinet_image(image),
-        Err(error) => crate::ui_errln!("launcher: failed to load cabinet image {path}: {error}"),
-    }
 }
 
 fn load_slint_logo_image(bridge: &slint_ui::launcher::MisterBridge) {

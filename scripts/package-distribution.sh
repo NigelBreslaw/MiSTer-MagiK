@@ -197,9 +197,6 @@ chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 python3 "$ROOT/scripts/png-to-slint-rgba.py" \
-  "$ROOT/magik-gui/ui/art/arcade-cabinet-preview.png" \
-  "$STAGE/mister-magik/art/arcade-cabinet-preview.rgba"
-python3 "$ROOT/scripts/png-to-slint-rgba.py" \
   "$ROOT/magik-gui/ui/art/slint-logo-pixel.png" \
   "$STAGE/mister-magik/art/slint-logo-pixel.rgba"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
