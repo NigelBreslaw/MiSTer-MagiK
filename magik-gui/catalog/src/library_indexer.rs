@@ -10,7 +10,7 @@ use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::core_audit;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
-    discovery_from_profile_file, GameDiscovery,
+    discovery_from_profile_file_with_prepared_index, GameDiscovery,
 };
 use crate::launch_profiles::{self, PayloadDisposition, PayloadRule, ProfilePathClass};
 use crate::library_db::{
@@ -18,6 +18,7 @@ use crate::library_db::{
     LibraryScanEvent, ProgressCallback, ScanEventCallback,
 };
 use crate::media_metadata;
+use crate::prepared_collections::PreparedPayloadIndex;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -220,6 +221,17 @@ fn scan_library_with_progress_and_events(
             plan.game_dir_headers().len(),
         ),
     );
+    let prepared_payload_t = Instant::now();
+    let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
+    library_db::report_library_scan_timing(
+        "prepared_payload_index",
+        prepared_payload_t.elapsed().as_micros() as u64,
+        format!(
+            "files={} complete_roots={}",
+            prepared_payload_index.file_count(),
+            prepared_payload_index.complete_root_count(),
+        ),
+    );
     let rx = match priority {
         LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
@@ -349,11 +361,12 @@ fn scan_library_with_progress_and_events(
                         path: f.path.display().to_string(),
                     });
                     let discovery_t = Instant::now();
-                    discoveries.push(discovery_from_profile_file(
+                    discoveries.push(discovery_from_profile_file_with_prepared_index(
                         &f,
                         profile,
                         &payload_rule,
                         &profiles,
+                        Some(&prepared_payload_index),
                     ));
                     timing.record_file_discovery(
                         profile.id.as_str(),
@@ -467,6 +480,18 @@ fn scan_library_with_progress_and_events(
         format!("files={}", timing.file_discovery_count),
     );
     timing.report_file_discovery_breakdown();
+    let prepared_lookup = prepared_payload_index.lookup_stats();
+    library_db::report_library_scan_timing(
+        "prepared_payload_lookup",
+        0,
+        format!(
+            "files={} missing={} unknown={} live_fallbacks={}",
+            prepared_lookup.files,
+            prepared_lookup.missing,
+            prepared_lookup.unknown,
+            prepared_lookup.live_fallbacks,
+        ),
+    );
     library_db::report_library_scan_timing(
         "classify_total",
         classify_t.elapsed().as_micros() as u64,
