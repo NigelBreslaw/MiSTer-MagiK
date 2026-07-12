@@ -9,6 +9,36 @@ use std::io::{BufRead, BufReader};
 use std::os::fd::AsRawFd;
 use std::process::{Command, Stdio};
 
+fn send_ready_catalog(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    catalog: ArcadeCatalog,
+    summary: Option<library_db::LibraryRefreshSummary>,
+    load_us: u64,
+    source: CatalogSource,
+    durable_save_pending: bool,
+) {
+    let prewarm = catalog.ensure_text_indexes_ready_with_timing();
+    let _ = tx.send(CatalogWorkerMessage::Timing {
+        name: "arcade_search_index_prewarm".to_string(),
+        detail: format!(
+            "built={} games={} elapsed_us={} source={} search_keys_us={} autocomplete_us={}",
+            u8::from(prewarm.built),
+            catalog.len(),
+            prewarm.total_us,
+            source.label(),
+            prewarm.search_keys_us,
+            prewarm.autocomplete_us
+        ),
+    });
+    let _ = tx.send(CatalogWorkerMessage::Ready {
+        catalog,
+        summary,
+        load_us,
+        source,
+        durable_save_pending,
+    });
+}
+
 pub(super) fn catalog_builder_lock_available() -> bool {
     let path = std::env::var_os("MISTER_CATALOG_BUILDER_LOCK")
         .map(PathBuf::from)
@@ -75,13 +105,14 @@ pub(super) fn start_library_catalog_worker(
                                 &loaded,
                             );
                             cache_state = CatalogCacheState::Ready;
-                            let _ = tx.send(CatalogWorkerMessage::Ready {
-                                catalog: loaded.catalog,
-                                summary: None,
-                                load_us: loaded.us,
-                                source: CatalogSource::NavigationProjection,
-                                durable_save_pending: false,
-                            });
+                            send_ready_catalog(
+                                &tx,
+                                loaded.catalog,
+                                None,
+                                loaded.us,
+                                CatalogSource::NavigationProjection,
+                                false,
+                            );
                         }
                         Ok(None) => {
                             let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -110,13 +141,14 @@ pub(super) fn start_library_catalog_worker(
                                 } else {
                                     cache_state = CatalogCacheState::Ready;
                                     let catalog_for_repair = loaded.catalog.clone();
-                                    let _ = tx.send(CatalogWorkerMessage::Ready {
-                                        catalog: loaded.catalog,
-                                        summary: None,
-                                        load_us: loaded.us,
-                                        source: CatalogSource::FullSqlite,
-                                        durable_save_pending: false,
-                                    });
+                                    send_ready_catalog(
+                                        &tx,
+                                        loaded.catalog,
+                                        None,
+                                        loaded.us,
+                                        CatalogSource::FullSqlite,
+                                        false,
+                                    );
                                     if let Some(stamp) = loaded.stamp {
                                         projection_repair_catalog =
                                             Some((catalog_for_repair, stamp));
@@ -143,13 +175,14 @@ pub(super) fn start_library_catalog_worker(
                             } else {
                                 cache_state = CatalogCacheState::Ready;
                                 let catalog_for_repair = loaded.catalog.clone();
-                                let _ = tx.send(CatalogWorkerMessage::Ready {
-                                    catalog: loaded.catalog,
-                                    summary: None,
-                                    load_us: loaded.us,
-                                    source: CatalogSource::FullSqlite,
-                                    durable_save_pending: false,
-                                });
+                                send_ready_catalog(
+                                    &tx,
+                                    loaded.catalog,
+                                    None,
+                                    loaded.us,
+                                    CatalogSource::FullSqlite,
+                                    false,
+                                );
                                 if let Some(stamp) = loaded.stamp {
                                     projection_repair_catalog = Some((catalog_for_repair, stamp));
                                 }
@@ -257,13 +290,14 @@ pub(super) fn start_library_catalog_worker(
                     let load_us = catalog_t.elapsed().as_micros() as u64;
                     let catalog_len = catalog.len();
                     let projection_catalog = catalog.clone();
-                    let _ = tx.send(CatalogWorkerMessage::Ready {
+                    send_ready_catalog(
+                        &tx,
                         catalog,
-                        summary: None,
+                        None,
                         load_us,
-                        source: CatalogSource::FreshBuild,
-                        durable_save_pending: true,
-                    });
+                        CatalogSource::FreshBuild,
+                        true,
+                    );
                     apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
                     let _ = tx.send(CatalogWorkerMessage::Timing {
                         name: "catalog_execution_mode_transition".to_string(),
@@ -333,13 +367,14 @@ pub(super) fn start_library_catalog_worker(
                 let catalog = artifact.catalog(&root);
                 let load_us = catalog_t.elapsed().as_micros() as u64;
                 let catalog_len = catalog.len();
-                let _ = tx.send(CatalogWorkerMessage::Ready {
+                send_ready_catalog(
+                    &tx,
                     catalog,
-                    summary: None,
+                    None,
                     load_us,
-                    source: CatalogSource::FreshBuild,
-                    durable_save_pending: true,
-                });
+                    CatalogSource::FreshBuild,
+                    true,
+                );
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_worker_ram_catalog".to_string(),
                     detail: format!(
@@ -543,13 +578,14 @@ fn run_catalog_builder_subprocess(
                     std::path::Path::new(&snapshot_path),
                 ) {
                     Ok(loaded) => {
-                        let _ = tx.send(CatalogWorkerMessage::Ready {
-                            catalog: loaded.catalog,
-                            summary: None,
+                        send_ready_catalog(
+                            tx,
+                            loaded.catalog,
+                            None,
                             load_us,
-                            source: CatalogSource::FreshBuild,
-                            durable_save_pending: true,
-                        });
+                            CatalogSource::FreshBuild,
+                            true,
+                        );
                     }
                     Err(error) => {
                         let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error });
@@ -1094,6 +1130,61 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ready_catalog_is_search_prewarmed_before_delivery() {
+        use mister_magik_catalog::arcade_catalog::{ArcadeGameEntry, GameSystemEntry};
+        use std::sync::Arc;
+
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![ArcadeGameEntry {
+                title: Arc::from("Street Fighter II"),
+                mra_path: Arc::from("/media/fat/_Arcade/Street Fighter II.mra"),
+                preview_archive_path: Arc::from(""),
+                preview_asset_key: Arc::from(""),
+                has_preview: false,
+                system_id: Arc::from("arcade"),
+                year: Some(1991),
+                manufacturer: Arc::from("Capcom"),
+                category: Arc::from("Fighter"),
+                is_new: false,
+            }],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+        assert!(!catalog.text_indexes_ready());
+        let (tx, rx) = mpsc::channel();
+
+        send_ready_catalog(
+            &tx,
+            catalog,
+            None,
+            42,
+            CatalogSource::NavigationProjection,
+            false,
+        );
+
+        match rx.recv().expect("prewarm timing") {
+            CatalogWorkerMessage::Timing { name, detail } => {
+                assert_eq!(name, "arcade_search_index_prewarm");
+                assert!(detail.contains("built=1"), "{detail}");
+            }
+            _ => panic!("expected prewarm timing before ready catalog"),
+        }
+        match rx.recv().expect("ready catalog") {
+            CatalogWorkerMessage::Ready { catalog, .. } => {
+                assert!(catalog.text_indexes_ready());
+                assert_eq!(catalog.search_game_indexes("arcade", "capcom"), vec![0]);
+                assert!(!catalog.ensure_text_indexes_ready());
+            }
+            _ => panic!("expected ready catalog"),
+        }
+    }
 
     #[test]
     fn catalog_builder_protocol_rejects_malformed_and_incompatible_events() {

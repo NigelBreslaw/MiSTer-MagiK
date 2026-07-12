@@ -1,4 +1,4 @@
-use mister_magik_catalog::sqlite_inspect::{sqlite_query_is_read_only, sqlite_query_to_tsv};
+use mister_magik_catalog::sqlite_inspect::{sqlite_query_hash, sqlite_query_to_tsv};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use rusqlite::{params, Connection, OpenFlags};
@@ -174,8 +174,14 @@ fn run_cli() -> Result<()> {
             println!("get {} -> {}", args[0], args[1]);
         }
         "db" | "library-db" => {
+            let connect_t = Instant::now();
             let sess = connect(10)?;
-            run_library_db_query(&sess, &args)?;
+            let connect_us = connect_t.elapsed().as_micros();
+            run_library_db_query(&sess, &args, connect_us)?;
+        }
+        "catalog" => {
+            let sess = connect(10)?;
+            run_catalog_inspect(&sess, &args)?;
         }
         "wait" => {
             let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
@@ -3466,7 +3472,8 @@ fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
     })
 }
 
-fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
+fn run_library_db_query(sess: &Session, args: &[String], connect_us: u128) -> Result<()> {
+    let total_t = Instant::now();
     let query_args = library_db_query_args(args);
     let quoted_args = query_args
         .iter()
@@ -3474,7 +3481,9 @@ fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
         .collect::<Vec<_>>()
         .join(" ");
     let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
+    let exec_t = Instant::now();
     let out = exec(sess, &command, true)?;
+    let exec_us = exec_t.elapsed().as_micros();
     if out.rc != 0 && library_sql_command_unavailable(&out.stdout, &out.stderr) {
         eprintln!(
             "scripts/mister db: remote library-sql unavailable; using SFTP local-query fallback"
@@ -3484,13 +3493,58 @@ fn run_library_db_query(sess: &Session, args: &[String]) -> Result<()> {
         if !output.ends_with('\n') {
             println!();
         }
+        if query_args
+            .iter()
+            .filter(|arg| arg.as_str() == "--query")
+            .count()
+            > 1
+        {
+            println!(
+                "library_sql_transport_tsv\t{connect_us}\t{exec_us}\t{}\tfallback",
+                total_t.elapsed().as_micros()
+            );
+        }
         return Ok(());
     }
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
         eprint!("[stderr] {}", out.stderr);
     }
-    std::process::exit(out.rc);
+    if out.rc != 0 {
+        return Err(format!("library-sql failed with rc={}", out.rc).into());
+    }
+    if query_args
+        .iter()
+        .filter(|arg| arg.as_str() == "--query")
+        .count()
+        > 1
+    {
+        println!(
+            "library_sql_transport_tsv\t{connect_us}\t{exec_us}\t{}\tremote",
+            total_t.elapsed().as_micros()
+        );
+    }
+    Ok(())
+}
+
+fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Err(
+            "usage: scripts/mister catalog <counts|find-launch-ref|launch-plan|prepared> ..."
+                .into(),
+        );
+    }
+    let quoted_args = args.iter().map(|arg| sh(arg)).collect::<Vec<_>>().join(" ");
+    let command = format!("/media/fat/mister-magik/mister-magik-fb catalog-inspect {quoted_args}");
+    let out = exec(sess, &command, true)?;
+    print!("{}", out.stdout);
+    if !out.stderr.trim().is_empty() {
+        eprint!("[stderr] {}", out.stderr);
+    }
+    if out.rc != 0 {
+        return Err(format!("catalog inspect failed with rc={}", out.rc).into());
+    }
+    Ok(())
 }
 
 fn library_db_query_args(args: &[String]) -> Vec<String> {
@@ -3519,17 +3573,18 @@ fn library_sql_command_unavailable(stdout: &str, stderr: &str) -> bool {
 }
 
 fn run_library_db_query_via_sftp(sess: &Session, args: &[String]) -> Result<String> {
-    let (remote_path, query) = parse_library_db_query(args)?;
+    let (remote_path, queries) = parse_library_db_queries(args)?;
     let local_path = temporary_library_db_path();
     get(sess, &remote_path, &local_path)?;
-    let result = run_local_read_only_sqlite_query(&local_path, &query);
+    let result = run_local_read_only_sqlite_queries(&local_path, &queries);
     let _ = fs::remove_file(&local_path);
     result
 }
 
-fn parse_library_db_query(args: &[String]) -> Result<(String, String)> {
+fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
     let mut remote_path = DEFAULT_REMOTE_LIBRARY_DB.to_string();
     let mut query_parts = Vec::new();
+    let mut queries = Vec::new();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -3540,20 +3595,31 @@ fn parse_library_db_query(args: &[String]) -> Result<(String, String)> {
                 remote_path = value.to_string();
                 i += 2;
             }
+            "--query" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("db: --query needs a statement".into());
+                };
+                queries.push(value.to_string());
+                i += 2;
+            }
             other => {
                 query_parts.push(other.to_string());
                 i += 1;
             }
         }
     }
-    if query_parts.is_empty() {
-        return Err("usage: scripts/mister db [--path PATH] SELECT ...".into());
+    if !query_parts.is_empty() && !queries.is_empty() {
+        return Err("db: cannot mix positional SQL with --query".into());
     }
-    let query = query_parts.join(" ");
-    if !sqlite_query_is_read_only(&query) {
-        return Err("scripts/mister db only allows read-only SELECT/WITH queries".into());
+    if !query_parts.is_empty() {
+        queries.push(query_parts.join(" "));
     }
-    Ok((remote_path, query))
+    if queries.is_empty() {
+        return Err(
+            "usage: scripts/mister db [--path PATH] SQL | --query SQL [--query SQL ...]".into(),
+        );
+    }
+    Ok((remote_path, queries))
 }
 
 fn temporary_library_db_path() -> PathBuf {
@@ -3566,7 +3632,7 @@ fn temporary_library_db_path() -> PathBuf {
     path
 }
 
-fn run_local_read_only_sqlite_query(path: &Path, query: &str) -> Result<String> {
+fn run_local_read_only_sqlite_queries(path: &Path, queries: &[String]) -> Result<String> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(format!("{} is not a file", path.display()).into());
@@ -3579,7 +3645,36 @@ fn run_local_read_only_sqlite_query(path: &Path, query: &str) -> Result<String> 
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    Ok(sqlite_query_to_tsv(&conn, query)?)
+    let mut out = String::new();
+    for (index, query) in queries.iter().enumerate() {
+        let hash = sqlite_query_hash(query);
+        if queries.len() > 1 {
+            out.push_str(&format!(
+                "library_sql_result_tsv\t{}\tbegin\t{hash:016x}\n",
+                index + 1
+            ));
+        }
+        let query_out = sqlite_query_to_tsv(&conn, query).map_err(|error| {
+            if matches!(error, rusqlite::Error::InvalidQuery) {
+                Box::<dyn std::error::Error>::from(
+                    "scripts/mister db accepts exactly one SQLite read-only statement",
+                )
+            } else {
+                Box::<dyn std::error::Error>::from(error)
+            }
+        })?;
+        out.push_str(&query_out);
+        if queries.len() > 1 {
+            out.push_str(&format!(
+                "library_sql_result_tsv\t{}\tend\t{hash:016x}\n",
+                index + 1
+            ));
+        }
+    }
+    if queries.len() > 1 {
+        out.push_str(&format!("library_sql_batch_tsv\t{}\t0\t0\n", queries.len()));
+    }
+    Ok(out)
 }
 
 fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
@@ -5169,7 +5264,7 @@ video_mode=14
     }
 
     #[test]
-    fn library_db_query_allows_comments_before_read_only_queries() {
+    fn library_db_query_preserves_statement_for_remote_read_only_validation() {
         let args = vec![
             "--path".to_string(),
             "/tmp/library.sqlite3".to_string(),
@@ -5177,28 +5272,36 @@ video_mode=14
             "SELECT * FROM recent".to_string(),
         ];
 
-        let (path, query) = parse_library_db_query(&args).expect("read-only query");
+        let (path, queries) = parse_library_db_queries(&args).expect("read-only query");
 
         assert_eq!(path, "/tmp/library.sqlite3");
-        assert!(query.contains("WITH recent"));
+        assert!(queries[0].contains("WITH recent"));
     }
 
     #[test]
-    fn library_db_query_rejects_with_write_statements() {
-        for query in [
-            "WITH doomed AS (SELECT 1) DELETE FROM games",
-            "WITH changed AS (SELECT 1) UPDATE games SET title='x'",
-            "WITH created AS (SELECT 1) INSERT INTO games(title) VALUES('x')",
-            "SELECT 1; DELETE FROM games",
-            "/* comment */ PRAGMA writable_schema=ON",
-        ] {
-            let err = parse_library_db_query(&[query.to_string()])
-                .expect_err("write-capable query should be rejected");
-            assert!(
-                err.to_string().contains("read-only SELECT/WITH"),
-                "{query}: {err}"
-            );
-        }
+    fn library_db_query_accepts_pragma_for_remote_read_only_validation() {
+        let (_, queries) =
+            parse_library_db_queries(&["PRAGMA table_info(launch_plans)".to_string()])
+                .expect("pragma should reach SQLite read-only validation");
+        assert_eq!(queries, ["PRAGMA table_info(launch_plans)"]);
+    }
+
+    #[test]
+    fn library_db_query_parses_repeated_query_batch() {
+        let (path, queries) = parse_library_db_queries(&[
+            "--path".to_string(),
+            "/tmp/library.sqlite3".to_string(),
+            "--query".to_string(),
+            "SELECT count(*) FROM game_rows".to_string(),
+            "--query".to_string(),
+            "PRAGMA table_info(launch_plans)".to_string(),
+        ])
+        .expect("query batch");
+
+        assert_eq!(path, "/tmp/library.sqlite3");
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0], "SELECT count(*) FROM game_rows");
+        assert_eq!(queries[1], "PRAGMA table_info(launch_plans)");
     }
 
     #[test]

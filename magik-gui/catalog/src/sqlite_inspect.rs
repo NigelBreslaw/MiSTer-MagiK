@@ -73,16 +73,37 @@ pub fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> rusqlite::R
     }
 }
 
-pub fn sqlite_query_is_read_only(query: &str) -> bool {
-    let tokens = sqlite_query_tokens(query);
-    let Some(first) = tokens.first().map(String::as_str) else {
-        return false;
-    };
-    (first == "select" || first == "with") && !sqlite_tokens_contain_write(&tokens)
-}
-
 pub fn sqlite_query_to_tsv(conn: &Connection, query: &str) -> rusqlite::Result<String> {
     let mut stmt = conn.prepare(query)?;
+    if !sqlite_statement_is_inspect_only(query, &stmt) {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    sqlite_statement_to_tsv(&mut stmt)
+}
+
+pub fn sqlite_statement_is_inspect_only(query: &str, stmt: &rusqlite::Statement<'_>) -> bool {
+    if !stmt.readonly() {
+        return false;
+    }
+    let tokens = sqlite_query_tokens(query);
+    if tokens.first().map(String::as_str) != Some("pragma") {
+        return true;
+    }
+    match tokens.get(1).map(String::as_str) {
+        Some(
+            "table_info" | "table_xinfo" | "index_list" | "index_info" | "index_xinfo"
+            | "foreign_key_list" | "integrity_check" | "quick_check",
+        ) => true,
+        Some(
+            "database_list" | "compile_options" | "page_count" | "page_size"
+            | "freelist_count" | "journal_mode" | "synchronous" | "schema_version"
+            | "user_version" | "application_id" | "encoding",
+        ) => tokens.len() == 2,
+        _ => false,
+    }
+}
+
+pub fn sqlite_statement_to_tsv(stmt: &mut rusqlite::Statement<'_>) -> rusqlite::Result<String> {
     let column_count = stmt.column_count();
     let mut out = String::new();
     if column_count > 0 {
@@ -100,26 +121,6 @@ pub fn sqlite_query_to_tsv(conn: &Connection, query: &str) -> rusqlite::Result<S
         out.push('\n');
     }
     Ok(out)
-}
-
-fn sqlite_tokens_contain_write(tokens: &[String]) -> bool {
-    tokens.iter().any(|token| {
-        matches!(
-            token.as_str(),
-            "insert"
-                | "update"
-                | "delete"
-                | "replace"
-                | "create"
-                | "drop"
-                | "alter"
-                | "pragma"
-                | "attach"
-                | "detach"
-                | "vacuum"
-                | "reindex"
-        )
-    })
 }
 
 fn sqlite_query_tokens(query: &str) -> Vec<String> {

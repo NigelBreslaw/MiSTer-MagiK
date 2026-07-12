@@ -449,8 +449,20 @@ if re.search(r"startup_timing\tcatalog_navigation_load\t", log_text):
     failures.append("forbidden_catalog_navigation_load")
 if re.search(r"startup_timing\tcatalog_system_navigation_load\t", log_text):
     failures.append("forbidden_catalog_system_navigation_load")
-if re.search(r"startup_timing\tarcade_search_index_prewarm\t[^\n]*built=1", log_text):
-    failures.append("forbidden_arcade_search_index_prewarm")
+prewarms = list(re.finditer(r"startup_timing\tarcade_search_index_prewarm\t[^\n]*", log_text))
+prewarm = prewarms[0] if prewarms else None
+library_ready = re.search(r"startup_timing\tlibrary_ready\t[^\n]*", log_text)
+if prewarm is None:
+    failures.append("missing_arcade_search_index_prewarm")
+elif library_ready is None:
+    failures.append("missing_library_ready_for_search_prewarm")
+elif prewarm.start() > library_ready.start():
+    failures.append("late_arcade_search_index_prewarm")
+elif any(
+    event.start() > library_ready.start() and "built=1" in event.group(0)
+    for event in prewarms
+):
+    failures.append("post_ready_arcade_search_index_build")
 
 summary = " ".join(
     f"{event}_delta_ms={rows[event]['delta_ms']}"

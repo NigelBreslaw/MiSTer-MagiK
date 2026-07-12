@@ -43,12 +43,14 @@ APIs, progress states, and benchmark expectations.
 
 ## Read-Only Inspection
 
-Use `scripts/mister db`, `scripts/mister library-db`, or
+Use `scripts/mister catalog` for routine counts and launch lookups. Use
+`scripts/mister db`, `scripts/mister library-db`, or
 `mister-magik-fb library-sql` for catalog database inspection. `library-sql` is
 available in release-device builds so device queries do not need `sqlite3(1)` or
-a diagnostics binary. These entrypoints are intentionally read-only: they accept
-`SELECT`/read-only `WITH` queries, reject obvious write statements before
-opening the database, and also open SQLite with read-only/query-only settings.
+a diagnostics binary. These entrypoints open SQLite read-only/query-only,
+prepare exactly one statement, and use SQLite's read-only classification plus a
+safe introspection-PRAGMA allowlist. Read-only `PRAGMA table_info(...)` and
+`EXPLAIN QUERY PLAN` are supported.
 Do not add write, repair, migration, or cache rebuild behavior to these
 inspection paths; use the catalog builder and launcher worker flows instead.
 
@@ -59,11 +61,20 @@ query-output byte count. If `scripts/mister db` reports that it is using the
 SFTP fallback, the timing describes the host-side local query of a copied
 database, not direct device SQLite performance.
 
+Pass repeated `--query SQL` arguments to reuse one SSH command, remote process,
+and SQLite connection. Batch output wraps each result with
+`library_sql_result_tsv` rows and ends with `library_sql_batch_tsv`. Routine
+scripts should query physical tables such as `game_rows`, `launch_target_rows`,
+and `launcher_catalog_rows`; text compatibility views such as `games` and
+`launch_plans` may decompress path data and are intended for human inspection.
+
 ## Launcher Search
 
 The Arcade `Search` filter is a runtime UI index, not a catalog table or a
-SQLite hot path. When the launcher hydrates the in-memory `ArcadeCatalog`, it
-also builds normalized search keys and a small autocomplete word index from each
+SQLite hot path. The background catalog worker builds normalized search keys
+and a small autocomplete word index before delivering the full catalog, so the
+first non-empty query performs no one-time construction on the UI thread. The
+index uses each
 game's title, launch path basename, manufacturer, category, year, and decade.
 Typing on the virtual keyboard scans only the active system's in-memory rows and
 updates the Rust-painted result list plus the Slint suggestion strip in the next

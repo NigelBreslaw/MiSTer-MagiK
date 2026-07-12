@@ -5,10 +5,11 @@ use crate::catalog_scan;
 use crate::library_db::{self, BenchConfig};
 use crate::sqlite_inspect::{
     append_sqlite_timing_row, sqlite_cell_to_string, sqlite_query_hash,
-    sqlite_query_is_read_only as sqlite_inspect_query_is_read_only, SqliteInspectTiming,
+    sqlite_statement_is_inspect_only, SqliteInspectTiming,
 };
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use rusqlite::Connection;
 
 pub(crate) fn run_scan_bench() {
     let cfg = BenchConfig::from_env();
@@ -166,6 +167,7 @@ pub(crate) fn run_scan_bench() {
 pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
     let mut path = default_sqlite_path();
     let mut query_parts = Vec::new();
+    let mut queries = Vec::new();
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -176,21 +178,29 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
                 path = PathBuf::from(value);
                 i += 2;
             }
+            "--query" => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err("library-sql: --query needs a statement".into());
+                };
+                queries.push(value.to_string());
+                i += 2;
+            }
             other => {
                 query_parts.push(other.to_string());
                 i += 1;
             }
         }
     }
-    if query_parts.is_empty() {
-        return Err("usage: library-sql [--path PATH] SELECT ...".into());
+    if !query_parts.is_empty() && !queries.is_empty() {
+        return Err("library-sql cannot mix positional SQL with --query".into());
     }
-    let query = query_parts.join(" ");
-    if !sqlite_inspect_query_is_read_only(&query) {
-        return Err("library-sql only allows read-only SELECT/WITH queries".into());
+    if !query_parts.is_empty() {
+        queries.push(query_parts.join(" "));
     }
-
-    let total_t = Instant::now();
+    if queries.is_empty() {
+        return Err("usage: library-sql [--path PATH] SQL | --query SQL [--query SQL ...]".into());
+    }
+    let batch_t = Instant::now();
     let metadata = std::fs::metadata(&path).map_err(|e| format!("stat {}: {e}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!("{} is not a file", path.display()));
@@ -204,10 +214,60 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     let open_us = open_t.elapsed().as_micros() as u64;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
+    if queries.len() == 1 {
+        return run_sqlite_inspect_query(
+            &conn,
+            &path,
+            metadata.len(),
+            &queries[0],
+            open_us,
+        );
+    }
+    let mut out = String::new();
+    for (index, query) in queries.iter().enumerate() {
+        let hash = sqlite_query_hash(query);
+        out.push_str(&format!(
+            "library_sql_result_tsv\t{}\tbegin\t{:016x}\n",
+            index + 1,
+            hash
+        ));
+        out.push_str(&run_sqlite_inspect_query(
+            &conn,
+            &path,
+            metadata.len(),
+            query,
+            open_us,
+        )?);
+        out.push_str(&format!(
+            "library_sql_result_tsv\t{}\tend\t{:016x}\n",
+            index + 1,
+            hash
+        ));
+    }
+    out.push_str(&format!(
+        "library_sql_batch_tsv\t{}\t{}\t{}\n",
+        queries.len(),
+        open_us,
+        batch_t.elapsed().as_micros()
+    ));
+    Ok(out)
+}
+
+fn run_sqlite_inspect_query(
+    conn: &Connection,
+    path: &Path,
+    db_bytes: u64,
+    query: &str,
+    open_us: u64,
+) -> Result<String, String> {
+    let total_t = Instant::now();
     let prepare_t = Instant::now();
     let mut stmt = conn
-        .prepare(&query)
+        .prepare(query)
         .map_err(|e| format!("prepare query: {e}"))?;
+    if !sqlite_statement_is_inspect_only(query, &stmt) {
+        return Err("library-sql accepts exactly one SQLite read-only statement".into());
+    }
     let prepare_us = prepare_t.elapsed().as_micros() as u64;
     let column_count = stmt.column_count();
     let mut out = String::new();
@@ -250,9 +310,9 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
         append_sqlite_timing_row(
             &mut out,
             SqliteInspectTiming {
-                path: &path,
-                db_bytes: metadata.len(),
-                query_hash: sqlite_query_hash(&query),
+                path,
+                db_bytes,
+                query_hash: sqlite_query_hash(query),
                 open_us,
                 schema_check_us: None,
                 prepare_us,
@@ -288,9 +348,9 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
     append_sqlite_timing_row(
         &mut out,
         SqliteInspectTiming {
-            path: &path,
-            db_bytes: metadata.len(),
-            query_hash: sqlite_query_hash(&query),
+            path,
+            db_bytes,
+            query_hash: sqlite_query_hash(query),
             open_us,
             schema_check_us: None,
             prepare_us,
@@ -310,7 +370,6 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
 mod tests {
     use super::*;
     use crate::test_support::*;
-    use rusqlite::Connection;
 
     #[test]
     fn sqlite_inspect_does_not_create_missing_database() {
@@ -413,26 +472,90 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_inspect_allows_comments_before_select_and_with_select() {
-        assert!(sqlite_inspect_query_is_read_only(
-            "-- comment\n/* more */ SELECT 'delete from games'"
-        ));
-        assert!(sqlite_inspect_query_is_read_only(
-            "WITH recent AS (SELECT 1) SELECT * FROM recent"
-        ));
+    fn sqlite_inspect_batches_queries_on_one_connection_with_framed_output() {
+        let root = unique_temp_dir("sqlite-inspect-batch");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE values_fixture(value INTEGER); INSERT INTO values_fixture VALUES(7);")
+            .expect("create inspect fixture");
+        drop(conn);
+
+        let out = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "--query".to_string(),
+            "SELECT count(*) FROM values_fixture".to_string(),
+            "--query".to_string(),
+            "PRAGMA table_info(values_fixture)".to_string(),
+        ])
+        .expect("batch inspect");
+
+        assert!(out.contains("library_sql_result_tsv\t1\tbegin\t"), "{out}");
+        assert!(out.contains("library_sql_result_tsv\t1\tend\t"), "{out}");
+        assert!(out.contains("library_sql_result_tsv\t2\tbegin\t"), "{out}");
+        assert!(out.contains("library_sql_result_tsv\t2\tend\t"), "{out}");
+        assert_eq!(out.matches("library_sql_timing_tsv\t").count(), 2, "{out}");
+        assert!(out.contains("library_sql_batch_tsv\t2\t"), "{out}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn sqlite_inspect_rejects_with_write_statements() {
+    fn sqlite_inspect_allows_sqlite_read_only_statements() {
+        let root = unique_temp_dir("sqlite-inspect-read-only");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE values_fixture(value INTEGER);")
+            .expect("create inspect fixture");
+        drop(conn);
+
         for query in [
-            "WITH doomed AS (SELECT 1) DELETE FROM games",
-            "WITH changed AS (SELECT 1) UPDATE games SET title='x'",
-            "WITH created AS (SELECT 1) INSERT INTO games(title) VALUES('x')",
-            "SELECT 1; DELETE FROM games",
+            "-- comment\n/* more */ SELECT 'delete from games'",
+            "WITH recent AS (SELECT 1) SELECT * FROM recent",
+            "PRAGMA table_info(values_fixture)",
+            "EXPLAIN QUERY PLAN SELECT * FROM values_fixture",
+        ] {
+            run_sqlite_inspect_cli(&[
+                "--path".to_string(),
+                db.display().to_string(),
+                query.to_string(),
+            ])
+            .unwrap_or_else(|error| panic!("{query}: {error}"));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_inspect_rejects_writes_and_multiple_statements() {
+        let root = unique_temp_dir("sqlite-inspect-writes");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE values_fixture(value INTEGER);")
+            .expect("create inspect fixture");
+        drop(conn);
+
+        for query in [
+            "WITH doomed AS (SELECT 1) DELETE FROM values_fixture",
+            "WITH changed AS (SELECT 1) UPDATE values_fixture SET value=2",
+            "WITH created AS (SELECT 1) INSERT INTO values_fixture(value) VALUES(1)",
+            "CREATE TABLE forbidden(value INTEGER)",
             "/* comment */ PRAGMA writable_schema=ON",
         ] {
-            assert!(!sqlite_inspect_query_is_read_only(query), "{query}");
+            let error = run_sqlite_inspect_cli(&[
+                "--path".to_string(),
+                db.display().to_string(),
+                query.to_string(),
+            ])
+            .expect_err("write-capable statement should be rejected");
+            assert!(error.contains("read-only statement"), "{query}: {error}");
         }
+        let multiple = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT 1; SELECT 2".to_string(),
+        ])
+        .expect_err("multiple statements should be rejected");
+        assert!(multiple.contains("Multiple statements"), "{multiple}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn assert_sqlite_timing_row(row: &str, db: &Path, rows: usize, columns: usize) {
