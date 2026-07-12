@@ -1136,16 +1136,17 @@ impl CatalogProjectionBuildContext<'_> {
                 metadata,
             )
         } else {
-            let preview = software_identity
-                .as_ref()
-                .and_then(|identity| console_preview_asset(identity, self.preview_paths));
-            let preview = preview
-                .as_ref()
-                .map(|asset| {
-                    LauncherPreviewAsset::new(
-                        preview_worker::preview_archive_path_for_system(&system_id),
-                        asset.asset_key.to_string(),
-                    )
+            let preview = amigavision_preview_asset(discovery, &system_id, self.preview_paths)
+                .or_else(|| {
+                    software_identity
+                        .as_ref()
+                        .and_then(|identity| console_preview_asset(identity, self.preview_paths))
+                        .map(|asset| {
+                            LauncherPreviewAsset::new(
+                                preview_worker::preview_archive_path_for_system(&system_id),
+                                asset.asset_key.to_string(),
+                            )
+                        })
                 })
                 .unwrap_or_else(LauncherPreviewAsset::none);
             let family_key = software_identity
@@ -1159,7 +1160,7 @@ impl CatalogProjectionBuildContext<'_> {
                 ArcadeGameMetadataKey {
                     year: discovery.year,
                     manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                    category: discovery.genre.clone().unwrap_or_default(),
+                    category: launcher_category_for_discovery(discovery),
                 },
             )
         };
@@ -1190,6 +1191,30 @@ impl CatalogProjectionBuildContext<'_> {
             is_arcade,
             launch_plan,
         })
+    }
+}
+
+fn amigavision_preview_asset(
+    discovery: &GameDiscovery,
+    system_id: &str,
+    preview_paths: &PreviewArchivePaths,
+) -> Option<LauncherPreviewAsset> {
+    if system_id != "amiga" || discovery.genre.as_deref() != Some("AmigaVision") {
+        return None;
+    }
+    preview_paths.archive_for_platform("amiga")?;
+    Some(LauncherPreviewAsset::new(
+        preview_worker::preview_archive_path_for_system("amiga"),
+        crate::media_identity::ScreenshotAssetId::from_amigavision_title(&discovery.title)
+            .into_string(),
+    ))
+}
+
+fn launcher_category_for_discovery(discovery: &GameDiscovery) -> String {
+    match discovery.genre.as_deref() {
+        Some("AmigaVision") if discovery.platform_id == "amiga" => "Games".to_string(),
+        Some("AmigaVision demos") if discovery.platform_id == "amiga" => "Demos".to_string(),
+        _ => discovery.genre.clone().unwrap_or_default(),
     }
 }
 
@@ -1562,6 +1587,28 @@ mod tests {
                 is_new: game.is_new,
             })
             .collect()
+    }
+
+    #[test]
+    fn amigavision_games_use_amiga_pack_identity_but_demos_do_not() {
+        let mut discovery = payload("/media/fat/games/Amiga/AmigaVision.hdf");
+        discovery.title = "Alien Breed (OCS)[en]".to_string();
+        discovery.platform_id = "amiga".to_string();
+        discovery.genre = Some("AmigaVision".to_string());
+        let paths = PreviewArchivePaths::from_paths(vec![
+            "/media/fat/mister-magik/assets/amiga-screenshots.mmlz4b".to_string(),
+        ]);
+
+        let preview = amigavision_preview_asset(&discovery, "amiga", &paths)
+            .expect("AmigaVision game preview");
+        assert_eq!(
+            preview.archive_path,
+            "/media/fat/mister-magik/assets/amiga-screenshots.mmlz4b"
+        );
+        assert_eq!(preview.asset_key, "amigavision__667cdd86c04e1709");
+
+        discovery.genre = Some("AmigaVision demos".to_string());
+        assert!(amigavision_preview_asset(&discovery, "amiga", &paths).is_none());
     }
 
     #[test]
@@ -1991,6 +2038,27 @@ mod tests {
             prepared: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
         };
+        let amigavision_demo = GameDiscovery {
+            source_path: "/media/fat/games/Amiga/AmigaVision.hdf::State of the Art".to_string(),
+            launch_ref: media_metadata::amigavision_game_launch_ref(
+                "listings/demos.txt",
+                "State of the Art",
+            ),
+            source_kind: DiscoverySourceKind::CatalogEntry,
+            title: "State of the Art".to_string(),
+            category: "Computer".to_string(),
+            platform_id: "amiga".to_string(),
+            core_id: "Minimig".to_string(),
+            hardware_id: "amiga".to_string(),
+            manufacturer: None,
+            genre: Some("AmigaVision demos".to_string()),
+            year: None,
+            setname: None,
+            parent: None,
+            covered_payload_path: None,
+            prepared: None,
+            confidence: DiscoveryConfidence::CatalogMetadata,
+        };
 
         let scan = sqlite_scan_with_discoveries(vec![
             arcade_parent,
@@ -2002,6 +2070,7 @@ mod tests {
             neogeo_without_setname,
             archive_entry,
             amigavision_game,
+            amigavision_demo,
         ]);
         let ram_catalog = build_catalog_from_scan_with_sources(
             "/media/fat/_Arcade",
@@ -2040,6 +2109,26 @@ mod tests {
             .games
             .iter()
             .any(|game| game.mra_path.starts_with("magik-amigavision:")));
+        assert_eq!(
+            ram_catalog
+                .games
+                .iter()
+                .find(|game| game.title.as_ref() == "Alien Breed")
+                .expect("AmigaVision game")
+                .category
+                .as_ref(),
+            "Games"
+        );
+        assert_eq!(
+            ram_catalog
+                .games
+                .iter()
+                .find(|game| game.title.as_ref() == "State of the Art")
+                .expect("AmigaVision demo")
+                .category
+                .as_ref(),
+            "Demos"
+        );
         let virtual_ref = ram_catalog
             .games
             .iter()
