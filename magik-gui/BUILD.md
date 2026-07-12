@@ -235,8 +235,9 @@ python3 scripts/generate-third-party-licenses.py
 
 The generator follows only normal runtime dependencies for
 `armv7-unknown-linux-gnueabihf`, deduplicates identical legal texts, and writes
-the release artifacts under `magik-gui/licenses/` for both on-device browsing
-and inclusion beside the distributed binary.
+the release artifacts under `magik-gui/licenses/` for inclusion beside the
+distributed binary. The launcher keeps its license screen concise; the complete
+runtime dependency inventory is available in the distribution ZIP and Docs.
 
 Stage the alpha binary and all sidecar license files together with:
 

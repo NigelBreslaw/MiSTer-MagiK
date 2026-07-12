@@ -80,7 +80,17 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   if "$ROOT/scripts/package-distribution.sh" \
       --binary "$package_tmp/mister-magik-fb" \
       --mame-sqlite "$package_tmp/mame.sqlite3" \
+      --name missing-provenance \
+      --out-dir "$package_tmp/out" >/dev/null 2>&1; then
+    echo "expected package without MAME provenance to fail" >&2
+    exit 1
+  fi
+  if "$ROOT/scripts/package-distribution.sh" \
+      --binary "$package_tmp/mister-magik-fb" \
+      --mame-sqlite "$package_tmp/mame.sqlite3" \
+      --mame-source-ref test-fixture \
       --hbmame-sqlite "$package_tmp/tiny-hbmame.sqlite3" \
+      --hbmame-source-revision test-fixture \
       --name tiny-hbmame \
       --out-dir "$package_tmp/out" >/dev/null 2>&1; then
     echo "expected tiny HBMAME metadata DB package to fail" >&2
@@ -108,9 +118,36 @@ SQL
   "$ROOT/scripts/package-distribution.sh" \
     --binary "$package_tmp/mister-magik-fb" \
     --mame-sqlite "$package_tmp/mame.sqlite3" \
+    --mame-source-ref test-fixture \
     --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
+    --hbmame-source-revision test-fixture \
     --name valid-hbmame \
     --out-dir "$package_tmp/out" >/dev/null
+  python3 - "$package_tmp/out/valid-hbmame.zip" <<'PY'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    names = set(archive.namelist())
+    required = {
+        "THIRD-PARTY-NOTICES.txt",
+        "SOURCE-OFFER.txt",
+        "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+        "licenses/RUST-LIBRARIES.txt",
+        "licenses/FFMPEG-LGPL-2.1-or-later.txt",
+        "licenses/PRESS-START-2P-OFL-1.1.txt",
+    }
+    missing = sorted(required - names)
+    if missing:
+        raise SystemExit(f"distribution missing legal files: {', '.join(missing)}")
+    notices = archive.read("THIRD-PARTY-NOTICES.txt").decode()
+    source_offer = archive.read("SOURCE-OFFER.txt").decode()
+    for expected in ("test-fixture", "not ROM, BIOS, firmware, or game media"):
+        if expected not in notices:
+            raise SystemExit(f"distribution notices missing: {expected}")
+    if "FFmpeg 8.1.2 source" not in source_offer:
+        raise SystemExit("distribution source offer is missing FFmpeg source")
+PY
 fi
 
 if grep -R -E 'scripts/(bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh|scripts/experiments/(profile-preview-transition-mega|bench-effects|profile-camera-effects|profile-sprite-effects|profile-text-effects|profile-raster-effects|profile-transition-effects)\.sh' \

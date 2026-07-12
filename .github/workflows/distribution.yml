@@ -390,6 +390,9 @@ jobs:
         run: |
           scripts/package-distribution.sh \
             --main-bin Main_MiSTer/bin/MiSTer \
+            --main-source-revision "${{ steps.main-rev.outputs.sha }}" \
+            --mame-source-ref "$MAME_REF" \
+            --hbmame-source-revision "${{ needs.resolve-hbmame.outputs.sha }}" \
             --hbmame-sqlite-default \
             --name "${{ github.event.inputs.artifact_name }}"
 

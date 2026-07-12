@@ -88,11 +88,13 @@ fi
 package_args=(
   --binary "$BIN"
   --mame-sqlite "$MAME_SQLITE"
+  --mame-source-ref release-check-fixture
   --name release-check
   --out-dir "$WORK"
 )
 if [ -f "$MAIN_BIN" ]; then
-  package_args+=(--main-bin "$MAIN_BIN")
+  MAIN_SOURCE_REVISION="$(git -C "$(dirname "$MAIN_BIN")/.." rev-parse HEAD)"
+  package_args+=(--main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION")
   EXPECT_MAIN=1
 else
   EXPECT_MAIN=0
@@ -111,6 +113,12 @@ required = {
     "Scripts/mister-magik.sh",
     "mister-magik/mister-magik-fb",
     "mister-magik/mame.sqlite3",
+    "THIRD-PARTY-NOTICES.txt",
+    "SOURCE-OFFER.txt",
+    "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+    "licenses/RUST-LIBRARIES.txt",
+    "licenses/FFMPEG-LGPL-2.1-or-later.txt",
+    "licenses/PRESS-START-2P-OFL-1.1.txt",
 }
 if expect_main:
     required.add("MiSTer_MagiK")
