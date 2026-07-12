@@ -217,6 +217,8 @@ pub(super) enum LauncherLifecycleInput {
     StartupReturnContextRestored {
         screen: &'static str,
         system_id: String,
+        filter: String,
+        game_path: String,
         game_index: usize,
         visual_index: f32,
         preview_expected: bool,
@@ -508,6 +510,8 @@ impl LauncherLifecycle {
             LauncherLifecycleInput::StartupReturnContextRestored {
                 screen,
                 system_id,
+                filter,
+                game_path,
                 game_index,
                 visual_index,
                 preview_expected,
@@ -518,7 +522,7 @@ impl LauncherLifecycle {
                 out.startup_event(
                     "return_context_restored",
                     format!(
-                        "screen={screen} system_id={system_id} game_index={game_index} visual_index={visual_index:.3} preview_expected={preview_expected}"
+                        "screen={screen} system_id={system_id} filter={filter} game_path={game_path} game_index={game_index} visual_index={visual_index:.3} preview_expected={preview_expected}"
                     ),
                 );
                 return self.step(BridgeSyncPlan::None);
@@ -779,6 +783,15 @@ mod tests {
             .collect()
     }
 
+    fn effect_detail<'a>(effects: &'a LifecycleEffects, expected_name: &str) -> Option<&'a str> {
+        effects.as_slice().iter().find_map(|effect| match effect {
+            LauncherEffect::StartupEvent { name, detail } if *name == expected_name => {
+                Some(detail.as_str())
+            }
+            _ => None,
+        })
+    }
+
     fn assert_input_ignored(
         lifecycle: &mut LauncherLifecycle,
         effects: &mut LifecycleEffects,
@@ -927,6 +940,8 @@ mod tests {
             LauncherLifecycleInput::StartupReturnContextRestored {
                 screen: "arcade",
                 system_id: "arcade".to_string(),
+                filter: "all".to_string(),
+                game_path: "/media/fat/_Arcade/Air Gallet (Europe).mra".to_string(),
                 game_index: 17,
                 visual_index: 17.0,
                 preview_expected: true,
@@ -939,6 +954,12 @@ mod tests {
         );
         assert!(!lifecycle.startup_can_present_frame());
         assert!(effect_names(&effects).contains(&"return_context_restored"));
+        assert_eq!(
+            effect_detail(&effects, "return_context_restored"),
+            Some(
+                "screen=arcade system_id=arcade filter=all game_path=/media/fat/_Arcade/Air Gallet (Europe).mra game_index=17 visual_index=17.000 preview_expected=true"
+            )
+        );
         effects.clear();
 
         lifecycle.handle(
@@ -971,6 +992,8 @@ mod tests {
             LauncherLifecycleInput::StartupReturnContextRestored {
                 screen: "arcade",
                 system_id: "neogeo".to_string(),
+                filter: "manufacturer:SNK".to_string(),
+                game_path: "/media/fat/_Arcade/Metal Slug.mra".to_string(),
                 game_index: 144,
                 visual_index: 144.0,
                 preview_expected: true,

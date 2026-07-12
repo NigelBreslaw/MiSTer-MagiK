@@ -77,6 +77,7 @@ trap cleanup EXIT
 cat >"$tmp_env" <<EOF
 export MISTER_CATALOG_REFRESH=off
 export MISTER_LAUNCHER_START_SCREEN=arcade
+export MISTER_LAUNCHER_START_SYSTEM=arcade
 export MISTER_ARCADE_SELECTED_INDEX=$SELECTED
 export MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED=1
 EOF
@@ -105,21 +106,18 @@ sleep "$GAME_SETTLE_SECS"
 echo "==> Returning from active core via load_core menu.rbf"
 remote "rm -f '$REMOTE_ENV' '$REMOTE_LOG' '$REMOTE_EVENTS'"
 if ! fifo_has_reader; then
-  echo "WARN: active core has no /dev/MiSTer_cmd reader; using raw reboot return recovery"
-  cat >"$tmp_env" <<EOF
-export MISTER_MAGIK_RETURN_TO_LAUNCHER=1
-EOF
-  "$MISTER" put "$tmp_env" "$REMOTE_ENV" >/dev/null
+  echo "FAIL: active core has no /dev/MiSTer_cmd reader; cannot exercise Menu-to-latch return" >&2
+  remote "rm -f '$REMOTE_ENV' '$RETURN_STATE'"
   "$MISTER" reboot-wait --raw
+  exit 1
 elif ! send_main_command "load_core menu.rbf"; then
-  echo "WARN: active core has no /dev/MiSTer_cmd reader; using raw reboot return recovery"
-  cat >"$tmp_env" <<EOF
-export MISTER_MAGIK_RETURN_TO_LAUNCHER=1
-EOF
-  "$MISTER" put "$tmp_env" "$REMOTE_ENV" >/dev/null
+  echo "FAIL: load_core menu.rbf failed; cannot exercise Menu-to-latch return" >&2
+  remote "rm -f '$REMOTE_ENV' '$RETURN_STATE'"
   "$MISTER" reboot-wait --raw
+  exit 1
 fi
 wait_remote "launcher restored Arcade row $SELECTED" 90 "grep -q '\"screen\":\"arcade\"' '$STATUS' 2>/dev/null && grep -q '\"arcade_selected\":$SELECTED' '$STATUS' 2>/dev/null"
+wait_remote "launcher restored Arcade identity" 10 "expected=\$(sed -n 's/.*\"game_path\": \"\(.*\)\",/\1/p' '$STALE_RETURN_STATE'); test -n \"\$expected\" && grep -Fq \"system_id=arcade filter=all game_path=\$expected game_index=$SELECTED\" '$REMOTE_LOG'"
 wait_remote "return state consumed" 10 "test ! -e '$RETURN_STATE'"
 
 echo "==> Verifying stale return state is ignored without volatile return flag"

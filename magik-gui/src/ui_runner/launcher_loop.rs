@@ -3615,10 +3615,16 @@ fn emit_return_context_restored(
     let system_id = active_system(catalog, nav)
         .map(|system| system.id.clone())
         .unwrap_or_default();
+    let game_path = active_system(catalog, nav)
+        .and_then(|system| nav.active_arcade_game_at(catalog, &system.id, nav.arcade.selected))
+        .map(|game| game.mra_path.to_string())
+        .unwrap_or_default();
     lifecycle.handle(
         LauncherLifecycleInput::StartupReturnContextRestored {
             screen: screen_label(nav.screen),
             system_id,
+            filter: arcade_filter_cache_token(&nav.arcade_filter.active),
+            game_path,
             game_index: nav.arcade.selected,
             visual_index: nav.arcade.visual_index,
             preview_expected: selected_arcade_game_has_preview(nav, catalog),
