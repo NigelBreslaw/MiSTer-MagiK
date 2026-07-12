@@ -358,6 +358,60 @@ pub(super) fn sync_confirm_bridge(
     );
 }
 
+fn sync_launcher_confirm_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+    lifecycle: &LauncherLifecycle,
+) {
+    if let Some(dialog) = lifecycle.view().catalog_recovery_dialog() {
+        set_bridge_if_changed!(bridge, get_confirm_visible, set_confirm_visible, true);
+        set_bridge_if_changed!(
+            bridge,
+            get_confirm_selected,
+            set_confirm_selected,
+            dialog.selected.selected_index()
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_title,
+            set_confirm_title,
+            "Library failed to load."
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_message,
+            set_confirm_message,
+            dialog.error.as_str()
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_left_label,
+            set_confirm_left_label,
+            "Retry"
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_right_label,
+            set_confirm_right_label,
+            "Rebuild"
+        );
+        return;
+    }
+    set_bridge_if_changed!(
+        bridge,
+        get_confirm_visible,
+        set_confirm_visible,
+        nav.confirm_action.is_some()
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_confirm_selected,
+        set_confirm_selected,
+        nav.confirm_selected as i32
+    );
+    sync_confirm_bridge(bridge, nav.confirm_action);
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ConfirmBridgeText {
     title: &'static str,
@@ -411,6 +465,7 @@ pub(super) fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
     nav: &LauncherNav,
+    lifecycle: &LauncherLifecycle,
     setup: &SetupNav,
     loading_message: &str,
     loading_detail: &str,
@@ -463,9 +518,7 @@ pub(super) fn sync_bridge_launcher(
     }
     bridge.set_arcade_games_loading(active_games_loading);
     sync_arcade_search_bridge(&bridge, nav);
-    bridge.set_confirm_visible(nav.confirm_action.is_some());
-    bridge.set_confirm_selected(nav.confirm_selected as i32);
-    sync_confirm_bridge(&bridge, nav.confirm_action);
+    sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade
         && (active_games_loading || nav.arcade_search.is_active(&nav.arcade_filter.active))
@@ -493,6 +546,7 @@ pub(super) fn sync_bridge_launcher(
 pub(super) fn sync_bridge_launcher_light(
     app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
+    lifecycle: &LauncherLifecycle,
     models: &mut LauncherBridgeModels,
     setup: &SetupNav,
     loading_message: &str,
@@ -618,19 +672,7 @@ pub(super) fn sync_bridge_launcher_light(
         active_games_loading
     );
     sync_arcade_search_bridge_if_changed(&bridge, nav);
-    set_bridge_if_changed!(
-        bridge,
-        get_confirm_visible,
-        set_confirm_visible,
-        nav.confirm_action.is_some()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_confirm_selected,
-        set_confirm_selected,
-        nav.confirm_selected as i32
-    );
-    sync_confirm_bridge(&bridge, nav.confirm_action);
+    sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade
@@ -1174,11 +1216,18 @@ mod tests {
         nav.selected = 1;
         let mut preview = PreviewState::new();
         let mut models = LauncherBridgeModels::default();
+        let mut lifecycle = LauncherLifecycle::new(
+            LauncherLifecycleConfig {
+                catalog_worker_enabled: true,
+            },
+            Instant::now(),
+        );
         let rows = models.game_systems(&catalog, 1, 0);
 
         sync_bridge_launcher_light(
             &app,
             &nav,
+            &lifecycle,
             &mut models,
             &SetupNav::new(),
             "",
@@ -1195,5 +1244,27 @@ mod tests {
         assert_eq!(bridge.get_active_system_count(), 2);
         assert!(!rows.row_data(0).expect("first row").focused);
         assert!(rows.row_data(1).expect("second row").focused);
+
+        let mut effects = LifecycleEffects::new();
+        lifecycle.after_boot_splash_presented(
+            StartupCatalogState::LoadFailed {
+                error: "database disk image is malformed".to_string(),
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+        sync_launcher_confirm_bridge(&bridge, &nav, &lifecycle);
+        assert!(bridge.get_confirm_visible());
+        assert_eq!(
+            bridge.get_confirm_title().as_str(),
+            "Library failed to load."
+        );
+        assert_eq!(
+            bridge.get_confirm_message().as_str(),
+            "database disk image is malformed"
+        );
+        assert_eq!(bridge.get_confirm_left_label().as_str(), "Retry");
+        assert_eq!(bridge.get_confirm_right_label().as_str(), "Rebuild");
+        assert_eq!(bridge.get_confirm_selected(), 0);
     }
 }

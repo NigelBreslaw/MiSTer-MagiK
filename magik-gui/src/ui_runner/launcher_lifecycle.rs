@@ -23,7 +23,20 @@ impl CatalogSource {
 pub(super) enum LauncherLifecycleState {
     BootSplash,
     CatalogBuilding {
+        mode: CatalogBuildMode,
         foreground: bool,
+        has_stale_catalog: bool,
+    },
+    CatalogLoadFailed {
+        error: String,
+        has_stale_catalog: bool,
+        selected: CatalogRecoveryChoice,
+    },
+    CatalogRetrying {
+        has_stale_catalog: bool,
+    },
+    FreshRebuilding {
+        phase: FreshRebuildPhase,
         has_stale_catalog: bool,
     },
     CatalogReady {
@@ -47,6 +60,9 @@ impl LauncherLifecycleState {
         match self {
             Self::BootSplash => "boot-splash",
             Self::CatalogBuilding { .. } => "catalog-building",
+            Self::CatalogLoadFailed { .. } => "catalog-load-failed",
+            Self::CatalogRetrying { .. } => "catalog-retrying",
+            Self::FreshRebuilding { .. } => "catalog-fresh-rebuilding",
             Self::CatalogReady { .. } => "catalog-ready",
             Self::Idle => "idle",
             Self::Launching { .. } => "launching",
@@ -54,6 +70,34 @@ impl LauncherLifecycleState {
             Self::Recovered { .. } => "recovered",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogBuildMode {
+    FirstBuild,
+    Update,
+    FreshRecovery,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogRecoveryChoice {
+    Retry,
+    Rebuild,
+}
+
+impl CatalogRecoveryChoice {
+    pub(super) fn selected_index(self) -> i32 {
+        match self {
+            Self::Retry => 0,
+            Self::Rebuild => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FreshRebuildPhase {
+    AwaitingLock,
+    DeletingArtifacts,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +196,12 @@ pub(super) enum LauncherEffect {
     },
     PresentRecoveryFrame,
     ReturnToIdle,
+    StartCatalogRetry {
+        root: String,
+    },
+    StartFreshCatalogBuild {
+        root: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -196,14 +246,19 @@ pub(super) struct LauncherLifecycleConfig {
     pub(super) catalog_worker_enabled: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum StartupCatalogState {
     Ready {
         source: CatalogSource,
         validation_scheduled: bool,
     },
     Building {
+        mode: CatalogBuildMode,
         foreground_catalog_update: bool,
+        has_stale_catalog: bool,
+    },
+    LoadFailed {
+        error: String,
         has_stale_catalog: bool,
     },
 }
@@ -231,9 +286,19 @@ pub(super) enum LauncherLifecycleInput {
         validating: bool,
     },
     CatalogBuilding {
+        mode: CatalogBuildMode,
         foreground: bool,
         has_stale_catalog: bool,
     },
+    CatalogLoadFailed {
+        error: String,
+        has_stale_catalog: bool,
+    },
+    CatalogRecoveryLeft,
+    CatalogRecoveryRight,
+    CatalogRecoveryConfirm,
+    CatalogFreshCleanupStarted,
+    CatalogFreshCleanupCompleted,
     CatalogValidationStarted,
     CatalogValidationFinished,
     LaunchRequested {
@@ -260,6 +325,26 @@ pub(super) struct LauncherView {
     pub(super) state: LauncherLifecycleState,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CatalogRecoveryDialog {
+    pub(super) error: String,
+    pub(super) selected: CatalogRecoveryChoice,
+}
+
+impl LauncherView {
+    pub(super) fn catalog_recovery_dialog(&self) -> Option<CatalogRecoveryDialog> {
+        match &self.state {
+            LauncherLifecycleState::CatalogLoadFailed {
+                error, selected, ..
+            } => Some(CatalogRecoveryDialog {
+                error: error.clone(),
+                selected: *selected,
+            }),
+            _ => None,
+        }
+    }
+}
+
 pub(super) struct LauncherLifecycle {
     state: LauncherLifecycleState,
     config: LauncherLifecycleConfig,
@@ -269,6 +354,7 @@ pub(super) struct LauncherLifecycle {
     startup_started_at: Instant,
     startup_revealed_at: Option<Instant>,
     startup_input_enabled_at: Option<Instant>,
+    catalog_root: String,
 }
 
 impl LauncherLifecycle {
@@ -285,7 +371,12 @@ impl LauncherLifecycle {
             startup_started_at: now,
             startup_revealed_at: None,
             startup_input_enabled_at: None,
+            catalog_root: arcade_catalog::DEFAULT_ARCADE_ROOT.to_string(),
         }
+    }
+
+    pub(super) fn set_catalog_root(&mut self, root: String) {
+        self.catalog_root = root;
     }
 
     pub(super) fn begin_startup_reveal(
@@ -463,17 +554,34 @@ impl LauncherLifecycle {
                 }
             }
             StartupCatalogState::Building {
+                mode,
                 foreground_catalog_update,
                 has_stale_catalog,
             } => {
                 self.transition(
                     LauncherLifecycleState::CatalogBuilding {
+                        mode,
                         foreground: foreground_catalog_update || self.config.catalog_worker_enabled,
                         has_stale_catalog,
                     },
                     out,
                     "boot_splash_presented",
                 );
+            }
+            StartupCatalogState::LoadFailed {
+                error,
+                has_stale_catalog,
+            } => {
+                self.transition(
+                    LauncherLifecycleState::CatalogLoadFailed {
+                        error,
+                        has_stale_catalog,
+                        selected: CatalogRecoveryChoice::Retry,
+                    },
+                    out,
+                    "catalog_load_failed",
+                );
+                self.mark_reveal_ready("catalog_load_failed", out);
             }
         }
         self.step(BridgeSyncPlan::Full)
@@ -542,27 +650,171 @@ impl LauncherLifecycle {
         }
         match input {
             LauncherLifecycleInput::CatalogReady { source, validating } => {
-                self.transition(
-                    LauncherLifecycleState::CatalogReady { source, validating },
-                    out,
-                    "catalog_ready",
-                );
-                if !validating {
-                    self.transition(LauncherLifecycleState::Idle, out, "catalog_idle");
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::CatalogBuilding { .. }
+                        | LauncherLifecycleState::CatalogRetrying { .. }
+                        | LauncherLifecycleState::CatalogReady { .. }
+                        | LauncherLifecycleState::Idle
+                ) {
+                    self.transition(
+                        LauncherLifecycleState::CatalogReady { source, validating },
+                        out,
+                        "catalog_ready",
+                    );
+                    if !validating {
+                        self.transition(LauncherLifecycleState::Idle, out, "catalog_idle");
+                    }
                 }
             }
             LauncherLifecycleInput::CatalogBuilding {
+                mode,
                 foreground,
                 has_stale_catalog,
             } => {
-                self.transition(
-                    LauncherLifecycleState::CatalogBuilding {
-                        foreground,
-                        has_stale_catalog,
-                    },
-                    out,
-                    "catalog_building",
-                );
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::CatalogBuilding { .. }
+                        | LauncherLifecycleState::CatalogReady { .. }
+                        | LauncherLifecycleState::Idle
+                ) {
+                    self.transition(
+                        LauncherLifecycleState::CatalogBuilding {
+                            mode,
+                            foreground,
+                            has_stale_catalog,
+                        },
+                        out,
+                        "catalog_building",
+                    );
+                }
+            }
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error,
+                has_stale_catalog,
+            } => {
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::CatalogBuilding { .. }
+                        | LauncherLifecycleState::CatalogRetrying { .. }
+                        | LauncherLifecycleState::FreshRebuilding { .. }
+                        | LauncherLifecycleState::CatalogReady { .. }
+                        | LauncherLifecycleState::Idle
+                ) {
+                    self.transition(
+                        LauncherLifecycleState::CatalogLoadFailed {
+                            error,
+                            has_stale_catalog,
+                            selected: CatalogRecoveryChoice::Retry,
+                        },
+                        out,
+                        "catalog_load_failed",
+                    );
+                    self.mark_reveal_ready("catalog_load_failed", out);
+                }
+            }
+            LauncherLifecycleInput::CatalogRecoveryLeft => {
+                if let LauncherLifecycleState::CatalogLoadFailed {
+                    error,
+                    has_stale_catalog,
+                    ..
+                } = &self.state
+                {
+                    self.transition(
+                        LauncherLifecycleState::CatalogLoadFailed {
+                            error: error.clone(),
+                            has_stale_catalog: *has_stale_catalog,
+                            selected: CatalogRecoveryChoice::Retry,
+                        },
+                        out,
+                        "catalog_recovery_left",
+                    );
+                }
+            }
+            LauncherLifecycleInput::CatalogRecoveryRight => {
+                if let LauncherLifecycleState::CatalogLoadFailed {
+                    error,
+                    has_stale_catalog,
+                    ..
+                } = &self.state
+                {
+                    self.transition(
+                        LauncherLifecycleState::CatalogLoadFailed {
+                            error: error.clone(),
+                            has_stale_catalog: *has_stale_catalog,
+                            selected: CatalogRecoveryChoice::Rebuild,
+                        },
+                        out,
+                        "catalog_recovery_right",
+                    );
+                }
+            }
+            LauncherLifecycleInput::CatalogRecoveryConfirm => {
+                if let LauncherLifecycleState::CatalogLoadFailed {
+                    has_stale_catalog,
+                    selected,
+                    ..
+                } = self.state.clone()
+                {
+                    match selected {
+                        CatalogRecoveryChoice::Retry => {
+                            self.transition(
+                                LauncherLifecycleState::CatalogRetrying { has_stale_catalog },
+                                out,
+                                "catalog_retry_requested",
+                            );
+                            out.push(LauncherEffect::StartCatalogRetry {
+                                root: self.catalog_root.clone(),
+                            });
+                        }
+                        CatalogRecoveryChoice::Rebuild => {
+                            self.transition(
+                                LauncherLifecycleState::FreshRebuilding {
+                                    phase: FreshRebuildPhase::AwaitingLock,
+                                    has_stale_catalog,
+                                },
+                                out,
+                                "catalog_fresh_rebuild_requested",
+                            );
+                            out.push(LauncherEffect::StartFreshCatalogBuild {
+                                root: self.catalog_root.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            LauncherLifecycleInput::CatalogFreshCleanupStarted => {
+                if let LauncherLifecycleState::FreshRebuilding {
+                    phase: FreshRebuildPhase::AwaitingLock,
+                    has_stale_catalog,
+                } = self.state
+                {
+                    self.transition(
+                        LauncherLifecycleState::FreshRebuilding {
+                            phase: FreshRebuildPhase::DeletingArtifacts,
+                            has_stale_catalog,
+                        },
+                        out,
+                        "catalog_fresh_cleanup_started",
+                    );
+                }
+            }
+            LauncherLifecycleInput::CatalogFreshCleanupCompleted => {
+                if let LauncherLifecycleState::FreshRebuilding {
+                    phase: FreshRebuildPhase::DeletingArtifacts,
+                    has_stale_catalog,
+                } = self.state
+                {
+                    self.transition(
+                        LauncherLifecycleState::CatalogBuilding {
+                            mode: CatalogBuildMode::FreshRecovery,
+                            foreground: true,
+                            has_stale_catalog,
+                        },
+                        out,
+                        "catalog_fresh_cleanup_completed",
+                    );
+                }
             }
             LauncherLifecycleInput::CatalogValidationStarted => {
                 if let LauncherLifecycleState::CatalogReady { source, .. } = self.state {
@@ -1075,6 +1327,7 @@ mod tests {
 
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Building {
+                mode: CatalogBuildMode::FirstBuild,
                 foreground_catalog_update: false,
                 has_stale_catalog: false,
             },
@@ -1084,6 +1337,7 @@ mod tests {
         assert_eq!(
             lifecycle.state(),
             &LauncherLifecycleState::CatalogBuilding {
+                mode: CatalogBuildMode::FirstBuild,
                 foreground: true,
                 has_stale_catalog: false,
             }
@@ -1097,6 +1351,7 @@ mod tests {
 
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Building {
+                mode: CatalogBuildMode::FirstBuild,
                 foreground_catalog_update: false,
                 has_stale_catalog: false,
             },
@@ -1412,5 +1667,222 @@ mod tests {
             effects.as_slice().first(),
             Some(LauncherEffect::ReturnToIdle)
         ));
+    }
+
+    #[test]
+    fn catalog_load_failure_retry_and_repeated_failure_follow_state_chart() {
+        let mut lifecycle = lifecycle();
+        let mut effects = LifecycleEffects::new();
+        lifecycle.begin_startup_reveal(StartupMode::ColdNoCatalog, Instant::now(), &mut effects);
+        lifecycle.after_boot_splash_presented(
+            StartupCatalogState::LoadFailed {
+                error: "corrupt sqlite".to_string(),
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+
+        let dialog = lifecycle
+            .view()
+            .catalog_recovery_dialog()
+            .expect("recovery dialog");
+        assert_eq!(dialog.error, "corrupt sqlite");
+        assert_eq!(dialog.selected, CatalogRecoveryChoice::Retry);
+
+        effects.clear();
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::CatalogRetrying {
+                has_stale_catalog: false
+            }
+        );
+        assert!(effects
+            .as_slice()
+            .iter()
+            .any(|effect| matches!(effect, LauncherEffect::StartCatalogRetry { .. })));
+
+        effects.clear();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "still corrupt".to_string(),
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+        let dialog = lifecycle
+            .view()
+            .catalog_recovery_dialog()
+            .expect("repeated recovery dialog");
+        assert_eq!(dialog.error, "still corrupt");
+        assert_eq!(dialog.selected, CatalogRecoveryChoice::Retry);
+    }
+
+    #[test]
+    fn catalog_retry_success_returns_to_idle() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "temporarily unavailable".to_string(),
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        effects.clear();
+
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogReady {
+                source: CatalogSource::FullSqlite,
+                validating: false,
+            },
+            &mut effects,
+        );
+
+        assert_eq!(lifecycle.state(), &LauncherLifecycleState::Idle);
+    }
+
+    #[test]
+    fn catalog_fresh_rebuild_cleanup_phases_follow_state_chart() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "unreadable".to_string(),
+                has_stale_catalog: true,
+            },
+            &mut effects,
+        );
+        effects.clear();
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::FreshRebuilding {
+                phase: FreshRebuildPhase::AwaitingLock,
+                has_stale_catalog: true,
+            }
+        );
+        assert!(effects
+            .as_slice()
+            .iter()
+            .any(|effect| matches!(effect, LauncherEffect::StartFreshCatalogBuild { .. })));
+
+        effects.clear();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogFreshCleanupStarted,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::FreshRebuilding {
+                phase: FreshRebuildPhase::DeletingArtifacts,
+                has_stale_catalog: true,
+            }
+        );
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
+            &mut effects,
+        );
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::CatalogBuilding {
+                mode: CatalogBuildMode::FreshRecovery,
+                foreground: true,
+                has_stale_catalog: true,
+            }
+        );
+    }
+
+    #[test]
+    fn cleanup_events_are_ignored_outside_fresh_rebuild() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
+        );
+    }
+
+    #[test]
+    fn cleanup_completed_is_rejected_until_deletion_started() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "unreadable".to_string(),
+                has_stale_catalog: true,
+            },
+            &mut effects,
+        );
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        effects.clear();
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogFreshCleanupCompleted,
+        );
+    }
+
+    #[test]
+    fn cleanup_started_is_rejected_after_deletion_started() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "unreadable".to_string(),
+                has_stale_catalog: false,
+            },
+            &mut effects,
+        );
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryRight, &mut effects);
+        lifecycle.handle(LauncherLifecycleInput::CatalogRecoveryConfirm, &mut effects);
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogFreshCleanupStarted,
+            &mut effects,
+        );
+        effects.clear();
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogFreshCleanupStarted,
+        );
+    }
+
+    #[test]
+    fn stale_catalog_events_cannot_interrupt_launching() {
+        let (mut lifecycle, mut effects) = idle_lifecycle();
+        lifecycle.handle(
+            LauncherLifecycleInput::LaunchRequested {
+                launch_ref: "game.mra".to_string(),
+            },
+            &mut effects,
+        );
+
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogReady {
+                source: CatalogSource::FreshBuild,
+                validating: false,
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogBuilding {
+                mode: CatalogBuildMode::Update,
+                foreground: true,
+                has_stale_catalog: true,
+            },
+        );
+        assert_input_ignored(
+            &mut lifecycle,
+            &mut effects,
+            LauncherLifecycleInput::CatalogLoadFailed {
+                error: "stale worker".to_string(),
+                has_stale_catalog: true,
+            },
+        );
     }
 }

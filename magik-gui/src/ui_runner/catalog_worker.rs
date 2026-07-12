@@ -173,8 +173,10 @@ pub(super) fn start_library_catalog_worker(
                                 crate::ui_errln!("library catalog cache load failed: {e}");
                                 let _ = tx.send(CatalogWorkerMessage::Timing {
                                     name: "catalog_worker_cache_load_failed".to_string(),
-                                    detail: e,
+                                    detail: e.clone(),
                                 });
+                                let _ = tx.send(CatalogWorkerMessage::LoadFailed { error: e });
+                                return;
                             }
                         }
                     }
@@ -207,8 +209,10 @@ pub(super) fn start_library_catalog_worker(
                             crate::ui_errln!("library catalog cache load failed: {e}");
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_cache_load_failed".to_string(),
-                                detail: e,
+                                detail: e.clone(),
                             });
+                            let _ = tx.send(CatalogWorkerMessage::LoadFailed { error: e });
+                            return;
                         }
                     }
                 }
@@ -233,9 +237,15 @@ pub(super) fn start_library_catalog_worker(
                     });
                 }
             }
+            if request == CatalogWorkerRequest::StrictLoad && !cache_state.has_usable_catalog() {
+                let _ = tx.send(CatalogWorkerMessage::LoadFailed {
+                    error: "catalog is empty".to_string(),
+                });
+                return;
+            }
             let plan = catalog_worker_plan(cache_state, request);
             let foreground_exclusive =
-                plan == CatalogWorkerPlan::ForceBuild
+                matches!(plan, CatalogWorkerPlan::ForceBuild | CatalogWorkerPlan::FreshBuild)
                     && execution_mode == CatalogExecutionMode::ForegroundExclusive;
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_refresh_decision".to_string(),
@@ -270,8 +280,14 @@ pub(super) fn start_library_catalog_worker(
                         library_db::CatalogProgress::indexing_building_catalog(),
                     );
                 }
+                CatalogWorkerPlan::FreshBuild => {}
             }
-            if matches!(plan, CatalogWorkerPlan::CheckStamp | CatalogWorkerPlan::ForceBuild) {
+            if matches!(
+                plan,
+                CatalogWorkerPlan::CheckStamp
+                    | CatalogWorkerPlan::ForceBuild
+                    | CatalogWorkerPlan::FreshBuild
+            ) {
                 run_catalog_builder_subprocess(&root, plan, execution_mode, &tx);
                 return;
             }
@@ -519,6 +535,7 @@ fn run_catalog_builder_subprocess(
             "build"
         }
         CatalogWorkerPlan::ForceBuild => "rebuild",
+        CatalogWorkerPlan::FreshBuild => "fresh-build",
         CatalogWorkerPlan::LoadOnly => return,
     };
     let mut child = match Command::new(&binary)
@@ -529,41 +546,54 @@ fn run_catalog_builder_subprocess(
     {
         Ok(child) => child,
         Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("start catalog builder {binary}: {error}"),
-            });
+            send_builder_failure(
+                tx,
+                plan,
+                false,
+                format!("start catalog builder {binary}: {error}"),
+            );
             return;
         }
     };
     let Some(stdout) = child.stdout.take() else {
-        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-            error: "catalog builder stdout was unavailable".into(),
-        });
+        send_builder_failure(
+            tx,
+            plan,
+            false,
+            "catalog builder stdout was unavailable".into(),
+        );
         return;
     };
     let mut handshake_seen = false;
     let mut terminal_seen = false;
+    let mut catalog_ready_seen = false;
     for line in BufReader::new(stdout).lines() {
         let line = match line {
             Ok(line) => line,
             Err(error) => {
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                    error: format!("read catalog builder event: {error}"),
-                });
+                send_builder_failure(
+                    tx,
+                    plan,
+                    catalog_ready_seen,
+                    format!("read catalog builder event: {error}"),
+                );
                 break;
             }
         };
         let event = match decode_builder_event(&line) {
             Ok(event) => event,
             Err(error) => {
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error });
+                send_builder_failure(tx, plan, catalog_ready_seen, error);
                 break;
             }
         };
         if !handshake_seen && !matches!(event, CatalogBuilderEvent::Handshake { .. }) {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: "catalog builder emitted an event before its handshake".into(),
-            });
+            send_builder_failure(
+                tx,
+                plan,
+                catalog_ready_seen,
+                "catalog builder emitted an event before its handshake".into(),
+            );
             break;
         }
         match event {
@@ -572,9 +602,12 @@ fn run_catalog_builder_subprocess(
                 ..
             } if !handshake_seen && child_operation == operation => handshake_seen = true,
             CatalogBuilderEvent::Handshake { .. } => {
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                    error: "catalog builder emitted a duplicate or mismatched handshake".into(),
-                });
+                send_builder_failure(
+                    tx,
+                    plan,
+                    catalog_ready_seen,
+                    "catalog builder emitted a duplicate or mismatched handshake".into(),
+                );
                 break;
             }
             CatalogBuilderEvent::Progress { title, detail, .. } => {
@@ -591,6 +624,12 @@ fn run_catalog_builder_subprocess(
             CatalogBuilderEvent::Timing { name, detail, .. } => {
                 let _ = tx.send(CatalogWorkerMessage::Timing { name, detail });
             }
+            CatalogBuilderEvent::FreshCleanupStarted { .. } => {
+                let _ = tx.send(CatalogWorkerMessage::FreshCleanupStarted);
+            }
+            CatalogBuilderEvent::FreshCleanupCompleted { removed, .. } => {
+                let _ = tx.send(CatalogWorkerMessage::FreshCleanupCompleted { removed });
+            }
             CatalogBuilderEvent::CatalogReady {
                 snapshot_path,
                 load_us,
@@ -601,6 +640,7 @@ fn run_catalog_builder_subprocess(
                     std::path::Path::new(&snapshot_path),
                 ) {
                     Ok(loaded) => {
+                        catalog_ready_seen = true;
                         send_ready_catalog(
                             tx,
                             loaded.catalog,
@@ -611,7 +651,7 @@ fn run_catalog_builder_subprocess(
                         );
                     }
                     Err(error) => {
-                        let _ = tx.send(CatalogWorkerMessage::PersistenceFailed { error });
+                        let _ = tx.send(CatalogWorkerMessage::LoadFailed { error });
                     }
                 }
             }
@@ -632,9 +672,12 @@ fn run_catalog_builder_subprocess(
             }
             CatalogBuilderEvent::Failure { stage, error, .. } => {
                 terminal_seen = true;
-                let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                    error: format!("catalog builder {stage} failed: {error}"),
-                });
+                send_builder_failure(
+                    tx,
+                    plan,
+                    catalog_ready_seen,
+                    format!("catalog builder {stage} failed: {error}"),
+                );
             }
             CatalogBuilderEvent::Done { .. } => {
                 terminal_seen = true;
@@ -645,16 +688,36 @@ fn run_catalog_builder_subprocess(
     match child.wait() {
         Ok(_status) if handshake_seen && terminal_seen => {}
         Ok(status) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("catalog builder exited {status}; handshake={handshake_seen} terminal={terminal_seen}"),
-            });
+            send_builder_failure(
+                tx,
+                plan,
+                catalog_ready_seen,
+                format!("catalog builder exited {status}; handshake={handshake_seen} terminal={terminal_seen}"),
+            );
         }
         Err(error) => {
-            let _ = tx.send(CatalogWorkerMessage::PersistenceFailed {
-                error: format!("wait for catalog builder: {error}"),
-            });
+            send_builder_failure(
+                tx,
+                plan,
+                catalog_ready_seen,
+                format!("wait for catalog builder: {error}"),
+            );
         }
     }
+}
+
+fn send_builder_failure(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    plan: CatalogWorkerPlan,
+    catalog_ready_seen: bool,
+    error: String,
+) {
+    let message = if plan == CatalogWorkerPlan::FreshBuild && !catalog_ready_seen {
+        CatalogWorkerMessage::LoadFailed { error }
+    } else {
+        CatalogWorkerMessage::PersistenceFailed { error }
+    };
+    let _ = tx.send(message);
 }
 
 fn decode_builder_event(line: &str) -> Result<CatalogBuilderEvent, String> {
@@ -688,8 +751,10 @@ fn refresh_summary(value: BuilderSummary) -> library_db::LibraryRefreshSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogWorkerRequest {
     LoadOnly,
+    StrictLoad,
     CheckStamp,
     ForceBuild,
+    FreshBuild,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -727,8 +792,10 @@ impl CatalogWorkerRequest {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::LoadOnly => "load_only",
+            Self::StrictLoad => "strict_load",
             Self::CheckStamp => "check_stamp",
             Self::ForceBuild => "force_build",
+            Self::FreshBuild => "fresh_build",
         }
     }
 }
@@ -759,6 +826,7 @@ enum CatalogWorkerPlan {
     LoadOnly,
     CheckStamp,
     ForceBuild,
+    FreshBuild,
 }
 
 impl CatalogWorkerPlan {
@@ -767,6 +835,7 @@ impl CatalogWorkerPlan {
             Self::LoadOnly => "load_only",
             Self::CheckStamp => "check_stamp",
             Self::ForceBuild => "force_build",
+            Self::FreshBuild => "fresh_build",
         }
     }
 }
@@ -775,14 +844,19 @@ fn catalog_worker_plan(
     cache_state: CatalogCacheState,
     request: CatalogWorkerRequest,
 ) -> CatalogWorkerPlan {
-    if request == CatalogWorkerRequest::ForceBuild {
-        return CatalogWorkerPlan::ForceBuild;
+    match request {
+        CatalogWorkerRequest::StrictLoad => return CatalogWorkerPlan::LoadOnly,
+        CatalogWorkerRequest::ForceBuild => return CatalogWorkerPlan::ForceBuild,
+        CatalogWorkerRequest::FreshBuild => return CatalogWorkerPlan::FreshBuild,
+        _ => {}
     }
     match cache_state {
         CatalogCacheState::Ready => match request {
             CatalogWorkerRequest::LoadOnly => CatalogWorkerPlan::LoadOnly,
+            CatalogWorkerRequest::StrictLoad => CatalogWorkerPlan::LoadOnly,
             CatalogWorkerRequest::CheckStamp => CatalogWorkerPlan::CheckStamp,
             CatalogWorkerRequest::ForceBuild => CatalogWorkerPlan::ForceBuild,
+            CatalogWorkerRequest::FreshBuild => CatalogWorkerPlan::FreshBuild,
         },
         CatalogCacheState::Empty | CatalogCacheState::Missing => CatalogWorkerPlan::ForceBuild,
     }
@@ -797,6 +871,13 @@ pub(super) enum CatalogWorkerMessage {
         title: String,
         detail: String,
         percent: i32,
+    },
+    LoadFailed {
+        error: String,
+    },
+    FreshCleanupStarted,
+    FreshCleanupCompleted {
+        removed: usize,
     },
     SystemDiscovered {
         system_id: String,
@@ -1293,6 +1374,28 @@ mod tests {
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Empty, CatalogWorkerRequest::CheckStamp),
             CatalogWorkerPlan::ForceBuild
+        );
+    }
+
+    #[test]
+    fn strict_retry_never_falls_through_to_build() {
+        for state in [
+            CatalogCacheState::Ready,
+            CatalogCacheState::Empty,
+            CatalogCacheState::Missing,
+        ] {
+            assert_eq!(
+                catalog_worker_plan(state, CatalogWorkerRequest::StrictLoad),
+                CatalogWorkerPlan::LoadOnly
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_rebuild_uses_distinct_destructive_plan() {
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Ready, CatalogWorkerRequest::FreshBuild),
+            CatalogWorkerPlan::FreshBuild
         );
     }
 
