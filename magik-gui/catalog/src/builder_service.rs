@@ -31,6 +31,7 @@ pub fn run(
     operation: BuilderOperation,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
+    let run_started = Instant::now();
     let protocol = CATALOG_BUILDER_PROTOCOL_VERSION;
     let run_id = format!(
         "{}-{}",
@@ -95,12 +96,22 @@ pub fn run(
     let catalog = artifact.catalog(root);
     let load_us = started.elapsed().as_micros() as u64;
     let snapshot_path = snapshot_path();
+    let snapshot_started = Instant::now();
     if let Some(parent) = snapshot_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| fail(protocol, "snapshot", error.to_string(), &mut emit))?;
     }
     write_catalog_navigation_snapshot(&snapshot_path, &catalog, artifact.stamp())
         .map_err(|error| fail(protocol, "snapshot", error, &mut emit))?;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_catalog_ready".into(),
+        detail: format!(
+            "elapsed_us={} snapshot_us={}",
+            run_started.elapsed().as_micros(),
+            snapshot_started.elapsed().as_micros()
+        ),
+    });
     emit(CatalogBuilderEvent::CatalogReady {
         protocol,
         snapshot_path: snapshot_path.display().to_string(),
@@ -118,6 +129,11 @@ pub fn run(
     let summary = artifact
         .save_default_sqlite_with_catalog_projection(&catalog, Some(&mut progress))
         .map_err(|error| fail(protocol, "persist", error, &mut emit))?;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_persisted".into(),
+        detail: format!("elapsed_us={}", run_started.elapsed().as_micros()),
+    });
     emit(CatalogBuilderEvent::Persisted {
         protocol,
         summary: summary.into(),
