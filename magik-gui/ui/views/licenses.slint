@@ -1,0 +1,98 @@
+import { MisterBridge } from "../api.slint";
+
+component LicenseRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> focused;
+
+    height: 64px;
+    background: focused ? #2a2236 : #1e1828;
+    border-width: focused ? 2px : 1px;
+    border-color: focused ? #06d6a0 : #5c4a72;
+
+    HorizontalLayout {
+        padding: 12px;
+        Text {
+            text: label;
+            color: focused ? #06d6a0 : #e8e0f0;
+            font-size: 16px;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; background: transparent; }
+        Text {
+            text: ">";
+            color: focused ? #06d6a0 : #9080a8;
+            font-size: 16px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component LicensesScreen inherits Rectangle {
+    background: #0b0d14;
+
+    if !MisterBridge.licenses-expanded : VerticalLayout {
+        padding: 24px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            height: license-title.preferred-height;
+            padding-left: 12px;
+            license-title := Text {
+                text: "Licenses";
+                color: #e8e0f0;
+                font-size: 24px;
+                horizontal-alignment: left;
+            }
+        }
+        LicenseRow { label: "MiSTer MagiK"; focused: MisterBridge.licenses-selected == 0; }
+        LicenseRow { label: "Made with Slint"; focused: MisterBridge.licenses-selected == 1; }
+        LicenseRow { label: "Rust Libraries"; focused: MisterBridge.licenses-selected == 2; }
+        LicenseRow { label: "FFmpeg"; focused: MisterBridge.licenses-selected == 3; }
+        LicenseRow { label: "Press Start 2P"; focused: MisterBridge.licenses-selected == 4; }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+        Text {
+            text: "A: open    B: back";
+            color: #6f8198;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+
+    if MisterBridge.licenses-expanded : VerticalLayout {
+        padding: 24px;
+        spacing: 12px;
+        Text {
+            text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
+                  MisterBridge.licenses-selected == 1 ? "Made with Slint  v" :
+                  MisterBridge.licenses-selected == 2 ? "Rust Libraries  v" :
+                  MisterBridge.licenses-selected == 3 ? "FFmpeg  v" : "Press Start 2P  v";
+            color: #06d6a0;
+            font-size: 16px;
+            horizontal-alignment: center;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            background: #12101a;
+            border-width: 1px;
+            border-color: #5c4a72;
+            Text {
+                x: 12px;
+                y: 12px - Math.mod(MisterBridge.licenses-scroll-y, 10) * 1px;
+                width: parent.width - 24px;
+                height: parent.height - 24px;
+                text: MisterBridge.licenses-text;
+                color: #d8d0e0;
+                font-size: 8px;
+                wrap: word-wrap;
+                overflow: clip;
+                vertical-alignment: top;
+            }
+        }
+        Text {
+            text: "Up/Down: scroll    A/B: close";
+            color: #6f8198;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+    }
+}

@@ -5,6 +5,7 @@ import { SetupOverlay } from "controller_setup.slint";
 import { ArcadeListScreen } from "views/arcade_list.slint";
 import { HomeGrid } from "views/home.slint";
 import { SettingsScreen } from "views/settings.slint";
+import { LicensesScreen } from "views/licenses.slint";
 import {
     BackgroundScanBadge,
     CatalogScanPopup,
@@ -34,6 +35,8 @@ export component Launcher inherits MisterWindow {
     if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
 
     if MisterBridge.screen-mode == 3 : SettingsScreen { }
+
+    if MisterBridge.screen-mode == 4 : LicensesScreen { }
 
     if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
 

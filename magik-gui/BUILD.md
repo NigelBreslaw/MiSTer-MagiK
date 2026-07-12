@@ -226,6 +226,27 @@ MISTER_PPROF=1 MISTER_PPROF_OUT=/tmp/smoke.svg \
 
 ## Minimal FFmpeg
 
+Generate the alpha release's ARM `ui,video` Rust dependency inventory and the
+bundled FFmpeg/font notices after changing `Cargo.lock` or release features:
+
+```bash
+python3 scripts/generate-third-party-licenses.py
+```
+
+The generator follows only normal runtime dependencies for
+`armv7-unknown-linux-gnueabihf`, deduplicates identical legal texts, and writes
+the release artifacts under `magik-gui/licenses/` for both on-device browsing
+and inclusion beside the distributed binary.
+
+Stage the alpha binary and all sidecar license files together with:
+
+```bash
+scripts/package-alpha-release.sh [OUT_DIR]
+```
+
+Pass `--skip-build` as the second argument only when the current ARM
+`ui,video` release binary has already been built and verified.
+
 `--video` builds do not use a crate-managed broad FFmpeg builder. Instead,
 `build-arm.sh` runs `magik-gui/scripts/build-minimal-ffmpeg.sh`, then passes the
 resulting static libraries into the selected ARM Rust build backend. The cross-rs

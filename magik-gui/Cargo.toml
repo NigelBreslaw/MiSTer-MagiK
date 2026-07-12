@@ -15,6 +15,11 @@ name = "mister-magik-fb"
 path = "src/main.rs"
 required-features = ["ui"]
 
+[[example]]
+name = "render-licenses"
+path = "examples/render_licenses.rs"
+required-features = ["ui"]
+
 [dependencies]
 bytemuck = "1"
 libc = "0.2"
