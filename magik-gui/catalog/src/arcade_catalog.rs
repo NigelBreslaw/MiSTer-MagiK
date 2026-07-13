@@ -2507,13 +2507,49 @@ mod tests {
         saturn.category = "Fighter".into();
         saturn.year = Some(1996);
 
-        let games = vec![snk_arcade, capcom_arcade, snk_cps, neogeo, saturn];
+        let sms = game(
+            "Sonic the Hedgehog",
+            "/media/fat/games/SMS/Sonic.sms",
+            "sonic-sms",
+            "sms",
+        );
+        let gamegear = game(
+            "Columns",
+            "/media/fat/games/GameGear/Columns.gg",
+            "columns-gamegear",
+            "gamegear",
+        );
+        let astrocade = game(
+            "Wizard of Wor",
+            "/media/fat/games/Astrocade/Wizard of Wor.zip",
+            "wizard-of-wor-astrocade",
+            "astrocade",
+        );
+
+        let games = vec![
+            snk_arcade,
+            capcom_arcade,
+            snk_cps,
+            neogeo,
+            saturn,
+            sms,
+            gamegear,
+            astrocade,
+        ];
         let systems = systems_from_games(&games);
         let catalog = ArcadeCatalog::new(PathBuf::from(DEFAULT_ARCADE_ROOT), games, systems);
 
         assert_eq!(catalog.platform_kind("cps2"), PlatformKind::Arcade);
         assert_eq!(catalog.platform_kind("saturn"), PlatformKind::Console);
+        assert_eq!(catalog.platform_kind("sms"), PlatformKind::Console);
+        assert_eq!(catalog.platform_kind("gamegear"), PlatformKind::Handheld);
+        assert_eq!(catalog.platform_kind("astrocade"), PlatformKind::Console);
         assert_eq!(catalog.system_game_count(MENU_ARCADE_SYSTEM_ID), 3);
+        assert_eq!(
+            catalog.system_game_count(MENU_ARCADE_SYSTEM_ID),
+            catalog.system_game_view(MENU_ARCADE_SYSTEM_ID).len(),
+            "the Arcade number is exactly its visible, parent-collapsed projection"
+        );
         assert_eq!(catalog.system_game_count(MENU_SNK_ARCADE_SYSTEM_ID), 2);
         assert_eq!(
             catalog
