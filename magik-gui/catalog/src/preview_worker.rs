@@ -1152,7 +1152,18 @@ pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
 fn preview_archives_for_paths(
     paths: Vec<String>,
 ) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
-    let cache = preview_archive_cache();
+    preview_archives_for_paths_with_cache(
+        paths,
+        preview_archive_cache(),
+        missing_preview_archive_cache(),
+    )
+}
+
+fn preview_archives_for_paths_with_cache(
+    paths: Vec<String>,
+    cache: &Mutex<Option<CachedPreviewArchives>>,
+    missing_cache: &Mutex<Vec<MissingPreviewArchive>>,
+) -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
     if paths.is_empty() {
         if let Ok(mut cached) = cache.lock() {
             *cached = None;
@@ -1160,12 +1171,11 @@ fn preview_archives_for_paths(
         return Ok(None);
     }
 
-    let missing_cache = missing_preview_archive_cache();
     if let Some(error) = cached_missing_preview_archive_error(missing_cache, &paths) {
         return Err(error);
     }
 
-    if let Some(archives) = cached_preview_archives_for_paths(&paths) {
+    if let Some(archives) = cached_preview_archives_for_paths_in(cache, &paths) {
         return Ok(Some(archives));
     }
 
@@ -1216,7 +1226,13 @@ fn missing_preview_archive_cache() -> &'static Mutex<Vec<MissingPreviewArchive>>
 }
 
 fn cached_preview_archives_for_paths(paths: &[String]) -> Option<Arc<Vec<PreviewArchive>>> {
-    let cache = preview_archive_cache();
+    cached_preview_archives_for_paths_in(preview_archive_cache(), paths)
+}
+
+fn cached_preview_archives_for_paths_in(
+    cache: &Mutex<Option<CachedPreviewArchives>>,
+    paths: &[String],
+) -> Option<Arc<Vec<PreviewArchive>>> {
     let mut cached = cache.lock().ok()?;
     let cached = cached.as_mut()?;
     if cached.fingerprints.len() != paths.len()
@@ -3748,19 +3764,37 @@ mod tests {
             std::process::id()
         ));
         write_lz4_block_archive(&path, "old.rgb565", &raw565_fixture(1, 1, &[0xf800]));
-        let first = preview_archives_for_paths(vec![path.display().to_string()])
-            .expect("open first archive")
-            .expect("first archive");
+        // Cache behavior tests need private state because the production cache is
+        // intentionally shared and other Rust tests run in parallel.
+        let cache = Mutex::new(None);
+        let missing_cache = Mutex::new(Vec::new());
+        let first = preview_archives_for_paths_with_cache(
+            vec![path.display().to_string()],
+            &cache,
+            &missing_cache,
+        )
+        .expect("open first archive")
+        .expect("first archive");
 
         write_lz4_block_archive(
             &path,
             "new-long.rgb565",
             &raw565_fixture(2, 1, &[0x07e0, 0x001f]),
         );
-        expire_preview_archive_metadata_cache_for_tests();
-        let second = preview_archives_for_paths(vec![path.display().to_string()])
-            .expect("open changed archive")
-            .expect("changed archive");
+        let expired_at = Instant::now() - PREVIEW_ARCHIVE_METADATA_TTL - Duration::from_millis(1);
+        cache
+            .lock()
+            .expect("archive cache")
+            .as_mut()
+            .expect("cached archive")
+            .checked_at = expired_at;
+        let second = preview_archives_for_paths_with_cache(
+            vec![path.display().to_string()],
+            &cache,
+            &missing_cache,
+        )
+        .expect("open changed archive")
+        .expect("changed archive");
 
         assert!(!Arc::ptr_eq(&first, &second));
         let mut scratch = PreviewArchiveScratch::default();
@@ -3780,13 +3814,19 @@ mod tests {
         let path_text = path.display().to_string();
         write_lz4_block_archive(&path, "tiny.rgb565", &raw565_fixture(1, 1, &[0xf800]));
 
-        let first = preview_archives_for_paths(vec![path_text.clone()])
-            .expect("open archive")
-            .expect("archive");
+        // Keep another preview test from replacing the process-global cache
+        // between the two lookups this assertion is intended to compare.
+        let cache = Mutex::new(None);
+        let missing_cache = Mutex::new(Vec::new());
+        let first =
+            preview_archives_for_paths_with_cache(vec![path_text.clone()], &cache, &missing_cache)
+                .expect("open archive")
+                .expect("archive");
         let calls_after_first = preview_archive_metadata_calls(&path_text);
-        let second = preview_archives_for_paths(vec![path_text.clone()])
-            .expect("reuse archive")
-            .expect("archive");
+        let second =
+            preview_archives_for_paths_with_cache(vec![path_text.clone()], &cache, &missing_cache)
+                .expect("reuse archive")
+                .expect("archive");
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(
