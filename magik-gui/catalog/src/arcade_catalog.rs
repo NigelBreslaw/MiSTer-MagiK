@@ -4,9 +4,9 @@
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
 use crate::catalog_navigation::CatalogNavigationProjection;
+pub use crate::catalog_classify::PlatformKind;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -26,87 +26,6 @@ pub const HOME_LIST_VISIBLE_W: i32 = 924;
 pub const MENU_ARCADE_SYSTEM_ID: &str = "menu:arcade";
 pub const MENU_SNK_ARCADE_SYSTEM_ID: &str = "menu:snk-arcade";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlatformKind {
-    Arcade,
-    Console,
-    Handheld,
-    Computer,
-    #[default]
-    Unknown,
-}
-
-impl PlatformKind {
-    pub fn from_category(category: &str) -> Self {
-        match category.trim().to_ascii_lowercase().as_str() {
-            "arcade" => Self::Arcade,
-            "console" => Self::Console,
-            "handheld" => Self::Handheld,
-            "computer" => Self::Computer,
-            _ => Self::Unknown,
-        }
-    }
-
-    pub fn inferred_for_system_id(system_id: &str) -> Self {
-        match system_id {
-            MENU_ARCADE_SYSTEM_ID
-            | MENU_SNK_ARCADE_SYSTEM_ID
-            | "arcade"
-            | "cps1"
-            | "capcom-cps1"
-            | "cps2"
-            | "capcom-cps2"
-            | "cps3"
-            | "capcom-cps3"
-            | "system16"
-            | "sega-system16"
-            | "system18"
-            | "sega-system18"
-            | "m72"
-            | "irem-m72"
-            | "m92"
-            | "irem-m92" => Self::Arcade,
-            "gb" | "gameboy" | "gameboy2p" | "gbc" | "gba" | "gba2p" | "sgb" | "sgb2"
-            | "pokemonmini" | "gamegear" | "atarilynx" | "neogeopocket" | "ngpc" | "wonderswan"
-            | "wonderswancolor" | "supervision" | "megaduck" => Self::Handheld,
-            "acornatom" | "acornelectron" | "bbcmicro" | "archie" | "apple-ii" | "macplus"
-            | "maclc" | "amiga" | "c64" | "c128" | "c16" | "vic20" | "pet2001" | "atari800"
-            | "atarist" | "zx81" | "zx-spectrum" | "ql" | "trs-80" | "coco2" | "coco3"
-            | "ao486" | "dos" | "msx" | "msx2" | "pc88" | "pc98" | "x68000" | "x1" | "sharp-x1"
-            | "fm7" | "fmtowns" | "amstrad" | "oric" | "samcoupe" | "aquarius" | "altair8800" => {
-                Self::Computer
-            }
-            "atari2600" | "atari5200" | "atari7800" | "jaguar" | "sg1000" | "sms" | "megadrive"
-            | "megacd" | "s32x" | "saturn" | "psx" | "nes" | "fds" | "snes" | "satellaview"
-            | "n64" | "tgfx16" | "tgfx16-cd" | "supergrafx" | "colecovision" | "intellivision"
-            | "vectrex" | "channelf" | "odyssey2" | "amigacd32" | "neogeo-cd" => Self::Console,
-            "neogeo" | "neo-geo" | "snk-neo-geo" => Self::Arcade,
-            _ => Self::Unknown,
-        }
-    }
-
-    pub(crate) const fn encoded(self) -> u8 {
-        match self {
-            Self::Unknown => 0,
-            Self::Arcade => 1,
-            Self::Console => 2,
-            Self::Handheld => 3,
-            Self::Computer => 4,
-        }
-    }
-
-    pub(crate) fn from_encoded(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Unknown),
-            1 => Some(Self::Arcade),
-            2 => Some(Self::Console),
-            3 => Some(Self::Handheld),
-            4 => Some(Self::Computer),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
@@ -1535,6 +1454,9 @@ fn sort_systems_by_title(systems: &mut [GameSystemEntry]) {
 }
 
 pub fn system_title(id: &str) -> String {
+    if let Some(definition) = crate::catalog_classify::system_definition(id) {
+        return definition.title.clone();
+    }
     match id {
         "acornatom" => "Acorn Atom".to_string(),
         "acornelectron" => "Acorn Electron".to_string(),
