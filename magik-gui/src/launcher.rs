@@ -4069,7 +4069,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_enters_arcade_when_summary_projection_has_no_game_rows() {
+    fn launcher_does_not_offer_arcade_when_visible_projection_has_no_rows() {
         let catalog = arcade_catalog(vec![], vec![arcade_system("arcade", 911)]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
@@ -4077,7 +4077,7 @@ mod tests {
 
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
 
-        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.arcade.selected, 0);
     }

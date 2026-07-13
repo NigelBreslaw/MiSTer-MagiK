@@ -3,8 +3,8 @@
 //! The runtime launcher catalog is SQLite-backed. This module keeps the shared
 //! in-memory catalog types and presentation helpers used by the SQLite loader.
 
-use crate::catalog_navigation::CatalogNavigationProjection;
 pub use crate::catalog_classify::PlatformKind;
+use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
@@ -25,7 +25,6 @@ pub const HOME_TILE_GAP: i32 = 16;
 pub const HOME_LIST_VISIBLE_W: i32 = 924;
 pub const MENU_ARCADE_SYSTEM_ID: &str = "menu:arcade";
 pub const MENU_SNK_ARCADE_SYSTEM_ID: &str = "menu:snk-arcade";
-
 
 #[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
@@ -757,16 +756,14 @@ enum CatalogIndexMode {
 
 fn game_collection_ids<'a>(
     game: &'a ArcadeGameEntry,
-    platform_kinds: &HashMap<String, PlatformKind>,
+    _platform_kinds: &HashMap<String, PlatformKind>,
 ) -> [Option<&'a str>; 3] {
     let system_id = game.system_id.as_ref();
     let mut ids = [Some(system_id), None, None];
-    let platform_kind = platform_kinds
-        .get(system_id)
-        .copied()
-        .unwrap_or_else(|| PlatformKind::inferred_for_system_id(system_id));
-    let belongs_to_arcade = system_id == "arcade"
-        || (platform_kind == PlatformKind::Arcade && !is_snk_arcade_system_id(system_id));
+    let belongs_to_arcade =
+        crate::catalog_classify::system_definition(system_id).is_some_and(|definition| {
+            definition.section == crate::catalog_classify::LauncherSection::Arcade
+        });
     if belongs_to_arcade {
         ids[1] = Some(MENU_ARCADE_SYSTEM_ID);
     }
@@ -774,13 +771,6 @@ fn game_collection_ids<'a>(
         ids[2] = Some(MENU_SNK_ARCADE_SYSTEM_ID);
     }
     ids
-}
-
-fn is_snk_arcade_system_id(system_id: &str) -> bool {
-    matches!(
-        system_id,
-        "neogeo" | "neo-geo" | "snk-neo-geo" | "neogeo-cd" | "neogeopocket" | "ngpc"
-    )
 }
 
 pub fn manufacturer_has_snk_token(manufacturer: &str) -> bool {
@@ -960,7 +950,12 @@ enum TextIndexBuildPacing {
 impl TextIndexBuildPacing {
     /// Yield only after a real elapsed-time budget. Fixed sleeps made the
     /// indexer take a scheduler-dependent 8+ seconds on large catalogs.
-    fn cooperate<F>(&self, completed_games: usize, next_yield: &mut std::time::Instant, keep_running: &mut F) -> bool
+    fn cooperate<F>(
+        &self,
+        completed_games: usize,
+        next_yield: &mut std::time::Instant,
+        keep_running: &mut F,
+    ) -> bool
     where
         F: FnMut() -> bool,
     {
