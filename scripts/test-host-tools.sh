@@ -73,6 +73,8 @@ while IFS= read -r script; do
   bash -n "$script"
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 
+"$ROOT/scripts/test-mister-magik-installer.sh"
+
 if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   package_tmp="$TMP/package-distribution"
   mkdir -p "$package_tmp/out"
