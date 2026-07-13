@@ -3,10 +3,6 @@ name: Publish MiSTer MagiK
 on:
   workflow_dispatch:
     inputs:
-      main_ref:
-        description: "Main_MiSTer ref to bundle"
-        required: true
-        default: "mister-magik"
       release_channel:
         description: "Release channel"
         required: true
@@ -15,16 +11,6 @@ on:
         options:
           - beta
           - release
-      fpga_run_id:
-        description: "Successful FPGA Vblank Latch RBF workflow run ID for this exact MagiK revision"
-        required: true
-      scanout_run_id:
-        description: "Successful Kernel scanout slots workflow run ID for this exact MagiK revision"
-        required: true
-      hbmame_ref:
-        description: "Optional Robbbert/hbmame tag/ref; blank uses latest tagNNNNN tag"
-        required: false
-        default: ""
 
 permissions:
   contents: read
@@ -36,6 +22,7 @@ env:
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
+  MAIN_REF: mister-magik
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
   MAME_REF: mame0288
   MAME_LISTXML_URL: https://github.com/mamedev/mame/releases/download/mame0288/mame0288lx.zip
@@ -87,17 +74,13 @@ jobs:
       cache-key: ${{ steps.hbmame-ref.outputs.cache_key }}
 
     steps:
-      - name: Resolve HBMAME tag/ref
+      - name: Resolve latest HBMAME tag
         id: hbmame-ref
         env:
           GH_TOKEN: ${{ github.token }}
-          HBMAME_REF_INPUT: ${{ github.event.inputs.hbmame_ref }}
         run: |
           set -euo pipefail
-          ref="$HBMAME_REF_INPUT"
-          if [ -z "$ref" ]; then
-            ref="$(gh api repos/Robbbert/hbmame/tags --jq 'map(select(.name | test("^tag[0-9]+$")))[0].name')"
-          fi
+          ref="$(gh api repos/Robbbert/hbmame/tags --jq 'map(select(.name | test("^tag[0-9]+$")))[0].name')"
           if [ -z "$ref" ] || [ "$ref" = "null" ]; then
             echo "Unable to resolve latest Robbbert/hbmame tagNNNNN tag" >&2
             exit 1
@@ -228,7 +211,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: NigelBreslaw/Main_MiSTer
-          ref: ${{ github.event.inputs.main_ref }}
+          ref: ${{ env.MAIN_REF }}
           path: Main_MiSTer
           fetch-depth: 0
 
@@ -245,10 +228,19 @@ jobs:
       - name: Download explicitly qualified FPGA and module artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          FPGA_RUN_ID: ${{ github.event.inputs.fpga_run_id }}
-          SCANOUT_RUN_ID: ${{ github.event.inputs.scanout_run_id }}
         run: |
           set -euo pipefail
+          FPGA_RUN_ID="$(gh run list --workflow fpga-vblank-latch.yml --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "$FPGA_RUN_ID" ]; then
+            echo "::error::No successful FPGA Vblank Latch RBF run exists for $GITHUB_SHA. Run that manual workflow on main first, then retry publishing."
+            exit 1
+          fi
+          SCANOUT_RUN_ID="$(gh run list --workflow kernel-scanout.yml --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          if [ -z "$SCANOUT_RUN_ID" ]; then
+            echo "::error::No successful Kernel scanout slots run exists for $GITHUB_SHA. Wait for that automatic workflow, then retry publishing."
+            exit 1
+          fi
+          echo "Using FPGA run $FPGA_RUN_ID and scanout run $SCANOUT_RUN_ID for $GITHUB_SHA"
           for run_id in "$FPGA_RUN_ID" "$SCANOUT_RUN_ID"; do
             conclusion="$(gh run view "$run_id" --json conclusion --jq .conclusion)"
             head_sha="$(gh run view "$run_id" --json headSha --jq .headSha)"

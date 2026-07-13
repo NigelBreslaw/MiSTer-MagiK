@@ -23,6 +23,9 @@ required = (
     "contents: write",
     "gh release create",
     "mister-magik-$RELEASE_CHANNEL-db.json.zip",
+    "--workflow fpga-vblank-latch.yml",
+    "--workflow kernel-scanout.yml",
+    "MAIN_REF: mister-magik",
 )
 for value in required:
     assert value in text, f"distribution workflow is missing: {value}"
@@ -30,5 +33,8 @@ for value in required:
 before_publish, publish = text.split("\n  publish:\n", 1)
 assert "contents: write" not in before_publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
+
+for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_ref:"):
+    assert forbidden_input not in trigger, f"internal input leaked into dispatch UI: {forbidden_input}"
 
 print("distribution workflow contract ok")
