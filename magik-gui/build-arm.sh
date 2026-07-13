@@ -128,6 +128,11 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
 done
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
+# Keep the standalone catalog manifest in the same artifact tree as the UI.
+# Without this, Cargo defaults to catalog/target when --manifest-path is used,
+# while deploy/package scripts correctly expect the matched runtime pair under
+# magik-gui/target.
+export CARGO_TARGET_DIR=target
 export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}"
 export RUSTC_WRAPPER=""
 
