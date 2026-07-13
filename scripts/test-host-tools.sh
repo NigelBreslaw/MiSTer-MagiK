@@ -185,6 +185,8 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     required = {
         "THIRD-PARTY-NOTICES.txt",
         "SOURCE-OFFER.txt",
+        "Scripts/mister-magik.sh",
+        "Scripts/mister-magik-channel.sh",
         "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
         "licenses/RUST-LIBRARIES.txt",
         "licenses/FFMPEG-LGPL-2.1-or-later.txt",
@@ -360,6 +362,12 @@ bash "$ROOT/scripts/benchmark-cleanup-lib.sh" --self-test
 "$ROOT/scripts/profile-preview-pack-decode.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"
+python3 "$ROOT/scripts/test-generate-downloader-db.py"
+channel_fat="$TMP/channel-fat"
+MISTER_MAGIK_FAT="$channel_fat" "$ROOT/scripts/mister-magik-channel.sh" beta >/dev/null
+grep -q 'mister-magik-beta-db.json.zip' "$channel_fat/downloader_mister_magik.ini"
+MISTER_MAGIK_FAT="$channel_fat" "$ROOT/scripts/mister-magik-channel.sh" release >/dev/null
+grep -q 'mister-magik-release-db.json.zip' "$channel_fat/downloader_mister_magik.ini"
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 
 echo "host tool checks ok"
