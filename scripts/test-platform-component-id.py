@@ -58,6 +58,12 @@ class ComponentIdentityTests(unittest.TestCase):
         after, _ = component_id.component_id(self.root, "kernel")
         self.assertNotEqual(before, after)
 
+    def test_generated_untracked_file_does_not_change_identity(self) -> None:
+        before, _ = component_id.component_id(self.root, "kernel")
+        (self.root / "kernel/scanout-slots/mister_magik_scanout_slots.ko").write_bytes(b"generated")
+        after, _ = component_id.component_id(self.root, "kernel")
+        self.assertEqual(before, after)
+
     def test_dirty_checkout_is_rejected(self) -> None:
         (self.root / "scripts/build-fpga-vblank-latch-core.sh").write_text("dirty\n")
         with self.assertRaisesRegex(ValueError, "clean checkout"):
