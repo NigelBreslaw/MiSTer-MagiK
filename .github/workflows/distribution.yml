@@ -225,33 +225,27 @@ jobs:
           scripts/test-magik-state.sh
           scripts/check-magik-patch-surface.sh
 
-      - name: Download explicitly qualified FPGA and module artifacts
+      - name: Download immutable main-qualified platform bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          FPGA_RUN_ID="$(gh run list --workflow fpga-vblank-latch.yml --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-          if [ -z "$FPGA_RUN_ID" ]; then
-            echo "::error::No successful FPGA Vblank Latch RBF run exists for $GITHUB_SHA. Run that manual workflow on main first, then retry publishing."
+          fpga_id="$(python3 scripts/platform-component-id.py component fpga)"
+          kernel_id="$(python3 scripts/platform-component-id.py component kernel)"
+          bundle_id="$(python3 scripts/platform-component-id.py bundle --fpga-id "$fpga_id" --kernel-id "$kernel_id")"
+          tag="platform-v0.1-$bundle_id"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::No main-qualified platform bundle $tag exists. Run fresh main component workflows, then Promote MiSTer MagiK Platform Bundle v0.1."
             exit 1
           fi
-          SCANOUT_RUN_ID="$(gh run list --workflow kernel-scanout.yml --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-          if [ -z "$SCANOUT_RUN_ID" ]; then
-            echo "::error::No successful Kernel scanout slots run exists for $GITHUB_SHA. Wait for that automatic workflow, then retry publishing."
-            exit 1
-          fi
-          echo "Using FPGA run $FPGA_RUN_ID and scanout run $SCANOUT_RUN_ID for $GITHUB_SHA"
-          for run_id in "$FPGA_RUN_ID" "$SCANOUT_RUN_ID"; do
-            conclusion="$(gh run view "$run_id" --json conclusion --jq .conclusion)"
-            head_sha="$(gh run view "$run_id" --json headSha --jq .headSha)"
-            test "$conclusion" = success
-            test "$head_sha" = "$GITHUB_SHA"
-          done
-          mkdir -p build/qualified/fpga build/qualified/scanout
-          gh run download "$FPGA_RUN_ID" --name fpga-vblank-latch-signoff --dir build/qualified/fpga
-          gh run download "$SCANOUT_RUN_ID" --name mister-magik-scanout-slots --dir build/qualified/scanout
-          test "$(find build/qualified/fpga -name menu-magik-vblank-latch.rbf | wc -l)" -ge 2
-          test "$(find build/qualified/scanout -name mister_magik_scanout_slots.ko | wc -l)" -eq 1
+          mkdir -p build/qualified
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
+            --pattern 'mister-magik-platform-v0.1-*.zip' --pattern platform-bundle-v0.1.json
+          archive="$(find build/qualified -name 'mister-magik-platform-v0.1-*.zip' -print -quit)"
+          test -n "$archive"
+          python3 scripts/platform-bundle.py verify "$archive" \
+            --manifest build/qualified/platform-bundle-v0.1.json >/dev/null
+          unzip -q "$archive" -d build/qualified
 
       - name: Install Rust toolchain
         working-directory: magik-gui
@@ -480,7 +474,6 @@ jobs:
           module="$(find build/qualified/scanout -name mister_magik_scanout_slots.ko -print -quit)"
           module_meta="$(find build/qualified/scanout -name provenance.txt -print -quit)"
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
-          test "$(sed -n 's/^magik_commit=//p' "$rbf_meta")" = "$GITHUB_SHA"
           scripts/platform-manifest.py generate \
             --output build/platform-v1.manifest \
             --main Main_MiSTer/bin/MiSTer \
@@ -501,6 +494,7 @@ jobs:
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
             --platform-manifest build/platform-v1.manifest \
+            --platform-bundle-manifest build/qualified/platform-bundle-v0.1.json \
             --mame-source-ref "$MAME_REF" \
             --hbmame-source-revision "${{ needs.resolve-hbmame.outputs.sha }}" \
             --hbmame-sqlite-default \

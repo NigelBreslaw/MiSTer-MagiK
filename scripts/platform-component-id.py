@@ -49,7 +49,7 @@ def run_git(root: Path, *args: str) -> str:
 
 def require_clean_repository(root: Path) -> None:
     run_git(root, "rev-parse", "--is-inside-work-tree")
-    if run_git(root, "status", "--porcelain", "--untracked-files=all"):
+    if run_git(root, "status", "--porcelain", "--untracked-files=no"):
         raise IdentityError("platform component identities require a clean checkout")
 
 

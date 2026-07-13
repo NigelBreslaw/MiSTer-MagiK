@@ -122,6 +122,8 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" --latch-metadata "$WORK/latch.metadata.txt" \
   --main-revision "$MAIN_SOURCE_REVISION" --magik-revision "$MAGIK_REVISION" >/dev/null
+printf '{"format":"mister-magik-platform-bundle-v0.1","bundle_id":"%064d"}\n' 0 \
+  >"$WORK/platform-bundle-v0.1.json"
 package_args+=(
   --catalog-builder "$CATALOG_BUILDER"
   --main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION"
@@ -130,6 +132,7 @@ package_args+=(
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf"
   --latch-metadata "$WORK/latch.metadata.txt"
   --platform-manifest "$WORK/platform-v1.manifest"
+  --platform-bundle-manifest "$WORK/platform-bundle-v0.1.json"
 )
 EXPECT_MAIN=1
 
@@ -158,6 +161,7 @@ if expect_main:
     required.add("MiSTer_MagiK")
     required.update({
         "mister-magik/platform-v1.manifest",
+        "mister-magik/platform-bundle-v0.1.json",
         "mister-magik/mister_magik_scanout_slots.ko",
         "mister-magik/mister_magik_scanout_slots.metadata.txt",
         "mister-magik/fpga/menu-magik-vblank-latch.rbf",

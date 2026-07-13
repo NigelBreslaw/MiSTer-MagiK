@@ -89,8 +89,6 @@ def validate_metadata(
     module_metadata: Path,
     rbf: Path,
     rbf_metadata: Path,
-    *,
-    magik_revision: str,
 ) -> tuple[str, str]:
     module_fields = parse_fields(module_metadata)
     rbf_fields = parse_fields(rbf_metadata)
@@ -110,11 +108,6 @@ def validate_metadata(
     require_hex("platform_contract_sha256", contract, HEX64)
     menu_revision = rbf_fields.get("source_commit", "")
     require_hex("menu_revision", menu_revision, HEX40)
-    qualified_magik = rbf_fields.get("magik_commit", "")
-    if qualified_magik != magik_revision:
-        raise ManifestError(
-            f"RBF qualifies MagiK {qualified_magik or 'missing'}, not {magik_revision}"
-        )
     return contract, menu_revision
 
 
@@ -138,7 +131,6 @@ def generate(args: argparse.Namespace) -> None:
         args.scanout_metadata,
         args.latch_rbf,
         args.latch_metadata,
-        magik_revision=args.magik_revision,
     )
     values = {
         "format": FORMAT,
@@ -181,7 +173,6 @@ def verify_manifest(path: Path, *, artifact_root: Path | None = None) -> None:
         files["scanout_metadata"],
         files["latch_rbf"],
         files["latch_metadata"],
-        magik_revision=fields["magik_revision"],
     )
     if contract != fields["platform_contract_sha256"]:
         raise ManifestError("manifest platform contract does not match metadata")

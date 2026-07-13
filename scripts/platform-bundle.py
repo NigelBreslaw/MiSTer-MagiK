@@ -138,8 +138,8 @@ def create(args: argparse.Namespace) -> Path:
             "kernel_input_sha256": kernel_id,
             "platform_contract_sha256": contract,
             "components": {
-                "fpga": {"workflow": "fpga-vblank-latch.yml", "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha},
-                "kernel": {"workflow": "kernel-scanout.yml", "run_id": args.kernel_run_id, "head_sha": args.kernel_head_sha},
+                "fpga": {"workflow": "fpga-vblank-latch.yml", "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha, "head_branch": "main"},
+                "kernel": {"workflow": "kernel-scanout.yml", "run_id": args.kernel_run_id, "head_sha": args.kernel_head_sha, "head_branch": "main"},
             },
             "files": tree_entries(stage),
         }
@@ -183,6 +183,8 @@ def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object
             if origin.get("head_sha") is None:
                 raise BundleError(f"missing {component} origin")
             require_hex(f"{component} head_sha", str(origin["head_sha"]), HEX40)
+            if origin.get("head_branch") != "main":
+                raise BundleError(f"{component} origin is not main")
         expected_files = {entry["path"]: entry for entry in payload.get("files", [])}
         actual_files = tree_entries(root)
         actual_files = [entry for entry in actual_files if entry["path"] not in {MANIFEST_NAME, "SHA256SUMS"}]

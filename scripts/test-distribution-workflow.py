@@ -23,8 +23,10 @@ required = (
     "contents: write",
     "gh release create",
     "mister-magik-$RELEASE_CHANNEL-db.json.zip",
-    "--workflow fpga-vblank-latch.yml",
-    "--workflow kernel-scanout.yml",
+    "platform-component-id.py component fpga",
+    "platform-component-id.py component kernel",
+    "platform-v0.1-$bundle_id",
+    "platform-bundle-v0.1.json",
     "MAIN_REF: mister-magik",
 )
 for value in required:
@@ -36,5 +38,8 @@ assert "permissions:\n      actions: read\n      contents: write" in publish
 
 for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_ref:"):
     assert forbidden_input not in trigger, f"internal input leaked into dispatch UI: {forbidden_input}"
+
+assert "gh run list --workflow fpga-vblank-latch.yml" not in text
+assert "gh run list --workflow kernel-scanout.yml" not in text
 
 print("distribution workflow contract ok")
