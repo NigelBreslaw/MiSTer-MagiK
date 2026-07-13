@@ -72,6 +72,9 @@ cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets 
 step "ARM release-device build"
 "$ROOT/magik-gui/build-arm.sh" --device
 
+step "ARM catalog builder build"
+"$ROOT/scripts/build-catalog-builder.sh" --device
+
 step "ARM shared-library check"
 "$ROOT/magik-gui/scripts/check-arm-shared-libs.sh" "$BIN"
 

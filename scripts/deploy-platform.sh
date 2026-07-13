@@ -57,6 +57,8 @@ done
 
 echo "==> Building magik-gui production binary"
 "$GUI_DIR/build-arm.sh" --device
+echo "==> Building matching catalog builder"
+"$ROOT/scripts/build-catalog-builder.sh" --device
 echo "==> Building Main fork"
 if [[ "$CLEAN_MAIN" == 1 ]]; then "$MAIN_DIR/build-container.sh" clean; fi
 "$MAIN_DIR/build-container.sh"

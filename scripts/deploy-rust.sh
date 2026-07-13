@@ -78,14 +78,14 @@ human_bytes() {
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
 "$HERE/magik-gui/build-arm.sh" "${BUILD_FLAG[@]}"
+echo "==> Cross-building matching catalog builder"
+"$HERE/scripts/build-catalog-builder.sh" --device
 
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
-# The default ARM build produced both runtime binaries. Activate the builder
-# first, so a builder build/deploy failure cannot leave a new UI paired with an
-# old schema writer. The standalone deploy script remains available for the
-# rare catalog optimization workflow.
+# Both runtime binaries are complete before either is deployed. Activate the
+# builder first so a builder failure cannot leave a new UI with an old writer.
 echo "==> Deploying matching catalog builder"
 "$HERE/scripts/deploy-catalog-builder.sh" --skip-build
 

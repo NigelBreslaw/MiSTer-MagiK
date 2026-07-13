@@ -816,9 +816,9 @@ the launcher can become usable at the existing RAM-catalog gate. The existing
 SQLite, summary, navigation, stamp, and rebuild-marker formats remain the
 on-disk contract.
 
-The default ARM build produces both the frontend and its matching catalog
-builder, and normal runtime/platform deploys install the pair. Build or deploy
-only the builder for a rare catalog-optimization iteration with:
+Normal runtime/platform deploys explicitly build and install the frontend and
+its matching catalog builder. Build or deploy only the builder for a rare
+catalog-optimization iteration with:
 
 ```bash
 scripts/build-catalog-builder.sh --device
