@@ -96,6 +96,7 @@
     {"id":"altair8800","title":"Altair 8800","platform_kind":"computer","section":"computers","family":"other","order":104},
     {"id":"eg2000","title":"EG2000","platform_kind":"computer","section":"computers","family":"other","order":105},
     {"id":"ti-99-4a","title":"TI-99/4A","platform_kind":"computer","section":"computers","family":"other","order":106},
-    {"id":"casio-pv-2000","title":"Casio PV-2000","platform_kind":"computer","section":"computers","family":"other","order":107}
+    {"id":"casio-pv-2000","title":"Casio PV-2000","platform_kind":"computer","section":"computers","family":"other","order":107},
+    {"id":"launcher","title":"Launcher","platform_kind":"unknown","section":"other","family":"other","order":1000}
   ]
 }

@@ -1,6 +1,5 @@
 //! Game discovery and playable filtering.
 
-use crate::arcade_catalog;
 use crate::catalog_scan::{self, FoundFile};
 use crate::launch_profiles::{LaunchProfile, PayloadRule, RuleSourceKind};
 use crate::library_db::{
@@ -277,29 +276,29 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index(
             });
             let prepared = (profile.system_id == "dos"
                 && inspection.as_ref().is_ok_and(|inspection| {
-                    prepared_index.map_or_else(
-                        || {
-                            prepared_collections::validate_0mhz_mgl_inspection(
-                                &file.path,
-                                inspection,
-                            )
-                        },
-                        |index| {
-                            prepared_collections::validate_0mhz_mgl_inspection_with_index(
-                                &file.path,
-                                inspection,
-                                index,
-                            )
-                        },
-                    )
-                    .is_ok()
+                    prepared_index
+                        .map_or_else(
+                            || {
+                                prepared_collections::validate_0mhz_mgl_inspection(
+                                    &file.path, inspection,
+                                )
+                            },
+                            |index| {
+                                prepared_collections::validate_0mhz_mgl_inspection_with_index(
+                                    &file.path, inspection, index,
+                                )
+                            },
+                        )
+                        .is_ok()
                 }))
             .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::ZeroMhz));
             let prepared = prepared.or_else(|| {
                 (profile.id == "neon68k"
                     && inspection.as_ref().is_ok_and(|inspection| {
-                        prepared_collections::validate_neon68k_mgl_inspection(&file.path, inspection)
-                            .is_ok()
+                        prepared_collections::validate_neon68k_mgl_inspection(
+                            &file.path, inspection,
+                        )
+                        .is_ok()
                     }))
                 .then(|| PreparedLaunchProvenance::prepared(PreparedCollectionId::Neon68k))
             });
@@ -631,10 +630,6 @@ pub(crate) fn is_raw_arcade_zip_set_discovery(discovery: &GameDiscovery) -> bool
             })
 }
 
-pub(crate) fn system_title_for_discovery(_discovery: &GameDiscovery, system_id: &str) -> String {
-    arcade_catalog::system_title(system_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,7 +695,7 @@ mod tests {
         assert_eq!(profile.id, "dos");
         assert_eq!(discovery.platform_id, "dos");
         assert_eq!(catalog_system_id_for_discovery(&discovery), "dos");
-        assert_eq!(system_title_for_discovery(&discovery, "dos"), "DOS Games");
+        assert_eq!(crate::catalog_classify::system_title("dos"), "DOS Games");
         assert_eq!(discovery.genre.as_deref(), Some("0MHz"));
         assert_eq!(
             discovery.prepared.map(|value| value.collection_id),

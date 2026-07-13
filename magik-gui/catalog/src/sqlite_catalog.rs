@@ -25,8 +25,8 @@ use crate::game_discovery::unique_discovery_count;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
-    preferred_playable_discoveries_by_key, profile_id_for_discovery, system_title_for_discovery,
-    DiscoverySourceKind, GameDiscovery,
+    preferred_playable_discoveries_by_key, profile_id_for_discovery, DiscoverySourceKind,
+    GameDiscovery,
 };
 use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
@@ -767,17 +767,36 @@ fn load_embedded_catalog_navigation_with_limit(
 
 fn load_system_platform_kinds(conn: &Connection) -> Result<HashMap<String, PlatformKind>, String> {
     let mut stmt = conn
-        .prepare("SELECT system_id, category FROM systems")
+        .prepare("SELECT system_id, platform_kind FROM systems")
         .map_err(|e| format!("prepare system platform kind query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
             let system_id = row.get::<_, String>(0)?;
-            let category = row.get::<_, String>(1)?;
-            Ok((system_id, PlatformKind::from_category(&category)))
+            let platform_kind = row.get::<_, String>(1)?;
+            Ok((system_id, platform_kind))
         })
         .map_err(|e| format!("query system platform kinds: {e}"))?;
-    rows.map(|row| row.map_err(|e| format!("read system platform kind row: {e}")))
-        .collect()
+    let mut kinds = HashMap::new();
+    for row in rows {
+        let (system_id, stored_kind) =
+            row.map_err(|e| format!("read system platform kind row: {e}"))?;
+        let kind = PlatformKind::from_stored(&stored_kind)?;
+        kinds.insert(system_id, kind);
+    }
+    Ok(kinds)
+}
+
+fn core_location_category(core_path: Option<&str>) -> Option<&'static str> {
+    let path = core_path?.replace('\\', "/").to_ascii_lowercase();
+    if path.split('/').any(|part| part == "_arcade") {
+        Some("Arcade")
+    } else if path.split('/').any(|part| part == "_computer") {
+        Some("Computer")
+    } else if path.split('/').any(|part| part == "_console") {
+        Some("Console")
+    } else {
+        None
+    }
 }
 
 fn load_launcher_launch_plans(conn: &Connection) -> Result<Vec<StructuredLaunchPlan>, String> {
@@ -2137,7 +2156,6 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE TABLE profiles (
             profile_id TEXT PRIMARY KEY,
             system_id TEXT NOT NULL,
-            category TEXT NOT NULL,
             title TEXT NOT NULL,
             core_name TEXT NOT NULL,
             core_path TEXT,
@@ -2147,8 +2165,18 @@ fn write_sqlite_scan_with_sources_inner(
         CREATE TABLE systems (
             system_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
-            category TEXT NOT NULL
+            platform_kind TEXT NOT NULL CHECK(platform_kind IN ('arcade','console','handheld','computer','unknown')),
+            classification_source TEXT NOT NULL
         ) WITHOUT ROWID;
+        CREATE TABLE system_classification_diagnostics (
+            ordinal INTEGER PRIMARY KEY,
+            system_id TEXT NOT NULL,
+            accepted_kind TEXT NOT NULL,
+            accepted_source TEXT NOT NULL,
+            rejected_kind TEXT NOT NULL,
+            rejected_source TEXT NOT NULL,
+            reason TEXT NOT NULL
+        );
         CREATE TABLE catalog_audit (
             ordinal INTEGER PRIMARY KEY,
             core_id TEXT NOT NULL,
@@ -2679,15 +2707,14 @@ fn write_sqlite_scan_with_sources_inner(
         let stage_t = Instant::now();
         let mut stmt = tx
             .prepare(
-                "INSERT INTO profiles(profile_id,system_id,category,title,core_name,core_path,source_kind,source_detail)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                "INSERT INTO profiles(profile_id,system_id,title,core_name,core_path,source_kind,source_detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(|e| format!("prepare profile insert: {e}"))?;
         for profile in &scan.profiles {
             stmt.execute(params![
                 profile.id.as_str(),
                 profile.system_id.as_str(),
-                profile.category.as_str(),
                 profile.title.as_str(),
                 profile.core_name.as_str(),
                 profile.core_path.as_deref(),
@@ -2701,6 +2728,40 @@ fn write_sqlite_scan_with_sources_inner(
             stage_t,
             format!("rows={}", scan.profiles.len()),
         );
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO system_classification_diagnostics(ordinal,system_id,accepted_kind,accepted_source,rejected_kind,rejected_source,reason)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            )
+            .map_err(|e| format!("prepare system classification diagnostic insert: {e}"))?;
+        let mut ordinal = 0_i64;
+        let mut seen = HashSet::new();
+        for profile in &scan.profiles {
+            if !seen.insert(profile.system_id.as_str()) {
+                continue;
+            }
+            let observed = core_location_category(profile.core_path.as_deref());
+            let resolution = crate::catalog_classify::classify_system(
+                &profile.system_id,
+                observed,
+                "core-location",
+            );
+            if let Some(diagnostic) = resolution.diagnostic {
+                stmt.execute(params![
+                    ordinal,
+                    diagnostic.system_id,
+                    diagnostic.accepted_kind.as_str(),
+                    diagnostic.accepted_source,
+                    diagnostic.rejected_kind.as_str(),
+                    diagnostic.rejected_source,
+                    diagnostic.reason,
+                ])
+                .map_err(|e| format!("insert system classification diagnostic: {e}"))?;
+                ordinal += 1;
+            }
+        }
     }
     {
         let stage_t = Instant::now();
@@ -2747,7 +2808,7 @@ fn write_sqlite_scan_with_sources_inner(
         });
         let mut canonical_launch_ids = CanonicalLaunchIdIndex::default();
         let mut system_stmt = tx
-            .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
+            .prepare("INSERT OR IGNORE INTO systems(system_id,title,platform_kind,classification_source) VALUES (?1,?2,?3,?4)")
             .map_err(|e| format!("prepare system insert: {e}"))?;
         let mut game_stmt = tx
             .prepare(
@@ -2814,27 +2875,33 @@ fn write_sqlite_scan_with_sources_inner(
                 .then_some(system_id.clone())
             })
             .collect::<HashSet<_>>();
-        let mut system_rows = HashMap::<String, (String, String)>::new();
+        let mut system_rows = HashMap::<String, (String, String, String)>::new();
         for discovery in discoveries.values() {
             let system_id = catalog_system_id_for_discovery(discovery);
             if !promoted_systems.contains(&system_id) {
                 continue;
             }
             system_rows.entry(system_id.clone()).or_insert_with(|| {
+                let classification = crate::catalog_classify::classify_system(
+                    &system_id,
+                    None,
+                    "catalog-association",
+                )
+                .classification;
                 (
-                    system_title_for_discovery(discovery, &system_id),
-                    crate::catalog_classify::platform_kind_for_system(&system_id)
-                        .category_label()
-                        .to_string(),
+                    crate::catalog_classify::system_title(&system_id),
+                    classification.platform_kind.as_str().to_string(),
+                    classification.source,
                 )
             });
         }
-        for (system_id, (title, category)) in system_rows {
+        for (system_id, (title, platform_kind, classification_source)) in system_rows {
             system_stmt
                 .execute(params![
                     system_id.as_str(),
                     title.as_str(),
-                    category.as_str()
+                    platform_kind.as_str(),
+                    classification_source.as_str()
                 ])
                 .map_err(|e| format!("insert system: {e}"))?;
         }
@@ -3879,6 +3946,32 @@ mod tests {
     use crate::library_db::{
         save_scan_artifact_to_sqlite, scan_library_artifact, BenchConfig, ProgressCallback,
     };
+
+    #[test]
+    fn stored_platform_kind_is_strictly_validated() {
+        let conn = Connection::open_in_memory().expect("memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE systems(system_id TEXT PRIMARY KEY, platform_kind TEXT NOT NULL);
+             INSERT INTO systems VALUES ('bad-system', 'cabinet');",
+        )
+        .expect("seed invalid stored kind");
+        let error =
+            load_system_platform_kinds(&conn).expect_err("invalid kind must fail hydration");
+        assert!(error.contains("invalid stored platform kind"), "{error}");
+    }
+
+    #[test]
+    fn core_location_parser_is_diagnostic_only_and_component_exact() {
+        assert_eq!(
+            core_location_category(Some("_Arcade/cores/SMS")),
+            Some("Arcade")
+        );
+        assert_eq!(
+            core_location_category(Some("_Computer/Amiga")),
+            Some("Computer")
+        );
+        assert_eq!(core_location_category(Some("cores/My_Arcade_Core")), None);
+    }
     use crate::preview_worker;
     use crate::test_support::*;
     use rusqlite::Connection;

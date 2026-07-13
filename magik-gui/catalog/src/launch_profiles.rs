@@ -1395,6 +1395,7 @@ pub fn core_launch_manifest_fingerprint() -> u64 {
 }
 
 pub fn validate_core_launch_manifest() -> Result<(), String> {
+    crate::catalog_classify::validate_system_taxonomy()?;
     let manifest = parse_core_launch_manifest()?;
     if manifest.schema != CORE_LAUNCH_MANIFEST_VERSION {
         return Err(format!(
@@ -1404,6 +1405,23 @@ pub fn validate_core_launch_manifest() -> Result<(), String> {
     }
 
     let special = special_profiles();
+    let missing_systems = special
+        .iter()
+        .map(|profile| profile.system_id.as_str())
+        .chain(manifest.profiles.iter().map(|row| row.system_id.as_str()))
+        .filter(|system_id| crate::catalog_classify::system_definition(system_id).is_none())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if !missing_systems.is_empty() {
+        return Err(format!(
+            "checked-in launch profiles missing canonical system taxonomy definitions: {}",
+            missing_systems
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     let special_ids = special
         .iter()
         .map(|profile| profile.id.to_ascii_lowercase())
