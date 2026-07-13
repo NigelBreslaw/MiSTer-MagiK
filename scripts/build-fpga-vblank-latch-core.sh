@@ -31,7 +31,7 @@ usage() {
 Usage:
   scripts/build-fpga-vblank-latch-core.sh
 
-Builds an experimental Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
+Builds the production Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
 framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
 source checkout is copied to a disposable build workdir before patching.
 
