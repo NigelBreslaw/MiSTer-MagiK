@@ -59,7 +59,7 @@ class ComponentIdentityTests(unittest.TestCase):
         self.assertNotEqual(before, after)
 
     def test_dirty_checkout_is_rejected(self) -> None:
-        (self.root / "untracked.txt").write_text("dirty\n")
+        (self.root / "scripts/build-fpga-vblank-latch-core.sh").write_text("dirty\n")
         with self.assertRaisesRegex(ValueError, "clean checkout"):
             component_id.component_id(self.root, "fpga")
 

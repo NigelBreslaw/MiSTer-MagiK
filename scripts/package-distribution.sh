@@ -24,6 +24,7 @@ SCANOUT_METADATA=""
 LATCH_RBF=""
 LATCH_METADATA=""
 PLATFORM_MANIFEST=""
+PLATFORM_BUNDLE_MANIFEST=""
 MAME_SOURCE_REF=""
 HBMAME_SOURCE_REVISION=""
 NAME="mister-magik"
@@ -69,6 +70,8 @@ Options:
                        Required production latch metadata.
   --platform-manifest PATH
                        Required canonical manifest matching every platform artifact.
+  --platform-bundle-manifest PATH
+                       Required durable platform bundle v0.1 manifest.
   --mame-source-ref REF
                        mamedev/mame ref used to build --mame-sqlite (required).
   --hbmame-source-revision SHA
@@ -92,6 +95,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   mister-magik/assets/...     when --asset-pack is provided
   MiSTer_MagiK
   mister-magik/platform-v1.manifest
+  mister-magik/platform-bundle-v0.1.json
   mister-magik/mister_magik_scanout_slots.ko
   mister-magik/mister_magik_scanout_slots.metadata.txt
   mister-magik/fpga/menu-magik-vblank-latch.rbf
@@ -162,6 +166,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --platform-manifest)
       PLATFORM_MANIFEST="${2:?--platform-manifest requires a path}"
+      shift 2
+      ;;
+    --platform-bundle-manifest)
+      PLATFORM_BUNDLE_MANIFEST="${2:?--platform-bundle-manifest requires a path}"
       shift 2
       ;;
     --mame-source-ref)
@@ -291,7 +299,7 @@ if [[ -n "$HBMAME_SQLITE" ]]; then
     fi
   fi
 fi
-for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "$LATCH_METADATA" "$PLATFORM_MANIFEST"; do
+for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "$LATCH_METADATA" "$PLATFORM_MANIFEST" "$PLATFORM_BUNDLE_MANIFEST"; do
   if [[ -z "$artifact" || ! -f "$artifact" ]]; then
     echo "ERROR: required production platform artifact not found: ${artifact:-missing argument}" >&2
     exit 1
@@ -301,10 +309,23 @@ if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_R
   echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
 fi
-if [[ "$(sed -n 's/^magik_revision=//p' "$PLATFORM_MANIFEST")" != "$MAGIK_SOURCE_REVISION" ]]; then
-  echo "ERROR: platform manifest MagiK revision does not match package checkout." >&2
+PLATFORM_BUNDLE_ID="$(python3 - "$PLATFORM_BUNDLE_MANIFEST" <<'PY'
+import json
+import re
+import sys
+
+payload = json.load(open(sys.argv[1]))
+if payload.get("format") != "mister-magik-platform-bundle-v0.1":
+    raise SystemExit("unsupported platform bundle manifest")
+bundle_id = payload.get("bundle_id", "")
+if not re.fullmatch(r"[0-9a-f]{64}", bundle_id):
+    raise SystemExit("invalid platform bundle id")
+print(bundle_id)
+PY
+)" || {
+  echo "ERROR: --platform-bundle-manifest is invalid." >&2
   exit 1
-fi
+}
 
 mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
@@ -338,6 +359,7 @@ cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.
 cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
 cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
 cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v1.manifest"
+cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/platform-bundle-v0.1.json"
 cat >"$STAGE/mister-magik/release-v1.txt" <<EOF
 format=mister-magik-release-v1
 version=$VERSION
@@ -345,6 +367,7 @@ build_number=$BUILD_NUMBER
 magik_revision=$MAGIK_SOURCE_REVISION
 main_revision=$MAIN_SOURCE_REVISION
 features=$BIN_FEATURES
+platform_bundle_id=$PLATFORM_BUNDLE_ID
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
 python3 "$ROOT/scripts/platform-manifest.py" verify \

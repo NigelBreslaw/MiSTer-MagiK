@@ -74,6 +74,9 @@ while IFS= read -r script; do
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 
 "$ROOT/scripts/test-mister-magik-installer.sh"
+python3 "$ROOT/scripts/test-platform-component-id.py"
+python3 "$ROOT/scripts/test-platform-bundle.py"
+python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
 
 if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   package_tmp="$TMP/package-distribution"
@@ -109,6 +112,8 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf" \
     --latch-metadata "$package_tmp/latch.metadata.txt" \
     --main-revision "$fixture_main" --magik-revision "$fixture_magik" >/dev/null
+  printf '{"format":"mister-magik-platform-bundle-v0.1","bundle_id":"%064d"}\n' 0 \
+    >"$package_tmp/platform-bundle-v0.1.json"
   platform_args=(
     --version 0.2.42
     --build-number 42
@@ -120,6 +125,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf"
     --latch-metadata "$package_tmp/latch.metadata.txt"
     --platform-manifest "$package_tmp/platform-v1.manifest"
+    --platform-bundle-manifest "$package_tmp/platform-bundle-v0.1.json"
   )
   sqlite3 "$package_tmp/mame.sqlite3" \
     "CREATE TABLE release_check(name TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO release_check VALUES('kind','package-self-test');"
@@ -194,6 +200,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         "MiSTer_MagiK",
         "mister-magik/mister-magik-catalog-builder",
         "mister-magik/platform-v1.manifest",
+        "mister-magik/platform-bundle-v0.1.json",
         "mister-magik/mister_magik_scanout_slots.ko",
         "mister-magik/mister_magik_scanout_slots.metadata.txt",
         "mister-magik/fpga/menu-magik-vblank-latch.rbf",
