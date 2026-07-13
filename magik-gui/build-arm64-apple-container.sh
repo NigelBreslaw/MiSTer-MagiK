@@ -132,6 +132,7 @@ export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
 MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
   git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
 )}"
+MISTER_MAGIK_VERSION="${MISTER_MAGIK_VERSION:-0.2.$MISTER_MAGIK_BUILD_NUMBER}"
 MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-$(
   date '+%-d.%-m.%Y %H:%M' 2>/dev/null || date '+%d.%m.%Y %H:%M' 2>/dev/null || echo unknown
 )}"
@@ -268,6 +269,7 @@ container run --arch arm64 --rm \
   --env MAKEFLAGS="-j$CONTAINER_CPUS" \
   --env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" \
   --env MISTER_MAGIK_BUILD_NUMBER="$MISTER_MAGIK_BUILD_NUMBER" \
+  --env MISTER_MAGIK_VERSION="$MISTER_MAGIK_VERSION" \
   --env MISTER_MAGIK_BUILD_TIME="$MISTER_MAGIK_BUILD_TIME" \
   --env RUSTC_WRAPPER= \
   --env RUSTFLAGS="$CONTAINER_RUSTFLAGS" \

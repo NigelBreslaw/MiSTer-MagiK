@@ -143,6 +143,7 @@ export MISTER_UI_BUILD_SCOPE="$UI_SCOPE"
 export MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
   git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
 )}"
+export MISTER_MAGIK_VERSION="${MISTER_MAGIK_VERSION:-0.2.$MISTER_MAGIK_BUILD_NUMBER}"
 export MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-$(
   date '+%-d.%-m.%Y %H:%M' 2>/dev/null || date '+%d.%m.%Y %H:%M' 2>/dev/null || echo unknown
 )}"

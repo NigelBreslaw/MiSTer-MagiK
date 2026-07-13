@@ -305,6 +305,8 @@ esac
 printf 'benchmark identity self-test\n' >"$TMP/identity.bin"
 printf 'ui\n' >"$TMP/identity.bin.features"
 bench_context_write_build_receipt "$TMP/identity.bin" "$ROOT" release-device ui launcher
+[[ "$(bench_context_build_receipt_field "$TMP/identity.bin" build_number)" == "$(git -C "$ROOT" rev-list --count HEAD)" ]]
+[[ "$(bench_context_build_receipt_field "$TMP/identity.bin" version)" == "0.2.$(git -C "$ROOT" rev-list --count HEAD)" ]]
 identity_sha="$(bench_context_sha256_file "$TMP/identity.bin")"
 [[ "${#identity_sha}" -eq 64 ]]
 bench_context_require_verified_identity verified "$identity_sha" "$identity_sha"

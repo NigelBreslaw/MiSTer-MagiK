@@ -1,6 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=MISTER_UI_BUILD_SCOPE");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_NUMBER");
+    println!("cargo:rerun-if-env-changed=MISTER_MAGIK_VERSION");
     println!("cargo:rerun-if-env-changed=MISTER_MAGIK_BUILD_TIME");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
@@ -13,10 +14,10 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
     println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
     println!("cargo:rustc-check-cfg=cfg(mister_arm_scalar_decimator)");
-    println!(
-        "cargo:rustc-env=MISTER_MAGIK_BUILD_NUMBER={}",
-        git_commit_count()
-    );
+    let build_number = git_commit_count();
+    let version = release_version(&build_number);
+    println!("cargo:rustc-env=MISTER_MAGIK_BUILD_NUMBER={build_number}");
+    println!("cargo:rustc-env=MISTER_MAGIK_VERSION={version}");
     println!(
         "cargo:rustc-env=MISTER_MAGIK_BUILD_TIME={}",
         build_timestamp()
@@ -55,6 +56,16 @@ fn main() {
             .warnings_into_errors(true)
             .compile("mister_magik_downsample_scalar");
     }
+}
+
+fn release_version(build_number: &str) -> String {
+    if let Ok(value) = std::env::var("MISTER_MAGIK_VERSION") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.into();
+        }
+    }
+    format!("0.2.{build_number}")
 }
 
 fn git_commit_count() -> String {
