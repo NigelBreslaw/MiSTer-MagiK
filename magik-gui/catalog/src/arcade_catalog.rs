@@ -519,6 +519,13 @@ impl ArcadeCatalog {
             })
     }
 
+    pub(crate) fn structured_launch_plan_for_ref(
+        &self,
+        launch_ref: &str,
+    ) -> Option<&StructuredLaunchPlan> {
+        self.launch_plans_by_ref.get(launch_ref)
+    }
+
     pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
         self.system_game_view(system_id).iter().cloned().collect()
     }

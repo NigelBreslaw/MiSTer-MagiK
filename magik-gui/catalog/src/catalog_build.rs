@@ -3,7 +3,9 @@
 use crate::arcade_catalog;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_stamp;
-use crate::game_discovery::unique_discovery_count;
+use crate::game_discovery::{
+    covered_payload_paths, preferred_playable_discovery_indices_by_key, unique_discovery_count,
+};
 use crate::library_db::{
     BenchConfig, LibraryCatalogLoad, LibraryRamScanArtifact, LibraryRefreshCatalog,
     LibraryRefreshSummary, LibraryScan, LibraryScanArtifact, LibraryScanStats, ProgressCallback,
@@ -93,10 +95,14 @@ impl<'a> CatalogRefreshPipeline<'a> {
         let scan_t = Instant::now();
         let scan = LibraryIndexer::foreground(self.cfg)
             .scan_without_coverage_audit_with_progress_and_events(progress, scan_events);
-        let stats = scan_stats(&scan, scan_t);
+        let covered_payloads = covered_payload_paths(&scan.discoveries);
+        let preferred_discoveries =
+            preferred_playable_discovery_indices_by_key(&scan.discoveries, &covered_payloads);
+        let stats = scan_stats_with_discovery_count(&scan, scan_t, preferred_discoveries.len());
         crate::library_db::apply_library_path_map_to_ram_artifact(LibraryRamScanArtifact {
             scan,
             stats,
+            preferred_discoveries,
         })
     }
 
@@ -170,6 +176,14 @@ impl<'a> CatalogRefreshPipeline<'a> {
 }
 
 fn scan_stats(scan: &LibraryScan, scan_t: Instant) -> LibraryScanStats {
+    scan_stats_with_discovery_count(scan, scan_t, unique_discovery_count(&scan.discoveries))
+}
+
+fn scan_stats_with_discovery_count(
+    scan: &LibraryScan,
+    scan_t: Instant,
+    discoveries: usize,
+) -> LibraryScanStats {
     LibraryScanStats {
         scan_us: scan_t.elapsed().as_micros() as u64,
         discover_us: scan.discover_us,
@@ -178,6 +192,6 @@ fn scan_stats(scan: &LibraryScan, scan_t: Instant) -> LibraryScanStats {
         containers: scan.containers.len(),
         entries: scan.entries.len(),
         audit_rows: scan.audit_rows.len(),
-        discoveries: unique_discovery_count(&scan.discoveries),
+        discoveries,
     }
 }

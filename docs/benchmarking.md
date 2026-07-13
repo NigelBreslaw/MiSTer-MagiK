@@ -99,6 +99,17 @@ prefetch, media coordination, index sidecar repair, and other background jobs
 after a usable catalog exists.
 Use `--thread-sample` when changing catalog scheduling so the run proves the
 first-build roles are foreground and the later background roles remain isolated.
+For first-scan runs the sampler targets the standalone
+`mister-magik-catalog-builder`, not the dormant launcher. Its retained summary
+must include builder thread/core residency and `vmhwm_kb`; a header-only sample
+invalidates the run.
+The post-scan preparation overlap emits
+`builder_catalog_prepare_overlap` with `wall_us`, separate audit/stamp/catalog
+durations, `overlapped_us`, and the worker policy. Retained evidence must also
+contain a `catalog-audit` thread-policy row with nice `0` and all online CPUs;
+the optimization is invalid if either branch inherits the background CPU0
+policy. Compare `wall_us` with the sequential audit+stamp+catalog sum, but keep
+the canonical `library_ready` marker as the release gate.
 
 ## Startup Reveal Gate
 
@@ -828,6 +839,11 @@ label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync
 For warm-start claims, report first interactive Home/system-list time,
 `catalog_summary_load_us`, whether `catalog_cache_load_sync` stayed off the
 pre-loop path, first-frame time, and full catalog ready time.
+The harness also waits, with a bounded timeout, for production `CheckStamp` to
+emit `catalog_stamp_check` and the terminal `library_db_unchanged`. It records
+the component timings and fails unless `unchanged=true` and `check_us <=
+2000000`. The event timestamp includes intentional hydration/idle deferral and
+is not the validation-duration gate.
 
 ## Launch Handoff
 

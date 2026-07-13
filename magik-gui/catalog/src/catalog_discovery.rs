@@ -2,6 +2,7 @@
 
 use crate::catalog_scan::should_ignore_path;
 use crate::launch_profiles;
+use crate::namespace_walk;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,8 +18,18 @@ pub(crate) struct InstalledCore {
 pub(crate) struct GameDirFact {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
+    pub(crate) signature: GameDirSignature,
     pub(crate) has_payload_files: bool,
     pub(crate) has_zip_files: bool,
+    /// Visible ZIP files immediately below the game directory. The coverage
+    /// audit retains one diagnostic row per such file when a cataloged profile
+    /// has no archive rules, so keep these paths from the primary namespace
+    /// walk instead of reopening every exFAT directory before CatalogReady.
+    pub(crate) direct_zip_paths: Vec<PathBuf>,
+    /// Metadata signatures for immediate child directories when payload shape
+    /// is runtime-derived. They let warm validation cover the primary walk's
+    /// depth-two namespace without enumerating every payload again.
+    pub(crate) nested_probe_signatures: Vec<(PathBuf, GameDirSignature)>,
     pub(crate) payload_extensions: BTreeSet<String>,
 }
 
@@ -32,6 +43,40 @@ impl GameDirFact {
 pub(crate) struct GameDirHeader {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
+    pub(crate) signature: GameDirSignature,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GameDirSignature {
+    Present { len: u64, mtime_nanos: i64 },
+    Unavailable,
+}
+
+impl GameDirSignature {
+    pub(crate) fn from_path(path: &Path) -> Self {
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return Self::Unavailable;
+        };
+        let Some(mtime_nanos) = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+        else {
+            return Self::Unavailable;
+        };
+        Self::Present {
+            len: metadata.len(),
+            mtime_nanos,
+        }
+    }
+
+    pub(crate) fn from_namespace_signature(signature: Option<(u64, i64)>) -> Self {
+        signature.map_or(Self::Unavailable, |(len, mtime_nanos)| Self::Present {
+            len,
+            mtime_nanos,
+        })
+    }
 }
 
 pub(crate) fn installed_cores_for_roots(roots: &[String]) -> Vec<InstalledCore> {
@@ -200,16 +245,24 @@ pub(crate) fn top_level_game_dirs_for_roots_excluding(
     roots: &[String],
     excluded_names: &BTreeSet<String>,
 ) -> Vec<GameDirFact> {
-    top_level_game_dir_headers_for_roots_excluding(roots, excluded_names)
+    top_level_game_dir_probe_headers_for_roots_excluding(roots, excluded_names)
         .into_iter()
         .map(|header| {
-            let (has_payload_files, has_zip_files, payload_extensions) =
-                game_dir_payload_facts(&header.path);
+            let (
+                has_payload_files,
+                has_zip_files,
+                direct_zip_paths,
+                nested_probe_signatures,
+                payload_extensions,
+            ) = game_dir_payload_facts(&header.path);
             GameDirFact {
                 name: header.name,
                 path: header.path,
+                signature: header.signature,
                 has_payload_files,
                 has_zip_files,
+                direct_zip_paths,
+                nested_probe_signatures,
                 payload_extensions,
             }
         })
@@ -255,6 +308,7 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
             if seen.insert(key) {
                 entries.push(GameDirHeader {
                     name: name.to_string(),
+                    signature: GameDirSignature::Unavailable,
                     path,
                 });
             }
@@ -263,6 +317,35 @@ pub(crate) fn top_level_game_dir_headers_for_roots_excluding(
         out.extend(entries);
     }
     out
+}
+
+/// Adds compact directory signatures to the name-only cold scan headers.
+/// Linux obtains them by opening each direct child relative to `/games` and
+/// reading metadata from that fd, avoiding one full exFAT path lookup per
+/// system directory.
+pub(crate) fn top_level_game_dir_probe_headers_for_roots_excluding(
+    roots: &[String],
+    excluded_names: &BTreeSet<String>,
+) -> Vec<GameDirHeader> {
+    let mut headers = top_level_game_dir_headers_for_roots_excluding(roots, excluded_names);
+    for game_root in game_roots(roots) {
+        let indexes = headers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, header)| {
+                (header.path.parent() == Some(game_root.as_path())).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let child_paths = indexes
+            .iter()
+            .map(|index| headers[*index].path.clone())
+            .collect::<Vec<_>>();
+        let probe = namespace_walk::probe_directory_signatures(&game_root, &child_paths);
+        for (index, signature) in indexes.into_iter().zip(probe.child_signatures) {
+            headers[index].signature = GameDirSignature::from_namespace_signature(signature);
+        }
+    }
+    headers
 }
 
 #[cfg(test)]
@@ -291,13 +374,21 @@ pub(crate) fn game_dir_has_payload_candidate(path: &Path, extensions: &[String])
 }
 
 pub(crate) fn game_dir_payload_facts_for_header(header: GameDirHeader) -> GameDirFact {
-    let (has_payload_files, has_zip_files, payload_extensions) =
-        game_dir_payload_facts(&header.path);
+    let (
+        has_payload_files,
+        has_zip_files,
+        direct_zip_paths,
+        nested_probe_signatures,
+        payload_extensions,
+    ) = game_dir_payload_facts(&header.path);
     GameDirFact {
         name: header.name,
         path: header.path,
+        signature: header.signature,
         has_payload_files,
         has_zip_files,
+        direct_zip_paths,
+        nested_probe_signatures,
         payload_extensions,
     }
 }
@@ -370,9 +461,19 @@ pub(crate) fn should_ignore_game_dir(name: &str) -> bool {
         || name.eq_ignore_ascii_case("boxart")
 }
 
-fn game_dir_payload_facts(path: &Path) -> (bool, bool, BTreeSet<String>) {
+type GameDirPayloadFacts = (
+    bool,
+    bool,
+    Vec<PathBuf>,
+    Vec<(PathBuf, GameDirSignature)>,
+    BTreeSet<String>,
+);
+
+fn game_dir_payload_facts(path: &Path) -> GameDirPayloadFacts {
     let mut has_payload = false;
     let mut has_zip = false;
+    let mut direct_zip_paths = Vec::new();
+    let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = BTreeSet::new();
     for entry in walkdir::WalkDir::new(path)
         .follow_links(false)
@@ -381,12 +482,21 @@ fn game_dir_payload_facts(path: &Path) -> (bool, bool, BTreeSet<String>) {
         .filter_entry(|entry| !should_ignore_path(entry.path()))
         .filter_map(Result::ok)
     {
+        if entry.file_type().is_dir() && entry.depth() == 1 {
+            nested_probe_signatures.push((
+                entry.path().to_path_buf(),
+                GameDirSignature::from_path(entry.path()),
+            ));
+        }
         if !entry.file_type().is_file() {
             continue;
         }
         let p = entry.path();
         if path_ext_eq(p, "zip") {
             has_zip = true;
+            if entry.depth() == 1 {
+                direct_zip_paths.push(p.to_path_buf());
+            }
         } else {
             has_payload = true;
             if let Some(ext) = p
@@ -398,7 +508,17 @@ fn game_dir_payload_facts(path: &Path) -> (bool, bool, BTreeSet<String>) {
             }
         }
     }
-    (has_payload, has_zip, payload_extensions)
+    direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    nested_probe_signatures.sort_by_cached_key(|(path, _)| {
+        (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+    });
+    (
+        has_payload,
+        has_zip,
+        direct_zip_paths,
+        nested_probe_signatures,
+        payload_extensions,
+    )
 }
 
 fn path_name_eq(path: &Path, expected: &str) -> bool {
@@ -512,6 +632,27 @@ mod tests {
             .iter()
             .any(|dir| { dir.name == "Empty" && !dir.has_payloadish_files() }));
         assert!(!dirs.iter().any(|dir| dir.name == "screenshot-magik"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cold_game_dir_headers_defer_metadata_to_the_namespace_scan() {
+        let root = unique_temp_dir("discovery-game-dir-header-signatures");
+        std::fs::create_dir_all(root.join("games/NES")).expect("create NES dir");
+        let roots = vec![root.display().to_string()];
+
+        let cold = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new());
+        let probe = top_level_game_dir_probe_headers_for_roots_excluding(
+            &roots,
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(cold.len(), 1);
+        assert_eq!(cold[0].signature, GameDirSignature::Unavailable);
+        assert!(matches!(
+            probe[0].signature,
+            GameDirSignature::Present { .. }
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 

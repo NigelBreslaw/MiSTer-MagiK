@@ -1169,6 +1169,7 @@ fn runtime_profile_for_match(
         &catalog_discovery::GameDirHeader {
             name: game_dir.name.clone(),
             path: game_dir.path.clone(),
+            signature: game_dir.signature,
         },
         core,
         extensions,
@@ -2502,6 +2503,7 @@ mod tests {
             &catalog_discovery::GameDirHeader {
                 name: "SupportCore".to_string(),
                 path: PathBuf::from("/media/fat/games/SupportCore"),
+                signature: catalog_discovery::GameDirSignature::Unavailable,
             },
             &catalog_discovery::InstalledCore {
                 core_id: "SupportCore".to_string(),

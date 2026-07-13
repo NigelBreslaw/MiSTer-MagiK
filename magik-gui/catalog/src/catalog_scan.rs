@@ -7,7 +7,9 @@ use crate::launch_profiles::{
 use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
-use crate::namespace_walk::{self, NamespaceEntry, NamespaceEntryKind, NamespaceWalkStats};
+use crate::namespace_walk::{
+    self, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+};
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use std::collections::HashSet;
 use std::fs::File;
@@ -352,7 +354,7 @@ fn scan_targets_for_plan(
             let game_dir_header = plan
                 .all_game_dir_headers()
                 .iter()
-                .find(|header| header.path == path)
+                .find(|header| same_library_path(&header.path, &path))
                 .cloned();
             targets.push(PlannedScanTarget::Static {
                 path,
@@ -373,6 +375,10 @@ fn scan_targets_for_plan(
         }
     }
     targets
+}
+
+fn same_library_path(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
 fn walk_index_candidates_streaming(
@@ -431,17 +437,34 @@ fn scan_target_candidates_with_facts(
     let mut files = 0usize;
     let mut candidates = 0usize;
     let mut aborted = false;
+    let mut nested_directory_seen = false;
     let mut facts = game_dir_header.map(|header| GameDirFact {
         name: header.name.clone(),
         path: header.path.clone(),
+        signature: header.signature,
         has_payload_files: false,
         has_zip_files: false,
+        direct_zip_paths: Vec::new(),
+        nested_probe_signatures: Vec::new(),
         payload_extensions: std::collections::BTreeSet::new(),
     });
-    let namespace_stats = namespace_walk::visit(target, None, should_ignore_path, |entry| {
+    let signature_capture = if facts.is_some() {
+        NamespaceSignatureCapture::Target
+    } else {
+        NamespaceSignatureCapture::None
+    };
+    let namespace_stats = namespace_walk::visit_with_signature_capture(
+        target,
+        None,
+        signature_capture,
+        should_ignore_path,
+        |entry| {
         let p = entry.path.as_path();
         if entry.kind == NamespaceEntryKind::Directory {
             dirs += 1;
+            if facts.is_some() {
+                nested_directory_seen = true;
+            }
             return true;
         }
         if entry.kind != NamespaceEntryKind::File {
@@ -462,6 +485,10 @@ fn scan_target_candidates_with_facts(
             if depth <= 2 {
                 if ext.eq_ignore_ascii_case("zip") {
                     facts.has_zip_files = true;
+                    if depth == 1 {
+                        let relative = p.strip_prefix(target).unwrap_or(p);
+                        facts.direct_zip_paths.push(facts.path.join(relative));
+                    }
                 } else {
                     facts.has_payload_files = true;
                     if !ext.is_empty() {
@@ -489,7 +516,9 @@ fn scan_target_candidates_with_facts(
             return false;
         }
         true
-    });
+        },
+    );
+    let target_signature = namespace_stats.target_signature;
     (
         WalkTargetStats {
             dirs,
@@ -499,7 +528,24 @@ fn scan_target_candidates_with_facts(
             aborted,
             namespace: namespace_stats,
         },
-        facts,
+        facts.map(|mut facts| {
+            facts.signature = if nested_directory_seen && !facts.has_payloadish_files() {
+                // Static targets do not retain one probe per nested directory:
+                // doing so would add thousands of metadata operations to deep
+                // production trees. An empty tree with existing children can
+                // become payloadish without changing the top directory, so it
+                // must take the exact warm fallback rather than authorize reuse.
+                crate::catalog_discovery::GameDirSignature::Unavailable
+            } else {
+                crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+                    target_signature,
+                )
+            };
+            facts
+                .direct_zip_paths
+                .sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+            facts
+        }),
     )
 }
 
@@ -512,20 +558,33 @@ fn scan_runtime_target_candidates(
     let mut files_seen = 0usize;
     let mut has_payload_files = false;
     let mut has_zip_files = false;
+    let mut direct_zip_paths = Vec::new();
+    let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = std::collections::BTreeSet::new();
     let mut shallow_files = Vec::new();
     let mut deep_roots = Vec::new();
 
-    let shallow_namespace_stats =
-        namespace_walk::visit(&header.path, Some(2), should_ignore_path, |entry| {
+    let shallow_namespace_stats = namespace_walk::visit_with_signature_capture(
+        &header.path,
+        Some(2),
+        NamespaceSignatureCapture::TargetAndDepthOneDirectories,
+        should_ignore_path,
+        |entry| {
             let path = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
                 dirs += 1;
-                if path
+                let depth = path
                     .strip_prefix(&header.path)
                     .ok()
-                    .is_some_and(|relative| relative.components().count() == 2)
-                {
+                    .map(|relative| relative.components().count());
+                if depth == Some(1) {
+                    nested_probe_signatures.push((
+                        path.to_path_buf(),
+                        crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+                            entry.directory_signature,
+                        ),
+                    ));
+                } else if depth == Some(2) {
                     deep_roots.push(path.to_path_buf());
                 }
                 return true;
@@ -541,6 +600,13 @@ fn scan_runtime_target_candidates(
                 .to_ascii_lowercase();
             if ext.eq_ignore_ascii_case("zip") {
                 has_zip_files = true;
+                if path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .is_some_and(|relative| relative.components().count() == 1)
+                {
+                    direct_zip_paths.push(path.to_path_buf());
+                }
             } else {
                 has_payload_files = true;
                 if !ext.is_empty() {
@@ -556,13 +622,24 @@ fn scan_runtime_target_candidates(
             };
             shallow_files.push(file);
             true
-        });
+        },
+    );
+    let target_signature = shallow_namespace_stats.target_signature;
     let mut namespace_stats = shallow_namespace_stats;
+    direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    nested_probe_signatures.sort_by_cached_key(|(path, _)| {
+        (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+    });
     let facts = GameDirFact {
         name: header.name.clone(),
         path: header.path.clone(),
+        signature: crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+            target_signature,
+        ),
         has_payload_files,
         has_zip_files,
+        direct_zip_paths,
+        nested_probe_signatures,
         payload_extensions,
     };
     let Some(profile) = plan.profile_for_game_dir_facts(&facts) else {
@@ -682,12 +759,30 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
     let mut files = 0usize;
     let mut has_payload_files = false;
     let mut has_zip_files = false;
+    let mut direct_zip_paths = Vec::new();
+    let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = std::collections::BTreeSet::new();
-    let namespace_stats =
-        namespace_walk::visit(&header.path, Some(2), should_ignore_path, |entry| {
+    let namespace_stats = namespace_walk::visit_with_signature_capture(
+        &header.path,
+        Some(2),
+        NamespaceSignatureCapture::TargetAndDepthOneDirectories,
+        should_ignore_path,
+        |entry| {
             let path = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
                 dirs += 1;
+                if path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .is_some_and(|relative| relative.components().count() == 1)
+                {
+                    nested_probe_signatures.push((
+                        path.to_path_buf(),
+                        crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+                            entry.directory_signature,
+                        ),
+                    ));
+                }
                 return true;
             }
             if entry.kind != NamespaceEntryKind::File {
@@ -701,6 +796,13 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
                 .to_ascii_lowercase();
             if ext.eq_ignore_ascii_case("zip") {
                 has_zip_files = true;
+                if path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .is_some_and(|relative| relative.components().count() == 1)
+                {
+                    direct_zip_paths.push(path.to_path_buf());
+                }
             } else {
                 has_payload_files = true;
                 if !ext.is_empty() {
@@ -708,7 +810,13 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
                 }
             }
             true
-        });
+        },
+    );
+    direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
+    nested_probe_signatures.sort_by_cached_key(|(path, _)| {
+        (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+    });
+    let target_signature = namespace_stats.target_signature;
     (
         WalkTargetStats {
             dirs,
@@ -721,8 +829,13 @@ fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDir
         GameDirFact {
             name: header.name.clone(),
             path: header.path.clone(),
+            signature: crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+                target_signature,
+            ),
             has_payload_files,
             has_zip_files,
+            direct_zip_paths,
+            nested_probe_signatures,
             payload_extensions,
         },
     )
@@ -1387,6 +1500,18 @@ mod tests {
         .expect("profile");
 
         assert_eq!(profile.id, "neogeo");
+    }
+
+    #[test]
+    fn planned_target_matches_game_dir_header_case_insensitively() {
+        assert!(same_library_path(
+            Path::new("/media/fat/games/NeoGeo"),
+            Path::new("/media/fat/games/NEOGEO")
+        ));
+        assert!(!same_library_path(
+            Path::new("/media/fat/games/NeoGeo"),
+            Path::new("/media/fat/games/NeoGeo-CD")
+        ));
     }
 
     #[test]
@@ -2289,6 +2414,65 @@ mod tests {
             .systems
             .iter()
             .any(|system| system.id == "wonderswan" && system.count == 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn primary_scan_retains_direct_zip_paths_for_deferred_audit() {
+        let root = unique_temp_dir("scan-retained-direct-zip-audit");
+        let psx_dir = root.join("games/PSX");
+        let nested_dir = psx_dir.join("Nested");
+        let direct_zip = psx_dir.join("Packed PSX Games.zip");
+        let nested_zip = nested_dir.join("Nested PSX Games.zip");
+        std::fs::create_dir_all(&nested_dir).expect("create psx dirs");
+        write_stored_zip(&direct_zip, &[("Game.cue", b"cue")]);
+        write_stored_zip(&nested_zip, &[("Nested.cue", b"cue")]);
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let facts = scan
+            .game_dir_facts
+            .iter()
+            .find(|facts| facts.name == "PSX")
+            .expect("PSX facts");
+
+        assert!(facts.has_zip_files);
+        assert_eq!(facts.direct_zip_paths, vec![direct_zip.clone()]);
+        assert!(scan.audit_rows.iter().any(|row| {
+            row.reason == format!("zip-archive-not-indexed:{}", direct_zip.display())
+        }));
+        assert!(!scan
+            .audit_rows
+            .iter()
+            .any(|row| row.reason.contains("Nested PSX Games.zip")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_static_target_with_nested_directory_forces_exact_warm_fallback() {
+        let root = unique_temp_dir("scan-empty-static-nested-probe");
+        std::fs::create_dir_all(root.join("games/NES/Incoming")).expect("create empty nested dir");
+        install_test_console_core(&root, "NES");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let facts = scan
+            .game_dir_facts
+            .iter()
+            .find(|facts| facts.name == "NES")
+            .expect("NES facts");
+
+        assert!(!facts.has_payloadish_files());
+        assert_eq!(
+            facts.signature,
+            crate::catalog_discovery::GameDirSignature::Unavailable
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
