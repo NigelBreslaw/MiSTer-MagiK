@@ -78,6 +78,38 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   mkdir -p "$package_tmp/out"
   printf '#!/bin/sh\nexit 0\n' >"$package_tmp/mister-magik-fb"
   chmod 755 "$package_tmp/mister-magik-fb"
+  cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
+  printf 'module fixture\n' >"$package_tmp/mister_magik_scanout_slots.ko"
+  printf 'rbf fixture\n' >"$package_tmp/menu-magik-vblank-latch.rbf"
+  fixture_contract="$(printf contract | sha256sum | awk '{print $1}')"
+  fixture_magik="2222222222222222222222222222222222222222"
+  fixture_main="1111111111111111111111111111111111111111"
+  fixture_menu="3333333333333333333333333333333333333333"
+  printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
+    "$fixture_contract" "$(sha256sum "$package_tmp/mister_magik_scanout_slots.ko" | awk '{print $1}')" \
+    >"$package_tmp/scanout.metadata.txt"
+  printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
+    "$fixture_contract" "$fixture_magik" "$fixture_menu" \
+    "$(sha256sum "$package_tmp/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
+    >"$package_tmp/latch.metadata.txt"
+  "$ROOT/scripts/platform-manifest.py" generate \
+    --output "$package_tmp/platform-v1.manifest" \
+    --main "$package_tmp/MiSTer_MagiK" \
+    --gui "$package_tmp/mister-magik-fb" \
+    --scanout-module "$package_tmp/mister_magik_scanout_slots.ko" \
+    --scanout-metadata "$package_tmp/scanout.metadata.txt" \
+    --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf" \
+    --latch-metadata "$package_tmp/latch.metadata.txt" \
+    --main-revision "$fixture_main" --magik-revision "$fixture_magik" >/dev/null
+  platform_args=(
+    --main-bin "$package_tmp/MiSTer_MagiK"
+    --main-source-revision "$fixture_main"
+    --scanout-module "$package_tmp/mister_magik_scanout_slots.ko"
+    --scanout-metadata "$package_tmp/scanout.metadata.txt"
+    --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf"
+    --latch-metadata "$package_tmp/latch.metadata.txt"
+    --platform-manifest "$package_tmp/platform-v1.manifest"
+  )
   sqlite3 "$package_tmp/mame.sqlite3" \
     "CREATE TABLE release_check(name TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO release_check VALUES('kind','package-self-test');"
   sqlite3 "$package_tmp/tiny-hbmame.sqlite3" \
@@ -96,6 +128,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
       --mame-source-ref test-fixture \
       --hbmame-sqlite "$package_tmp/tiny-hbmame.sqlite3" \
       --hbmame-source-revision test-fixture \
+      "${platform_args[@]}" \
       --name tiny-hbmame \
       --out-dir "$package_tmp/out" >/dev/null 2>&1; then
     echo "expected tiny HBMAME metadata DB package to fail" >&2
@@ -126,6 +159,7 @@ SQL
     --mame-source-ref test-fixture \
     --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
     --hbmame-source-revision test-fixture \
+    "${platform_args[@]}" \
     --name valid-hbmame \
     --out-dir "$package_tmp/out" >/dev/null
   python3 - "$package_tmp/out/valid-hbmame.zip" <<'PY'
@@ -141,6 +175,12 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         "licenses/RUST-LIBRARIES.txt",
         "licenses/FFMPEG-LGPL-2.1-or-later.txt",
         "licenses/PRESS-START-2P-OFL-1.1.txt",
+        "MiSTer_MagiK",
+        "mister-magik/platform-v1.manifest",
+        "mister-magik/mister_magik_scanout_slots.ko",
+        "mister-magik/mister_magik_scanout_slots.metadata.txt",
+        "mister-magik/fpga/menu-magik-vblank-latch.rbf",
+        "mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
     }
     missing = sorted(required - names)
     if missing:
