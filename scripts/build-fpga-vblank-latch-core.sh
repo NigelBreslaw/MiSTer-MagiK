@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-LATCH_RTL="$ROOT/experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv"
+PATCH="$ROOT/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+LATCH_RTL="$ROOT/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then

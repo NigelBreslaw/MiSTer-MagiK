@@ -56,8 +56,8 @@ def main() -> None:
     if conflicts:
         fail("upstream opcode conflict: " + "; ".join(conflicts))
 
-    patch = root / "experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-    rtl = root / "experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv"
+    patch = root / "fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+    rtl = root / "fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
