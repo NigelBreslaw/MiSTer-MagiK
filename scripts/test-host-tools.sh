@@ -78,12 +78,16 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   mkdir -p "$package_tmp/out"
   printf '#!/bin/sh\nexit 0\n' >"$package_tmp/mister-magik-fb"
   chmod 755 "$package_tmp/mister-magik-fb"
+  printf 'ui,video\n' >"$package_tmp/mister-magik-fb.features"
+  MISTER_MAGIK_BUILD_NUMBER=42 MISTER_MAGIK_VERSION=0.2.42 \
+    bash -c 'source "$1/scripts/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui,video all' \
+    _ "$ROOT" "$package_tmp/mister-magik-fb"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/mister-magik-catalog-builder"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
   printf 'module fixture\n' >"$package_tmp/mister_magik_scanout_slots.ko"
   printf 'rbf fixture\n' >"$package_tmp/menu-magik-vblank-latch.rbf"
   fixture_contract="$(printf contract | sha256sum | awk '{print $1}')"
-  fixture_magik="2222222222222222222222222222222222222222"
+  fixture_magik="$(git -C "$ROOT" rev-parse HEAD)"
   fixture_main="1111111111111111111111111111111111111111"
   fixture_menu="3333333333333333333333333333333333333333"
   printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
@@ -104,6 +108,8 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     --latch-metadata "$package_tmp/latch.metadata.txt" \
     --main-revision "$fixture_main" --magik-revision "$fixture_magik" >/dev/null
   platform_args=(
+    --version 0.2.42
+    --build-number 42
     --catalog-builder "$package_tmp/mister-magik-catalog-builder"
     --main-bin "$package_tmp/MiSTer_MagiK"
     --main-source-revision "$fixture_main"
@@ -164,7 +170,10 @@ SQL
     --hbmame-source-revision test-fixture \
     "${platform_args[@]}" \
     --name valid-hbmame \
+    --release-assets-dir "$package_tmp/release-assets" \
     --out-dir "$package_tmp/out" >/dev/null
+  test -f "$package_tmp/release-assets/release-assets.json"
+  test -f "$package_tmp/release-assets/SHA256SUMS"
   python3 - "$package_tmp/out/valid-hbmame.zip" <<'PY'
 import sys
 import zipfile

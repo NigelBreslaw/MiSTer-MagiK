@@ -69,8 +69,8 @@ cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D
 step "Clippy MagiK agent"
 cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings
 
-step "ARM release-device build"
-"$ROOT/magik-gui/build-arm.sh" --device
+step "ARM release-device ui,video build"
+"$ROOT/magik-gui/build-arm.sh" --device --video
 
 step "ARM catalog builder build"
 "$ROOT/scripts/build-catalog-builder.sh" --device
@@ -95,6 +95,9 @@ package_args=(
   --mame-source-ref release-check-fixture
   --name release-check
   --out-dir "$WORK"
+  --version "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" version)"
+  --build-number "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" build_number)"
+  --release-assets-dir "$WORK/release-assets"
 )
 if [ -f "$MAIN_BIN" ]; then
   MAIN_SOURCE_REVISION="$(git -C "$(dirname "$MAIN_BIN")/.." rev-parse HEAD)"
@@ -103,7 +106,7 @@ else
   cp "$BIN" "$MAIN_BIN"
   MAIN_SOURCE_REVISION="1111111111111111111111111111111111111111"
 fi
-MAGIK_REVISION="2222222222222222222222222222222222222222"
+MAGIK_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 MENU_REVISION="3333333333333333333333333333333333333333"
 printf 'module release-check\n' > "$WORK/mister_magik_scanout_slots.ko"
 printf 'rbf release-check\n' > "$WORK/menu-magik-vblank-latch.rbf"
