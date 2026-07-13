@@ -10,6 +10,8 @@
 #   ./build-arm.sh --video-lab  → release-device with video comparison/fallback paths
 #   ./build-arm.sh --diagnostics → release-device with diagnostics commands
 #   ./build-arm.sh --bench-tools → release-device with device benchmark commands
+# Default UI builds also build the matching catalog builder. Use
+# --catalog-builder only for the rare standalone catalog optimization workflow.
 #
 # Every build emits a Cargo timing report under target/cargo-timings/ so we can
 # spot expensive crates and accidental target/feature creep.
@@ -232,3 +234,10 @@ printf '%s\n' "${FEATURE_LIST:-none}" >"$BIN.features"
 source "$PWD/../scripts/bench-context-lib.sh"
 bench_context_write_build_receipt "$BIN" "$PWD/.." "$PROFILE" "${FEATURE_LIST:-none}" "$UI_SCOPE"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"
+
+if [ -z "$BIN_TARGET" ]; then
+  rm -f "$BUILD_LOG" "$STAGED_LICENSE"
+  trap - EXIT
+  echo "==> building matching catalog builder"
+  MISTER_ARM_BUILD_BACKEND=cross "$PWD/build-arm.sh" --catalog-builder --device
+fi

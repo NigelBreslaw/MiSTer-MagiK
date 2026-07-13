@@ -78,6 +78,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   mkdir -p "$package_tmp/out"
   printf '#!/bin/sh\nexit 0\n' >"$package_tmp/mister-magik-fb"
   chmod 755 "$package_tmp/mister-magik-fb"
+  cp "$package_tmp/mister-magik-fb" "$package_tmp/mister-magik-catalog-builder"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
   printf 'module fixture\n' >"$package_tmp/mister_magik_scanout_slots.ko"
   printf 'rbf fixture\n' >"$package_tmp/menu-magik-vblank-latch.rbf"
@@ -96,12 +97,14 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     --output "$package_tmp/platform-v1.manifest" \
     --main "$package_tmp/MiSTer_MagiK" \
     --gui "$package_tmp/mister-magik-fb" \
+    --catalog-builder "$package_tmp/mister-magik-catalog-builder" \
     --scanout-module "$package_tmp/mister_magik_scanout_slots.ko" \
     --scanout-metadata "$package_tmp/scanout.metadata.txt" \
     --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf" \
     --latch-metadata "$package_tmp/latch.metadata.txt" \
     --main-revision "$fixture_main" --magik-revision "$fixture_magik" >/dev/null
   platform_args=(
+    --catalog-builder "$package_tmp/mister-magik-catalog-builder"
     --main-bin "$package_tmp/MiSTer_MagiK"
     --main-source-revision "$fixture_main"
     --scanout-module "$package_tmp/mister_magik_scanout_slots.ko"
@@ -176,6 +179,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         "licenses/FFMPEG-LGPL-2.1-or-later.txt",
         "licenses/PRESS-START-2P-OFL-1.1.txt",
         "MiSTer_MagiK",
+        "mister-magik/mister-magik-catalog-builder",
         "mister-magik/platform-v1.manifest",
         "mister-magik/mister_magik_scanout_slots.ko",
         "mister-magik/mister_magik_scanout_slots.metadata.txt",

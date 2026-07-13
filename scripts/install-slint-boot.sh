@@ -19,6 +19,7 @@ test -r "$manifest"
 test "$(get format)" = mister-magik-platform-v1
 test "$(get main_path)" = /media/fat/MiSTer_MagiK
 test "$(get gui_path)" = /media/fat/mister-magik/mister-magik-fb
+test "$(get catalog_builder_path)" = /media/fat/mister-magik/mister-magik-catalog-builder
 test "$(get scanout_module_path)" = /media/fat/mister-magik/mister_magik_scanout_slots.ko
 test "$(get scanout_metadata_path)" = /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt
 test "$(get latch_rbf_path)" = /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf
@@ -31,6 +32,7 @@ check() {
 }
 check main
 check gui
+check catalog_builder
 check scanout_module
 check scanout_metadata
 check latch_rbf

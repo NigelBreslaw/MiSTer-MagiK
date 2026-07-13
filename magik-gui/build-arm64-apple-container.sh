@@ -299,3 +299,10 @@ echo "==> build OK: $BIN"
 echo "==> mirrored binary: $MIRROR_BIN"
 echo "==> binary size: $BYTES bytes"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$MIRROR_BIN"
+
+if [ -z "$BIN_TARGET" ]; then
+  rm -f "$STAGED_LICENSE"
+  trap - EXIT
+  echo "==> building matching catalog builder"
+  "$PWD/build-arm64-apple-container.sh" --catalog-builder --device
+fi

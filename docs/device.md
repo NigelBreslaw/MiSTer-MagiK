@@ -158,8 +158,8 @@ The known-good activation sequence is:
    re-execs itself on that core, loads the scanout-slots module, then starts the
    launcher.
 
-   `scripts/deploy-platform.sh` installs Main, Rust, the scanout module and
-   metadata, the CI-built latch RBF and metadata, and activates
+   `scripts/deploy-platform.sh` installs Main, the matched Rust frontend and
+   catalog builder, the scanout module and metadata, the CI-built latch RBF and metadata, and activates
    `platform-v1.manifest` last. `scripts/install-slint-boot.sh` refuses to arm
    MagiK boot unless the complete installed bundle verifies.
 

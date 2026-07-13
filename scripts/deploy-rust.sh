@@ -82,6 +82,13 @@ echo "==> Cross-building (armv7 profile=$PROFILE)"
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
+# The default ARM build produced both runtime binaries. Activate the builder
+# first, so a builder build/deploy failure cannot leave a new UI paired with an
+# old schema writer. The standalone deploy script remains available for the
+# rare catalog optimization workflow.
+echo "==> Deploying matching catalog builder"
+"$HERE/scripts/deploy-catalog-builder.sh" --skip-build
+
 echo "==> Deploying Slint logo -> $REMOTE_ART_DIR"
 LOCAL_SLINT_LOGO_RAW="$(mktemp "${TMPDIR:-/tmp}/slint-logo-pixel-rgba.XXXXXX")"
 python3 "$HERE/scripts/png-to-slint-rgba.py" "$LOCAL_SLINT_LOGO" "$LOCAL_SLINT_LOGO_RAW"
@@ -140,8 +147,6 @@ printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path
   "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"
 
 echo "==> Deployed ($PROFILE)."
-echo "==> Building and deploying catalog builder"
-"$HERE/scripts/deploy-catalog-builder.sh"
 echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"

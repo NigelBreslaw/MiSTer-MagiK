@@ -816,7 +816,9 @@ the launcher can become usable at the existing RAM-catalog gate. The existing
 SQLite, summary, navigation, stamp, and rebuild-marker formats remain the
 on-disk contract.
 
-Build or deploy only this component with:
+The default ARM build produces both the frontend and its matching catalog
+builder, and normal runtime/platform deploys install the pair. Build or deploy
+only the builder for a rare catalog-optimization iteration with:
 
 ```bash
 scripts/build-catalog-builder.sh --device
@@ -825,8 +827,10 @@ scripts/profile-first-scan.sh LABEL --deploy-catalog --replace-label
 ```
 
 Catalog-only deployment atomically replaces the builder and does not suspend or
-restart the launcher. A normal `scripts/deploy-rust.sh` deployment installs both
-executables.
+restart the launcher. It is deliberately not a normal release deployment and
+does not update the platform manifest. A normal `scripts/deploy-rust.sh`
+deployment builds both executables before changing the device; production
+platform deployment and packaging hash-pin both in `platform-v1.manifest`.
 Runtime folder classification treats names, installed core identities, payload
 extensions, and support firmware as evidence. Strong normalized numeric-family
 aliases such as `PC88` and `PC8801` may learn the folder's observed payload

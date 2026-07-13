@@ -134,6 +134,7 @@ changes, and summarize failed experiment branches rather than merging them.
 # Full MiSTer release (fat LTO + Cortex-A9)
 magik-gui/build-arm.sh
 # → target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+# → target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder
 # On Apple Silicon this uses Apple's container runtime by default.
 # Set MISTER_ARM_BUILD_BACKEND=cross to force the CI/Linux cross-rs backend.
 
@@ -145,7 +146,7 @@ magik-gui/build-arm.sh --experiments
 
 # Explicit spelling for the same release-device build.
 magik-gui/build-arm.sh --device
-# → target/.../release-device/mister-magik-fb
+# → both matched runtime binaries under target/.../release-device/
 
 # Profiling build (symbols, pprof feature — do not ship)
 magik-gui/build-arm.sh --profile
