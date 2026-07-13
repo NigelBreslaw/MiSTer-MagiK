@@ -1278,8 +1278,11 @@ mod tests {
         assert_ne!(root_rows.row_count(), computer_rows.row_count());
         assert_eq!(computer_rows.row_count(), 1);
         assert_eq!(
-            computer_rows.row_data(0).expect("computer vendor").label,
-            "Commodore"
+            computer_rows
+                .row_data(0)
+                .expect("flattened computer collection")
+                .label,
+            "Commodore Amiga"
         );
     }
 

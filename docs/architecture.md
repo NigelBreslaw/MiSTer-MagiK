@@ -384,17 +384,19 @@ level, while `Home` returns directly to the hierarchy root. Each level retains
 its selected tile and horizontal scroll position, and Settings returns to the
 level that opened it. Launch return state records the active collection and
 menu path; older system-only state is resolved to that system's primary path.
-SNK Arcade and NeoGeo Pocket are deliberate alternate routes: SNK Arcade is a
-pre-indexed subset of the normal Arcade catalog selected by an `SNK`
-manufacturer token, and NeoGeo Pocket is available from both SNK NeoGeo and
-Handhelds/SNK.
+Vendor groups with only one installed collection are flattened into a single
+branded collection tile, such as `Sony PlayStation`, so a vendor grouping never
+adds a level solely for one child. SNK Arcade is a pre-indexed subset of the
+normal Arcade catalog selected by an `SNK` manufacturer token. NeoGeo Pocket is
+only available under Handhelds/SNK and is not duplicated under SNK NeoGeo.
 
-The curated hierarchy is fixed; only empty branches are removed:
+The curated hierarchy and ordering are fixed; empty branches are removed, and
+vendor branches with one installed collection are flattened into their parent:
 
 | Level | Ordered children / owned system IDs |
 | --- | --- |
 | Root | Arcade; SNK NeoGeo; Consoles; Handhelds; Computers |
-| SNK NeoGeo | Arcade shortcut; NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`); NeoGeo Pocket (`neogeopocket`, `ngpc`) |
+| SNK NeoGeo | Arcade shortcut; NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`) |
 | Consoles | Atari (`atari2600`, `atari5200`, `atari7800`, `jaguar`); Sega (`sg1000`, `sms`, `megadrive`, `megacd`, `s32x`, `saturn`); Sony (`psx`); Nintendo (`nes`, `fds`, `snes`, `satellaview`, `n64`); NEC (`tgfx16`, `tgfx16-cd`, `supergrafx`); Other |
 | Handhelds | Nintendo (`gb`, `gameboy`, `gameboy2p`, `gbc`, `gba`, `gba2p`, `sgb`, `sgb2`, `pokemonmini`); Sega (`gamegear`); Atari (`atarilynx`); SNK (`neogeopocket`, `ngpc`); Bandai (`wonderswan`, `wonderswancolor`); Other |
 | Computers | Acorn (`acornatom`, `acornelectron`, `bbcmicro`, `archie`); Apple (`apple-ii`, `macplus`, `maclc`); Commodore (`amiga`, `c64`, `c128`, `c16`, `vic20`, `pet2001`); Atari (`atari800`, `atarist`); Sinclair (`zx81`, `zx-spectrum`, `ql`); Tandy/Radio Shack (`trs-80`, `coco2`, `coco3`); DOS/PC (`ao486`, `dos`); Japanese Computers (`msx`, `msx2`, `pc88`, `pc98`, `x68000`, `x1`, `sharp-x1`, `fm7`, `fmtowns`); Other |
