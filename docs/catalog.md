@@ -26,6 +26,10 @@ APIs, progress states, and benchmark expectations.
 
 - `magik-gui/catalog/src/catalog_config.rs` owns default roots, DB paths, schema
   version, and catalog build version.
+- `magik-gui/catalog/data/system_taxonomy.json` is the checked-in, versioned
+  product taxonomy for systems. `catalog_classify.rs` is its only parser and
+  resolver. It owns stable system IDs, display titles, platform kinds, launcher
+  sections/families, aliases, and ordering.
 - `magik-gui/catalog/src/catalog_stamp.rs` owns the warm validation stamp.
 - `magik-gui/catalog/src/catalog_store.rs` owns stamp persistence helpers.
 - `magik-gui/catalog/src/catalog_build_record.rs` owns the completed-build
@@ -42,6 +46,42 @@ APIs, progress states, and benchmark expectations.
   adapter for starting and polling catalog, media, launch, and background jobs.
 - `magik-gui/src/launcher.rs` owns the library rebuild-on-next-boot marker plus
   virtual launch cache stamping and materialization.
+
+## System Classification Authority
+
+System association and system classification are separate decisions. Discovery
+first associates a playable item with a stable system ID. The canonical system
+taxonomy then resolves that ID to exactly one platform kind and launcher
+placement. Launch profiles, discovery ordering, payload extensions, core names,
+and filesystem locations are never product-taxonomy authorities.
+
+In particular, `_Arcade/cores` is a launch-mechanics location. A core being
+installed there does not make its system Arcade. The canonical classifications
+include `sms` as Console / Sega, `gamegear` as Handheld / Sega, and `astrocade`
+as Console / Other. A disagreement between core location and the canonical
+result is retained in `system_classification_diagnostics`; it cannot override
+the result.
+
+Checked-in taxonomy parse failures, duplicate IDs or aliases, and missing
+definitions for checked-in launch profiles are release-blocking validation
+errors. Invalid persisted platform-kind values are fatal hydration errors and
+must reach the visible library-load failure flow rather than silently becoming
+`Unknown` or publishing a ready catalog. A genuinely new runtime system remains
+visible through the explicit `Unknown` classification and is placed under
+Consoles / Other with an audit diagnostic until its taxonomy row is added.
+
+Schema 65 persists `systems.platform_kind` and
+`systems.classification_source`, with a constrained set of normalized platform
+kind values. RAM construction, SQLite hydration, summary projection,
+navigation projection, and launcher hierarchy all consume that resolved value;
+none re-infers classification from a core path.
+
+The root Arcade tile is a virtual collection derived only from taxonomy rows in
+the Arcade launcher section. Its displayed number is exactly the length of its
+visible, preferred, parent-collapsed game projection. Alternatives, bootlegs,
+clones, Neo Geo, SMS, Game Gear, Astrocade, and every console/handheld/computer
+system are excluded from that number. There is no fallback to raw system sums
+or broader physical `_Arcade` membership.
 
 ## Read-Only Inspection
 
@@ -142,7 +182,7 @@ the adjacent warm-start projections
 finalized catalog. If publication is interrupted between those steps, the
 embedded projection is the exact recovery source for recreating the pair.
 
-Schema 64 temporarily retains populated `ui_arcade_*`,
+Schema 65 temporarily retains populated `ui_arcade_*`,
 `launcher_catalog_rows`, and related materialized compatibility tables. Release
 acceptance, diagnostics, and benchmark selectors still query them while they
 are migrated to the canonical navigation contract. These tables are not the
