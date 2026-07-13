@@ -29,14 +29,14 @@ use crate::catalog_projection::{
 };
 use crate::catalog_stamp;
 use crate::core_audit::{self, CatalogAuditRow};
+#[cfg(test)]
+use crate::game_discovery::preferred_playable_discoveries_by_key;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, covered_payload_paths, is_launcher_launch_ref,
     is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
     preferred_playable_discovery_indices_by_key, profile_id_for_discovery, DiscoverySourceKind,
     GameDiscovery,
 };
-#[cfg(test)]
-use crate::game_discovery::preferred_playable_discoveries_by_key;
 use crate::launch_profiles::{self, CollectionListing, LaunchProfile, PayloadRule};
 use crate::library_indexer::LibraryIndexer;
 use crate::prepared_collections::PreparedCollectionId;
@@ -655,11 +655,10 @@ pub(crate) fn rewrite_catalog_projections_from_sqlite(
     let repair_t = std::time::Instant::now();
     sqlite_catalog::rewrite_catalog_projections_for_catalog(sqlite_path, &loaded.catalog, stamp)?;
     let repair_us = repair_t.elapsed().as_micros() as u64;
-    let summary_bytes = std::fs::metadata(crate::catalog_summary::summary_path_for_sqlite(
-        sqlite_path,
-    ))
-    .map(|metadata| metadata.len())
-    .unwrap_or(0);
+    let summary_bytes =
+        std::fs::metadata(crate::catalog_summary::summary_path_for_sqlite(sqlite_path))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
     let navigation_bytes = std::fs::metadata(navigation_path_for_sqlite(sqlite_path))
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -1056,10 +1055,8 @@ pub(crate) fn apply_library_path_map_to_ram_artifact(
     }
     remap_library_scan_paths(&mut artifact.scan, &rules);
     let covered_payloads = covered_payload_paths(&artifact.scan.discoveries);
-    artifact.preferred_discoveries = preferred_playable_discovery_indices_by_key(
-        &artifact.scan.discoveries,
-        &covered_payloads,
-    );
+    artifact.preferred_discoveries =
+        preferred_playable_discovery_indices_by_key(&artifact.scan.discoveries, &covered_payloads);
     artifact.stats.discoveries = artifact.preferred_discoveries.len();
     artifact
 }
@@ -1204,7 +1201,7 @@ fn build_catalog_from_scan_with_sources_and_preferred(
         .map(|profile| {
             (
                 profile.system_id.clone(),
-                PlatformKind::from_category(&profile.category),
+                crate::catalog_classify::platform_kind_for_system(&profile.system_id),
             )
         })
         .collect::<HashMap<_, _>>();
@@ -1217,15 +1214,12 @@ fn build_catalog_from_scan_with_sources_and_preferred(
         })
         .map(|profile| profile.system_id.clone())
         .collect::<HashSet<_>>();
-    for discovery in discoveries
-        .values()
-        .map(|index| &scan.discoveries[*index])
-    {
+    for discovery in discoveries.values().map(|index| &scan.discoveries[*index]) {
         let system_id = catalog_system_id_for_discovery(discovery);
         *playable_counts.entry(system_id.clone()).or_default() += 1;
         platform_kinds
             .entry(system_id)
-            .or_insert_with(|| PlatformKind::from_category(&discovery.category));
+            .or_insert_with_key(|id| crate::catalog_classify::platform_kind_for_system(id));
     }
     let promoted_systems = playable_counts
         .iter()
@@ -1236,11 +1230,8 @@ fn build_catalog_from_scan_with_sources_and_preferred(
             .then_some(system_id.clone())
         })
         .collect::<HashSet<_>>();
-    let arcade_setnames = arcade_metadata_setnames(
-        discoveries
-            .values()
-            .map(|index| &scan.discoveries[*index]),
-    );
+    let arcade_setnames =
+        arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
     let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
     let arcade_metadata = load_arcade_machine_metadata_for_setnames(
         sources.mame_sqlite_path,
@@ -2181,7 +2172,10 @@ mod tests {
             sequential_artifact.scan.audit_rows
         );
         assert_eq!(parallel_artifact.stamp, sequential_artifact.stamp);
-        assert_eq!(parallel_artifact.stats.audit_rows, sequential_artifact.stats.audit_rows);
+        assert_eq!(
+            parallel_artifact.stats.audit_rows,
+            sequential_artifact.stats.audit_rows
+        );
         let sequential_navigation =
             crate::catalog_navigation::encode_catalog_navigation_for_storage(
                 &sequential_catalog,
@@ -2218,14 +2212,15 @@ mod tests {
             &scan.installed_cores,
             &scan.game_dir_facts,
         );
-        let stored_checkpoint = crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
-            &scan.roots,
-            &root.join("mame.sqlite3"),
-            &root.join("hbmame.sqlite3"),
-            &initial_audit,
-            &scan.installed_cores,
-            &scan.game_dir_facts,
-        );
+        let stored_checkpoint =
+            crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
+                &scan.roots,
+                &root.join("mame.sqlite3"),
+                &root.join("hbmame.sqlite3"),
+                &initial_audit,
+                &scan.installed_cores,
+                &scan.game_dir_facts,
+            );
 
         let ram = ram_artifact_for_test(scan, 0);
         let (artifact, _catalog, _timing) = ram
@@ -2235,7 +2230,8 @@ mod tests {
         std::fs::create_dir_all(root.join("games/SNES")).expect("create drift games dir");
         std::fs::write(root.join("games/SNES/Game.sfc"), b"sfc").expect("write drift game");
 
-        let current_cores = crate::catalog_discovery::installed_cores_for_roots(&artifact.scan.roots);
+        let current_cores =
+            crate::catalog_discovery::installed_cores_for_roots(&artifact.scan.roots);
         let current_game_dirs =
             crate::catalog_discovery::top_level_game_dirs_for_roots(&artifact.scan.roots);
         let current_audit = core_audit::audit_catalog_coverage_from_facts(
@@ -2252,10 +2248,8 @@ mod tests {
                 &current_cores,
                 &current_game_dirs,
             );
-        let drift = CatalogDriftSummary::from_checkpoints(
-            Some(&stored_checkpoint),
-            &current_checkpoint,
-        );
+        let drift =
+            CatalogDriftSummary::from_checkpoints(Some(&stored_checkpoint), &current_checkpoint);
         assert!(!drift.unchanged);
         assert!(drift.changed_cores > 0 || drift.changed_game_dirs > 0);
         let current_stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
@@ -2309,14 +2303,20 @@ mod tests {
             &scan.installed_cores,
             &scan.game_dir_facts,
         );
-        assert!(checkpoint.lines().iter().all(|line| !line.contains("/source/library")));
+        assert!(checkpoint
+            .lines()
+            .iter()
+            .all(|line| !line.contains("/source/library")));
     }
 
     #[test]
     fn parallel_catalog_prepare_worker_keeps_foreground_all_online_policy() {
         use crate::runtime_thread::{RuntimeThreadPolicy, ThreadAffinity};
 
-        assert_eq!(CATALOG_PREPARE_WORKER_ROLE, RuntimeThreadRole::CatalogForeground);
+        assert_eq!(
+            CATALOG_PREPARE_WORKER_ROLE,
+            RuntimeThreadRole::CatalogForeground
+        );
         assert_eq!(
             CATALOG_PREPARE_WORKER_ROLE.default_policy(),
             RuntimeThreadPolicy {

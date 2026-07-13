@@ -297,9 +297,9 @@ fn generic_support_reason(path: &Path) -> Option<IgnoreReason> {
         })
     });
     let numbered_boot_rom = ext == "rom"
-        && stem.strip_prefix("boot").is_some_and(|tail| {
-            tail.is_empty() || tail.chars().all(|ch| ch.is_ascii_digit())
-        });
+        && stem
+            .strip_prefix("boot")
+            .is_some_and(|tail| tail.is_empty() || tail.chars().all(|ch| ch.is_ascii_digit()));
     let versioned_firmware_rom = ext == "rom"
         && (stem.contains("kickstart")
             || stem
@@ -315,8 +315,7 @@ fn generic_support_reason(path: &Path) -> Option<IgnoreReason> {
     if matches!(
         ext.as_str(),
         "act" | "gbp" | "nvr" | "jce" | "jmc" | "srm" | "sav"
-    )
-        || stem.contains("eeprom")
+    ) || stem.contains("eeprom")
         || stem.contains("memorytrack")
     {
         return Some(IgnoreReason::StateOrConfiguration);
@@ -553,18 +552,25 @@ fn base_profiles_for_installed_cores(
         .map(|core| catalog_discovery::compact_system_name(&core.core_id))
         .collect::<BTreeSet<_>>();
     let mut profiles = special_profiles();
-    profiles.extend(generic_manifest_profiles().into_iter().filter_map(|mut profile| {
-        if !installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase()) {
-            return None;
-        }
-        if descriptor_dirs.contains(&catalog_discovery::compact_system_name(&profile.core_name)) {
-            return None;
-        }
-        profile.game_dirs.retain(|dir| {
-            !descriptor_dirs.contains(&catalog_discovery::compact_system_name(dir))
-        });
-        (!profile.game_dirs.is_empty()).then_some(profile)
-    }));
+    profiles.extend(
+        generic_manifest_profiles()
+            .into_iter()
+            .filter_map(|mut profile| {
+                if !installed.contains(&canonical_core_id(&profile.core_name).to_ascii_lowercase())
+                {
+                    return None;
+                }
+                if descriptor_dirs
+                    .contains(&catalog_discovery::compact_system_name(&profile.core_name))
+                {
+                    return None;
+                }
+                profile.game_dirs.retain(|dir| {
+                    !descriptor_dirs.contains(&catalog_discovery::compact_system_name(dir))
+                });
+                (!profile.game_dirs.is_empty()).then_some(profile)
+            }),
+    );
     profiles
 }
 
@@ -1148,13 +1154,15 @@ fn runtime_profile_for_match(
             .filter(|extensions| !extensions.is_empty())
         })
         .or_else(|| {
-            game_dir.has_zip_files.then(|| {
-                catalog_discovery::archive_member_extensions_for_dir(&game_dir.path)
-                    .into_iter()
-                    .filter(|ext| is_observed_runtime_payload_extension(ext))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|extensions| !extensions.is_empty())
+            game_dir
+                .has_zip_files
+                .then(|| {
+                    catalog_discovery::archive_member_extensions_for_dir(&game_dir.path)
+                        .into_iter()
+                        .filter(|ext| is_observed_runtime_payload_extension(ext))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|extensions| !extensions.is_empty())
         })?;
     if !game_dir.has_zip_files
         && !game_dir
@@ -1176,7 +1184,9 @@ fn runtime_profile_for_match(
     ))
 }
 
-fn runtime_extensions_from_iter(extensions: impl IntoIterator<Item = String>) -> Option<Vec<String>> {
+fn runtime_extensions_from_iter(
+    extensions: impl IntoIterator<Item = String>,
+) -> Option<Vec<String>> {
     runtime_extensions_from_set(extensions.into_iter().collect())
 }
 
@@ -1185,7 +1195,10 @@ fn runtime_profile_for_extensions(
     core: &catalog_discovery::InstalledCore,
     extensions: Vec<String>,
 ) -> LaunchProfile {
-    let mount = if extensions.iter().all(|ext| matches!(ext.as_str(), "chd" | "cue" | "vhd")) {
+    let mount = if extensions
+        .iter()
+        .all(|ext| matches!(ext.as_str(), "chd" | "cue" | "vhd"))
+    {
         MountSpec::mount_image(0)
     } else {
         MountSpec::load_file(1)
@@ -1212,8 +1225,10 @@ fn runtime_profile_for_extensions(
     };
     LaunchProfile {
         id: format!("runtime-{id}"),
+        category: crate::catalog_classify::platform_kind_for_system(&id)
+            .category_label()
+            .to_string(),
         system_id: id,
-        category: category_for_installed_core_path(&core.path).to_string(),
         title: if distinct_variant {
             game_dir.name.clone()
         } else {
@@ -1352,18 +1367,6 @@ fn hint_matches_name(hint: &RuntimeProfileHint, name: &str) -> bool {
         .any(|hint_name| hint_name.eq_ignore_ascii_case(name))
 }
 
-fn category_for_installed_core_path(path: &Path) -> &'static str {
-    if path_has_component(path, "_Computer") {
-        "Computer"
-    } else if path_has_component(path, "_Arcade") {
-        "Arcade"
-    } else if path_has_component(path, "_LLAPI") {
-        "LLAPI"
-    } else {
-        "Console"
-    }
-}
-
 fn relative_core_path_for_installed_core(path: &Path) -> Option<String> {
     let components = path
         .components()
@@ -1380,15 +1383,6 @@ fn relative_core_path_for_installed_core(path: &Path) -> Option<String> {
         relative.truncate(relative.len() - 4);
     }
     Some(relative)
-}
-
-fn path_has_component(path: &Path, expected: &str) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|component| component.eq_ignore_ascii_case(expected))
-    })
 }
 
 pub fn core_launch_manifest_fingerprint() -> u64 {
@@ -2538,12 +2532,34 @@ mod tests {
     }
 
     #[test]
+    fn runtime_core_location_never_decides_product_classification() {
+        for (name, expected) in [
+            ("SMS", "Console"),
+            ("GameGear", "Handheld"),
+            ("Astrocade", "Console"),
+        ] {
+            let profile = runtime_profile_for_extensions(
+                &catalog_discovery::GameDirHeader {
+                    name: name.to_string(),
+                    path: PathBuf::from(format!("/media/fat/games/{name}")),
+                    signature: catalog_discovery::GameDirSignature::Unavailable,
+                },
+                &catalog_discovery::InstalledCore {
+                    core_id: name.to_string(),
+                    path: PathBuf::from(format!("/media/fat/_Arcade/cores/{name}.rbf")),
+                },
+                str_vec(&["rom"]),
+            );
+            assert_eq!(profile.category, expected, "{name}");
+        }
+    }
+
+    #[test]
     fn mgl_setname_creates_distinct_system_on_shared_core() {
         let root = unique_temp_dir("runtime-mgl-system");
         std::fs::create_dir_all(root.join("_Console")).expect("create console");
         std::fs::create_dir_all(root.join("games/GBC")).expect("create games");
-        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf")
-            .expect("write core");
+        std::fs::write(root.join("_Console/Gameboy_20260630.rbf"), b"rbf").expect("write core");
         std::fs::write(
             root.join("_Console/GameboyColor.mgl"),
             r#"<mistergamedescription><rbf>_Console/Gameboy</rbf><setname>GBC</setname></mistergamedescription>"#,
@@ -2555,7 +2571,10 @@ mod tests {
         let profile = profile_for_game_dir(&profiles, "GBC").expect("GBC profile");
 
         assert_eq!(profile.system_id, "gbc");
-        assert!(profile.core_path.as_deref().is_some_and(|path| path.contains("Gameboy")));
+        assert!(profile
+            .core_path
+            .as_deref()
+            .is_some_and(|path| path.contains("Gameboy")));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2564,23 +2583,23 @@ mod tests {
         let root = unique_temp_dir("runtime-mgl-stray-extension");
         std::fs::create_dir_all(root.join("_Console")).expect("create console");
         std::fs::create_dir_all(root.join("games/Atari2600")).expect("create games");
-        std::fs::write(root.join("_Console/Atari7800_20260630.rbf"), b"rbf")
-            .expect("write core");
+        std::fs::write(root.join("_Console/Atari7800_20260630.rbf"), b"rbf").expect("write core");
         std::fs::write(
             root.join("_Console/Atari 2600.mgl"),
             r#"<mistergamedescription><rbf>_Console/Atari7800</rbf><setname>Atari2600</setname></mistergamedescription>"#,
         )
         .expect("write descriptor");
-        std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom")
-            .expect("write game");
-        std::fs::write(root.join("games/Atari2600/Stray.a78"), b"rom")
-            .expect("write stray");
+        std::fs::write(root.join("games/Atari2600/Adventure.a26"), b"rom").expect("write game");
+        std::fs::write(root.join("games/Atari2600/Stray.a78"), b"rom").expect("write stray");
 
         let profiles = active_profiles_for_roots(&[root.display().to_string()]);
         let profile = profile_for_game_dir(&profiles, "Atari2600").expect("Atari 2600 profile");
 
         assert_eq!(profile.system_id, "atari2600");
-        assert!(profile.core_path.as_deref().is_some_and(|path| path.contains("Atari7800")));
+        assert!(profile
+            .core_path
+            .as_deref()
+            .is_some_and(|path| path.contains("Atari7800")));
         let _ = std::fs::remove_dir_all(root);
     }
 
