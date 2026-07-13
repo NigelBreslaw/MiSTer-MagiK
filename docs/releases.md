@@ -1,0 +1,115 @@
+# Releases and update_all installation
+
+MiSTer MagiK is distributed through GitHub Releases and a MiSTer Downloader
+database consumed by `update_all`. Publication is manual. The current public
+channel is Beta; the Release channel is wired for later use but should not be
+selected until a stable release is approved.
+
+## Install the Beta channel
+
+The first install is a one-time bootstrap:
+
+1. Download `mister-magik-beta-installer.zip` from the latest MiSTer MagiK
+   GitHub prerelease.
+2. Extract it at the root of the primary MiSTer SD card. It installs only
+   `downloader_mister_magik.ini`, which points at the Beta database.
+3. Boot the MiSTer and run `update_all`. Downloader fetches the complete
+   platform without changing `MiSTer.ini` or boot configuration.
+4. Run `Scripts` -> `mister-magik` once. The installer verifies the platform
+   manifest, every required file hash, the shared platform contract, module
+   metadata, RBF metadata, and executables before enabling the handoff.
+5. Reboot normally. In Settings -> Info, confirm the displayed version matches
+   the GitHub prerelease version.
+
+The bootstrap does not replace stock `/media/fat/MiSTer`, root `menu.rbf`, or
+any `MiSTer.ini`. If the download is partial, corrupt, or mixed between builds,
+the installer exits before changing boot state.
+
+After installation, update by running `update_all` and rebooting normally.
+Existing catalogs, media, settings, snapshots, and user content are outside the
+Downloader database and are preserved.
+
+## Beta and Release channels
+
+Both channels use the permanent database identity `mister_magik`. The drop-in
+selects one rolling feed:
+
+```text
+Beta:    https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-beta-db.json.zip
+Release: https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-release-db.json.zip
+```
+
+Run `Scripts` -> `mister-magik-channel` to switch feeds, then run `update_all`
+and reboot. The selector changes only `downloader_mister_magik.ini`; it never
+edits boot configuration. Beta can move ahead of Release. Selecting Release in
+the future may therefore install an older, stable build.
+
+The first Beta publication updates only the Beta feed. A future Release
+publication updates the Release feed and points Beta at that same stable build
+until a newer Beta is published.
+
+## Disable and rollback
+
+To disable the handoff without deleting MiSTer MagiK data, run this from a
+MiSTer shell and reboot normally:
+
+```sh
+sh /media/fat/Scripts/mister-magik.sh disable
+```
+
+This removes only the `main=MiSTer_MagiK` selection, restores the stock inittab
+shape, and retains the application, catalogs, settings, snapshots, and media.
+To enable it again, run `Scripts` -> `mister-magik` and reboot.
+
+If an update is interrupted, run `update_all` again before rebooting. The
+platform manifest and hashes prevent activation of an incomplete initial
+installation; the Main fork rejects an invalid latch/platform contract and
+keeps the stock menu path available. Do not manually mix files from different
+release ZIPs.
+
+## Manual publication checklist
+
+The workflow is `.github/workflows/distribution.yml` and has only the
+`workflow_dispatch` trigger.
+
+Before dispatch:
+
+1. Merge all release changes to `main` and run `scripts/release-check-host.sh`.
+2. Obtain successful FPGA Vblank Latch and Kernel scanout workflow run IDs for
+   the exact `main` commit being released.
+3. Configure protected GitHub environments named `publish-beta` and
+   `publish-release`, with required reviewers. For the first publication,
+   configure and use `publish-beta` only.
+4. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
+
+In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
+sure the branch is `main`, enter the qualified run IDs and Main_MiSTer ref, and
+select `beta`. The workflow computes the version from the dispatched commit:
+
+```text
+build   = git rev-list --count <dispatched-commit>
+version = 0.2.<build>
+tag     = v0.2.<build>
+```
+
+The build job uploads `mister-magik-0.2.<build>-candidate` before the protected
+publish job can start. Download that exact candidate, run
+`sha256sum --check SHA256SUMS`, install its distribution ZIP on the release-test
+SD card, and run the complete device gate:
+
+```bash
+scripts/device-release-acceptance.sh --skip-deploy
+```
+
+Check the candidate contains the expected ZIP, individual Downloader assets,
+channel database and bootstrap ZIP, `release-assets.json`, and `SHA256SUMS`.
+Confirm Settings -> Info, the package filename, `mister-magik/release-v1.txt`,
+and all database asset URLs use the same `0.2.<build>`. Test fresh Beta install,
+Beta-to-Beta update, interrupted-update repair, disable, and stock rollback.
+Approve `publish-beta` only after those checks pass.
+
+The publish job rejects non-`main` dispatches and existing tags, verifies all
+candidate checksums again, creates a prerelease titled
+`MiSTer MagiK 0.2.<build> Beta`, and updates only the Beta feed. Release assets
+and version tags are immutable and are never overwritten.
+

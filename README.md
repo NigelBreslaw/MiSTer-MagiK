@@ -25,6 +25,15 @@ MiSTer MagiK changes system configuration and controls low-level aspects of a
 MiSTer installation. Installing and using it is at your own risk. Back up your
 SD card and read the full [MiSTer MagiK disclaimer](disclaimer.md) before use.
 
+## Beta installation and updates
+
+MiSTer MagiK Beta is installed through the MiSTer Downloader used by
+`update_all`. Download the Beta installer ZIP, extract it to the SD-card root,
+run `update_all`, then run `Scripts` -> `mister-magik` once and reboot normally.
+Later updates require only `update_all` and a normal reboot. See
+[Releases and update_all installation](docs/releases.md) for the download
+channel, verification, switching, disable, and rollback details.
+
 ## Built With Slint
 
 MiSTer MagiK is built with [Slint](https://slint.dev), a modern declarative UI
