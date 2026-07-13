@@ -13,6 +13,10 @@ EXPECTED_DURABLE_GAMES=69571
 EXPECTED_VISIBLE_GAMES=67235
 EXPECTED_SYSTEMS=69
 EXPECTED_PC88_GAMES=3831
+EXPECTED_ARCADE_GAMES=909
+EXPECTED_SMS_GAMES=447
+EXPECTED_GAMEGEAR_GAMES=422
+EXPECTED_ASTROCADE_GAMES=23
 SETTLE_SECS=5
 RACE_REFRESH=0
 LABEL=""
@@ -137,6 +141,10 @@ acceptance_reporting_self_test() {
   grep -q $'selftest\ttwo\tfail\t>0\t0\tbad' "$RESULTS_TSV"
   [[ "$EXPECTED_DURABLE_GAMES" == "69571" ]]
   [[ "$EXPECTED_VISIBLE_GAMES" == "67235" ]]
+  [[ "$EXPECTED_ARCADE_GAMES" == "909" ]]
+  [[ "$EXPECTED_SMS_GAMES" == "447" ]]
+  [[ "$EXPECTED_GAMEGEAR_GAMES" == "422" ]]
+  [[ "$EXPECTED_ASTROCADE_GAMES" == "23" ]]
   binary="$tmp/mister-magik-fb"
   printf 'binary\n' >"$binary"
   printf 'ui\n' >"$binary.features"
@@ -307,6 +315,20 @@ read -r visible_games visible_systems < <(
 )
 assert_eq "launcher-visible game count" "$EXPECTED_VISIBLE_GAMES" "$visible_games"
 assert_eq "launcher system count" "$EXPECTED_SYSTEMS" "$visible_systems"
+read -r arcade_games sms_games sms_kind gamegear_games gamegear_kind astrocade_games astrocade_kind < <(
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s={x["id"]:x for x in d["systems"]}; print(len(d["hot_games"]),s["sms"]["count"],s["sms"]["platform_kind"],s["gamegear"]["count"],s["gamegear"]["platform_kind"],s["astrocade"]["count"],s["astrocade"]["platform_kind"])' "$SUMMARY_COPY"
+)
+assert_eq "Arcade visible parent count" "$EXPECTED_ARCADE_GAMES" "$arcade_games"
+assert_eq "SMS game count" "$EXPECTED_SMS_GAMES" "$sms_games"
+assert_eq "SMS platform kind" "console" "$sms_kind"
+assert_eq "Game Gear game count" "$EXPECTED_GAMEGEAR_GAMES" "$gamegear_games"
+assert_eq "Game Gear platform kind" "handheld" "$gamegear_kind"
+assert_eq "Astrocade game count" "$EXPECTED_ASTROCADE_GAMES" "$astrocade_games"
+assert_eq "Astrocade platform kind" "console" "$astrocade_kind"
+assert_eq "non-core-location classification diagnostics" "0" "$(db_scalar "SELECT count(*) FROM system_classification_diagnostics WHERE rejected_source != 'core-location';")"
+for expected_mismatch in sms gamegear astrocade; do
+  assert_eq "$expected_mismatch core-location mismatch diagnostic" "1" "$(db_scalar "SELECT count(*) FROM system_classification_diagnostics WHERE system_id='$expected_mismatch' AND rejected_source='core-location' AND rejected_kind='arcade';")"
+done
 assert_remote_nonempty "$REMOTE_NAVIGATION"
 
 console_pack_count="$(
