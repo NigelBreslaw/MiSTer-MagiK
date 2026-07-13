@@ -18,6 +18,9 @@ manual pre-release gate rather than GitHub-hosted CI.
   a production `experiments/` directory.
 - Rollback is verified with `scripts/restore-stock-boot.sh` before publishing a
   beta build from a new release flow.
+- The exact workflow candidate passes the full device gate before a reviewer
+  approves the protected `publish-beta` or `publish-release` environment. See
+  [Releases and update_all installation](releases.md).
 
 ## Host Gate
 
