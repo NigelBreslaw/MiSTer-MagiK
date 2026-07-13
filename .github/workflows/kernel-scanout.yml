@@ -49,6 +49,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse non-main manual artifact production
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "Kernel artifact production is restricted to main; got $GITHUB_REF" >&2
+          exit 1
 
       - name: Trust the container-mounted checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -80,6 +87,25 @@ jobs:
           KERNEL_SRC="$PWD/build/Linux-Kernel_MiSTer"
           KERNEL_BUILD="$PWD/build/scanout-slots-kernel"
           scripts/build-scanout-slots-module.sh
+
+      - name: Compute main platform component identity
+        id: component-id
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          python3 scripts/platform-component-id.py component kernel --github-output "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Attest main platform component identity
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          {
+            echo "component_input_sha256=${{ steps.component-id.outputs.kernel_input_sha256 }}"
+            echo "component_revision=${{ steps.component-id.outputs.kernel_component_revision }}"
+            echo "builder_revision=$GITHUB_SHA"
+          } >> build/scanout-slots/provenance.txt
+          (cd build/scanout-slots && sha256sum mister_magik_scanout_slots.ko modinfo.txt provenance.txt imports.txt > SHA256SUMS)
 
       - name: Warning-clean rebuild
         run: >-
@@ -118,9 +144,10 @@ jobs:
           grep -q '^platform_contract_sha256=[0-9a-f]\{64\}$' build/scanout-slots/provenance.txt
 
       - name: Upload attested module
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v7
         with:
-          name: mister-magik-scanout-slots
+          name: mister-magik-scanout-slots-v0.1-${{ steps.component-id.outputs.kernel_input_sha256 }}
           path: |
             build/scanout-slots/mister_magik_scanout_slots.ko
             build/scanout-slots/modinfo.txt

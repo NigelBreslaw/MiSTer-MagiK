@@ -24,6 +24,8 @@ QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite
 APPLY_PATCH="${MISTER_FPGA_APPLY_PATCH:-1}"
 BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-$(git -C "$ROOT" show -s --format=%cd --date=format:%y%m%d HEAD)}"
 QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}"
+COMPONENT_INPUT_SHA256="${MISTER_FPGA_COMPONENT_INPUT_SHA256:-}"
+COMPONENT_REVISION="${MISTER_FPGA_COMPONENT_REVISION:-}"
 PLATFORM_CONTRACT="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 usage() {
@@ -127,6 +129,14 @@ if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then
   echo "MISTER_FPGA_BUILD_DATE must be a six-digit YYMMDD value" >&2
   exit 2
 fi
+if [[ -n "$COMPONENT_INPUT_SHA256" && ! "$COMPONENT_INPUT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "MISTER_FPGA_COMPONENT_INPUT_SHA256 must be a SHA-256 value" >&2
+  exit 1
+fi
+if [[ -n "$COMPONENT_REVISION" && ! "$COMPONENT_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "MISTER_FPGA_COMPONENT_REVISION must be a full commit SHA" >&2
+  exit 1
+fi
 python3 - "$WORK_DIR/sys/build_id.tcl" "$BUILD_DATE" <<'PY'
 from pathlib import Path
 import re
@@ -151,6 +161,10 @@ PY
   echo "format=mister-magik-fpga-release-v1"
   shasum -a 256 "$PLATFORM_CONTRACT" | awk '{print "platform_contract_sha256="$1}'
   echo "magik_commit=$QUALIFIED_MAGIK_REVISION"
+  if [[ -n "$COMPONENT_INPUT_SHA256" ]]; then
+    echo "component_input_sha256=$COMPONENT_INPUT_SHA256"
+    echo "component_revision=$COMPONENT_REVISION"
+  fi
   git -C "$ROOT" rev-parse HEAD 2>/dev/null | sed 's/^/builder_commit=/'
   git -C "$ROOT" status --short --untracked-files=no 2>/dev/null | sed 's/^/magik_status=/'
   echo "source_dir=$MENU_ABS"

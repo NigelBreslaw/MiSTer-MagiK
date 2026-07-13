@@ -117,9 +117,9 @@ def main() -> int:
         if args.command == "component":
             identity, revision = component_id(args.root.resolve(), args.name)
             if args.github_output:
-                args.github_output.write_text(
-                    f"{args.name}_input_sha256={identity}\n{args.name}_component_revision={revision}\n"
-                )
+                with args.github_output.open("a") as output:
+                    output.write(f"{args.name}_input_sha256={identity}\n")
+                    output.write(f"{args.name}_component_revision={revision}\n")
             else:
                 print(identity)
         else:
