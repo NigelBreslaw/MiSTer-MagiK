@@ -1083,6 +1083,9 @@ impl LauncherNav {
         let Some(collection) = self.taxonomy.collection(collection_id).cloned() else {
             return false;
         };
+        if self.screen == Screen::Home {
+            self.remember_current_menu_view();
+        }
         self.active_collection_id = Some(collection.id.clone());
         let filter = self
             .collection_filters
@@ -3736,6 +3739,7 @@ mod tests {
                     .manufacturer("SNK (Rock-Ola license)")
                     .build(),
                 arcade_game("Super Mario Bros").system_id("nes").build(),
+                arcade_game("Super Mario 64").system_id("n64").build(),
                 arcade_game("Pocket Tennis")
                     .system_id("neogeopocket")
                     .build(),
@@ -3747,6 +3751,7 @@ mod tests {
                 arcade_system("arcade", 1),
                 arcade_system("neogeo", 1),
                 arcade_system("nes", 1),
+                arcade_system("n64", 1),
                 arcade_system("neogeopocket", 1),
                 arcade_system("gamegear", 1),
                 arcade_system("amiga", 1),
@@ -4903,6 +4908,7 @@ mod tests {
                 arcade_system("nes", 1),
                 arcade_system("tgfx16", 1),
                 arcade_system("colecovision", 1),
+                arcade_system("intellivision", 1),
                 arcade_system("amiga", 1),
             ],
         );
@@ -4933,6 +4939,39 @@ mod tests {
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
         assert_eq!(nav.current_menu_items()[nav.selected].id, "menu:consoles");
         assert_eq!(nav.scroll_x, home_max_scroll(nav.current_menu_count()));
+    }
+
+    #[test]
+    fn leaving_collection_restores_the_highlighted_menu_item() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Super Mario Bros").system_id("nes").build(),
+                arcade_game("Super Mario 64").system_id("n64").build(),
+            ],
+            vec![arcade_system("nes", 1), arcade_system("n64", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.selected = nav
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == "n64")
+            .expect("Nintendo 64");
+
+        let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), t0, &catalog);
+        assert_eq!(nav.screen, Screen::Arcade);
+        release(&mut nav, &catalog, t0, 16);
+        let _ = nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            t0 + Duration::from_millis(32),
+            &catalog,
+        );
+
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        assert_eq!(nav.current_menu_items()[nav.selected].id, "n64");
     }
 
     #[test]
@@ -5013,22 +5052,22 @@ mod tests {
     }
 
     #[test]
-    fn launch_return_restores_exact_shortcut_path_and_legacy_state_uses_primary_path() {
+    fn launch_return_restores_flattened_primary_path() {
         let catalog = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
-        assert!(nav.open_menu("snk-neogeo"));
+        assert!(nav.open_menu("handhelds"));
         nav.selected = nav
             .current_menu_items()
             .iter()
             .position(|item| item.id == "neogeopocket")
-            .expect("NeoGeo Pocket shortcut");
+            .expect("SNK NeoGeo Pocket");
         let _ = nav.handle_input(&pad_with(|pad| pad.btn_a = true), Instant::now(), &catalog);
         let state =
             capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/Pocket Tennis.mra")
                 .expect("return state");
         assert_eq!(state.collection_id.as_deref(), Some("neogeopocket"));
-        assert_eq!(state.menu_path, vec![ROOT_MENU_ID, "menu:snk-neogeo"]);
+        assert_eq!(state.menu_path, vec![ROOT_MENU_ID, "menu:handhelds"]);
 
         let mut restored = LauncherNav::new();
         assert!(apply_launch_return_state(
@@ -5036,7 +5075,7 @@ mod tests {
             &catalog,
             state.clone()
         ));
-        assert_eq!(restored.menu_path(), &[ROOT_MENU_ID, "menu:snk-neogeo"]);
+        assert_eq!(restored.menu_path(), &[ROOT_MENU_ID, "menu:handhelds"]);
 
         let mut legacy = state;
         legacy.schema_version = 2;
@@ -5050,7 +5089,7 @@ mod tests {
         ));
         assert_eq!(
             legacy_restored.menu_path(),
-            &[ROOT_MENU_ID, "menu:handhelds", "menu:handhelds:snk"]
+            &[ROOT_MENU_ID, "menu:handhelds"]
         );
     }
 

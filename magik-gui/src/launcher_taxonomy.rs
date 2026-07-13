@@ -615,15 +615,6 @@ impl<'a> TaxonomyBuilder<'a> {
             );
         }
 
-        // NeoGeo Pocket is intentionally reachable both through the dedicated
-        // SNK menu and its primary Handhelds / SNK path.
-        if let Some(handheld_snk) = self.taxonomy.menu(HANDHELDS_SNK_MENU_ID) {
-            for item in &handheld_snk.items {
-                if HANDHELD_SNK.contains(&normalize_system_id(&item.id).as_str()) {
-                    items.push(item.clone());
-                }
-            }
-        }
         self.insert_menu(SNK_NEOGEO_MENU_ID, "SNK NeoGeo", Some(ROOT_MENU_ID), items);
     }
 
@@ -696,16 +687,32 @@ impl<'a> TaxonomyBuilder<'a> {
     }
 
     fn insert_parent_menu(&mut self, id: &str, title: &str, child_ids: &[&str]) {
-        let items = child_ids
-            .iter()
-            .filter_map(|child_id| self.taxonomy.menu(child_id))
-            .map(|menu| LauncherMenuItem {
-                id: menu.id.clone(),
-                title: menu.title.clone(),
-                count: menu.count,
-                kind: LauncherMenuItemKind::Menu,
-            })
-            .collect();
+        let mut items = Vec::new();
+        for child_id in child_ids {
+            let Some(menu) = self.taxonomy.menu(child_id).cloned() else {
+                continue;
+            };
+            if menu.items.len() == 1 && menu.items[0].kind == LauncherMenuItemKind::Collection {
+                let mut item = menu.items[0].clone();
+                item.title = flattened_vendor_title(&menu.title, &item.title);
+                if let Some(destination) = self
+                    .taxonomy
+                    .primary_system_destinations
+                    .get_mut(&normalize_system_id(&item.id))
+                {
+                    destination.menu_path = vec![ROOT_MENU_ID.to_string(), id.to_string()];
+                }
+                self.taxonomy.menus.remove(*child_id);
+                items.push(item);
+            } else {
+                items.push(LauncherMenuItem {
+                    id: menu.id,
+                    title: menu.title,
+                    count: menu.count,
+                    kind: LauncherMenuItemKind::Menu,
+                });
+            }
+        }
         self.insert_menu(id, title, Some(ROOT_MENU_ID), items);
     }
 
@@ -783,6 +790,18 @@ fn snk_title(id: &str, fallback: &str) -> String {
         "neogeo-cd" => "NeoGeo CD".to_string(),
         "neogeopocket" | "ngpc" => "NeoGeo Pocket".to_string(),
         _ => fallback.to_string(),
+    }
+}
+
+fn flattened_vendor_title(vendor: &str, collection: &str) -> String {
+    if vendor.eq_ignore_ascii_case("Other")
+        || collection
+            .to_ascii_lowercase()
+            .starts_with(&vendor.to_ascii_lowercase())
+    {
+        collection.to_string()
+    } else {
+        format!("{vendor} {collection}")
     }
 }
 
@@ -872,17 +891,38 @@ mod tests {
     }
 
     #[test]
-    fn neogeo_pocket_has_handheld_primary_path_and_snk_shortcut() {
+    fn neogeo_pocket_only_has_handheld_primary_path() {
         let taxonomy =
             LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("neogeopocket", 3)]));
         let primary = taxonomy
             .primary_destination_for_system("neogeopocket")
             .expect("primary destination");
+        assert_eq!(primary.menu_path, vec![ROOT_MENU_ID, HANDHELDS_MENU_ID]);
+        assert!(!taxonomy.menu_contains_item(SNK_NEOGEO_MENU_ID, "neogeopocket"));
+    }
+
+    #[test]
+    fn single_collection_vendor_is_flattened_into_its_category() {
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(
+            Vec::new(),
+            vec![GameSystemEntry {
+                id: "psx".to_string(),
+                title: "PlayStation".to_string(),
+                count: 7,
+            }],
+        ));
+        let consoles = taxonomy.menu(CONSOLES_MENU_ID).expect("Consoles");
+        assert_eq!(consoles.items.len(), 1);
+        assert_eq!(consoles.items[0].id, "psx");
+        assert_eq!(consoles.items[0].title, "Sony PlayStation");
+        assert_eq!(consoles.items[0].kind, LauncherMenuItemKind::Collection);
         assert_eq!(
-            primary.menu_path,
-            vec![ROOT_MENU_ID, HANDHELDS_MENU_ID, HANDHELDS_SNK_MENU_ID]
+            taxonomy
+                .primary_destination_for_system("psx")
+                .expect("PlayStation destination")
+                .menu_path,
+            vec![ROOT_MENU_ID, CONSOLES_MENU_ID]
         );
-        assert!(taxonomy.menu_contains_item(SNK_NEOGEO_MENU_ID, "neogeopocket"));
     }
 
     #[test]
@@ -908,13 +948,14 @@ mod tests {
     fn unknown_system_falls_back_to_console_other_with_diagnostic() {
         let taxonomy =
             LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("mystery-box", 2)]));
-        assert!(taxonomy.menu_contains_item(CONSOLES_OTHER_MENU_ID, "mystery-box"));
+        assert!(taxonomy.menu_contains_item(CONSOLES_MENU_ID, "mystery-box"));
+        assert!(taxonomy.menu(CONSOLES_OTHER_MENU_ID).is_none());
         assert_eq!(taxonomy.diagnostics().len(), 1);
     }
 
     #[test]
-    fn every_curated_system_id_has_its_approved_primary_vendor_path() {
-        for (ids, parent, vendor) in [
+    fn every_curated_system_id_flattens_a_single_item_vendor_path() {
+        for (ids, parent, _vendor) in [
             (CONSOLE_ATARI, CONSOLES_MENU_ID, CONSOLES_ATARI_MENU_ID),
             (CONSOLE_SEGA, CONSOLES_MENU_ID, CONSOLES_SEGA_MENU_ID),
             (CONSOLE_SONY, CONSOLES_MENU_ID, CONSOLES_SONY_MENU_ID),
@@ -962,7 +1003,7 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing primary destination for {id}"));
                 assert_eq!(
                     destination.menu_path,
-                    vec![ROOT_MENU_ID, parent, vendor],
+                    vec![ROOT_MENU_ID, parent],
                     "wrong primary path for {id}"
                 );
                 assert_eq!(destination.collection_id, *id);
@@ -984,7 +1025,7 @@ mod tests {
 
     #[test]
     fn category_fallbacks_are_complete_and_unknown_is_diagnostic() {
-        for (kind, parent, vendor) in [
+        for (kind, parent, _vendor) in [
             (
                 PlatformKind::Console,
                 CONSOLES_MENU_ID,
@@ -1011,7 +1052,7 @@ mod tests {
             let destination = taxonomy
                 .primary_destination_for_system(&id)
                 .expect("fallback destination");
-            assert_eq!(destination.menu_path, vec![ROOT_MENU_ID, parent, vendor]);
+            assert_eq!(destination.menu_path, vec![ROOT_MENU_ID, parent]);
             assert_eq!(
                 taxonomy.diagnostics().len(),
                 usize::from(kind == PlatformKind::Unknown)
@@ -1028,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn vendor_groups_keep_fixed_order_and_aggregate_counts_include_overlaps() {
+    fn flattened_vendor_items_keep_fixed_order_and_aggregate_counts_exclude_duplicates() {
         let mut snk_arcade = game("arcade", "Metal Slug", "SNK");
         snk_arcade.year = Some(1996);
         let snk_cps = game("cps1", "P.O.W.", "SNK (license)");
@@ -1073,38 +1114,31 @@ mod tests {
         };
         assert_eq!(
             menu_ids(CONSOLES_MENU_ID),
-            vec![
-                CONSOLES_ATARI_MENU_ID,
-                CONSOLES_SEGA_MENU_ID,
-                CONSOLES_SONY_MENU_ID,
-                CONSOLES_NINTENDO_MENU_ID,
-                CONSOLES_NEC_MENU_ID,
-                CONSOLES_OTHER_MENU_ID,
-            ]
+            vec!["atari2600", "sms", "psx", "nes", "tgfx16", "colecovision",]
         );
         assert_eq!(
             menu_ids(HANDHELDS_MENU_ID),
             vec![
-                HANDHELDS_NINTENDO_MENU_ID,
-                HANDHELDS_SEGA_MENU_ID,
-                HANDHELDS_ATARI_MENU_ID,
-                HANDHELDS_SNK_MENU_ID,
-                HANDHELDS_BANDAI_MENU_ID,
-                HANDHELDS_OTHER_MENU_ID,
+                "gb",
+                "gamegear",
+                "atarilynx",
+                "neogeopocket",
+                "wonderswan",
+                "supervision",
             ]
         );
         assert_eq!(
             menu_ids(COMPUTERS_MENU_ID),
             vec![
-                COMPUTERS_ACORN_MENU_ID,
-                COMPUTERS_APPLE_MENU_ID,
-                COMPUTERS_COMMODORE_MENU_ID,
-                COMPUTERS_ATARI_MENU_ID,
-                COMPUTERS_SINCLAIR_MENU_ID,
-                COMPUTERS_TANDY_MENU_ID,
-                COMPUTERS_DOS_PC_MENU_ID,
-                COMPUTERS_JAPANESE_MENU_ID,
-                COMPUTERS_OTHER_MENU_ID,
+                "acornatom",
+                "apple-ii",
+                "amiga",
+                "atari800",
+                "zx81",
+                "trs-80",
+                "dos",
+                "msx",
+                "amstrad",
             ]
         );
         assert_eq!(taxonomy.collection(MENU_ARCADE_SYSTEM_ID).unwrap().count, 2);
@@ -1115,6 +1149,6 @@ mod tests {
                 .count,
             2
         );
-        assert_eq!(taxonomy.menu(SNK_NEOGEO_MENU_ID).unwrap().count, 4);
+        assert_eq!(taxonomy.menu(SNK_NEOGEO_MENU_ID).unwrap().count, 3);
     }
 }
