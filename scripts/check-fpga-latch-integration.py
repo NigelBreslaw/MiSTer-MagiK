@@ -11,7 +11,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-PINNED_MENU_COMMIT = "3c3634c0105d78f27aeba66b38966c50dbc42c9b"
 COMMAND_PATTERNS = {
     "0x57": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')57", re.I),
     "0x58": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')58", re.I),
@@ -23,6 +22,18 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def qualified_menu_commit(root: Path) -> str:
+    pin = root / "fpga/menu-vblank-latch/Menu_MiSTer.commit"
+    try:
+        contents = pin.read_text()
+    except OSError as error:
+        fail(f"cannot read qualified Menu source revision {pin}: {error}")
+    if not re.fullmatch(r"[0-9a-f]{40}\n?", contents):
+        fail(f"invalid qualified Menu source revision in {pin}: {contents!r}")
+    commit = contents.rstrip("\n")
+    return commit
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("menu_dir", type=Path)
@@ -30,6 +41,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
+    pinned_menu_commit = qualified_menu_commit(root)
     menu = args.menu_dir.resolve()
     sys_top = menu / "sys/sys_top.v"
     qsf = menu / "menu.qsf"
@@ -42,8 +54,8 @@ def main() -> None:
         text=True,
         capture_output=True,
     ).stdout.strip()
-    if not args.allow_unpinned and commit != PINNED_MENU_COMMIT:
-        fail(f"Menu commit {commit} is not pinned {PINNED_MENU_COMMIT}")
+    if not args.allow_unpinned and commit != pinned_menu_commit:
+        fail(f"Menu commit {commit} is not pinned {pinned_menu_commit}")
 
     conflicts: list[str] = []
     for path in sorted((menu / "sys").rglob("*")):

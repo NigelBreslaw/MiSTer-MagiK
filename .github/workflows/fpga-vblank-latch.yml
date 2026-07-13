@@ -5,19 +5,6 @@ name: FPGA Vblank Latch RBF
 # actually needed.
 on:
   workflow_dispatch:
-    inputs:
-      menu_ref:
-        description: "Full MiSTer-devel/Menu_MiSTer commit SHA to build"
-        required: true
-        default: "3c3634c0105d78f27aeba66b38966c50dbc42c9b"
-      quartus_run_url:
-        description: "Optional URL for QuartusLiteSetup-17.0.0.595-linux.run; falls back to secret QUARTUS_17_0_RUN_URL"
-        required: false
-        default: "https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/QuartusLiteSetup-17.0.0.595-linux.run"
-      cyclonev_qdz_url:
-        description: "Optional URL for cyclonev-17.0.0.595.qdz; falls back to secret QUARTUS_17_0_CYCLONEV_QDZ_URL"
-        required: false
-        default: "https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/cyclonev-17.0.0.595.qdz"
 
 permissions:
   contents: read
@@ -80,20 +67,14 @@ jobs:
       - name: Download Quartus 17.0 installer payloads
         if: steps.quartus-install-cache.outputs.cache-hit != 'true'
         env:
-          QUARTUS_RUN_URL_INPUT: ${{ github.event.inputs.quartus_run_url }}
-          CYCLONEV_QDZ_URL_INPUT: ${{ github.event.inputs.cyclonev_qdz_url }}
           QUARTUS_RUN_URL_SECRET: ${{ secrets.QUARTUS_17_0_RUN_URL }}
           CYCLONEV_QDZ_URL_SECRET: ${{ secrets.QUARTUS_17_0_CYCLONEV_QDZ_URL }}
         run: |
           set -euo pipefail
           mkdir -p "$QUARTUS_CACHE_DIR"
 
-          quartus_url="${QUARTUS_RUN_URL_INPUT:-$QUARTUS_RUN_URL_SECRET}"
-          cyclonev_url="${CYCLONEV_QDZ_URL_INPUT:-$CYCLONEV_QDZ_URL_SECRET}"
-          if [ -z "$quartus_url" ] || [ -z "$cyclonev_url" ]; then
-            echo "Set workflow inputs quartus_run_url/cyclonev_qdz_url or repo secrets QUARTUS_17_0_RUN_URL/QUARTUS_17_0_CYCLONEV_QDZ_URL." >&2
-            exit 2
-          fi
+          quartus_url="${QUARTUS_RUN_URL_SECRET:-https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/QuartusLiteSetup-17.0.0.595-linux.run}"
+          cyclonev_url="${CYCLONEV_QDZ_URL_SECRET:-https://downloads.intel.com/akdlm/software/acdsinst/17.0std/595/ib_installers/cyclonev-17.0.0.595.qdz}"
 
           download_payload() {
             local url="$1"
@@ -170,6 +151,22 @@ jobs:
       - name: Checkout MagiK repo
         uses: actions/checkout@v4
 
+      - name: Read qualified Menu source revision
+        id: menu-source
+        run: |
+          set -euo pipefail
+          mapfile -t menu_refs < fpga/menu-vblank-latch/Menu_MiSTer.commit
+          if [[ ${#menu_refs[@]} -ne 1 ]]; then
+            echo "qualified Menu source revision must be exactly one line" >&2
+            exit 2
+          fi
+          menu_ref="${menu_refs[0]}"
+          if [[ ! "$menu_ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid qualified Menu source revision: $menu_ref" >&2
+            exit 2
+          fi
+          printf 'commit=%s\n' "$menu_ref" >> "$GITHUB_OUTPUT"
+
       - name: Bind runner temp to build volume
         run: |
           set -euo pipefail
@@ -200,7 +197,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MiSTer-devel/Menu_MiSTer
-          ref: ${{ github.event.inputs.menu_ref || 'master' }}
+          ref: ${{ steps.menu-source.outputs.commit }}
           path: build/Menu_MiSTer
 
       - name: Report pre-build disk state
@@ -220,7 +217,7 @@ jobs:
           QUARTUS_STRACE: "0"
         run: |
           set -euo pipefail
-          test "$(git -C "$MISTER_MENU_DIR" rev-parse HEAD)" = "${{ github.event.inputs.menu_ref }}"
+          test "$(git -C "$MISTER_MENU_DIR" rev-parse HEAD)" = "${{ steps.menu-source.outputs.commit }}"
           MISTER_FPGA_APPLY_PATCH=0 \
             MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock/Menu-work" \
