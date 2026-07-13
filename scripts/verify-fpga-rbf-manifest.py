@@ -53,6 +53,10 @@ def verify(metadata_path: Path) -> dict[str, str]:
     for name in ("platform_contract_sha256", "patch_sha256", "latch_rtl_sha256", "rbf_sha256"):
         if not SHA256_RE.fullmatch(fields[name]):
             raise ValueError(f"invalid SHA-256 in {name}")
+    if "component_input_sha256" in fields and not SHA256_RE.fullmatch(fields["component_input_sha256"]):
+        raise ValueError("invalid component_input_sha256")
+    if "component_revision" in fields and not COMMIT_RE.fullmatch(fields["component_revision"]):
+        raise ValueError("component_revision must be a full commit SHA")
     if any(key in fields for key in ("magik_status", "source_status")):
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
