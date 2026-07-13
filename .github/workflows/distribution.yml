@@ -419,6 +419,7 @@ jobs:
             --output build/platform-v1.manifest \
             --main Main_MiSTer/bin/MiSTer \
             --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
+            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
@@ -426,6 +427,7 @@ jobs:
             --main-revision "${{ steps.main-rev.outputs.sha }}" \
             --magik-revision "$GITHUB_SHA"
           scripts/package-distribution.sh \
+            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
             --main-bin Main_MiSTer/bin/MiSTer \
             --main-source-revision "${{ steps.main-rev.outputs.sha }}" \
             --scanout-module "$module" \

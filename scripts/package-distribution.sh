@@ -4,11 +4,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
 
 BIN="$DEFAULT_BIN"
+CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
 MAME_SQLITE="$DEFAULT_MAME"
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
@@ -35,6 +37,9 @@ Usage:
 Options:
   --binary PATH        ARM mister-magik-fb binary.
                        Default: $DEFAULT_BIN
+  --catalog-builder PATH
+                       Matching ARM catalog builder (required).
+                       Default: $DEFAULT_CATALOG_BUILDER
   --mame-sqlite PATH   MAME metadata SQLite database.
                        Default: $DEFAULT_MAME
   --hbmame-sqlite PATH Optional HBMame metadata SQLite database.
@@ -68,6 +73,7 @@ Options:
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/mister-magik.sh
   mister-magik/mister-magik-fb
+  mister-magik/mister-magik-catalog-builder
   mister-magik/mame.sqlite3
   mister-magik/hbmame.sqlite3   when --hbmame-sqlite is provided
   mister-magik/assets/...     when --asset-pack is provided
@@ -87,6 +93,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --binary)
       BIN="${2:?--binary requires a path}"
+      shift 2
+      ;;
+    --catalog-builder)
+      CATALOG_BUILDER="${2:?--catalog-builder requires a path}"
       shift 2
       ;;
     --mame-sqlite)
@@ -172,6 +182,10 @@ if [[ ! -f "$BIN" ]]; then
   echo "ERROR: binary not found: $BIN" >&2
   exit 1
 fi
+if [[ ! -f "$CATALOG_BUILDER" ]]; then
+  echo "ERROR: catalog builder not found: $CATALOG_BUILDER" >&2
+  exit 1
+fi
 if [[ ! -f "$MAME_SQLITE" ]]; then
   echo "ERROR: MAME metadata DB not found: $MAME_SQLITE" >&2
   echo "       Build it with: scripts/mister mame-metadata-build --out '$MAME_SQLITE' [--category-ini /path/to/catver.ini]" >&2
@@ -241,6 +255,8 @@ cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
 chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
+cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"
+chmod 755 "$STAGE/mister-magik/mister-magik-catalog-builder"
 python3 "$ROOT/scripts/png-to-slint-rgba.py" \
   "$ROOT/magik-gui/ui/art/slint-logo-pixel.png" \
   "$STAGE/mister-magik/art/slint-logo-pixel.rgba"

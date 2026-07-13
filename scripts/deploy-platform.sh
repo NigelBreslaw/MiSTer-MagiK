@@ -27,6 +27,7 @@ for arg in "$@"; do
 done
 
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+CATALOG_BUILDER="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
 MODULE="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 MODULE_META="$ROOT/build/scanout-slots/provenance.txt"
@@ -66,6 +67,7 @@ MAGIK_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
   --output "$MANIFEST" \
   --main "$MAIN_BIN" \
   --gui "$GUI_BIN" \
+  --catalog-builder "$CATALOG_BUILDER" \
   --scanout-module "$MODULE" \
   --scanout-metadata "$MODULE_META" \
   --latch-rbf "$RBF" \
@@ -89,9 +91,10 @@ fi
 echo "snapshot: $SNAP"
 '
 
-declare -a LOCAL=("$GUI_BIN" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META" "$MANIFEST")
+declare -a LOCAL=("$GUI_BIN" "$CATALOG_BUILDER" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META" "$MANIFEST")
 declare -a REMOTE=(
   /media/fat/mister-magik/mister-magik-fb
+  /media/fat/mister-magik/mister-magik-catalog-builder
   /media/fat/MiSTer_MagiK
   /media/fat/mister-magik/mister_magik_scanout_slots.ko
   /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt
@@ -112,6 +115,7 @@ get() { sed -n "s/^$1=//p" "$manifest"; }
 test "$(get format)" = mister-magik-platform-v1
 test "$(get main_path)" = /media/fat/MiSTer_MagiK
 test "$(get gui_path)" = /media/fat/mister-magik/mister-magik-fb
+test "$(get catalog_builder_path)" = /media/fat/mister-magik/mister-magik-catalog-builder
 test "$(get scanout_module_path)" = /media/fat/mister-magik/mister_magik_scanout_slots.ko
 test "$(get scanout_metadata_path)" = /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt
 test "$(get latch_rbf_path)" = /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf
@@ -119,6 +123,7 @@ test "$(get latch_metadata_path)" = /media/fat/mister-magik/fpga/menu-magik-vbla
 check() { test "$(sha256sum "$1.upload" | awk "{print \$1}")" = "$(get "$2")"; }
 check /media/fat/MiSTer_MagiK main_sha256
 check /media/fat/mister-magik/mister-magik-fb gui_sha256
+check /media/fat/mister-magik/mister-magik-catalog-builder catalog_builder_sha256
 check /media/fat/mister-magik/mister_magik_scanout_slots.ko scanout_module_sha256
 check /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt scanout_metadata_sha256
 check /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf latch_rbf_sha256
@@ -133,12 +138,13 @@ grep -qx "module_sha256=$module_hash" /media/fat/mister-magik/mister_magik_scano
 grep -qx "rbf_sha256=$rbf_hash" /media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt.upload
 grep -qx "source_commit=$menu_revision" /media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt.upload
 mv /media/fat/mister-magik/mister-magik-fb.upload /media/fat/mister-magik/mister-magik-fb
+mv /media/fat/mister-magik/mister-magik-catalog-builder.upload /media/fat/mister-magik/mister-magik-catalog-builder
 mv /media/fat/MiSTer_MagiK.upload /media/fat/MiSTer_MagiK
 mv /media/fat/mister-magik/mister_magik_scanout_slots.ko.upload /media/fat/mister-magik/mister_magik_scanout_slots.ko
 mv /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt.upload /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt
 mv /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf.upload /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf
 mv /media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt.upload /media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
-chmod 755 /media/fat/MiSTer_MagiK /media/fat/mister-magik/mister-magik-fb
+chmod 755 /media/fat/MiSTer_MagiK /media/fat/mister-magik/mister-magik-fb /media/fat/mister-magik/mister-magik-catalog-builder
 chmod 600 /media/fat/mister-magik/mister_magik_scanout_slots.ko /media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf /media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
 sync
 mv "$manifest" /media/fat/mister-magik/platform-v1.manifest

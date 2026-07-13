@@ -146,6 +146,8 @@ scripts/deploy-platform.sh --clean-main
 The script deploys:
 
 - `magik-gui` to `/media/fat/mister-magik/mister-magik-fb`
+- the matching catalog builder to
+  `/media/fat/mister-magik/mister-magik-catalog-builder`
 - `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiK`
 - the qualified scanout module and metadata to `/media/fat/mister-magik/`
 - the qualified Menu latch RBF and metadata to `/media/fat/mister-magik/fpga/`

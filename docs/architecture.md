@@ -43,11 +43,11 @@ mixed-version, or hash-mismatched manifest disables the redirect and falls back
 to stock behavior without rebooting repeatedly.
 
 The manifest binds fixed installed paths, SHA-256 hashes, Main/MagiK/Menu source
-revisions, and the framebuffer platform-contract hash for Main, Rust, the
-scanout module and metadata, and the latch RBF and metadata. Deployment uploads
-and verifies the complete inactive bundle, syncs it, and activates the manifest
-last. Distribution packages contain the same layout and deliberately exclude
-root `menu.rbf`.
+revisions, and the framebuffer platform-contract hash for Main, the Rust
+frontend, the matching catalog builder, the scanout module and metadata, and the
+latch RBF and metadata. Deployment uploads and verifies the complete inactive
+bundle, syncs it, and activates the manifest last. Distribution packages
+contain the same layout and deliberately exclude root `menu.rbf`.
 
 ## Framebuffer Ownership
 

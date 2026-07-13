@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 WORK="$ROOT/build/release-check-host"
 MAIN_BIN="${MISTER_MAIN_BIN:-$ROOT/../Main_MiSTer/bin/MiSTer}"
 
@@ -111,10 +112,12 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
 "$ROOT/scripts/platform-manifest.py" generate \
   --output "$WORK/platform-v1.manifest" --main "$MAIN_BIN" --gui "$BIN" \
+  --catalog-builder "$CATALOG_BUILDER" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" --latch-metadata "$WORK/latch.metadata.txt" \
   --main-revision "$MAIN_SOURCE_REVISION" --magik-revision "$MAGIK_REVISION" >/dev/null
 package_args+=(
+  --catalog-builder "$CATALOG_BUILDER"
   --main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION"
   --scanout-module "$WORK/mister_magik_scanout_slots.ko"
   --scanout-metadata "$WORK/scanout.metadata.txt"
@@ -136,6 +139,7 @@ expect_main = os.environ["EXPECT_MAIN"] == "1"
 required = {
     "Scripts/mister-magik.sh",
     "mister-magik/mister-magik-fb",
+    "mister-magik/mister-magik-catalog-builder",
     "mister-magik/mame.sqlite3",
     "THIRD-PARTY-NOTICES.txt",
     "SOURCE-OFFER.txt",

@@ -13,6 +13,7 @@ FORMAT = "mister-magik-platform-v1"
 DEVICE_PATHS = {
     "main": "/media/fat/MiSTer_MagiK",
     "gui": "/media/fat/mister-magik/mister-magik-fb",
+    "catalog_builder": "/media/fat/mister-magik/mister-magik-catalog-builder",
     "scanout_module": "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
     "scanout_metadata": "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
     "latch_rbf": "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
@@ -20,9 +21,11 @@ DEVICE_PATHS = {
 }
 FIELDS = (
     "format",
-    "main_path", "gui_path", "scanout_module_path", "scanout_metadata_path",
+    "main_path", "gui_path", "catalog_builder_path",
+    "scanout_module_path", "scanout_metadata_path",
     "latch_rbf_path", "latch_metadata_path",
-    "main_sha256", "gui_sha256", "scanout_module_sha256", "scanout_metadata_sha256",
+    "main_sha256", "gui_sha256", "catalog_builder_sha256",
+    "scanout_module_sha256", "scanout_metadata_sha256",
     "latch_rbf_sha256", "latch_metadata_sha256", "platform_contract_sha256",
     "main_revision", "magik_revision", "menu_revision",
 )
@@ -119,6 +122,7 @@ def generate(args: argparse.Namespace) -> None:
     artifacts = {
         "main": args.main,
         "gui": args.gui,
+        "catalog_builder": args.catalog_builder,
         "scanout_module": args.scanout_module,
         "scanout_metadata": args.scanout_metadata,
         "latch_rbf": args.latch_rbf,
@@ -192,6 +196,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--output", required=True, type=Path)
     create.add_argument("--main", required=True, type=Path)
     create.add_argument("--gui", required=True, type=Path)
+    create.add_argument("--catalog-builder", required=True, type=Path)
     create.add_argument("--scanout-module", required=True, type=Path)
     create.add_argument("--scanout-metadata", required=True, type=Path)
     create.add_argument("--latch-rbf", required=True, type=Path)
