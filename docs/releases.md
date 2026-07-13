@@ -75,16 +75,19 @@ The workflow is `.github/workflows/distribution.yml` and has only the
 Before dispatch:
 
 1. Merge all release changes to `main` and run `scripts/release-check-host.sh`.
-2. Obtain successful FPGA Vblank Latch and Kernel scanout workflow run IDs for
-   the exact `main` commit being released.
+2. Run the full FPGA Vblank Latch workflow successfully for the exact `main`
+   commit being released, and confirm the automatic Kernel scanout workflow for
+   that commit succeeded. Publishing finds both runs automatically.
 3. Configure protected GitHub environments named `publish-beta` and
    `publish-release`, with required reviewers. For the first publication,
    configure and use `publish-beta` only.
 4. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
-sure the branch is `main`, enter the qualified run IDs and Main_MiSTer ref, and
-select `beta`. The workflow computes the version from the dispatched commit:
+sure the branch is `main`, and select `beta`. This is the only release input.
+The workflow resolves the qualified FPGA build, scanout module, latest
+`Main_MiSTer/mister-magik`, and latest HBMAME tag automatically. It computes the
+version from the dispatched commit:
 
 ```text
 build   = git rev-list --count <dispatched-commit>
@@ -112,4 +115,3 @@ The publish job rejects non-`main` dispatches and existing tags, verifies all
 candidate checksums again, creates a prerelease titled
 `MiSTer MagiK 0.2.<build> Beta`, and updates only the Beta feed. Release assets
 and version tags are immutable and are never overwritten.
-
