@@ -128,6 +128,9 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
 done
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
+# The catalog builder uses catalog/Cargo.toml, so point cross at the production
+# config explicitly instead of letting config discovery follow the manifest.
+export CROSS_CONFIG="$PWD/Cross.toml"
 # Keep the standalone catalog manifest in the same artifact tree as the UI.
 # Without this, Cargo defaults to catalog/target when --manifest-path is used,
 # while deploy/package scripts correctly expect the matched runtime pair under
