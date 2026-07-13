@@ -3,6 +3,9 @@
 use crate::arcade_catalog::{
     ArcadeCatalog, GameSystemEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID, MENU_SNK_ARCADE_SYSTEM_ID,
 };
+#[cfg(test)]
+use mister_magik_catalog::catalog_classify::system_definitions;
+use mister_magik_catalog::catalog_classify::{system_definition, LauncherSection};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -35,42 +38,6 @@ const COMPUTERS_TANDY_MENU_ID: &str = "menu:computers:tandy";
 const COMPUTERS_DOS_PC_MENU_ID: &str = "menu:computers:dos-pc";
 const COMPUTERS_JAPANESE_MENU_ID: &str = "menu:computers:japanese";
 const COMPUTERS_OTHER_MENU_ID: &str = "menu:computers:other";
-
-const CONSOLE_ATARI: &[&str] = &["atari2600", "atari5200", "atari7800", "jaguar"];
-const CONSOLE_SEGA: &[&str] = &["sg1000", "sms", "megadrive", "megacd", "s32x", "saturn"];
-const CONSOLE_SONY: &[&str] = &["psx"];
-const CONSOLE_NINTENDO: &[&str] = &["nes", "fds", "snes", "satellaview", "n64"];
-const CONSOLE_NEC: &[&str] = &["tgfx16", "tgfx16-cd", "supergrafx"];
-
-const HANDHELD_NINTENDO: &[&str] = &[
-    "gb",
-    "gameboy",
-    "gameboy2p",
-    "gbc",
-    "gba",
-    "gba2p",
-    "sgb",
-    "sgb2",
-    "pokemonmini",
-];
-const HANDHELD_SEGA: &[&str] = &["gamegear"];
-const HANDHELD_ATARI: &[&str] = &["atarilynx"];
-const HANDHELD_SNK: &[&str] = &["neogeopocket", "ngpc"];
-const HANDHELD_BANDAI: &[&str] = &["wonderswan", "wonderswancolor"];
-
-const COMPUTER_ACORN: &[&str] = &["acornatom", "acornelectron", "bbcmicro", "archie"];
-const COMPUTER_APPLE: &[&str] = &["apple-ii", "macplus", "maclc"];
-const COMPUTER_COMMODORE: &[&str] = &["amiga", "c64", "c128", "c16", "vic20", "pet2001"];
-const COMPUTER_ATARI: &[&str] = &["atari800", "atarist"];
-const COMPUTER_SINCLAIR: &[&str] = &["zx81", "zx-spectrum", "ql"];
-const COMPUTER_TANDY: &[&str] = &["trs-80", "coco2", "coco3"];
-const COMPUTER_DOS_PC: &[&str] = &["ao486", "dos"];
-const COMPUTER_JAPANESE: &[&str] = &[
-    "msx", "msx2", "pc88", "pc98", "x68000", "x1", "sharp-x1", "fm7", "fmtowns",
-];
-
-const NEOGEO_IDS: &[&str] = &["neogeo", "neo-geo", "snk-neo-geo"];
-const NEOGEO_CD_IDS: &[&str] = &["neogeo-cd"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherMenuItemKind {
@@ -283,7 +250,6 @@ struct TaxonomyBuilder<'a> {
     taxonomy: LauncherTaxonomy,
     buckets: HashMap<Bucket, Vec<ClassifiedSystem>>,
     snk_systems: Vec<ClassifiedSystem>,
-    arcade_summary_count: usize,
 }
 
 impl<'a> TaxonomyBuilder<'a> {
@@ -296,7 +262,6 @@ impl<'a> TaxonomyBuilder<'a> {
             },
             buckets: HashMap::new(),
             snk_systems: Vec::new(),
-            arcade_summary_count: 0,
         }
     }
 
@@ -320,7 +285,6 @@ impl<'a> TaxonomyBuilder<'a> {
             let kind = self.catalog.platform_kind(&system.id);
             let (bucket, rank) = classify(&id, kind);
             if bucket == Bucket::ArcadeAggregate {
-                self.arcade_summary_count = self.arcade_summary_count.saturating_add(count);
                 self.taxonomy.primary_system_destinations.insert(
                     id,
                     LauncherDestination {
@@ -619,10 +583,7 @@ impl<'a> TaxonomyBuilder<'a> {
     }
 
     fn build_root_menu(&mut self) {
-        let arcade_count = self
-            .catalog
-            .system_game_count(MENU_ARCADE_SYSTEM_ID)
-            .max(self.arcade_summary_count);
+        let arcade_count = self.catalog.system_game_count(MENU_ARCADE_SYSTEM_ID);
         let mut items = Vec::new();
         if arcade_count > 0 {
             self.taxonomy.collections.insert(
@@ -741,35 +702,40 @@ impl<'a> TaxonomyBuilder<'a> {
 }
 
 fn classify(id: &str, kind: PlatformKind) -> (Bucket, usize) {
-    if let Some(rank) = rank_in(id, NEOGEO_IDS) {
-        return (Bucket::SnkOnly, rank);
-    }
-    if let Some(rank) = rank_in(id, NEOGEO_CD_IDS) {
-        return (Bucket::SnkOnly, NEOGEO_IDS.len() + rank);
-    }
-    for (ids, bucket) in [
-        (CONSOLE_ATARI, Bucket::ConsoleAtari),
-        (CONSOLE_SEGA, Bucket::ConsoleSega),
-        (CONSOLE_SONY, Bucket::ConsoleSony),
-        (CONSOLE_NINTENDO, Bucket::ConsoleNintendo),
-        (CONSOLE_NEC, Bucket::ConsoleNec),
-        (HANDHELD_NINTENDO, Bucket::HandheldNintendo),
-        (HANDHELD_SEGA, Bucket::HandheldSega),
-        (HANDHELD_ATARI, Bucket::HandheldAtari),
-        (HANDHELD_SNK, Bucket::HandheldSnk),
-        (HANDHELD_BANDAI, Bucket::HandheldBandai),
-        (COMPUTER_ACORN, Bucket::ComputerAcorn),
-        (COMPUTER_APPLE, Bucket::ComputerApple),
-        (COMPUTER_COMMODORE, Bucket::ComputerCommodore),
-        (COMPUTER_ATARI, Bucket::ComputerAtari),
-        (COMPUTER_SINCLAIR, Bucket::ComputerSinclair),
-        (COMPUTER_TANDY, Bucket::ComputerTandy),
-        (COMPUTER_DOS_PC, Bucket::ComputerDosPc),
-        (COMPUTER_JAPANESE, Bucket::ComputerJapanese),
-    ] {
-        if let Some(rank) = rank_in(id, ids) {
-            return (bucket, rank);
-        }
+    if let Some(definition) = system_definition(id) {
+        let bucket = match definition.section {
+            LauncherSection::Arcade => Bucket::ArcadeAggregate,
+            LauncherSection::SnkNeogeo => Bucket::SnkOnly,
+            LauncherSection::Consoles => match definition.family.as_str() {
+                "atari" => Bucket::ConsoleAtari,
+                "sega" => Bucket::ConsoleSega,
+                "sony" => Bucket::ConsoleSony,
+                "nintendo" => Bucket::ConsoleNintendo,
+                "nec" => Bucket::ConsoleNec,
+                _ => Bucket::ConsoleOther,
+            },
+            LauncherSection::Handhelds => match definition.family.as_str() {
+                "nintendo" => Bucket::HandheldNintendo,
+                "sega" => Bucket::HandheldSega,
+                "atari" => Bucket::HandheldAtari,
+                "snk" => Bucket::HandheldSnk,
+                "bandai" => Bucket::HandheldBandai,
+                _ => Bucket::HandheldOther,
+            },
+            LauncherSection::Computers => match definition.family.as_str() {
+                "acorn" => Bucket::ComputerAcorn,
+                "apple" => Bucket::ComputerApple,
+                "commodore" => Bucket::ComputerCommodore,
+                "atari" => Bucket::ComputerAtari,
+                "sinclair" => Bucket::ComputerSinclair,
+                "tandy" => Bucket::ComputerTandy,
+                "dos-pc" => Bucket::ComputerDosPc,
+                "japanese" => Bucket::ComputerJapanese,
+                _ => Bucket::ComputerOther,
+            },
+            LauncherSection::Other => Bucket::ConsoleOther,
+        };
+        return (bucket, usize::from(definition.order));
     }
     match kind {
         PlatformKind::Arcade => (Bucket::ArcadeAggregate, usize::MAX),
@@ -778,10 +744,6 @@ fn classify(id: &str, kind: PlatformKind) -> (Bucket, usize) {
         PlatformKind::Computer => (Bucket::ComputerOther, usize::MAX),
         PlatformKind::Unknown => (Bucket::ConsoleOther, usize::MAX),
     }
-}
-
-fn rank_in(id: &str, ids: &[&str]) -> Option<usize> {
-    ids.iter().position(|candidate| *candidate == id)
 }
 
 fn snk_title(id: &str, fallback: &str) -> String {
@@ -954,71 +916,25 @@ mod tests {
     }
 
     #[test]
-    fn every_curated_system_id_flattens_a_single_item_vendor_path() {
-        for (ids, parent, _vendor) in [
-            (CONSOLE_ATARI, CONSOLES_MENU_ID, CONSOLES_ATARI_MENU_ID),
-            (CONSOLE_SEGA, CONSOLES_MENU_ID, CONSOLES_SEGA_MENU_ID),
-            (CONSOLE_SONY, CONSOLES_MENU_ID, CONSOLES_SONY_MENU_ID),
-            (
-                CONSOLE_NINTENDO,
-                CONSOLES_MENU_ID,
-                CONSOLES_NINTENDO_MENU_ID,
-            ),
-            (CONSOLE_NEC, CONSOLES_MENU_ID, CONSOLES_NEC_MENU_ID),
-            (
-                HANDHELD_NINTENDO,
-                HANDHELDS_MENU_ID,
-                HANDHELDS_NINTENDO_MENU_ID,
-            ),
-            (HANDHELD_SEGA, HANDHELDS_MENU_ID, HANDHELDS_SEGA_MENU_ID),
-            (HANDHELD_ATARI, HANDHELDS_MENU_ID, HANDHELDS_ATARI_MENU_ID),
-            (HANDHELD_SNK, HANDHELDS_MENU_ID, HANDHELDS_SNK_MENU_ID),
-            (HANDHELD_BANDAI, HANDHELDS_MENU_ID, HANDHELDS_BANDAI_MENU_ID),
-            (COMPUTER_ACORN, COMPUTERS_MENU_ID, COMPUTERS_ACORN_MENU_ID),
-            (COMPUTER_APPLE, COMPUTERS_MENU_ID, COMPUTERS_APPLE_MENU_ID),
-            (
-                COMPUTER_COMMODORE,
-                COMPUTERS_MENU_ID,
-                COMPUTERS_COMMODORE_MENU_ID,
-            ),
-            (COMPUTER_ATARI, COMPUTERS_MENU_ID, COMPUTERS_ATARI_MENU_ID),
-            (
-                COMPUTER_SINCLAIR,
-                COMPUTERS_MENU_ID,
-                COMPUTERS_SINCLAIR_MENU_ID,
-            ),
-            (COMPUTER_TANDY, COMPUTERS_MENU_ID, COMPUTERS_TANDY_MENU_ID),
-            (COMPUTER_DOS_PC, COMPUTERS_MENU_ID, COMPUTERS_DOS_PC_MENU_ID),
-            (
-                COMPUTER_JAPANESE,
-                COMPUTERS_MENU_ID,
-                COMPUTERS_JAPANESE_MENU_ID,
-            ),
-        ] {
-            for id in ids {
-                let taxonomy =
-                    LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system(id, 1)]));
-                let destination = taxonomy
-                    .primary_destination_for_system(id)
-                    .unwrap_or_else(|| panic!("missing primary destination for {id}"));
-                assert_eq!(
-                    destination.menu_path,
-                    vec![ROOT_MENU_ID, parent],
-                    "wrong primary path for {id}"
-                );
-                assert_eq!(destination.collection_id, *id);
-            }
-        }
-
-        for id in NEOGEO_IDS.iter().chain(NEOGEO_CD_IDS) {
+    fn every_canonical_system_has_a_single_taxonomy_driven_path() {
+        for definition in system_definitions().expect("canonical system taxonomy") {
+            let id = definition.id.as_str();
             let taxonomy =
                 LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system(id, 1)]));
             let destination = taxonomy
                 .primary_destination_for_system(id)
-                .expect("SNK primary destination");
+                .unwrap_or_else(|| panic!("missing primary destination for {id}"));
+            let expected = match definition.section {
+                LauncherSection::Arcade => vec![ROOT_MENU_ID],
+                LauncherSection::SnkNeogeo => vec![ROOT_MENU_ID, SNK_NEOGEO_MENU_ID],
+                LauncherSection::Consoles => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
+                LauncherSection::Handhelds => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID],
+                LauncherSection::Computers => vec![ROOT_MENU_ID, COMPUTERS_MENU_ID],
+                LauncherSection::Other => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
+            };
             assert_eq!(
-                destination.menu_path,
-                vec![ROOT_MENU_ID, SNK_NEOGEO_MENU_ID]
+                destination.menu_path, expected,
+                "wrong primary path for {id}"
             );
         }
     }
