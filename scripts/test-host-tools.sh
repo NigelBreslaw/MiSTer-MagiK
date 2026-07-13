@@ -363,6 +363,7 @@ bash "$ROOT/scripts/benchmark-cleanup-lib.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
 python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"
 python3 "$ROOT/scripts/test-generate-downloader-db.py"
+python3 "$ROOT/scripts/test-distribution-workflow.py"
 channel_fat="$TMP/channel-fat"
 MISTER_MAGIK_FAT="$channel_fat" "$ROOT/scripts/mister-magik-channel.sh" beta >/dev/null
 grep -q 'mister-magik-beta-db.json.zip' "$channel_fat/downloader_mister_magik.ini"
