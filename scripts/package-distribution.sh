@@ -8,12 +8,14 @@ DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/re
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
+DEFAULT_CHANNEL_SELECTOR="$ROOT/scripts/mister-magik-channel.sh"
 
 BIN="$DEFAULT_BIN"
 CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
 MAME_SQLITE="$DEFAULT_MAME"
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
+CHANNEL_SELECTOR="$DEFAULT_CHANNEL_SELECTOR"
 ASSET_PACK=""
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
@@ -49,6 +51,9 @@ Options:
                        Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
+  --channel-selector PATH
+                       Beta/Release feed selector.
+                       Default: $DEFAULT_CHANNEL_SELECTOR
   --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
   --hbmame-sqlite-default
                        Include the default HBMame metadata DB if present.
@@ -79,6 +84,7 @@ Options:
 
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/mister-magik.sh
+  Scripts/mister-magik-channel.sh
   mister-magik/mister-magik-fb
   mister-magik/mister-magik-catalog-builder
   mister-magik/mame.sqlite3
@@ -116,6 +122,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --installer)
       INSTALLER="${2:?--installer requires a path}"
+      shift 2
+      ;;
+    --channel-selector)
+      CHANNEL_SELECTOR="${2:?--channel-selector requires a path}"
       shift 2
       ;;
     --asset-pack)
@@ -214,6 +224,10 @@ if [[ ! -f "$INSTALLER" ]]; then
   echo "ERROR: installer not found: $INSTALLER" >&2
   exit 1
 fi
+if [[ ! -f "$CHANNEL_SELECTOR" ]]; then
+  echo "ERROR: channel selector not found: $CHANNEL_SELECTOR" >&2
+  exit 1
+fi
 if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ || "$VERSION" != "0.2.$BUILD_NUMBER" ]]; then
   echo "ERROR: --version must equal 0.2.--build-number; got version=${VERSION:-missing} build=${BUILD_NUMBER:-missing}." >&2
   exit 2
@@ -299,6 +313,8 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/mister-magik/fpga" "$STAGE/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
 chmod 755 "$STAGE/Scripts/mister-magik.sh"
+cp "$CHANNEL_SELECTOR" "$STAGE/Scripts/mister-magik-channel.sh"
+chmod 755 "$STAGE/Scripts/mister-magik-channel.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"

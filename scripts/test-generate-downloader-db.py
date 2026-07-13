@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import unittest
+import zipfile
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+
+SCRIPT = Path(__file__).with_name("generate-downloader-db.py")
+SPEC = spec_from_file_location("generate_downloader_db", SCRIPT)
+assert SPEC and SPEC.loader
+MODULE = module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+
+
+class DownloaderDatabaseTests(unittest.TestCase):
+    def test_channels_share_identity_and_reference_immutable_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = root / "files"
+            files.mkdir()
+            asset = files / "mister-magik--Scripts--mister-magik.sh"
+            asset.write_bytes(b"installer\n")
+            receipt = {
+                "format": "mister-magik-release-assets-v1",
+                "version": "0.2.42",
+                "build_number": 42,
+                "files": [{
+                    "path": "Scripts/mister-magik.sh",
+                    "asset": asset.name,
+                    "size": asset.stat().st_size,
+                    "md5": hashlib.md5(asset.read_bytes()).hexdigest(),
+                    "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                }],
+            }
+            receipt_path = root / "release-assets.json"
+            receipt_path.write_text(json.dumps(receipt))
+
+            for channel in ("beta", "release"):
+                output = root / channel
+                MODULE.generate(
+                    receipt_path, output, channel, "Owner/Repo", "v0.2.42", 1_700_000_000
+                )
+                database = json.loads((output / f"mister-magik-{channel}-db.json").read_text())
+                self.assertEqual(database["v"], 1)
+                self.assertEqual(database["db_id"], "mister_magik")
+                self.assertEqual(database["timestamp"], 1_700_000_000)
+                self.assertIn("v0.2.42", json.dumps(database))
+                item = database["files"]["Scripts/mister-magik.sh"]
+                self.assertEqual(item["hash"], receipt["files"][0]["md5"])
+                self.assertIn("/releases/download/v0.2.42/", item["url"])
+                with zipfile.ZipFile(output / f"mister-magik-{channel}-installer.zip") as archive:
+                    names = archive.namelist()
+                    self.assertEqual(names, ["downloader_mister_magik.ini"])
+                    ini = archive.read(names[0]).decode()
+                    self.assertIn(f"mister-magik-{channel}-db.json.zip", ini)
+                self.assertNotIn("downloader_mister_magik.ini", database["files"])
+
+    def test_rejects_forbidden_owned_path_and_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "files").mkdir()
+            asset = root / "files" / "bad"
+            asset.write_bytes(b"bad")
+            receipt = root / "release-assets.json"
+            base = {
+                "format": "mister-magik-release-assets-v1",
+                "version": "0.2.7",
+                "build_number": 7,
+                "files": [{"path": "MiSTer.ini", "asset": "bad", "size": 3, "md5": "x"}],
+            }
+            receipt.write_text(json.dumps(base))
+            with self.assertRaisesRegex(ValueError, "forbidden"):
+                MODULE.generate(
+                    receipt, root / "out", "beta", "Owner/Repo", "v0.2.7", 1_700_000_000
+                )
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                MODULE.generate(
+                    receipt, root / "out", "beta", "Owner/Repo", "v0.2.8", 1_700_000_000
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
