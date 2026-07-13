@@ -2739,27 +2739,37 @@ fn write_sqlite_scan_with_sources_inner(
         let mut ordinal = 0_i64;
         let mut seen = HashSet::new();
         for profile in &scan.profiles {
-            if !seen.insert(profile.system_id.as_str()) {
-                continue;
-            }
-            let observed = core_location_category(profile.core_path.as_deref());
-            let resolution = crate::catalog_classify::classify_system(
-                &profile.system_id,
-                observed,
-                "core-location",
-            );
-            if let Some(diagnostic) = resolution.diagnostic {
-                stmt.execute(params![
-                    ordinal,
-                    diagnostic.system_id,
-                    diagnostic.accepted_kind.as_str(),
-                    diagnostic.accepted_source,
-                    diagnostic.rejected_kind.as_str(),
-                    diagnostic.rejected_source,
-                    diagnostic.reason,
-                ])
-                .map_err(|e| format!("insert system classification diagnostic: {e}"))?;
-                ordinal += 1;
+            let profile_core = crate::catalog_discovery::compact_system_name(&profile.core_name);
+            for core in scan.installed_cores.iter().filter(|core| {
+                crate::catalog_discovery::compact_system_name(&core.core_id) == profile_core
+            }) {
+                let observed = core_location_category(core.path.to_str());
+                let resolution = crate::catalog_classify::classify_system(
+                    &profile.system_id,
+                    observed,
+                    "core-location",
+                );
+                if let Some(diagnostic) = resolution.diagnostic {
+                    let key = (
+                        diagnostic.system_id.clone(),
+                        diagnostic.rejected_kind,
+                        diagnostic.rejected_source.clone(),
+                    );
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    stmt.execute(params![
+                        ordinal,
+                        diagnostic.system_id,
+                        diagnostic.accepted_kind.as_str(),
+                        diagnostic.accepted_source,
+                        diagnostic.rejected_kind.as_str(),
+                        diagnostic.rejected_source,
+                        diagnostic.reason,
+                    ])
+                    .map_err(|e| format!("insert system classification diagnostic: {e}"))?;
+                    ordinal += 1;
+                }
             }
         }
     }
@@ -3971,6 +3981,43 @@ mod tests {
             Some("Computer")
         );
         assert_eq!(core_location_category(Some("cores/My_Arcade_Core")), None);
+    }
+
+    #[test]
+    fn sqlite_persists_actual_installed_core_location_disagreements() {
+        let root = unique_temp_dir("sqlite-system-classification-diagnostics");
+        let db = root.join("library.sqlite3");
+        let mut scan = sqlite_scan_with_discoveries(Vec::new());
+        let mut astrocade = scan
+            .profiles
+            .iter()
+            .find(|profile| profile.system_id == "sms")
+            .expect("SMS profile template")
+            .clone();
+        astrocade.id = "runtime-astrocade".to_string();
+        astrocade.system_id = "astrocade".to_string();
+        astrocade.core_name = "Astrocade".to_string();
+        scan.profiles.push(astrocade);
+        scan.installed_cores = ["SMS", "GameGear", "Astrocade"]
+            .into_iter()
+            .map(|core_id| crate::catalog_discovery::InstalledCore {
+                core_id: core_id.to_string(),
+                path: PathBuf::from(format!("/media/fat/_Arcade/cores/{core_id}.rbf")),
+            })
+            .collect();
+
+        save_sqlite_scan(&db, &scan).expect("persist classification diagnostics");
+        let conn = Connection::open(&db).expect("open diagnostics database");
+        let rows = conn
+            .query_row(
+                "SELECT count(*) FROM system_classification_diagnostics
+                 WHERE rejected_source='core-location' AND rejected_kind='arcade'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count classification diagnostics");
+        assert_eq!(rows, 3);
+        let _ = std::fs::remove_dir_all(root);
     }
     use crate::preview_worker;
     use crate::test_support::*;
