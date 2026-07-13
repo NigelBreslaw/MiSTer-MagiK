@@ -1,0 +1,143 @@
+name: Promote MiSTer MagiK Platform Bundle v0.1
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  assemble:
+    name: Assemble main-qualified platform bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      bundle-id: ${{ steps.identity.outputs.bundle_id }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - name: Refuse non-main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Platform bundle promotion is restricted to main; got $GITHUB_REF" >&2
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify checked-out main
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git branch --show-current)" = main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Resolve current component identities
+        id: identity
+        run: |
+          set -euo pipefail
+          fpga_id="$(python3 scripts/platform-component-id.py component fpga)"
+          kernel_id="$(python3 scripts/platform-component-id.py component kernel)"
+          bundle_id="$(python3 scripts/platform-component-id.py bundle --fpga-id "$fpga_id" --kernel-id "$kernel_id")"
+          printf 'fpga_id=%s\n' "$fpga_id" >> "$GITHUB_OUTPUT"
+          printf 'kernel_id=%s\n' "$kernel_id" >> "$GITHUB_OUTPUT"
+          printf 'bundle_id=%s\n' "$bundle_id" >> "$GITHUB_OUTPUT"
+          printf 'tag=platform-v0.1-%s\n' "$bundle_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest successful main component artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
+          KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
+        run: |
+          set -euo pipefail
+          find_run() {
+            local artifact_name="$1" workflow_name="$2" allowed_events="$3" run_id details
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              details="$(gh run view "$run_id" --json conclusion,headBranch,workflowName,event,headSha)"
+              if jq -e --arg workflow "$workflow_name" --arg events "$allowed_events" '
+                .conclusion == "success" and .headBranch == "main" and .workflowName == $workflow and
+                (.event as $event | ($events | split(",") | index($event)))
+              ' <<<"$details" >/dev/null; then
+                printf '%s\n' "$run_id"
+                return 0
+              fi
+            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$artifact_name&per_page=100" \
+              --jq '.artifacts | sort_by(.created_at) | reverse[] | select(.expired == false) | .workflow_run.id')
+            echo "No successful main artifact named $artifact_name was found. Run the matching main component workflow first." >&2
+            return 1
+          }
+          fpga_name="fpga-vblank-latch-signoff-v0.1-$FPGA_ID"
+          kernel_name="mister-magik-scanout-slots-v0.1-$KERNEL_ID"
+          fpga_run="$(find_run "$fpga_name" "FPGA Vblank Latch RBF" "workflow_dispatch")"
+          kernel_run="$(find_run "$kernel_name" "Kernel scanout slots" "push,workflow_dispatch")"
+          mkdir -p build/platform-input/fpga build/platform-input/scanout
+          gh run download "$fpga_run" --name "$fpga_name" --dir build/platform-input/fpga
+          gh run download "$kernel_run" --name "$kernel_name" --dir build/platform-input/scanout
+          fpga_sha="$(gh run view "$fpga_run" --json headSha --jq .headSha)"
+          kernel_sha="$(gh run view "$kernel_run" --json headSha --jq .headSha)"
+          python3 scripts/platform-bundle.py create \
+            --fpga-dir build/platform-input/fpga \
+            --scanout-dir build/platform-input/scanout \
+            --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+            --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
+            --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
+            --output build/platform-bundle
+
+      - name: Upload reviewed platform bundle candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: platform-bundle-v0.1-candidate
+          path: build/platform-bundle
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish immutable platform bundle
+    runs-on: ubuntu-24.04
+    needs: assemble
+    timeout-minutes: 15
+    environment:
+      name: publish-platform
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Refuse non-main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: exit 1
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: platform-bundle-v0.1-candidate
+          path: candidate
+
+      - name: Publish or verify immutable platform bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.assemble.outputs.tag }}
+          BUNDLE_ID: ${{ needs.assemble.outputs.bundle-id }}
+        run: |
+          set -euo pipefail
+          archive="candidate/mister-magik-platform-v0.1-$BUNDLE_ID.zip"
+          manifest="candidate/platform-bundle-v0.1.json"
+          test -f "$archive" && test -f "$manifest"
+          python3 scripts/platform-bundle.py verify "$archive" --manifest "$manifest" >/dev/null
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            mkdir existing
+            gh release download "$TAG" --repo "$GH_REPO" --dir existing \
+              --pattern 'mister-magik-platform-v0.1-*.zip' --pattern platform-bundle-v0.1.json
+            existing_archive="$(find existing -name 'mister-magik-platform-v0.1-*.zip' -print -quit)"
+            python3 scripts/platform-bundle.py verify "$existing_archive" \
+              --manifest existing/platform-bundle-v0.1.json >/dev/null
+            test "$(python3 -c 'import json; print(json.load(open("existing/platform-bundle-v0.1.json"))["bundle_id"])')" = "$BUNDLE_ID"
+            echo "Platform bundle $TAG is already published and valid."
+            exit 0
+          fi
+          gh release create "$TAG" "$archive" "$manifest" candidate/SHA256SUMS \
+            --repo "$GH_REPO" --target "$GITHUB_SHA" --title "MiSTer MagiK Platform Bundle v0.1" \
+            --draft --prerelease
+          gh release edit "$TAG" --repo "$GH_REPO" --draft=false
