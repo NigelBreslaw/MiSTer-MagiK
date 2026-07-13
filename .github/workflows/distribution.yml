@@ -1,4 +1,4 @@
-name: Distribution ZIP
+name: Publish MiSTer MagiK
 
 on:
   workflow_dispatch:
@@ -7,16 +7,20 @@ on:
         description: "Main_MiSTer ref to bundle"
         required: true
         default: "mister-magik"
+      release_channel:
+        description: "Release channel"
+        required: true
+        type: choice
+        default: beta
+        options:
+          - beta
+          - release
       fpga_run_id:
         description: "Successful FPGA Vblank Latch RBF workflow run ID for this exact MagiK revision"
         required: true
       scanout_run_id:
         description: "Successful Kernel scanout slots workflow run ID for this exact MagiK revision"
         required: true
-      artifact_name:
-        description: "Distribution artifact basename"
-        required: true
-        default: "mister-magik"
       hbmame_ref:
         description: "Optional Robbbert/hbmame tag/ref; blank uses latest tagNNNNN tag"
         required: false
@@ -37,9 +41,45 @@ env:
   MAME_LISTXML_URL: https://github.com/mamedev/mame/releases/download/mame0288/mame0288lx.zip
 
 jobs:
+  release-metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build-number: ${{ steps.release.outputs.build_number }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      artifact-name: ${{ steps.release.outputs.artifact_name }}
+      timestamp: ${{ steps.release.outputs.timestamp }}
+    steps:
+      - name: Refuse non-main publication
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases must be dispatched from the main branch; got $GITHUB_REF" >&2
+          exit 1
+
+      - name: Checkout complete app history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Derive build-based version
+        id: release
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          build_number="$(git rev-list --count "$GITHUB_SHA")"
+          version="0.2.$build_number"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=mister-magik-$version-candidate" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
   resolve-hbmame:
     name: Resolve HBMAME ref
     runs-on: ubuntu-24.04
+    needs: release-metadata
     timeout-minutes: 10
     outputs:
       ref: ${{ steps.hbmame-ref.outputs.ref }}
@@ -163,11 +203,13 @@ jobs:
     name: Build distribution ZIP
     runs-on: ubuntu-24.04
     needs:
+      - release-metadata
       - resolve-hbmame
       - hbmame-db-cache
       - hbmame-listxml
     if: |
       always() &&
+      needs.release-metadata.result == 'success' &&
       needs.resolve-hbmame.result == 'success' &&
       needs.hbmame-db-cache.result == 'success' &&
       (
@@ -179,6 +221,8 @@ jobs:
     steps:
       - name: Checkout app repo
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Checkout Main_MiSTer fork
         uses: actions/checkout@v7
@@ -186,10 +230,17 @@ jobs:
           repository: NigelBreslaw/Main_MiSTer
           ref: ${{ github.event.inputs.main_ref }}
           path: Main_MiSTer
+          fetch-depth: 0
 
       - name: Resolve Main_MiSTer revision
         id: main-rev
         run: echo "sha=$(git -C Main_MiSTer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Test Main_MiSTer state and patch surface
+        working-directory: Main_MiSTer
+        run: |
+          scripts/test-magik-state.sh
+          scripts/check-magik-patch-surface.sh
 
       - name: Download explicitly qualified FPGA and module artifacts
         env:
@@ -198,6 +249,12 @@ jobs:
           SCANOUT_RUN_ID: ${{ github.event.inputs.scanout_run_id }}
         run: |
           set -euo pipefail
+          for run_id in "$FPGA_RUN_ID" "$SCANOUT_RUN_ID"; do
+            conclusion="$(gh run view "$run_id" --json conclusion --jq .conclusion)"
+            head_sha="$(gh run view "$run_id" --json headSha --jq .headSha)"
+            test "$conclusion" = success
+            test "$head_sha" = "$GITHUB_SHA"
+          done
           mkdir -p build/qualified/fpga build/qualified/scanout
           gh run download "$FPGA_RUN_ID" --name fpga-vblank-latch-signoff --dir build/qualified/fpga
           gh run download "$SCANOUT_RUN_ID" --name mister-magik-scanout-slots --dir build/qualified/scanout
@@ -236,19 +293,28 @@ jobs:
           path: |
             magik-gui/target/release-device
             magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
-          key: target-arm-dist-${{ runner.os }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-arm-dist-${{ runner.os }}-${{ needs.release-metadata.outputs.build-number }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
             target-arm-dist-${{ runner.os }}-
             target-arm-${{ runner.os }}-release-release-device-none-
 
       - name: Build ARM frontend
-        run: magik-gui/build-arm.sh --device
+        env:
+          MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
+          MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: magik-gui/build-arm.sh --device --video
 
       - name: Build ARM catalog builder
+        env:
+          MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
+          MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: scripts/build-catalog-builder.sh --device
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+
+      - name: Generate matching third-party notices
+        run: python3 scripts/generate-third-party-licenses.py
 
       - name: Cache Main_MiSTer build outputs
         id: main-build-cache
@@ -410,6 +476,11 @@ jobs:
           retention-days: 30
 
       - name: Package distribution zip
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
         run: |
           set -euo pipefail
           rbf="$(find build/qualified/fpga -path '*/patched/menu-magik-vblank-latch.rbf' -print -quit)"
@@ -441,11 +512,159 @@ jobs:
             --mame-source-ref "$MAME_REF" \
             --hbmame-source-revision "${{ needs.resolve-hbmame.outputs.sha }}" \
             --hbmame-sqlite-default \
-            --name "${{ github.event.inputs.artifact_name }}"
+            --version "$RELEASE_VERSION" \
+            --build-number "$RELEASE_BUILD_NUMBER" \
+            --name "mister-magik-$RELEASE_VERSION" \
+            --release-assets-dir dist/release-assets
+          python3 scripts/generate-downloader-db.py \
+            --receipt dist/release-assets/release-assets.json \
+            --output dist/release-assets \
+            --channel "$RELEASE_CHANNEL" \
+            --tag "$RELEASE_TAG" \
+            --timestamp "${{ needs.release-metadata.outputs.timestamp }}"
+          if [ "$RELEASE_CHANNEL" = release ]; then
+            python3 scripts/generate-downloader-db.py \
+              --receipt dist/release-assets/release-assets.json \
+              --output dist/release-assets \
+              --channel beta \
+              --tag "$RELEASE_TAG" \
+              --timestamp "${{ needs.release-metadata.outputs.timestamp }}"
+          fi
+          (
+            cd dist/release-assets
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > SHA256SUMS
+          )
 
-      - name: Upload distribution zip
+      - name: Verify release identity is consistent
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+        run: |
+          python3 - <<'PY'
+          import json, os, zipfile
+          from pathlib import Path
+
+          root = Path("dist/release-assets")
+          receipt = json.loads((root / "release-assets.json").read_text())
+          version = os.environ["RELEASE_VERSION"]
+          build = int(os.environ["RELEASE_BUILD_NUMBER"])
+          tag = os.environ["RELEASE_TAG"]
+          channel = os.environ["RELEASE_CHANNEL"]
+          assert receipt["version"] == version == f"0.2.{build}"
+          assert tag == f"v{version}"
+          assert receipt["archive"] == f"mister-magik-{version}.zip"
+          with zipfile.ZipFile(root / receipt["archive"]) as package:
+              release = dict(
+                  line.split("=", 1)
+                  for line in package.read("mister-magik/release-v1.txt").decode().splitlines()
+              )
+          assert release["version"] == version
+          assert int(release["build_number"]) == build
+          database = json.loads((root / f"mister-magik-{channel}-db.json").read_text())
+          assert database["db_id"] == "mister_magik"
+          assert tag in json.dumps(database)
+          PY
+
+      - name: Upload immutable candidate
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ github.event.inputs.artifact_name }}-distribution
-          path: dist/${{ github.event.inputs.artifact_name }}.zip
+          name: ${{ needs.release-metadata.outputs.artifact-name }}
+          path: dist/release-assets
           if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish ${{ github.event.inputs.release_channel }} release
+    runs-on: ubuntu-24.04
+    needs:
+      - release-metadata
+      - distribution
+    timeout-minutes: 20
+    environment:
+      name: publish-${{ github.event.inputs.release_channel }}
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download reviewed candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.release-metadata.outputs.artifact-name }}
+          path: candidate
+
+      - name: Refuse an existing immutable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          (cd candidate && sha256sum --check SHA256SUMS)
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_TAG already exists; immutable releases are never overwritten." >&2
+            exit 1
+          fi
+          test "${{ github.ref }}" = refs/heads/main
+
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+        run: |
+          set -euo pipefail
+          title="MiSTer MagiK $RELEASE_VERSION"
+          prerelease=()
+          if [ "$RELEASE_CHANNEL" = beta ]; then
+            title="$title Beta"
+            prerelease=(--prerelease)
+          fi
+          mapfile -t assets < <(find candidate -type f -print | sort)
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --generate-notes \
+            "${prerelease[@]}"
+
+      - name: Update channel feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/$GH_REPO/git/ref/heads/downloader" >/dev/null 2>&1; then
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f ref=refs/heads/downloader \
+              -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          publish_file() {
+            local source="$1" destination="$2" existing_sha
+            existing_sha="$(gh api "repos/$GH_REPO/contents/$destination?ref=downloader" --jq .sha 2>/dev/null || true)"
+            args=(
+              --method PUT "repos/$GH_REPO/contents/$destination"
+              -f message="Publish MiSTer MagiK $RELEASE_VERSION $destination"
+              -f branch=downloader
+              -f content="$(base64 -w 0 "$source")"
+            )
+            if [ -n "$existing_sha" ]; then
+              args+=(-f sha="$existing_sha")
+            fi
+            gh api "${args[@]}" >/dev/null
+          }
+          publish_file \
+            "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
+            "mister-magik-$RELEASE_CHANNEL-db.json.zip"
+          if [ "$RELEASE_CHANNEL" = release ]; then
+            publish_file \
+              candidate/mister-magik-beta-db.json.zip \
+              mister-magik-beta-db.json.zip
+          fi
