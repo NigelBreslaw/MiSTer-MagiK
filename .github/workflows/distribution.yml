@@ -244,6 +244,9 @@ jobs:
       - name: Build ARM frontend
         run: magik-gui/build-arm.sh --device
 
+      - name: Build ARM catalog builder
+        run: scripts/build-catalog-builder.sh --device
+
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
