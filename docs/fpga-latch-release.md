@@ -1,5 +1,11 @@
 # FPGA vblank latch release requirements
 
+The latch is a production subsystem. Its source lives under
+`fpga/menu-vblank-latch/`, and its installed RBF lives under
+`/media/fat/mister-magik/fpga/`. Root `/media/fat/menu.rbf` is stock firmware
+owned by `update_all`. Every new RBF hash, including the Menu `20260603` port,
+must complete this qualification before platform-manifest activation.
+
 This document defines the commercial-release contract for the small Menu FPGA
 delta used by MiSTer MagiK. Its scope is only the `0x57` set command, the `0x58`
 status command, and the vblank-latched framebuffer route. The retired scanout
@@ -91,7 +97,7 @@ The current ignored local RBF has SHA-256
 metadata includes the retired mailbox patch and RTL. It is stale, is not the
 latch-only baseline, and is ineligible for release qualification or deployment.
 
-The extracted-latch candidate and its current qualification disposition are
+The previous extracted-latch candidate and its historical qualification disposition are
 recorded in [FPGA latch release signoff](fpga-latch-release-signoff.md). A
 candidate hash listed there is not an approved commercial release while any
 custom-delta checklist item remains open.

@@ -9,7 +9,7 @@ slint/
   Main_MiSTer/         # real GitHub fork of MiSTer-devel/Main_MiSTer
 ```
 
-`scripts/deploy-main-mister-experiment.sh` defaults to
+`scripts/deploy-platform.sh` defaults to
 `../Main_MiSTer`. Set `MISTER_MAIN_DIR` when the fork lives elsewhere.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
@@ -22,8 +22,8 @@ The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
 `mister-magik`.
 
 - Upstream project: `MiSTer-devel/Main_MiSTer`
-- Baseline commit: `c73802332ff9c73659410084b6319ccd29f0b3aa`
-- Baseline release: `Release 20260603.`
+- Baseline commit: `93d13fb690db4581768389450fb639822ae88333`
+- Baseline release: `Release 20260707.`
 - Device binary: `/media/fat/MiSTer_MagiK`
 - Ledger: `MAGIK_PATCHSET.md` in the fork repo
 - Provenance doc: `FORK.md` in the fork repo
@@ -75,8 +75,8 @@ mister_magik_exit_to_menu
 ```
 
 Commands are valid only from `LauncherActive`. Launch shuts down Slint and uses
-Main's normal loader path. Exit shuts down Slint and restores the stock Main
-menu path.
+Main's normal loader path. Exit shuts down Slint but remains on the active
+manifest-qualified latch Menu core; it does not reload root `menu.rbf`.
 
 Structured catalog plans are a MagiK-only handoff path for virtual
 `magik-plan:*` launcher rows. Rust sends `schema=1`, `core_path`,
@@ -112,7 +112,7 @@ Build the fork directly from the fork repo:
 
 ```bash
 cd ../Main_MiSTer
-./build-docker.sh
+./build-container.sh
 scripts/test-magik-state.sh
 scripts/check-magik-patch-surface.sh
 ```
@@ -126,28 +126,34 @@ protocol details and device smoke results current in the fork's
 Deploy from this app repo:
 
 ```bash
-scripts/deploy-main-mister-experiment.sh
+scripts/deploy-platform.sh
 ```
 
 Use a non-default fork checkout:
 
 ```bash
 export MISTER_MAIN_DIR=/path/to/Main_MiSTer
-scripts/deploy-main-mister-experiment.sh
+scripts/deploy-platform.sh
 ```
 
 The deploy script no longer forces a clean Main build. Use `--clean-main` only
 when stale Main objects are suspected:
 
 ```bash
-scripts/deploy-main-mister-experiment.sh --clean-main
+scripts/deploy-platform.sh --clean-main
 ```
 
 The script deploys:
 
 - `magik-gui` to `/media/fat/mister-magik/mister-magik-fb`
 - `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiK`
+- the qualified scanout module and metadata to `/media/fat/mister-magik/`
+- the qualified Menu latch RBF and metadata to `/media/fat/mister-magik/fpga/`
+- the complete platform contract to `/media/fat/mister-magik/platform-v1.manifest`
 - stock inittab plus `[MiSTer] main=MiSTer_MagiK`
+
+The manifest is activated last. The deploy script never writes root
+`/media/fat/menu.rbf`, which remains owned by `update_all`.
 
 ## Sequential Release Process
 
