@@ -82,13 +82,17 @@ def verify_component_inputs(fpga_root: Path, scanout_root: Path, fpga_id: str, k
         metadata = root / "menu-magik-vblank-latch.metadata.txt"
         if not metadata.is_file():
             raise BundleError(f"missing FPGA metadata: {metadata}")
-        verifier = load_module("verify_fpga_rbf_manifest", ROOT / "scripts/verify-fpga-rbf-manifest.py")
-        try:
-            fpga_fields = verifier.verify(metadata)
-        except ValueError as error:
-            raise BundleError(f"invalid FPGA metadata: {error}") from error
+        fpga_fields = fields(metadata)
         if fpga_fields.get("component_input_sha256") != fpga_id:
             raise BundleError("FPGA component identity does not match artifact")
+        rbf = root / "menu-magik-vblank-latch.rbf"
+        if not rbf.is_file() or fpga_fields.get("rbf_sha256") != digest(rbf):
+            raise BundleError("FPGA metadata does not match RBF")
+    verifier = load_module("verify_fpga_rbf_manifest", ROOT / "scripts/verify-fpga-rbf-manifest.py")
+    try:
+        verifier.verify(patched / "menu-magik-vblank-latch.metadata.txt")
+    except ValueError as error:
+        raise BundleError(f"invalid patched FPGA metadata: {error}") from error
     module = scanout_root / "mister_magik_scanout_slots.ko"
     provenance = scanout_root / "provenance.txt"
     if not module.is_file() or not provenance.is_file():
