@@ -30,6 +30,10 @@ step "Clippy magik-gui host logic"
   cargo clippy --lib --no-default-features -- -D warnings
 )
 
+step "Check production magik-gui binary"
+cargo check --manifest-path "$ROOT/magik-gui/Cargo.toml" \
+  --bin mister-magik-fb --no-default-features --features ui
+
 step "Check host logic"
 "$ROOT/scripts/dev-rust" check
 

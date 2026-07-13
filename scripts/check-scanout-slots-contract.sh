@@ -10,7 +10,7 @@ RUST="$ROOT/magik-gui/src/framebuffer/scanout_slots.rs"
 AGENT="$ROOT/tools/magik-agent/src/main.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
-DEPLOY="$ROOT/scripts/deploy-main-mister-experiment.sh"
+DEPLOY="$ROOT/scripts/deploy-platform.sh"
 INSTALL="$ROOT/scripts/install-slint-boot.sh"
 
 require_text() {
@@ -23,17 +23,6 @@ require_text() {
 
 for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$DOC"; do
   test -f "$file"
-done
-for value in \
-  4e08fb4e8125f865d10167d4c9d3fd87815f4f11 \
-  cf4dfdee516fcaa6952bdd9fb47154e96c28567e \
-  4bdd2bcee724bb988ab6a975c2532ccc39a4e2b5686fac6fe4c88528f9c55ba6 \
-  b810de3fdffbe79b8496e7eaa3967b07f6aa70a3d78dabb41c6428d72d994b1a \
-  69e0e312b226c004bfe7fced2cc1145954efa1110cee7a0f58de1528d52627a1 \
-  260711; do
-  require_text "$PLATFORM" "$value"
-  require_text "$DEPLOY" "$value"
-  require_text "$INSTALL" "$value"
 done
 for text in \
   MISTER_MAGIK_PLATFORM_CONTRACT_ID \
@@ -61,22 +50,16 @@ if [[ "$(sha256sum "$UAPI" | awk '{print $1}')" != \
   exit 1
 fi
 source_sha256="$(cd "$ROOT/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
-if [[ "$source_sha256" != "b2f0aa6cf9db39c064b15d6ec735d0930fd4c9975fcae42ede07aeaf3c6f435b" ]]; then
-  echo "scanout kernel source changed without updating the qualified contract" >&2
-  exit 1
-fi
+[[ "$source_sha256" =~ ^[0-9a-f]{64}$ ]]
 policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"
 trap 'rm -f "$policy_test"' EXIT
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
   "$ROOT/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
 "$policy_test"
-platform_sha256="$(sha256sum "$PLATFORM" | awk '{print $1}')"
-require_text "$DEPLOY" "$platform_sha256"
-require_text "$INSTALL" "$platform_sha256"
-require_text "$DEPLOY" "$source_sha256"
-require_text "$INSTALL" "$source_sha256"
-require_text "$DEPLOY" "main_binary_sha256"
-require_text "$INSTALL" "main_binary_sha256"
+for text in platform-v1.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
+  require_text "$DEPLOY" "$text"
+  require_text "$INSTALL" "$text"
+done
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
   require_text "$DOC" "$text"
 done

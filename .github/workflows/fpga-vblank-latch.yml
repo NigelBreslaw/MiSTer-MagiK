@@ -9,7 +9,7 @@ on:
       menu_ref:
         description: "Full MiSTer-devel/Menu_MiSTer commit SHA to build"
         required: true
-        default: "cf4dfdee516fcaa6952bdd9fb47154e96c28567e"
+        default: "3c3634c0105d78f27aeba66b38966c50dbc42c9b"
       quartus_run_url:
         description: "Optional URL for QuartusLiteSetup-17.0.0.595-linux.run; falls back to secret QUARTUS_17_0_RUN_URL"
         required: false
@@ -215,6 +215,7 @@ jobs:
       - name: Build matched stock and vblank-latched RBFs
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
+          MISTER_FPGA_QUALIFIED_MAGIK_REVISION: ${{ github.sha }}
           QUARTUS_DOCKER_EMPTY_SYS: "1"
           QUARTUS_STRACE: "0"
         run: |

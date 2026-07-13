@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 WORK="$ROOT/build/release-check-host"
 MAIN_BIN="${MISTER_MAIN_BIN:-$ROOT/../Main_MiSTer/bin/MiSTer}"
 
@@ -71,6 +72,9 @@ cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets 
 step "ARM release-device build"
 "$ROOT/magik-gui/build-arm.sh" --device
 
+step "ARM catalog builder build"
+"$ROOT/scripts/build-catalog-builder.sh" --device
+
 step "ARM shared-library check"
 "$ROOT/magik-gui/scripts/check-arm-shared-libs.sh" "$BIN"
 
@@ -94,11 +98,37 @@ package_args=(
 )
 if [ -f "$MAIN_BIN" ]; then
   MAIN_SOURCE_REVISION="$(git -C "$(dirname "$MAIN_BIN")/.." rev-parse HEAD)"
-  package_args+=(--main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION")
-  EXPECT_MAIN=1
 else
-  EXPECT_MAIN=0
+  MAIN_BIN="$WORK/MiSTer_MagiK"
+  cp "$BIN" "$MAIN_BIN"
+  MAIN_SOURCE_REVISION="1111111111111111111111111111111111111111"
 fi
+MAGIK_REVISION="2222222222222222222222222222222222222222"
+MENU_REVISION="3333333333333333333333333333333333333333"
+printf 'module release-check\n' > "$WORK/mister_magik_scanout_slots.ko"
+printf 'rbf release-check\n' > "$WORK/menu-magik-vblank-latch.rbf"
+CONTRACT="$(printf release-check-contract | sha256sum | awk '{print $1}')"
+printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
+  "$CONTRACT" "$(sha256sum "$WORK/mister_magik_scanout_slots.ko" | awk '{print $1}')" > "$WORK/scanout.metadata.txt"
+printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
+  "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
+  "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
+"$ROOT/scripts/platform-manifest.py" generate \
+  --output "$WORK/platform-v1.manifest" --main "$MAIN_BIN" --gui "$BIN" \
+  --catalog-builder "$CATALOG_BUILDER" \
+  --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \
+  --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" --latch-metadata "$WORK/latch.metadata.txt" \
+  --main-revision "$MAIN_SOURCE_REVISION" --magik-revision "$MAGIK_REVISION" >/dev/null
+package_args+=(
+  --catalog-builder "$CATALOG_BUILDER"
+  --main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION"
+  --scanout-module "$WORK/mister_magik_scanout_slots.ko"
+  --scanout-metadata "$WORK/scanout.metadata.txt"
+  --latch-rbf "$WORK/menu-magik-vblank-latch.rbf"
+  --latch-metadata "$WORK/latch.metadata.txt"
+  --platform-manifest "$WORK/platform-v1.manifest"
+)
+EXPECT_MAIN=1
 
 ZIP="$("$ROOT/scripts/package-distribution.sh" "${package_args[@]}")"
 export ZIP EXPECT_MAIN
@@ -112,6 +142,7 @@ expect_main = os.environ["EXPECT_MAIN"] == "1"
 required = {
     "Scripts/mister-magik.sh",
     "mister-magik/mister-magik-fb",
+    "mister-magik/mister-magik-catalog-builder",
     "mister-magik/mame.sqlite3",
     "THIRD-PARTY-NOTICES.txt",
     "SOURCE-OFFER.txt",
@@ -122,6 +153,13 @@ required = {
 }
 if expect_main:
     required.add("MiSTer_MagiK")
+    required.update({
+        "mister-magik/platform-v1.manifest",
+        "mister-magik/mister_magik_scanout_slots.ko",
+        "mister-magik/mister_magik_scanout_slots.metadata.txt",
+        "mister-magik/fpga/menu-magik-vblank-latch.rbf",
+        "mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
+    })
 
 with zipfile.ZipFile(zip_path) as zf:
     names = set(zf.namelist())

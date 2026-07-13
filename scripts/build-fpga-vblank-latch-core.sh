@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATCH="$ROOT/experiments/fpga-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
-LATCH_RTL="$ROOT/experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv"
+PATCH="$ROOT/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
+LATCH_RTL="$ROOT/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -22,8 +22,8 @@ QUARTUS_DOCKER_CPUS="${QUARTUS_DOCKER_CPUS:-8}"
 QUARTUS_DOCKER_MEMORY="${QUARTUS_DOCKER_MEMORY:-12g}"
 QUARTUS_HOST_INSTALL_ROOT="${QUARTUS_HOST_INSTALL_ROOT:-$ROOT/build/quartus-lite-17.0/docker-intelFPGA_lite}"
 APPLY_PATCH="${MISTER_FPGA_APPLY_PATCH:-1}"
-BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-260711}"
-QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-4e08fb4e8125f865d10167d4c9d3fd87815f4f11}"
+BUILD_DATE="${MISTER_FPGA_BUILD_DATE:-$(git -C "$ROOT" show -s --format=%cd --date=format:%y%m%d HEAD)}"
+QUALIFIED_MAGIK_REVISION="${MISTER_FPGA_QUALIFIED_MAGIK_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}"
 PLATFORM_CONTRACT="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
 
 usage() {
@@ -31,7 +31,7 @@ usage() {
 Usage:
   scripts/build-fpga-vblank-latch-core.sh
 
-Builds an experimental Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
+Builds the production Menu_MiSTer RBF with the MiSTer MagiK vblank-latched
 framebuffer patch. Set MISTER_MENU_DIR to override the source checkout. The
 source checkout is copied to a disposable build workdir before patching.
 

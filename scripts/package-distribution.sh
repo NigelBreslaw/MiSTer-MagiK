@@ -4,17 +4,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
+DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
 DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
 
 BIN="$DEFAULT_BIN"
+CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
 MAME_SQLITE="$DEFAULT_MAME"
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
 ASSET_PACK=""
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
+SCANOUT_MODULE=""
+SCANOUT_METADATA=""
+LATCH_RBF=""
+LATCH_METADATA=""
+PLATFORM_MANIFEST=""
 MAME_SOURCE_REF=""
 HBMAME_SOURCE_REVISION=""
 NAME="mister-magik"
@@ -30,6 +37,9 @@ Usage:
 Options:
   --binary PATH        ARM mister-magik-fb binary.
                        Default: $DEFAULT_BIN
+  --catalog-builder PATH
+                       Matching ARM catalog builder (required).
+                       Default: $DEFAULT_CATALOG_BUILDER
   --mame-sqlite PATH   MAME metadata SQLite database.
                        Default: $DEFAULT_MAME
   --hbmame-sqlite PATH Optional HBMame metadata SQLite database.
@@ -39,9 +49,18 @@ Options:
   --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
   --hbmame-sqlite-default
                        Include the default HBMame metadata DB if present.
-  --main-bin PATH      Optional MiSTer_MagiK Main fork binary.
+  --main-bin PATH      Required MiSTer_MagiK Main fork binary.
   --main-source-revision SHA
                        Source revision for --main-bin (required when it is supplied).
+  --scanout-module PATH
+                       Required qualified scanout module.
+  --scanout-metadata PATH
+                       Required scanout module metadata.
+  --latch-rbf PATH     Required qualified production latch RBF.
+  --latch-metadata PATH
+                       Required production latch metadata.
+  --platform-manifest PATH
+                       Required canonical manifest matching every platform artifact.
   --mame-source-ref REF
                        mamedev/mame ref used to build --mame-sqlite (required).
   --hbmame-source-revision SHA
@@ -54,10 +73,16 @@ Options:
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/mister-magik.sh
   mister-magik/mister-magik-fb
+  mister-magik/mister-magik-catalog-builder
   mister-magik/mame.sqlite3
   mister-magik/hbmame.sqlite3   when --hbmame-sqlite is provided
   mister-magik/assets/...     when --asset-pack is provided
-  MiSTer_MagiK                when --main-bin is provided
+  MiSTer_MagiK
+  mister-magik/platform-v1.manifest
+  mister-magik/mister_magik_scanout_slots.ko
+  mister-magik/mister_magik_scanout_slots.metadata.txt
+  mister-magik/fpga/menu-magik-vblank-latch.rbf
+  mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
   licenses/...                GPL, LGPL, OFL, and Rust dependency notices
   THIRD-PARTY-NOTICES.txt     Metadata and bundled-component provenance
   SOURCE-OFFER.txt            Exact corresponding-source locations and revisions
@@ -68,6 +93,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --binary)
       BIN="${2:?--binary requires a path}"
+      shift 2
+      ;;
+    --catalog-builder)
+      CATALOG_BUILDER="${2:?--catalog-builder requires a path}"
       shift 2
       ;;
     --mame-sqlite)
@@ -96,6 +125,26 @@ while [[ $# -gt 0 ]]; do
       ;;
     --main-source-revision)
       MAIN_SOURCE_REVISION="${2:?--main-source-revision requires a revision}"
+      shift 2
+      ;;
+    --scanout-module)
+      SCANOUT_MODULE="${2:?--scanout-module requires a path}"
+      shift 2
+      ;;
+    --scanout-metadata)
+      SCANOUT_METADATA="${2:?--scanout-metadata requires a path}"
+      shift 2
+      ;;
+    --latch-rbf)
+      LATCH_RBF="${2:?--latch-rbf requires a path}"
+      shift 2
+      ;;
+    --latch-metadata)
+      LATCH_METADATA="${2:?--latch-metadata requires a path}"
+      shift 2
+      ;;
+    --platform-manifest)
+      PLATFORM_MANIFEST="${2:?--platform-manifest requires a path}"
       shift 2
       ;;
     --mame-source-ref)
@@ -133,6 +182,10 @@ if [[ ! -f "$BIN" ]]; then
   echo "ERROR: binary not found: $BIN" >&2
   exit 1
 fi
+if [[ ! -f "$CATALOG_BUILDER" ]]; then
+  echo "ERROR: catalog builder not found: $CATALOG_BUILDER" >&2
+  exit 1
+fi
 if [[ ! -f "$MAME_SQLITE" ]]; then
   echo "ERROR: MAME metadata DB not found: $MAME_SQLITE" >&2
   echo "       Build it with: scripts/mister mame-metadata-build --out '$MAME_SQLITE' [--category-ini /path/to/catver.ini]" >&2
@@ -159,8 +212,8 @@ if [[ -n "$HBMAME_SQLITE" && -z "$HBMAME_SOURCE_REVISION" ]]; then
   echo "ERROR: --hbmame-source-revision is required with --hbmame-sqlite." >&2
   exit 2
 fi
-if [[ -n "$MAIN_BIN" && -z "$MAIN_SOURCE_REVISION" ]]; then
-  echo "ERROR: --main-source-revision is required with --main-bin." >&2
+if [[ -z "$MAIN_BIN" || -z "$MAIN_SOURCE_REVISION" ]]; then
+  echo "ERROR: --main-bin and --main-source-revision are required." >&2
   exit 2
 fi
 if [[ -n "$HBMAME_SQLITE" ]]; then
@@ -182,8 +235,14 @@ if [[ -n "$HBMAME_SQLITE" ]]; then
     fi
   fi
 fi
-if [[ -n "$MAIN_BIN" && ! -f "$MAIN_BIN" ]]; then
-  echo "ERROR: Main fork binary not found: $MAIN_BIN" >&2
+for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "$LATCH_METADATA" "$PLATFORM_MANIFEST"; do
+  if [[ -z "$artifact" || ! -f "$artifact" ]]; then
+    echo "ERROR: required production platform artifact not found: ${artifact:-missing argument}" >&2
+    exit 1
+  fi
+done
+if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_REVISION" ]]; then
+  echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
 fi
 
@@ -191,11 +250,13 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/licenses"
+mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/mister-magik/fpga" "$STAGE/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
 chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
+cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"
+chmod 755 "$STAGE/mister-magik/mister-magik-catalog-builder"
 python3 "$ROOT/scripts/png-to-slint-rgba.py" \
   "$ROOT/magik-gui/ui/art/slint-logo-pixel.png" \
   "$STAGE/mister-magik/art/slint-logo-pixel.rgba"
@@ -209,9 +270,18 @@ if [[ -n "$ASSET_PACK" ]]; then
   cp "$ASSET_PACK" "$STAGE/mister-magik/assets/$(basename "$ASSET_PACK")"
 fi
 
-if [[ -n "$MAIN_BIN" ]]; then
-  cp "$MAIN_BIN" "$STAGE/MiSTer_MagiK"
-  chmod 755 "$STAGE/MiSTer_MagiK"
+cp "$MAIN_BIN" "$STAGE/MiSTer_MagiK"
+cp "$SCANOUT_MODULE" "$STAGE/mister-magik/mister_magik_scanout_slots.ko"
+cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.txt"
+cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
+cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
+cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v1.manifest"
+chmod 755 "$STAGE/MiSTer_MagiK"
+python3 "$ROOT/scripts/platform-manifest.py" verify \
+  "$STAGE/mister-magik/platform-v1.manifest" --root "$STAGE" >/dev/null
+if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
+  echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
+  exit 1
 fi
 
 # Keep every binary distribution self-describing. These are copied rather than
@@ -263,13 +333,11 @@ at the MiSTer MagiK source revision above.
 The MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.
 EOF
-if [[ -n "$MAIN_BIN" ]]; then
-  cat >> "$STAGE/SOURCE-OFFER.txt" <<EOF
+cat >> "$STAGE/SOURCE-OFFER.txt" <<EOF
 
 MiSTer_MagiK Main fork source:
   https://github.com/NigelBreslaw/Main_MiSTer/tree/$MAIN_SOURCE_REVISION
 EOF
-fi
 
 OUT="$OUT_DIR/$NAME.zip"
 rm -f "$OUT"

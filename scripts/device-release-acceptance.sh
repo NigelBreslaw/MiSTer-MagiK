@@ -739,6 +739,22 @@ run_install_restore_roundtrip() {
   run_capture "restore-stock-boot" "$ROOT/scripts/restore-stock-boot.sh"
   run_capture "install-slint-boot" "$ROOT/scripts/install-slint-boot.sh"
   wait_for_launcher_active "wait-launcher-after-install-roundtrip" 120 || return
+  run_update_all_safe_boot || true
+}
+
+run_update_all_safe_boot() {
+  local stock=/media/fat/menu.stock-firmware-20260713.rbf
+  if ! remote "test -f '$stock'" >/dev/null 2>&1; then
+    record_skip "update_all-safe boot requires $stock"
+    return 0
+  fi
+  run_capture "restore-stock-root-menu" "$MISTER" run \
+    "set -e; cp '$stock' /media/fat/menu.rbf; sync; test \"\$(sha256sum '$stock' | awk '{print \$1}')\" = \"\$(sha256sum /media/fat/menu.rbf | awk '{print \$1}')\""
+  run_capture "update-all-safe-normal-reboot" "$MISTER" reboot-wait
+  wait_for_launcher_active "wait-launcher-after-update-all-safe-reboot" 120 || return 1
+  run_capture "verify-update-all-safe-latch" "$MISTER" run \
+    "set -e; pid=\$(pidof MiSTer_MagiK); tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf; /media/fat/mister-magik/mister-magik-fb fpga-latch-report | grep -q 'supported=1'; /media/fat/mister-magik/mister-magik-fb fpga-latch-report | grep -q 'drop_count=0'"
+  record_ok "stock update_all root Menu coexists with production latch core"
 }
 
 run_soak() {
@@ -860,7 +876,7 @@ PY
 
 run_deploy_if_requested() {
   if [ "$DEPLOY" -eq 1 ]; then
-    run_required_capture "deploy-main-mister-experiment" "$ROOT/scripts/deploy-main-mister-experiment.sh"
+    run_required_capture "deploy-platform" "$ROOT/scripts/deploy-platform.sh"
     run_required_capture "raw-reboot-after-deploy" "$MISTER" reboot-wait --raw
   fi
 }
@@ -1034,6 +1050,8 @@ run_tier_handoff() {
   status_json "exit-menu" || record_fail "exit-to-menu status JSON"
   assert_status "$OUT/status-exit-menu.json" "exit-to-menu reaches stock-menu handoff state" \
     "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')"
+  run_capture "exit-menu-keeps-production-rbf" "$MISTER" run \
+    "pid=\$(pidof MiSTer_MagiK); tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf"
   run_capture "raw-reboot-after-exit-menu" "$MISTER" reboot-wait --raw
   wait_for_launcher_active "wait-launcher-after-exit-menu-reboot" 90 || return 1
   status_json "post-exit-menu-reboot" || record_fail "post exit-menu reboot status JSON"
