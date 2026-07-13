@@ -54,21 +54,26 @@ def require_clean_repository(root: Path) -> None:
 
 
 def selected_files(root: Path, component: str) -> tuple[Path, ...]:
+    inputs = COMPONENT_INPUTS[component]
+    tracked = run_git(root, "ls-files", "-z", "--", *inputs)
     files: set[Path] = set()
-    for relative in COMPONENT_INPUTS[component]:
+    for relative in filter(None, tracked.split("\0")):
+        path = root / relative
+        if not path.is_file():
+            raise IdentityError(f"tracked {component} input is not a regular file: {relative}")
+        files.add(path)
+    for relative in inputs:
         path = root / relative
         if not path.exists():
             raise IdentityError(f"missing {component} input: {relative}")
         if path.is_symlink():
             raise IdentityError(f"symbolic links are not allowed in inputs: {relative}")
         if path.is_dir():
-            for child in path.rglob("*"):
-                if child.is_symlink():
-                    raise IdentityError(f"symbolic links are not allowed in inputs: {child.relative_to(root)}")
-                if child.is_file():
-                    files.add(child)
+            if not any(path in file.parents for file in files):
+                raise IdentityError(f"no tracked {component} inputs under: {relative}")
         elif path.is_file():
-            files.add(path)
+            if path not in files:
+                raise IdentityError(f"input is not tracked: {relative}")
         else:
             raise IdentityError(f"unsupported {component} input: {relative}")
     return tuple(sorted(files, key=lambda item: item.relative_to(root).as_posix()))
