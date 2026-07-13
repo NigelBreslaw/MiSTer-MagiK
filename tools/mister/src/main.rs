@@ -4721,7 +4721,7 @@ fn magik_fb0_owner_pids(status: &Value) -> Vec<u64> {
 
 fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()> {
     if deploy {
-        return Err("boot-capture --deploy is intentionally not wired into the Rust tool yet; run deploy-main-mister-experiment.sh first".into());
+        return Err("boot-capture --deploy is intentionally not wired into the Rust tool yet; run deploy-platform.sh first".into());
     }
     {
         let sess = connect(10)?;

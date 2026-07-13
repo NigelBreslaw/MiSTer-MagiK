@@ -135,7 +135,7 @@ framebuffer has multiple buffers, and the FPGA scans whichever buffer is
 selected by the framebuffer route command. At the stock menu, `/dev/fb0` can be
 correct while HDMI still shows another buffer.
 
-The experimental vblank-latched Menu RBF is built only by manually starting the
+The production vblank-latched Menu RBF is built only by manually starting the
 `FPGA Vblank Latch RBF` GitHub Actions workflow. Do not run this workflow on
 every push or pull request; Quartus builds are heavyweight and should be kicked
 off only when a new shared RBF artifact is actually needed. From a checked-out
@@ -150,25 +150,25 @@ The built RBF is only one part of the fast hidden-buffer path. Seeing
 The known-good activation sequence is:
 
 1. Copy the CI artifact to
-   `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`.
+   `/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf`.
 2. Install the stock-kernel scanout-slots module at
    `/media/fat/mister-magik/mister_magik_scanout_slots.ko`.
 3. Deploy a MagiK Main fork that owns production latch startup. On boot or
-   return to menu, the fork redirects `menu.rbf` to the persistent latch RBF,
+   return to menu, the fork redirects the default Menu target to the persistent latch RBF,
    re-execs itself on that core, loads the scanout-slots module, then starts the
    launcher.
 
-   `scripts/deploy-main-mister-experiment.sh` installs all three production
-   pieces: `MiSTer_MagiK`, `mister_magik_scanout_slots.ko`, and the CI-built
-   latch RBF. `scripts/install-slint-boot.sh` refuses to arm MagiK boot if the
-   persistent latch RBF or scanout-slots module is missing.
+   `scripts/deploy-platform.sh` installs Main, Rust, the scanout module and
+   metadata, the CI-built latch RBF and metadata, and activates
+   `platform-v1.manifest` last. `scripts/install-slint-boot.sh` refuses to arm
+   MagiK boot unless the complete installed bundle verifies.
 
 For one-shot diagnosis only, load that RBF through Main's MagiK launch command
 path, not with an external loader and not with `load_core` while the launcher is
 active:
 
    ```bash
-   scripts/mister run "printf 'mister_magik_launch /media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
+   scripts/mister run "printf 'mister_magik_launch /media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf\n' > /dev/MiSTer_cmd"
    ```
 
    Prove activation before diagnosing latch support:
@@ -178,7 +178,7 @@ active:
    ```
 
    The cmdline must include
-   `/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf`. Earlier
+   `/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf`. Earlier
    experiments used `load_core` from the launcher state; Main stayed on the
    stock Menu path, so `supported=0` only proved the patched RBF was not active.
 
@@ -235,9 +235,10 @@ final present goes through hidden buffers. The reliable proof signals are:
 If the RBF file is merely present on `/media/fat`, or the backend env is logged
 without the latch counters advancing, the fast path has not been proven.
 
-The latch backend is only active while the MagiK Menu latch RBF and plugin support
-are active. Returning from a game normally brings Main back as
-`MiSTer_MagiK menu.rbf`; runtime counters and benchmark traces must be checked
+The latch backend is only active while the MagiK Menu latch RBF and plugin
+support are active. Returning from a game or requesting `load_core menu.rbf`
+is redirected to the manifest-owned production RBF; “Exit to MiSTer” remains on
+that already-active core. Runtime counters and benchmark traces must be checked
 again after return. MagiK falls back to `/dev/fb0` if hidden buffers or latch
 commands are unavailable.
 

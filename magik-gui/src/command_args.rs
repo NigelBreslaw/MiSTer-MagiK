@@ -51,7 +51,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("fb-map-bandwidth", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("scanout-slots-map-report", CommandKind::PreFpga),
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
     CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
@@ -240,6 +239,8 @@ mod tests {
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("library-sql"));
         assert!(is_known_command("read"));
+        assert!(is_known_command("fpga-latch-report"));
+        assert_command_kind("fpga-latch-report", CommandKind::Fpga);
         for command in [
             "vsync-probe",
             "cpu-profile-smoke",

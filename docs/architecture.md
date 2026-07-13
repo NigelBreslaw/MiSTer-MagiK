@@ -22,15 +22,32 @@ Production boot stays compatible with stock MiSTer:
 1. `/etc/inittab` starts stock `/media/fat/MiSTer`.
 2. Stock Main reads `MiSTer.ini`.
 3. `[MiSTer] main=MiSTer_MagiK` re-execs the MagiK Main fork.
-4. The fork initializes HDMI/video through the normal Main path.
-5. The fork runs `mister-magik-fb early-black` after `video_init()` so Rust
+4. The fork verifies `/media/fat/mister-magik/platform-v1.manifest` and redirects
+   an empty/default Menu boot to the manifest-owned production RBF at
+   `/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf`.
+5. The fork initializes HDMI/video through the normal Main path.
+6. The fork runs `mister-magik-fb early-black` after `video_init()` so Rust
    clears and routes the launcher framebuffer before the full UI starts.
-6. The fork starts `/media/fat/mister-magik/mister-magik-fb ui launcher 0` on
+7. The fork starts `/media/fat/mister-magik/mister-magik-fb ui launcher 0` on
    `tty2` and enters dormant launcher mode.
 
 The fork must not write the launcher framebuffer mode, route a generic 8888
 framebuffer, draw the stock menu OSD, or keep input grabbed while Slint owns the
 launcher.
+
+Root `/media/fat/menu.rbf` is stock firmware owned by `update_all`; MagiK never
+writes it. `mister_magik_exit_to_menu` stays on the active latch Menu core.
+Game returns and `load_core menu.rbf` are redirected by `MiSTer_MagiK` to the
+MagiK-owned RBF after manifest verification. A missing, malformed, duplicate,
+mixed-version, or hash-mismatched manifest disables the redirect and falls back
+to stock behavior without rebooting repeatedly.
+
+The manifest binds fixed installed paths, SHA-256 hashes, Main/MagiK/Menu source
+revisions, and the framebuffer platform-contract hash for Main, Rust, the
+scanout module and metadata, and the latch RBF and metadata. Deployment uploads
+and verifies the complete inactive bundle, syncs it, and activates the manifest
+last. Distribution packages contain the same layout and deliberately exclude
+root `menu.rbf`.
 
 ## Framebuffer Ownership
 

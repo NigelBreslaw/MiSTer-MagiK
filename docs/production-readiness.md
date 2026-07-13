@@ -11,8 +11,11 @@ manual pre-release gate rather than GitHub-hosted CI.
   `scripts/test-magik-state.sh`, `scripts/check-magik-patch-surface.sh`, and
   `./build-container.sh`.
 - Device acceptance passes with `scripts/device-release-acceptance.sh --deploy`.
-- The distribution zip contains the installer script, `mister-magik-fb`,
-  `mame.sqlite3`, and `MiSTer_MagiK` when the Main fork binary is supplied.
+- The distribution zip contains the installer script, `MiSTer_MagiK`,
+  `mister-magik-fb`, the qualified scanout module and metadata, the production
+  latch RBF and metadata under `mister-magik/fpga/`, and
+  `mister-magik/platform-v1.manifest`. It contains neither root `menu.rbf` nor
+  a production `experiments/` directory.
 - Rollback is verified with `scripts/restore-stock-boot.sh` before publishing a
   beta build from a new release flow.
 
