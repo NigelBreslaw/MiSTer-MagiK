@@ -55,7 +55,10 @@ impl RuntimeThreadRole {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
             Self::FramebufferStream => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit),
+            // Download starts only after it has joined the cooperative work
+            // coordinator.  It may then use both online Cortex-A9 cores while
+            // yielding at bounded stream-copy units for selected previews.
+            Self::MediaDownload => RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline),
             Self::VideoDecode | Self::VideoAudio => {
                 RuntimeThreadPolicy::new(5, ThreadAffinity::Inherit)
             }
@@ -372,7 +375,7 @@ mod tests {
     fn visible_media_download_runs_at_interactive_priority() {
         assert_eq!(
             RuntimeThreadRole::MediaDownload.default_policy(),
-            RuntimeThreadPolicy::new(0, ThreadAffinity::Inherit)
+            RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
         );
     }
 
@@ -412,7 +415,7 @@ mod tests {
             ),
             (RuntimeThreadRole::PreviewPrefetch, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::MediaWorker, 10, ThreadAffinity::Cpu0),
-            (RuntimeThreadRole::MediaDownload, 0, ThreadAffinity::Inherit),
+            (RuntimeThreadRole::MediaDownload, 0, ThreadAffinity::AllOnline),
             (RuntimeThreadRole::MediaIndex, 10, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::FramebufferStream,

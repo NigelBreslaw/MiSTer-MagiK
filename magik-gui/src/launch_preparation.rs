@@ -48,6 +48,7 @@ pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
 }
 
 pub fn prepare_launch_target(launch_target: &LaunchTarget) -> Result<LaunchTarget, String> {
+    let _lease = mister_magik_catalog::work_coordinator::foreground("launch-preparation");
     let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
     prepare_launch_target_with_roots(launch_target, &roots)
 }
