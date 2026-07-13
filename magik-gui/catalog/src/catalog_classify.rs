@@ -64,6 +64,16 @@ impl PlatformKind {
         }
     }
 
+    pub const fn category_label(self) -> &'static str {
+        match self {
+            Self::Arcade => "Arcade",
+            Self::Console => "Console",
+            Self::Handheld => "Handheld",
+            Self::Computer => "Computer",
+            Self::Unknown => "Unknown",
+        }
+    }
+
     pub fn from_stored(value: &str) -> Result<Self, String> {
         match value {
             "arcade" => Ok(Self::Arcade),
@@ -123,6 +133,12 @@ pub struct SystemClassificationDiagnostic {
     pub reason: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemClassificationResolution {
+    pub classification: SystemClassification,
+    pub diagnostic: Option<SystemClassificationDiagnostic>,
+}
+
 #[derive(Debug, Deserialize)]
 struct SystemTaxonomyDocument {
     schema: u32,
@@ -137,8 +153,8 @@ struct SystemTaxonomy {
 
 impl SystemTaxonomy {
     fn parse(text: &str) -> Result<Self, String> {
-        let document: SystemTaxonomyDocument =
-            serde_json::from_str(text).map_err(|error| format!("parse system taxonomy: {error}"))?;
+        let document: SystemTaxonomyDocument = serde_json::from_str(text)
+            .map_err(|error| format!("parse system taxonomy: {error}"))?;
         if document.schema != SYSTEM_TAXONOMY_VERSION {
             return Err(format!(
                 "system taxonomy schema {} does not match expected {SYSTEM_TAXONOMY_VERSION}",
@@ -150,7 +166,10 @@ impl SystemTaxonomy {
         for (index, system) in document.systems.iter().enumerate() {
             let id = normalize_system_id(&system.id);
             if id.is_empty() || id != system.id {
-                return Err(format!("system taxonomy id {:?} is not normalized", system.id));
+                return Err(format!(
+                    "system taxonomy id {:?} is not normalized",
+                    system.id
+                ));
             }
             if system.title.trim().is_empty() {
                 return Err(format!("system taxonomy {id} has an empty title"));
@@ -160,7 +179,8 @@ impl SystemTaxonomy {
             }
             for alias in &system.aliases {
                 let alias = normalize_system_id(alias);
-                if alias.is_empty() || by_id.contains_key(&alias) || !aliases.insert(alias.clone()) {
+                if alias.is_empty() || by_id.contains_key(&alias) || !aliases.insert(alias.clone())
+                {
                     return Err(format!("duplicate system taxonomy alias {alias}"));
                 }
             }
@@ -213,6 +233,44 @@ pub fn platform_kind_for_system(system_id: &str) -> PlatformKind {
         .unwrap_or(PlatformKind::Unknown)
 }
 
+/// Resolve product classification from the canonical taxonomy. Observed category
+/// is deliberately diagnostic-only: a core path, manifest row, or discovery can
+/// never override the taxonomy attached to the associated system id.
+pub fn classify_system(
+    system_id: &str,
+    observed_category: Option<&str>,
+    observed_source: &str,
+) -> SystemClassificationResolution {
+    let normalized_id = normalize_system_id(system_id);
+    let (platform_kind, source) = match system_definition(&normalized_id) {
+        Some(definition) => (definition.platform_kind, "system-taxonomy-v1"),
+        None => (PlatformKind::Unknown, "runtime-unknown-fallback"),
+    };
+    let classification = SystemClassification {
+        system_id: normalized_id.clone(),
+        platform_kind,
+        source: source.to_string(),
+    };
+    let diagnostic = observed_category.and_then(|category| {
+        let rejected_kind = PlatformKind::from_category(category);
+        (rejected_kind != PlatformKind::Unknown && rejected_kind != platform_kind).then(|| {
+            SystemClassificationDiagnostic {
+                system_id: normalized_id,
+                accepted_kind: platform_kind,
+                accepted_source: source.to_string(),
+                rejected_kind,
+                rejected_source: observed_source.to_string(),
+                reason: "physical or legacy category disagrees with canonical system taxonomy"
+                    .to_string(),
+            }
+        })
+    });
+    SystemClassificationResolution {
+        classification,
+        diagnostic,
+    }
+}
+
 pub fn system_title(system_id: &str) -> String {
     system_definition(system_id)
         .map(|definition| definition.title.clone())
@@ -245,16 +303,34 @@ mod tests {
     fn checked_in_taxonomy_is_valid_and_unique() {
         validate_system_taxonomy().expect("valid taxonomy");
         let systems = system_definitions().expect("taxonomy systems");
-        let ids = systems.iter().map(|system| &system.id).collect::<HashSet<_>>();
+        let ids = systems
+            .iter()
+            .map(|system| &system.id)
+            .collect::<HashSet<_>>();
         assert_eq!(ids.len(), systems.len());
     }
 
     #[test]
     fn critical_systems_have_explicit_product_classification() {
         for (id, kind, section, family) in [
-            ("sms", PlatformKind::Console, LauncherSection::Consoles, "sega"),
-            ("gamegear", PlatformKind::Handheld, LauncherSection::Handhelds, "sega"),
-            ("astrocade", PlatformKind::Console, LauncherSection::Consoles, "other"),
+            (
+                "sms",
+                PlatformKind::Console,
+                LauncherSection::Consoles,
+                "sega",
+            ),
+            (
+                "gamegear",
+                PlatformKind::Handheld,
+                LauncherSection::Handhelds,
+                "sega",
+            ),
+            (
+                "astrocade",
+                PlatformKind::Console,
+                LauncherSection::Consoles,
+                "other",
+            ),
         ] {
             let definition = system_definition(id).unwrap_or_else(|| panic!("missing {id}"));
             assert_eq!(definition.platform_kind, kind, "{id}");
@@ -265,8 +341,24 @@ mod tests {
 
     #[test]
     fn invalid_stored_platform_kinds_are_rejected() {
-        assert_eq!(PlatformKind::from_stored("console"), Ok(PlatformKind::Console));
+        assert_eq!(
+            PlatformKind::from_stored("console"),
+            Ok(PlatformKind::Console)
+        );
         assert!(PlatformKind::from_stored("Arcade").is_err());
         assert!(PlatformKind::from_stored("cabinet").is_err());
+    }
+
+    #[test]
+    fn physical_arcade_location_cannot_reclassify_console_or_handheld_systems() {
+        for (id, expected) in [
+            ("sms", PlatformKind::Console),
+            ("gamegear", PlatformKind::Handheld),
+            ("astrocade", PlatformKind::Console),
+        ] {
+            let resolution = classify_system(id, Some("Arcade"), "core-location:_Arcade/cores");
+            assert_eq!(resolution.classification.platform_kind, expected, "{id}");
+            assert!(resolution.diagnostic.is_some(), "{id}");
+        }
     }
 }

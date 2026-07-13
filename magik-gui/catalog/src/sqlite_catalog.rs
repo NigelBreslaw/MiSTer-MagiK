@@ -20,14 +20,14 @@ use crate::catalog_stamp;
 use crate::catalog_store;
 use crate::catalog_summary;
 use crate::core_audit;
+#[cfg(test)]
+use crate::game_discovery::unique_discovery_count;
 use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
     preferred_playable_discoveries_by_key, profile_id_for_discovery, system_title_for_discovery,
     DiscoverySourceKind, GameDiscovery,
 };
-#[cfg(test)]
-use crate::game_discovery::unique_discovery_count;
 use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
     self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
@@ -1337,9 +1337,8 @@ pub(crate) fn sqlite_catalog_stamp_check(
         stored_semantic_checkpoint.as_ref(),
         &exact_semantic_checkpoint,
     );
-    checkpoint_compare_us = checkpoint_compare_us.saturating_add(
-        exact_checkpoint_compare_t.elapsed().as_micros() as u64,
-    );
+    checkpoint_compare_us = checkpoint_compare_us
+        .saturating_add(exact_checkpoint_compare_t.elapsed().as_micros() as u64);
     catalog_checkpoint::report_drift_summary(&drift);
     let stamp_unchanged = stored.as_ref().is_some_and(|stored| stored == &exact_stamp);
     let unchanged = stamp_unchanged && drift.unchanged;
@@ -2824,7 +2823,9 @@ fn write_sqlite_scan_with_sources_inner(
             system_rows.entry(system_id.clone()).or_insert_with(|| {
                 (
                     system_title_for_discovery(discovery, &system_id),
-                    discovery.category.clone(),
+                    crate::catalog_classify::platform_kind_for_system(&system_id)
+                        .category_label()
+                        .to_string(),
                 )
             });
         }
@@ -3232,7 +3233,7 @@ fn write_sqlite_scan_with_sources_inner(
         stmt.execute(params!["ignored_files", scan.ignored_files as i64])
             .map_err(|e| format!("insert ignored count: {e}"))?;
         stmt.execute(params!["discoveries", discovery_total as i64])
-        .map_err(|e| format!("insert discovery count: {e}"))?;
+            .map_err(|e| format!("insert discovery count: {e}"))?;
         stmt.execute(params!["mame_metadata_size", mame_signature.size as i64])
             .map_err(|e| format!("insert mame metadata size: {e}"))?;
         stmt.execute(params!["mame_metadata_mtime", mame_signature.mtime_secs])
@@ -5479,9 +5480,11 @@ mod tests {
 
         let conn = Connection::open(&db).expect("open retained discovery count fixture");
         let stored = conn
-            .query_row("SELECT value FROM meta WHERE key='discoveries'", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key='discoveries'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
             .expect("query retained discovery count");
         let inserted = conn
             .query_row("SELECT count(*) FROM game_rows", [], |row| {
