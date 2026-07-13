@@ -11,8 +11,8 @@ use crate::core_audit::CatalogAuditRow;
 use crate::launch_profiles::{
     self, core_launch_manifest_fingerprint, CORE_LAUNCH_MANIFEST_VERSION, PROFILE_SET_VERSION,
 };
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const CHECKPOINT_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -127,6 +127,7 @@ impl CatalogDriftSummary {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compute_catalog_discovery_checkpoint(
     roots: &[String],
     mame_sqlite_path: &Path,
@@ -210,6 +211,223 @@ pub(crate) fn compute_catalog_discovery_checkpoint_from_facts(
     CatalogDiscoveryCheckpoint { lines }
 }
 
+/// Revalidate the retained cold-scan checkpoint without walking every payload.
+///
+/// The cold scan retains the semantic payload shape and audit summary. Warm
+/// validation enumerates only top-level system directories, refreshes their
+/// compact metadata signatures, and reuses retained semantic fields only when
+/// each path has an unambiguous, available signature. Any missing, added,
+/// malformed, or unstatable directory produces a different checkpoint and a
+/// conservative rebuild.
+pub(crate) fn compute_catalog_discovery_checkpoint_probe(
+    roots: &[String],
+    mame_sqlite_path: &Path,
+    hbmame_sqlite_path: &Path,
+    installed_cores: &[catalog_discovery::InstalledCore],
+    game_dir_headers: &[catalog_discovery::GameDirHeader],
+    stored: &CatalogDiscoveryCheckpoint,
+) -> CatalogDiscoveryCheckpoint {
+    let mut ambiguous = false;
+    let mut retained_shapes = HashMap::<String, bool>::new();
+    let mut top_probes = HashSet::<String>::new();
+    let mut child_probe_counts = HashMap::<String, usize>::new();
+    let mut child_probe_paths = HashMap::<String, Vec<PathBuf>>::new();
+    for line in stored.lines() {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        match fields.first().copied().unwrap_or_default() {
+            "game-dir" => {
+                if fields.len() != 6 {
+                    ambiguous = true;
+                    continue;
+                }
+                let payloadish = match fields[5] {
+                    "payloadish" => true,
+                    "empty" => false,
+                    _ => {
+                        ambiguous = true;
+                        continue;
+                    }
+                };
+                let key = fields[2].to_ascii_lowercase();
+                if retained_shapes.insert(key, payloadish).is_some() {
+                    ambiguous = true;
+                }
+            }
+            "game-dir-probe" => {
+                if !valid_present_probe(&fields) {
+                    ambiguous = true;
+                    continue;
+                }
+                if !top_probes.insert(fields[1].to_ascii_lowercase()) {
+                    ambiguous = true;
+                }
+            }
+            "game-dir-child-probes" => {
+                if fields.len() != 3 {
+                    ambiguous = true;
+                    continue;
+                }
+                let Ok(count) = fields[2].parse::<usize>() else {
+                    ambiguous = true;
+                    continue;
+                };
+                if child_probe_counts
+                    .insert(fields[1].to_ascii_lowercase(), count)
+                    .is_some()
+                {
+                    ambiguous = true;
+                }
+            }
+            "game-dir-child-probe" => {
+                if !valid_present_probe(&fields) {
+                    ambiguous = true;
+                    continue;
+                }
+                let path = PathBuf::from(fields[1]);
+                let Some(parent) = path.parent() else {
+                    ambiguous = true;
+                    continue;
+                };
+                child_probe_paths
+                    .entry(parent.to_string_lossy().to_ascii_lowercase())
+                    .or_default()
+                    .push(path);
+            }
+            _ => {}
+        }
+    }
+    for (parent, count) in &child_probe_counts {
+        if child_probe_paths.get(parent).map_or(0, Vec::len) != *count {
+            ambiguous = true;
+        }
+    }
+
+    let mut game_dirs = Vec::with_capacity(game_dir_headers.len());
+    for header in game_dir_headers {
+        let key = header.path.to_string_lossy().to_ascii_lowercase();
+        let Some(payloadish) = retained_shapes.remove(&key) else {
+            ambiguous = true;
+            game_dirs.push(catalog_discovery::GameDirFact {
+                name: header.name.clone(),
+                path: header.path.clone(),
+                signature: header.signature,
+                has_payload_files: false,
+                has_zip_files: false,
+                direct_zip_paths: Vec::new(),
+                nested_probe_signatures: Vec::new(),
+                payload_extensions: BTreeSet::new(),
+            });
+            continue;
+        };
+        if !top_probes.remove(&key) || !child_probe_counts.contains_key(&key) {
+            ambiguous = true;
+        }
+        let child_paths = child_probe_paths.remove(&key).unwrap_or_default();
+        let probe = crate::namespace_walk::probe_directory_signatures(&header.path, &child_paths);
+        let top_signature =
+            catalog_discovery::GameDirSignature::from_namespace_signature(probe.target_signature);
+        if matches!(
+            top_signature,
+            catalog_discovery::GameDirSignature::Unavailable
+        ) {
+            ambiguous = true;
+        }
+        let mut nested_probe_signatures = child_paths
+            .into_iter()
+            .zip(probe.child_signatures)
+            .map(|(path, signature)| {
+                let signature =
+                    catalog_discovery::GameDirSignature::from_namespace_signature(signature);
+                if matches!(
+                    signature,
+                    catalog_discovery::GameDirSignature::Unavailable
+                ) {
+                    ambiguous = true;
+                }
+                (path, signature)
+            })
+            .collect::<Vec<_>>();
+        nested_probe_signatures.sort_by_cached_key(|(path, _)| {
+            (path.to_string_lossy().to_ascii_lowercase(), path.clone())
+        });
+        game_dirs.push(catalog_discovery::GameDirFact {
+            name: header.name.clone(),
+            path: header.path.clone(),
+            signature: top_signature,
+            has_payload_files: payloadish,
+            has_zip_files: false,
+            direct_zip_paths: Vec::new(),
+            nested_probe_signatures,
+            payload_extensions: BTreeSet::new(),
+        });
+    }
+    if !retained_shapes.is_empty()
+        || !top_probes.is_empty()
+        || !child_probe_paths.is_empty()
+    {
+        ambiguous = true;
+    }
+
+    let mut current = compute_catalog_discovery_checkpoint_from_facts(
+        roots,
+        mame_sqlite_path,
+        hbmame_sqlite_path,
+        &[],
+        installed_cores,
+        &game_dirs,
+    );
+    let retained_audit = stored
+        .lines()
+        .iter()
+        .filter(|line| {
+            line.starts_with("core-audit-summary\t") || line.starts_with("core-audit-row\t")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if retained_audit.is_empty() {
+        ambiguous = true;
+    }
+    current.lines.retain(|line| {
+        !line.starts_with("core-audit-summary\t") && !line.starts_with("core-audit-row\t")
+    });
+    let audit_insert = current
+        .lines
+        .iter()
+        .position(|line| {
+            line.starts_with("mame-metadata\t") || line.starts_with("hbmame-metadata\t")
+        })
+        .unwrap_or(current.lines.len());
+    current.lines.splice(audit_insert..audit_insert, retained_audit);
+    if ambiguous {
+        current.lines.push("checkpoint-probe\tambiguous".to_string());
+    }
+    current
+}
+
+fn valid_present_probe(fields: &[&str]) -> bool {
+    fields.len() == 5
+        && fields[2] == "present"
+        && fields[3].parse::<u64>().is_ok()
+        && fields[4].parse::<i64>().is_ok()
+}
+
+pub(crate) fn without_probe_lines(
+    checkpoint: &CatalogDiscoveryCheckpoint,
+) -> CatalogDiscoveryCheckpoint {
+    CatalogDiscoveryCheckpoint::from_lines(
+        checkpoint
+            .lines()
+            .iter()
+            .filter(|line| {
+                !line.starts_with("game-dir-probe\t")
+                    && !line.starts_with("game-dir-child-probe")
+                    && !line.starts_with("checkpoint-probe\t")
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
 pub(crate) fn catalog_trace_detail_enabled() -> bool {
     std::env::var("MISTER_CATALOG_TRACE")
         .unwrap_or_default()
@@ -273,7 +491,15 @@ fn append_game_dir_summaries(
     for (root_idx, game_root) in game_roots.iter().enumerate() {
         append_path_signature(lines, "game-root", root_idx, game_root);
     }
-    for (idx, dir) in game_dirs.iter().enumerate() {
+    let mut game_dirs = game_dirs.iter().collect::<Vec<_>>();
+    game_dirs.sort_by_cached_key(|dir| {
+        (
+            dir.path.to_string_lossy().to_ascii_lowercase(),
+            dir.path.to_string_lossy().into_owned(),
+        )
+    });
+    let game_dir_count = game_dirs.len();
+    for (idx, dir) in game_dirs.into_iter().enumerate() {
         let status = if launch_profiles::generic_manifest_profile_for_game_dir(&dir.name).is_some()
             || launch_profiles::builtin_profiles().iter().any(|profile| {
                 profile
@@ -285,19 +511,44 @@ fn append_game_dir_summaries(
         } else {
             "unknown"
         };
+        let payload_shape = if dir.has_payloadish_files() {
+            "payloadish"
+        } else {
+            "empty"
+        };
         lines.push(format!(
-            "game-dir\t{idx}\t{}\t{}\t{}\t{}",
+            "game-dir\t{idx}\t{}\t{}\t{status}\t{payload_shape}",
             dir.path.display(),
             dir.name,
-            status,
-            if dir.has_payloadish_files() {
-                "payloadish"
-            } else {
-                "empty"
-            }
         ));
+        append_game_dir_probe(lines, "game-dir-probe", &dir.path, dir.signature);
+        lines.push(format!(
+            "game-dir-child-probes\t{}\t{}",
+            dir.path.display(),
+            dir.nested_probe_signatures.len()
+        ));
+        for (child_path, signature) in &dir.nested_probe_signatures {
+            append_game_dir_probe(lines, "game-dir-child-probe", child_path, *signature);
+        }
     }
-    lines.push(format!("game-dirs\t{}", game_dirs.len()));
+    lines.push(format!("game-dirs\t{game_dir_count}"));
+}
+
+fn append_game_dir_probe(
+    lines: &mut Vec<String>,
+    kind: &str,
+    path: &Path,
+    signature: catalog_discovery::GameDirSignature,
+) {
+    match signature {
+        catalog_discovery::GameDirSignature::Present { len, mtime_nanos } => lines.push(format!(
+            "{kind}\t{}\tpresent\t{len}\t{mtime_nanos}",
+            path.display()
+        )),
+        catalog_discovery::GameDirSignature::Unavailable => {
+            lines.push(format!("{kind}\t{}\tunavailable", path.display()))
+        }
+    }
 }
 
 fn append_audit_summary(lines: &mut Vec<String>, audit_rows: &[CatalogAuditRow]) {
@@ -419,6 +670,40 @@ mod tests {
     }
 
     #[test]
+    fn retained_game_dir_order_matches_live_canonical_order() {
+        let root = unique_temp_dir("checkpoint-retained-order");
+        for name in ["Saturn", "NES", "PSX"] {
+            let dir = root.join("games").join(name);
+            std::fs::create_dir_all(&dir).expect("create game dir");
+            std::fs::write(dir.join("Game.rom"), b"rom").expect("write game");
+        }
+        let roots = vec![root.display().to_string()];
+        let live_facts = catalog_discovery::top_level_game_dirs_for_roots(&roots);
+        let mut retained_facts = live_facts.clone();
+        retained_facts.reverse();
+
+        let live = compute_catalog_discovery_checkpoint_from_facts(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+            &[],
+            &live_facts,
+        );
+        let retained = compute_catalog_discovery_checkpoint_from_facts(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+            &[],
+            &retained_facts,
+        );
+
+        assert_eq!(retained, live);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn known_core_addition_changes_checkpoint() {
         let root = unique_temp_dir("checkpoint-known-core");
         let roots = vec![root.display().to_string()];
@@ -494,7 +779,7 @@ mod tests {
             &[],
         );
 
-        assert_eq!(first, second);
+        assert_eq!(without_probe_lines(&first), without_probe_lines(&second));
         let _ = std::fs::remove_dir_all(root);
     }
 

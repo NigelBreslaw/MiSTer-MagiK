@@ -13,8 +13,8 @@ use crate::catalog_load_metrics;
 use crate::catalog_navigation;
 use crate::catalog_progress::{report_catalog_progress, CatalogProgress};
 use crate::catalog_projection::{
-    self, ArcadePreviewProjection, CatalogProjectionRow, CatalogProjectionSource,
-    LauncherPreviewAsset,
+    self, ArcadeCompatibilityRow, ArcadePreviewProjection, CanonicalLaunchIdIndex,
+    CatalogProjectionRow, CatalogProjectionSource, LauncherPreviewAsset,
 };
 use crate::catalog_stamp;
 use crate::catalog_store;
@@ -24,8 +24,10 @@ use crate::game_discovery::{
     catalog_system_id_for_discovery, confidence_str, covered_payload_paths, is_launcher_launch_ref,
     is_raw_arcade_zip_set_discovery, launch_kind_for_discovery, launch_ref_for_discovery,
     preferred_playable_discoveries_by_key, profile_id_for_discovery, system_title_for_discovery,
-    unique_discovery_count, DiscoverySourceKind, GameDiscovery,
+    DiscoverySourceKind, GameDiscovery,
 };
+#[cfg(test)]
+use crate::game_discovery::unique_discovery_count;
 use crate::launch_profiles::{self, LaunchProfile, MountKind, MountSpec, RuleSourceKind};
 use crate::library_db::{
     self, BenchConfig, CatalogStampCheckSummary, FileSignature, LibraryCatalogLoad,
@@ -1239,6 +1241,72 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let checkpoint_read_us = checkpoint_read_t.elapsed().as_micros() as u64;
     let compute_t = Instant::now();
     let installed_cores = catalog_discovery::installed_cores_for_roots(&cfg.roots);
+    let game_dir_headers = catalog_discovery::top_level_game_dir_headers_for_roots_excluding(
+        &cfg.roots,
+        &std::collections::BTreeSet::new(),
+    );
+    catalog_checkpoint::report_checkpoint_timing(
+        "coverage_audit",
+        0,
+        "skipped=retained-directory-signatures",
+    );
+    let current_live_stamp = catalog_stamp::compute_default_catalog_stamp(&cfg.roots);
+    let empty_checkpoint = catalog_checkpoint::CatalogDiscoveryCheckpoint::from_lines(Vec::new());
+    let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint_probe(
+        &cfg.roots,
+        &default_mame_sqlite_path(),
+        &default_hbmame_sqlite_path(),
+        &installed_cores,
+        &game_dir_headers,
+        stored_checkpoint.as_ref().unwrap_or(&empty_checkpoint),
+    );
+    let probe_compute_us = compute_t.elapsed().as_micros() as u64;
+    let compare_t = Instant::now();
+    let (stored_fingerprint, stored_lines, stamp_unchanged) = match &stored {
+        Some(stored) => {
+            let stored_fingerprint = stored.fingerprint_hex();
+            let stored_lines = stored.lines().len();
+            let unchanged = stored.has_same_live_inputs(&current_live_stamp);
+            (Some(stored_fingerprint), stored_lines, unchanged)
+        }
+        None => (None, 0, false),
+    };
+    let checkpoint_compare_t = Instant::now();
+    let probe_drift =
+        CatalogDriftSummary::from_checkpoints(stored_checkpoint.as_ref(), &current_checkpoint);
+    let mut checkpoint_compare_us = checkpoint_compare_t.elapsed().as_micros() as u64;
+    let (stored_checkpoint_fingerprint, stored_checkpoint_lines) =
+        stored_checkpoint.as_ref().map_or((None, 0), |checkpoint| {
+            (Some(checkpoint.fingerprint_hex()), checkpoint.lines().len())
+        });
+    if stamp_unchanged && probe_drift.unchanged {
+        catalog_checkpoint::report_drift_summary(&probe_drift);
+        let compare_us = compare_t.elapsed().as_micros() as u64;
+        return Ok(CatalogStampCheckSummary {
+            unchanged: true,
+            check_us: started.elapsed().as_micros() as u64,
+            compute_us: probe_compute_us,
+            open_us,
+            read_us,
+            checkpoint_read_us,
+            checkpoint_compare_us,
+            compare_us,
+            stored_fingerprint: stored_fingerprint.clone(),
+            current_fingerprint: stored_fingerprint.unwrap_or_default(),
+            stored_checkpoint_fingerprint,
+            current_checkpoint_fingerprint: current_checkpoint.fingerprint_hex(),
+            stored_lines,
+            current_lines: stored_lines,
+            stored_checkpoint_lines,
+            current_checkpoint_lines: current_checkpoint.lines().len(),
+            drift: probe_drift,
+        });
+    }
+
+    // A probe miss is not a semantic change by itself. Recompute the exact
+    // depth-two facts and audit only on that exceptional path, preserving the
+    // established drift/fingerprint contract for metadata churn and errors.
+    let fallback_t = Instant::now();
     let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(&cfg.roots);
     let profiles =
         launch_profiles::active_profiles_for_roots_with_facts(&installed_cores, &game_dirs);
@@ -1246,12 +1314,13 @@ pub(crate) fn sqlite_catalog_stamp_check(
     let audit_rows =
         core_audit::audit_catalog_coverage_from_facts(&profiles, &installed_cores, &game_dirs);
     catalog_checkpoint::report_checkpoint_timing(
-        "coverage_audit",
+        "coverage_audit_fallback",
         audit_t.elapsed().as_micros() as u64,
         format!("rows={}", audit_rows.len()),
     );
-    let current = catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
-    let current_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
+    let exact_stamp =
+        catalog_stamp::compute_default_catalog_stamp_with_audit(&cfg.roots, &audit_rows);
+    let exact_checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
         &cfg.roots,
         &default_mame_sqlite_path(),
         &default_hbmame_sqlite_path(),
@@ -1259,31 +1328,22 @@ pub(crate) fn sqlite_catalog_stamp_check(
         &installed_cores,
         &game_dirs,
     );
-    let current_fingerprint = current.fingerprint_hex();
-    let current_lines = current.lines().len();
-    let current_checkpoint_fingerprint = current_checkpoint.fingerprint_hex();
-    let current_checkpoint_lines = current_checkpoint.lines().len();
-    let compute_us = compute_t.elapsed().as_micros() as u64;
-    let compare_t = Instant::now();
-    let (stored_fingerprint, stored_lines, stamp_unchanged) = match stored {
-        Some(stored) => {
-            let stored_fingerprint = stored.fingerprint_hex();
-            let stored_lines = stored.lines().len();
-            let unchanged = stored == current;
-            (Some(stored_fingerprint), stored_lines, unchanged)
-        }
-        None => (None, 0, false),
-    };
-    let checkpoint_compare_t = Instant::now();
-    let drift =
-        CatalogDriftSummary::from_checkpoints(stored_checkpoint.as_ref(), &current_checkpoint);
-    let checkpoint_compare_us = checkpoint_compare_t.elapsed().as_micros() as u64;
+    let stored_semantic_checkpoint = stored_checkpoint
+        .as_ref()
+        .map(catalog_checkpoint::without_probe_lines);
+    let exact_semantic_checkpoint = catalog_checkpoint::without_probe_lines(&exact_checkpoint);
+    let exact_checkpoint_compare_t = Instant::now();
+    let drift = CatalogDriftSummary::from_checkpoints(
+        stored_semantic_checkpoint.as_ref(),
+        &exact_semantic_checkpoint,
+    );
+    checkpoint_compare_us = checkpoint_compare_us.saturating_add(
+        exact_checkpoint_compare_t.elapsed().as_micros() as u64,
+    );
     catalog_checkpoint::report_drift_summary(&drift);
-    let (stored_checkpoint_fingerprint, stored_checkpoint_lines) =
-        stored_checkpoint.as_ref().map_or((None, 0), |checkpoint| {
-            (Some(checkpoint.fingerprint_hex()), checkpoint.lines().len())
-        });
+    let stamp_unchanged = stored.as_ref().is_some_and(|stored| stored == &exact_stamp);
     let unchanged = stamp_unchanged && drift.unchanged;
+    let compute_us = probe_compute_us.saturating_add(fallback_t.elapsed().as_micros() as u64);
     let compare_us = compare_t.elapsed().as_micros() as u64;
     Ok(CatalogStampCheckSummary {
         unchanged,
@@ -1295,13 +1355,13 @@ pub(crate) fn sqlite_catalog_stamp_check(
         checkpoint_compare_us,
         compare_us,
         stored_fingerprint,
-        current_fingerprint,
+        current_fingerprint: exact_stamp.fingerprint_hex(),
         stored_checkpoint_fingerprint,
-        current_checkpoint_fingerprint,
+        current_checkpoint_fingerprint: exact_semantic_checkpoint.fingerprint_hex(),
         stored_lines,
-        current_lines,
+        current_lines: exact_stamp.lines().len(),
         stored_checkpoint_lines,
-        current_checkpoint_lines,
+        current_checkpoint_lines: exact_semantic_checkpoint.lines().len(),
         drift,
     })
 }
@@ -1440,6 +1500,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
                     discovery_history.clone(),
                     Some(stamp),
                     None,
+                    None,
                     true,
                 )?;
                 projections = Some(build_catalog_projections_from_materialized_sqlite(
@@ -1487,6 +1548,7 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
                     discovery_history.clone(),
                     Some(stamp),
                     Some(&canonical_navigation),
+                    Some(catalog),
                     // The embedded navigation payload is canonical. Retain the
                     // materialized compatibility tables until every release,
                     // acceptance, diagnostic, and benchmark selector has moved
@@ -1920,6 +1982,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
     canonical_navigation: Option<&[u8]>,
+    canonical_catalog: Option<&ArcadeCatalog>,
     materialize_runtime_catalog: bool,
 ) -> Result<(), String> {
     let preview_paths = PreviewArchivePaths::from_paths(
@@ -1941,6 +2004,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
         None,
         progress,
         canonical_navigation,
+        canonical_catalog,
         materialize_runtime_catalog,
     )
     .map(|_| ())
@@ -2035,10 +2099,20 @@ fn write_sqlite_scan_with_sources(
     root: &Path,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryCatalogLoad, String> {
-    write_sqlite_scan_with_sources_inner(path, scan, sources, Some(root), progress, None, true)?
-        .ok_or_else(|| "saved catalog was not returned".to_string())
+    write_sqlite_scan_with_sources_inner(
+        path,
+        scan,
+        sources,
+        Some(root),
+        progress,
+        None,
+        None,
+        true,
+    )?
+    .ok_or_else(|| "saved catalog was not returned".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_sqlite_scan_with_sources_inner(
     path: &Path,
     scan: &LibraryScan,
@@ -2046,6 +2120,7 @@ fn write_sqlite_scan_with_sources_inner(
     root: Option<&Path>,
     mut progress: ProgressCallback<'_>,
     canonical_navigation: Option<&[u8]>,
+    canonical_catalog: Option<&ArcadeCatalog>,
     materialize_runtime_catalog: bool,
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let total_t = Instant::now();
@@ -2574,6 +2649,7 @@ fn write_sqlite_scan_with_sources_inner(
     let hbmame_signature = library_db::file_signature(sources.hbmame_sqlite_path);
     let covered_payloads = covered_payload_paths(&scan.discoveries);
     let discoveries = preferred_playable_discoveries_by_key(&scan.discoveries, &covered_payloads);
+    let discovery_total = discoveries.len();
     let arcade_setnames = arcade_metadata_setnames(discoveries.values().copied());
     let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
     let arcade_metadata = load_arcade_machine_metadata_for_setnames(
@@ -2662,6 +2738,15 @@ fn write_sqlite_scan_with_sources_inner(
     {
         let stage_t = Instant::now();
         let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
+        let mut arcade_compatibility_rows = Vec::<ArcadeCompatibilityRow>::new();
+        let canonical_launch_refs = canonical_catalog.map(|catalog| {
+            catalog
+                .games
+                .iter()
+                .map(|game| game.mra_path.as_ref())
+                .collect::<HashSet<_>>()
+        });
+        let mut canonical_launch_ids = CanonicalLaunchIdIndex::default();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,category) VALUES (?1,?2,?3)")
             .map_err(|e| format!("prepare system insert: {e}"))?;
@@ -2707,7 +2792,6 @@ fn write_sqlite_scan_with_sources_inner(
                  VALUES (?1,?2,?3)",
             )
             .map_err(|e| format!("prepare region metadata insert: {e}"))?;
-        let discovery_total = discoveries.len();
         let mut playable_counts = HashMap::<String, usize>::new();
         let manifest_backed_systems = scan
             .profiles
@@ -2814,7 +2898,8 @@ fn write_sqlite_scan_with_sources_inner(
                 None
             };
             let plan_launch_ref = launch_ref_for_discovery(&key, discovery);
-            if is_launcher_launch_ref(&plan_launch_ref)
+            if canonical_catalog.is_none()
+                && is_launcher_launch_ref(&plan_launch_ref)
                 && system_id != "arcade"
                 && system_id != "neogeo"
                 && promoted_systems.contains(&system_id)
@@ -2915,6 +3000,7 @@ fn write_sqlite_scan_with_sources_inner(
                     ])
                     .map_err(|e| format!("insert prepared launch diagnostic: {e}"))?;
             }
+            let mut arcade_identity = None;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
                 let (family_id, title, year, manufacturer, category, source) =
                     mame_identity_projection(
@@ -2935,6 +3021,7 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern(source)
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
+                arcade_identity = Some((identity_id, family_id));
             }
             if let Some(identity) = software_identity.as_ref() {
                 let identity_id = format!("{}:{}", identity.list_name, identity.software_name);
@@ -2951,6 +3038,35 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern(identity.source)
                     ])
                     .map_err(|e| format!("insert software launchable identity: {e}"))?;
+            }
+            if canonical_catalog.is_some()
+                && matches!(system_id.as_str(), "arcade" | "neogeo")
+                && is_launcher_launch_ref(&plan_launch_ref)
+                && promoted_systems.contains(&system_id)
+            {
+                let (identity_id, family_id) = arcade_identity
+                    .map(|(identity_id, family_id)| (Some(identity_id), family_id))
+                    .unwrap_or_else(|| (None, expanded_game_id(&key, discovery)));
+                let preview_asset_key = arcade_compatibility_preview_asset_key(
+                    &system_id,
+                    identity_id.as_deref(),
+                    &family_id,
+                    discovery,
+                );
+                arcade_compatibility_rows.push(ArcadeCompatibilityRow {
+                    launch_id,
+                    family_id,
+                    identity_id,
+                    title: discovery.title.clone(),
+                    system_id: system_id.clone(),
+                    launch_ref: plan_launch_ref.clone(),
+                    has_preview: !preview_asset_key.is_empty()
+                        && sources
+                            .preview_paths
+                            .archive_for_platform(&system_id)
+                            .is_some(),
+                    preview_asset_key,
+                });
             }
             let region = software_identity
                 .as_ref()
@@ -2969,6 +3085,17 @@ fn write_sqlite_scan_with_sources_inner(
                 region_stmt
                     .execute(params![game_key_id, region.region, region.confidence])
                     .map_err(|e| format!("insert region metadata: {e}"))?;
+            }
+            if canonical_launch_refs
+                .as_ref()
+                .is_some_and(|refs| refs.contains(plan_launch_ref.as_str()))
+            {
+                canonical_launch_ids.insert(
+                    plan_launch_ref,
+                    &discovery.title,
+                    &system_id,
+                    launch_id,
+                );
             }
             let written = idx + 1;
             if written % 1000 == 0 || written == discovery_total {
@@ -2998,43 +3125,85 @@ fn write_sqlite_scan_with_sources_inner(
             "insert_games_total",
             stage_t,
             format!(
-                "rows={discovery_total} launcher_rows={}",
-                launcher_rows.len()
+                "rows={discovery_total} launcher_rows={} canonical_launch_ids={} arcade_compatibility_rows={}",
+                launcher_rows.len(),
+                canonical_launch_ids.len(),
+                arcade_compatibility_rows.len(),
             ),
         );
         report_sqlite_import_finalizing(&mut progress);
         if materialize_runtime_catalog {
-            let projection_t = Instant::now();
-            let arcade_preview_projection = ArcadePreviewProjection::new(
-                sources
-                    .preview_paths
-                    .archive_for_platform("arcade")
-                    .unwrap_or_default(),
-                sources
-                    .preview_paths
-                    .archive_for_platform("neogeo")
-                    .unwrap_or_default(),
-            );
-            catalog_projection::materialize_arcade_ui_projections(&tx, &arcade_preview_projection)?;
-            report_library_import_timing("materialize_arcade_ui", projection_t, "");
-            let launcher_arcade_t = Instant::now();
-            catalog_projection::insert_arcade_launcher_catalog(&tx)?;
-            report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
-            let launcher_console_t = Instant::now();
-            let launcher_game_count =
-                catalog_projection::insert_console_launcher_catalog(&tx, launcher_rows)?;
-            report_library_import_timing(
-                "insert_launcher_console",
-                launcher_console_t,
-                format!("rows={launcher_game_count}"),
-            );
-            let launcher_plans_t = Instant::now();
-            let launcher_plan_count = catalog_projection::materialize_launcher_launch_plans(&tx)?;
-            report_library_import_timing(
-                "insert_launcher_launch_plans",
-                launcher_plans_t,
-                format!("rows={launcher_plan_count}"),
-            );
+            if let Some(catalog) = canonical_catalog {
+                let projection_t = Instant::now();
+                let arcade_count = catalog_projection::materialize_arcade_ui_projection_rows(
+                    &tx,
+                    arcade_compatibility_rows,
+                    catalog,
+                )?;
+                report_library_import_timing(
+                    "materialize_arcade_ui",
+                    projection_t,
+                    format!("rows={arcade_count} source=canonical_ram_catalog"),
+                );
+                report_library_import_timing(
+                    "insert_launcher_arcade",
+                    Instant::now(),
+                    format!("rows={arcade_count} source=canonical_ram_catalog"),
+                );
+                let launcher_console_t = Instant::now();
+                let stats = catalog_projection::insert_canonical_launcher_catalog(
+                    &tx,
+                    catalog,
+                    &canonical_launch_ids,
+                    arcade_count,
+                )?;
+                report_library_import_timing(
+                    "insert_launcher_console",
+                    launcher_console_t,
+                    format!("rows={} source=canonical_ram_catalog", stats.rows),
+                );
+                report_library_import_timing(
+                    "insert_launcher_launch_plans",
+                    Instant::now(),
+                    format!("rows={} source=canonical_ram_catalog", stats.launch_plans),
+                );
+            } else {
+                let projection_t = Instant::now();
+                let arcade_preview_projection = ArcadePreviewProjection::new(
+                    sources
+                        .preview_paths
+                        .archive_for_platform("arcade")
+                        .unwrap_or_default(),
+                    sources
+                        .preview_paths
+                        .archive_for_platform("neogeo")
+                        .unwrap_or_default(),
+                );
+                catalog_projection::materialize_arcade_ui_projections(
+                    &tx,
+                    &arcade_preview_projection,
+                )?;
+                report_library_import_timing("materialize_arcade_ui", projection_t, "");
+                let launcher_arcade_t = Instant::now();
+                catalog_projection::insert_arcade_launcher_catalog(&tx)?;
+                report_library_import_timing("insert_launcher_arcade", launcher_arcade_t, "");
+                let launcher_console_t = Instant::now();
+                let launcher_game_count =
+                    catalog_projection::insert_console_launcher_catalog(&tx, launcher_rows)?;
+                report_library_import_timing(
+                    "insert_launcher_console",
+                    launcher_console_t,
+                    format!("rows={launcher_game_count}"),
+                );
+                let launcher_plans_t = Instant::now();
+                let launcher_plan_count =
+                    catalog_projection::materialize_launcher_launch_plans(&tx)?;
+                report_library_import_timing(
+                    "insert_launcher_launch_plans",
+                    launcher_plans_t,
+                    format!("rows={launcher_plan_count}"),
+                );
+            }
         } else {
             report_library_import_timing(
                 "materialize_runtime_catalog",
@@ -3062,10 +3231,7 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("insert audit row count: {e}"))?;
         stmt.execute(params!["ignored_files", scan.ignored_files as i64])
             .map_err(|e| format!("insert ignored count: {e}"))?;
-        stmt.execute(params![
-            "discoveries",
-            unique_discovery_count(&scan.discoveries) as i64
-        ])
+        stmt.execute(params!["discoveries", discovery_total as i64])
         .map_err(|e| format!("insert discovery count: {e}"))?;
         stmt.execute(params!["mame_metadata_size", mame_signature.size as i64])
             .map_err(|e| format!("insert mame metadata size: {e}"))?;
@@ -3086,11 +3252,13 @@ fn write_sqlite_scan_with_sources_inner(
     if let Some(stamp) = sources.stamp {
         let stage_t = Instant::now();
         catalog_store::write_catalog_stamp(&tx, stamp)?;
-        let checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint(
+        let checkpoint = catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
             &scan.roots,
             sources.mame_sqlite_path,
             sources.hbmame_sqlite_path,
             &scan.audit_rows,
+            &scan.installed_cores,
+            &scan.game_dir_facts,
         );
         catalog_store::write_catalog_discovery_checkpoint(&tx, &checkpoint)?;
         report_library_import_timing(
@@ -3601,6 +3769,41 @@ fn game_id_storage_for<'a>(game_id: &'a str, discovery: &'a GameDiscovery) -> Ga
     }
 }
 
+fn expanded_game_id(game_id: &str, discovery: &GameDiscovery) -> String {
+    match discovery.source_kind {
+        DiscoverySourceKind::Mgl | DiscoverySourceKind::PayloadFile => {
+            format!("payload:{}", discovery.launch_ref)
+        }
+        DiscoverySourceKind::ArchiveEntry => format!("archive:{}", discovery.launch_ref),
+        DiscoverySourceKind::Mra | DiscoverySourceKind::CatalogEntry => game_id.to_string(),
+    }
+}
+
+fn arcade_compatibility_preview_asset_key(
+    system_id: &str,
+    identity_id: Option<&str>,
+    family_id: &str,
+    discovery: &GameDiscovery,
+) -> String {
+    let setname = discovery.setname.as_deref().unwrap_or_default();
+    if system_id == "neogeo" {
+        return setname.to_string();
+    }
+    if let Some(identity_id) = identity_id {
+        return if family_id.is_empty() {
+            identity_id.to_string()
+        } else {
+            family_id.to_string()
+        };
+    }
+    discovery
+        .parent
+        .as_deref()
+        .filter(|parent| !parent.trim().is_empty())
+        .unwrap_or(setname)
+        .to_string()
+}
+
 fn launch_ref_storage_for<'a>(
     launch_ref: &'a str,
     payload_path: Option<&'a str>,
@@ -4072,6 +4275,34 @@ mod tests {
             changed.stored_fingerprint,
             Some(changed.current_fingerprint)
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_catalog_stamp_check_detects_nested_directory_change() {
+        let root = unique_temp_dir("sqlite-catalog-stamp-nested-change");
+        let db = root.join("library.sqlite3");
+        let games = root.join("games");
+        let nested = games.join("NES/Action");
+        std::fs::create_dir_all(&nested).expect("create nested system dir");
+        std::fs::write(nested.join("First.nes"), b"first").expect("write initial game");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+        assert!(
+            sqlite_catalog_stamp_check(&cfg)
+                .expect("check unchanged stamp")
+                .unchanged
+        );
+
+        std::fs::remove_file(nested.join("First.nes")).expect("remove nested game");
+        let changed = sqlite_catalog_stamp_check(&cfg).expect("check nested change");
+
+        assert!(!changed.unchanged);
+        assert!(changed.drift.changed_game_dirs > 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4766,23 +4997,24 @@ mod tests {
         ]);
         let arcade_path = "/media/fat/_Arcade/Canonical Alpha.mra";
         let saturn_path = "magik-plan:payload:/media/fat/games/Saturn/Nights.chd";
-        let games = vec![
-            arcade_game("Canonical Alpha")
-                .path(arcade_path)
-                .preview("canonical-alpha")
-                .year(1983)
-                .manufacturer("Example")
-                .category("Maze")
-                .build(),
-            arcade_game("Nights into Dreams")
-                .path(saturn_path)
-                .preview("nights-into-dreams")
-                .system_id("saturn")
-                .year(1996)
-                .manufacturer("Sega")
-                .category("Action")
-                .build(),
-        ];
+        let canonical_arcade_game = arcade_game("Canonical Alpha")
+            .path(arcade_path)
+            .preview("game00001")
+            .year(1983)
+            .manufacturer("Example")
+            .category("Maze")
+            .build();
+        let mut saturn_game = arcade_game("Nights into Dreams")
+            .path(saturn_path)
+            .preview("nights-into-dreams")
+            .system_id("saturn")
+            .year(1996)
+            .manufacturer("Sega")
+            .category("Action")
+            .build();
+        saturn_game.preview_archive_path =
+            preview_worker::preview_archive_path_for_system("saturn").into();
+        let games = vec![canonical_arcade_game, saturn_game];
         let systems = vec![
             GameSystemEntry {
                 id: "arcade".to_string(),
@@ -4799,7 +5031,7 @@ mod tests {
             launch_ref: saturn_path.into(),
             title: "Nights into Dreams".into(),
             system_id: "saturn".into(),
-            core_path: "/media/fat/_Console/Saturn_20260601.rbf".into(),
+            core_path: "_Console/Saturn".into(),
             payload_path: "/media/fat/games/Saturn/Nights.chd".into(),
             mount_kind: "mount-image".into(),
             mount_index: 0,
@@ -4816,15 +5048,26 @@ mod tests {
             ]),
         );
 
+        let mut arcade = mra_discovery(1, "Canonical Alpha");
+        arcade.year = Some(1983);
+        arcade.manufacturer = Some("Example".to_string());
+        arcade.genre = Some("Maze".to_string());
+        let mut saturn = saturn_payload("/media/fat/games/Saturn/Nights.chd");
+        saturn.title = "Nights into Dreams".to_string();
+        saturn.year = Some(1996);
+        saturn.manufacturer = Some("Sega".to_string());
+        saturn.genre = Some("Action".to_string());
         save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
             &db,
-            &sqlite_scan_with_discoveries(vec![mra_discovery(1, "Canonical Alpha")]),
+            &sqlite_scan_with_discoveries(vec![arcade, saturn]),
             &stamp,
             &expected,
             None,
         )
         .expect("save production catalog projection");
         let conn = Connection::open(&db).expect("open production catalog");
+        register_sqlite_catalog_functions(&conn)
+            .expect("register production catalog SQL functions");
         assert_eq!(
             conn.query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| row
                 .get::<_, i64>(0))
@@ -4840,8 +5083,54 @@ mod tests {
                 |row| row.get::<_, i64>(0),
             )
             .expect("count compatibility launcher rows"),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM launcher_launch_plans", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count canonical structured launch plans"),
             1
         );
+        let compatibility_rows = conn
+            .prepare(
+                "SELECT title,launch_ref,system_id,preview_asset_key,has_preview,
+                        COALESCE(year,-1),COALESCE(manufacturer,''),COALESCE(category,'')
+                 FROM launcher_catalog_text ORDER BY ordinal",
+            )
+            .expect("prepare canonical compatibility row oracle")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .expect("query canonical compatibility row oracle")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read canonical compatibility row oracle");
+        let canonical_rows = expected
+            .games
+            .iter()
+            .map(|game| {
+                (
+                    game.title.to_string(),
+                    game.mra_path.to_string(),
+                    game.system_id.to_string(),
+                    game.preview_asset_key.to_string(),
+                    i64::from(game.has_preview),
+                    game.year.map_or(-1, i64::from),
+                    game.manufacturer.to_string(),
+                    game.category.to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(compatibility_rows, canonical_rows);
         assert!(
             load_embedded_catalog_navigation_with_limit(&conn, &stamp, 1)
                 .expect("size-limited embedded navigation probe")
@@ -4880,10 +5169,195 @@ mod tests {
             load_arcade_catalog_from_sqlite_at(arcade_catalog::DEFAULT_ARCADE_ROOT, &db)
                 .expect("fall through corrupt embedded projection");
         assert!(compatibility_fallback.projection_repair_safe);
-        assert_eq!(compatibility_fallback.catalog.games.len(), 1);
+        assert_navigation_catalog_matches_sqlite(&expected, &compatibility_fallback.catalog);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_compatibility_rows_keep_shared_launch_refs_distinct() {
+        let root = unique_temp_dir("sqlite-canonical-shared-launch-ref");
+        let db = root.join("library.sqlite3");
+        let shared_ref = "magik-amigavision:shared-collection";
+        let mut agony = payload("/media/fat/games/Amiga/AmigaVision.hdf::Agony");
+        agony.source_kind = DiscoverySourceKind::CatalogEntry;
+        agony.launch_ref = shared_ref.to_string();
+        agony.title = "Agony".to_string();
+        agony.platform_id = "amiga".to_string();
+        agony.core_id = "Minimig".to_string();
+        agony.hardware_id = "amiga".to_string();
+        agony.genre = Some("AmigaVision".to_string());
+        let mut alien_breed = agony.clone();
+        alien_breed.source_path = "/media/fat/games/Amiga/AmigaVision.hdf::Alien Breed".to_string();
+        alien_breed.title = "Alien Breed".to_string();
+
+        let games = vec![
+            arcade_game("Agony")
+                .path(shared_ref)
+                .system_id("amiga")
+                .category("Games")
+                .build(),
+            arcade_game("Alien Breed")
+                .path(shared_ref)
+                .system_id("amiga")
+                .category("Games")
+                .build(),
+        ];
+        let expected = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            games,
+            vec![GameSystemEntry {
+                id: "amiga".to_string(),
+                title: "Amiga".to_string(),
+                count: 2,
+            }],
+            Vec::new(),
+        );
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tshared-launch-ref".to_string(),
+        ]);
+
+        save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+            &db,
+            &sqlite_scan_with_discoveries(vec![agony, alien_breed]),
+            &stamp,
+            &expected,
+            None,
+        )
+        .expect("save shared-ref canonical projection");
+
+        let conn = Connection::open(&db).expect("open shared-ref catalog");
+        register_sqlite_catalog_functions(&conn).expect("register shared-ref SQL functions");
+        let rows = conn
+            .prepare("SELECT title,launch_id FROM launcher_catalog_text ORDER BY ordinal")
+            .expect("prepare shared-ref compatibility query")
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query shared-ref compatibility rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read shared-ref compatibility rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "Agony");
+        assert_eq!(rows[1].0, "Alien Breed");
+        assert_ne!(rows[0].1, rows[1].1);
+        conn.execute(
+            "UPDATE catalog_navigation_projection SET bytes=?1 WHERE id=0",
+            [b"corrupt".as_slice()],
+        )
+        .expect("corrupt embedded projection");
+        drop(conn);
+
+        let compatibility =
+            load_arcade_catalog_from_sqlite_at(arcade_catalog::DEFAULT_ARCADE_ROOT, &db)
+                .expect("load shared-ref compatibility projection");
+        assert_navigation_catalog_matches_sqlite(&expected, &compatibility.catalog);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_compatibility_rejects_mismatched_scan_generation() {
+        let root = unique_temp_dir("sqlite-canonical-generation-mismatch");
+        let db = root.join("library.sqlite3");
+        let missing_ref = "magik-plan:payload:/media/fat/games/Saturn/Missing.chd";
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            vec![arcade_game("Missing")
+                .path(missing_ref)
+                .system_id("saturn")
+                .build()],
+            vec![GameSystemEntry {
+                id: "saturn".to_string(),
+                title: "Saturn".to_string(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tgeneration-mismatch".to_string(),
+        ]);
+
+        let error = save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+            &db,
+            &sqlite_scan_with_discoveries(Vec::new()),
+            &stamp,
+            &catalog,
+            None,
+        )
+        .expect_err("mismatched canonical generation must be rejected");
+
+        assert!(error.contains("canonical launcher row has no source launch id"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_arcade_preferred_row_follows_ram_catalog_selection() {
+        let root = unique_temp_dir("sqlite-canonical-arcade-preferred");
+        let db = root.join("library.sqlite3");
+        let mut first = mra_discovery(1, "1942 (First Version)");
+        first.setname = Some("1942b".to_string());
+        first.parent = Some("1942".to_string());
+        let mut world = mra_discovery(2, "1942 (World)");
+        world.setname = Some("1942w".to_string());
+        world.parent = Some("1942".to_string());
+        let world_ref = world.launch_ref.clone();
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            vec![arcade_game("1942 (World)")
+                .path(&world_ref)
+                .preview("1942")
+                .build()],
+            vec![GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tcanonical-arcade-preferred".to_string(),
+        ]);
+
+        save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+            &db,
+            &sqlite_scan_with_discoveries(vec![first, world]),
+            &stamp,
+            &catalog,
+            None,
+        )
+        .expect("save canonical Arcade preferred projection");
+
+        let conn = Connection::open(&db).expect("open canonical Arcade preferred projection");
+        register_sqlite_catalog_functions(&conn)
+            .expect("register canonical Arcade preferred SQL functions");
+        let preferred: (String, String, i64) = conn
+            .query_row(
+                "SELECT title,family_id,has_preview FROM ui_arcade_preferred_text",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("query canonical Arcade preferred row");
         assert_eq!(
-            compatibility_fallback.catalog.games[0].title.as_ref(),
-            "Canonical Alpha"
+            preferred,
+            ("1942 (World)".to_string(), "1942".to_string(), 1)
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM ui_arcade_variants", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count canonical Arcade variants"),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM ui_arcade_variants WHERE preferred=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count canonical Arcade preferred flags"),
+            1
         );
         let _ = std::fs::remove_dir_all(root);
     }
@@ -4905,6 +5379,7 @@ mod tests {
             None,
             Some(&stamp),
             None,
+            None,
             false,
         )
         .expect("write source-fact-only sqlite");
@@ -4922,6 +5397,153 @@ mod tests {
         assert!(repair_error.contains("refusing to rewrite catalog projections"));
         assert!(!catalog_summary::summary_path_for_sqlite(&db).exists());
         assert!(!catalog_navigation::navigation_path_for_sqlite(&db).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_arcade_preview_uses_mra_parent_when_setname_is_missing() {
+        let root = unique_temp_dir("sqlite-canonical-arcade-parent-preview");
+        let db = root.join("library.sqlite3");
+        let path = "/media/fat/_Arcade/Pac-Manic Miner.mra";
+        let mut discovery = mra_discovery(1, "Pac-Manic Miner");
+        discovery.setname = None;
+        discovery.parent = Some("puckman".to_string());
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from(arcade_catalog::DEFAULT_ARCADE_ROOT),
+            vec![arcade_game("Pac-Manic Miner")
+                .path(path)
+                .preview("puckman")
+                .build()],
+            vec![GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tcanonical-parent-preview".to_string(),
+        ]);
+
+        save_sqlite_scan_with_progress_and_stamp_and_catalog_projection(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &stamp,
+            &catalog,
+            None,
+        )
+        .expect("save MRA parent-derived canonical preview");
+
+        let conn = Connection::open(&db).expect("open MRA parent-derived canonical preview");
+        register_sqlite_catalog_functions(&conn)
+            .expect("register MRA parent-derived canonical preview functions");
+        let preview: (String, i64) = conn
+            .query_row(
+                "SELECT preview_asset_key,has_preview FROM ui_arcade_preferred_text",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("query MRA parent-derived canonical preview");
+        assert_eq!(preview, ("puckman".to_string(), 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn meta_discovery_count_matches_inserted_preferred_set_semantics() {
+        let root = unique_temp_dir("sqlite-meta-retained-discovery-count");
+        let db = root.join("library.sqlite3");
+        let mut first_variant = mra_discovery(1, "Shared Family (World)");
+        first_variant.setname = Some("shared-family".to_string());
+        let mut second_variant = mra_discovery(2, "Shared Family (Japan)");
+        second_variant.setname = Some("shared-family".to_string());
+        let payload_path = "/media/fat/games/NES/Covered.nes";
+        let mut launcher = mgl(
+            "/media/fat/_Console/Covered.mgl",
+            "/media/fat/_Console/Covered.mgl",
+        );
+        launcher.platform_id = "nes".to_string();
+        launcher.covered_payload_path = Some(payload_path.to_string());
+        let mut covered_payload = payload(payload_path);
+        covered_payload.platform_id = "nes".to_string();
+        let scan = sqlite_scan_with_discoveries(vec![
+            first_variant,
+            second_variant,
+            launcher,
+            covered_payload,
+        ]);
+        let expected = unique_discovery_count(&scan.discoveries);
+        assert_eq!(expected, 2, "fixture must exercise collapse and coverage");
+
+        save_sqlite_scan(&db, &scan).expect("save retained discovery count fixture");
+
+        let conn = Connection::open(&db).expect("open retained discovery count fixture");
+        let stored = conn
+            .query_row("SELECT value FROM meta WHERE key='discoveries'", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("query retained discovery count");
+        let inserted = conn
+            .query_row("SELECT count(*) FROM game_rows", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count inserted preferred discoveries");
+        assert_eq!(stored, expected as i64);
+        assert_eq!(stored, inserted);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_checkpoint_persistence_reuses_retained_scan_facts() {
+        let root = unique_temp_dir("sqlite-checkpoint-retained-facts");
+        std::fs::create_dir_all(root.join("games/NES")).expect("create initial game dir");
+        std::fs::write(root.join("games/NES/Mario.nes"), b"nes").expect("write initial game");
+        let mut scan = sqlite_scan_with_discoveries(Vec::new());
+        scan.roots = vec![root.display().to_string()];
+        scan.installed_cores = catalog_discovery::installed_cores_for_roots(&scan.roots);
+        scan.game_dir_facts = catalog_discovery::top_level_game_dirs_for_roots(&scan.roots);
+
+        std::fs::create_dir_all(root.join("games/SNES")).expect("create post-scan game dir");
+        std::fs::write(root.join("games/SNES/F-Zero.sfc"), b"snes").expect("write post-scan game");
+        let expected = catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
+            &scan.roots,
+            &default_mame_sqlite_path(),
+            &default_hbmame_sqlite_path(),
+            &scan.audit_rows,
+            &scan.installed_cores,
+            &scan.game_dir_facts,
+        );
+        let db = root.with_extension("sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\tretained-checkpoint-facts".to_string(),
+        ]);
+        write_sqlite_scan_without_catalog_rebuild(
+            &db,
+            &scan,
+            None,
+            SoftwareHashCache::load(&db),
+            None,
+            Some(&stamp),
+            None,
+            None,
+            false,
+        )
+        .expect("write retained-fact checkpoint");
+
+        let conn = Connection::open(&db).expect("open retained-fact checkpoint");
+        let stored = catalog_store::read_catalog_discovery_checkpoint(&conn)
+            .expect("read retained-fact checkpoint")
+            .expect("stored retained-fact checkpoint");
+        assert_eq!(stored, expected);
+        let live = catalog_checkpoint::compute_catalog_discovery_checkpoint(
+            &scan.roots,
+            &default_mame_sqlite_path(),
+            &default_hbmame_sqlite_path(),
+            &scan.audit_rows,
+        );
+        assert_ne!(stored, live, "writer must not rediscover post-scan facts");
+        let _ = std::fs::remove_file(db);
         let _ = std::fs::remove_dir_all(root);
     }
 

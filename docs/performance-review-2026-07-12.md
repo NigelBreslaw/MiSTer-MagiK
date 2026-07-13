@@ -827,15 +827,48 @@ contract requires another explicit decision.
 
 Incremental slices:
 
+The binary-frozen `370ce765` C2 BEFORE triplicate measured `library_ready` at
+95.846–96.905 seconds and `library_db_saved` at 175.356–176.033 seconds. All
+three runs used identical verified launcher and catalog-builder hashes. The
+first run recorded a clean profile-time source state, while the build receipts
+recorded `source_dirty=1` and later runs also contained tracked benchmark-result
+changes. Treat this as stable binary evidence, not as a clean-build receipt. The
+durable stage repeated the same shape in all three runs: Arcade compatibility
+SQL 36.346–36.535 seconds, console compatibility insertion 2.535–2.585
+seconds, the `launcher_launch_plans` view count 9.955–10.114 seconds, and the
+stamp/checkpoint stage 5.390–5.437 seconds. Detailed checkpoint telemetry was
+only 0.278–0.285 seconds; the remaining ~5.1 seconds was a second filesystem
+discovery before checkpoint formatting.
+
+0. **Overlap exact post-scan preparation.** After the walker has joined, build
+   the RAM catalog on the foreground coordinator while a scoped
+   `catalog-audit` worker computes the deferred coverage audit and stamp from
+   the same immutable `LibraryScan`. Both branches retain nice `0` and
+   all-online affinity and join before the stamped snapshot/`CatalogReady`
+   boundary. `builder_catalog_prepare_overlap` reports the wall time and the
+   component durations. This is a ready-time optimization only; retain it only
+   after the real-device AFTER run preserves exact catalog/audit/stamp output
+   and improves `library_ready` without regressing durable save or peak memory.
 1. **One retained-facts checkpoint path.** Use
    `compute_catalog_discovery_checkpoint_from_facts` during persistence.
-   Expected gain: ~0.4 seconds measured; low risk.
-2. **Compact stamp/checkpoint persistence.** Replace thousands of row/string
-   operations with a compact generation blob or equivalent batched encoding.
-   The stage currently costs 8.283 seconds; target <2 seconds.
-3. **One enrichment artifact.** Carry resolved MAME/software identities,
-   preview IDs, launch plans, stamp facts, and metadata from RAM projection into
-   SQLite insertion. Expected gain: several seconds; medium/high risk.
+   The stamp and checkpoint are already compressed single-row BLOBs; the
+   measured opportunity is the redundant discovery, not SQLite row batching.
+   Expected gain from the C2 BEFORE evidence: ~5.1 seconds; low risk.
+2. **Canonical compatibility insertion.** Keep the physical compatibility
+   tables required by Desktop, release checks, diagnostics, and benchmark
+   selectors, but populate them from the exact current-generation RAM catalog
+   and compact Arcade discovery rows. This removes the 36-second text-view/path
+   decompression traversal and uses canonical order, preferred variants,
+   preview flags, and structured plans. Carry launch-plan count from that same
+   insertion pass instead of evaluating the 10-second compatibility view.
+   Stable identity is `(launch_ref,title,system_id)`, because collection games
+   may intentionally share a launch reference. Reject a scan/catalog generation
+   mismatch rather than publishing partially mapped rows.
+3. **One enrichment artifact.** Continue carrying resolved MAME/software
+   identities, preview IDs, launch plans, stamp facts, and metadata from RAM
+   projection into SQLite insertion. The current slice avoids constructing and
+   sorting 66k duplicate `CatalogProjectionRow` values; deeper interning remains
+   a separate measured optimization.
 4. **Fix attribution before parallelism.** Measure real child CPU/I/O and split
    receive wait from metadata read, parse, enrichment, and classification.
 5. **Bounded two-core metadata parsing.** Then A/B one versus two MRA/MGL
@@ -1010,6 +1043,30 @@ Key raw evidence:
   `history/toolchain-bench/results-library-io.tsv`,
   `results-library-save.tsv`, `results-media-cold-boot.tsv`, and
   `results-warm-catalog.tsv`.
+
+## P0 C02 production result (2026-07-13)
+
+The clean immediate parent `370ce765` measured 96.597 seconds to canonical
+readiness and 177.068 seconds to durable save in the verified
+`P0-C02-CLEAN-BEFORE-1` cold run. The exact C02 candidate measured median
+93.714 seconds and 119.485 seconds respectively (`P0-C02-AFTER-1..3`),
+satisfying the ratified
+94.650/121.336-second gates. The confirmed costs were repeated exFAT audit and
+checkpoint walks, duplicate runtime/SQLite projection construction, and
+redundant launch-plan ownership during navigation snapshot conversion.
+
+Five final-binary warm validations completed unchanged in 0.443–0.513 seconds.
+Median first
+frame remained 129 ms (the same as the immediate-parent median, so the older
+100 ms aspirational threshold is not a valid regression gate for this
+taxonomy/navigation baseline); median full hydration was 1.438 seconds versus
+1.429 seconds before, a 0.6% change within the allowed 5%. Catalog acceptance
+passed with 69,571 durable discoveries and 67,235 launcher-visible games.
+
+Raw logs are under `build/first-scan-profiles/P0-C02-*`,
+`build/warm-catalog/P0-C02-WARM-*`, and the tracked summary rows in
+`history/toolchain-bench/results-first-scan.tsv`,
+`results-library-save.tsv`, and `results-warm-catalog.tsv`.
 
 ## Release posture
 

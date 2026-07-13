@@ -8,7 +8,6 @@ use crate::launch_profiles::{
     self, LaunchProfile, PayloadDisposition, RuleSourceKind, RuntimeProfileDecision,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogAuditRow {
@@ -129,7 +128,6 @@ fn audit_game_directories(
     .collect::<BTreeMap<_, _>>();
     for fact in game_dirs {
         let name = fact.name.as_str();
-        let path = &fact.path;
         let key = name.to_ascii_lowercase();
         if cataloged_dirs.contains(&key) {
             if let Some(profile) = launch_profiles::profile_for_game_dir(profiles, name) {
@@ -145,7 +143,7 @@ fn audit_game_directories(
                 }
             }
             if fact.has_zip_files {
-                audit_non_indexed_zips_in_cataloged_dir(path, name, profiles, rows);
+                audit_non_indexed_zips_in_cataloged_dir(fact, profiles, rows);
             }
             continue;
         }
@@ -233,8 +231,7 @@ fn audit_row_for_runtime_decision(
 }
 
 fn audit_non_indexed_zips_in_cataloged_dir(
-    dir: &Path,
-    dir_name: &str,
+    fact: &catalog_discovery::GameDirFact,
     profiles: &[LaunchProfile],
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
@@ -242,27 +239,20 @@ fn audit_non_indexed_zips_in_cataloged_dir(
         profile
             .game_dirs
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(dir_name))
+            .any(|candidate| candidate.eq_ignore_ascii_case(&fact.name))
     }) else {
         return;
     };
     if !profile.archive_entry_rules.is_empty() || !profile.collection_rules.is_empty() {
         return;
     }
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read_dir.filter_map(Result::ok) {
-        let path = entry.path();
-        if !path.is_file() || should_ignore_hidden_path(&path) || !path_ext_eq(&path, "zip") {
-            continue;
-        }
+    for path in &fact.direct_zip_paths {
         insert_audit_row(
             rows,
             CatalogAuditRow {
                 core_id: profile.core_name.to_string(),
                 core_path: profile.core_path.as_deref().unwrap_or_default().to_string(),
-                expected_game_dir: format!("games/{dir_name}"),
+                expected_game_dir: format!("games/{}", fact.name),
                 extensions: profile_payload_extensions(profile),
                 mount_kind: "load-file".to_string(),
                 source: "main-derived".to_string(),
@@ -377,19 +367,6 @@ fn inferred_extensions_for_game_dir(game_dir: &str) -> String {
     exts.join(",")
 }
 
-fn path_ext_eq(path: &Path, expected: &str) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
-}
-
-fn should_ignore_hidden_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy();
-        name.len() > 1 && name.starts_with('.')
-    })
-}
-
 fn source_name(kind: crate::launch_profiles::RuleSourceKind) -> &'static str {
     match kind {
         crate::launch_profiles::RuleSourceKind::MainSource => "main-derived",
@@ -445,6 +422,33 @@ mod tests {
             row.expected_game_dir == "games/PSX"
                 && row.catalog_status == "unsupported"
                 && row.reason.contains("zip-archive-not-indexed")
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn deferred_zip_audit_uses_primary_walk_generation_without_reopening_directory() {
+        let root = unique_temp_dir("audit-retained-psx-zip");
+        let dir = root.join("games/PSX");
+        let zip = dir.join("Packed PSX Games.zip");
+        std::fs::create_dir_all(&dir).expect("create psx dir");
+        write_stored_zip(&zip, &[("Game.cue", b"cue")]);
+        let roots = vec![root.display().to_string()];
+        let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(&roots);
+        let installed_cores = catalog_discovery::installed_cores_for_roots(&roots);
+        assert_eq!(game_dirs[0].direct_zip_paths, vec![zip.clone()]);
+
+        std::fs::remove_file(&zip).expect("remove zip after primary walk");
+        let rows = audit_catalog_coverage_from_facts(
+            &launch_profiles::builtin_profiles(),
+            &installed_cores,
+            &game_dirs,
+        );
+
+        assert!(rows.iter().any(|row| {
+            row.expected_game_dir == "games/PSX"
+                && row.catalog_status == "unsupported"
+                && row.reason == format!("zip-archive-not-indexed:{}", zip.display())
         }));
         let _ = std::fs::remove_dir_all(root);
     }

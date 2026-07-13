@@ -112,6 +112,13 @@ Cold or reset database:
    not inherit the low-priority CPU0 background policy used by warm validation,
    media, or preview prefetch work. The UI may drop frames on the scan screen
    while this foreground builder consumes both Cortex-A9 cores.
+   After the namespace scan joins, the foreground coordinator builds the RAM
+   catalog while one scoped `catalog-audit` worker computes the exact deferred
+   coverage audit and stamp from the same immutable scan. Both branches use the
+   `CatalogForeground` nice-0/all-online policy and must join before the stamped
+   navigation snapshot or `Ready` event can escape. The worker does not outlive
+   the scan artifact and does not change audit, stamp, catalog ordering, or
+   recovery semantics.
 6. The worker reports `Ready` from the fresh RAM catalog as soon as it can
    provide a usable launcher catalog. The launcher clears the scan UI at this
    point and records `library_ready`.
@@ -139,8 +146,14 @@ Schema 64 temporarily retains populated `ui_arcade_*`,
 `launcher_catalog_rows`, and related materialized compatibility tables. Release
 acceptance, diagnostics, and benchmark selectors still query them while they
 are migrated to the canonical navigation contract. These tables are not the
-runtime source of truth and may be removed only after that selector migration
-lands with equivalent device coverage.
+runtime source of truth. The production canonical writer populates them from
+the same RAM catalog generation and retained Arcade discovery identities; it
+does not rebuild them by traversing the path-decompressing text views.
+Compatibility launch identity is the tuple `(launch_ref,title,system_id)` so
+distinct collection games may safely share one launch reference. Publication
+fails on any scan/catalog identity mismatch. The legacy SQL materializer remains
+for legacy/test writer coverage only. These tables may be removed only after
+their selector migration lands with equivalent device coverage.
 
 Legacy/source-fact databases may still be readable through the joined-SQL
 fallback, but that result is explicitly degraded: preview keys and finalized

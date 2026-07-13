@@ -1,8 +1,9 @@
 //! Runtime navigation projection for fast launcher catalog hydration.
 
+#[cfg(test)]
+use crate::arcade_catalog::LaunchTarget;
 use crate::arcade_catalog::{
-    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, PlatformKind,
-    StructuredLaunchPlan,
+    ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, PlatformKind, StructuredLaunchPlan,
 };
 use crate::bounded_lz4;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
@@ -351,16 +352,14 @@ impl From<NavigationLaunchPlan> for StructuredLaunchPlan {
 }
 
 fn structured_launch_plans(catalog: &ArcadeCatalog) -> Vec<NavigationLaunchPlan> {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::<&str>::new();
     let mut plans = Vec::new();
     for game in catalog.games.iter() {
-        if !seen.insert(game.mra_path.to_string()) {
+        if !seen.insert(game.mra_path.as_ref()) {
             continue;
         }
-        if let LaunchTarget::Structured(plan) =
-            catalog.launch_target_for_ref(game.mra_path.as_ref())
-        {
-            plans.push(NavigationLaunchPlan::from(&plan));
+        if let Some(plan) = catalog.structured_launch_plan_for_ref(game.mra_path.as_ref()) {
+            plans.push(NavigationLaunchPlan::from(plan));
         }
     }
     plans
@@ -1110,6 +1109,11 @@ mod tests {
                 "neogeo",
             ),
         ];
+        games.push(game(
+            "Nights (Shared Launch Ref)",
+            &format!("magik-plan:payload:{saturn_payload}"),
+            "saturn",
+        ));
         games[2].preview_archive_path =
             Arc::from("/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b");
         let systems = vec![
@@ -1121,7 +1125,7 @@ mod tests {
             GameSystemEntry {
                 id: "saturn".to_string(),
                 title: "Saturn".to_string(),
-                count: 1,
+                count: 2,
             },
             GameSystemEntry {
                 id: "neogeo".to_string(),
@@ -1157,6 +1161,39 @@ mod tests {
             systems,
             plans,
         )
+    }
+
+    fn owned_launch_plan_extraction_reference(
+        catalog: &ArcadeCatalog,
+    ) -> Vec<NavigationLaunchPlan> {
+        let mut seen = HashSet::new();
+        let mut plans = Vec::new();
+        for game in catalog.games.iter() {
+            if !seen.insert(game.mra_path.to_string()) {
+                continue;
+            }
+            if let LaunchTarget::Structured(plan) =
+                catalog.launch_target_for_ref(game.mra_path.as_ref())
+            {
+                plans.push(NavigationLaunchPlan::from(&plan));
+            }
+        }
+        plans
+    }
+
+    #[test]
+    fn borrowed_launch_plan_extraction_preserves_encoded_bytes() {
+        let catalog = projection_catalog();
+        let stamp = stamp(&["root /media/fat/games", "core Saturn 123"]);
+        let optimized = CatalogNavigationProjection::from_catalog(&catalog, &stamp);
+        let mut reference = optimized.clone();
+        reference.launch_plans = owned_launch_plan_extraction_reference(&catalog);
+
+        assert_eq!(optimized.launch_plans, reference.launch_plans);
+        assert_eq!(
+            encode_navigation_projection(&optimized).expect("encode borrowed extraction"),
+            encode_navigation_projection(&reference).expect("encode owned extraction reference")
+        );
     }
 
     #[test]

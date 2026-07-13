@@ -432,30 +432,40 @@ pub(crate) fn profile_confidence(rule: &PayloadRule) -> DiscoveryConfidence {
 
 pub(crate) fn unique_discovery_count(discoveries: &[GameDiscovery]) -> usize {
     let covered_payloads = covered_payload_paths(discoveries);
-    preferred_playable_discoveries_by_key(discoveries, &covered_payloads).len()
+    preferred_playable_discovery_indices_by_key(discoveries, &covered_payloads).len()
+}
+
+pub(crate) fn preferred_playable_discovery_indices_by_key(
+    discoveries: &[GameDiscovery],
+    covered_payloads: &HashSet<String>,
+) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::<String, usize>::new();
+    for (index, discovery) in discoveries.iter().enumerate() {
+        if !is_playable_discovery_with_coverage(discovery, covered_payloads) {
+            continue;
+        }
+        let key = discovery_unique_key(discovery);
+        match out.get(&key).copied() {
+            Some(existing) if prefer_discovery_variant(discovery, &discoveries[existing]) => {
+                out.insert(key, index);
+            }
+            None => {
+                out.insert(key, index);
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 pub(crate) fn preferred_playable_discoveries_by_key<'a>(
     discoveries: &'a [GameDiscovery],
     covered_payloads: &HashSet<String>,
 ) -> BTreeMap<String, &'a GameDiscovery> {
-    let mut out = BTreeMap::<String, &'a GameDiscovery>::new();
-    for discovery in discoveries {
-        if !is_playable_discovery_with_coverage(discovery, covered_payloads) {
-            continue;
-        }
-        let key = discovery_unique_key(discovery);
-        match out.get(&key).copied() {
-            Some(existing) if prefer_discovery_variant(discovery, existing) => {
-                out.insert(key, discovery);
-            }
-            None => {
-                out.insert(key, discovery);
-            }
-            _ => {}
-        }
-    }
-    out
+    preferred_playable_discovery_indices_by_key(discoveries, covered_payloads)
+        .into_iter()
+        .map(|(key, index)| (key, &discoveries[index]))
+        .collect()
 }
 
 fn prefer_discovery_variant(a: &GameDiscovery, b: &GameDiscovery) -> bool {

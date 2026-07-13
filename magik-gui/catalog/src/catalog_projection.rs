@@ -5,14 +5,14 @@
 //! assets attach, and how rows become launcher entries.
 
 #[cfg(test)]
-use crate::arcade_catalog::{self, ArcadeCatalog};
-use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameMetadataKey};
+use crate::arcade_catalog;
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, LaunchTarget};
 use crate::game_discovery::variant_score_from_haystack;
 use crate::library_db;
 use crate::prepared_collections::PreparedLaunchProvenance;
 use crate::software_identity::ConsolePreviewAsset;
 use rusqlite::{params, Transaction};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(test)]
 use std::path::Path;
 
@@ -65,6 +65,62 @@ pub(crate) struct CatalogProjectionSource {
     pub(crate) parent: String,
     pub(crate) family_key: Option<String>,
     pub(crate) prepared: Option<PreparedLaunchProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ArcadeCompatibilityRow {
+    pub(crate) launch_id: i64,
+    pub(crate) family_id: String,
+    pub(crate) identity_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) system_id: String,
+    pub(crate) launch_ref: String,
+    pub(crate) preview_asset_key: String,
+    pub(crate) has_preview: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CanonicalLauncherInsertStats {
+    pub(crate) rows: usize,
+    pub(crate) launch_plans: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct CanonicalLaunchIdIndex {
+    by_ref: HashMap<String, HashMap<String, HashMap<String, i64>>>,
+}
+
+impl CanonicalLaunchIdIndex {
+    pub(crate) fn insert(
+        &mut self,
+        launch_ref: String,
+        title: &str,
+        system_id: &str,
+        launch_id: i64,
+    ) {
+        self.by_ref
+            .entry(launch_ref)
+            .or_default()
+            .entry(title.to_string())
+            .or_default()
+            .insert(system_id.to_string(), launch_id);
+    }
+
+    fn get(&self, game: &ArcadeGameEntry) -> Option<i64> {
+        self.by_ref
+            .get(game.mra_path.as_ref())
+            .and_then(|by_title| by_title.get(game.title.as_ref()))
+            .and_then(|by_system| by_system.get(game.system_id.as_ref()))
+            .copied()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.by_ref
+            .values()
+            .flat_map(HashMap::values)
+            .map(HashMap::len)
+            .sum()
+    }
 }
 
 impl CatalogProjectionRow {
@@ -435,6 +491,231 @@ pub(crate) fn materialize_arcade_ui_projections(
     .map_err(|e| format!("materialize arcade ui projections: {e}"))
 }
 
+/// Populate the retained SQLite compatibility projection from the exact
+/// current-generation RAM catalog rather than rebuilding it through text
+/// views that repeatedly decompress interned paths.
+pub(crate) fn materialize_arcade_ui_projection_rows(
+    tx: &Transaction<'_>,
+    mut rows: Vec<ArcadeCompatibilityRow>,
+    catalog: &ArcadeCatalog,
+) -> Result<usize, String> {
+    let preferred_games = catalog
+        .games
+        .iter()
+        .filter(|game| matches!(game.system_id.as_ref(), "arcade" | "neogeo"))
+        .collect::<Vec<_>>();
+    let preferred_keys = preferred_games
+        .iter()
+        .map(|game| {
+            (
+                game.mra_path.to_string(),
+                game.title.to_string(),
+                game.system_id.to_string(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    let preferred_games_by_key = preferred_games
+        .iter()
+        .map(|game| {
+            (
+                (
+                    game.mra_path.to_string(),
+                    game.title.to_string(),
+                    game.system_id.to_string(),
+                ),
+                *game,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut grouped = BTreeMap::<String, Vec<ArcadeCompatibilityRow>>::new();
+    for row in rows.drain(..) {
+        grouped
+            .entry(library_db::normalize_id(&row.family_id))
+            .or_default()
+            .push(row);
+    }
+
+    let mut variant_stmt = tx
+        .prepare(
+            "INSERT INTO ui_arcade_variants(
+                family_id,variant_ordinal,launch_id,preview_asset_key,has_preview,
+                asset_link_reason,preferred,preferred_reason
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        )
+        .map_err(|e| format!("prepare Rust arcade variant insert: {e}"))?;
+    let mut preferred_rows = HashMap::<(String, String, String), (String, i64)>::new();
+    for (family_id, family_rows) in &mut grouped {
+        family_rows.sort_by_cached_key(|row| {
+            let key = (
+                row.launch_ref.clone(),
+                row.title.clone(),
+                row.system_id.clone(),
+            );
+            (
+                !preferred_keys.contains(&key),
+                row.title.to_ascii_lowercase(),
+                row.launch_ref.to_ascii_lowercase(),
+            )
+        });
+        let preferred_count = family_rows
+            .iter()
+            .filter(|row| {
+                preferred_keys.contains(&(
+                    row.launch_ref.clone(),
+                    row.title.clone(),
+                    row.system_id.clone(),
+                ))
+            })
+            .count();
+        if preferred_count != 1 {
+            return Err(format!(
+                "canonical arcade family {family_id} has {preferred_count} preferred rows"
+            ));
+        }
+        for (variant_ordinal, row) in family_rows.iter().enumerate() {
+            let key = (
+                row.launch_ref.clone(),
+                row.title.clone(),
+                row.system_id.clone(),
+            );
+            let preferred = preferred_keys.contains(&key);
+            let preferred_reason = if preferred {
+                if row
+                    .identity_id
+                    .as_deref()
+                    .is_some_and(|identity| library_db::normalize_id(identity) == *family_id)
+                {
+                    "installed-parent"
+                } else {
+                    "deterministic-child"
+                }
+            } else {
+                "variant"
+            };
+            let (preview_asset_key, has_preview) =
+                if let Some(canonical) = preferred_games_by_key.get(&key) {
+                    if row.preview_asset_key != canonical.preview_asset_key.as_ref()
+                        || row.has_preview != canonical.has_preview
+                    {
+                        return Err(format!(
+                            "canonical arcade preview mismatch for {}: prepared_key={} prepared_has_preview={} canonical_key={} canonical_has_preview={}",
+                            canonical.mra_path,
+                            row.preview_asset_key,
+                            row.has_preview,
+                            canonical.preview_asset_key,
+                            canonical.has_preview
+                        ));
+                    }
+                    (canonical.preview_asset_key.as_ref(), canonical.has_preview)
+                } else {
+                    (row.preview_asset_key.as_str(), row.has_preview)
+                };
+            variant_stmt
+                .execute(params![
+                    family_id,
+                    variant_ordinal as i64,
+                    row.launch_id,
+                    preview_asset_key,
+                    i64::from(has_preview),
+                    if has_preview {
+                        "derived-family"
+                    } else {
+                        "none"
+                    },
+                    i64::from(preferred),
+                    preferred_reason,
+                ])
+                .map_err(|e| format!("insert Rust arcade variant: {e}"))?;
+            if preferred {
+                preferred_rows.insert(key, (family_id.clone(), variant_ordinal as i64));
+            }
+        }
+    }
+    drop(variant_stmt);
+
+    if preferred_rows.len() != preferred_games.len() {
+        return Err(format!(
+            "canonical arcade projection row mismatch preferred={} catalog={}",
+            preferred_rows.len(),
+            preferred_games.len()
+        ));
+    }
+    let mut preferred_stmt = tx
+        .prepare(
+            "INSERT INTO ui_arcade_preferred(ordinal,family_id,variant_ordinal)
+             VALUES (?1,?2,?3)",
+        )
+        .map_err(|e| format!("prepare Rust arcade preferred insert: {e}"))?;
+    for (ordinal, game) in preferred_games.iter().enumerate() {
+        let key = (
+            game.mra_path.to_string(),
+            game.title.to_string(),
+            game.system_id.to_string(),
+        );
+        let (family_id, variant_ordinal) = preferred_rows.get(&key).ok_or_else(|| {
+            format!(
+                "canonical arcade row is missing from compatibility data: {}",
+                game.mra_path
+            )
+        })?;
+        let _source = grouped
+            .get(family_id)
+            .and_then(|family| family.get(*variant_ordinal as usize))
+            .ok_or_else(|| {
+                format!(
+                    "canonical arcade compatibility pointer is invalid: {}",
+                    game.mra_path
+                )
+            })?;
+        preferred_stmt
+            .execute(params![ordinal as i64, family_id, variant_ordinal])
+            .map_err(|e| format!("insert Rust arcade preferred row: {e}"))?;
+    }
+    Ok(preferred_games.len())
+}
+
+pub(crate) fn insert_canonical_launcher_catalog(
+    tx: &Transaction<'_>,
+    catalog: &ArcadeCatalog,
+    launch_ids: &CanonicalLaunchIdIndex,
+    ordinal_offset: usize,
+) -> Result<CanonicalLauncherInsertStats, String> {
+    let mut stmt = tx
+        .prepare(
+            "INSERT INTO launcher_catalog_rows(ordinal,launch_id,preview_asset_key,has_preview)
+             VALUES (?1,?2,?3,?4)",
+        )
+        .map_err(|e| format!("prepare canonical launcher catalog insert: {e}"))?;
+    let mut stats = CanonicalLauncherInsertStats::default();
+    for game in catalog
+        .games
+        .iter()
+        .filter(|game| !matches!(game.system_id.as_ref(), "arcade" | "neogeo"))
+    {
+        let launch_id = launch_ids.get(game).ok_or_else(|| {
+            format!(
+                "canonical launcher row has no source launch id: {}",
+                game.mra_path
+            )
+        })?;
+        stmt.execute(params![
+            (ordinal_offset + stats.rows) as i64,
+            launch_id,
+            game.preview_asset_key.as_ref(),
+            i64::from(game.has_preview),
+        ])
+        .map_err(|e| format!("insert canonical launcher catalog: {e}"))?;
+        stats.rows += 1;
+        if matches!(
+            catalog.launch_target_for_ref(game.mra_path.as_ref()),
+            LaunchTarget::Structured(_)
+        ) {
+            stats.launch_plans += 1;
+        }
+    }
+    Ok(stats)
+}
+
 pub(crate) fn insert_arcade_launcher_catalog(tx: &Transaction<'_>) -> Result<(), String> {
     tx.query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
         row.get::<_, i64>(0)
@@ -546,7 +827,10 @@ mod tests {
         sort_catalog_projection_rows(&mut rows);
 
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].game.mra_path.as_ref(), "/media/fat/_DOS Games/Doom.mgl");
+        assert_eq!(
+            rows[0].game.mra_path.as_ref(),
+            "/media/fat/_DOS Games/Doom.mgl"
+        );
     }
 
     #[test]

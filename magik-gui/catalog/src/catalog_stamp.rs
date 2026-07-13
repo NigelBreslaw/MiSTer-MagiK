@@ -42,6 +42,19 @@ impl CatalogStamp {
     pub fn fingerprint_hex(&self) -> String {
         format!("{:016x}", self.fingerprint())
     }
+
+    pub(crate) fn has_same_live_inputs(&self, current: &Self) -> bool {
+        fn is_retained_audit_line(line: &str) -> bool {
+            line.starts_with("core-audit\t") || line.starts_with("core-audit-row\t")
+        }
+        self.lines
+            .iter()
+            .filter(|line| !is_retained_audit_line(line))
+            .eq(current
+                .lines
+                .iter()
+                .filter(|line| !is_retained_audit_line(line)))
+    }
 }
 
 pub fn compute_default_catalog_stamp(roots: &[String]) -> CatalogStamp {

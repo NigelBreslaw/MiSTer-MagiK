@@ -99,26 +99,44 @@ pub fn run(
             stats.normal_files, stats.containers, stats.entries
         ),
     });
-    let audit_stamp_started = Instant::now();
-    let artifact = scanned.complete_coverage_audit();
-    let audit_stamp_us = audit_stamp_started.elapsed().as_micros() as u64;
+    let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
+    let (artifact, catalog, prepare_timing) = scanned
+        .complete_coverage_audit_and_catalog_foreground(root)
+        .map_err(|error| fail(protocol, "prepare-catalog", error, &mut emit))?;
     emit(CatalogBuilderEvent::Timing {
         protocol,
         name: "builder_deferred_audit_stamp".into(),
         detail: format!(
-            "elapsed_us={} audit_rows={}",
-            audit_stamp_us,
+            "elapsed_us={} audit_us={} stamp_us={} audit_rows={}",
+            prepare_timing.audit_stamp_worker_us,
+            prepare_timing.audit_us,
+            prepare_timing.stamp_us,
             artifact.stats().audit_rows
         ),
     });
-    let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-    let started = Instant::now();
-    let catalog = artifact.catalog(root);
-    let load_us = started.elapsed().as_micros() as u64;
+    let load_us = prepare_timing.catalog_us;
     emit(CatalogBuilderEvent::Timing {
         protocol,
         name: "builder_catalog_projection".into(),
         detail: format!("elapsed_us={} games={}", load_us, catalog.len()),
+    });
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "builder_catalog_prepare_overlap".into(),
+        detail: format!(
+            "wall_us={} audit_stamp_worker_us={} audit_us={} stamp_us={} catalog_us={} overlapped_us={} mode=scoped-dual-core worker_role={} worker_affinity={}",
+            prepare_timing.wall_us,
+            prepare_timing.audit_stamp_worker_us,
+            prepare_timing.audit_us,
+            prepare_timing.stamp_us,
+            prepare_timing.catalog_us,
+            prepare_timing.overlapped_us,
+            RuntimeThreadRole::CatalogForeground.label(),
+            RuntimeThreadRole::CatalogForeground
+                .default_policy()
+                .affinity
+                .label(),
+        ),
     });
     let snapshot_path = snapshot_path();
     let snapshot_started = Instant::now();
@@ -231,23 +249,50 @@ impl Drop for BuilderLock {
 }
 
 fn check(protocol: u32, emit: &mut impl FnMut(CatalogBuilderEvent)) -> Result<(), String> {
-    match library_db::default_sqlite_catalog_stamp_check() {
-        Ok(check) if check.unchanged => {
-            let summary = library_db::default_sqlite_cached_summary(check.check_us)
-                .map_err(|error| fail(protocol, "summary", error, emit))?;
-            emit(CatalogBuilderEvent::Unchanged {
-                protocol,
-                summary: BuilderSummary::from(summary),
-            });
-        }
-        Ok(check) => emit(CatalogBuilderEvent::Changed {
+    let check = library_db::default_sqlite_catalog_stamp_check()
+        .map_err(|error| fail(protocol, "check", error, emit))?;
+    emit(CatalogBuilderEvent::Timing {
+        protocol,
+        name: "catalog_stamp_check".into(),
+        detail: format!(
+            "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={}",
+            check.unchanged,
+            check.check_us,
+            check.compute_us,
+            check.open_us,
+            check.read_us,
+            check.checkpoint_read_us,
+            check.compare_us,
+            check.checkpoint_compare_us,
+            check.stored_fingerprint.as_deref().unwrap_or("missing"),
+            check.current_fingerprint,
+            check
+                .stored_checkpoint_fingerprint
+                .as_deref()
+                .unwrap_or("missing"),
+            check.current_checkpoint_fingerprint,
+            check.stored_lines,
+            check.current_lines,
+            check.stored_checkpoint_lines,
+            check.current_checkpoint_lines,
+            check.drift.detail,
+        ),
+    });
+    if check.unchanged {
+        let summary = library_db::default_sqlite_cached_summary(check.check_us)
+            .map_err(|error| fail(protocol, "summary", error, emit))?;
+        emit(CatalogBuilderEvent::Unchanged {
+            protocol,
+            summary: BuilderSummary::from(summary),
+        });
+    } else {
+        emit(CatalogBuilderEvent::Changed {
             protocol,
             detail: format!(
                 "Catalog inputs changed; rebuild required. {}",
                 check.drift.detail
             ),
-        }),
-        Err(error) => return Err(fail(protocol, "check", error, emit)),
+        });
     }
     emit(CatalogBuilderEvent::Done { protocol });
     Ok(())

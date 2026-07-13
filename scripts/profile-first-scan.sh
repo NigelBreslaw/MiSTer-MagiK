@@ -193,13 +193,57 @@ with source:
 PY
 }
 
+first_scan_normalize_builder_timings() {
+  local builder_log="$1"
+  python3 - "$builder_log" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+metric_keys = {
+    "builder_deferred_audit_stamp": "elapsed_us",
+    "builder_catalog_projection": "elapsed_us",
+    "builder_catalog_prepare_overlap": "wall_us",
+}
+try:
+    source = open(path, encoding="utf-8", errors="replace")
+except OSError:
+    raise SystemExit(0)
+with source:
+    for line in source:
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if row.get("event") != "timing":
+            continue
+        name = str(row.get("name") or "")
+        metric_key = metric_keys.get(name)
+        if metric_key is None:
+            continue
+        detail = str(row.get("detail") or "")
+        match = re.search(rf"(?:^|\s){re.escape(metric_key)}=(\d+)(?:\s|$)", detail)
+        if match is None:
+            continue
+        elapsed_us = int(match.group(1))
+        elapsed_ms = (elapsed_us + 500) // 1000
+        print(
+            f"startup_timing\t{name}\t{elapsed_ms}ms\t"
+            f"{detail} source=standalone-builder"
+        )
+PY
+}
+
 first_scan_write_canonical_log() {
   local output="$1" builder_log="$2" launcher_log="$3" events_log="${4:-}"
-  local pair ready_ms saved_ms marker_source ready_us saved_us normalized_events
+  local pair ready_ms saved_ms marker_source ready_us saved_us normalized_events normalized_builder_timings
   pair="$(first_scan_extract_complete_pair "$builder_log" "$launcher_log" "$events_log")" || return 1
   IFS=$'\t' read -r ready_ms saved_ms marker_source ready_us saved_us <<<"$pair"
   normalized_events="$(mktemp)"
+  normalized_builder_timings="$(mktemp)"
   first_scan_normalize_events "$events_log" >"$normalized_events"
+  first_scan_normalize_builder_timings "$builder_log" >"$normalized_builder_timings"
   {
     if [[ "$marker_source" == launcher-* ]]; then
       printf 'startup_timing\tlibrary_ready\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$ready_ms" "$marker_source" "$ready_ms" "$ready_us"
@@ -208,9 +252,10 @@ first_scan_write_canonical_log() {
       printf 'startup_timing\tlibrary_ready\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$ready_ms" "$ready_us"
       printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$saved_ms" "$saved_us"
     fi
-    awk -F '\t' '!($1 == "startup_timing" && ($2 == "library_ready" || $2 == "library_db_saved"))' "$builder_log" "$launcher_log" "$normalized_events"
+    cat "$normalized_builder_timings"
+    awk -F '\t' '!($1 == "startup_timing" && ($2 == "library_ready" || $2 == "library_db_saved" || $2 == "builder_deferred_audit_stamp" || $2 == "builder_catalog_projection" || $2 == "builder_catalog_prepare_overlap"))' "$builder_log" "$launcher_log" "$normalized_events"
   } >"$output"
-  rm -f "$normalized_events"
+  rm -f "$normalized_events" "$normalized_builder_timings"
 }
 
 first_scan_marker_self_test() {
@@ -221,6 +266,9 @@ first_scan_marker_self_test() {
   events="$tmp/events.jsonl"
   combined="$tmp/combined.log"
   printf '%s\n' '{"event":"timing","name":"builder_catalog_ready","detail":"elapsed_us=1000500"}' \
+    '{"event":"timing","name":"builder_deferred_audit_stamp","detail":"elapsed_us=12500 audit_us=11000 stamp_us=1500 audit_rows=4"}' \
+    '{"event":"timing","name":"builder_catalog_projection","detail":"elapsed_us=23500 games=10"}' \
+    '{"event":"timing","name":"builder_catalog_prepare_overlap","detail":"wall_us=24000 audit_stamp_worker_us=12500 audit_us=11000 stamp_us=1500 catalog_us=23500 overlapped_us=12000 mode=scoped-dual-core"}' \
     '{"event":"timing","name":"builder_persisted","detail":"elapsed_us=2000500"}' >"$builder"
   : >"$launcher"
   pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
@@ -236,7 +284,13 @@ first_scan_marker_self_test() {
   first_scan_write_canonical_log "$combined" "$builder" "$launcher" "$events"
   [[ "$(grep -c $'^startup_timing\tlibrary_ready\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tlibrary_db_saved\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tbuilder_deferred_audit_stamp\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tbuilder_catalog_projection\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tbuilder_catalog_prepare_overlap\t' "$combined")" == "1" ]]
   grep -q $'^startup_timing\tlibrary_ready\t1200ms\tsource=launcher-events elapsed_ms=1200 builder_elapsed_us=1000500$' "$combined"
+  grep -q $'^startup_timing\tbuilder_deferred_audit_stamp\t13ms\telapsed_us=12500 .*source=standalone-builder$' "$combined"
+  grep -q $'^startup_timing\tbuilder_catalog_projection\t24ms\telapsed_us=23500 .*source=standalone-builder$' "$combined"
+  grep -q $'^startup_timing\tbuilder_catalog_prepare_overlap\t24ms\twall_us=24000 .*source=standalone-builder$' "$combined"
   if grep -q $'source=launcher-.* elapsed_us=' "$combined"; then
     rm -rf "$tmp"
     echo "first-scan canonical log mislabeled builder microseconds as the launcher clock" >&2
@@ -295,9 +349,93 @@ first_scan_self_test() {
     return 1
   fi
   first_scan_marker_self_test
+  first_scan_thread_sample_self_test
   first_scan_identity_self_test
   first_scan_reset_artifact_self_test
   echo "profile-first-scan self-test ok"
+}
+
+first_scan_thread_sample_process() {
+  printf 'mister-magik-catalog-builder\n'
+}
+
+first_scan_thread_sample_has_builder_evidence() {
+  local path="$1"
+  [[ -s "$path" ]] &&
+    awk -F '\t' '
+      $1 == "thread_sample_tsv" && $2 != "sample" &&
+      $6 ~ /^[0-9]+$/ && $10 ~ /^[0-9]+$/ &&
+      $20 ~ /^[0-9]+$/ && $20 + 0 > 0 {
+        found = 1
+      }
+      END { exit(found ? 0 : 1) }
+    ' "$path"
+}
+
+first_scan_has_catalog_audit_policy_evidence() {
+  local path="$1"
+  [[ -s "$path" ]] &&
+    awk -F '\t' '
+      $1 == "thread_policy_tsv" &&
+      $2 == "thread=catalog-audit" &&
+      $3 == "role=catalog-foreground" &&
+      $4 == "intended_nice=0" &&
+      $5 == "actual_nice=0" &&
+      $6 == "affinity=all-online" &&
+      $7 == "allowed_cpus=0-1" &&
+      $8 ~ /^processor=[0-9]+$/ &&
+      $9 == "nice_status=ok" &&
+      $10 == "affinity_status=ok" {
+        found = 1
+      }
+      END { exit(found ? 0 : 1) }
+    ' "$path"
+}
+
+first_scan_thread_sample_self_test() {
+  local tmp sample policy
+  [[ "$(first_scan_thread_sample_process)" == "mister-magik-catalog-builder" ]]
+  tmp="$(mktemp -d)"
+  sample="$tmp/sample.tsv"
+  printf '%s\n' \
+    $'thread_sample_tsv\tsample\tts_unix\tinterval_start_monotonic_us\tmonotonic_us\tpid\ttid\tthread_name\tstate\tprocessor\tutime_jiffies\tstime_jiffies\tutime_delta_jiffies\tstime_delta_jiffies\tvoluntary_ctxt_switches\tnonvoluntary_ctxt_switches\tvoluntary_delta\tnonvoluntary_delta\tvmrss_kb\tvmhwm_kb' \
+    $'thread_sample_tsv\t0\t1\t1\t1\t42\t42\tmister-magik-c\tR\t1\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000' >"$sample"
+  first_scan_thread_sample_has_builder_evidence "$sample"
+  sed 's/\t1\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000$/\tnot-a-cpu\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000/' "$sample" >"$tmp/bad-cpu.tsv"
+  if first_scan_thread_sample_has_builder_evidence "$tmp/bad-cpu.tsv"; then
+    rm -rf "$tmp"
+    echo "first-scan thread evidence accepted a non-numeric processor" >&2
+    return 1
+  fi
+  sed 's/\t64000$/\t0/' "$sample" >"$tmp/missing-hwm.tsv"
+  if first_scan_thread_sample_has_builder_evidence "$tmp/missing-hwm.tsv"; then
+    rm -rf "$tmp"
+    echo "first-scan thread evidence accepted missing peak RSS" >&2
+    return 1
+  fi
+  head -1 "$sample" >"$tmp/empty.tsv"
+  if first_scan_thread_sample_has_builder_evidence "$tmp/empty.tsv"; then
+    rm -rf "$tmp"
+    echo "first-scan thread evidence accepted a header-only sample" >&2
+    return 1
+  fi
+  policy="$tmp/catalog-audit.log"
+  printf '%s\n' \
+    $'thread_policy_tsv\tthread=catalog-audit\trole=catalog-foreground\tintended_nice=0\tactual_nice=0\taffinity=all-online\tallowed_cpus=0-1\tprocessor=1\tnice_status=ok\taffinity_status=ok' >"$policy"
+  first_scan_has_catalog_audit_policy_evidence "$policy"
+  sed 's/actual_nice=0/actual_nice=10/' "$policy" >"$tmp/bad-nice.log"
+  if first_scan_has_catalog_audit_policy_evidence "$tmp/bad-nice.log"; then
+    rm -rf "$tmp"
+    echo "first-scan policy evidence accepted background nice" >&2
+    return 1
+  fi
+  sed 's/allowed_cpus=0-1/allowed_cpus=0/' "$policy" >"$tmp/bad-affinity.log"
+  if first_scan_has_catalog_audit_policy_evidence "$tmp/bad-affinity.log"; then
+    rm -rf "$tmp"
+    echo "first-scan policy evidence accepted single-core affinity" >&2
+    return 1
+  fi
+  rm -rf "$tmp"
 }
 
 first_scan_identity_self_test() {
@@ -475,6 +613,7 @@ emit_thread_sample_artifact_report() {
   printf 'binary_context_tsv\tlabel=%s\trole=catalog-builder\t%s\n' "$LABEL" "$catalog_builder_fields"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     thread_sample_emit_artifacts
+    thread_sample_emit_summary "$LABEL" "first-scan-builder" "$thread_sample_local_tsv"
   fi
 }
 profile_first_scan_cleanup() {
@@ -552,7 +691,12 @@ printf '%s\n' "$reset_report" | tee "$OUT_DIR/${LABEL}-artifact-reset.tsv"
 mister_supervision_command "mister_magik_resume" 0 >/dev/null
 launcher_suspended=0
 "$MISTER" reboot-wait
-thread_sample_start "$LABEL" "first-scan" "$OUT_DIR" "$TIMEOUT_SECS"
+thread_sample_start \
+  "$LABEL" \
+  "first-scan" \
+  "$OUT_DIR" \
+  "$TIMEOUT_SECS" \
+  "$(first_scan_thread_sample_process)"
 
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
@@ -577,6 +721,13 @@ cp "$local_refresh_log" "$raw_refresh_log"
 cp "$local_events" "$raw_events"
 thread_sample_stop
 thread_sample_collect
+if [[ "$thread_sample_enabled" == "1" ]] &&
+   { ! first_scan_thread_sample_has_builder_evidence "$thread_sample_local_tsv" ||
+     ! first_scan_has_catalog_audit_policy_evidence "$local_refresh_log"; }; then
+  emit_thread_sample_artifact_report | tee "$artifact_report" || true
+  echo "first-scan evidence did not prove catalog-builder CPU/HWM and catalog-audit foreground all-core policy" >&2
+  exit 1
+fi
 if grep -q '"event":"failure"' "$local_refresh_log" ||
    grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
@@ -610,7 +761,7 @@ fi
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   BEGIN { OFS = "\t" }
-  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "catalog_worker_ram_catalog") {
+  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "catalog_worker_ram_catalog" || $2 == "builder_deferred_audit_stamp" || $2 == "builder_catalog_projection" || $2 == "builder_catalog_prepare_overlap") {
     ms = $3
     sub(/ms$/, "", ms)
     if ($2 == "bootstrap_counter_sustained_climb") {
