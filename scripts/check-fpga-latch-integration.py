@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PINNED_MENU_COMMIT = "cf4dfdee516fcaa6952bdd9fb47154e96c28567e"
+PINNED_MENU_COMMIT = "3c3634c0105d78f27aeba66b38966c50dbc42c9b"
 COMMAND_PATTERNS = {
     "0x57": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')57", re.I),
     "0x58": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')58", re.I),
