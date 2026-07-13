@@ -26,6 +26,9 @@ MAME_SOURCE_REF=""
 HBMAME_SOURCE_REVISION=""
 NAME="mister-magik"
 OUT_DIR="$ROOT/dist"
+VERSION=""
+BUILD_NUMBER=""
+RELEASE_ASSETS_DIR=""
 
 usage() {
   sed -n '2,2p' "$0" | sed 's/^# \{0,1\}//'
@@ -68,6 +71,10 @@ Options:
                        when it is supplied).
   --name NAME          Output basename. Default: mister-magik
   --out-dir PATH       Output directory. Default: dist
+  --version VERSION    Required release version (0.2.BUILD).
+  --build-number N     Required Info build number; must match VERSION and binary receipt.
+  --release-assets-dir PATH
+                       Optional output for flattened GitHub release assets and provenance.
   -h, --help           Show this help.
 
 The zip is laid out relative to the MiSTer SD-card root:
@@ -163,6 +170,18 @@ while [[ $# -gt 0 ]]; do
       OUT_DIR="${2:?--out-dir requires a path}"
       shift 2
       ;;
+    --version)
+      VERSION="${2:?--version requires a value}"
+      shift 2
+      ;;
+    --build-number)
+      BUILD_NUMBER="${2:?--build-number requires a value}"
+      shift 2
+      ;;
+    --release-assets-dir)
+      RELEASE_ASSETS_DIR="${2:?--release-assets-dir requires a path}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -193,6 +212,29 @@ if [[ ! -f "$MAME_SQLITE" ]]; then
 fi
 if [[ ! -f "$INSTALLER" ]]; then
   echo "ERROR: installer not found: $INSTALLER" >&2
+  exit 1
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ || "$VERSION" != "0.2.$BUILD_NUMBER" ]]; then
+  echo "ERROR: --version must equal 0.2.--build-number; got version=${VERSION:-missing} build=${BUILD_NUMBER:-missing}." >&2
+  exit 2
+fi
+BIN_FEATURES="$(tr -d '\r\n' <"$BIN.features" 2>/dev/null || true)"
+BIN_RECEIPT="$BIN.build-receipt.tsv"
+receipt_field() {
+  local key="$1"
+  awk -F '\t' -v key="$key" 'NR == 1 { for (i = 2; i <= NF; i++) { if ($i ~ ("^" key "=")) { sub("^[^=]*=", "", $i); print $i; exit } } }' "$BIN_RECEIPT"
+}
+if [[ "$BIN_FEATURES" != "ui,video" ]]; then
+  echo "ERROR: production distribution requires ui,video; got ${BIN_FEATURES:-missing}." >&2
+  exit 1
+fi
+if [[ ! -f "$BIN_RECEIPT" || "$(receipt_field build_number)" != "$BUILD_NUMBER" || "$(receipt_field version)" != "$VERSION" ]]; then
+  echo "ERROR: binary build receipt does not match release version=$VERSION build=$BUILD_NUMBER." >&2
+  exit 1
+fi
+MAGIK_SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+if [[ "$(receipt_field source_commit)" != "$MAGIK_SOURCE_REVISION" ]]; then
+  echo "ERROR: binary receipt source revision does not match package checkout." >&2
   exit 1
 fi
 if [[ -z "$MAME_SOURCE_REF" ]]; then
@@ -245,6 +287,10 @@ if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_R
   echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
 fi
+if [[ "$(sed -n 's/^magik_revision=//p' "$PLATFORM_MANIFEST")" != "$MAGIK_SOURCE_REVISION" ]]; then
+  echo "ERROR: platform manifest MagiK revision does not match package checkout." >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
@@ -276,6 +322,14 @@ cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.
 cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
 cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
 cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v1.manifest"
+cat >"$STAGE/mister-magik/release-v1.txt" <<EOF
+format=mister-magik-release-v1
+version=$VERSION
+build_number=$BUILD_NUMBER
+magik_revision=$MAGIK_SOURCE_REVISION
+main_revision=$MAIN_SOURCE_REVISION
+features=$BIN_FEATURES
+EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
 python3 "$ROOT/scripts/platform-manifest.py" verify \
   "$STAGE/mister-magik/platform-v1.manifest" --root "$STAGE" >/dev/null
@@ -345,5 +399,14 @@ rm -f "$OUT"
   cd "$STAGE"
   zip -qr "$OUT" .
 )
+
+if [[ -n "$RELEASE_ASSETS_DIR" ]]; then
+  python3 "$ROOT/scripts/package-release-assets.py" \
+    --stage "$STAGE" \
+    --zip "$OUT" \
+    --output "$RELEASE_ASSETS_DIR" \
+    --version "$VERSION" \
+    --build-number "$BUILD_NUMBER"
+fi
 
 echo "$OUT"
