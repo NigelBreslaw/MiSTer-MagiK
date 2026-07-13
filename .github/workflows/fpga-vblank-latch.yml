@@ -215,6 +215,7 @@ jobs:
       - name: Build matched stock and vblank-latched RBFs
         env:
           MISTER_MENU_DIR: ${{ github.workspace }}/build/Menu_MiSTer
+          MISTER_FPGA_QUALIFIED_MAGIK_REVISION: ${{ github.sha }}
           QUARTUS_DOCKER_EMPTY_SYS: "1"
           QUARTUS_STRACE: "0"
         run: |
