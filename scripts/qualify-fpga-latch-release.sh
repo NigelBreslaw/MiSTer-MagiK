@@ -6,8 +6,8 @@ MISTER="$ROOT/scripts/mister"
 RBF_DIR="${MISTER_FPGA_RELEASE_DIR:-$ROOT/build/fpga-vblank-latch}"
 RBF="$RBF_DIR/menu-magik-vblank-latch.rbf"
 META="$RBF_DIR/menu-magik-vblank-latch.metadata.txt"
-REMOTE_RBF="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf"
-REMOTE_META="/media/fat/mister-magik/experiments/menu-magik-vblank-latch.metadata.txt"
+REMOTE_RBF="/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf"
+REMOTE_META="/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
 LABEL="FPGA-LATCH-QUAL-$(date -u +%Y%m%dT%H%M%SZ)"
 SOAK_SECS=0
@@ -77,7 +77,7 @@ self_test() {
   expected="$(printf 'a%.0s' {1..64})"
   require_equal_hash "$expected" "$expected"
   ! require_equal_hash "$expected" "$(printf 'b%.0s' {1..64})"
-  runtime=$'rbf_sha256='"$expected"$'\nmain_rbf=/media/fat/mister-magik/experiments/menu-magik-vblank-latch.rbf\nmodule_ready=1\ndevice_ready=1'
+  runtime=$'rbf_sha256='"$expected"$'\nmain_rbf=/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf\nmodule_ready=1\ndevice_ready=1'
   require_runtime "$runtime" "$expected"
   ! require_runtime "${runtime/module_ready=1/module_ready=0}" "$expected"
   marker="$(mktemp)"
