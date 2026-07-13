@@ -460,6 +460,10 @@ fn start_ready_downloads(
         std::thread::Builder::new()
             .name(format!("screenshot-media-{}", pack.id))
             .spawn(move || {
+                // A requested pack is visible user work. Acquire foreground
+                // ownership before raising this worker to nice 0/AllOnline;
+                // index-sidecar repair remains cooperative background work.
+                let _lease = mister_magik_catalog::work_coordinator::foreground("media-download");
                 apply_runtime_thread_policy(RuntimeThreadRole::MediaDownload);
                 let result = download_pack_assets(
                     &download_config,
@@ -873,6 +877,7 @@ fn start_silent_index_download(
     let handle = std::thread::Builder::new()
         .name(format!("screenshot-media-{}-index", pack.id))
         .spawn(move || {
+            let _lease = mister_magik_catalog::work_coordinator::background("media-index");
             apply_runtime_thread_policy(RuntimeThreadRole::MediaIndex);
             stream_index_to_publish_temp(
                 &index,

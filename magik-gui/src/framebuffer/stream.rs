@@ -514,6 +514,7 @@ fn worker_queue() -> &'static Arc<WorkerQueue> {
 }
 
 fn run_worker(queue: Arc<WorkerQueue>) {
+    let background_lease = mister_magik_catalog::work_coordinator::background("framebuffer-stream");
     mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
         mister_magik_catalog::runtime_thread::RuntimeThreadRole::FramebufferStream,
     );
@@ -529,6 +530,7 @@ fn run_worker(queue: Arc<WorkerQueue>) {
                 NEEDS_KEYFRAME.store(true, Ordering::Release);
             }
             WorkerEvent::Frame(update) => {
+                let _ = background_lease.cooperate();
                 if update.kind == FrameUpdateKind::Delta {
                     producer_state.remember_rect_pixels(
                         update.geometry,

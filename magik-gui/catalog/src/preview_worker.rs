@@ -23,6 +23,7 @@ use crate::preview_archive::{
 #[cfg(test)]
 use crate::preview_archive::{MAX_PREVIEW_ARCHIVE_ENTRIES, MAX_PREVIEW_ARCHIVE_RAW_BYTES};
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
+use crate::work_coordinator;
 
 pub const DEFAULT_PREVIEW_RADIUS: usize = 12;
 pub const DEFAULT_PREVIEW_CACHE_CAP: usize = DEFAULT_PREVIEW_RADIUS * 2 + 1;
@@ -555,6 +556,7 @@ fn preview_selected_thread(
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewSelected);
     let mut scratch = PreviewArchiveScratch::default();
     while let Some(req) = rx.take_blocking() {
+        let _lease = work_coordinator::foreground("selected-preview");
         let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
         if !tx.publish(result) {
             break;
@@ -569,6 +571,7 @@ fn preview_prefetch_thread(
     trace_start: Instant,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewPrefetch);
+    let lease = work_coordinator::background("preview-prefetch");
     let mut queue: Vec<PreviewRequest> = Vec::new();
     let mut scratch = PreviewArchiveScratch::default();
     let mut newest_generation = 0;
@@ -588,6 +591,7 @@ fn preview_prefetch_thread(
         }
         prune_stale_prefetch_requests(&mut queue, newest_generation);
         if let Some(req) = pop_next_preview_request(&mut queue) {
+            let _ = lease.cooperate();
             let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
             match tx.try_send(result) {
                 Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}

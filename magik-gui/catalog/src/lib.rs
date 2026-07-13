@@ -35,6 +35,7 @@ pub mod builder_protocol;
 #[cfg(feature = "builder")]
 pub mod builder_service;
 pub mod runtime_thread;
+pub mod work_coordinator;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
