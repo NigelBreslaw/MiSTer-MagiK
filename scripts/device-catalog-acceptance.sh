@@ -9,9 +9,9 @@ REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
 REMOTE_NAVIGATION="/media/fat/mister-magik/library.nav.lz4b"
 REMOTE_ASSETS="/media/fat/mister-magik/assets"
-EXPECTED_DURABLE_GAMES=69571
-EXPECTED_VISIBLE_GAMES=67235
-EXPECTED_SYSTEMS=69
+EXPECTED_DURABLE_GAMES=69646
+EXPECTED_VISIBLE_GAMES=67288
+EXPECTED_SYSTEMS=71
 EXPECTED_PC88_GAMES=3831
 EXPECTED_ARCADE_GAMES=909
 EXPECTED_SMS_GAMES=447
@@ -139,8 +139,9 @@ acceptance_reporting_self_test() {
   grep -q '"passed": 1' "$summary"
   grep -q '"failed": 1' "$summary"
   grep -q $'selftest\ttwo\tfail\t>0\t0\tbad' "$RESULTS_TSV"
-  [[ "$EXPECTED_DURABLE_GAMES" == "69571" ]]
-  [[ "$EXPECTED_VISIBLE_GAMES" == "67235" ]]
+  [[ "$EXPECTED_DURABLE_GAMES" == "69646" ]]
+  [[ "$EXPECTED_VISIBLE_GAMES" == "67288" ]]
+  [[ "$EXPECTED_SYSTEMS" == "71" ]]
   [[ "$EXPECTED_ARCADE_GAMES" == "909" ]]
   [[ "$EXPECTED_SMS_GAMES" == "447" ]]
   [[ "$EXPECTED_GAMEGEAR_GAMES" == "422" ]]

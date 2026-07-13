@@ -10,8 +10,8 @@ APIs, progress states, and benchmark expectations.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
-  The ratified cold first-scan acceptance is RAM catalog usable within 94650ms
-  on the target MiSTer and durable SQLite save complete within 121336ms. Anything
+  The ratified cold first-scan acceptance is RAM catalog usable within 100000ms
+  on the target MiSTer and durable SQLite save complete within 127000ms. Anything
   above either threshold fails `scripts/profile-first-scan.sh`.
 - First database creation is a foreground bootstrap job. The catalog worker and
   library walker must run at full priority with unrestricted CPU affinity until

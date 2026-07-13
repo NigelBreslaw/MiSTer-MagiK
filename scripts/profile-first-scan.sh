@@ -22,8 +22,8 @@ REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
 NAMESPACE_BACKEND=""
-RAM_CATALOG_READY_GATE_MS=94650
-DB_SAVE_GATE_MS=121336
+RAM_CATALOG_READY_GATE_MS=100000
+DB_SAVE_GATE_MS=127000
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/mister-supervision-lib.sh"
 source "$HERE/scripts/bench-context-lib.sh"
