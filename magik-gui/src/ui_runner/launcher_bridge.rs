@@ -78,9 +78,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
 }
 
 fn build_label() -> String {
+    let version = env!("MISTER_MAGIK_VERSION");
     let build_number = env!("MISTER_MAGIK_BUILD_NUMBER");
     let build_time = env!("MISTER_MAGIK_BUILD_TIME");
-    format!("Build {build_number}  {build_time}")
+    format!("Version {version}  Build {build_number}  {build_time}")
 }
 
 fn kernel_version() -> String {

@@ -139,13 +139,15 @@ bench_context_build_receipt_status() {
 
 bench_context_write_build_receipt() {
   local binary_path="$1" repo="$2" profile="$3" features="$4" ui_scope="$5"
-  local receipt tmp binary_sha source_fields
+  local receipt tmp binary_sha source_fields build_number version
   receipt="$(bench_context_build_receipt_path "$binary_path")"
   tmp="$(mktemp "${receipt}.XXXXXX")"
   binary_sha="$(bench_context_sha256_file "$binary_path")"
   source_fields="$(bench_context_source_fields "$repo")"
-  printf 'build_receipt_tsv\tbinary_sha256=%s\tprofile=%s\tfeatures=%s\tui_scope=%s\t%s\n' \
-    "$binary_sha" "$profile" "$features" "$ui_scope" "$source_fields" >"$tmp"
+  build_number="${MISTER_MAGIK_BUILD_NUMBER:-$(git -C "$repo" rev-list --count HEAD 2>/dev/null || printf unknown)}"
+  version="${MISTER_MAGIK_VERSION:-0.2.$build_number}"
+  printf 'build_receipt_tsv\tbinary_sha256=%s\tprofile=%s\tfeatures=%s\tui_scope=%s\tbuild_number=%s\tversion=%s\t%s\n' \
+    "$binary_sha" "$profile" "$features" "$ui_scope" "$build_number" "$version" "$source_fields" >"$tmp"
   mv "$tmp" "$receipt"
 }
 
