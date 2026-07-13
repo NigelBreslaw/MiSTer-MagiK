@@ -23,13 +23,28 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Read qualified Menu source revision
+        id: menu-source
+        run: |
+          set -euo pipefail
+          mapfile -t menu_refs < fpga/menu-vblank-latch/Menu_MiSTer.commit
+          if [[ ${#menu_refs[@]} -ne 1 ]]; then
+            echo "qualified Menu source revision must be exactly one line" >&2
+            exit 2
+          fi
+          menu_ref="${menu_refs[0]}"
+          if [[ ! "$menu_ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid qualified Menu source revision: $menu_ref" >&2
+            exit 2
+          fi
+          printf 'commit=%s\n' "$menu_ref" >> "$GITHUB_OUTPUT"
       - name: Install FPGA fast-gate tools
         run: sudo apt-get update && sudo apt-get install -y iverilog verilator lcov
       - name: Check out pinned Menu source
         uses: actions/checkout@v4
         with:
           repository: MiSTer-devel/Menu_MiSTer
-          ref: 3c3634c0105d78f27aeba66b38966c50dbc42c9b
+          ref: ${{ steps.menu-source.outputs.commit }}
           path: build/Menu_MiSTer
       - name: Run warning-clean Icarus simulation
         run: scripts/test-fpga-vblank-latch.sh

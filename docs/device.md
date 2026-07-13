@@ -138,8 +138,12 @@ correct while HDMI still shows another buffer.
 The production vblank-latched Menu RBF is built only by manually starting the
 `FPGA Vblank Latch RBF` GitHub Actions workflow. Do not run this workflow on
 every push or pull request; Quartus builds are heavyweight and should be kicked
-off only when a new shared RBF artifact is actually needed. From a checked-out
-repo with GitHub CLI auth:
+off only when a new shared RBF artifact is actually needed. The manual form has
+no custom inputs: select the MiSTer MagiK branch, normally `main`, and run it.
+That branch supplies the latch patch and scripts; the workflow builds the exact
+qualified `Menu_MiSTer` revision in
+`fpga/menu-vblank-latch/Menu_MiSTer.commit`. It does not build the separate
+`Main_MiSTer` MagiK fork. From a checked-out repo with GitHub CLI auth:
 
 ```bash
 gh workflow run fpga-vblank-latch.yml --repo NigelBreslaw/MiSTer-MagiK --ref main
