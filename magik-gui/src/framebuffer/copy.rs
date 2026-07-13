@@ -1,7 +1,4 @@
 /// Copy a source rectangle into a destination buffer, nearest-neighbor scaled.
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-use std::sync::OnceLock;
-
 // Flat rectangle parameters keep framebuffer call sites allocation-free and easy
 // to inline in copy-heavy paths.
 #[allow(clippy::too_many_arguments)]
@@ -153,13 +150,6 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
     let src_len = src.len();
     let packed_len = (dst.len() / 2).min(src.len());
     let mut i = 0;
-    #[cfg(all(target_arch = "arm", target_feature = "neon"))]
-    if use_neon_2x_scaler() {
-        // SAFETY: packed_len is min(dst.len() / 2, src.len()), so the NEON
-        // helper reads at most packed_len source words and writes exactly twice
-        // as many destination words.
-        i = unsafe { copy_2x_u32_row_neon(dst, src, packed_len) };
-    }
     while i + 4 <= packed_len {
         let c0 = src[i];
         let c1 = src[i + 1];
@@ -186,37 +176,6 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
     if !dst_len.is_multiple_of(2) && packed_len < src_len {
         dst[packed_len * 2] = src[packed_len];
     }
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-fn use_neon_2x_scaler() -> bool {
-    static USE_NEON: OnceLock<bool> = OnceLock::new();
-    *USE_NEON.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_SCALE_2X").as_deref(),
-            Ok("scalar") | Ok("SCALAR") | Ok("off") | Ok("0")
-        )
-    })
-}
-
-#[cfg(all(target_arch = "arm", target_feature = "neon"))]
-unsafe fn copy_2x_u32_row_neon(dst: &mut [u32], src: &[u32], packed_len: usize) -> usize {
-    use core::arch::arm::{vld1q_u32, vst1q_u32, vzipq_u32};
-
-    debug_assert!(packed_len <= src.len());
-    debug_assert!(packed_len * 2 <= dst.len());
-    let mut i = 0;
-    let src = src.as_ptr();
-    let dst = dst.as_mut_ptr();
-    while i + 4 <= packed_len {
-        let pixels = vld1q_u32(src.add(i));
-        let duplicated = vzipq_u32(pixels, pixels);
-        let d = dst.add(i * 2);
-        vst1q_u32(d, duplicated.0);
-        vst1q_u32(d.add(4), duplicated.1);
-        i += 4;
-    }
-    i
 }
 
 #[cfg(test)]
