@@ -91,6 +91,7 @@ jobs:
       - name: Compute main platform component identity
         id: component-id
         if: github.ref == 'refs/heads/main'
+        shell: bash
         run: |
           set -euo pipefail
           python3 scripts/platform-component-id.py component kernel --github-output "$GITHUB_OUTPUT"
@@ -98,6 +99,7 @@ jobs:
 
       - name: Attest main platform component identity
         if: github.ref == 'refs/heads/main'
+        shell: bash
         run: |
           set -euo pipefail
           {
