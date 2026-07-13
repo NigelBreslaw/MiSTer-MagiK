@@ -7,6 +7,12 @@ on:
         description: "Main_MiSTer ref to bundle"
         required: true
         default: "mister-magik"
+      fpga_run_id:
+        description: "Successful FPGA Vblank Latch RBF workflow run ID for this exact MagiK revision"
+        required: true
+      scanout_run_id:
+        description: "Successful Kernel scanout slots workflow run ID for this exact MagiK revision"
+        required: true
       artifact_name:
         description: "Distribution artifact basename"
         required: true
@@ -18,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -184,6 +191,19 @@ jobs:
         id: main-rev
         run: echo "sha=$(git -C Main_MiSTer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Download explicitly qualified FPGA and module artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FPGA_RUN_ID: ${{ github.event.inputs.fpga_run_id }}
+          SCANOUT_RUN_ID: ${{ github.event.inputs.scanout_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/qualified/fpga build/qualified/scanout
+          gh run download "$FPGA_RUN_ID" --name fpga-vblank-latch-signoff --dir build/qualified/fpga
+          gh run download "$SCANOUT_RUN_ID" --name mister-magik-scanout-slots --dir build/qualified/scanout
+          test "$(find build/qualified/fpga -name menu-magik-vblank-latch.rbf | wc -l)" -ge 2
+          test "$(find build/qualified/scanout -name mister_magik_scanout_slots.ko | wc -l)" -eq 1
+
       - name: Install Rust toolchain
         working-directory: magik-gui
         run: rustup show
@@ -223,6 +243,9 @@ jobs:
 
       - name: Build ARM frontend
         run: magik-gui/build-arm.sh --device
+
+      - name: Build ARM catalog builder
+        run: scripts/build-catalog-builder.sh --device
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
@@ -388,9 +411,33 @@ jobs:
 
       - name: Package distribution zip
         run: |
+          set -euo pipefail
+          rbf="$(find build/qualified/fpga -path '*/patched/menu-magik-vblank-latch.rbf' -print -quit)"
+          rbf_meta="$(find build/qualified/fpga -path '*/patched/menu-magik-vblank-latch.metadata.txt' -print -quit)"
+          module="$(find build/qualified/scanout -name mister_magik_scanout_slots.ko -print -quit)"
+          module_meta="$(find build/qualified/scanout -name provenance.txt -print -quit)"
+          test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
+          test "$(sed -n 's/^magik_commit=//p' "$rbf_meta")" = "$GITHUB_SHA"
+          scripts/platform-manifest.py generate \
+            --output build/platform-v1.manifest \
+            --main Main_MiSTer/bin/MiSTer \
+            --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
+            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
+            --scanout-module "$module" \
+            --scanout-metadata "$module_meta" \
+            --latch-rbf "$rbf" \
+            --latch-metadata "$rbf_meta" \
+            --main-revision "${{ steps.main-rev.outputs.sha }}" \
+            --magik-revision "$GITHUB_SHA"
           scripts/package-distribution.sh \
+            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
             --main-bin Main_MiSTer/bin/MiSTer \
             --main-source-revision "${{ steps.main-rev.outputs.sha }}" \
+            --scanout-module "$module" \
+            --scanout-metadata "$module_meta" \
+            --latch-rbf "$rbf" \
+            --latch-metadata "$rbf_meta" \
+            --platform-manifest build/platform-v1.manifest \
             --mame-source-ref "$MAME_REF" \
             --hbmame-source-revision "${{ needs.resolve-hbmame.outputs.sha }}" \
             --hbmame-sqlite-default \

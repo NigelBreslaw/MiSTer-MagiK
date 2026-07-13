@@ -184,7 +184,7 @@ pub(crate) fn probe_directory_signatures(
 ) -> DirectorySignatureProbe {
     #[cfg(target_os = "linux")]
     {
-        return linux::probe_directory_signatures(target, child_paths);
+        linux::probe_directory_signatures(target, child_paths)
     }
 
     #[cfg(not(target_os = "linux"))]

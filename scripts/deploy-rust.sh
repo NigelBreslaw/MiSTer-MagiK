@@ -78,9 +78,16 @@ human_bytes() {
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
 "$HERE/magik-gui/build-arm.sh" "${BUILD_FLAG[@]}"
+echo "==> Cross-building matching catalog builder"
+"$HERE/scripts/build-catalog-builder.sh" --device
 
 LOCAL_BYTES="$(bytes "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
+
+# Both runtime binaries are complete before either is deployed. Activate the
+# builder first so a builder failure cannot leave a new UI with an old writer.
+echo "==> Deploying matching catalog builder"
+"$HERE/scripts/deploy-catalog-builder.sh" --skip-build
 
 echo "==> Deploying Slint logo -> $REMOTE_ART_DIR"
 LOCAL_SLINT_LOGO_RAW="$(mktemp "${TMPDIR:-/tmp}/slint-logo-pixel-rgba.XXXXXX")"
@@ -140,8 +147,6 @@ printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path
   "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"
 
 echo "==> Deployed ($PROFILE)."
-echo "==> Building and deploying catalog builder"
-"$HERE/scripts/deploy-catalog-builder.sh"
 echo "    Main-supervised launcher was suspended and resumed when available."
 echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"

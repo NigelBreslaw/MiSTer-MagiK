@@ -105,7 +105,7 @@ default. Override with `MISTER_MAIN_DIR`.
   `scripts/bench-toolchain.sh ...`, `scripts/profile-*.sh ...`,
   `scripts/gate-*.sh ...`, `scripts/device-*.sh ...`,
   `scripts/install-slint-boot.sh`, `scripts/restore-stock-boot.sh`, and
-  `scripts/deploy-main-mister-experiment.sh ...`.
+  `scripts/deploy-platform.sh ...`.
 - Do not hide an escalation command behind inline environment assignments,
   shell wrappers, command substitutions, pipes, or redirects. If a command needs
   unusual environment, prefer a repository script/flag or ask before running a
@@ -168,8 +168,8 @@ Build and deploy:
 ```bash
 magik-gui/build-arm.sh --device
 scripts/deploy-rust.sh
-scripts/deploy-main-mister-experiment.sh
-scripts/deploy-main-mister-experiment.sh --clean-main  # only if stale Main objects are suspected
+scripts/deploy-platform.sh
+scripts/deploy-platform.sh --clean-main  # only if stale Main objects are suspected
 ```
 
 Run and inspect the deployed UI:

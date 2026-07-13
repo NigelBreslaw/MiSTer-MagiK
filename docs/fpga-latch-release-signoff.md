@@ -1,11 +1,12 @@
-# FPGA latch release signoff
+# FPGA latch release signoff (superseded artifact)
 
 ## Disposition
 
-The extracted-latch RBF is a **release candidate, not an approved commercial
-release**. Automated RTL and Quartus custom-delta signoff pass, and matched
+This records evidence for the superseded pre-Menu-20260603 RBF. It is **not an
+approval of the newly ported production artifact**. Automated RTL and Quartus custom-delta signoff pass, and matched
 single-device 960x540 qualification passes. The release remains blocked by the
-open items below. Do not tag or present it as commercially qualified yet.
+open items below. The new hash requires complete host, Quartus, device,
+update_all-overwrite, return, and rollback qualification.
 
 ## Candidate identity
 

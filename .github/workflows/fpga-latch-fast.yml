@@ -3,13 +3,13 @@ name: FPGA latch fast gates
 on:
   pull_request:
     paths:
-      - "experiments/fpga-vblank-latch/**"
+      - "fpga/menu-vblank-latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - ".github/workflows/fpga-latch-fast.yml"
   push:
     paths:
-      - "experiments/fpga-vblank-latch/**"
+      - "fpga/menu-vblank-latch/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - ".github/workflows/fpga-latch-fast.yml"
@@ -29,14 +29,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MiSTer-devel/Menu_MiSTer
-          ref: cf4dfdee516fcaa6952bdd9fb47154e96c28567e
+          ref: 3c3634c0105d78f27aeba66b38966c50dbc42c9b
           path: build/Menu_MiSTer
       - name: Run warning-clean Icarus simulation
         run: scripts/test-fpga-vblank-latch.sh
       - name: Lint custom RTL
         run: >-
           verilator --lint-only --Wall --Wno-fatal
-          experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv
+          fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
       - name: Verify pinned patch integration and opcode ownership
         run: scripts/check-fpga-latch-integration.py build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage
@@ -47,9 +47,9 @@ jobs:
           verilator --cc --exe --build --timing --coverage-line \
             --top-module tb_mister_magik_vblank_latch \
             --Mdir "$build_dir/obj" \
-            experiments/fpga-vblank-latch/mister_magik_vblank_latch.sv \
-            experiments/fpga-vblank-latch/tb_mister_magik_vblank_latch.sv \
-            "$GITHUB_WORKSPACE/experiments/fpga-vblank-latch/verilator_coverage_main.cpp"
+            fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            fpga/menu-vblank-latch/tb_mister_magik_vblank_latch.sv \
+            "$GITHUB_WORKSPACE/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
           (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
           verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
           scripts/check-fpga-latch-coverage.py "$build_dir/annotated"

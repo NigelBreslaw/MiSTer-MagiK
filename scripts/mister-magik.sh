@@ -8,6 +8,7 @@ INI="$FAT/MiSTer.ini"
 APP_DIR="$FAT/mister-magik"
 MAIN_BIN="$FAT/MiSTer_MagiK"
 GUI_BIN="$APP_DIR/mister-magik-fb"
+CATALOG_BUILDER="$APP_DIR/mister-magik-catalog-builder"
 SLINT_LOGO_FILE="$APP_DIR/art/slint-logo-pixel.rgba"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
@@ -41,6 +42,10 @@ ensure_files() {
   fi
   if [ ! -x "$GUI_BIN" ]; then
     say "ERROR: $GUI_BIN is missing or not executable."
+    exit 1
+  fi
+  if [ ! -x "$CATALOG_BUILDER" ]; then
+    say "ERROR: $CATALOG_BUILDER is missing or not executable."
     exit 1
   fi
   if [ ! -f "$SLINT_LOGO_FILE" ]; then
@@ -145,7 +150,7 @@ in_mister && /^[[:space:]]*main[[:space:]]*=[[:space:]]*MiSTer_MagiK[[:space:]]*
 install_magik() {
   ensure_files
   snapshot
-  chmod +x "$MAIN_BIN" "$GUI_BIN"
+  chmod +x "$MAIN_BIN" "$GUI_BIN" "$CATALOG_BUILDER"
   ensure_stock_inittab
   write_ini_with_main
   sync
