@@ -44,7 +44,10 @@ impl RuntimeThreadRole {
         match self {
             Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Inherit),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
-            Self::SearchIndex => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
+            // Initial index construction is part of making a newly published
+            // catalog fully usable. Give it both A9 cores until the P4
+            // coordinator can yield it to an actual foreground request.
+            Self::SearchIndex => RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline),
             Self::CatalogForeground | Self::LibraryWalkerForeground => {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             }

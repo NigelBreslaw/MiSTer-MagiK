@@ -1,4 +1,8 @@
 use super::*;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
 pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
@@ -78,6 +82,11 @@ enum CatalogJobState {
     Running(mpsc::Receiver<CatalogWorkerMessage>),
 }
 
+enum SearchIndexJobState {
+    Idle,
+    Running(mpsc::Receiver<CatalogWorkerMessage>),
+}
+
 enum MediaJobState {
     Idle,
     Running(MediaWorkerHandle),
@@ -86,6 +95,8 @@ enum MediaJobState {
 
 pub(super) struct LauncherScheduler {
     catalog: CatalogJobState,
+    search_index: SearchIndexJobState,
+    search_index_generation: Arc<AtomicUsize>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
@@ -94,6 +105,8 @@ impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
         Self {
             catalog: CatalogJobState::Idle,
+            search_index: SearchIndexJobState::Idle,
+            search_index_generation: Arc::new(AtomicUsize::new(0)),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -101,6 +114,61 @@ impl LauncherScheduler {
 
     pub(super) fn catalog_worker_running(&self) -> bool {
         matches!(self.catalog, CatalogJobState::Running(_))
+    }
+
+    pub(super) fn catalog_messages_running(&self) -> bool {
+        self.catalog_worker_running()
+            || matches!(self.search_index, SearchIndexJobState::Running(_))
+    }
+
+    /// This is entered by the catalog session state chart only after its
+    /// durable-save transition. Starting a new generation cancels any stale
+    /// index job at its next cooperative checkpoint.
+    pub(super) fn start_search_index(
+        &mut self,
+        job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
+        games: usize,
+        source: CatalogSource,
+    ) {
+        let generation = self.search_index_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let active_generation = Arc::clone(&self.search_index_generation);
+        let text_index_token = job.text_index_token();
+        let (tx, rx) = mpsc::channel();
+        self.search_index = SearchIndexJobState::Running(rx);
+        if std::thread::Builder::new()
+            .name("arcade-search-index".to_string())
+            .spawn(move || {
+                let lease = mister_magik_catalog::work_coordinator::background("search-index");
+                if tx
+                    .send(CatalogWorkerMessage::SearchIndexBuildStarted {
+                        text_index_token,
+                        games,
+                        source,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::SearchIndex,
+                );
+                let Some(timing) = job.build_with_timing_while(|| {
+                    lease.cooperate();
+                    active_generation.load(Ordering::Acquire) == generation
+                }) else {
+                    return;
+                };
+                let _ = tx.send(CatalogWorkerMessage::SearchIndexesReady {
+                    text_index_token,
+                    games,
+                    source,
+                    timing,
+                });
+            })
+            .is_err()
+        {
+            self.search_index = SearchIndexJobState::Idle;
+        }
     }
 
     pub(super) fn start_catalog_worker(
@@ -135,6 +203,22 @@ impl LauncherScheduler {
         }
         if disconnected {
             self.catalog = CatalogJobState::Idle;
+        }
+        let mut search_disconnected = false;
+        if let SearchIndexJobState::Running(rx) = &self.search_index {
+            while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
+                match rx.try_recv() {
+                    Ok(message) => out.push(message),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        search_disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if search_disconnected {
+            self.search_index = SearchIndexJobState::Idle;
         }
     }
 

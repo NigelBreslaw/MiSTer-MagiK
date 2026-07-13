@@ -17,8 +17,6 @@ fn send_ready_catalog(
     source: CatalogSource,
     durable_save_pending: bool,
 ) {
-    let games = catalog.len();
-    let text_index_job = catalog.text_index_build_job();
     let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
         catalog,
@@ -28,26 +26,10 @@ fn send_ready_catalog(
         durable_save_pending,
         publication_ack: Some(publication_tx),
     });
-    if publication_rx.recv().is_err() {
-        return;
-    }
-    let Some(text_index_job) = text_index_job else {
-        return;
-    };
-    let text_index_token = text_index_job.text_index_token();
-    let _ = tx.send(CatalogWorkerMessage::SearchIndexBuildStarted {
-        text_index_token,
-        games,
-        source,
-    });
-    apply_runtime_thread_policy(RuntimeThreadRole::SearchIndex);
-    let timing = text_index_job.build_with_timing();
-    let _ = tx.send(CatalogWorkerMessage::SearchIndexesReady {
-        text_index_token,
-        games,
-        source,
-        timing,
-    });
+    // The launcher session owns the next transition. For a fresh catalog it
+    // schedules indexing only after the durable Persisted event; the worker
+    // must therefore return immediately to its SQLite/sidecar save path.
+    let _ = publication_rx.recv();
 }
 
 pub(super) fn catalog_builder_lock_available() -> bool {
@@ -1292,7 +1274,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ready_catalog_is_delivered_before_background_search_index_events() {
+    fn ready_catalog_defers_search_index_to_the_launcher_session() {
         use mister_magik_catalog::arcade_catalog::{ArcadeGameEntry, GameSystemEntry};
         use std::sync::Arc;
 
@@ -1345,36 +1327,9 @@ mod tests {
             }
             _ => panic!("expected ready catalog"),
         };
-        let token = match rx.recv().expect("search index build started") {
-            CatalogWorkerMessage::SearchIndexBuildStarted {
-                text_index_token,
-                games,
-                source,
-            } => {
-                assert_eq!(games, 1);
-                assert_eq!(source, CatalogSource::NavigationProjection);
-                text_index_token
-            }
-            _ => panic!("expected search index build start after ready catalog"),
-        };
-        match rx.recv().expect("search indexes ready") {
-            CatalogWorkerMessage::SearchIndexesReady {
-                text_index_token,
-                timing,
-                ..
-            } => {
-                assert_eq!(text_index_token, token);
-                assert!(timing.built);
-            }
-            _ => panic!("expected search index completion"),
-        }
-        assert_eq!(delivered_catalog.text_index_token(), token);
-        assert!(delivered_catalog.text_indexes_ready());
-        worker.join().expect("background index worker");
-        assert_eq!(
-            delivered_catalog.search_game_indexes("arcade", "capcom"),
-            vec![0]
-        );
+        worker.join().expect("catalog worker");
+        assert!(rx.recv().is_err(), "worker must not start search indexing");
+        assert!(!delivered_catalog.text_indexes_ready());
     }
 
     #[test]

@@ -201,19 +201,33 @@ impl ArcadeTextIndexBuildJob {
     }
 
     pub fn build_with_timing(self) -> ArcadeTextIndexBuildTiming {
+        self.build_with_timing_while(|| true).unwrap_or_default()
+    }
+
+    /// Build deferred indexes while the caller still owns the runtime job.
+    ///
+    /// The predicate is sampled at bounded cooperative checkpoints.  A
+    /// disconnected launcher can therefore stop an obsolete generation rather
+    /// than continuing to consume an A9 after its result can no longer be
+    /// published.
+    pub fn build_with_timing_while<F>(self, keep_running: F) -> Option<ArcadeTextIndexBuildTiming>
+    where
+        F: FnMut() -> bool,
+    {
         if self.lazy_text_indexes.get().is_some() {
-            return ArcadeTextIndexBuildTiming::default();
+            return Some(ArcadeTextIndexBuildTiming::default());
         }
-        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(
+        let (indexes, mut timing) = build_arcade_text_indexes_with_timing_while(
             &self.games,
             &self.platform_kinds,
             TextIndexBuildPacing::Interactive,
-        );
+            keep_running,
+        )?;
         timing.built = self.lazy_text_indexes.set(indexes).is_ok();
         if timing.built {
-            timing
+            Some(timing)
         } else {
-            ArcadeTextIndexBuildTiming::default()
+            Some(ArcadeTextIndexBuildTiming::default())
         }
     }
 }
@@ -680,11 +694,13 @@ impl ArcadeCatalog {
         if was_ready {
             return ArcadeTextIndexBuildTiming::default();
         }
-        let (indexes, mut timing) = build_arcade_text_indexes_with_timing(
+        let (indexes, mut timing) = build_arcade_text_indexes_with_timing_while(
             &self.games,
             &self.platform_kinds,
             TextIndexBuildPacing::Unthrottled,
-        );
+            || true,
+        )
+        .expect("unthrottled text-index build cannot be cancelled");
         timing.built = self.lazy_text_indexes.set(indexes).is_ok();
         if !timing.built {
             ArcadeTextIndexBuildTiming::default()
@@ -1006,8 +1022,14 @@ fn build_arcade_text_indexes(
     games: &[ArcadeGameEntry],
     platform_kinds: &HashMap<String, PlatformKind>,
 ) -> ArcadeTextIndexes {
-    build_arcade_text_indexes_with_timing(games, platform_kinds, TextIndexBuildPacing::Unthrottled)
-        .0
+    build_arcade_text_indexes_with_timing_while(
+        games,
+        platform_kinds,
+        TextIndexBuildPacing::Unthrottled,
+        || true,
+    )
+    .expect("unthrottled text-index build cannot be cancelled")
+    .0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1017,45 +1039,70 @@ enum TextIndexBuildPacing {
 }
 
 impl TextIndexBuildPacing {
-    fn after_game(self, completed_games: usize) {
-        if self == Self::Interactive && completed_games.is_multiple_of(16) {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+    /// Yield only after a real elapsed-time budget. Fixed sleeps made the
+    /// indexer take a scheduler-dependent 8+ seconds on large catalogs.
+    fn cooperate<F>(&self, completed_games: usize, next_yield: &mut std::time::Instant, keep_running: &mut F) -> bool
+    where
+        F: FnMut() -> bool,
+    {
+        // Checking at 64 rows bounds cancellation latency without putting a
+        // clock call on every game.
+        if !completed_games.is_multiple_of(64) {
+            return true;
         }
+        if !keep_running() {
+            return false;
+        }
+        if self == &Self::Interactive && std::time::Instant::now() >= *next_yield {
+            std::thread::yield_now();
+            *next_yield = std::time::Instant::now() + std::time::Duration::from_millis(3);
+        }
+        true
     }
 }
 
-fn build_arcade_text_indexes_with_timing(
+fn build_arcade_text_indexes_with_timing_while<F>(
     games: &[ArcadeGameEntry],
     platform_kinds: &HashMap<String, PlatformKind>,
     pacing: TextIndexBuildPacing,
-) -> (ArcadeTextIndexes, ArcadeTextIndexBuildTiming) {
+    mut keep_running: F,
+) -> Option<(ArcadeTextIndexes, ArcadeTextIndexBuildTiming)>
+where
+    F: FnMut() -> bool,
+{
+    if !keep_running() {
+        return None;
+    }
     let total_t = std::time::Instant::now();
     let mut search_keys = Vec::with_capacity(games.len());
     let mut autocomplete = ArcadeAutocompleteIndex::default();
-    let search_t = std::time::Instant::now();
+    let mut next_yield = total_t + std::time::Duration::from_millis(3);
+    // Search keys and autocomplete use the same game fields. Keeping them in
+    // one traversal avoids a second 67k-row cache walk and preserves both
+    // existing result/ranking structures exactly.
     for (index, game) in games.iter().enumerate() {
         search_keys.push(ArcadeSearchKey::from_game(game));
-        pacing.after_game(index + 1);
-    }
-    let search_keys_us = search_t.elapsed().as_micros() as u64;
-    let autocomplete_t = std::time::Instant::now();
-    for (index, game) in games.iter().enumerate() {
         autocomplete.add_game(game, platform_kinds);
-        pacing.after_game(index + 1);
+        if !pacing.cooperate(index + 1, &mut next_yield, &mut keep_running) {
+            return None;
+        }
     }
-    let autocomplete_us = autocomplete_t.elapsed().as_micros() as u64;
-    (
+    let total_us = total_t.elapsed().as_micros() as u64;
+    Some((
         ArcadeTextIndexes {
             search_keys,
             autocomplete,
         },
         ArcadeTextIndexBuildTiming {
             built: false,
-            search_keys_us,
-            autocomplete_us,
-            total_us: total_t.elapsed().as_micros() as u64,
+            // Fused construction has no meaningful phase boundary. Retain the
+            // legacy fields for trace compatibility and attribute all work to
+            // the combined search-key phase.
+            search_keys_us: total_us,
+            autocomplete_us: 0,
+            total_us,
         },
-    )
+    ))
 }
 
 impl ArcadeSearchKey {
@@ -2155,6 +2202,23 @@ mod tests {
             .expect("autocomplete should reuse text indexes")
             as *const ArcadeTextIndexes;
         assert_eq!(built, reused);
+    }
+
+    #[test]
+    fn deferred_text_index_job_can_cancel_before_publishing_a_generation() {
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/media/fat/_Arcade"),
+            vec![game("Street Fighter II", "/games/sf2.mra", "", "arcade")],
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 1,
+            }],
+            Vec::new(),
+        );
+        let job = catalog.text_index_build_job().expect("deferred job");
+        assert!(job.build_with_timing_while(|| false).is_none());
+        assert!(!catalog.text_indexes_ready());
     }
 
     #[test]

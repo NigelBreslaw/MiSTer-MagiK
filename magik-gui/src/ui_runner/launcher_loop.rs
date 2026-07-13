@@ -1742,7 +1742,7 @@ pub(super) fn run_launcher_loop(
         if catalog_messages_need_polling(
             pending_catalog_ready.is_some(),
             catalog_session.refresh_done(),
-            scheduler.catalog_worker_running(),
+            scheduler.catalog_messages_running(),
         ) {
             scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
@@ -3879,6 +3879,17 @@ fn apply_catalog_session_effects(
                     lifecycle_effects,
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+            }
+            CatalogSessionEffect::StartSearchIndex { job, games, source } => {
+                print_startup_event(
+                    start,
+                    "arcade_search_index_scheduled",
+                    format!(
+                        "games={games} source={} after=library_db_saved",
+                        source.label()
+                    ),
+                );
+                scheduler.start_search_index(job, games, source);
             }
             CatalogSessionEffect::SearchIndexesReady {
                 text_index_token,
