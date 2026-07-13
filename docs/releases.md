@@ -75,19 +75,27 @@ The workflow is `.github/workflows/distribution.yml` and has only the
 Before dispatch:
 
 1. Merge all release changes to `main` and run `scripts/release-check-host.sh`.
-2. Run the full FPGA Vblank Latch workflow successfully for the exact `main`
-   commit being released, and confirm the automatic Kernel scanout workflow for
-   that commit succeeded. Publishing finds both runs automatically.
-3. Configure protected GitHub environments named `publish-beta` and
+2. When FPGA or scanout inputs changed, run the FPGA Vblank Latch workflow on
+   `main` and wait for the main Kernel scanout workflow (or dispatch it on
+   `main`). Pull-request builds are validation-only and do not create promotable
+   artifacts.
+3. Dispatch **Promote MiSTer MagiK Platform Bundle v0.1** from `main`. It finds
+   the newest successful main artifacts matching the current component
+   identities and creates the immutable prerelease tag
+   `platform-v0.1-<bundle-id>`.
+4. Configure protected GitHub environments named `publish-platform`, `publish-beta` and
    `publish-release`, with required reviewers. For the first publication,
-   configure and use `publish-beta` only.
-4. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
+   configure and use `publish-beta` only. Enable GitHub Release immutability
+   before the first platform promotion.
+5. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
 sure the branch is `main`, and select `beta`. This is the only release input.
-The workflow resolves the qualified FPGA build, scanout module, latest
-`Main_MiSTer/mister-magik`, and latest HBMAME tag automatically. It computes the
-version from the dispatched commit:
+The workflow resolves the immutable platform bundle whose FPGA and kernel input
+identities match the checked-out `main`, plus latest `Main_MiSTer/mister-magik`
+and HBMAME inputs. If the platform tag is absent, run fresh main component
+workflows and promote their bundle before retrying publication. It computes the
+application version from the dispatched commit:
 
 ```text
 build   = git rev-list --count <dispatched-commit>
@@ -115,3 +123,12 @@ The publish job rejects non-`main` dispatches and existing tags, verifies all
 candidate checksums again, creates a prerelease titled
 `MiSTer MagiK 0.2.<build> Beta`, and updates only the Beta feed. Release assets
 and version tags are immutable and are never overwritten.
+
+## Platform bundle recovery
+
+- A non-main FPGA, scanout, or promotion dispatch is intentionally rejected.
+- A missing platform tag means the component inputs changed without a successful
+  main promotion; do not use an Actions artifact from a PR or another branch.
+- An expired staging artifact requires a fresh component workflow on `main`.
+- A mismatched platform contract is a failed qualification and must be fixed
+  before promotion; a platform release is never patched in place.

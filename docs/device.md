@@ -167,6 +167,11 @@ The known-good activation sequence is:
    `platform-v1.manifest` last. `scripts/install-slint-boot.sh` refuses to arm
    MagiK boot unless the complete installed bundle verifies.
 
+   Release packages additionally retain `platform-bundle-v0.1.json`: it
+   identifies the immutable main-qualified FPGA/kernel promotion that supplied
+   the platform files. It is release provenance; `platform-v1.manifest` remains
+   the device activation integrity contract.
+
 For one-shot diagnosis only, load that RBF through Main's MagiK launch command
 path, not with an external loader and not with `load_core` while the launcher is
 active:
