@@ -57,7 +57,12 @@ impl SpringConfiguration {
 
     /// A smooth, critically damped spring with a 0.5-second response.
     pub fn smooth() -> Self {
-        Self::from_response(Duration::from_millis(500), 1.0)
+        Self::smooth_with_response(Duration::from_millis(500))
+    }
+
+    /// A smooth, critically damped spring retimed to the requested response.
+    pub fn smooth_with_response(response: Duration) -> Self {
+        Self::from_response(response, 1.0)
     }
 
     pub fn angular_frequency(self) -> f64 {
@@ -209,6 +214,13 @@ mod tests {
         assert!((spring.stiffness() - 157.913_670_417_429_73).abs() < 1e-9);
         assert!((spring.damping() - 25.132_741_228_718_345).abs() < 1e-9);
         assert!((spring.damping_ratio() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn smooth_response_can_be_retimed_without_changing_damping() {
+        let spring = SpringConfiguration::smooth_with_response(Duration::from_millis(200));
+        assert_eq!(spring.damping_ratio(), 1.0);
+        assert!((spring.angular_frequency() - 10.0 * std::f64::consts::PI).abs() < 1e-12);
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
 pub const DEFAULT_VIDEO_DIR: &str = "/media/fat/mister-magik/video-snaps/neogeo";
 const DEFAULT_VIDEO_MAX_W: u32 = 640;
 const DEFAULT_VIDEO_MAX_H: u32 = 480;
+pub const CANONICAL_VIDEO_WIDTH: u32 = 320;
+pub const CANONICAL_VIDEO_HEIGHT: u32 = 240;
 const AUDIO_RATE: u32 = 48_000;
 const OUTPUT_AUDIO_CHANNELS: usize = 2;
 const VIDEO_QUEUE_DEPTH: usize = 2;
@@ -111,6 +113,10 @@ impl VideoScaleMode {
             Self::Source => (src_w.min(max_w), src_h.min(max_h)),
         }
     }
+}
+
+pub fn video_starts_doubled_from_env() -> Result<bool, String> {
+    VideoScaleMode::from_env().map(|mode| mode == VideoScaleMode::Double)
 }
 
 pub struct VideoPlayer {
@@ -380,6 +386,17 @@ impl VideoPlayer {
             .decoder()
             .video()
             .map_err(|e| format!("open video decoder: {e}"))?;
+        if video_decoder.width() != CANONICAL_VIDEO_WIDTH
+            || video_decoder.height() != CANONICAL_VIDEO_HEIGHT
+        {
+            return Err(format!(
+                "{path}: expected canonical {}x{} video, got {}x{}",
+                CANONICAL_VIDEO_WIDTH,
+                CANONICAL_VIDEO_HEIGHT,
+                video_decoder.width(),
+                video_decoder.height()
+            ));
+        }
 
         let audio_context = codec::context::Context::from_parameters(audio_stream.parameters())
             .map_err(|e| format!("audio decoder parameters: {e}"))?;
@@ -400,7 +417,9 @@ impl VideoPlayer {
         )
         .map_err(|e| format!("create audio resampler: {e}"))?;
 
-        let scale_mode = VideoScaleMode::from_env()?;
+        // Presentation size is animated by the UI loop. Keep decode/conversion at the
+        // canonical source geometry so toggling never restarts FFmpeg or changes its load.
+        let scale_mode = VideoScaleMode::Source;
         let (output_w, output_h) = scale_mode.output_dimensions(
             video_decoder.width(),
             video_decoder.height(),

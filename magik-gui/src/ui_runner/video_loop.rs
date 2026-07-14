@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(mister_video_scene)]
+use crate::spring_animation::{SpringAnimation, SpringConfiguration};
+
 pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
     x0: 40,
     y0: 30,
@@ -8,12 +11,225 @@ pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
 };
 
 #[cfg(mister_video_scene)]
-pub(super) fn video_frame_rect(frame: &crate::video_player::VideoRgb565Frame) -> DirtyRect {
+const VIDEO_SOURCE_W: usize = crate::video_player::CANONICAL_VIDEO_WIDTH as usize;
+#[cfg(mister_video_scene)]
+const VIDEO_SOURCE_H: usize = crate::video_player::CANONICAL_VIDEO_HEIGHT as usize;
+#[cfg(mister_video_scene)]
+const VIDEO_SCALE_ANIMATION_RESPONSE: Duration = Duration::from_millis(200);
+
+#[cfg(mister_video_scene)]
+fn video_scale_spring_configuration() -> SpringConfiguration {
+    SpringConfiguration::smooth_with_response(VIDEO_SCALE_ANIMATION_RESPONSE)
+}
+
+#[cfg(mister_video_scene)]
+pub(super) fn video_frame_rect(width: usize, height: usize) -> DirtyRect {
     DirtyRect {
         x0: VIDEO_IMAGE_RECT.x0,
         y0: VIDEO_IMAGE_RECT.y0,
-        x1: (VIDEO_IMAGE_RECT.x0 + frame.width as usize).min(VIDEO_IMAGE_RECT.x1),
-        y1: (VIDEO_IMAGE_RECT.y0 + frame.height as usize).min(VIDEO_IMAGE_RECT.y1),
+        x1: (VIDEO_IMAGE_RECT.x0 + width).min(VIDEO_IMAGE_RECT.x1),
+        y1: (VIDEO_IMAGE_RECT.y0 + height).min(VIDEO_IMAGE_RECT.y1),
+    }
+}
+
+#[cfg(mister_video_scene)]
+#[derive(Clone, Copy, Debug)]
+struct VideoSizeAnimation {
+    spring: SpringAnimation,
+    updated_at: Duration,
+}
+
+#[cfg(mister_video_scene)]
+impl VideoSizeAnimation {
+    fn new(doubled: bool) -> Self {
+        let progress = if doubled { 1.0 } else { 0.0 };
+        Self {
+            spring: SpringAnimation::new(progress, video_scale_spring_configuration()),
+            updated_at: Duration::ZERO,
+        }
+    }
+
+    fn update(&mut self, now: Duration) -> bool {
+        let was_active = self.is_active();
+        let elapsed = now.saturating_sub(self.updated_at);
+        self.updated_at = now;
+        if was_active {
+            self.spring.advance(elapsed);
+        }
+        was_active && !self.is_active()
+    }
+
+    fn toggle(&mut self, now: Duration) {
+        self.update(now);
+        self.spring.set_target(if self.spring.target() >= 0.5 {
+            0.0
+        } else {
+            1.0
+        });
+    }
+
+    fn is_active(self) -> bool {
+        !self.spring.is_settled()
+    }
+
+    fn dimensions(self) -> (usize, usize) {
+        let progress = self.spring.value().clamp(0.0, 1.0);
+        let interpolated = (VIDEO_SOURCE_W as f64 * (1.0 + progress)).round() as usize;
+        let width = ((interpolated + 2) / 4) * 4;
+        let height = width * VIDEO_SOURCE_H / VIDEO_SOURCE_W;
+        (width.clamp(VIDEO_SOURCE_W, VIDEO_SOURCE_W * 2), height)
+    }
+
+    fn target_dimensions(self) -> (usize, usize) {
+        if self.spring.target() >= 0.5 {
+            (VIDEO_SOURCE_W * 2, VIDEO_SOURCE_H * 2)
+        } else {
+            (VIDEO_SOURCE_W, VIDEO_SOURCE_H)
+        }
+    }
+}
+
+#[cfg(mister_video_scene)]
+#[derive(Default)]
+struct VideoButtonEdge {
+    previous_a: bool,
+}
+
+#[cfg(mister_video_scene)]
+struct VideoAutoToggle {
+    interval: Option<Duration>,
+    next: Duration,
+}
+
+#[cfg(mister_video_scene)]
+impl VideoAutoToggle {
+    fn from_env() -> Self {
+        let interval = std::env::var("MISTER_VIDEO_AUTO_TOGGLE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|millis| *millis > 0)
+            .map(Duration::from_millis);
+        Self {
+            next: interval.unwrap_or(Duration::ZERO),
+            interval,
+        }
+    }
+
+    fn due(&mut self, now: Duration) -> bool {
+        let Some(interval) = self.interval else {
+            return false;
+        };
+        if now < self.next {
+            return false;
+        }
+        self.next += interval;
+        while self.next <= now {
+            self.next += interval;
+        }
+        true
+    }
+}
+
+#[cfg(mister_video_scene)]
+impl VideoButtonEdge {
+    fn a_pressed(&mut self, current_a: bool) -> bool {
+        let pressed = current_a && !self.previous_a;
+        self.previous_a = current_a;
+        pressed
+    }
+}
+
+#[cfg(mister_video_scene)]
+struct VideoRgb565Scaler {
+    pixels: Vec<u16>,
+    x_map: Vec<usize>,
+    y_map: Vec<usize>,
+    mapped_source_width: usize,
+    mapped_source_height: usize,
+    mapped_width: usize,
+    mapped_height: usize,
+}
+
+#[cfg(mister_video_scene)]
+impl Default for VideoRgb565Scaler {
+    fn default() -> Self {
+        Self {
+            pixels: Vec::with_capacity(VIDEO_SOURCE_W * 2 * VIDEO_SOURCE_H * 2),
+            x_map: Vec::with_capacity(VIDEO_SOURCE_W * 2),
+            y_map: Vec::with_capacity(VIDEO_SOURCE_H * 2),
+            mapped_source_width: 0,
+            mapped_source_height: 0,
+            mapped_width: 0,
+            mapped_height: 0,
+        }
+    }
+}
+
+#[cfg(mister_video_scene)]
+impl VideoRgb565Scaler {
+    fn scale<'a>(
+        &'a mut self,
+        frame: &'a crate::video_player::VideoRgb565Frame,
+        width: usize,
+        height: usize,
+    ) -> &'a [u16] {
+        let source_w = frame.width as usize;
+        let source_h = frame.height as usize;
+        debug_assert_eq!(frame.pixels.len(), source_w * source_h);
+        if width == source_w && height == source_h {
+            return &frame.pixels;
+        }
+
+        self.pixels.resize(width * height, 0);
+        if width == source_w * 2 && height == source_h * 2 {
+            for source_y in 0..source_h {
+                let source = &frame.pixels[source_y * source_w..(source_y + 1) * source_w];
+                let first_row = source_y * 2 * width;
+                let target = &mut self.pixels[first_row..first_row + width];
+                for (pair, pixel) in target.chunks_exact_mut(2).zip(source.iter().copied()) {
+                    pair.fill(pixel);
+                }
+                self.pixels
+                    .copy_within(first_row..first_row + width, first_row + width);
+            }
+            return &self.pixels;
+        }
+
+        if self.mapped_source_width != source_w
+            || self.mapped_source_height != source_h
+            || self.mapped_width != width
+            || self.mapped_height != height
+        {
+            self.x_map.resize(width, 0);
+            for (target_x, source_x) in self.x_map.iter_mut().enumerate() {
+                *source_x = target_x * source_w / width;
+            }
+            self.y_map.resize(height, 0);
+            for (target_y, source_y) in self.y_map.iter_mut().enumerate() {
+                *source_y = target_y * source_h / height;
+            }
+            self.mapped_source_width = source_w;
+            self.mapped_source_height = source_h;
+            self.mapped_width = width;
+            self.mapped_height = height;
+        }
+        let mut previous_source_y = None;
+        for target_y in 0..height {
+            let source_y = self.y_map[target_y];
+            let target_row = target_y * width;
+            if previous_source_y == Some(source_y) {
+                self.pixels
+                    .copy_within(target_row - width..target_row, target_row);
+            } else {
+                let source_row = source_y * source_w;
+                for target_x in 0..width {
+                    self.pixels[target_row + target_x] =
+                        frame.pixels[source_row + self.x_map[target_x]];
+                }
+            }
+            previous_source_y = Some(source_y);
+        }
+        &self.pixels
     }
 }
 
@@ -35,17 +251,18 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
 #[cfg(mister_video_scene)]
 fn present_video_frame_direct(
     disp: &mut MappedRgb565Framebuffer,
-    frame: &crate::video_player::VideoRgb565Frame,
+    pixels: &[u16],
+    stride: usize,
     rect: DirtyRect,
 ) {
-    let src = rgb565_words_as_pixels(&frame.pixels);
+    let src = rgb565_words_as_pixels(pixels);
     if let Err(e) = disp.present_rect_565_strided(
         rect.x0,
         rect.y0,
         rect.width(),
         rect.rows() as usize,
         src,
-        frame.width as usize,
+        stride,
         0,
         0,
     ) {
@@ -58,31 +275,82 @@ fn present_direct_video_frame(
     disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
     cached: &[Rgb565Pixel],
-    frame: &crate::video_player::VideoRgb565Frame,
+    pixels: &[u16],
+    width: usize,
+    height: usize,
     dirty: Option<DirtyRect>,
-    video_dirty_clip_ready: bool,
+    previous_video_rect: Option<DirtyRect>,
+    geometry_changed: bool,
 ) -> (u32, Option<DirtyRect>) {
-    let video_rect = video_frame_rect(frame);
+    let video_rect = video_frame_rect(width, height);
     let mut rows = 0u32;
     let mut copied_rect = None;
 
+    let mut restore = |background_dirty: DirtyRect| {
+        if let Some(copied) = copy_cached_rect_565(
+            disp,
+            CachedFrameView::new(cached, ui.render_w(), ui.render_h()),
+            background_dirty,
+        ) {
+            rows = rows.saturating_add(copied.rows());
+            copied_rect = Some(copied_rect.map_or(copied, |rect: DirtyRect| rect.union(copied)));
+        }
+    };
     if let Some(dirty) = dirty {
-        if !video_dirty_clip_ready || dirty.intersection(video_rect).is_none() {
-            if let Some(copied) = copy_cached_rect_565(
-                disp,
-                CachedFrameView::new(cached, ui.render_w(), ui.render_h()),
-                dirty,
-            ) {
-                rows = rows.saturating_add(copied.rows());
-                copied_rect = Some(copied);
-            }
+        restore(dirty);
+    }
+    if geometry_changed {
+        for exposed in previous_video_rect
+            .map(|previous| video_exposed_background_rects(previous, video_rect))
+            .unwrap_or([None, None])
+            .into_iter()
+            .flatten()
+        {
+            restore(exposed);
         }
     }
 
-    present_video_frame_direct(disp, frame, video_rect);
+    present_video_frame_direct(disp, pixels, width, video_rect);
     rows = rows.saturating_add(video_rect.rows());
     copied_rect = Some(copied_rect.map_or(video_rect, |rect: DirtyRect| rect.union(video_rect)));
     (rows, copied_rect)
+}
+
+#[cfg(mister_video_scene)]
+fn video_exposed_background_rects(
+    previous: DirtyRect,
+    current: DirtyRect,
+) -> [Option<DirtyRect>; 2] {
+    let right = (current.x1 < previous.x1).then_some(DirtyRect {
+        x0: current.x1,
+        y0: previous.y0,
+        x1: previous.x1,
+        y1: previous.y1,
+    });
+    let bottom = (current.y1 < previous.y1).then_some(DirtyRect {
+        x0: previous.x0,
+        y0: current.y1,
+        x1: current.x1.min(previous.x1),
+        y1: previous.y1,
+    });
+    [right, bottom]
+}
+
+#[cfg(all(test, mister_video_scene))]
+fn exposed_background_union(previous: DirtyRect, current: DirtyRect) -> Option<DirtyRect> {
+    video_exposed_background_rects(previous, current)
+        .into_iter()
+        .flatten()
+        .reduce(DirtyRect::union)
+}
+
+#[cfg(all(test, mister_video_scene))]
+fn growing_video_exposes_no_background(previous: DirtyRect, current: DirtyRect) -> bool {
+    if current.x1 >= previous.x1 && current.y1 >= previous.y1 {
+        exposed_background_union(previous, current).is_none()
+    } else {
+        false
+    }
 }
 
 #[cfg(mister_video_scene)]
@@ -99,6 +367,7 @@ pub(super) struct VideoFramePhases {
     audio_write_us: u64,
     audio_buffer_frames: u32,
     queue_depth: u32,
+    missed_deadlines: u32,
     audio_underrun: bool,
 }
 
@@ -116,6 +385,7 @@ pub(super) struct VideoWindowTotals {
     audio_resample_us: u128,
     audio_write_us: u128,
     audio_underruns: u64,
+    missed_deadlines: u64,
     render_us: u128,
     vsync_us: u128,
     copy_us: u128,
@@ -146,6 +416,7 @@ impl VideoWindowTotals {
         if phases.audio_underrun {
             self.audio_underruns += 1;
         }
+        self.missed_deadlines += u64::from(phases.missed_deadlines);
         self.render_us += sample.slint_render_us as u128;
         self.vsync_us += sample.vsync_us as u128;
         self.copy_us += sample.fb_present_us as u128;
@@ -177,27 +448,22 @@ impl VideoWindowTotals {
 }
 
 #[cfg(mister_video_scene)]
-pub(super) fn video_copy_rect(
-    dirty: DirtyRect,
-    video_dirty_clip_ready: bool,
-    frame_updated: bool,
-) -> DirtyRect {
-    if video_dirty_clip_ready && frame_updated {
-        dirty.intersection(VIDEO_IMAGE_RECT).unwrap_or(dirty)
-    } else {
-        dirty
-    }
-}
-
-#[cfg(mister_video_scene)]
 pub(super) fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MinimalSoftwareWindow>,
+    mut pad: PadPool,
     _app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,
 ) {
+    let initial_doubled = match crate::video_player::video_starts_doubled_from_env() {
+        Ok(doubled) => doubled,
+        Err(e) => {
+            crate::ui_errln!("video_playback: {e}");
+            std::process::exit(2);
+        }
+    };
     let paths = match crate::video_player::video_paths_from_env() {
         Ok(paths) => paths,
         Err(e) => {
@@ -233,7 +499,11 @@ pub(super) fn run_video_playback_loop(
     let mut profiler = FrameProfiler::from_env();
     let cpu = cpu_profile::start();
     let profile_on = profiler.enabled();
-    let frame_order = FrameOrder::from_env();
+    let frame_order = if std::env::var_os("MISTER_FRAME_ORDER").is_some() {
+        FrameOrder::from_env()
+    } else {
+        FrameOrder::VsyncThenRender
+    };
     let mut pacer = VsyncPacer::from_env();
 
     let mut fps_window_start = Instant::now();
@@ -241,7 +511,13 @@ pub(super) fn run_video_playback_loop(
     let mut video_totals = VideoWindowTotals::default();
     let mut audio_stats = AudioWindowStats::default();
     let mut video_cpu = VideoCpuSampler::new();
-    let mut video_dirty_clip_ready = false;
+    let mut size_animation = VideoSizeAnimation::new(initial_doubled);
+    let mut button_edge = VideoButtonEdge::default();
+    let mut auto_toggle = VideoAutoToggle::from_env();
+    let mut retained_frame: Option<crate::video_player::VideoRgb565Frame> = None;
+    let mut scaler = VideoRgb565Scaler::default();
+    let mut previous_video_rect: Option<DirtyRect> = None;
+    let mut playback_started = false;
 
     let label = if secs == 0 {
         "forever".to_string()
@@ -255,8 +531,9 @@ pub(super) fn run_video_playback_loop(
     );
     crate::ui_logln!("video_render_mode=direct-blit");
     crate::ui_logln!(
-        "video_controls queue_depth=2 scale={} profile={}",
+        "video_controls queue_depth=2 scale={} a=toggle-320x240-640x480 animation=spring-smooth response_ms={} profile={}",
         std::env::var("MISTER_VIDEO_SCALE").unwrap_or_else(|_| "source".into()),
+        VIDEO_SCALE_ANIMATION_RESPONSE.as_millis(),
         std::env::var("MISTER_VIDEO_PROFILE")
             .or_else(|_| std::env::var("MISTER_PROFILE"))
             .unwrap_or_else(|_| "off".into())
@@ -282,16 +559,45 @@ pub(super) fn run_video_playback_loop(
             video_queue_depth: phases.queue_depth,
             ..Default::default()
         };
-        let mut direct_frame: Option<crate::video_player::VideoRgb565Frame> = None;
+        let now = start.elapsed();
+        let _ = pad.poll();
+        let controller_toggle = button_edge.a_pressed(pad.state().btn_a);
+        let automatic_toggle = auto_toggle.due(now);
+        if controller_toggle || automatic_toggle {
+            size_animation.toggle(now);
+            let (width, height) = size_animation.dimensions();
+            let (target_width, target_height) = size_animation.target_dimensions();
+            crate::ui_logln!(
+                "video_size_transition trigger={} start={}x{} target={}x{} animation=spring-smooth response_ms={}",
+                if controller_toggle { "controller-a" } else { "automatic" },
+                width,
+                height,
+                target_width,
+                target_height,
+                VIDEO_SCALE_ANIMATION_RESPONSE.as_millis()
+            );
+        }
+        if size_animation.update(now) {
+            let (width, height) = size_animation.dimensions();
+            crate::ui_logln!("video_size_transition complete={}x{}", width, height);
+        }
+        let (presentation_width, presentation_height) = size_animation.dimensions();
+        let presentation_rect = video_frame_rect(presentation_width, presentation_height);
+        let geometry_changed = previous_video_rect != Some(presentation_rect);
+        video_profile.video_present_width = presentation_width as u32;
+        video_profile.video_present_height = presentation_height as u32;
+        video_profile.video_size_animating = size_animation.is_active();
 
         match frame_order {
             FrameOrder::RenderThenVsync => {
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
+                    let playback_was_started = playback_started;
                     let recv_t0 = Instant::now();
                     match frame_worker.try_recv() {
                         Ok(Some(frame)) => {
+                            playback_started = true;
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                             let crate::video_player::PlaybackFrame {
                                 frame,
@@ -323,7 +629,9 @@ pub(super) fn run_video_playback_loop(
                                 audio_codec: metrics.audio_codec,
                                 ..Default::default()
                             };
-                            direct_frame = Some(frame);
+                            if let Some(previous) = retained_frame.replace(frame) {
+                                frame_worker.recycle_pixels(previous.pixels);
+                            }
                             if !enqueue_audio_write(
                                 &audio_writer,
                                 &frame_worker,
@@ -339,16 +647,25 @@ pub(super) fn run_video_playback_loop(
                         }
                         Ok(None) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
+                            if playback_was_started {
+                                phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
+                            }
                         }
                         Err(e) => {
                             crate::ui_errln!("video_playback: {e}");
                             break;
                         }
                     }
-                    next_video_at += frame_interval;
-                    while next_video_at < now {
+                    if playback_started && !playback_was_started {
+                        next_video_at = now + frame_interval;
+                    } else if playback_started {
                         next_video_at += frame_interval;
+                        while next_video_at < now {
+                            next_video_at += frame_interval;
+                            phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
+                        }
                     }
+                    video_profile.video_missed_deadlines = phases.missed_deadlines;
                 }
                 let t1 = Instant::now();
                 window.draw_if_needed(|renderer| {
@@ -359,19 +676,30 @@ pub(super) fn run_video_playback_loop(
                 let pace = pacer.wait();
                 let t3 = Instant::now();
                 let mut copied_rect = None;
-                let rows = if let Some(frame) = direct_frame.as_ref() {
+                let should_present_video = retained_frame.is_some()
+                    && (phases.frame_updated || geometry_changed || this_rect.is_some());
+                let rows = if should_present_video {
+                    let frame = retained_frame.as_ref().expect("checked above");
+                    let scale_started = Instant::now();
+                    let pixels = scaler.scale(frame, presentation_width, presentation_height);
+                    phases.video_scale_us = phases
+                        .video_scale_us
+                        .saturating_add(scale_started.elapsed().as_micros() as u64);
                     let (rows, rect) = present_direct_video_frame(
                         disp,
                         ui,
                         &cached,
-                        frame,
+                        pixels,
+                        presentation_width,
+                        presentation_height,
                         this_rect,
-                        video_dirty_clip_ready,
+                        previous_video_rect,
+                        geometry_changed,
                     );
                     copied_rect = rect;
+                    previous_video_rect = Some(presentation_rect);
                     rows
                 } else if let Some(rect) = this_rect {
-                    let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
                     let copied = copy_cached_rect_565(
                         disp,
                         CachedFrameView::new(&cached, ui.render_w(), ui.render_h()),
@@ -382,12 +710,11 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
-                if let Some(frame) = direct_frame.take() {
-                    frame_worker.recycle_pixels(frame.pixels);
-                }
-                if rows > 0 {
-                    video_dirty_clip_ready = true;
-                }
+                video_profile.video_scale_us = phases.video_scale_us;
+                video_profile.video_present_width = presentation_width as u32;
+                video_profile.video_present_height = presentation_height as u32;
+                video_profile.video_size_animating = size_animation.is_active();
+                video_profile.video_missed_deadlines = phases.missed_deadlines;
                 let t4 = Instant::now();
                 let sample = FrameSample {
                     prepare_us: 0,
@@ -424,9 +751,11 @@ pub(super) fn run_video_playback_loop(
                 update_slint_animations(animation_clock);
                 let now = start.elapsed();
                 if now >= next_video_at {
+                    let playback_was_started = playback_started;
                     let recv_t0 = Instant::now();
                     match frame_worker.try_recv() {
                         Ok(Some(frame)) => {
+                            playback_started = true;
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
                             let crate::video_player::PlaybackFrame {
                                 frame,
@@ -458,7 +787,9 @@ pub(super) fn run_video_playback_loop(
                                 audio_codec: metrics.audio_codec,
                                 ..Default::default()
                             };
-                            direct_frame = Some(frame);
+                            if let Some(previous) = retained_frame.replace(frame) {
+                                frame_worker.recycle_pixels(previous.pixels);
+                            }
                             if !enqueue_audio_write(
                                 &audio_writer,
                                 &frame_worker,
@@ -474,16 +805,25 @@ pub(super) fn run_video_playback_loop(
                         }
                         Ok(None) => {
                             phases.recv_us = recv_t0.elapsed().as_micros() as u64;
+                            if playback_was_started {
+                                phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
+                            }
                         }
                         Err(e) => {
                             crate::ui_errln!("video_playback: {e}");
                             break;
                         }
                     }
-                    next_video_at += frame_interval;
-                    while next_video_at < now {
+                    if playback_started && !playback_was_started {
+                        next_video_at = now + frame_interval;
+                    } else if playback_started {
                         next_video_at += frame_interval;
+                        while next_video_at < now {
+                            next_video_at += frame_interval;
+                            phases.missed_deadlines = phases.missed_deadlines.saturating_add(1);
+                        }
                     }
+                    video_profile.video_missed_deadlines = phases.missed_deadlines;
                 }
                 let t2 = Instant::now();
                 window.draw_if_needed(|renderer| {
@@ -492,19 +832,30 @@ pub(super) fn run_video_playback_loop(
                 });
                 let t3 = Instant::now();
                 let mut copied_rect = None;
-                let rows = if let Some(frame) = direct_frame.as_ref() {
+                let should_present_video = retained_frame.is_some()
+                    && (phases.frame_updated || geometry_changed || this_rect.is_some());
+                let rows = if should_present_video {
+                    let frame = retained_frame.as_ref().expect("checked above");
+                    let scale_started = Instant::now();
+                    let pixels = scaler.scale(frame, presentation_width, presentation_height);
+                    phases.video_scale_us = phases
+                        .video_scale_us
+                        .saturating_add(scale_started.elapsed().as_micros() as u64);
                     let (rows, rect) = present_direct_video_frame(
                         disp,
                         ui,
                         &cached,
-                        frame,
+                        pixels,
+                        presentation_width,
+                        presentation_height,
                         this_rect,
-                        video_dirty_clip_ready,
+                        previous_video_rect,
+                        geometry_changed,
                     );
                     copied_rect = rect;
+                    previous_video_rect = Some(presentation_rect);
                     rows
                 } else if let Some(rect) = this_rect {
-                    let rect = video_copy_rect(rect, video_dirty_clip_ready, phases.frame_updated);
                     let copied = copy_cached_rect_565(
                         disp,
                         CachedFrameView::new(&cached, ui.render_w(), ui.render_h()),
@@ -515,12 +866,11 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
-                if let Some(frame) = direct_frame.take() {
-                    frame_worker.recycle_pixels(frame.pixels);
-                }
-                if rows > 0 {
-                    video_dirty_clip_ready = true;
-                }
+                video_profile.video_scale_us = phases.video_scale_us;
+                video_profile.video_present_width = presentation_width as u32;
+                video_profile.video_present_height = presentation_height as u32;
+                video_profile.video_size_animating = size_animation.is_active();
+                video_profile.video_missed_deadlines = phases.missed_deadlines;
                 let t4 = Instant::now();
                 let sample = FrameSample {
                     prepare_us: 0,
@@ -555,6 +905,9 @@ pub(super) fn run_video_playback_loop(
         frames += 1;
     }
 
+    if let Some(frame) = retained_frame.take() {
+        frame_worker.recycle_pixels(frame.pixels);
+    }
     finish_audio_writer(audio_writer, &frame_worker, &mut audio_stats);
     let elapsed = start.elapsed().as_secs_f64();
     crate::ui_logln!(
@@ -853,9 +1206,10 @@ pub(super) fn record_video_sample(
     if fps_window_start.elapsed().as_millis() >= 1000 {
         let video_nn = totals.video_frames.max(1);
         crate::ui_logln!(
-            "  fps ~ {}  | video-frames {} recv {}us video-decode {}us/frame video-scale {}us/frame image-update {}us/frame blit {}us/frame slint-render {}us vsync-wait {}us fb-present {}us ({} logical rows avg, {} px avg) audio-decode {}us/frame audio-resample {}us/frame audio-write {}us/frame audio {}/{}f underruns {} loops {}",
+            "  fps ~ {}  | video-frames {} missed-deadlines {} recv {}us video-decode {}us/frame video-scale {}us/frame image-update {}us/frame blit {}us/frame slint-render {}us vsync-wait {}us fb-present {}us ({} logical rows avg, {} px avg) audio-decode {}us/frame audio-resample {}us/frame audio-write {}us/frame audio {}/{}f underruns {} loops {}",
             *fps_frames,
             totals.video_frames,
+            totals.missed_deadlines,
             VideoWindowTotals::avg_per_frame(totals.recv_us, *fps_frames),
             VideoWindowTotals::avg_per_video_frame(totals.video_decode_us, video_nn),
             VideoWindowTotals::avg_per_video_frame(totals.video_scale_us, video_nn),
@@ -1019,4 +1373,134 @@ fn read_stat_ticks(path: impl AsRef<std::path::Path>) -> Option<u64> {
     let utime = fields.get(11)?.parse::<u64>().ok()?;
     let stime = fields.get(12)?.parse::<u64>().ok()?;
     Some(utime + stime)
+}
+
+#[cfg(all(test, mister_video_scene))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_animation_uses_a_200ms_smooth_spring_response() {
+        let mut animation = VideoSizeAnimation::new(false);
+        animation.toggle(Duration::ZERO);
+
+        assert!(!animation.update(Duration::from_millis(100)));
+        let halfway = animation.dimensions();
+        assert!(halfway.0 > 320 && halfway.0 < 640);
+        assert_eq!(halfway.0 * 3, halfway.1 * 4);
+        assert!(animation.is_active());
+
+        assert!(!animation.update(Duration::from_millis(200)));
+        assert!(animation.dimensions().0 >= 632);
+        assert_eq!(
+            animation.spring.configuration().damping_ratio(),
+            SpringConfiguration::smooth().damping_ratio()
+        );
+        assert!(animation.update(Duration::from_millis(400)));
+        assert_eq!(animation.dimensions(), (640, 480));
+        assert!(!animation.is_active());
+    }
+
+    #[test]
+    fn reversing_mid_animation_keeps_current_size_and_spring_velocity() {
+        let mut animation = VideoSizeAnimation::new(false);
+        animation.toggle(Duration::ZERO);
+        animation.update(Duration::from_millis(100));
+        let midpoint = animation.dimensions();
+        let velocity = animation.spring.velocity();
+
+        animation.toggle(Duration::from_millis(100));
+        assert_eq!(animation.dimensions(), midpoint);
+        assert_eq!(animation.spring.velocity(), velocity);
+        assert_eq!(animation.target_dimensions(), (320, 240));
+        assert!(animation.update(Duration::from_millis(500)));
+        assert_eq!(animation.dimensions(), (320, 240));
+    }
+
+    #[test]
+    fn a_button_is_rising_edge_triggered() {
+        let mut edge = VideoButtonEdge::default();
+        assert!(!edge.a_pressed(false));
+        assert!(edge.a_pressed(true));
+        assert!(!edge.a_pressed(true));
+        assert!(!edge.a_pressed(false));
+        assert!(edge.a_pressed(true));
+    }
+
+    #[test]
+    fn automatic_toggle_fires_at_each_configured_interval() {
+        let mut toggle = VideoAutoToggle {
+            interval: Some(Duration::from_millis(500)),
+            next: Duration::from_millis(500),
+        };
+        assert!(!toggle.due(Duration::from_millis(499)));
+        assert!(toggle.due(Duration::from_millis(500)));
+        assert!(!toggle.due(Duration::from_millis(999)));
+        assert!(toggle.due(Duration::from_millis(1_100)));
+        assert_eq!(toggle.next, Duration::from_millis(1_500));
+    }
+
+    #[test]
+    fn scaler_uses_nearest_neighbour_for_intermediate_and_exact_2x_sizes() {
+        let frame = crate::video_player::VideoRgb565Frame {
+            pixels: vec![1, 2, 3, 4],
+            width: 2,
+            height: 2,
+        };
+        let mut scaler = VideoRgb565Scaler::default();
+
+        assert_eq!(scaler.scale(&frame, 3, 3), &[1, 1, 2, 1, 1, 2, 3, 3, 4]);
+        assert_eq!(
+            scaler.scale(&frame, 4, 4),
+            &[1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
+        );
+    }
+
+    #[test]
+    fn scaler_reuses_its_output_allocation() {
+        let frame = crate::video_player::VideoRgb565Frame {
+            pixels: vec![7; 4],
+            width: 2,
+            height: 2,
+        };
+        let mut scaler = VideoRgb565Scaler::default();
+        assert!(scaler.pixels.capacity() >= VIDEO_SOURCE_W * 2 * VIDEO_SOURCE_H * 2);
+        assert!(scaler.x_map.capacity() >= VIDEO_SOURCE_W * 2);
+        assert!(scaler.y_map.capacity() >= VIDEO_SOURCE_H * 2);
+        scaler.scale(&frame, 4, 4);
+        let allocation = scaler.pixels.as_ptr();
+        let x_mapping = scaler.x_map.as_ptr();
+        let y_mapping = scaler.y_map.as_ptr();
+        scaler.scale(&frame, 3, 3);
+        assert_eq!(scaler.pixels.as_ptr(), allocation);
+        assert_eq!(scaler.x_map.as_ptr(), x_mapping);
+        assert_eq!(scaler.y_map.as_ptr(), y_mapping);
+    }
+
+    #[test]
+    fn shrinking_restores_only_exposed_background_bands() {
+        let old = video_frame_rect(640, 480);
+        let new = video_frame_rect(320, 240);
+        let [right, bottom] = video_exposed_background_rects(old, new);
+        assert_eq!(
+            right,
+            Some(DirtyRect {
+                x0: 360,
+                y0: 30,
+                x1: 680,
+                y1: 510,
+            })
+        );
+        assert_eq!(
+            bottom,
+            Some(DirtyRect {
+                x0: 40,
+                y0: 270,
+                x1: 360,
+                y1: 510,
+            })
+        );
+        assert_eq!(exposed_background_union(old, new), Some(old));
+        assert!(growing_video_exposes_no_background(new, old));
+    }
 }

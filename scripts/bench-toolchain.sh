@@ -23,6 +23,7 @@ BENCH_SCENES=(launcher)
 VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-cortex-a9}"
 VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
 VIDEO_PATH_REMOTE=""
+VIDEO_AUTO_TOGGLE_MS=""
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -66,6 +67,7 @@ usage() {
   echo "         --launcher-scenario idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
   echo "         --video-scale source|2x  --video-profile summary|full|trace"
+  echo "         --video-path-remote PATH  --video-auto-toggle-ms N"
   echo "         --ui-scope launcher|arcade|all (default: launcher)"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -103,6 +105,8 @@ while [[ $# -gt 0 ]]; do
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
     --video-scale) VIDEO_SCALE="${2:?}"; shift 2 ;;
     --video-profile) VIDEO_PROFILE="${2:?}"; shift 2 ;;
+    --video-path-remote) VIDEO_PATH_REMOTE="${2:?}"; shift 2 ;;
+    --video-auto-toggle-ms) VIDEO_AUTO_TOGGLE_MS="${2:?}"; shift 2 ;;
     --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
@@ -140,6 +144,10 @@ case "$VIDEO_PROFILE" in
   summary|full|trace) ;;
   *) echo "Unknown --video-profile: $VIDEO_PROFILE" >&2; exit 1 ;;
 esac
+if [[ -n "$VIDEO_AUTO_TOGGLE_MS" ]] && ! [[ "$VIDEO_AUTO_TOGGLE_MS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --video-auto-toggle-ms: $VIDEO_AUTO_TOGGLE_MS (expected a positive integer)" >&2
+  exit 1
+fi
 case "$UI_SCOPE" in
   all|launcher|arcade) ;;
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
@@ -315,6 +323,7 @@ function number_after(line, key, rest) {
   sub(/[^0-9].*/, "", rest)
   return rest + 0
 }
+
 /fps ~ / && /fallback=/ {
   count++
   hits[count] = number_after($0, "vsync hits=")
@@ -342,6 +351,30 @@ END {
   if (errors_total < 0) errors_total = 0
   print fallback_total + 0, errors_total + 0
 }
+' "$ui_log"
+}
+
+parse_video_acceptance_counters() {
+  local ui_log="$1"
+  awk '
+function number_after(line, key, rest) {
+  rest = line
+  if (index(rest, key) == 0) return 0
+  rest = substr(rest, index(rest, key) + length(key))
+  sub(/^[^0-9]*/, "", rest)
+  sub(/[^0-9].*/, "", rest)
+  return rest + 0
+}
+/^video-updates=/ {
+  missed = number_after($0, "video-missed-deadlines=")
+  underruns = number_after($0, "audio-underrun-frames=")
+}
+/^vsync: hits=/ {
+  timeouts = number_after($0, "timeouts=")
+  fallback = number_after($0, "fallback_frames=")
+  errors = number_after($0, "errors=")
+}
+END { print missed + 0, underruns + 0, timeouts + 0, fallback + 0, errors + 0 }
 ' "$ui_log"
 }
 
@@ -548,6 +581,15 @@ EOF
     return 1
   }
 
+  cat >"$tmp_dir/video-acceptance.log" <<'EOF'
+video-updates=900 video-missed-deadlines=2 audio-underrun-frames=3
+vsync: hits=901 timeouts=4 fallback_frames=5 errors=6 max_miss_streak=1 inferred_hz=60.01
+EOF
+  [[ "$(parse_video_acceptance_counters "$tmp_dir/video-acceptance.log")" == "2 3 4 5 6" ]] || {
+    echo "self-test: video acceptance counters were not parsed" >&2
+    return 1
+  }
+
   TSV="$old_tsv"
   HOST_NOTES="$old_host_notes"
   LABEL="$old_label"
@@ -609,12 +651,17 @@ set -e
 # Visible bench path: Slint owns SPI + HDMI at 60 Hz.
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep $SETTLE_SECS
+if pidof mister-magik-catalog-builder >/dev/null 2>&1; then
+  echo 'catalog builder is still running; refusing to benchmark competing work' >&2
+  exit 72
+fi
 if [ '$scene' = 'video_playback' ]; then
-  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_PATH='$VIDEO_PATH_REMOTE' MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_PROFILE_FILE=/tmp/mister-video-profile.tsv $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_PATH='$VIDEO_PATH_REMOTE' MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_AUTO_TOGGLE_MS='$VIDEO_AUTO_TOGGLE_MS' MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_PROFILE_FILE=/tmp/mister-video-profile.tsv $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 else
   MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 fi
 UI_PID=\$!
+CATALOG_COMPETITION=0
 CPU_SUM=0
 CPU_MAX=0
 CPU_N=0
@@ -624,6 +671,11 @@ jiffies() { awk '{print \$14+\$15}' /proc/\$1/stat 2>/dev/null || echo 0; }
 rss_pages() { awk '{print \$24}' /proc/\$1/stat 2>/dev/null || echo 0; }
 i=0
 while [ \$i -lt $secs ]; do
+  if pidof mister-magik-catalog-builder >/dev/null 2>&1; then
+    CATALOG_COMPETITION=1
+    kill -9 \$UI_PID 2>/dev/null || true
+    break
+  fi
   if kill -0 \$UI_PID 2>/dev/null; then
     t1=\$(jiffies \$UI_PID)
     sleep 1
@@ -653,6 +705,8 @@ echo ___BENCH_RSS___
 echo \$RSS
 echo ___BENCH_UI_RC___
 echo \$UI_RC
+echo ___BENCH_CATALOG_COMPETITION___
+echo \$CATALOG_COMPETITION
 echo ___BENCH_UI_LOG___
 cat /tmp/bench-ui.log
 " >"$ui_full" 2>&1 || true
@@ -667,11 +721,12 @@ cat /tmp/bench-ui.log
     mister get /tmp/mister-video-profile.tsv "$BENCH_DIR/${LABEL}-${scene}-frames.tsv" || true
   fi
 
-  local cpu_mean cpu_max rss_kb ui_rc parse_stats
+  local cpu_mean cpu_max rss_kb ui_rc catalog_competition parse_stats
   cpu_mean="$(sed -n '/___BENCH_CPU_MEAN___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   cpu_max="$(sed -n '/___BENCH_CPU_MAX___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   rss_kb="$(sed -n '/___BENCH_RSS___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   ui_rc="$(sed -n '/___BENCH_UI_RC___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
+  catalog_competition="$(sed -n '/___BENCH_CATALOG_COMPETITION___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
   if [[ -n "$rss_kb" && "$rss_kb" =~ ^[0-9]+$ && "$rss_kb" -lt 100000 ]]; then
     rss_kb=$((rss_kb * 4))
   fi
@@ -698,6 +753,28 @@ cat /tmp/bench-ui.log
   if [[ -n "$vsync_stats" ]]; then
     read -r vsync_fallback vsync_errors <<<"$vsync_stats"
     notes="${notes:+$notes; }vsync_fallback=${vsync_fallback:-0}; vsync_errors=${vsync_errors:-0}"
+  fi
+
+  if [[ "${catalog_competition:-0}" != "0" ]]; then
+    timing_ok="no"
+    notes="${notes:+$notes; }catalog_competition=${catalog_competition}"
+    scene_failures="${scene_failures:+$scene_failures,}catalog-competition"
+  fi
+
+  if [[ "$scene" == "video_playback" ]]; then
+    local video_missed video_underruns video_timeouts video_fallback video_errors video_acceptance
+    if ! grep -q '^video-updates=' "$ui_log" || ! grep -q '^vsync: hits=' "$ui_log"; then
+      timing_ok="no"
+      scene_failures="${scene_failures:+$scene_failures,}video-acceptance-missing"
+    else
+      video_acceptance="$(parse_video_acceptance_counters "$ui_log")"
+      read -r video_missed video_underruns video_timeouts video_fallback video_errors <<<"$video_acceptance"
+      notes="${notes:+$notes; }video_missed_deadlines=${video_missed}; audio_underruns=${video_underruns}; video_vsync_timeouts=${video_timeouts}"
+      if [[ "$video_missed" != "0" || "$video_underruns" != "0" || "$video_timeouts" != "0" || "$video_fallback" != "0" || "$video_errors" != "0" ]]; then
+        timing_ok="no"
+        scene_failures="${scene_failures:+$scene_failures,}video-acceptance=${video_missed}/${video_underruns}/${video_timeouts}/${video_fallback}/${video_errors}"
+      fi
+    fi
   fi
 
   if [[ "${ui_rc:-1}" == "0" ]] || grep -q '^done:' "$ui_log"; then

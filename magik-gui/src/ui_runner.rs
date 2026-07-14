@@ -340,10 +340,11 @@ pub fn run_ui(f: &mut Fpga) {
     match scene.as_str() {
         #[cfg(mister_video_scene)]
         "video_playback" => {
+            let pad = open_pads();
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_video_playback_loop(secs, &ui, &mut disp, &window, app, &animation_clock);
+                run_video_playback_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
             });
         }
         "controller_test" => {

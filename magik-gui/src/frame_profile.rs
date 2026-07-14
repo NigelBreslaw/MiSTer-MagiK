@@ -50,6 +50,10 @@ pub struct VideoFrameProfile {
     pub video_file: String,
     pub video_width: u32,
     pub video_height: u32,
+    pub video_present_width: u32,
+    pub video_present_height: u32,
+    pub video_size_animating: bool,
+    pub video_missed_deadlines: u32,
     pub video_codec: String,
     pub audio_codec: String,
 }
@@ -198,6 +202,7 @@ pub struct FrameProfiler {
     window_audio_resample: u128,
     window_audio_write: u128,
     window_video_updates: u64,
+    window_video_missed_deadlines: u64,
     window_audio_underruns: u64,
 }
 
@@ -261,6 +266,7 @@ impl FrameProfiler {
             window_audio_resample: 0,
             window_audio_write: 0,
             window_video_updates: 0,
+            window_video_missed_deadlines: 0,
             window_audio_underruns: 0,
         }
     }
@@ -334,6 +340,7 @@ impl FrameProfiler {
         if sample.video.video_frame_updated {
             self.window_video_updates += 1;
         }
+        self.window_video_missed_deadlines += u64::from(sample.video.video_missed_deadlines);
         if sample.video.audio_underrun {
             self.window_audio_underruns += 1;
         }
@@ -386,8 +393,9 @@ impl FrameProfiler {
             > 0
         {
             crate::ui_logln!(
-                "  video-profile | updates {} decode {}us scale {}us recv {}us image {}us blit {}us audio-decode {}us audio-resample {}us audio-write {}us underruns {}",
+                "  video-profile | updates {} missed-deadlines {} decode {}us scale {}us recv {}us image {}us blit {}us audio-decode {}us audio-resample {}us audio-write {}us underruns {}",
                 self.window_video_updates,
+                self.window_video_missed_deadlines,
                 self.window_video_decode / nn,
                 self.window_video_scale / nn,
                 self.window_video_recv / nn,
@@ -422,6 +430,7 @@ impl FrameProfiler {
         self.window_audio_resample = 0;
         self.window_audio_write = 0;
         self.window_video_updates = 0;
+        self.window_video_missed_deadlines = 0;
         self.window_audio_underruns = 0;
         self.window_start = Instant::now();
     }
@@ -464,7 +473,7 @@ impl FrameProfiler {
         let mut f = File::create(path)?;
         writeln!(
             f,
-            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvideo_decode_us\tvideo_scale_us\tvideo_recv_us\tvideo_image_us\tvideo_blit_us\taudio_decode_us\taudio_resample_us\taudio_write_us\tvideo_frame_updated\tvideo_queue_depth\taudio_buffer_frames\taudio_underrun\tvideo_file\tvideo_width\tvideo_height\tvideo_codec\taudio_codec\tdominant"
+            "frame\tprepare_us\tanim_us\tslint_render_us\tcustom_draw_us\tvsync_us\tfb_present_us\tcached_present_us\tarcade_list_present_us\tphases_us\twall_us\trows\tpresent_x0\tpresent_y0\tpresent_x1\tpresent_y1\tpresent_pixels\tpresent_bytes\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvideo_decode_us\tvideo_scale_us\tvideo_recv_us\tvideo_image_us\tvideo_blit_us\taudio_decode_us\taudio_resample_us\taudio_write_us\tvideo_frame_updated\tvideo_queue_depth\taudio_buffer_frames\taudio_underrun\tvideo_file\tvideo_width\tvideo_height\tvideo_present_width\tvideo_present_height\tvideo_size_animating\tvideo_missed_deadlines\tvideo_codec\taudio_codec\tdominant"
         )?;
         for (i, s) in self.frames.iter().enumerate() {
             let (x0, y0, x1, y1, pixels) = s
@@ -473,7 +482,7 @@ impl FrameProfiler {
                 .unwrap_or((0, 0, 0, 0, 0));
             writeln!(
                 f,
-                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 s.prepare_us,
                 s.anim_us,
                 s.slint_render_us,
@@ -509,6 +518,10 @@ impl FrameProfiler {
                 tsv_escape(&s.video.video_file),
                 s.video.video_width,
                 s.video.video_height,
+                s.video.video_present_width,
+                s.video.video_present_height,
+                s.video.video_size_animating as u8,
+                s.video.video_missed_deadlines,
                 tsv_escape(&s.video.video_codec),
                 tsv_escape(&s.video.audio_codec),
                 s.dominant_phase()
@@ -738,7 +751,14 @@ impl FrameProfiler {
             .iter()
             .filter(|s| s.video.audio_underrun)
             .count();
-        crate::ui_logln!("video-updates={updates} audio-underrun-frames={underruns}");
+        let missed_deadlines: u64 = self
+            .frames
+            .iter()
+            .map(|s| u64::from(s.video.video_missed_deadlines))
+            .sum();
+        crate::ui_logln!(
+            "video-updates={updates} video-missed-deadlines={missed_deadlines} audio-underrun-frames={underruns}"
+        );
     }
 
     fn print_present_bandwidth(&self) {
