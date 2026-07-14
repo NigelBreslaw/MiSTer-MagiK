@@ -225,7 +225,7 @@ pub fn system_definitions() -> Result<&'static [SystemDefinition], String> {
 }
 
 pub fn platform_kind_for_system(system_id: &str) -> PlatformKind {
-    if matches!(system_id, "menu:arcade" | "menu:snk-arcade") {
+    if system_id == "menu:arcade" {
         return PlatformKind::Arcade;
     }
     system_definition(system_id)

@@ -24,7 +24,6 @@ pub const HOME_TILE_GAP: i32 = 16;
 /// Home list width inside the 18px left/right padding of the 960px UI.
 pub const HOME_LIST_VISIBLE_W: i32 = 924;
 pub const MENU_ARCADE_SYSTEM_ID: &str = "menu:arcade";
-pub const MENU_SNK_ARCADE_SYSTEM_ID: &str = "menu:snk-arcade";
 
 #[derive(Clone, Debug)]
 pub struct ArcadeGameEntry {
@@ -757,9 +756,9 @@ enum CatalogIndexMode {
 fn game_collection_ids<'a>(
     game: &'a ArcadeGameEntry,
     _platform_kinds: &HashMap<String, PlatformKind>,
-) -> [Option<&'a str>; 3] {
+) -> [Option<&'a str>; 2] {
     let system_id = game.system_id.as_ref();
-    let mut ids = [Some(system_id), None, None];
+    let mut ids = [Some(system_id), None];
     let belongs_to_arcade =
         crate::catalog_classify::system_definition(system_id).is_some_and(|definition| {
             definition.section == crate::catalog_classify::LauncherSection::Arcade
@@ -767,16 +766,7 @@ fn game_collection_ids<'a>(
     if belongs_to_arcade {
         ids[1] = Some(MENU_ARCADE_SYSTEM_ID);
     }
-    if belongs_to_arcade && manufacturer_has_snk_token(&game.manufacturer) {
-        ids[2] = Some(MENU_SNK_ARCADE_SYSTEM_ID);
-    }
     ids
-}
-
-pub fn manufacturer_has_snk_token(manufacturer: &str) -> bool {
-    search_match_key(manufacturer)
-        .split_whitespace()
-        .any(|token| token == "snk")
 }
 
 #[derive(Clone, Debug)]
@@ -2452,16 +2442,7 @@ mod tests {
     }
 
     #[test]
-    fn snk_manufacturer_match_requires_a_whole_token() {
-        assert!(manufacturer_has_snk_token("SNK"));
-        assert!(manufacturer_has_snk_token("SNK (Rock-Ola license)"));
-        assert!(manufacturer_has_snk_token("Sega / SNK"));
-        assert!(!manufacturer_has_snk_token("SNKJ"));
-        assert!(!manufacturer_has_snk_token("snkplaymore"));
-    }
-
-    #[test]
-    fn virtual_arcade_collections_share_prebuilt_catalog_indexes() {
+    fn virtual_arcade_collection_uses_prebuilt_catalog_indexes() {
         let mut snk_arcade = game(
             "Metal Slug Arcade",
             "/media/fat/_Arcade/Metal Slug Arcade.mra",
@@ -2550,7 +2531,6 @@ mod tests {
             catalog.system_game_view(MENU_ARCADE_SYSTEM_ID).len(),
             "the Arcade number is exactly its visible, parent-collapsed projection"
         );
-        assert_eq!(catalog.system_game_count(MENU_SNK_ARCADE_SYSTEM_ID), 2);
         assert_eq!(
             catalog
                 .system_game_view(MENU_ARCADE_SYSTEM_ID)
@@ -2560,23 +2540,8 @@ mod tests {
             vec!["Metal Slug Arcade", "Cyberbots", "P.O.W."]
         );
         assert_eq!(
-            catalog
-                .system_game_view(MENU_SNK_ARCADE_SYSTEM_ID)
-                .iter()
-                .map(|game| game.title.as_ref())
-                .collect::<Vec<_>>(),
-            vec!["Metal Slug Arcade", "P.O.W."]
-        );
-        assert_eq!(
             catalog.filtered_game_count(MENU_ARCADE_SYSTEM_ID, &ArcadeFilter::Decade(1990)),
             2
-        );
-        assert_eq!(
-            catalog.filtered_game_count(
-                MENU_SNK_ARCADE_SYSTEM_ID,
-                &ArcadeFilter::Category("Run and Gun".to_string())
-            ),
-            1
         );
         assert_eq!(catalog.system_preview_game_count(MENU_ARCADE_SYSTEM_ID), 3);
         assert_eq!(
@@ -2588,10 +2553,5 @@ mod tests {
             .words
             .get("cyberbots")
             .is_some_and(|stats| stats.system_scores.contains_key(MENU_ARCADE_SYSTEM_ID)));
-        assert!(catalog
-            .autocomplete
-            .words
-            .get("metal")
-            .is_some_and(|stats| stats.system_scores.contains_key(MENU_SNK_ARCADE_SYSTEM_ID)));
     }
 }

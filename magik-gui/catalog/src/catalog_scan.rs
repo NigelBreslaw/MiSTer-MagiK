@@ -2713,6 +2713,16 @@ mod tests {
         )
         .expect("write alt mra");
         std::fs::write(
+            arcade_dir.join("NeoGeo Pocket.mra"),
+            "<misterromdescription><name>NeoGeo Pocket</name><setname>ngp</setname><rbf>jtngp</rbf></misterromdescription>",
+        )
+        .expect("write system launcher mra");
+        std::fs::write(
+            alternatives_dir.join("NeoGeo Pocket Color.mra"),
+            "<misterromdescription><name>NeoGeo Pocket Color</name><setname>ngpc</setname><rbf>jtngp</rbf></misterromdescription>",
+        )
+        .expect("write alternative system launcher mra");
+        std::fs::write(
             media_dir.join("Fake Screenshot.mra"),
             "<misterromdescription><name>Fake Screenshot</name></misterromdescription>",
         )
@@ -2734,6 +2744,8 @@ mod tests {
         assert!(titles.contains(&"Real Game"));
         assert!(titles.contains(&"Alt Game"));
         assert!(!titles.contains(&"Fake Screenshot"));
+        assert!(!titles.contains(&"NeoGeo Pocket"));
+        assert!(!titles.contains(&"NeoGeo Pocket Color"));
         let _ = std::fs::remove_dir_all(root);
     }
 
