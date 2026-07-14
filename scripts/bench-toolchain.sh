@@ -22,7 +22,6 @@ MISTER="$HERE/scripts/mister"
 BENCH_SCENES=(launcher)
 VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-cortex-a9}"
 VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
-VIDEO_FILE="${MISTER_VIDEO_FILE:-}"
 VIDEO_PATH_REMOTE=""
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
@@ -66,7 +65,7 @@ usage() {
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
-  echo "         --video-scale source|2x  --video-profile summary|full|trace  --video-file FILE"
+  echo "         --video-scale source|2x  --video-profile summary|full|trace"
   echo "         --ui-scope launcher|arcade|all (default: launcher)"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -104,7 +103,6 @@ while [[ $# -gt 0 ]]; do
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
     --video-scale) VIDEO_SCALE="${2:?}"; shift 2 ;;
     --video-profile) VIDEO_PROFILE="${2:?}"; shift 2 ;;
-    --video-file) VIDEO_FILE="${2:?}"; shift 2 ;;
     --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
@@ -802,20 +800,12 @@ echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BY
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   mister_suspend_launcher
   trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
-  if [[ -n "$VIDEO_FILE" ]]; then
-    [[ -f "$VIDEO_FILE" ]] || { echo "Video file not found: $VIDEO_FILE" >&2; exit 1; }
-    VIDEO_PATH_REMOTE="$VIDEO_REMOTE_DIR/$(basename "$VIDEO_FILE")"
-  fi
   if [[ "$SKIP_DEPLOY" -eq 0 ]]; then
     echo "==> Deploy $BIN"
     mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
     mister put "$BIN" "$REMOTE"
     mister run "chmod +x $REMOTE"
-    if [[ "$INCLUDE_VIDEO" -eq 1 && -n "$VIDEO_FILE" ]]; then
-      echo "==> Sync single video $VIDEO_FILE -> $VIDEO_PATH_REMOTE"
-      mister run "mkdir -p '$VIDEO_REMOTE_DIR'; rm -f '$VIDEO_REMOTE_DIR'/*.mp4 '$VIDEO_REMOTE_DIR'/*.MP4"
-      mister put "$VIDEO_FILE" "$VIDEO_PATH_REMOTE"
-    elif [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+    if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
       echo "==> Sync video snaps $VIDEO_SRC_DIR -> $VIDEO_REMOTE_DIR"
       "$HERE/scripts/sync-video-snaps.sh" "$VIDEO_SRC_DIR" "$VIDEO_REMOTE_DIR"
     fi

@@ -51,9 +51,9 @@ scripts/sync-video-snaps.sh
 ```
 
 The encoder script creates ignored assets under
-`build/video-snaps-neogeo-cortex-a9` by default. Each source clip is halved in
-both dimensions with Lanczos, encoded as H.264 Constrained Baseline, and keeps
-AAC audio copied from the source.
+`build/video-snaps-neogeo-cortex-a9` by default. Each source clip must be
+`640x480`, is halved to `320x240` with Lanczos, encoded as H.264 Constrained
+Baseline, and keeps AAC audio copied from the source.
 
 Validation requires:
 
