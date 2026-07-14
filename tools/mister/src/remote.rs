@@ -40,10 +40,70 @@ pub(crate) fn connect(timeout_secs: u64) -> Result<Session> {
     Ok(sess)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExecOutput {
     pub(crate) rc: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub(crate) fn remote_subcommand(binary: &str, subcommand: &str, args: &[String]) -> String {
+    let mut command = format!("{binary} {subcommand}");
+    for arg in args {
+        command.push(' ');
+        command.push_str(&shell_quote(arg));
+    }
+    command
+}
+
+pub(crate) fn remove_files_command(paths: &[&str]) -> String {
+    format!(
+        "rm -f {}",
+        paths
+            .iter()
+            .map(|path| shell_quote(path))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+pub(crate) fn create_dir_command(path: &str) -> String {
+    format!("mkdir -p {}", shell_quote(path))
+}
+
+pub(crate) fn launcher_restart_command(main_status: &str, slint_status: &str) -> String {
+    format!(
+        "{}; if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
+        remove_files_command(&[main_status, slint_status])
+    )
+}
+
+pub(crate) fn exec_failure_message(context: &str, output: &ExecOutput) -> Option<String> {
+    if output.rc == 0 {
+        return None;
+    }
+    let stderr = output.stderr.trim();
+    let stdout = output.stdout.trim();
+    let detail = match (stderr.is_empty(), stdout.is_empty()) {
+        (false, false) => format!("stderr={stderr}; stdout={stdout}"),
+        (false, true) => format!("stderr={stderr}"),
+        (true, false) => format!("stdout={stdout}"),
+        (true, true) => "no output".to_string(),
+    };
+    Some(format!("{context} failed with rc={}: {detail}", output.rc))
+}
+
+pub(crate) fn library_sql_command_unavailable(output: &ExecOutput) -> bool {
+    output.rc != 0
+        && output
+            .stdout
+            .lines()
+            .chain(output.stderr.lines())
+            .any(|line| line.contains("unknown command 'library-sql'"))
 }
 
 pub(crate) fn exec(sess: &Session, command: &str, merge_stderr: bool) -> Result<ExecOutput> {
@@ -257,16 +317,20 @@ pub(crate) fn tcp_probe_label_port(port: u16, timeout: Duration) -> String {
 
     match TcpStream::connect_timeout(&addr, timeout) {
         Ok(_) => "ok".to_string(),
-        Err(err) => match err.raw_os_error() {
-            Some(64) => "hostdown".to_string(),
-            Some(65) => "noroute".to_string(),
-            Some(60) => "timeout".to_string(),
-            Some(61) => "refused".to_string(),
-            Some(code) => format!("os{code}"),
-            None if err.kind() == io::ErrorKind::TimedOut => "timeout".to_string(),
-            None if err.kind() == io::ErrorKind::ConnectionRefused => "refused".to_string(),
-            None => format!("{:?}", err.kind()).to_lowercase(),
-        },
+        Err(err) => io_error_label(&err),
+    }
+}
+
+fn io_error_label(err: &io::Error) -> String {
+    match err.raw_os_error() {
+        Some(64) => "hostdown".to_string(),
+        Some(65) => "noroute".to_string(),
+        Some(60) => "timeout".to_string(),
+        Some(61) => "refused".to_string(),
+        Some(code) => format!("os{code}"),
+        None if err.kind() == io::ErrorKind::TimedOut => "timeout".to_string(),
+        None if err.kind() == io::ErrorKind::ConnectionRefused => "refused".to_string(),
+        None => format!("{:?}", err.kind()).to_lowercase(),
     }
 }
 
@@ -284,24 +348,30 @@ pub(crate) fn host_wait_diagnostics() -> String {
 
 fn command_summary(program: &str, args: &[&str], contains: Option<&str>) -> String {
     match Command::new(program).args(args).output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut lines = stdout
-                .lines()
-                .chain(stderr.lines())
-                .filter(|line| contains.map(|needle| line.contains(needle)).unwrap_or(true))
-                .map(str::trim)
-                .filter(|line| !line.is_empty());
-            let text = lines.next().unwrap_or("no matching output");
-            format!(
-                "rc={} {}",
-                output.status.code().unwrap_or(-1),
-                text.replace('\t', " ")
-            )
-        }
+        Ok(output) => summarize_command_output(
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+            contains,
+        ),
         Err(err) => format!("error={}", err),
     }
+}
+
+fn summarize_command_output(
+    code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    contains: Option<&str>,
+) -> String {
+    let text = stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter(|line| contains.map(|needle| line.contains(needle)).unwrap_or(true))
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no matching output");
+    format!("rc={} {}", code.unwrap_or(-1), text.replace('\t', " "))
 }
 
 pub(crate) fn port_open(timeout: Duration) -> bool {
@@ -312,4 +382,125 @@ pub(crate) fn port_open(timeout: Duration) -> bool {
         return false;
     };
     TcpStream::connect_timeout(&addr, timeout).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_command_builders_quote_every_dynamic_value() {
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote("it's here"), "'it'\"'\"'s here'");
+        assert_eq!(
+            remote_subcommand(
+                "/media/fat/mister-magik/mister-magik-fb",
+                "library-sql",
+                &["SELECT *".into(), "name='Pac-Man'".into()]
+            ),
+            "/media/fat/mister-magik/mister-magik-fb library-sql 'SELECT *' 'name='\"'\"'Pac-Man'\"'\"''"
+        );
+        assert_eq!(
+            remove_files_command(&["/tmp/a path", "/tmp/it's"]),
+            "rm -f '/tmp/a path' '/tmp/it'\"'\"'s'"
+        );
+        assert_eq!(create_dir_command("/tmp/a path"), "mkdir -p '/tmp/a path'");
+    }
+
+    #[test]
+    fn launcher_restart_command_keeps_fifo_safety_contract() {
+        let command = launcher_restart_command("/tmp/main status", "/tmp/slint's status");
+        assert!(command.starts_with("rm -f '/tmp/main status' '/tmp/slint'\"'\"'s status';"));
+        assert!(command.contains("[ -p /dev/MiSTer_cmd ]"));
+        assert!(command.contains("pidof MiSTer_MagiK"));
+        assert!(command.contains("mister_magik_restart_launcher\\n"));
+        assert!(command.contains("exit 12"));
+    }
+
+    #[test]
+    fn exec_failure_prefers_stderr_but_preserves_stdout_context() {
+        let success = ExecOutput {
+            rc: 0,
+            stdout: "ok".into(),
+            stderr: String::new(),
+        };
+        assert_eq!(exec_failure_message("query", &success), None);
+
+        for (stdout, stderr, expected) in [
+            ("", "", "query failed with rc=7: no output"),
+            ("out", "", "query failed with rc=7: stdout=out"),
+            ("", "err", "query failed with rc=7: stderr=err"),
+            (
+                "out",
+                "err",
+                "query failed with rc=7: stderr=err; stdout=out",
+            ),
+        ] {
+            let output = ExecOutput {
+                rc: 7,
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+            };
+            assert_eq!(
+                exec_failure_message("query", &output).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn library_sql_fallback_requires_nonzero_unknown_command_response() {
+        let mut output = ExecOutput {
+            rc: 1,
+            stdout: String::new(),
+            stderr: "unknown command 'library-sql'".into(),
+        };
+        assert!(library_sql_command_unavailable(&output));
+        output.rc = 0;
+        assert!(!library_sql_command_unavailable(&output));
+        output.rc = 1;
+        output.stderr = "database is corrupt".into();
+        assert!(!library_sql_command_unavailable(&output));
+    }
+
+    #[test]
+    fn io_errors_map_to_stable_probe_labels_without_networking() {
+        for (error, expected) in [
+            (io::Error::from_raw_os_error(64), "hostdown"),
+            (io::Error::from_raw_os_error(65), "noroute"),
+            (io::Error::from_raw_os_error(60), "timeout"),
+            (io::Error::from_raw_os_error(61), "refused"),
+            (io::Error::from_raw_os_error(99), "os99"),
+            (
+                io::Error::new(io::ErrorKind::TimedOut, "fixture"),
+                "timeout",
+            ),
+            (
+                io::Error::new(io::ErrorKind::ConnectionRefused, "fixture"),
+                "refused",
+            ),
+            (
+                io::Error::new(io::ErrorKind::BrokenPipe, "fixture"),
+                "brokenpipe",
+            ),
+        ] {
+            assert_eq!(io_error_label(&error), expected);
+        }
+    }
+
+    #[test]
+    fn command_summary_handles_filters_tabs_empty_output_and_missing_status() {
+        assert_eq!(
+            summarize_command_output(Some(2), "skip\nmatch\tvalue\n", "err", Some("match")),
+            "rc=2 match value"
+        );
+        assert_eq!(
+            summarize_command_output(Some(0), "", "", None),
+            "rc=0 no matching output"
+        );
+        assert_eq!(
+            summarize_command_output(None, "", "failure", None),
+            "rc=-1 failure"
+        );
+    }
 }

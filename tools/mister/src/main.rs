@@ -22,8 +22,10 @@ use agent_client::{
     verify_agent_deploy_result, AGENT_PORT,
 };
 use remote::{
-    connect, connect_timed, exec, get, host, host_wait_diagnostics, port_open, put, put_bytes,
-    put_dir, sftp_write_profile, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
+    connect, connect_timed, create_dir_command, exec, exec_failure_message, get, host,
+    host_wait_diagnostics, launcher_restart_command, library_sql_command_unavailable, port_open,
+    put, put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
+    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
 };
 
 #[cfg(test)]
@@ -2396,9 +2398,9 @@ fn shell_export_quote(value: &str) -> String {
 
 fn prepare_launcher_env(sess: &Session, options: &LauncherRestartOptions) -> Result<String> {
     if options.clear_env {
-        let out = exec(sess, &format!("rm -f {}", sh(&options.remote_env)), true)?;
-        if out.rc != 0 {
-            return Err(format!("clear launcher env failed: {}", out.stdout.trim()).into());
+        let out = exec(sess, &remove_files_command(&[&options.remote_env]), true)?;
+        if let Some(error) = exec_failure_message("clear launcher env", &out) {
+            return Err(error.into());
         }
         return Ok("cleared".to_string());
     }
@@ -2406,9 +2408,9 @@ fn prepare_launcher_env(sess: &Session, options: &LauncherRestartOptions) -> Res
         return Ok("unchanged".to_string());
     }
     let parent = remote_parent_dir(&options.remote_env)?;
-    let out = exec(sess, &format!("mkdir -p {}", sh(parent)), true)?;
-    if out.rc != 0 {
-        return Err(format!("create launcher env parent failed: {}", out.stdout.trim()).into());
+    let out = exec(sess, &create_dir_command(parent), true)?;
+    if let Some(error) = exec_failure_message("create launcher env parent", &out) {
+        return Err(error.into());
     }
     put_bytes(
         sess,
@@ -2433,20 +2435,12 @@ fn remote_parent_dir(remote: &str) -> Result<&str> {
 }
 
 fn issue_launcher_restart(sess: &Session) -> Result<()> {
-    let out = exec(
-        sess,
-        &format!(
-            "rm -f {} {}; if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
-            sh(MAIN_STATUS_REMOTE),
-            sh(SLINT_STATUS_REMOTE)
-        ),
-        true,
-    )?;
-    if out.rc == 0 {
-        Ok(())
-    } else {
-        Err(format!("launcher restart command failed: {}", out.stdout.trim()).into())
+    let command = launcher_restart_command(MAIN_STATUS_REMOTE, SLINT_STATUS_REMOTE);
+    let out = exec(sess, &command, true)?;
+    if let Some(error) = exec_failure_message("launcher restart command", &out) {
+        return Err(error.into());
     }
+    Ok(())
 }
 
 fn wait_launcher_ready(
@@ -3475,16 +3469,15 @@ fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
 fn run_library_db_query(sess: &Session, args: &[String], connect_us: u128) -> Result<()> {
     let total_t = Instant::now();
     let query_args = library_db_query_args(args);
-    let quoted_args = query_args
-        .iter()
-        .map(|arg| sh(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command = format!("/media/fat/mister-magik/mister-magik-fb library-sql {quoted_args}");
+    let command = remote_subcommand(
+        "/media/fat/mister-magik/mister-magik-fb",
+        "library-sql",
+        &query_args,
+    );
     let exec_t = Instant::now();
     let out = exec(sess, &command, true)?;
     let exec_us = exec_t.elapsed().as_micros();
-    if out.rc != 0 && library_sql_command_unavailable(&out.stdout, &out.stderr) {
+    if library_sql_command_unavailable(&out) {
         eprintln!(
             "scripts/mister db: remote library-sql unavailable; using SFTP local-query fallback"
         );
@@ -3510,8 +3503,8 @@ fn run_library_db_query(sess: &Session, args: &[String], connect_us: u128) -> Re
     if !out.stderr.trim().is_empty() {
         eprint!("[stderr] {}", out.stderr);
     }
-    if out.rc != 0 {
-        return Err(format!("library-sql failed with rc={}", out.rc).into());
+    if let Some(error) = exec_failure_message("library-sql", &out) {
+        return Err(error.into());
     }
     if query_args
         .iter()
@@ -3534,15 +3527,18 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
                 .into(),
         );
     }
-    let quoted_args = args.iter().map(|arg| sh(arg)).collect::<Vec<_>>().join(" ");
-    let command = format!("/media/fat/mister-magik/mister-magik-fb catalog-inspect {quoted_args}");
+    let command = remote_subcommand(
+        "/media/fat/mister-magik/mister-magik-fb",
+        "catalog-inspect",
+        args,
+    );
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
         eprint!("[stderr] {}", out.stderr);
     }
-    if out.rc != 0 {
-        return Err(format!("catalog inspect failed with rc={}", out.rc).into());
+    if let Some(error) = exec_failure_message("catalog inspect", &out) {
+        return Err(error.into());
     }
     Ok(())
 }
@@ -3565,11 +3561,6 @@ fn library_db_query_args(args: &[String]) -> Vec<String> {
     } else {
         args.to_vec()
     }
-}
-
-fn library_sql_command_unavailable(stdout: &str, stderr: &str) -> bool {
-    let text = format!("{stdout}\n{stderr}");
-    text.contains("unknown command 'library-sql'")
 }
 
 fn run_library_db_query_via_sftp(sess: &Session, args: &[String]) -> Result<String> {
@@ -4870,10 +4861,6 @@ fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option
         }
         _ => None,
     }
-}
-
-fn sh(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
 fn option_value(args: &[String], name: &str) -> Option<String> {
