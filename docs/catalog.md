@@ -734,11 +734,13 @@ Compare average and p95 `total_ms` and `copy_ms`. The progress save path is the
 only supported screenshot-pack publish path; record performance evidence in
 `history/toolchain-bench/results-screenshot-save.tsv`.
 
-MAME and HBMAME identity metadata are fixed SQLite artifacts. Build them
-offline with `scripts/mister mame-metadata-build`, include them in the release
-package with `scripts/package-distribution.sh`, and let the catalog stamp track
-their file signatures. Runtime deploy no longer builds or copies those metadata
-databases; changing them is a catalog/media artifact publish step.
+MAME and HBMAME identity metadata are fixed SQLite artifacts. The manual,
+main-only game-database workflow publishes both in sequential
+`game-databases-vN` releases and rebuilds only upstreams whose tag or revision
+changed. `scripts/package-distribution.sh` verifies the selected numbered
+manifest before including both databases, and the catalog stamp tracks their
+file signatures. Runtime deploy and ordinary application publication never
+build those metadata databases.
 
 ## SQLite Build And Publish
 

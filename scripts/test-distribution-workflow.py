@@ -23,9 +23,11 @@ required = (
     "contents: write",
     "gh release create",
     "mister-magik-$RELEASE_CHANNEL-db.json.zip",
-    "platform-component-id.py component fpga",
-    "platform-component-id.py component kernel",
-    "platform-v0.1-$bundle_id",
+    "select-published-release.py platform",
+    "select-published-release.py game-databases",
+    "game-databases-bundle.py verify",
+    "game-databases-manifest.json",
+    "--game-databases-manifest",
     "platform-bundle-v0.1.json",
     "MAIN_REF: mister-magik",
 )
@@ -41,6 +43,15 @@ for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_
 
 assert "gh run list --workflow fpga-vblank-latch.yml" not in text
 assert "gh run list --workflow kernel-scanout.yml" not in text
+for forbidden in (
+    "platform-component-id.py",
+    "repos/Robbbert/hbmame",
+    "repos/mamedev/mame",
+    "mame-metadata-build",
+    "Build HBMAME",
+    "MAME_LISTXML_URL",
+):
+    assert forbidden not in text, f"distribution still builds support bundle content: {forbidden}"
 assert 'unzip -q -o "$archive" -d build/qualified' in text
 
 print("distribution workflow contract ok")

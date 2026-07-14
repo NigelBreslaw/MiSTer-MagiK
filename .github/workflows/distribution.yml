@@ -24,8 +24,6 @@ env:
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
   MAIN_REF: mister-magik
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
-  MAME_REF: mame0288
-  MAME_LISTXML_URL: https://github.com/mamedev/mame/releases/download/mame0288/mame0288lx.zip
 
 jobs:
   release-metadata:
@@ -63,142 +61,10 @@ jobs:
           echo "artifact_name=mister-magik-$version-candidate" >> "$GITHUB_OUTPUT"
           echo "timestamp=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
-  resolve-hbmame:
-    name: Resolve HBMAME ref
-    runs-on: ubuntu-24.04
-    needs: release-metadata
-    timeout-minutes: 10
-    outputs:
-      ref: ${{ steps.hbmame-ref.outputs.ref }}
-      sha: ${{ steps.hbmame-ref.outputs.sha }}
-      cache-key: ${{ steps.hbmame-ref.outputs.cache_key }}
-
-    steps:
-      - name: Resolve latest HBMAME tag
-        id: hbmame-ref
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          ref="$(gh api repos/Robbbert/hbmame/tags --jq 'map(select(.name | test("^tag[0-9]+$")))[0].name')"
-          if [ -z "$ref" ] || [ "$ref" = "null" ]; then
-            echo "Unable to resolve latest Robbbert/hbmame tagNNNNN tag" >&2
-            exit 1
-          fi
-          sha="$(gh api "repos/Robbbert/hbmame/commits/$ref" --jq .sha)"
-          if [ -z "$sha" ] || [ "$sha" = "null" ]; then
-            echo "Unable to resolve Robbbert/hbmame commit for ref: $ref" >&2
-            exit 1
-          fi
-          cache_key="${ref}-${sha}"
-          echo "Using Robbbert/hbmame ref $ref at $sha"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "cache_key=$cache_key" >> "$GITHUB_OUTPUT"
-
-  hbmame-db-cache:
-    name: Check HBMAME metadata cache
-    runs-on: ubuntu-24.04
-    needs: resolve-hbmame
-    timeout-minutes: 10
-    outputs:
-      cache-restored: ${{ steps.hbmame-db-cache.outputs.cache-matched-key != '' }}
-
-    steps:
-      - name: Checkout app repo
-        uses: actions/checkout@v7
-
-      - name: Check HBMAME metadata database cache
-        id: hbmame-db-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: build/hbmame.sqlite3
-          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
-          restore-keys: |
-            hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-
-          lookup-only: true
-
-  hbmame-listxml:
-    name: Build HBMAME listxml
-    runs-on: windows-latest
-    needs:
-      - resolve-hbmame
-      - hbmame-db-cache
-    if: needs.hbmame-db-cache.outputs.cache-restored != 'true'
-    timeout-minutes: 60
-    outputs:
-      cache-key: ${{ steps.hbmame-outputs.outputs.cache_key }}
-
-    steps:
-      - name: Checkout app repo
-        uses: actions/checkout@v7
-
-      - name: Expose HBMAME cache key
-        id: hbmame-outputs
-        run: echo "cache_key=${{ needs.resolve-hbmame.outputs.cache-key }}" >> "$GITHUB_OUTPUT"
-
-      - name: Cache HBMAME listxml
-        id: hbmame-listxml-cache
-        uses: actions/cache@v6
-        with:
-          path: build/hbmame-listxml.xml
-          key: hbmame-listxml-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('.github/workflows/distribution.yml') }}
-
-      - name: Checkout HBMAME
-        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v7
-        with:
-          repository: Robbbert/hbmame
-          ref: ${{ needs.resolve-hbmame.outputs.ref }}
-          path: hbmame
-
-      - name: Install HBMAME build tools
-        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        uses: msys2/setup-msys2@v2
-        with:
-          install: git make mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld mingw-w64-x86_64-libc++
-
-      - name: Build HBMAME
-        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        shell: msys2 {0}
-        working-directory: hbmame
-        env:
-          MINGW64: "/mingw64"
-          PTR64: "1"
-        run: make -j2 PTR64=1 TARGET=hbmame DEPRECATED=0 SYMBOLS=0 NO_SYMBOLS=1 NOWERROR=1
-
-      - name: Generate HBMAME listxml
-        if: steps.hbmame-listxml-cache.outputs.cache-hit != 'true'
-        shell: msys2 {0}
-        working-directory: hbmame
-        run: |
-          mkdir -p ../build
-          ./hbmame -listxml > ../build/hbmame-listxml.xml
-
-      - name: Upload HBMAME listxml
-        uses: actions/upload-artifact@v7
-        with:
-          name: hbmame-listxml
-          path: build/hbmame-listxml.xml
-          if-no-files-found: error
-
   distribution:
     name: Build distribution ZIP
     runs-on: ubuntu-24.04
-    needs:
-      - release-metadata
-      - resolve-hbmame
-      - hbmame-db-cache
-      - hbmame-listxml
-    if: |
-      always() &&
-      needs.release-metadata.result == 'success' &&
-      needs.resolve-hbmame.result == 'success' &&
-      needs.hbmame-db-cache.result == 'success' &&
-      (
-        needs.hbmame-db-cache.outputs.cache-restored == 'true' ||
-        needs.hbmame-listxml.result == 'success'
-      )
+    needs: release-metadata
     timeout-minutes: 120
 
     steps:
@@ -225,27 +91,40 @@ jobs:
           scripts/test-magik-state.sh
           scripts/check-magik-patch-surface.sh
 
-      - name: Download immutable main-qualified platform bundle
+      - name: Download current published platform and game databases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          fpga_id="$(python3 scripts/platform-component-id.py component fpga)"
-          kernel_id="$(python3 scripts/platform-component-id.py component kernel)"
-          bundle_id="$(python3 scripts/platform-component-id.py bundle --fpga-id "$fpga_id" --kernel-id "$kernel_id")"
-          tag="platform-v0.1-$bundle_id"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::No main-qualified platform bundle $tag exists. Run fresh main component workflows, then Promote MiSTer MagiK Platform Bundle v0.1."
+          mkdir -p build/published
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/published/releases.json
+
+          if ! platform_tag="$(python3 scripts/select-published-release.py platform --releases build/published/releases.json)"; then
+            echo "::error::No published platform-v0.1 release exists. Run Promote MiSTer MagiK Platform Bundle v0.1."
             exit 1
           fi
           mkdir -p build/qualified
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
+          gh release download "$platform_tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
             --pattern 'mister-magik-platform-v0.1-*.zip' --pattern platform-bundle-v0.1.json
           archive="$(find build/qualified -name 'mister-magik-platform-v0.1-*.zip' -print -quit)"
           test -n "$archive"
           python3 scripts/platform-bundle.py verify "$archive" \
             --manifest build/qualified/platform-bundle-v0.1.json >/dev/null
           unzip -q -o "$archive" -d build/qualified
+
+          if ! databases_tag="$(python3 scripts/select-published-release.py game-databases --releases build/published/releases.json)"; then
+            echo "::error::No published numbered game-database release exists. Run Promote MiSTer MagiK Game Databases."
+            exit 1
+          fi
+          databases_version="${databases_tag#game-databases-v}"
+          mkdir -p build/game-databases
+          gh release download "$databases_tag" --repo "$GITHUB_REPOSITORY" --dir build/game-databases \
+            --pattern "mister-magik-game-databases-v${databases_version}.zip" \
+            --pattern game-databases-manifest.json
+          databases_archive="build/game-databases/mister-magik-game-databases-v${databases_version}.zip"
+          python3 scripts/game-databases-bundle.py verify "$databases_archive" \
+            --manifest build/game-databases/game-databases-manifest.json >/dev/null
+          unzip -q "$databases_archive" mame.sqlite3 hbmame.sqlite3 -d build
 
       - name: Install Rust toolchain
         working-directory: magik-gui
@@ -331,135 +210,8 @@ jobs:
           export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
           make
 
-      - name: Cache MAME metadata database
-        id: mame-db-cache
-        uses: actions/cache@v6
-        with:
-          path: build/mame.sqlite3
-          key: mame-sqlite-${{ runner.os }}-${{ env.MAME_REF }}-v3-${{ hashFiles('tools/mister/src/main.rs', '.github/workflows/distribution.yml') }}
-
-      - name: Cache HBMAME metadata database
-        id: hbmame-db-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: build/hbmame.sqlite3
-          key: hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-${{ hashFiles('tools/mister/src/main.rs') }}
-          restore-keys: |
-            hbmame-sqlite-${{ runner.os }}-${{ needs.resolve-hbmame.outputs.cache-key }}-
-
       - name: Install package tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl sqlite3 unzip zip
-
-      - name: Download MAME listxml
-        if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p build/mame-release
-          curl -fsSL "$MAME_LISTXML_URL" -o build/mame-release/mame-listxml.zip
-          unzip -p build/mame-release/mame-listxml.zip mame0288.xml > build/mame-listxml.xml
-
-      - name: Checkout MAME hash lists
-        if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v7
-        with:
-          repository: mamedev/mame
-          ref: ${{ env.MAME_REF }}
-          path: mame-source
-          sparse-checkout: hash
-
-      - name: Resolve MAME software lists
-        if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        id: mame-hash
-        shell: bash
-        run: |
-          hash_dir="$GITHUB_WORKSPACE/mame-source/hash"
-          if [[ -z "$hash_dir" || ! -f "$hash_dir/saturn.xml" ]]; then
-            echo "MAME $MAME_REF hash directory with target software lists was not found" >&2
-            exit 1
-          fi
-          echo "dir=$hash_dir" >> "$GITHUB_OUTPUT"
-
-      - name: Build MAME metadata database
-        if: steps.mame-db-cache.outputs.cache-hit != 'true'
-        run: scripts/mister mame-metadata-build --listxml build/mame-listxml.xml --software-dir "${{ steps.mame-hash.outputs.dir }}" --out build/mame.sqlite3
-
-      - name: Verify MAME software metadata
-        run: |
-          source_version="$(sqlite3 build/mame.sqlite3 "SELECT DISTINCT source_version FROM mame_machines;")"
-          if [ "$source_version" != "0.288 (mame0288)" ]; then
-            echo "Expected MAME metadata source_version '0.288 (mame0288)', got '$source_version'" >&2
-            exit 1
-          fi
-          machine_rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_machines;")"
-          if [ "${machine_rows:-0}" -lt 50000 ]; then
-            echo "MAME metadata DB is suspiciously small: $machine_rows machine rows" >&2
-            exit 1
-          fi
-          sqlite3 build/mame.sqlite3 "
-            WITH expected(list_name) AS (
-              VALUES ('megadriv'),('n64'),('nes'),('saturn'),('sms'),('snes')
-            )
-            SELECT expected.list_name, COALESCE(counts.rows, 0) AS rows
-            FROM expected
-            LEFT JOIN (
-              SELECT list_name, count(*) AS rows
-              FROM mame_software_items
-              GROUP BY list_name
-            ) counts USING (list_name)
-            ORDER BY expected.list_name;
-          " | tee build/mame-software-counts.txt
-          if grep -E '\|0$' build/mame-software-counts.txt; then
-            echo "One or more required MAME software lists are missing from build/mame.sqlite3" >&2
-            exit 1
-          fi
-
-      - name: Upload MAME metadata database
-        uses: actions/upload-artifact@v7
-        with:
-          name: mame-sqlite-${{ env.MAME_REF }}
-          path: build/mame.sqlite3
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Download HBMAME listxml
-        if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
-        uses: actions/download-artifact@v8
-        with:
-          name: hbmame-listxml
-          path: build
-
-      - name: Build HBMAME metadata database
-        if: steps.hbmame-db-cache.outputs.cache-matched-key == ''
-        run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
-
-      - name: Verify HBMAME metadata
-        run: |
-          rows="$(sqlite3 build/hbmame.sqlite3 "SELECT count(*) FROM mame_machines;")"
-          if [ "${rows:-0}" -lt 5000 ]; then
-            echo "HBMAME metadata DB is suspiciously small: $rows machine rows" >&2
-            exit 1
-          fi
-          marpy_parent="$(sqlite3 build/hbmame.sqlite3 "SELECT COALESCE(parent_setname, '') FROM mame_machines WHERE setname = 'marpy';")"
-          if [ "$marpy_parent" != "mappy" ]; then
-            echo "HBMAME metadata sentinel failed: expected marpy parent mappy, got '${marpy_parent:-missing}'" >&2
-            exit 1
-          fi
-
-      - name: Save HBMAME metadata database cache
-        if: steps.hbmame-db-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: build/hbmame.sqlite3
-          key: ${{ steps.hbmame-db-cache.outputs.cache-primary-key }}
-
-      - name: Upload HBMAME metadata database
-        uses: actions/upload-artifact@v7
-        with:
-          name: hbmame-sqlite-${{ needs.resolve-hbmame.outputs.sha }}
-          path: build/hbmame.sqlite3
-          if-no-files-found: error
-          retention-days: 30
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 unzip zip
 
       - name: Package distribution zip
         env:
@@ -495,8 +247,7 @@ jobs:
             --latch-metadata "$rbf_meta" \
             --platform-manifest build/platform-v1.manifest \
             --platform-bundle-manifest build/qualified/platform-bundle-v0.1.json \
-            --mame-source-ref "$MAME_REF" \
-            --hbmame-source-revision "${{ needs.resolve-hbmame.outputs.sha }}" \
+            --game-databases-manifest build/game-databases/game-databases-manifest.json \
             --hbmame-sqlite-default \
             --version "$RELEASE_VERSION" \
             --build-number "$RELEASE_BUILD_NUMBER" \
@@ -548,8 +299,12 @@ jobs:
                   line.split("=", 1)
                   for line in package.read("mister-magik/release-v1.txt").decode().splitlines()
               )
+              game_databases = json.loads(
+                  package.read("mister-magik/game-databases-manifest.json")
+              )
           assert release["version"] == version
           assert int(release["build_number"]) == build
+          assert int(release["game_database_version"]) == game_databases["release_version"]
           database = json.loads((root / f"mister-magik-{channel}-db.json").read_text())
           assert database["db_id"] == "mister_magik"
           assert tag in json.dumps(database)

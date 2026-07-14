@@ -1,0 +1,351 @@
+name: Promote MiSTer MagiK Game Databases
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: promote-mister-magik-game-databases
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    name: Check upstream database releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      current-version: ${{ steps.plan.outputs.current_version }}
+      next-version: ${{ steps.plan.outputs.next_version }}
+      update-needed: ${{ steps.plan.outputs.update_needed }}
+      mame-changed: ${{ steps.plan.outputs.mame_changed }}
+      hbmame-changed: ${{ steps.plan.outputs.hbmame_changed }}
+      mame-tag: ${{ steps.upstream.outputs.mame_tag }}
+      mame-sha: ${{ steps.upstream.outputs.mame_sha }}
+      mame-listxml-asset: ${{ steps.upstream.outputs.mame_listxml_asset }}
+      mame-listxml-url: ${{ steps.upstream.outputs.mame_listxml_url }}
+      hbmame-tag: ${{ steps.upstream.outputs.hbmame_tag }}
+      hbmame-sha: ${{ steps.upstream.outputs.hbmame_sha }}
+    steps:
+      - name: Refuse non-main dispatch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Game-database promotion is restricted to main; got $GITHUB_REF" >&2
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify checked-out main
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git branch --show-current)" = main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Resolve latest MAME release and HBMAME tag
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/game-databases
+          gh api repos/mamedev/mame/releases/latest > build/game-databases/mame-release.json
+          mame_tag="$(jq -r '.tag_name | select(test("^mame[0-9]+$"))' build/game-databases/mame-release.json)"
+          test -n "$mame_tag"
+          mame_sha="$(gh api "repos/mamedev/mame/commits/$mame_tag" --jq .sha)"
+          mame_asset="$(jq -r '[.assets[] | select(.name | test("lx\\.zip$"))] | if length == 1 then .[0].name else empty end' build/game-databases/mame-release.json)"
+          mame_url="$(jq -r --arg name "$mame_asset" '.assets[] | select(.name == $name) | .browser_download_url' build/game-databases/mame-release.json)"
+          test -n "$mame_asset" && test -n "$mame_url"
+
+          gh api --paginate --slurp 'repos/Robbbert/hbmame/tags?per_page=100' > build/game-databases/hbmame-tags.json
+          hbmame_tag="$(jq -r 'add | [.[] | select(.name | test("^tag[0-9]+$"))] | max_by(.name | ltrimstr("tag") | tonumber) | .name' build/game-databases/hbmame-tags.json)"
+          test -n "$hbmame_tag" && test "$hbmame_tag" != null
+          hbmame_sha="$(gh api "repos/Robbbert/hbmame/commits/$hbmame_tag" --jq .sha)"
+
+          echo "mame_tag=$mame_tag" >> "$GITHUB_OUTPUT"
+          echo "mame_sha=$mame_sha" >> "$GITHUB_OUTPUT"
+          echo "mame_listxml_asset=$mame_asset" >> "$GITHUB_OUTPUT"
+          echo "mame_listxml_url=$mame_url" >> "$GITHUB_OUTPUT"
+          echo "hbmame_tag=$hbmame_tag" >> "$GITHUB_OUTPUT"
+          echo "hbmame_sha=$hbmame_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify current numbered release
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/game-databases/releases.json
+          if tag="$(python3 scripts/select-published-release.py game-databases --releases build/game-databases/releases.json 2>/dev/null)"; then
+            version="${tag#game-databases-v}"
+            mkdir -p build/game-databases/current
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/game-databases/current \
+              --pattern "mister-magik-game-databases-v${version}.zip" \
+              --pattern game-databases-manifest.json --pattern SHA256SUMS
+            archive="build/game-databases/current/mister-magik-game-databases-v${version}.zip"
+            python3 scripts/game-databases-bundle.py verify "$archive" \
+              --manifest build/game-databases/current/game-databases-manifest.json >/dev/null
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "manifest=build/game-databases/current/game-databases-manifest.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "No existing numbered game-database release; v1 will build both databases."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "manifest=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Plan database update
+        id: plan
+        env:
+          CURRENT_MANIFEST: ${{ steps.current.outputs.manifest }}
+          MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
+          MAME_SHA: ${{ steps.upstream.outputs.mame_sha }}
+          HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
+          HBMAME_SHA: ${{ steps.upstream.outputs.hbmame_sha }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "$CURRENT_MANIFEST" ]; then
+            args+=(--manifest "$CURRENT_MANIFEST")
+          fi
+          python3 scripts/game-databases-bundle.py plan-update "${args[@]}" \
+            --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
+            --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Report update decision
+        env:
+          UPDATE_NEEDED: ${{ steps.plan.outputs.update_needed }}
+          CURRENT_VERSION: ${{ steps.plan.outputs.current_version }}
+          NEXT_VERSION: ${{ steps.plan.outputs.next_version }}
+          MAME_CHANGED: ${{ steps.plan.outputs.mame_changed }}
+          HBMAME_CHANGED: ${{ steps.plan.outputs.hbmame_changed }}
+          MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
+          HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
+        run: |
+          {
+            echo "## Game database promotion"
+            echo
+            if [ "$UPDATE_NEEDED" = true ]; then
+              echo "Preparing v$NEXT_VERSION (current v$CURRENT_VERSION): MAME changed=$MAME_CHANGED, HBMAME changed=$HBMAME_CHANGED."
+            else
+              echo "Game databases v$CURRENT_VERSION are already up to date ($MAME_TAG, $HBMAME_TAG)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-mame:
+    name: Build MAME metadata database
+    runs-on: ubuntu-24.04
+    needs: inspect
+    if: needs.inspect.outputs.mame-changed == 'true'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install package tools
+        run: sudo apt-get update && sudo apt-get install -y curl sqlite3 unzip
+
+      - name: Download MAME listxml
+        env:
+          LISTXML_URL: ${{ needs.inspect.outputs.mame-listxml-url }}
+          LISTXML_ASSET: ${{ needs.inspect.outputs.mame-listxml-asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/mame-release
+          curl -fsSL "$LISTXML_URL" -o "build/mame-release/$LISTXML_ASSET"
+          sha256sum "build/mame-release/$LISTXML_ASSET" | awk '{print $1}' > build/mame-listxml.sha256
+          member="$(unzip -Z1 "build/mame-release/$LISTXML_ASSET" | grep -E '^mame[0-9]+\.xml$')"
+          test -n "$member"
+          unzip -p "build/mame-release/$LISTXML_ASSET" "$member" > build/mame-listxml.xml
+
+      - name: Checkout matching MAME hash lists
+        uses: actions/checkout@v7
+        with:
+          repository: mamedev/mame
+          ref: ${{ needs.inspect.outputs.mame-sha }}
+          path: mame-source
+          sparse-checkout: hash
+
+      - name: Build MAME database
+        run: scripts/mister mame-metadata-build --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: game-databases-mame
+          path: |
+            build/mame.sqlite3
+            build/mame-listxml.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  build-hbmame-listxml:
+    name: Build HBMAME listxml
+    runs-on: windows-latest
+    needs: inspect
+    if: needs.inspect.outputs.hbmame-changed == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: Robbbert/hbmame
+          ref: ${{ needs.inspect.outputs.hbmame-sha }}
+          path: hbmame
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          install: git make mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld mingw-w64-x86_64-libc++
+
+      - name: Build HBMAME
+        shell: msys2 {0}
+        working-directory: hbmame
+        env:
+          MINGW64: "/mingw64"
+          PTR64: "1"
+        run: make -j2 PTR64=1 TARGET=hbmame DEPRECATED=0 SYMBOLS=0 NO_SYMBOLS=1 NOWERROR=1
+
+      - name: Generate HBMAME listxml
+        shell: msys2 {0}
+        working-directory: hbmame
+        run: ./hbmame -listxml > ../hbmame-listxml.xml
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: game-databases-hbmame-listxml
+          path: hbmame-listxml.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: Assemble numbered game-database release
+    runs-on: ubuntu-24.04
+    needs: [inspect, build-mame, build-hbmame-listxml]
+    if: |
+      always() &&
+      needs.inspect.result == 'success' &&
+      needs.inspect.outputs.update-needed == 'true' &&
+      (needs.build-mame.result == 'success' || needs.build-mame.result == 'skipped') &&
+      (needs.build-hbmame-listxml.result == 'success' || needs.build-hbmame-listxml.result == 'skipped')
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install package tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 unzip
+
+      - name: Restore unchanged databases from current release
+        if: needs.inspect.outputs.current-version != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_VERSION: ${{ needs.inspect.outputs.current-version }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/current
+          tag="game-databases-v$CURRENT_VERSION"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/current \
+            --pattern "mister-magik-game-databases-v${CURRENT_VERSION}.zip" \
+            --pattern game-databases-manifest.json
+          archive="build/current/mister-magik-game-databases-v${CURRENT_VERSION}.zip"
+          python3 scripts/game-databases-bundle.py verify "$archive" \
+            --manifest build/current/game-databases-manifest.json >/dev/null
+          unzip -q "$archive" mame.sqlite3 hbmame.sqlite3 -d build/current
+
+      - name: Download rebuilt MAME database
+        if: needs.inspect.outputs.mame-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: game-databases-mame
+          path: build
+
+      - name: Reuse unchanged MAME database
+        if: needs.inspect.outputs.mame-changed != 'true'
+        run: cp build/current/mame.sqlite3 build/mame.sqlite3
+
+      - name: Download rebuilt HBMAME listxml
+        if: needs.inspect.outputs.hbmame-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: game-databases-hbmame-listxml
+          path: build
+
+      - name: Build HBMAME database
+        if: needs.inspect.outputs.hbmame-changed == 'true'
+        run: scripts/mister mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+
+      - name: Reuse unchanged HBMAME database
+        if: needs.inspect.outputs.hbmame-changed != 'true'
+        run: cp build/current/hbmame.sqlite3 build/hbmame.sqlite3
+
+      - name: Create and verify numbered bundle
+        run: |
+          set -euo pipefail
+          mame_builder_sha="$GITHUB_SHA"
+          hbmame_builder_sha="$GITHUB_SHA"
+          if [ '${{ needs.inspect.outputs.mame-changed }}' = true ]; then
+            mame_listxml_sha256="$(cat build/mame-listxml.sha256)"
+          else
+            mame_listxml_sha256="$(jq -r '.sources.mame.listxml_sha256' build/current/game-databases-manifest.json)"
+            mame_builder_sha="$(jq -r '.sources.mame.builder_sha' build/current/game-databases-manifest.json)"
+          fi
+          if [ '${{ needs.inspect.outputs.hbmame-changed }}' != true ]; then
+            hbmame_builder_sha="$(jq -r '.sources.hbmame.builder_sha' build/current/game-databases-manifest.json)"
+          fi
+          python3 scripts/game-databases-bundle.py create \
+            --mame-sqlite build/mame.sqlite3 --hbmame-sqlite build/hbmame.sqlite3 \
+            --release-version '${{ needs.inspect.outputs.next-version }}' \
+            --mame-tag '${{ needs.inspect.outputs.mame-tag }}' \
+            --mame-sha '${{ needs.inspect.outputs.mame-sha }}' \
+            --mame-listxml-asset '${{ needs.inspect.outputs.mame-listxml-asset }}' \
+            --mame-listxml-sha256 "$mame_listxml_sha256" \
+            --hbmame-tag '${{ needs.inspect.outputs.hbmame-tag }}' \
+            --hbmame-sha '${{ needs.inspect.outputs.hbmame-sha }}' \
+            --mame-builder-sha "$mame_builder_sha" \
+            --hbmame-builder-sha "$hbmame_builder_sha" \
+            --output build/game-databases
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: game-databases-v${{ needs.inspect.outputs.next-version }}-candidate
+          path: build/game-databases
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish numbered game-database release
+    runs-on: ubuntu-24.04
+    needs: [inspect, assemble]
+    timeout-minutes: 15
+    environment:
+      name: publish-game-databases
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: game-databases-v${{ needs.inspect.outputs.next-version }}-candidate
+          path: candidate
+
+      - name: Publish immutable numbered release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.inspect.outputs.next-version }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          tag="game-databases-v$VERSION"
+          archive="candidate/mister-magik-game-databases-v$VERSION.zip"
+          python3 scripts/game-databases-bundle.py verify "$archive" \
+            --manifest candidate/game-databases-manifest.json >/dev/null
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists; numbered database releases are immutable." >&2
+            exit 1
+          fi
+          gh release create "$tag" "$archive" candidate/game-databases-manifest.json candidate/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "MiSTer MagiK Game Databases v$VERSION" --draft --prerelease
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

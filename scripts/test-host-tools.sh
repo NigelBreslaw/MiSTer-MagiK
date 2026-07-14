@@ -92,6 +92,9 @@ fi
 python3 "$ROOT/scripts/test-platform-component-id.py"
 python3 "$ROOT/scripts/test-platform-bundle.py"
 python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
+python3 "$ROOT/scripts/test-game-databases-bundle.py"
+python3 "$ROOT/scripts/test-select-published-release.py"
+python3 "$ROOT/scripts/test-game-databases-workflow.py"
 
 if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   package_tmp="$TMP/package-distribution"
@@ -143,7 +146,11 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     --platform-bundle-manifest "$package_tmp/platform-bundle-v0.1.json"
   )
   sqlite3 "$package_tmp/mame.sqlite3" \
-    "CREATE TABLE release_check(name TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO release_check VALUES('kind','package-self-test');"
+    "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,source_version TEXT NOT NULL) WITHOUT ROWID;
+     WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
+     INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'0.288 (mame0288)' FROM seq;
+     CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
+     INSERT INTO mame_software_items VALUES('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');"
   sqlite3 "$package_tmp/tiny-hbmame.sqlite3" \
     "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY, parent_setname TEXT, title TEXT NOT NULL) WITHOUT ROWID; INSERT INTO mame_machines VALUES('mappyj','mappy','Mappy');"
   if "$ROOT/scripts/package-distribution.sh" \
@@ -185,13 +192,22 @@ INSERT INTO mame_machines VALUES('marpy', 'mappy', 'Marpy', 'self-test');
 CREATE TABLE package_padding(data BLOB NOT NULL);
 INSERT INTO package_padding VALUES(zeroblob(1048576));
 SQL
+  "$ROOT/scripts/game-databases-bundle.py" create \
+    --mame-sqlite "$package_tmp/mame.sqlite3" \
+    --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
+    --release-version 1 --mame-tag mame0288 \
+    --mame-sha 1111111111111111111111111111111111111111 \
+    --mame-listxml-asset mame0288lx.zip --mame-listxml-sha256 "$(printf 5%.0s {1..64})" \
+    --hbmame-tag tag24532 \
+    --hbmame-sha 2222222222222222222222222222222222222222 \
+    --mame-builder-sha "$fixture_magik" --hbmame-builder-sha "$fixture_magik" \
+    --output "$package_tmp/game-databases" >/dev/null
   "$ROOT/scripts/package-distribution.sh" \
     --binary "$package_tmp/mister-magik-fb" \
     --mame-sqlite "$package_tmp/mame.sqlite3" \
-    --mame-source-ref test-fixture \
     --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
-    --hbmame-source-revision test-fixture \
     "${platform_args[@]}" \
+    --game-databases-manifest "$package_tmp/game-databases/game-databases-manifest.json" \
     --name valid-hbmame \
     --release-assets-dir "$package_tmp/release-assets" \
     --out-dir "$package_tmp/out" >/dev/null
@@ -216,6 +232,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         "mister-magik/mister-magik-catalog-builder",
         "mister-magik/platform-v1.manifest",
         "mister-magik/platform-bundle-v0.1.json",
+        "mister-magik/game-databases-manifest.json",
         "mister-magik/mister_magik_scanout_slots.ko",
         "mister-magik/mister_magik_scanout_slots.metadata.txt",
         "mister-magik/fpga/menu-magik-vblank-latch.rbf",
@@ -226,7 +243,10 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         raise SystemExit(f"distribution missing legal files: {', '.join(missing)}")
     notices = archive.read("THIRD-PARTY-NOTICES.txt").decode()
     source_offer = archive.read("SOURCE-OFFER.txt").decode()
-    for expected in ("test-fixture", "not ROM, BIOS, firmware, or game media"):
+    release = archive.read("mister-magik/release-v1.txt").decode()
+    if "game_database_version=1" not in release:
+        raise SystemExit("distribution release identity is missing game database version")
+    for expected in ("mame0288", "2222222222222222222222222222222222222222", "not ROM, BIOS, firmware, or game media"):
         if expected not in notices:
             raise SystemExit(f"distribution notices missing: {expected}")
     if "FFmpeg 8.1.2 source" not in source_offer:
