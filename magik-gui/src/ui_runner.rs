@@ -11,8 +11,6 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
-#[cfg(all(mister_video_scene, feature = "video-lab"))]
-use slint::Rgb8Pixel;
 use slint::{
     ComponentHandle, Model, ModelRc, PhysicalSize, Rgba8Pixel, SharedPixelBuffer, SharedString,
     VecModel,

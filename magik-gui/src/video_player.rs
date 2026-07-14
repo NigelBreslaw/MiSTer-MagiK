@@ -4,8 +4,6 @@ use ffmpeg::codec;
 use ffmpeg::format;
 use ffmpeg::media;
 use ffmpeg::software::resampling::Context as ResamplingContext;
-#[cfg(feature = "video-lab")]
-use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg::util::format::pixel::Pixel as FfmpegPixel;
 use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::frame::audio::Audio;
@@ -21,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 
-use crate::video_i420::convert_i420_to_rgb565;
+use crate::video_i420::{convert_i420_to_rgb565, convert_i420_to_rgb565_2x_rust_optimized};
 
 pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
 pub const DEFAULT_VIDEO_DIR: &str = "/media/fat/mister-magik/video-snaps/neogeo";
@@ -29,6 +27,7 @@ const DEFAULT_VIDEO_MAX_W: u32 = 640;
 const DEFAULT_VIDEO_MAX_H: u32 = 480;
 const AUDIO_RATE: u32 = 48_000;
 const OUTPUT_AUDIO_CHANNELS: usize = 2;
+const VIDEO_QUEUE_DEPTH: usize = 2;
 
 pub fn video_paths_from_env() -> Result<Vec<String>, String> {
     if let Some(path) = std::env::var("MISTER_VIDEO_PATH")
@@ -73,113 +72,10 @@ fn sorted_mp4_files(dir: PathBuf) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-fn video_queue_depth_from_env() -> usize {
-    std::env::var("MISTER_VIDEO_QUEUE_DEPTH")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .map(|n| n.clamp(1, 8))
-        .unwrap_or(2)
-}
-
-fn video_threading_from_env() -> Result<Option<codec::threading::Config>, String> {
-    #[cfg(feature = "video-lab")]
-    {
-        let Some(threads) = std::env::var("MISTER_VIDEO_THREADS")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-        else {
-            return Ok(None);
-        };
-        let mut threading = codec::threading::Config::count(threads);
-        threading.kind = video_thread_type_from_env()?;
-        return Ok(Some(threading));
-    }
-
-    #[cfg(not(feature = "video-lab"))]
-    {
-        if let Some(value) = std::env::var("MISTER_VIDEO_THREADS")
-            .ok()
-            .filter(|s| !s.is_empty())
-        {
-            return Err(format!(
-                "MISTER_VIDEO_THREADS={value:?} requires a --video-lab build; production video is single-threaded"
-            ));
-        }
-        let thread_type = std::env::var("MISTER_VIDEO_THREAD_TYPE")
-            .unwrap_or_else(|_| "none".to_string())
-            .to_ascii_lowercase();
-        match thread_type.as_str() {
-            "" | "none" | "off" | "single" => Ok(None),
-            other => Err(format!(
-                "MISTER_VIDEO_THREAD_TYPE={other:?} requires a --video-lab build; production video supports only none"
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "video-lab")]
-fn video_thread_type_from_env() -> Result<codec::threading::Type, String> {
-    match std::env::var("MISTER_VIDEO_THREAD_TYPE")
-        .unwrap_or_else(|_| "frame".to_string())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "none" | "off" | "single" => Ok(codec::threading::Type::None),
-        "slice" => Ok(codec::threading::Type::Slice),
-        "frame" => Ok(codec::threading::Type::Frame),
-        "auto" => Ok(codec::threading::Type::None),
-        other => Err(format!(
-            "video: unknown MISTER_VIDEO_THREAD_TYPE={other:?}; use none|frame|slice|auto"
-        )),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum VideoConvertMode {
-    CustomNeon,
-    #[cfg(feature = "video-lab")]
-    SwscaleRgb565,
-}
-
-impl VideoConvertMode {
-    fn from_env() -> Result<Self, String> {
-        match std::env::var("MISTER_VIDEO_CONVERT")
-            .unwrap_or_else(|_| "custom-neon".to_string())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "custom-neon" | "custom_neon" | "neon" | "custom" => Ok(Self::CustomNeon),
-            #[cfg(feature = "video-lab")]
-            "swscale-rgb565" | "swscale_rgb565" | "swscale" => Ok(Self::SwscaleRgb565),
-            #[cfg(not(feature = "video-lab"))]
-            "swscale-rgb565" | "swscale_rgb565" | "swscale" => {
-                Err("MISTER_VIDEO_CONVERT=swscale-rgb565 requires a --video-lab build".to_string())
-            }
-            other => Err(format!(
-                "video: unknown MISTER_VIDEO_CONVERT={other:?}; use custom-neon"
-            )),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::CustomNeon => "custom-neon",
-            #[cfg(feature = "video-lab")]
-            Self::SwscaleRgb565 => "swscale-rgb565",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VideoScaleMode {
     Source,
-    #[cfg(feature = "video-lab")]
-    FitHeight,
-    #[cfg(feature = "video-lab")]
-    FitWidth,
-    #[cfg(feature = "video-lab")]
-    Native,
+    Double,
 }
 
 impl VideoScaleMode {
@@ -190,55 +86,27 @@ impl VideoScaleMode {
             .as_str()
         {
             "source" => Ok(Self::Source),
-            #[cfg(feature = "video-lab")]
-            "fit-height" | "fit_height" => Ok(Self::FitHeight),
-            #[cfg(feature = "video-lab")]
-            "fit-width" | "fit_width" => Ok(Self::FitWidth),
-            #[cfg(feature = "video-lab")]
-            "native" => Ok(Self::Native),
-            #[cfg(not(feature = "video-lab"))]
-            "fit-height" | "fit_height" | "fit-width" | "fit_width" | "native" => Err(format!(
-                "MISTER_VIDEO_SCALE={:?} requires a --video-lab build; production video supports only source",
-                std::env::var("MISTER_VIDEO_SCALE").unwrap_or_default()
+            "2x" | "double" => Ok(Self::Double),
+            other => Err(format!(
+                "video: unknown MISTER_VIDEO_SCALE={other:?}; use source|2x"
             )),
-            other => Err(format!("video: unknown MISTER_VIDEO_SCALE={other:?}; use source")),
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::Source => "source",
-            #[cfg(feature = "video-lab")]
-            Self::FitHeight => "fit-height",
-            #[cfg(feature = "video-lab")]
-            Self::FitWidth => "fit-width",
-            #[cfg(feature = "video-lab")]
-            Self::Native => "native",
+            Self::Double => "2x",
         }
     }
 
     fn output_dimensions(self, src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
         match self {
-            #[cfg(feature = "video-lab")]
-            Self::Source | Self::Native => (src_w.min(max_w), src_h.min(max_h)),
-            #[cfg(not(feature = "video-lab"))]
+            Self::Double => (
+                src_w.saturating_mul(2).min(max_w),
+                src_h.saturating_mul(2).min(max_h),
+            ),
             Self::Source => (src_w.min(max_w), src_h.min(max_h)),
-            #[cfg(feature = "video-lab")]
-            Self::FitHeight => {
-                let out_h = src_h.min(max_h).max(1);
-                let out_w = ((src_w as u64 * out_h as u64) / src_h.max(1) as u64)
-                    .min(max_w as u64)
-                    .max(1) as u32;
-                (out_w, out_h)
-            }
-            #[cfg(feature = "video-lab")]
-            Self::FitWidth => {
-                let out_w = src_w.min(max_w).max(1);
-                let out_h = ((src_h as u64 * out_w as u64) / src_w.max(1) as u64)
-                    .min(max_h as u64)
-                    .max(1) as u32;
-                (out_w, out_h)
-            }
         }
     }
 }
@@ -252,8 +120,6 @@ pub struct VideoPlayer {
     audio_stream_index: usize,
     video_decoder: ffmpeg::decoder::Video,
     audio_decoder: ffmpeg::decoder::Audio,
-    #[cfg(feature = "video-lab")]
-    scaler: ScalingContext,
     audio_resampler: ResamplingContext,
     frame_interval: Duration,
     audio_rate: u32,
@@ -266,7 +132,6 @@ pub struct VideoPlayer {
     video_codec: String,
     audio_codec: String,
     scale_mode: VideoScaleMode,
-    convert_mode: VideoConvertMode,
     output_width: u32,
     output_height: u32,
 }
@@ -276,7 +141,6 @@ pub struct PlaybackFrame {
     pub audio: Vec<i16>,
     pub audio_requested_frames: usize,
     pub loop_count: u64,
-    pub decode_us: u64,
     pub metrics: PlaybackMetrics,
 }
 
@@ -289,7 +153,13 @@ pub struct VideoRgb565Frame {
 
 #[derive(Clone, Debug, Default)]
 pub struct PlaybackMetrics {
+    pub video_pipeline: String,
     pub video_decode_us: u64,
+    pub video_convert_us: u64,
+    pub video_scale_2x_us: u64,
+    pub video_fused_us: u64,
+    pub video_pipeline_us: u64,
+    pub video_worker_us: u64,
     pub video_scale_us: u64,
     pub audio_decode_us: u64,
     pub audio_resample_us: u64,
@@ -304,6 +174,9 @@ pub struct PlaybackMetrics {
 #[derive(Clone, Copy, Debug, Default)]
 struct VideoDecodeMetrics {
     decode_us: u64,
+    convert_us: u64,
+    scale_2x_us: u64,
+    fused_us: u64,
     scale_us: u64,
 }
 
@@ -327,9 +200,8 @@ pub struct VideoFrameWorker {
 
 impl VideoFrameWorker {
     pub fn start(paths: Vec<String>) -> Result<Self, String> {
-        let queue_depth = video_queue_depth_from_env();
-        let (tx, rx) = mpsc::sync_channel(queue_depth);
-        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<RecycledFrame>(queue_depth);
+        let (tx, rx) = mpsc::sync_channel(VIDEO_QUEUE_DEPTH);
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<RecycledFrame>(VIDEO_QUEUE_DEPTH);
         let (init_tx, init_rx) = mpsc::sync_channel(1);
         let pending_frames = Arc::new(AtomicU32::new(0));
         let decode_pending_frames = Arc::clone(&pending_frames);
@@ -357,7 +229,7 @@ impl VideoFrameWorker {
                         player
                             .next_frame_into(audio_frames, buffers.audio)
                             .map(|mut frame| {
-                                frame.decode_us = t0.elapsed().as_micros() as u64;
+                                frame.metrics.video_worker_us = t0.elapsed().as_micros() as u64;
                                 frame
                             });
                     let failed = frame.is_err();
@@ -426,30 +298,6 @@ impl AudioFramePacer {
     }
 }
 
-macro_rules! receive_player_rgb565_frame {
-    ($player:expr) => {{
-        #[cfg(feature = "video-lab")]
-        {
-            receive_rgb565_frame(
-                &mut $player.video_decoder,
-                &mut $player.scaler,
-                $player.convert_mode,
-                $player.output_width,
-                $player.output_height,
-            )
-        }
-        #[cfg(not(feature = "video-lab"))]
-        {
-            receive_rgb565_frame(
-                &mut $player.video_decoder,
-                $player.convert_mode,
-                $player.output_width,
-                $player.output_height,
-            )
-        }
-    }};
-}
-
 impl VideoPlayer {
     pub fn open(paths: Vec<String>) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| format!("ffmpeg init failed: {e}"))?;
@@ -458,7 +306,7 @@ impl VideoPlayer {
         }
         let player = Self::open_inner(paths, 0, 0)?;
         crate::ui_logln!(
-            "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={} convert={})",
+            "video: opened {} (playlist={} file=1; {}x{}, video={}, frame_interval={}us; audio={} {}Hz {}ch {} -> 48000Hz stereo s16; scale={} pipeline={})",
             player.path,
             player.playlist.len(),
             player.video_decoder.width(),
@@ -470,7 +318,7 @@ impl VideoPlayer {
             player.audio_channels,
             player.audio_decoder.format().name(),
             player.scale_mode.label(),
-            player.convert_mode.label()
+            player.video_pipeline_label()
         );
         Ok(player)
     }
@@ -504,11 +352,8 @@ impl VideoPlayer {
         let video_codec = video_stream.parameters().id().name().to_string();
         let audio_codec = audio_stream.parameters().id().name().to_string();
 
-        let mut video_context = codec::context::Context::from_parameters(video_stream.parameters())
+        let video_context = codec::context::Context::from_parameters(video_stream.parameters())
             .map_err(|e| format!("decoder parameters: {e}"))?;
-        if let Some(threading) = video_threading_from_env()? {
-            video_context.set_threading(threading);
-        }
         let video_decoder = video_context
             .decoder()
             .video()
@@ -534,24 +379,12 @@ impl VideoPlayer {
         .map_err(|e| format!("create audio resampler: {e}"))?;
 
         let scale_mode = VideoScaleMode::from_env()?;
-        let convert_mode = VideoConvertMode::from_env()?;
         let (output_w, output_h) = scale_mode.output_dimensions(
             video_decoder.width(),
             video_decoder.height(),
             DEFAULT_VIDEO_MAX_W,
             DEFAULT_VIDEO_MAX_H,
         );
-        #[cfg(feature = "video-lab")]
-        let scaler = ScalingContext::get(
-            video_decoder.format(),
-            video_decoder.width(),
-            video_decoder.height(),
-            FfmpegPixel::RGB565LE,
-            output_w,
-            output_h,
-            Flags::BILINEAR,
-        )
-        .map_err(|e| format!("create RGB scaler: {e}"))?;
 
         Ok(Self {
             playlist,
@@ -562,8 +395,6 @@ impl VideoPlayer {
             audio_stream_index,
             video_decoder,
             audio_decoder,
-            #[cfg(feature = "video-lab")]
-            scaler,
             audio_resampler,
             frame_interval,
             audio_rate,
@@ -576,7 +407,6 @@ impl VideoPlayer {
             video_codec,
             audio_codec,
             scale_mode,
-            convert_mode,
             output_width: output_w,
             output_height: output_h,
         })
@@ -618,7 +448,12 @@ impl VideoPlayer {
         audio_frames: usize,
         mut audio: Vec<i16>,
     ) -> Result<Option<PlaybackFrame>, String> {
-        if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
+        if let Some((frame, video_metrics)) = receive_rgb565_frame(
+            &mut self.video_decoder,
+            self.scale_mode,
+            self.output_width,
+            self.output_height,
+        )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -626,7 +461,6 @@ impl VideoPlayer {
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
-                decode_us: 0,
                 metrics: self.take_playback_metrics(video_metrics),
             }));
         }
@@ -638,7 +472,12 @@ impl VideoPlayer {
                 self.video_decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
+                if let Some((frame, video_metrics)) = receive_rgb565_frame(
+                    &mut self.video_decoder,
+                    self.scale_mode,
+                    self.output_width,
+                    self.output_height,
+                )? {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
@@ -646,7 +485,6 @@ impl VideoPlayer {
                         audio,
                         audio_requested_frames: audio_frames,
                         loop_count: self.loop_count,
-                        decode_us: 0,
                         metrics: self.take_playback_metrics(video_metrics),
                     }));
                 }
@@ -678,7 +516,12 @@ impl VideoPlayer {
             &mut metrics,
         )?;
         self.add_pending_audio_metrics(metrics);
-        if let Some((frame, video_metrics)) = receive_player_rgb565_frame!(self)? {
+        if let Some((frame, video_metrics)) = receive_rgb565_frame(
+            &mut self.video_decoder,
+            self.scale_mode,
+            self.output_width,
+            self.output_height,
+        )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
             return Ok(Some(PlaybackFrame {
@@ -686,7 +529,6 @@ impl VideoPlayer {
                 audio,
                 audio_requested_frames: audio_frames,
                 loop_count: self.loop_count,
-                decode_us: 0,
                 metrics: self.take_playback_metrics(video_metrics),
             }));
         }
@@ -755,7 +597,17 @@ impl VideoPlayer {
         let audio_decode_us = std::mem::take(&mut self.pending_audio_decode_us);
         let audio_resample_us = std::mem::take(&mut self.pending_audio_resample_us);
         PlaybackMetrics {
+            video_pipeline: self.video_pipeline_label().into(),
             video_decode_us: video.decode_us,
+            video_convert_us: video.convert_us,
+            video_scale_2x_us: video.scale_2x_us,
+            video_fused_us: video.fused_us,
+            video_pipeline_us: if video.fused_us > 0 {
+                video.fused_us
+            } else {
+                video.convert_us.saturating_add(video.scale_2x_us)
+            },
+            video_worker_us: 0,
             video_scale_us: video.scale_us,
             audio_decode_us,
             audio_resample_us,
@@ -768,12 +620,18 @@ impl VideoPlayer {
             audio_codec: self.audio_codec.clone(),
         }
     }
+
+    fn video_pipeline_label(&self) -> &'static str {
+        match self.scale_mode {
+            VideoScaleMode::Source => "rust-source",
+            VideoScaleMode::Double => "rust-fused-2x",
+        }
+    }
 }
 
 fn receive_rgb565_frame(
     decoder: &mut ffmpeg::decoder::Video,
-    #[cfg(feature = "video-lab")] scaler: &mut ScalingContext,
-    convert_mode: VideoConvertMode,
+    scale_mode: VideoScaleMode,
     output_width: u32,
     output_height: u32,
 ) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
@@ -782,41 +640,27 @@ fn receive_rgb565_frame(
     match decoder.receive_frame(&mut decoded) {
         Ok(()) => {
             let decode_us = decode_t0.elapsed().as_micros() as u64;
-            let scale_t0 = Instant::now();
-            let frame = match convert_mode {
-                VideoConvertMode::CustomNeon => {
-                    rgb565_frame_from_custom_i420(&decoded, output_width, output_height)?
-                }
-                #[cfg(feature = "video-lab")]
-                VideoConvertMode::SwscaleRgb565 => None,
-            };
-            let frame = match frame {
-                Some(frame) => frame,
-                None => {
-                    #[cfg(feature = "video-lab")]
-                    {
-                        let mut rgb = Video::empty();
-                        scaler
-                            .run(&decoded, &mut rgb)
-                            .map_err(|e| format!("scale video frame: {e}"))?;
-                        rgb565_frame_to_words(&rgb)?
-                    }
-                    #[cfg(not(feature = "video-lab"))]
-                    {
-                        return Err(format!(
-                            "video frame format {:?} at {}x{} requires a --video-lab swscale fallback; production video requires source-size YUV420P",
-                            decoded.format(),
-                            decoded.width(),
-                            decoded.height()
-                        ));
-                    }
-                }
-            };
+            let mut convert_us = 0;
+            let mut scale_2x_us = 0;
+            let mut fused_us = 0;
+            let scale_us = 0;
+            let frame = rgb565_frame_from_i420(
+                &decoded,
+                scale_mode,
+                output_width,
+                output_height,
+                &mut convert_us,
+                &mut scale_2x_us,
+                &mut fused_us,
+            )?;
             Ok(Some((
                 frame,
                 VideoDecodeMetrics {
                     decode_us,
-                    scale_us: scale_t0.elapsed().as_micros() as u64,
+                    convert_us,
+                    scale_2x_us,
+                    fused_us,
+                    scale_us,
                 },
             )))
         }
@@ -824,22 +668,57 @@ fn receive_rgb565_frame(
     }
 }
 
-fn rgb565_frame_from_custom_i420(
+fn rgb565_frame_from_i420(
     frame: &Video,
+    scale_mode: VideoScaleMode,
     output_width: u32,
     output_height: u32,
+    convert_us: &mut u64,
+    scale_2x_us: &mut u64,
+    fused_us: &mut u64,
 ) -> Result<Option<VideoRgb565Frame>, String> {
     if frame.format() != FfmpegPixel::YUV420P {
-        return Ok(None);
+        return Err(format!(
+            "video frame format {:?} at {}x{} is unsupported; production video requires YUV420P",
+            frame.format(),
+            frame.width(),
+            frame.height()
+        ));
     }
 
     let width = frame.width();
     let height = frame.height();
-    if width != output_width || height != output_height {
+    let expected =
+        scale_mode.output_dimensions(width, height, DEFAULT_VIDEO_MAX_W, DEFAULT_VIDEO_MAX_H);
+    if expected != (output_width, output_height) {
         return Ok(None);
     }
 
+    if scale_mode == VideoScaleMode::Double {
+        let mut pixels = vec![0u16; output_width as usize * output_height as usize];
+        let started = Instant::now();
+        convert_i420_to_rgb565_2x_rust_optimized(
+            frame.data(0),
+            frame_stride_usize(frame, 0),
+            frame.data(1),
+            frame_stride_usize(frame, 1),
+            frame.data(2),
+            frame_stride_usize(frame, 2),
+            &mut pixels,
+            output_width as usize,
+            width as usize,
+            height as usize,
+        )?;
+        *fused_us = started.elapsed().as_micros() as u64;
+        return Ok(Some(VideoRgb565Frame {
+            pixels,
+            width: output_width,
+            height: output_height,
+        }));
+    }
+
     let mut pixels = vec![0u16; width as usize * height as usize];
+    let convert_t0 = Instant::now();
     convert_i420_to_rgb565(
         frame.data(0),
         frame_stride_usize(frame, 0),
@@ -852,11 +731,12 @@ fn rgb565_frame_from_custom_i420(
         width as usize,
         height as usize,
     )?;
+    *convert_us = convert_t0.elapsed().as_micros() as u64;
 
     Ok(Some(VideoRgb565Frame {
         pixels,
-        width,
-        height,
+        width: output_width,
+        height: output_height,
     }))
 }
 
@@ -950,31 +830,4 @@ fn stream_frame_interval(stream: &format::stream::Stream<'_>) -> Duration {
     } else {
         Duration::from_nanos(16_666_667)
     }
-}
-
-fn rgb565_frame_to_words(frame: &Video) -> Result<VideoRgb565Frame, String> {
-    if frame.format() != FfmpegPixel::RGB565LE {
-        return Err(format!(
-            "scaler produced {:?}, expected RGB565LE",
-            frame.format()
-        ));
-    }
-    let width = frame.width();
-    let height = frame.height();
-    let stride = frame.stride(0);
-    let row_len = width as usize * 2;
-    let data = frame.data(0);
-    let mut pixels = vec![0u16; width as usize * height as usize];
-    for y in 0..height as usize {
-        let src = &data[y * stride..y * stride + row_len];
-        let dst = &mut pixels[y * width as usize..(y + 1) * width as usize];
-        for (word, bytes) in dst.iter_mut().zip(src.chunks_exact(2)) {
-            *word = u16::from_le_bytes([bytes[0], bytes[1]]);
-        }
-    }
-    Ok(VideoRgb565Frame {
-        pixels,
-        width,
-        height,
-    })
 }

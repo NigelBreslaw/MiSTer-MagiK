@@ -37,6 +37,212 @@ pub(crate) fn convert_i420_to_rgb565(
     Ok(())
 }
 
+pub(crate) fn convert_i420_to_rgb565_2x_rust_optimized(
+    src_y: &[u8],
+    src_stride_y: usize,
+    src_u: &[u8],
+    src_stride_u: usize,
+    src_v: &[u8],
+    src_stride_v: usize,
+    dst: &mut [u16],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) -> Result<(), String> {
+    let geometry = validate_i420_to_rgb565_2x_buffers(
+        src_y,
+        src_stride_y,
+        src_u,
+        src_stride_u,
+        src_v,
+        src_stride_v,
+        dst,
+        dst_stride,
+        width,
+        height,
+    )?;
+    // SAFETY: the validation above proves every source read and destination write made by the
+    // pointer kernel is within its corresponding slice. Source and destination slices cannot
+    // alias because Rust's borrow rules require exclusive access to `dst`.
+    unsafe {
+        convert_i420_to_rgb565_2x_rust_optimized_unchecked(
+            src_y.as_ptr(),
+            src_stride_y,
+            src_u.as_ptr(),
+            src_stride_u,
+            src_v.as_ptr(),
+            src_stride_v,
+            dst.as_mut_ptr(),
+            dst_stride,
+            width,
+            height,
+            geometry.output_width,
+        );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct I420DoubleGeometry {
+    output_width: usize,
+}
+
+fn validate_i420_to_rgb565_2x_buffers(
+    src_y: &[u8],
+    src_stride_y: usize,
+    src_u: &[u8],
+    src_stride_u: usize,
+    src_v: &[u8],
+    src_stride_v: usize,
+    dst: &[u16],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) -> Result<I420DoubleGeometry, String> {
+    if width == 0 || height == 0 {
+        return Err("video frame has zero dimensions".into());
+    }
+    let output_width = width.checked_mul(2).ok_or("fused width overflow")?;
+    let output_height = height.checked_mul(2).ok_or("fused height overflow")?;
+    let chroma_w = width.div_ceil(2);
+    let chroma_h = height.div_ceil(2);
+    if src_stride_y < width
+        || src_stride_u < chroma_w
+        || src_stride_v < chroma_w
+        || dst_stride < output_width
+    {
+        return Err("invalid fused I420 2x stride".into());
+    }
+    let plane_len = |stride: usize, rows: usize, cols: usize| {
+        stride
+            .checked_mul(rows - 1)
+            .and_then(|n| n.checked_add(cols))
+    };
+    let y_len = plane_len(src_stride_y, height, width).ok_or("fused Y size overflow")?;
+    let u_len = plane_len(src_stride_u, chroma_h, chroma_w).ok_or("fused U size overflow")?;
+    let v_len = plane_len(src_stride_v, chroma_h, chroma_w).ok_or("fused V size overflow")?;
+    let dst_len =
+        plane_len(dst_stride, output_height, output_width).ok_or("fused output size overflow")?;
+    if src_y.len() < y_len || src_u.len() < u_len || src_v.len() < v_len || dst.len() < dst_len {
+        return Err("fused I420 2x buffer is shorter than its geometry".into());
+    }
+    Ok(I420DoubleGeometry { output_width })
+}
+
+#[inline(always)]
+fn i420_luma_with_chroma_terms(y: u8, r_add: i32, g_add: i32, b_add: i32) -> u16 {
+    let yc = i420_luma_terms()[usize::from(y)];
+    let r = clamp_u8_i32((yc + r_add) >> 8);
+    let g = clamp_u8_i32((yc + g_add) >> 8);
+    let b = clamp_u8_i32((yc + b_add) >> 8);
+    ((u16::from(r & 0xf8)) << 8) | ((u16::from(g & 0xfc)) << 3) | (u16::from(b) >> 3)
+}
+
+#[inline]
+fn i420_luma_terms() -> &'static [i32; 256] {
+    &I420_LUMA_TERMS
+}
+
+const fn i420_luma_terms_const() -> [i32; 256] {
+    let mut terms = [0; 256];
+    let mut y = 0;
+    while y < terms.len() {
+        let level = y as i32 - 16;
+        terms[y] = 298 * if level > 0 { level } else { 0 };
+        y += 1;
+    }
+    terms
+}
+
+static I420_LUMA_TERMS: [i32; 256] = i420_luma_terms_const();
+
+#[inline(always)]
+unsafe fn write_duplicated_rgb565(dst: *mut u16, pixel: u16) {
+    let pair = u32::from(pixel) | (u32::from(pixel) << 16);
+    // SAFETY: the caller validated room for two u16 values. `write_unaligned` supports padded
+    // destination strides whose rows are not naturally aligned to four bytes.
+    unsafe { (dst.cast::<u32>()).write_unaligned(pair) };
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn convert_i420_to_rgb565_2x_rust_optimized_unchecked(
+    src_y: *const u8,
+    src_stride_y: usize,
+    src_u: *const u8,
+    src_stride_u: usize,
+    src_v: *const u8,
+    src_stride_v: usize,
+    dst: *mut u16,
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+    output_width: usize,
+) {
+    let mut source_y = 0;
+    while source_y < height {
+        // SAFETY: the safe wrapper validated every plane and stride for this geometry.
+        let (y0, u, v, out0) = unsafe {
+            (
+                src_y.add(source_y * src_stride_y),
+                src_u.add((source_y / 2) * src_stride_u),
+                src_v.add((source_y / 2) * src_stride_v),
+                dst.add(source_y * 2 * dst_stride),
+            )
+        };
+        let has_second_source_row = source_y + 1 < height;
+        let y1 = has_second_source_row.then(|| unsafe { y0.add(src_stride_y) });
+        let out2 = has_second_source_row.then(|| unsafe { out0.add(dst_stride * 2) });
+
+        let mut x = 0;
+        while x + 1 < width {
+            // SAFETY: x/2 is within the validated chroma width and x/x+1 are within luma rows.
+            let (cu, cv, y00, y01) =
+                unsafe { (*u.add(x / 2), *v.add(x / 2), *y0.add(x), *y0.add(x + 1)) };
+            let d = i32::from(cu) - 128;
+            let e = i32::from(cv) - 128;
+            let r_add = 409 * e + 128;
+            let g_add = -100 * d - 208 * e + 128;
+            let b_add = 516 * d + 128;
+            let p00 = i420_luma_with_chroma_terms(y00, r_add, g_add, b_add);
+            let p01 = i420_luma_with_chroma_terms(y01, r_add, g_add, b_add);
+            unsafe {
+                write_duplicated_rgb565(out0.add(x * 2), p00);
+                write_duplicated_rgb565(out0.add(x * 2 + 2), p01);
+            }
+            if let (Some(y1), Some(out2)) = (y1, out2) {
+                let (y10, y11) = unsafe { (*y1.add(x), *y1.add(x + 1)) };
+                let p10 = i420_luma_with_chroma_terms(y10, r_add, g_add, b_add);
+                let p11 = i420_luma_with_chroma_terms(y11, r_add, g_add, b_add);
+                unsafe {
+                    write_duplicated_rgb565(out2.add(x * 2), p10);
+                    write_duplicated_rgb565(out2.add(x * 2 + 2), p11);
+                }
+            }
+            x += 2;
+        }
+        if x < width {
+            let (cu, cv, y00) = unsafe { (*u.add(x / 2), *v.add(x / 2), *y0.add(x)) };
+            let d = i32::from(cu) - 128;
+            let e = i32::from(cv) - 128;
+            let r_add = 409 * e + 128;
+            let g_add = -100 * d - 208 * e + 128;
+            let b_add = 516 * d + 128;
+            let p00 = i420_luma_with_chroma_terms(y00, r_add, g_add, b_add);
+            unsafe { write_duplicated_rgb565(out0.add(x * 2), p00) };
+            if let (Some(y1), Some(out2)) = (y1, out2) {
+                let p10 = i420_luma_with_chroma_terms(unsafe { *y1.add(x) }, r_add, g_add, b_add);
+                unsafe { write_duplicated_rgb565(out2.add(x * 2), p10) };
+            }
+        }
+
+        unsafe { std::ptr::copy_nonoverlapping(out0, out0.add(dst_stride), output_width) };
+        if let Some(out2) = out2 {
+            unsafe { std::ptr::copy_nonoverlapping(out2, out2.add(dst_stride), output_width) };
+        }
+        source_y += 2;
+    }
+}
+
 fn validate_i420_to_rgb565_buffers(
     src_y: &[u8],
     src_stride_y: usize,
@@ -194,6 +400,28 @@ mod tests {
         expected
     }
 
+    fn expected_2x(
+        src: &[u16],
+        src_stride: usize,
+        dst_stride: usize,
+        width: usize,
+        height: usize,
+    ) -> Vec<u16> {
+        let mut dst = vec![0xdead; dst_stride * height * 2];
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = src[y * src_stride + x];
+                let dx = x * 2;
+                let dy = y * 2;
+                dst[dy * dst_stride + dx] = pixel;
+                dst[dy * dst_stride + dx + 1] = pixel;
+                dst[(dy + 1) * dst_stride + dx] = pixel;
+                dst[(dy + 1) * dst_stride + dx + 1] = pixel;
+            }
+        }
+        dst
+    }
+
     #[test]
     fn i420_converter_rejects_zero_dimensions() {
         let mut dst = vec![0; 1];
@@ -270,5 +498,88 @@ mod tests {
 
             assert_eq!(dst, expected_exact(&fixture), "{width}x{height}");
         }
+    }
+
+    #[test]
+    fn rust_optimized_fused_matches_separated_for_padded_odd_even_frames() {
+        for (width, height, pad) in [
+            (1, 1, 3),
+            (2, 1, 2),
+            (7, 3, 5),
+            (8, 2, 4),
+            (15, 4, 3),
+            (16, 5, 1),
+        ] {
+            let fixture = fixture(width, height, pad);
+            let mut converted = vec![0xdead; fixture.dst_stride * fixture.height];
+            convert_i420_to_rgb565(
+                &fixture.src_y,
+                fixture.src_stride_y,
+                &fixture.src_u,
+                fixture.src_stride_u,
+                &fixture.src_v,
+                fixture.src_stride_v,
+                &mut converted,
+                fixture.dst_stride,
+                width,
+                height,
+            )
+            .unwrap();
+
+            let output_stride = width * 2 + pad;
+            let expected =
+                expected_2x(&converted, fixture.dst_stride, output_stride, width, height);
+            let mut fused = vec![0xdead; output_stride * height * 2];
+            convert_i420_to_rgb565_2x_rust_optimized(
+                &fixture.src_y,
+                fixture.src_stride_y,
+                &fixture.src_u,
+                fixture.src_stride_u,
+                &fixture.src_v,
+                fixture.src_stride_v,
+                &mut fused,
+                output_stride,
+                width,
+                height,
+            )
+            .unwrap();
+
+            assert_eq!(fused, expected, "fused {width}x{height} pad={pad}");
+        }
+    }
+
+    #[test]
+    fn rust_optimized_fused_rejects_invalid_geometry() {
+        let fixture = fixture(3, 3, 2);
+        let mut dst = vec![0; 6 * 6];
+        let err = convert_i420_to_rgb565_2x_rust_optimized(
+            &fixture.src_y,
+            fixture.src_stride_y,
+            &fixture.src_u,
+            fixture.src_stride_u,
+            &fixture.src_v,
+            fixture.src_stride_v,
+            &mut dst,
+            5,
+            fixture.width,
+            fixture.height,
+        )
+        .expect_err("short doubled destination stride must fail");
+        assert!(err.contains("stride"), "unexpected error: {err}");
+
+        let err = convert_i420_to_rgb565_2x_rust_optimized(
+            &fixture.src_y,
+            fixture.src_stride_y,
+            &fixture.src_u,
+            fixture.src_stride_u,
+            &fixture.src_v,
+            fixture.src_stride_v,
+            &mut dst,
+            6,
+            0,
+            fixture.height,
+        )
+        .expect_err("zero width must fail");
+        assert!(err.contains("zero dimensions"), "unexpected error: {err}");
     }
 }
