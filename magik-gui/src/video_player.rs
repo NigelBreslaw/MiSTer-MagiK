@@ -192,6 +192,7 @@ struct AudioDecodeMetrics {
 #[derive(Default)]
 struct RecycledFrame {
     audio: Vec<i16>,
+    pixels: Vec<u16>,
 }
 
 pub struct VideoFrameWorker {
@@ -225,16 +226,23 @@ impl VideoFrameWorker {
                 let frame_interval = player.frame_interval();
                 let mut audio_pacer = AudioFramePacer::new();
                 loop {
-                    let buffers = recycle_rx.try_recv().unwrap_or_default();
+                    let mut buffers = RecycledFrame::default();
+                    while let Ok(mut recycled) = recycle_rx.try_recv() {
+                        if buffers.audio.is_empty() {
+                            buffers.audio = std::mem::take(&mut recycled.audio);
+                        }
+                        if buffers.pixels.is_empty() {
+                            buffers.pixels = std::mem::take(&mut recycled.pixels);
+                        }
+                    }
                     let audio_frames = audio_pacer.next_frames(frame_interval);
                     let t0 = Instant::now();
-                    let frame =
-                        player
-                            .next_frame_into(audio_frames, buffers.audio)
-                            .map(|mut frame| {
-                                frame.metrics.video_worker_us = t0.elapsed().as_micros() as u64;
-                                frame
-                            });
+                    let frame = player
+                        .next_frame_into(audio_frames, buffers.audio, buffers.pixels)
+                        .map(|mut frame| {
+                            frame.metrics.video_worker_us = t0.elapsed().as_micros() as u64;
+                            frame
+                        });
                     let failed = frame.is_err();
                     decode_pending_frames.fetch_add(1, Ordering::Relaxed);
                     if tx.send(frame).is_err() || failed {
@@ -280,7 +288,18 @@ impl VideoFrameWorker {
 
     pub fn recycle_audio(&self, mut audio: Vec<i16>) {
         audio.clear();
-        let _ = self.recycle_tx.try_send(RecycledFrame { audio });
+        let _ = self.recycle_tx.try_send(RecycledFrame {
+            audio,
+            pixels: Vec::new(),
+        });
+    }
+
+    pub fn recycle_pixels(&self, mut pixels: Vec<u16>) {
+        pixels.clear();
+        let _ = self.recycle_tx.try_send(RecycledFrame {
+            audio: Vec::new(),
+            pixels,
+        });
     }
 }
 
@@ -436,12 +455,14 @@ impl VideoPlayer {
         &mut self,
         audio_frames: usize,
         mut audio: Vec<i16>,
+        mut pixels: Vec<u16>,
     ) -> Result<PlaybackFrame, String> {
         for _ in 0..2 {
-            if let Some(frame) = self.next_frame_until_eof_into(audio_frames, audio)? {
+            if let Some(frame) = self.next_frame_until_eof_into(audio_frames, audio, pixels)? {
                 return Ok(frame);
             }
             audio = Vec::new();
+            pixels = Vec::new();
             self.rewind()?;
         }
         Err("media decode reached EOF twice without a video frame".into())
@@ -451,12 +472,14 @@ impl VideoPlayer {
         &mut self,
         audio_frames: usize,
         mut audio: Vec<i16>,
+        mut pixels: Vec<u16>,
     ) -> Result<Option<PlaybackFrame>, String> {
         if let Some((frame, video_metrics)) = receive_rgb565_frame(
             &mut self.video_decoder,
             self.scale_mode,
             self.output_width,
             self.output_height,
+            pixels,
         )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
@@ -468,9 +491,10 @@ impl VideoPlayer {
                 metrics: self.take_playback_metrics(video_metrics),
             }));
         }
+        pixels = Vec::new();
 
         while let Some(packet) = self.pending_video_packets.pop_front() {
-            if let Some((frame, video_metrics)) = self.send_video_packet(packet)? {
+            if let Some((frame, video_metrics)) = self.send_video_packet(packet, pixels)? {
                 self.ensure_audio(audio_frames)?;
                 self.take_audio_into(audio_frames, &mut audio);
                 return Ok(Some(PlaybackFrame {
@@ -481,13 +505,16 @@ impl VideoPlayer {
                     metrics: self.take_playback_metrics(video_metrics),
                 }));
             }
+            pixels = Vec::new();
         }
 
-        for item in self.input.packets() {
-            let (stream, packet) = item;
+        loop {
+            let Some((stream, packet)) = self.input.packets().next() else {
+                break;
+            };
             let stream_index = stream.index();
             if stream_index == self.video_stream_index {
-                if let Some((frame, video_metrics)) = self.send_video_packet(packet)? {
+                if let Some((frame, video_metrics)) = self.send_video_packet(packet, pixels)? {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
@@ -498,6 +525,7 @@ impl VideoPlayer {
                         metrics: self.take_playback_metrics(video_metrics),
                     }));
                 }
+                pixels = Vec::new();
             } else if stream_index == self.audio_stream_index {
                 let mut metrics = AudioDecodeMetrics::default();
                 append_decoded_audio_packet(
@@ -531,6 +559,7 @@ impl VideoPlayer {
             self.scale_mode,
             self.output_width,
             self.output_height,
+            pixels,
         )? {
             self.ensure_audio(audio_frames)?;
             self.take_audio_into(audio_frames, &mut audio);
@@ -582,6 +611,7 @@ impl VideoPlayer {
     fn send_video_packet(
         &mut self,
         packet: Packet,
+        pixels: Vec<u16>,
     ) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
         match self.video_decoder.send_packet(&packet) {
             Ok(()) => receive_rgb565_frame(
@@ -589,6 +619,7 @@ impl VideoPlayer {
                 self.scale_mode,
                 self.output_width,
                 self.output_height,
+                pixels,
             ),
             Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {
                 let frame = receive_rgb565_frame(
@@ -596,6 +627,7 @@ impl VideoPlayer {
                     self.scale_mode,
                     self.output_width,
                     self.output_height,
+                    pixels,
                 )?;
                 self.pending_video_packets.push_front(packet);
                 Ok(frame)
@@ -667,6 +699,7 @@ fn receive_rgb565_frame(
     scale_mode: VideoScaleMode,
     output_width: u32,
     output_height: u32,
+    pixels: Vec<u16>,
 ) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
     let mut decoded = Video::empty();
     let decode_t0 = Instant::now();
@@ -674,7 +707,6 @@ fn receive_rgb565_frame(
         Ok(()) => {
             let decode_us = decode_t0.elapsed().as_micros() as u64;
             let mut convert_us = 0;
-            let mut scale_2x_us = 0;
             let mut fused_us = 0;
             let scale_us = 0;
             let frame = rgb565_frame_from_i420(
@@ -682,8 +714,8 @@ fn receive_rgb565_frame(
                 scale_mode,
                 output_width,
                 output_height,
+                pixels,
                 &mut convert_us,
-                &mut scale_2x_us,
                 &mut fused_us,
             )?;
             Ok(Some((
@@ -691,7 +723,7 @@ fn receive_rgb565_frame(
                 VideoDecodeMetrics {
                     decode_us,
                     convert_us,
-                    scale_2x_us,
+                    scale_2x_us: 0,
                     fused_us,
                     scale_us,
                 },
@@ -706,10 +738,10 @@ fn rgb565_frame_from_i420(
     scale_mode: VideoScaleMode,
     output_width: u32,
     output_height: u32,
+    pixels: Vec<u16>,
     convert_us: &mut u64,
-    scale_2x_us: &mut u64,
     fused_us: &mut u64,
-) -> Result<Option<VideoRgb565Frame>, String> {
+) -> Result<VideoRgb565Frame, String> {
     if frame.format() != FfmpegPixel::YUV420P {
         return Err(format!(
             "video frame format {:?} at {}x{} is unsupported; production video requires YUV420P",
@@ -724,11 +756,15 @@ fn rgb565_frame_from_i420(
     let expected =
         scale_mode.output_dimensions(width, height, DEFAULT_VIDEO_MAX_W, DEFAULT_VIDEO_MAX_H);
     if expected != (output_width, output_height) {
-        return Ok(None);
+        return Err(format!(
+            "video output geometry mismatch: expected {}x{}, got {}x{}",
+            expected.0, expected.1, output_width, output_height
+        ));
     }
 
     if scale_mode == VideoScaleMode::Double {
-        let mut pixels = vec![0u16; output_width as usize * output_height as usize];
+        let mut pixels =
+            recycled_rgb565_pixels(pixels, output_width as usize * output_height as usize);
         let started = Instant::now();
         convert_i420_to_rgb565_2x_rust_optimized(
             frame.data(0),
@@ -743,14 +779,14 @@ fn rgb565_frame_from_i420(
             height as usize,
         )?;
         *fused_us = started.elapsed().as_micros() as u64;
-        return Ok(Some(VideoRgb565Frame {
+        return Ok(VideoRgb565Frame {
             pixels,
             width: output_width,
             height: output_height,
-        }));
+        });
     }
 
-    let mut pixels = vec![0u16; width as usize * height as usize];
+    let mut pixels = recycled_rgb565_pixels(pixels, width as usize * height as usize);
     let convert_t0 = Instant::now();
     convert_i420_to_rgb565(
         frame.data(0),
@@ -766,11 +802,16 @@ fn rgb565_frame_from_i420(
     )?;
     *convert_us = convert_t0.elapsed().as_micros() as u64;
 
-    Ok(Some(VideoRgb565Frame {
+    Ok(VideoRgb565Frame {
         pixels,
         width: output_width,
         height: output_height,
-    }))
+    })
+}
+
+fn recycled_rgb565_pixels(mut pixels: Vec<u16>, len: usize) -> Vec<u16> {
+    pixels.resize(len, 0);
+    pixels
 }
 
 fn frame_stride_usize(frame: &Video, plane: usize) -> usize {
