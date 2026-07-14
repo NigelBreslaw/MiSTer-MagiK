@@ -73,7 +73,8 @@ mod sd_browse {
     ) -> Result<Value, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = sd_host_path(root, &relative_path);
+        let host_path = checked_sd_host_path(root, &relative_path)
+            .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
         let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
@@ -101,7 +102,8 @@ mod sd_browse {
     ) -> Result<Value, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = sd_host_path(root, &relative_path);
+        let host_path = checked_sd_host_path(root, &relative_path)
+            .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
         let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
@@ -125,7 +127,8 @@ mod sd_browse {
     pub fn stat_item_at_root(root: &Path, requested_path: &str) -> Result<Value, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = sd_host_path(root, &relative_path);
+        let host_path = checked_sd_host_path(root, &relative_path)
+            .map_err(|err| format!("stat {relative_path}: {err}"))?;
         let metadata =
             fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
         let name = item_name(&relative_path);
@@ -162,7 +165,8 @@ mod sd_browse {
     ) -> Result<SdPreviewImage, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = sd_host_path(root, &relative_path);
+        let host_path = checked_sd_host_path(root, &relative_path)
+            .map_err(|err| format!("stat {relative_path}: {err}"))?;
         let metadata =
             fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
         if !metadata.is_file() {
@@ -201,7 +205,8 @@ mod sd_browse {
     pub fn parse_mra_at_root(root: &Path, requested_path: &str) -> Result<Value, String> {
         let start = Instant::now();
         let relative_path = normalize_sd_relative_path(requested_path)?;
-        let host_path = sd_host_path(root, &relative_path);
+        let host_path = checked_sd_host_path(root, &relative_path)
+            .map_err(|err| format!("stat {relative_path}: {err}"))?;
         let metadata =
             fs::metadata(&host_path).map_err(|err| format!("stat {relative_path}: {err}"))?;
         if !metadata.is_file() {
@@ -283,6 +288,21 @@ mod sd_browse {
             path.push(part);
         }
         path
+    }
+
+    fn checked_sd_host_path(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+        let canonical_root = fs::canonicalize(root)
+            .map_err(|err| format!("resolve SD root {}: {err}", root.display()))?;
+        let host_path = sd_host_path(root, relative_path);
+        let canonical_path = fs::canonicalize(&host_path)
+            .map_err(|err| format!("resolve {relative_path}: {err}"))?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(format!(
+                "resolved path is outside SD root: {}",
+                canonical_path.display()
+            ));
+        }
+        Ok(canonical_path)
     }
 
     pub fn sd_entry_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
@@ -3916,6 +3936,29 @@ mod tests {
             sd_browse::sd_host_path(root, "/games/NES"),
             std::path::PathBuf::from("/media/fat/games/NES")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sd_item_access_rejects_symlinks_that_escape_root() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!(
+            "mister-magik-agent-sd-symlink-{}",
+            std::process::id()
+        ));
+        let root = base.join("sd");
+        let outside = base.join("outside.txt");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
+        symlink(&outside, root.join("escape.txt")).unwrap();
+
+        let error = sd_browse::stat_item_at_root(&root, "/escape.txt")
+            .expect_err("an SD path must not follow a symlink outside its root");
+
+        assert!(error.contains("outside SD root"), "{error}");
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

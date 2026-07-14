@@ -147,6 +147,9 @@ impl FrameHeader {
         if rect_right > self.geometry.width || rect_bottom > self.geometry.height {
             return Err(FrameStreamError::BadRect);
         }
+        if self.kind == FrameKind::Keyframe && self.rect != FrameRect::full(self.geometry) {
+            return Err(FrameStreamError::BadRect);
+        }
         let expected_raw = self
             .rect
             .width
@@ -343,6 +346,7 @@ mod tests {
     #[test]
     fn frame_header_validates_rect_payload_size() {
         let mut header = keyframe_header();
+        header.kind = FrameKind::RectDelta;
         header.rect = FrameRect {
             x: 10,
             y: 20,
@@ -493,5 +497,19 @@ mod tests {
             header.validate_shape(),
             Err(FrameStreamError::PayloadTooLarge)
         );
+    }
+
+    #[test]
+    fn keyframe_must_cover_the_full_visible_surface() {
+        let mut header = keyframe_header();
+        header.rect = FrameRect {
+            x: 10,
+            y: 10,
+            width: 100,
+            height: 100,
+        };
+        header.raw_bytes = 100 * 100 * 2;
+
+        assert_eq!(header.validate_shape(), Err(FrameStreamError::BadRect));
     }
 }

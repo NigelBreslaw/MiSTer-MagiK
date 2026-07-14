@@ -1,5 +1,6 @@
 use crate::agent_client;
 use rusqlite::{Connection, OpenFlags};
+use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -159,7 +160,7 @@ pub fn load_library_catalog(path: &Path) -> Result<LibraryCatalog, String> {
         .map_err(|err| format!("open library database {}: {err}", path.display()))?;
     let identities = load_identities(&conn)?;
     let mut games = load_games(&conn, identities)?;
-    games.sort_by(|a, b| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title)));
+    games.sort_by(|a, b| natural_cmp(&a.sort_title, &b.sort_title));
 
     let mut systems = BTreeSet::new();
     let mut categories = BTreeSet::new();
@@ -438,29 +439,29 @@ fn sort_games(
 ) {
     games.sort_by(|a, b| {
         let ordering = match column {
-            LibrarySortColumn::Title => natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title)),
+            LibrarySortColumn::Title => natural_cmp(&a.sort_title, &b.sort_title),
             LibrarySortColumn::System => a
                 .system_title
                 .cmp(&b.system_title)
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
             LibrarySortColumn::Year => numeric_sort_key(&a.year)
                 .cmp(&numeric_sort_key(&b.year))
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
             LibrarySortColumn::Manufacturer => a
                 .manufacturer
                 .cmp(&b.manufacturer)
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
             LibrarySortColumn::Category => a
                 .category
                 .cmp(&b.category)
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
             LibrarySortColumn::Preview => a
                 .has_preview
                 .cmp(&b.has_preview)
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
             LibrarySortColumn::Discovered => numeric_sort_key(&a.discovered_at_unix)
                 .cmp(&numeric_sort_key(&b.discovered_at_unix))
-                .then_with(|| natural_key(&a.sort_title).cmp(&natural_key(&b.sort_title))),
+                .then_with(|| natural_cmp(&a.sort_title, &b.sort_title)),
         };
         match direction {
             LibrarySortDirection::Ascending => ordering,
@@ -473,8 +474,56 @@ fn numeric_sort_key(value: &str) -> i64 {
     value.parse::<i64>().unwrap_or(i64::MIN)
 }
 
-fn natural_key(value: &str) -> String {
-    value.to_ascii_lowercase()
+fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let mut a_chars = a.char_indices().peekable();
+    let mut b_chars = b.char_indices().peekable();
+    loop {
+        match (a_chars.peek().copied(), b_chars.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some((_, ac)), Some((_, bc))) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
+                let a_digits = take_ascii_digits(a, &mut a_chars);
+                let b_digits = take_ascii_digits(b, &mut b_chars);
+                let a_number = a_digits.trim_start_matches('0');
+                let b_number = b_digits.trim_start_matches('0');
+                let a_number = if a_number.is_empty() { "0" } else { a_number };
+                let b_number = if b_number.is_empty() { "0" } else { b_number };
+                let ordering = a_number
+                    .len()
+                    .cmp(&b_number.len())
+                    .then_with(|| a_number.cmp(b_number))
+                    .then_with(|| a_digits.len().cmp(&b_digits.len()));
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            (Some((_, ac)), Some((_, bc))) => {
+                a_chars.next();
+                b_chars.next();
+                let ordering = ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase());
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+        }
+    }
+}
+
+fn take_ascii_digits<'a>(
+    text: &'a str,
+    chars: &mut std::iter::Peekable<std::str::CharIndices<'a>>,
+) -> &'a str {
+    let start = chars.peek().map(|(index, _)| *index).unwrap_or(text.len());
+    let mut end = start;
+    while let Some((index, ch)) = chars.peek().copied() {
+        if !ch.is_ascii_digit() {
+            break;
+        }
+        end = index + ch.len_utf8();
+        chars.next();
+    }
+    &text[start..end]
 }
 
 #[cfg(test)]
@@ -590,6 +639,34 @@ mod tests {
         assert_eq!(view.rows[0].title, "1943");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn title_sort_orders_numbered_games_naturally() {
+        let mut catalog = LibraryCatalog {
+            games: ["Game 10", "Game 2", "Game 1"]
+                .into_iter()
+                .map(|title| LibraryGame {
+                    id: title.to_string(),
+                    title: title.to_string(),
+                    sort_title: title.to_string(),
+                    ..LibraryGame::default()
+                })
+                .collect(),
+            ..LibraryCatalog::default()
+        };
+        for game in &mut catalog.games {
+            game.search_text = build_search_text(game);
+        }
+
+        let view = apply_library_query(&catalog, &LibraryQuery::default());
+        let titles = view
+            .rows
+            .iter()
+            .map(|game| game.title.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(titles, ["Game 1", "Game 2", "Game 10"]);
     }
 
     fn temp_dir(label: &str) -> PathBuf {

@@ -68,7 +68,7 @@ pub fn sqlite_cell_to_string(row: &rusqlite::Row<'_>, col: usize) -> rusqlite::R
         ValueRef::Null => Ok(String::new()),
         ValueRef::Integer(value) => Ok(value.to_string()),
         ValueRef::Real(value) => Ok(value.to_string()),
-        ValueRef::Text(value) => Ok(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Text(value) => Ok(tsv_field(&String::from_utf8_lossy(value))),
         ValueRef::Blob(value) => Ok(format!("<blob:{}>", value.len())),
     }
 }
@@ -95,9 +95,9 @@ pub fn sqlite_statement_is_inspect_only(query: &str, stmt: &rusqlite::Statement<
             | "foreign_key_list" | "integrity_check" | "quick_check",
         ) => true,
         Some(
-            "database_list" | "compile_options" | "page_count" | "page_size"
-            | "freelist_count" | "journal_mode" | "synchronous" | "schema_version"
-            | "user_version" | "application_id" | "encoding",
+            "database_list" | "compile_options" | "page_count" | "page_size" | "freelist_count"
+            | "journal_mode" | "synchronous" | "schema_version" | "user_version" | "application_id"
+            | "encoding",
         ) => tokens.len() == 2,
         _ => false,
     }
@@ -107,7 +107,14 @@ pub fn sqlite_statement_to_tsv(stmt: &mut rusqlite::Statement<'_>) -> rusqlite::
     let column_count = stmt.column_count();
     let mut out = String::new();
     if column_count > 0 {
-        out.push_str(&stmt.column_names().join("\t"));
+        out.push_str(
+            &stmt
+                .column_names()
+                .into_iter()
+                .map(tsv_field)
+                .collect::<Vec<_>>()
+                .join("\t"),
+        );
         out.push('\n');
     }
     let mut rows = stmt.query([])?;
@@ -179,4 +186,22 @@ fn sqlite_query_tokens(query: &str) -> Vec<String> {
         tokens.push(token);
     }
     tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_tsv_escapes_column_names_and_text_cells() {
+        let conn = Connection::open_in_memory().expect("open sqlite fixture");
+
+        let out = sqlite_query_to_tsv(
+            &conn,
+            "SELECT 'row\tvalue\nnext\\part' AS 'odd\theader\nname'",
+        )
+        .expect("format sqlite fixture");
+
+        assert_eq!(out, "odd\\theader\\nname\nrow\\tvalue\\nnext\\\\part\n");
+    }
 }

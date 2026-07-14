@@ -7,9 +7,9 @@ use crate::sqlite_inspect::{
     append_sqlite_timing_row, sqlite_cell_to_string, sqlite_query_hash,
     sqlite_statement_is_inspect_only, SqliteInspectTiming,
 };
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use rusqlite::Connection;
 
 pub(crate) fn run_scan_bench() {
     let cfg = BenchConfig::from_env();
@@ -215,13 +215,7 @@ pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> 
     let open_us = open_t.elapsed().as_micros() as u64;
     let _ = conn.execute_batch("PRAGMA query_only=ON;");
     if queries.len() == 1 {
-        return run_sqlite_inspect_query(
-            &conn,
-            &path,
-            metadata.len(),
-            &queries[0],
-            open_us,
-        );
+        return run_sqlite_inspect_query(&conn, &path, metadata.len(), &queries[0], open_us);
     }
     let mut out = String::new();
     for (index, query) in queries.iter().enumerate() {
@@ -273,7 +267,14 @@ fn run_sqlite_inspect_query(
     let mut out = String::new();
     if column_count > 0 {
         let format_t = Instant::now();
-        out.push_str(&stmt.column_names().join("\t"));
+        out.push_str(
+            &stmt
+                .column_names()
+                .into_iter()
+                .map(crate::sqlite_inspect::tsv_field)
+                .collect::<Vec<_>>()
+                .join("\t"),
+        );
         out.push('\n');
         let mut format_us = format_t.elapsed().as_micros() as u64;
         let mut row_read_us = 0u64;
@@ -447,6 +448,29 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_inspect_keeps_special_text_inside_tsv_fields() {
+        let root = unique_temp_dir("sqlite-inspect-tsv-fields");
+        let db = root.join("library.sqlite3");
+        let conn = Connection::open(&db).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE fixture(value TEXT);")
+            .expect("create inspect fixture");
+        drop(conn);
+
+        let out = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            db.display().to_string(),
+            "SELECT 'row\tvalue\nnext\\part' AS 'odd\theader\nname'".to_string(),
+        ])
+        .expect("inspect special TSV fields");
+
+        assert!(
+            out.starts_with("odd\\theader\\nname\nrow\\tvalue\\nnext\\\\part\n"),
+            "{out}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sqlite_inspect_appends_timing_row() {
         let root = unique_temp_dir("sqlite-inspect-timing");
         let db = root.join("library.sqlite3");
@@ -476,8 +500,10 @@ mod tests {
         let root = unique_temp_dir("sqlite-inspect-batch");
         let db = root.join("library.sqlite3");
         let conn = Connection::open(&db).expect("open sqlite");
-        conn.execute_batch("CREATE TABLE values_fixture(value INTEGER); INSERT INTO values_fixture VALUES(7);")
-            .expect("create inspect fixture");
+        conn.execute_batch(
+            "CREATE TABLE values_fixture(value INTEGER); INSERT INTO values_fixture VALUES(7);",
+        )
+        .expect("create inspect fixture");
         drop(conn);
 
         let out = run_sqlite_inspect_cli(&[
