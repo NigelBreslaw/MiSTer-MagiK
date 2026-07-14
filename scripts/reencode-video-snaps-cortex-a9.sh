@@ -10,6 +10,8 @@ LUMA_PSNR_MIN="${MISTER_VIDEO_LUMA_PSNR_MIN:-45}"
 CRF="${MISTER_VIDEO_CRF:-10}"
 PRESET="${MISTER_VIDEO_PRESET:-slow}"
 GOP="${MISTER_VIDEO_GOP:-120}"
+SOURCE_GEOMETRY="${MISTER_VIDEO_SOURCE_GEOMETRY:-640x480}"
+OUTPUT_GEOMETRY="${MISTER_VIDEO_OUTPUT_GEOMETRY:-320x240}"
 
 die() {
   echo "reencode-video-snaps-cortex-a9: $*" >&2
@@ -50,6 +52,59 @@ raise SystemExit(0 if value >= minimum or math.isinf(value) else 1)
 PY
 }
 
+validate_h264_policy() {
+  local file="$1"
+  local gop="$2"
+  local frames_log trace_log
+  frames_log="$(mktemp "${TMPDIR:-/tmp}/video-frames.XXXXXX")"
+  trace_log="$(mktemp "${TMPDIR:-/tmp}/video-h264-trace.XXXXXX")"
+  ffprobe -v error -select_streams v:0 -show_entries frame=key_frame,pict_type \
+    -of csv=p=0 "$file" >"$frames_log"
+  ffmpeg -hide_banner -v debug -i "$file" -map 0:v:0 -c copy \
+    -bsf:v trace_headers -f null - >"$trace_log" 2>&1
+  if ! python3 - "$frames_log" "$trace_log" "$gop" <<'PY'
+import re
+import sys
+
+frames_path, trace_path, gop_text = sys.argv[1:]
+gop = int(gop_text)
+keys = []
+for index, raw in enumerate(open(frames_path, encoding="utf-8", errors="replace")):
+    fields = [part.strip() for part in raw.strip().split(",") if part.strip()]
+    if len(fields) < 2:
+        continue
+    key_frame, pict_type = fields[0], fields[1]
+    if pict_type == "B":
+        raise SystemExit("B-frame found")
+    if key_frame == "1":
+        keys.append(index)
+if not keys:
+    raise SystemExit("no keyframes found")
+if keys[0] != 0:
+    raise SystemExit(f"first keyframe is frame {keys[0]}, expected 0")
+for previous, current in zip(keys, keys[1:]):
+    if current - previous != gop:
+        raise SystemExit(f"GOP interval {current - previous}, expected {gop}")
+
+trace = open(trace_path, encoding="utf-8", errors="replace").read()
+entropy = re.findall(r"entropy_coding_mode_flag[^\n]*=\s*([01])", trace)
+if not entropy:
+    raise SystemExit("could not validate CABAC flag")
+if any(value != "0" for value in entropy):
+    raise SystemExit("CABAC enabled")
+refs = re.findall(r"\b(?:max_)?num_ref_frames\b[^\n]*=\s*(\d+)", trace)
+if not refs:
+    raise SystemExit("could not validate reference frame count")
+if any(int(value) > 1 for value in refs):
+    raise SystemExit(f"multiple reference frames found: {refs}")
+PY
+  then
+    rm -f "$frames_log" "$trace_log"
+    return 1
+  fi
+  rm -f "$frames_log" "$trace_log"
+}
+
 require_tool ffmpeg
 require_tool ffprobe
 require_tool python3
@@ -87,10 +142,12 @@ for source in "${sources[@]}"; do
   fps="${video[4]}"
   audio_codec="${audio[0]}"
   [[ "$audio_codec" == "aac" ]] || die "$base: audio codec is $audio_codec; expected AAC so the canonical encode can copy audio"
+  [[ "${source_width}x${source_height}" == "$SOURCE_GEOMETRY" ]] || die "$base: source geometry is ${source_width}x${source_height}; expected $SOURCE_GEOMETRY"
   [[ $((source_width % 2)) -eq 0 && $((source_height % 2)) -eq 0 ]] || die "$base: source geometry must be even, got ${source_width}x${source_height}"
   out_width=$((source_width / 2))
   out_height=$((source_height / 2))
   [[ "$out_width" -gt 0 && "$out_height" -gt 0 ]] || die "$base: invalid half geometry ${out_width}x${out_height}"
+  [[ "${out_width}x${out_height}" == "$OUTPUT_GEOMETRY" ]] || die "$base: output geometry would be ${out_width}x${out_height}; expected $OUTPUT_GEOMETRY"
 
   ffmpeg -hide_banner -y -i "$source" \
     -map 0:v:0 -map 0:a:0 \
@@ -112,9 +169,9 @@ for source in "${sources[@]}"; do
   profile="${out_video[1]}"
   probed_width="${out_video[2]}"
   probed_height="${out_video[3]}"
-  pix_fmt="${out_video[4]}"
-  probed_fps="${out_video[5]}"
-  has_b_frames="${out_video[6]}"
+  has_b_frames="${out_video[4]}"
+  pix_fmt="${out_video[5]}"
+  probed_fps="${out_video[6]}"
   probed_audio="${out_audio[0]}"
 
   [[ "$out_codec" == "h264" ]] || die "$out_name: video codec is $out_codec"
@@ -124,6 +181,7 @@ for source in "${sources[@]}"; do
   [[ "$has_b_frames" == "0" ]] || die "$out_name: has_b_frames is $has_b_frames"
   [[ "$probed_audio" == "aac" ]] || die "$out_name: audio codec is $probed_audio"
   fraction_equal "$probed_fps" "$fps" || die "$out_name: fps is $probed_fps, source fps is $fps"
+  validate_h264_policy "$out" "$GOP" || die "$out_name: H.264 policy validation failed"
 
   ssim_log="$(mktemp "${TMPDIR:-/tmp}/video-ssim.XXXXXX")"
   psnr_log="$(mktemp "${TMPDIR:-/tmp}/video-psnr.XXXXXX")"

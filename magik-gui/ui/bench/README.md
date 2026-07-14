@@ -29,8 +29,8 @@ For 60 fps Neo Geo video snaps on the MiSTer, use half-resolution source assets
 (`320x240` for the original `640x480` snaps) and leave
 `MISTER_VIDEO_SCALE=source`. This keeps the fast YUV420P-to-RGB565 conversion
 path active and avoids runtime scaling in the hot frame loop.
-`scripts/reencode-video-snaps-cortex-a9.sh` writes validated Lanczos-half,
-Constrained Baseline H.264/AAC assets under
+`scripts/reencode-video-snaps-cortex-a9.sh` writes validated `640x480` to
+`320x240` Lanczos-half, Constrained Baseline H.264/AAC assets under
 `build/video-snaps-neogeo-cortex-a9`, with per-file provenance and a manifest.
 `scripts/sync-video-snaps.sh` validates that manifest, stages the files on the
 MiSTer, verifies remote hashes, and then swaps the playlist folder atomically so
