@@ -1,5 +1,8 @@
 use std::env;
 
+#[cfg(target_os = "linux")]
+mod scanout_slots_contract;
+
 #[cfg(any(target_os = "linux", test))]
 use std::io;
 
@@ -791,6 +794,10 @@ mod library_snapshot {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use super::scanout_slots_contract::{
+        ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
+        GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
+    };
     use flate2::{write::ZlibEncoder, Compression};
     use libc::{
         c_char, c_int, c_short, c_ulong, close, if_nametoindex, ifreq, in_addr, ioctl, rtentry,
@@ -821,9 +828,6 @@ mod linux {
     const AGENT_PORT: u16 = 7498;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
-    const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
-    const SCANOUT_SLOTS_ABI_VERSION: u32 = 1;
-    const SCANOUT_SLOTS_GET_LAYOUT: c_ulong = 0x8040_4d01;
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
@@ -2405,28 +2409,6 @@ mod linux {
         mmap_offset_bytes: usize,
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    struct ScanoutSlotLayout {
-        physical_address: u32,
-        mmap_offset_bytes: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    struct ScanoutSlotsLayout {
-        abi_version: u32,
-        slot_count: u32,
-        width: u32,
-        height: u32,
-        stride_bytes: u32,
-        frame_bytes: u32,
-        map_bytes: u32,
-        flags: u32,
-        slots: [ScanoutSlotLayout; 2],
-        reserved: [u32; 4],
-    }
-
     #[derive(Clone, Copy, Debug)]
     struct LatchedFbufStatus {
         active_sequence: u16,
@@ -2529,30 +2511,9 @@ mod linux {
                 io::Error::last_os_error()
             ));
         }
-        let expected = ScanoutSlotsLayout {
-            abi_version: SCANOUT_SLOTS_ABI_VERSION,
-            slot_count: 2,
-            width: 960,
-            height: 540,
-            stride_bytes: 1920,
-            frame_bytes: 1_036_800,
-            map_bytes: 1_040_384,
-            flags: 1,
-            slots: [
-                ScanoutSlotLayout {
-                    physical_address: 0x227e_9000,
-                    mmap_offset_bytes: 0,
-                },
-                ScanoutSlotLayout {
-                    physical_address: 0x22fd_2000,
-                    mmap_offset_bytes: 1_048_576,
-                },
-            ],
-            reserved: [0; 4],
-        };
-        if layout != expected {
+        if layout != EXPECTED_LAYOUT {
             return Err(format!(
-                "scanout slots layout mismatch: expected {expected:?}, got {layout:?}"
+                "scanout slots layout mismatch: expected {EXPECTED_LAYOUT:?}, got {layout:?}"
             ));
         }
         Ok(layout)

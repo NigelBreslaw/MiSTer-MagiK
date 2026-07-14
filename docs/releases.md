@@ -75,10 +75,13 @@ The workflow is `.github/workflows/distribution.yml` and has only the
 Before dispatch:
 
 1. Merge all release changes to `main` and run `scripts/release-check-host.sh`.
-2. When FPGA or scanout inputs changed, run the FPGA Vblank Latch workflow on
-   `main` and wait for the main Kernel scanout workflow (or dispatch it on
-   `main`). Pull-request builds are validation-only and do not create promotable
-   artifacts.
+2. When inputs listed in `scripts/platform-component-inputs/fpga-v0.1.txt`
+   changed, run the FPGA Vblank Latch workflow on `main`. When inputs listed in
+   `scripts/platform-component-inputs/kernel-v0.1.txt` changed, wait for the
+   main Kernel scanout workflow or dispatch it on `main`. Userspace scanout ABI,
+   deploy, installer, and checked-documentation changes require the lightweight
+   Scanout contract check, not new platform artifacts. Pull-request builds are
+   validation-only and do not create promotable artifacts.
 3. Dispatch **Promote MiSTer MagiK Platform Bundle v0.1** from `main`. It finds
    the newest successful main artifacts matching the current component
    identities and creates the immutable prerelease tag

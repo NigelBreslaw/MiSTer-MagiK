@@ -1,0 +1,8 @@
+# MiSTer MagiK FPGA component identity inputs, format v0.1.
+fpga/menu-vblank-latch
+kernel/scanout-slots/mister_magik_scanout_platform.h
+scripts/build-fpga-vblank-latch-core.sh
+scripts/install-quartus-lite-docker.sh
+scripts/check-fpga-quartus-delta.py
+scripts/verify-fpga-rbf-manifest.py
+.github/workflows/fpga-vblank-latch.yml

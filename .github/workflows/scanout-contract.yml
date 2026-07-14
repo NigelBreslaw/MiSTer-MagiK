@@ -1,0 +1,33 @@
+name: Scanout contract
+
+on:
+  pull_request:
+    paths:
+      - "magik-gui/src/framebuffer/scanout_slots.rs"
+      - "tools/magik-agent/src/scanout_slots_contract.rs"
+      - "scripts/deploy-platform.sh"
+      - "scripts/install-slint-boot.sh"
+      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - ".github/workflows/scanout-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "magik-gui/src/framebuffer/scanout_slots.rs"
+      - "tools/magik-agent/src/scanout_slots_contract.rs"
+      - "scripts/deploy-platform.sh"
+      - "scripts/install-slint-boot.sh"
+      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - ".github/workflows/scanout-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check cross-language scanout contract
+        run: scripts/check-scanout-slots-contract.sh

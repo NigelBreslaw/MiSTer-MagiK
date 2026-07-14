@@ -4,33 +4,21 @@ on:
   pull_request:
     paths:
       - "kernel/scanout-slots/**"
-      - "magik-gui/src/framebuffer/scanout_slots.rs"
-      - "tools/magik-agent/src/main.rs"
       - "scripts/build-scanout-slots-module.sh"
       - "scripts/check-scanout-slots-contract.sh"
-      - "scripts/deploy-platform.sh"
-      - "scripts/install-slint-boot.sh"
-      - "scripts/scanout-slots-one-shot.sh"
-      - "docs/kernel-scanout-plugin-assurance.md"
-      - "docs/benchmarking.md"
-      - "documentation/src/content/docs/architecture/framebuffer-and-hdmi.mdx"
-      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - "scripts/test-scanout-platform-contract.py"
+      - "scripts/platform-component-inputs/kernel-v0.1.txt"
+      - "scripts/platform-component-id.py"
       - ".github/workflows/kernel-scanout.yml"
   push:
     branches: [main]
     paths:
       - "kernel/scanout-slots/**"
-      - "magik-gui/src/framebuffer/scanout_slots.rs"
-      - "tools/magik-agent/src/main.rs"
       - "scripts/build-scanout-slots-module.sh"
       - "scripts/check-scanout-slots-contract.sh"
-      - "scripts/deploy-platform.sh"
-      - "scripts/install-slint-boot.sh"
-      - "scripts/scanout-slots-one-shot.sh"
-      - "docs/kernel-scanout-plugin-assurance.md"
-      - "docs/benchmarking.md"
-      - "documentation/src/content/docs/architecture/framebuffer-and-hdmi.mdx"
-      - "documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
+      - "scripts/test-scanout-platform-contract.py"
+      - "scripts/platform-component-inputs/kernel-v0.1.txt"
+      - "scripts/platform-component-id.py"
       - ".github/workflows/kernel-scanout.yml"
   workflow_dispatch:
 

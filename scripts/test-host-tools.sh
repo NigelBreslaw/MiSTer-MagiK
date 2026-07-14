@@ -90,6 +90,7 @@ fi
 
 "$ROOT/scripts/test-mister-magik-installer.sh"
 python3 "$ROOT/scripts/test-platform-component-id.py"
+python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"
 python3 "$ROOT/scripts/test-platform-bundle.py"
 python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
 python3 "$ROOT/scripts/test-game-databases-bundle.py"
