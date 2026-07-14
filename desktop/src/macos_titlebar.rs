@@ -1,6 +1,50 @@
+use crate::platform_lifecycle::{TitlebarAdapter, TitlebarController};
+use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSToolbar, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWindowToolbarStyle,
+};
+use objc2_foundation::NSString;
 use slint::winit_030::winit;
 use winit::platform::macos::WindowAttributesExtMacOS;
 use winit::window::WindowAttributes;
+
+struct AppKitTitlebarAdapter<'a> {
+    window: &'a NSWindow,
+}
+
+impl TitlebarAdapter for AppKitTitlebarAdapter<'_> {
+    fn setup(&mut self) -> bool {
+        let mask =
+            NSWindowStyleMask(self.window.styleMask().0 | NSWindowStyleMask::FullSizeContentView.0);
+        self.window.setStyleMask(mask);
+        self.window.setTitlebarAppearsTransparent(true);
+        self.window
+            .setTitleVisibility(NSWindowTitleVisibility::Hidden);
+        self.window.setMovable(false);
+
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        let identifier = NSString::from_str("MisterMagikDesktopToolbar");
+        let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), &identifier);
+        self.window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+        self.window.setToolbar(Some(&toolbar));
+        true
+    }
+
+    fn activate_benchmark(&mut self) -> bool {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        let application = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        application.activateIgnoringOtherApps(true);
+        self.window.makeKeyAndOrderFront(None);
+        self.window.orderFrontRegardless();
+        true
+    }
+}
 
 pub fn apply_unified_titlebar(attributes: WindowAttributes) -> WindowAttributes {
     attributes
@@ -10,11 +54,7 @@ pub fn apply_unified_titlebar(attributes: WindowAttributes) -> WindowAttributes 
 }
 
 pub async fn setup_window(window: &slint::Window) -> Option<()> {
-    use objc2::{MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::{
-        NSToolbar, NSView, NSWindowStyleMask, NSWindowTitleVisibility, NSWindowToolbarStyle,
-    };
-    use objc2_foundation::NSString;
+    use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use slint::winit_030::WinitWindowAccessor;
 
@@ -28,26 +68,14 @@ pub async fn setup_window(window: &slint::Window) -> Option<()> {
     let ns_view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
     let ns_window = ns_view.window()?;
 
-    let mask =
-        NSWindowStyleMask(ns_window.styleMask().0 | NSWindowStyleMask::FullSizeContentView.0);
-    ns_window.setStyleMask(mask);
-    ns_window.setTitlebarAppearsTransparent(true);
-    ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
-    ns_window.setMovable(false);
-
-    let mtm = MainThreadMarker::new()?;
-    let identifier = NSString::from_str("MisterMagikDesktopToolbar");
-    let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), &identifier);
-    ns_window.setToolbarStyle(NSWindowToolbarStyle::Unified);
-    ns_window.setToolbar(Some(&toolbar));
-
-    Some(())
+    let mut controller = TitlebarController::default();
+    let mut adapter = AppKitTitlebarAdapter { window: &ns_window };
+    controller.setup_once(&mut adapter).then_some(())
 }
 
 #[cfg_attr(not(feature = "compiled-ui"), allow(dead_code))]
 pub fn activate_benchmark_window(window: &winit::window::Window) -> Option<()> {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
@@ -58,11 +86,7 @@ pub fn activate_benchmark_window(window: &winit::window::Window) -> Option<()> {
     // runs from Slint's UI event loop on the macOS main thread.
     let ns_view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
     let ns_window = ns_view.window()?;
-    let mtm = MainThreadMarker::new()?;
-    let application = NSApplication::sharedApplication(mtm);
-    #[allow(deprecated)]
-    application.activateIgnoringOtherApps(true);
-    ns_window.makeKeyAndOrderFront(None);
-    ns_window.orderFrontRegardless();
-    Some(())
+    let mut controller = TitlebarController::default();
+    let mut adapter = AppKitTitlebarAdapter { window: &ns_window };
+    controller.activate_benchmark(&mut adapter).then_some(())
 }

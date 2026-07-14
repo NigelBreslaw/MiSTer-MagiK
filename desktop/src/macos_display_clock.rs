@@ -1,3 +1,4 @@
+use crate::platform_lifecycle::{seconds_to_microseconds, DisplayClockTick};
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::NSView;
@@ -7,12 +8,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MacDisplayLinkTick {
-    pub timestamp_us: u64,
-    pub target_timestamp_us: u64,
-    pub duration_us: u64,
-}
+pub type MacDisplayLinkTick = DisplayClockTick;
 
 pub type MacDisplayLinkCallback = Rc<RefCell<Box<dyn FnMut(MacDisplayLinkTick)>>>;
 
@@ -32,9 +28,9 @@ define_class!(
         #[unsafe(method(tick:))]
         fn tick(&self, display_link: &CADisplayLink) {
             (self.ivars().callback.borrow_mut())(MacDisplayLinkTick {
-                timestamp_us: seconds_to_us(display_link.timestamp()),
-                target_timestamp_us: seconds_to_us(display_link.targetTimestamp()),
-                duration_us: seconds_to_us(display_link.duration()),
+                timestamp_us: seconds_to_microseconds(display_link.timestamp()),
+                target_timestamp_us: seconds_to_microseconds(display_link.targetTimestamp()),
+                duration_us: seconds_to_microseconds(display_link.duration()),
             });
         }
     }
@@ -89,26 +85,5 @@ impl MacDisplayClock {
 impl Drop for MacDisplayClock {
     fn drop(&mut self) {
         self.display_link.invalidate();
-    }
-}
-
-fn seconds_to_us(seconds: f64) -> u64 {
-    if seconds.is_finite() && seconds > 0.0 {
-        (seconds * 1_000_000.0).round() as u64
-    } else {
-        0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::seconds_to_us;
-
-    #[test]
-    fn display_link_seconds_convert_to_microseconds() {
-        assert_eq!(seconds_to_us(1.25), 1_250_000);
-        assert_eq!(seconds_to_us(1.0 / 120.0), 8_333);
-        assert_eq!(seconds_to_us(f64::NAN), 0);
-        assert_eq!(seconds_to_us(-1.0), 0);
     }
 }

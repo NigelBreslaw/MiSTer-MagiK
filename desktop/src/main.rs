@@ -10,6 +10,7 @@ mod library;
 mod macos_display_clock;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
+mod platform_lifecycle;
 mod sd_card;
 
 use agent_client::{
@@ -45,6 +46,7 @@ type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
 type SharedRealtimeStreamGeneration = Arc<AtomicU64>;
 type SharedRealtimeStreamControl = Arc<Mutex<Option<(u64, DeviceTelemetryStreamControl)>>>;
+type SharedDisplayClockCallback = Rc<RefCell<Box<dyn FnMut(FramebufferDisplayClockTick)>>>;
 
 const DIRTY_RECT_LINGER_FRAMES: usize = 8;
 const MAX_DIRTY_RECT_OVERLAYS: usize = 12;
@@ -108,48 +110,70 @@ fn start_framebuffer_display_clock(
     window: &slint::Window,
     callback: impl FnMut(FramebufferDisplayClockTick) + 'static,
 ) -> FramebufferDisplayClock {
-    let callback = Rc::new(RefCell::new(
-        Box::new(callback) as Box<dyn FnMut(FramebufferDisplayClockTick)>
-    ));
-    #[cfg(target_os = "macos")]
-    {
-        use slint::winit_030::WinitWindowAccessor;
-        let tick_callback = Rc::clone(&callback);
-        let mac_callback = Rc::new(RefCell::new(Box::new(
-            move |tick: macos_display_clock::MacDisplayLinkTick| {
-                (tick_callback.borrow_mut())(FramebufferDisplayClockTick {
-                    timestamp_us: tick.timestamp_us,
-                    target_timestamp_us: tick.target_timestamp_us,
-                    duration_us: tick.duration_us,
-                });
-            },
-        )
-            as Box<dyn FnMut(macos_display_clock::MacDisplayLinkTick)>));
-        if let Some(clock) = window
-            .with_winit_window(|winit_window| {
-                macos_display_clock::MacDisplayClock::start(winit_window, mac_callback)
-            })
-            .flatten()
-        {
-            return FramebufferDisplayClock::Macos(clock);
+    struct Adapter<'a> {
+        window: &'a slint::Window,
+        callback: SharedDisplayClockCallback,
+    }
+
+    impl platform_lifecycle::DisplayClockAdapter for Adapter<'_> {
+        type Clock = FramebufferDisplayClock;
+
+        fn start_native(&mut self) -> Option<Self::Clock> {
+            #[cfg(target_os = "macos")]
+            {
+                use slint::winit_030::WinitWindowAccessor;
+                let callback = Rc::clone(&self.callback);
+                let mac_callback = Rc::new(RefCell::new(Box::new(
+                    move |tick: macos_display_clock::MacDisplayLinkTick| {
+                        (callback.borrow_mut())(FramebufferDisplayClockTick {
+                            timestamp_us: tick.timestamp_us,
+                            target_timestamp_us: tick.target_timestamp_us,
+                            duration_us: tick.duration_us,
+                        });
+                    },
+                )
+                    as Box<dyn FnMut(macos_display_clock::MacDisplayLinkTick)>));
+                self.window
+                    .with_winit_window(|window| {
+                        macos_display_clock::MacDisplayClock::start(window, mac_callback)
+                    })
+                    .flatten()
+                    .map(FramebufferDisplayClock::Macos)
+            }
+            #[cfg(not(target_os = "macos"))]
+            None
+        }
+
+        fn start_slint_timer(&mut self) -> Self::Clock {
+            let timer = slint::Timer::default();
+            let started = Instant::now();
+            let callback = Rc::clone(&self.callback);
+            timer.start(
+                slint::TimerMode::Repeated,
+                Duration::from_nanos(16_666_667),
+                move || {
+                    let tick = platform_lifecycle::timer_tick(
+                        started.elapsed(),
+                        Duration::from_micros(16_667),
+                    );
+                    (callback.borrow_mut())(FramebufferDisplayClockTick {
+                        timestamp_us: tick.timestamp_us,
+                        target_timestamp_us: tick.target_timestamp_us,
+                        duration_us: tick.duration_us,
+                    });
+                },
+            );
+            FramebufferDisplayClock::Timer(timer)
         }
     }
 
-    let timer = slint::Timer::default();
-    let started = Instant::now();
-    timer.start(
-        slint::TimerMode::Repeated,
-        Duration::from_nanos(16_666_667),
-        move || {
-            let timestamp_us = started.elapsed().as_micros() as u64;
-            (callback.borrow_mut())(FramebufferDisplayClockTick {
-                timestamp_us,
-                target_timestamp_us: timestamp_us.saturating_add(16_667),
-                duration_us: 16_667,
-            });
-        },
-    );
-    FramebufferDisplayClock::Timer(timer)
+    let callback = Rc::new(RefCell::new(
+        Box::new(callback) as Box<dyn FnMut(FramebufferDisplayClockTick)>
+    ));
+    let mut adapter = Adapter { window, callback };
+    let controller = platform_lifecycle::DisplayClockController::start(&mut adapter);
+    let _source = controller.source();
+    controller.into_clock()
 }
 
 #[derive(Clone, Debug)]
