@@ -298,7 +298,6 @@ pub(super) fn run_video_playback_loop(
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
-                                decode_us: _decode_us,
                                 metrics,
                             } = frame;
                             phases.frame_updated = true;
@@ -383,6 +382,9 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
+                if let Some(frame) = direct_frame.take() {
+                    frame_worker.recycle_pixels(frame.pixels);
+                }
                 if rows > 0 {
                     video_dirty_clip_ready = true;
                 }
@@ -431,7 +433,6 @@ pub(super) fn run_video_playback_loop(
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
-                                decode_us: _decode_us,
                                 metrics,
                             } = frame;
                             phases.frame_updated = true;
@@ -514,6 +515,9 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
+                if let Some(frame) = direct_frame.take() {
+                    frame_worker.recycle_pixels(frame.pixels);
+                }
                 if rows > 0 {
                     video_dirty_clip_ready = true;
                 }
