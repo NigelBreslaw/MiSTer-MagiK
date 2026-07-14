@@ -83,19 +83,22 @@ Before dispatch:
    the newest successful main artifacts matching the current component
    identities and creates the immutable prerelease tag
    `platform-v0.1-<bundle-id>`.
-4. Configure protected GitHub environments named `publish-platform`, `publish-beta` and
-   `publish-release`, with required reviewers. For the first publication,
-   configure and use `publish-beta` only. Enable GitHub Release immutability
-   before the first platform promotion.
-5. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
+4. Configure protected GitHub environments named `publish-platform`,
+   `publish-game-databases`, `publish-beta`, and `publish-release`, with required
+   reviewers. Enable GitHub Release immutability before the first support-bundle
+   promotion.
+5. Dispatch **Promote MiSTer MagiK Game Databases** from `main`. The first run
+   publishes `game-databases-v1`; later no-change runs exit without publishing.
+6. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
 sure the branch is `main`, and select `beta`. This is the only release input.
-The workflow resolves the immutable platform bundle whose FPGA and kernel input
-identities match the checked-out `main`, plus latest `Main_MiSTer/mister-magik`
-and HBMAME inputs. If the platform tag is absent, run fresh main component
-workflows and promote their bundle before retrying publication. It computes the
-application version from the dispatched commit:
+The workflow consumes the newest published `platform-v0.1-*` bundle and the
+highest numbered published `game-databases-vN` bundle, plus the latest
+`Main_MiSTer/mister-magik`. It does not rebuild support databases or require the
+platform bundle to match the current application source identity. If either
+support release is absent, run its manual promotion workflow before retrying
+publication. The application version is computed from the dispatched commit:
 
 ```text
 build   = git rev-list --count <dispatched-commit>
@@ -127,8 +130,20 @@ and version tags are immutable and are never overwritten.
 ## Platform bundle recovery
 
 - A non-main FPGA, scanout, or promotion dispatch is intentionally rejected.
-- A missing platform tag means the component inputs changed without a successful
-  main promotion; do not use an Actions artifact from a PR or another branch.
+- A missing published platform release requires a successful main promotion; do
+  not use an Actions artifact from a PR or another branch.
 - An expired staging artifact requires a fresh component workflow on `main`.
 - A mismatched platform contract is a failed qualification and must be fixed
   before promotion; a platform release is never patched in place.
+
+## Numbered game-database releases
+
+Run **Promote MiSTer MagiK Game Databases** manually from `main`. It compares the
+latest MAME GitHub release and latest numeric HBMAME tag with the manifest in the
+highest published `game-databases-vN` release before starting expensive work.
+When neither changed, the workflow exits successfully as already up to date.
+When one changed, only that database is rebuilt; the other is verified and
+reused. The first publication is `game-databases-v1` with
+`mister-magik-game-databases-v1.zip`, and each later upstream change increments
+the whole release number. These support releases are immutable prereleases so
+they do not replace the application release reported by GitHub as latest.

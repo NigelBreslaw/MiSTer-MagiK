@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Select current immutable support releases from GitHub Releases JSON."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+GAME_DATABASE_TAG = re.compile(r"game-databases-v([1-9][0-9]*)")
+PLATFORM_TAG = re.compile(r"platform-v0\.1-[0-9a-f]{64}")
+
+
+def select_game_databases(releases: list[dict[str, object]]) -> dict[str, object] | None:
+    candidates: list[tuple[int, dict[str, object]]] = []
+    for release in releases:
+        match = GAME_DATABASE_TAG.fullmatch(str(release.get("tag_name", "")))
+        if match and not release.get("draft") and release.get("published_at"):
+            candidates.append((int(match.group(1)), release))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def select_platform(releases: list[dict[str, object]]) -> dict[str, object] | None:
+    candidates = [
+        release
+        for release in releases
+        if PLATFORM_TAG.fullmatch(str(release.get("tag_name", "")))
+        and not release.get("draft")
+        and release.get("published_at")
+    ]
+    return max(candidates, key=lambda release: str(release["published_at"])) if candidates else None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("kind", choices=("game-databases", "platform"))
+    parser.add_argument("--releases", type=Path)
+    parser.add_argument("--field", choices=("tag", "version"), default="tag")
+    args = parser.parse_args()
+    try:
+        payload = json.loads(args.releases.read_text() if args.releases else sys.stdin.read())
+        if not isinstance(payload, list):
+            raise ValueError("release payload must be an array")
+        if payload and all(isinstance(page, list) for page in payload):
+            payload = [release for page in payload for release in page]
+        if not all(isinstance(release, dict) for release in payload):
+            raise ValueError("release payload entries must be objects")
+        selected = select_game_databases(payload) if args.kind == "game-databases" else select_platform(payload)
+        if selected is None:
+            print(f"no published {args.kind} release found", file=sys.stderr)
+            return 1
+        tag = str(selected["tag_name"])
+        if args.field == "version":
+            if args.kind != "game-databases":
+                raise ValueError("version output is only valid for game databases")
+            print(GAME_DATABASE_TAG.fullmatch(tag).group(1))
+        else:
+            print(tag)
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        print(f"release selection failed: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

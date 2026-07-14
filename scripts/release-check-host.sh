@@ -82,17 +82,49 @@ step "Distribution package dry-run"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 MAME_SQLITE="$WORK/mame.sqlite3"
-if command -v sqlite3 >/dev/null 2>&1; then
-  sqlite3 "$MAME_SQLITE" \
-    "CREATE TABLE release_check(name TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO release_check VALUES('kind','public-beta-host-gate');"
-else
-  printf 'mister-magik release-check metadata\n' > "$MAME_SQLITE"
-fi
+HBMAME_SQLITE="$WORK/hbmame.sqlite3"
+python3 - "$MAME_SQLITE" "$HBMAME_SQLITE" <<'PY'
+import sqlite3
+import sys
+
+mame = sqlite3.connect(sys.argv[1])
+mame.executescript("""
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,source_version TEXT NOT NULL) WITHOUT ROWID;
+WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'0.288 (mame0288)' FROM seq;
+CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
+INSERT INTO mame_software_items VALUES('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
+""")
+mame.commit()
+mame.close()
+hbmame = sqlite3.connect(sys.argv[2])
+hbmame.executescript("""
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL) WITHOUT ROWID;
+WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<5000)
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i FROM seq;
+INSERT INTO mame_machines VALUES('marpy','mappy','Marpy');
+CREATE TABLE package_padding(data BLOB NOT NULL);
+INSERT INTO package_padding VALUES(zeroblob(1048576));
+""")
+hbmame.commit()
+hbmame.close()
+PY
+"$ROOT/scripts/game-databases-bundle.py" create \
+  --mame-sqlite "$MAME_SQLITE" --hbmame-sqlite "$HBMAME_SQLITE" \
+  --release-version 1 --mame-tag mame0288 \
+  --mame-sha 1111111111111111111111111111111111111111 \
+  --mame-listxml-asset mame0288lx.zip \
+  --mame-listxml-sha256 "$(printf 5%.0s {1..64})" --hbmame-tag tag24532 \
+  --hbmame-sha 2222222222222222222222222222222222222222 \
+  --mame-builder-sha "$(git -C "$ROOT" rev-parse HEAD)" \
+  --hbmame-builder-sha "$(git -C "$ROOT" rev-parse HEAD)" \
+  --output "$WORK/game-databases" >/dev/null
 
 package_args=(
   --binary "$BIN"
   --mame-sqlite "$MAME_SQLITE"
-  --mame-source-ref release-check-fixture
+  --hbmame-sqlite "$HBMAME_SQLITE"
+  --game-databases-manifest "$WORK/game-databases/game-databases-manifest.json"
   --name release-check
   --out-dir "$WORK"
   --version "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" version)"
@@ -162,6 +194,7 @@ if expect_main:
     required.update({
         "mister-magik/platform-v1.manifest",
         "mister-magik/platform-bundle-v0.1.json",
+        "mister-magik/game-databases-manifest.json",
         "mister-magik/mister_magik_scanout_slots.ko",
         "mister-magik/mister_magik_scanout_slots.metadata.txt",
         "mister-magik/fpga/menu-magik-vblank-latch.rbf",
@@ -170,9 +203,13 @@ if expect_main:
 
 with zipfile.ZipFile(zip_path) as zf:
     names = set(zf.namelist())
+    release = zf.read("mister-magik/release-v1.txt").decode()
 missing = sorted(required - names)
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
+if "game_database_version=1" not in release:
+    print("package validation failed: missing game database version", file=sys.stderr)
     sys.exit(1)
 
 print(f"package validation ok: {zip_path}")
