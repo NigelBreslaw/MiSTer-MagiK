@@ -1785,7 +1785,7 @@ fn run_framebuffer_stream_bench(
             }
         }
         FramebufferBenchMode::Dump(ref dir) => {
-            std::fs::create_dir_all(&dir)?;
+            std::fs::create_dir_all(dir)?;
             let seed_capture = fetch_framebuffer_capture(&host).ok();
             if let Some(capture) = seed_capture.as_ref() {
                 let png = framebuffer_capture_png_bytes(capture)?;
@@ -5892,6 +5892,7 @@ fn spawn_live_profile_load(
 }
 
 #[cfg(feature = "live-ui")]
+#[allow(clippy::too_many_arguments)]
 fn start_live_framebuffer_display_clock(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
@@ -6047,6 +6048,7 @@ fn consume_live_framebuffer_display(
 }
 
 #[cfg(feature = "live-ui")]
+#[allow(clippy::too_many_arguments)]
 fn spawn_live_framebuffer_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     capture_state: SharedFramebufferCapture,
@@ -6983,7 +6985,7 @@ mod tests {
         assert_eq!(view.memory_magik_label, "MagiK: 97.7 MiB");
         assert_eq!(view.memory_other_label, "Other: 488.3 MiB");
         assert_eq!(view.memory_available_label, "Available: 390.6 MiB");
-        assert_eq!(view.frame_history[0].alert, true);
+        assert!(view.frame_history[0].alert);
         assert_eq!(view.frame_samples.len(), 1);
         assert_eq!(view.frame_samples[0].process_cpu_us, 80);
         assert!(!view.frame_samples[0].idle);

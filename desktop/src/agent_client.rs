@@ -1030,7 +1030,7 @@ impl FramebufferStreamState {
         if capture.width == 0 || capture.height == 0 || capture.raw_stride_bytes == 0 {
             return Ok(());
         }
-        if capture.raw_stride_bytes % 2 != 0 {
+        if !capture.raw_stride_bytes.is_multiple_of(2) {
             return Err(AgentError::Protocol(
                 "framebuffer capture stride is not 16bpp aligned".to_string(),
             ));
