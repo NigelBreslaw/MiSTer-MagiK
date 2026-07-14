@@ -18,6 +18,10 @@ The first install is a one-time bootstrap:
 4. Run `Scripts` -> `mister-magik` once. The installer verifies the platform
    manifest, every required file hash, the shared platform contract, module
    metadata, RBF metadata, and executables before enabling the handoff.
+   It canonicalizes `[Menu] video_mode=8` (1920x1080 at 60 Hz), the only
+   currently supported and release-tested launcher output mode. Before making
+   changes, it warns that other resolutions and CRT support are coming later
+   and requires A/Enter confirmation; any other input cancels.
    Before its first boot-configuration edit, it preserves the existing INI as
    `/media/fat/MiSTer.ini.bak.before-magik`. That backup is never replaced by a
    later install or reinstall.
@@ -33,10 +37,12 @@ Existing catalogs, media, settings, snapshots, and user content are outside the
 Downloader database and are preserved.
 
 Running `Scripts` -> `mister-magik` again while the MagiK handoff is active
-offers UP to reinstall or DOWN to disable it, followed by an A/Enter
-confirmation. Any other input cancels. If the pre-MagiK backup is unexpectedly
-missing during a reinstall, the installer warns and leaves it missing rather
-than copying the already-modified live INI under a misleading backup name.
+opens a controller-friendly menu for restoring stock boot or fully uninstalling
+MiSTer MagiK. Use UP/DOWN to select, A/Enter to continue, and B/Escape to
+cancel. Full uninstall has a second A/Enter confirmation. If the pre-MagiK
+backup is unexpectedly missing during a reinstall, the installer warns and
+leaves it missing rather than copying the already-modified live INI under a
+misleading backup name.
 
 ## Beta and Release channels
 
@@ -57,18 +63,26 @@ The first Beta publication updates only the Beta feed. A future Release
 publication updates the Release feed and points Beta at that same stable build
 until a newer Beta is published.
 
-## Disable and rollback
+## Restore and uninstall
 
-To disable the handoff without deleting MiSTer MagiK data, run this from a
+To restore stock boot without deleting MiSTer MagiK data, run this from a
 MiSTer shell and reboot normally:
 
 ```sh
-sh /media/fat/Scripts/mister-magik.sh disable
+sh /media/fat/Scripts/mister-magik.sh restore
 ```
 
-This changes `main=MiSTer_MagiK` to `main=MiSTer`, restores the stock inittab
-shape, and retains the application, catalogs, settings, snapshots, and media.
-To enable it again, run `Scripts` -> `mister-magik` and reboot.
+This canonicalizes the active Main as `main=MiSTer`, restores the stock inittab
+shape, and retains the application, catalogs, settings, snapshots, media,
+Downloader entry, scripts, and pre-MagiK INI backup. To enable it again, run
+`Scripts` -> `mister-magik` and reboot. The release-tested
+`[Menu] video_mode=8` setting remains in place when stock boot is restored.
+
+Choose **Fully uninstall MiSTer MagiK** from the menu, or run the interactive
+`uninstall` command, to restore and verify stock boot before deleting MagiK's
+application directory, Main fork, scripts, Downloader entry, saved backup,
+optional agent hook, and legacy legal files. Uninstall never reboots
+automatically and refuses to run without interactive confirmation.
 
 If an update is interrupted, run `update_all` again before rebooting. The
 platform manifest and hashes prevent activation of an incomplete initial
@@ -131,8 +145,9 @@ Check the candidate contains the expected ZIP, individual Downloader assets,
 channel database and bootstrap ZIP, `release-assets.json`, and `SHA256SUMS`.
 Confirm Settings -> Info, the package filename, `mister-magik/release-v1.txt`,
 and all database asset URLs use the same `0.2.<build>`. Test fresh Beta install,
-Beta-to-Beta update, interrupted-update repair, disable, and stock rollback.
-Approve `publish-beta` only after those checks pass.
+Beta-to-Beta update, interrupted-update repair, non-destructive stock restore
+and re-enable, and full uninstall. Approve `publish-beta` only after those
+checks pass.
 
 The publish job rejects non-`main` dispatches and existing tags, verifies all
 candidate checksums again, creates a prerelease titled
