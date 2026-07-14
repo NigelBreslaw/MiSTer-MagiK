@@ -551,7 +551,7 @@ pub(super) fn run_video_playback_loop(
         frames += 1;
     }
 
-    let _ = drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats);
+    finish_audio_writer(audio_writer, &frame_worker, &mut audio_stats);
     let elapsed = start.elapsed().as_secs_f64();
     crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
@@ -628,8 +628,9 @@ struct AudioWriteResult {
 
 #[cfg(mister_video_scene)]
 struct AudioWriteWorker {
-    tx: mpsc::SyncSender<AudioWriteJob>,
+    tx: Option<mpsc::SyncSender<AudioWriteJob>>,
     rx: mpsc::Receiver<AudioWriteResult>,
+    join: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(mister_video_scene)]
@@ -638,7 +639,7 @@ impl AudioWriteWorker {
         let mut sink = crate::mr_audio::MrAudioSink::open_default()?;
         let (tx, job_rx) = mpsc::sync_channel::<AudioWriteJob>(4);
         let (result_tx, rx) = mpsc::channel::<AudioWriteResult>();
-        std::thread::Builder::new()
+        let join = std::thread::Builder::new()
             .name("video-audio-write".to_string())
             .spawn(move || {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
@@ -671,15 +672,35 @@ impl AudioWriteWorker {
                 }
             })
             .map_err(|e| format!("spawn video-audio-write: {e}"))?;
-        Ok(Self { tx, rx })
+        Ok(Self {
+            tx: Some(tx),
+            rx,
+            join: Some(join),
+        })
     }
 
     fn try_send(&self, job: AudioWriteJob) -> Result<(), mpsc::TrySendError<AudioWriteJob>> {
-        self.tx.try_send(job)
+        match &self.tx {
+            Some(tx) => tx.try_send(job),
+            None => Err(mpsc::TrySendError::Disconnected(job)),
+        }
     }
 
     fn try_recv(&self) -> Result<AudioWriteResult, mpsc::TryRecvError> {
         self.rx.try_recv()
+    }
+
+    fn finish(mut self) -> Result<Vec<AudioWriteResult>, String> {
+        self.tx.take();
+        let mut results = Vec::new();
+        while let Ok(result) = self.rx.recv() {
+            results.push(result);
+        }
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| "video audio writer panicked during shutdown".to_string())?;
+        }
+        Ok(results)
     }
 }
 
@@ -711,6 +732,42 @@ fn drain_audio_write_results(
                 return false;
             }
         }
+    }
+}
+
+#[cfg(mister_video_scene)]
+fn finish_audio_writer(
+    audio_writer: AudioWriteWorker,
+    frame_worker: &crate::video_player::VideoFrameWorker,
+    audio_stats: &mut AudioWindowStats,
+) {
+    match audio_writer.finish() {
+        Ok(results) => {
+            let mut requested = 0usize;
+            let mut written = 0usize;
+            for result in results {
+                if let Some(e) = result.error {
+                    crate::ui_errln!("video_playback audio shutdown: {e}");
+                }
+                requested = requested.saturating_add(result.requested_frames);
+                written = written.saturating_add(result.written_frames);
+                audio_stats.add(
+                    Duration::from_micros(result.write_us),
+                    result.requested_frames,
+                    result.written_frames,
+                    result.loop_count,
+                );
+                frame_worker.recycle_audio(result.audio);
+            }
+            crate::ui_logln!(
+                "video_playback audio shutdown requested={} written={} lost={} underruns={}",
+                requested,
+                written,
+                requested.saturating_sub(written),
+                audio_stats.underruns
+            );
+        }
+        Err(e) => crate::ui_errln!("video_playback audio shutdown: {e}"),
     }
 }
 
