@@ -48,6 +48,15 @@ export component HomeGrid inherits Rectangle {
                                 overflow: elide;
                             }
 
+                            if MisterBridge.update-available && MisterBridge.menu-breadcrumb == "" : Text {
+                                width: 100%;
+                                text: "Update Available";
+                                color: #06d6a0;
+                                font-size: 8px * s;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
                             if MisterBridge.menu-breadcrumb != "" : Text {
                                 width: 100%;
                                 text: MisterBridge.menu-breadcrumb;

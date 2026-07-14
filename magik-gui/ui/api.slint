@@ -81,6 +81,8 @@ export global MisterBridge {
     // Current launcher hierarchy level. Root uses the product name and no breadcrumb.
     in-out property <string> menu-title: "MiSTer MagiK";
     in-out property <string> menu-breadcrumb;
+    // Set asynchronously after comparing the configured Downloader feed with the installed build.
+    in-out property <bool> update-available;
     in-out property <[MenuItem]> menu-items;
     // Scroll offset in logical pixels (0 = left); translates the Home six-tile ring.
     in-out property <bool> home-scroll-held;
