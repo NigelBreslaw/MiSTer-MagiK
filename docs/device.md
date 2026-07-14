@@ -125,6 +125,12 @@ parked legacy FastNet script by renaming
 restoring `MiSTer.ini` from `/media/fat/MiSTer.ini.bak` when appropriate, and
 rebooting.
 
+That `.bak` belongs to the developer `install-slint-boot.sh` /
+`restore-stock-boot.sh` workflow. The Downloader-installed `mister-magik`
+menu script instead preserves its original public-install configuration as
+`/media/fat/MiSTer.ini.bak.before-magik`; reinstalls never replace it, and the
+menu-script disable action changes only `main=MiSTer_MagiK` to `main=MiSTer`.
+
 If HDMI is black but SSH works, prefer scripted recovery/reboot over manual
 process experiments.
 

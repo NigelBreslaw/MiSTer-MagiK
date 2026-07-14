@@ -6,6 +6,8 @@ set -eu
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
 INITTAB="${MISTER_MAGIK_INITTAB:-/etc/inittab}"
 INI="$FAT/MiSTer.ini"
+INI_BACKUP="$FAT/MiSTer.ini.bak.before-magik"
+INI_BACKUP_PENDING="$FAT/.MiSTer.ini.bak.before-magik.new.$$"
 APP_DIR="$FAT/mister-magik"
 MAIN_BIN="$FAT/MiSTer_MagiK"
 GUI_BIN="$APP_DIR/mister-magik-fb"
@@ -24,6 +26,103 @@ pause_exit() {
   echo
   echo "Press Enter to exit."
   read _ || true
+}
+
+ini_selects_magik() {
+  [ -f "$INI" ] || return 1
+  awk '
+BEGIN { in_mister = 0; found = 0 }
+/^[[:space:]]*\[[^]]+\]/ {
+  section = $0
+  sub(/^[[:space:]]*\[/, "", section)
+  sub(/\].*$/, "", section)
+  gsub(/[[:space:]]/, "", section)
+  in_mister = (tolower(section) == "mister")
+  next
+}
+in_mister && /^[[:space:]]*main[[:space:]]*=/ {
+  value = $0
+  sub(/^[^=]*=[[:space:]]*/, "", value)
+  sub(/[[:space:]]*[;#].*$/, "", value)
+  gsub(/[[:space:]]/, "", value)
+  if (value == "MiSTer_MagiK") found = 1
+}
+END { exit(found ? 0 : 1) }
+' "$INI"
+}
+
+backup_ini_before_magik() {
+  [ -f "$INI" ] || return 0
+  [ -e "$INI_BACKUP" ] && return 0
+  if ini_selects_magik; then
+    say "WARNING: $INI_BACKUP is missing; not creating it from a MagiK-active MiSTer.ini."
+    return 0
+  fi
+
+  cp "$INI" "$INI_BACKUP_PENDING"
+  sync "$INI_BACKUP_PENDING" 2>/dev/null || sync
+  if [ -e "$INI_BACKUP" ]; then
+    rm -f "$INI_BACKUP_PENDING"
+  else
+    mv "$INI_BACKUP_PENDING" "$INI_BACKUP"
+    sync "$INI_BACKUP" 2>/dev/null || sync
+    say "backup: $INI_BACKUP"
+  fi
+}
+
+restore_menu_terminal() {
+  if [ -n "${MENU_SAVED_STTY:-}" ]; then
+    stty "$MENU_SAVED_STTY" 2>/dev/null || true
+    MENU_SAVED_STTY=""
+  fi
+}
+
+read_menu_key() {
+  [ -t 0 ] || return 1
+  MENU_SAVED_STTY="$(stty -g 2>/dev/null)" || return 1
+  trap 'restore_menu_terminal; exit 130' HUP INT TERM
+  stty -echo -icanon min 1 time 0
+  first="$(dd bs=1 count=1 2>/dev/null || true)"
+  key=other
+  case "$first" in
+    "") key=enter ;;
+    "$(printf '\033')")
+      # Arrow keys continue with "[A"/"[B". A lone Escape (controller B)
+      # must cancel instead of blocking while waiting for bytes that never come.
+      stty min 0 time 1
+      second="$(dd bs=1 count=1 2>/dev/null || true)"
+      third="$(dd bs=1 count=1 2>/dev/null || true)"
+      case "$second$third" in
+        "[A"|"OA") key=up ;;
+        "[B"|"OB") key=down ;;
+      esac
+      ;;
+  esac
+  restore_menu_terminal
+  trap - HUP INT TERM
+  printf '\n'
+  MENU_KEY="$key"
+}
+
+choose_installed_action() {
+  say "already installed."
+  echo "Press UP to reinstall or DOWN to disable MagiK boot. Any other button cancels."
+  if ! read_menu_key; then
+    say "interactive input is unavailable; no changes made."
+    return 1
+  fi
+  case "$MENU_KEY" in
+    up) action=install; label="Reinstall MiSTer MagiK" ;;
+    down) action=disable; label="Disable MagiK boot" ;;
+    *) say "cancelled; no changes made."; return 1 ;;
+  esac
+
+  echo "$label? Press A/Enter to confirm; any other button cancels."
+  if ! read_menu_key || [ "$MENU_KEY" != enter ]; then
+    say "cancelled; no changes made."
+    return 1
+  fi
+  SELECTED_ACTION="$action"
 }
 
 snapshot() {
@@ -133,7 +232,7 @@ write_ini_with_main() {
   if [ ! -f "$INI" ]; then
     printf '[MiSTer]\nmain=MiSTer_MagiK\n' > "$PENDING"
   else
-    cp -n "$INI" "$INI.bak" 2>/dev/null || true
+    backup_ini_before_magik
     awk '
 BEGIN { in_mister = 0; saw_mister = 0; wrote_main = 0 }
 function write_main_if_needed() {
@@ -177,9 +276,8 @@ END {
   sync "$INI" 2>/dev/null || sync
 }
 
-remove_ini_main() {
+write_ini_with_stock_main() {
   [ -f "$INI" ] || return 0
-  cp -n "$INI" "$INI.bak" 2>/dev/null || true
   awk '
 BEGIN { in_mister = 0 }
 /^[[:space:]]*\[[^]]+\]/ {
@@ -191,7 +289,10 @@ BEGIN { in_mister = 0 }
   print
   next
 }
-in_mister && /^[[:space:]]*main[[:space:]]*=[[:space:]]*MiSTer_MagiK[[:space:]]*([;#].*)?$/ { next }
+in_mister && /^[[:space:]]*main[[:space:]]*=[[:space:]]*MiSTer_MagiK[[:space:]]*([;#].*)?$/ {
+  print "main=MiSTer"
+  next
+}
 { print }
 ' "$INI" > "$PENDING"
   sync "$PENDING" 2>/dev/null || sync
@@ -212,12 +313,22 @@ install_magik() {
 disable_magik() {
   snapshot
   ensure_stock_inittab
-  remove_ini_main
+  write_ini_with_stock_main
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
   say "disabled. Reboot to return to stock MiSTer boot."
 }
 
-case "${1:-}" in
+action="${1:-}"
+if [ -z "$action" ] && ini_selects_magik; then
+  SELECTED_ACTION=""
+  if ! choose_installed_action; then
+    pause_exit
+    exit 0
+  fi
+  action="$SELECTED_ACTION"
+fi
+
+case "$action" in
   install|enable|"")
     install_magik
     ;;
