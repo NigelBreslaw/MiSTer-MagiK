@@ -103,9 +103,11 @@ The zip is laid out relative to the MiSTer SD-card root:
   mister-magik/mister_magik_scanout_slots.metadata.txt
   mister-magik/fpga/menu-magik-vblank-latch.rbf
   mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
-  licenses/...                GPL, LGPL, OFL, and Rust dependency notices
-  THIRD-PARTY-NOTICES.txt     Metadata and bundled-component provenance
-  SOURCE-OFFER.txt            Exact corresponding-source locations and revisions
+  mister-magik/licenses/...   GPL, LGPL, OFL, and Rust dependency notices
+  mister-magik/THIRD-PARTY-NOTICES.txt
+                              Metadata and bundled-component provenance
+  mister-magik/SOURCE-OFFER.txt
+                              Exact corresponding-source locations and revisions
 EOF
 }
 
@@ -365,7 +367,7 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/mister-magik/fpga" "$STAGE/licenses"
+mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
 chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$CHANNEL_SELECTOR" "$STAGE/Scripts/mister-magik-channel.sh"
@@ -415,21 +417,21 @@ fi
 
 # Keep every binary distribution self-describing. These are copied rather than
 # merely linked so an extracted SD-card package retains the notices.
-cp "$ROOT/LICENSE" "$STAGE/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$STAGE/licenses/RUST-LIBRARIES.txt"
-cp "$ROOT/magik-gui/licenses/FFMPEG.txt" "$STAGE/licenses/FFMPEG-LGPL-2.1-or-later.txt"
-cp "$ROOT/magik-gui/licenses/PRESS-START-2P.txt" "$STAGE/licenses/PRESS-START-2P-OFL-1.1.txt"
-cat > "$STAGE/THIRD-PARTY-NOTICES.txt" <<EOF
+cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
+cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
+cp "$ROOT/magik-gui/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
+cp "$ROOT/magik-gui/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
+cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
 
 MiSTer MagiK is GPL-3.0-or-later. Its full license is in
-licenses/MiSTer-MagiK-GPL-3.0-or-later.txt.
+mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
 and the Press Start 2P font under SIL OFL-1.1. Their complete notices are in
-the licenses/ directory.
+the mister-magik/licenses/ directory.
 
 mame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media. It
 is derived from MAME listxml and software-list data from mamedev/mame at ref:
@@ -438,7 +440,7 @@ MAME is distributed under the BSD 3-Clause License. Source and license:
   https://github.com/mamedev/mame/tree/$MAME_SOURCE_REF
 EOF
 if [[ -n "$HBMAME_SQLITE" ]]; then
-  cat >> "$STAGE/THIRD-PARTY-NOTICES.txt" <<EOF
+  cat >> "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 
 hbmame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media.
 It is derived from HBMAME listxml at revision:
@@ -447,7 +449,7 @@ HBMAME source and license:
   https://github.com/Robbbert/hbmame/tree/$HBMAME_SOURCE_REVISION
 EOF
 fi
-cat > "$STAGE/SOURCE-OFFER.txt" <<EOF
+cat > "$STAGE/mister-magik/SOURCE-OFFER.txt" <<EOF
 Corresponding source and relinking instructions
 ===============================================
 
@@ -462,7 +464,7 @@ at the MiSTer MagiK source revision above.
 The MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.
 EOF
-cat >> "$STAGE/SOURCE-OFFER.txt" <<EOF
+cat >> "$STAGE/mister-magik/SOURCE-OFFER.txt" <<EOF
 
 MiSTer_MagiK Main fork source:
   https://github.com/NigelBreslaw/Main_MiSTer/tree/$MAIN_SOURCE_REVISION

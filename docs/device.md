@@ -128,8 +128,15 @@ rebooting.
 That `.bak` belongs to the developer `install-slint-boot.sh` /
 `restore-stock-boot.sh` workflow. The Downloader-installed `mister-magik`
 menu script instead preserves its original public-install configuration as
-`/media/fat/MiSTer.ini.bak.before-magik`; reinstalls never replace it, and the
-menu-script disable action changes only `main=MiSTer_MagiK` to `main=MiSTer`.
+`/media/fat/MiSTer.ini.bak.before-magik`; reinstalls never replace it. The
+menu-script restore action canonicalizes the active Main as `main=MiSTer` while
+preserving the MagiK installation; full uninstall deletes this backup only
+after stock boot has been restored and verified.
+
+The public installer canonicalizes `[Menu] video_mode=8` (1920x1080 at 60 Hz)
+because other launcher output modes are not yet release-tested. Restore and
+uninstall retain that safe menu mode while returning the Main selection to
+stock.
 
 If HDMI is black but SSH works, prefer scripted recovery/reboot over manual
 process experiments.

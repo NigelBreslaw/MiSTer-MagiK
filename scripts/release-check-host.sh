@@ -182,12 +182,12 @@ required = {
     "mister-magik/mister-magik-fb",
     "mister-magik/mister-magik-catalog-builder",
     "mister-magik/mame.sqlite3",
-    "THIRD-PARTY-NOTICES.txt",
-    "SOURCE-OFFER.txt",
-    "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
-    "licenses/RUST-LIBRARIES.txt",
-    "licenses/FFMPEG-LGPL-2.1-or-later.txt",
-    "licenses/PRESS-START-2P-OFL-1.1.txt",
+    "mister-magik/THIRD-PARTY-NOTICES.txt",
+    "mister-magik/SOURCE-OFFER.txt",
+    "mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+    "mister-magik/licenses/RUST-LIBRARIES.txt",
+    "mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt",
+    "mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt",
 }
 if expect_main:
     required.add("MiSTer_MagiK")
@@ -207,6 +207,18 @@ with zipfile.ZipFile(zip_path) as zf:
 missing = sorted(required - names)
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
+legacy_root_paths = {
+    "THIRD-PARTY-NOTICES.txt",
+    "SOURCE-OFFER.txt",
+    "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+    "licenses/RUST-LIBRARIES.txt",
+    "licenses/FFMPEG-LGPL-2.1-or-later.txt",
+    "licenses/PRESS-START-2P-OFL-1.1.txt",
+}
+unexpected = sorted(legacy_root_paths & names)
+if unexpected:
+    print(f"package validation failed: legal files outside mister-magik/: {', '.join(unexpected)}", file=sys.stderr)
     sys.exit(1)
 if "game_database_version=1" not in release:
     print("package validation failed: missing game database version", file=sys.stderr)

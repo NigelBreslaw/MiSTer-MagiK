@@ -5,6 +5,7 @@ set -eu
 
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
 INITTAB="${MISTER_MAGIK_INITTAB:-/etc/inittab}"
+INIT_DIR="${MISTER_MAGIK_INIT_DIR:-/etc/init.d}"
 INI="$FAT/MiSTer.ini"
 INI_BACKUP="$FAT/MiSTer.ini.bak.before-magik"
 INI_BACKUP_PENDING="$FAT/.MiSTer.ini.bak.before-magik.new.$$"
@@ -16,6 +17,9 @@ SLINT_LOGO_FILE="$APP_DIR/art/slint-logo-pixel.rgba"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
 MANIFEST="$APP_DIR/platform-v1.manifest"
+INSTALLED_SCRIPT="$FAT/Scripts/mister-magik.sh"
+CHANNEL_SCRIPT="$FAT/Scripts/mister-magik-channel.sh"
+DOWNLOADER_DROP_IN="$FAT/downloader_mister_magik.ini"
 
 say() {
   echo "MiSTer MagiK: $*"
@@ -31,7 +35,14 @@ pause_exit() {
 ini_selects_magik() {
   [ -f "$INI" ] || return 1
   awk '
-BEGIN { in_mister = 0; found = 0 }
+BEGIN { in_mister = 0; selected = "" }
+function is_main_assignment(line, key) {
+  if (line !~ /=/) return 0
+  key = line
+  sub(/=.*/, "", key)
+  gsub(/[[:space:]]/, "", key)
+  return tolower(key) == "main"
+}
 /^[[:space:]]*\[[^]]+\]/ {
   section = $0
   sub(/^[[:space:]]*\[/, "", section)
@@ -40,14 +51,46 @@ BEGIN { in_mister = 0; found = 0 }
   in_mister = (tolower(section) == "mister")
   next
 }
-in_mister && /^[[:space:]]*main[[:space:]]*=/ {
+in_mister && is_main_assignment($0) {
   value = $0
   sub(/^[^=]*=[[:space:]]*/, "", value)
   sub(/[[:space:]]*[;#].*$/, "", value)
   gsub(/[[:space:]]/, "", value)
-  if (value == "MiSTer_MagiK") found = 1
+  selected = value
 }
-END { exit(found ? 0 : 1) }
+END { exit(selected == "MiSTer_MagiK" ? 0 : 1) }
+' "$INI"
+}
+
+ini_has_one_main() {
+  expected="$1"
+  [ -f "$INI" ] || return 1
+  awk -v expected="$expected" '
+BEGIN { in_mister = 0; count = 0; selected = "" }
+function is_main_assignment(line, key) {
+  if (line !~ /=/) return 0
+  key = line
+  sub(/=.*/, "", key)
+  gsub(/[[:space:]]/, "", key)
+  return tolower(key) == "main"
+}
+/^[[:space:]]*\[[^]]+\]/ {
+  section = $0
+  sub(/^[[:space:]]*\[/, "", section)
+  sub(/\].*$/, "", section)
+  gsub(/[[:space:]]/, "", section)
+  in_mister = (tolower(section) == "mister")
+  next
+}
+in_mister && is_main_assignment($0) {
+  value = $0
+  sub(/^[^=]*=[[:space:]]*/, "", value)
+  sub(/[[:space:]]*[;#].*$/, "", value)
+  gsub(/[[:space:]]/, "", value)
+  selected = value
+  count++
+}
+END { exit(count == 1 && selected == expected ? 0 : 1) }
 ' "$INI"
 }
 
@@ -78,6 +121,17 @@ restore_menu_terminal() {
 }
 
 read_menu_key() {
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && [ -n "${MISTER_MAGIK_TEST_KEYS:-}" ]; then
+    case "$MISTER_MAGIK_TEST_KEYS" in
+      *,*) key="${MISTER_MAGIK_TEST_KEYS%%,*}"; MISTER_MAGIK_TEST_KEYS="${MISTER_MAGIK_TEST_KEYS#*,}" ;;
+      *) key="$MISTER_MAGIK_TEST_KEYS"; MISTER_MAGIK_TEST_KEYS="" ;;
+    esac
+    case "$key" in
+      up|down|enter|cancel|other) MENU_KEY="$key" ;;
+      *) MENU_KEY=other ;;
+    esac
+    return 0
+  fi
   [ -t 0 ] || return 1
   MENU_SAVED_STTY="$(stty -g 2>/dev/null)" || return 1
   trap 'restore_menu_terminal; exit 130' HUP INT TERM
@@ -95,6 +149,7 @@ read_menu_key() {
       case "$second$third" in
         "[A"|"OA") key=up ;;
         "[B"|"OB") key=down ;;
+        *) key=cancel ;;
       esac
       ;;
   esac
@@ -105,24 +160,68 @@ read_menu_key() {
 }
 
 choose_installed_action() {
-  say "already installed."
-  echo "Press UP to reinstall or DOWN to disable MagiK boot. Any other button cancels."
+  selected=restore
+  while :; do
+    say "is installed and selected as Main."
+    echo "Use UP/DOWN to choose, A/Enter to continue, or B/Escape to cancel."
+    if [ "$selected" = restore ]; then
+      echo "> Restore stock MiSTer"
+      echo "  Fully uninstall MiSTer MagiK"
+    else
+      echo "  Restore stock MiSTer"
+      echo "> Fully uninstall MiSTer MagiK"
+    fi
+    if ! read_menu_key; then
+      say "interactive input is unavailable; no changes made."
+      return 1
+    fi
+    case "$MENU_KEY" in
+      up|down)
+        if [ "$selected" = restore ]; then selected=uninstall; else selected=restore; fi
+        ;;
+      enter) SELECTED_ACTION="$selected"; return 0 ;;
+      cancel) say "cancelled; no changes made."; return 1 ;;
+    esac
+  done
+}
+
+confirm_install() {
+  echo
+  echo "MiSTer MagiK currently only supports 1080p."
+  echo "Other resolutions and CRT support are coming later."
+  echo
+  echo "Continue by pressing A/Enter. Any other key cancels."
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && [ "${MISTER_MAGIK_TEST_CONFIRM_INSTALL:-0}" = 1 ]; then
+    return 0
+  fi
   if ! read_menu_key; then
-    say "interactive input is unavailable; no changes made."
+    say "interactive input is unavailable; installation refused."
     return 1
   fi
-  case "$MENU_KEY" in
-    up) action=install; label="Reinstall MiSTer MagiK" ;;
-    down) action=disable; label="Disable MagiK boot" ;;
-    *) say "cancelled; no changes made."; return 1 ;;
-  esac
-
-  echo "$label? Press A/Enter to confirm; any other button cancels."
-  if ! read_menu_key || [ "$MENU_KEY" != enter ]; then
+  if [ "$MENU_KEY" != enter ]; then
     say "cancelled; no changes made."
     return 1
   fi
-  SELECTED_ACTION="$action"
+}
+
+confirm_uninstall() {
+  echo
+  echo "WARNING: This permanently removes MiSTer MagiK, its settings, catalog,"
+  echo "downloaded media, installer scripts, update_all entry, and saved backup."
+  echo "Stock MiSTer boot will be restored first."
+  echo
+  echo "Press A/Enter to confirm. Press any other button to cancel."
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && [ "${MISTER_MAGIK_TEST_CONFIRM_UNINSTALL:-0}" = 1 ]; then
+    return 0
+  fi
+  if ! read_menu_key; then
+    say "interactive input is unavailable; uninstall refused."
+    return 1
+  fi
+  if [ "$MENU_KEY" != enter ]; then
+    say "cancelled; no changes made."
+    return 1
+  fi
 }
 
 snapshot() {
@@ -205,6 +304,18 @@ verify_platform() {
   say "verified platform $(manifest_field magik_revision)"
 }
 
+remove_legacy_root_legal_files() {
+  legacy_failed=0
+  rm -f \
+    "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt" \
+    "$FAT/licenses/RUST-LIBRARIES.txt" \
+    "$FAT/licenses/FFMPEG-LGPL-2.1-or-later.txt" \
+    "$FAT/licenses/PRESS-START-2P-OFL-1.1.txt" \
+    "$FAT/THIRD-PARTY-NOTICES.txt" "$FAT/SOURCE-OFFER.txt" || legacy_failed=1
+  rmdir "$FAT/licenses" 2>/dev/null || true
+  [ "$legacy_failed" = 0 ]
+}
+
 ensure_stock_inittab() {
   if [ "${MISTER_MAGIK_TEST_MODE:-0}" != 1 ]; then mount -o remount,rw / 2>/dev/null || true; fi
   tmp=/tmp/inittab.magik
@@ -227,45 +338,61 @@ END {
   cp "$tmp" "$INITTAB"
 }
 
-write_ini_with_main() {
-  mkdir -p "$APP_DIR"
+write_ini_with_selected_value() {
+  selected_section="$1"
+  selected_key="$2"
+  selected_value="$3"
   if [ ! -f "$INI" ]; then
-    printf '[MiSTer]\nmain=MiSTer_MagiK\n' > "$PENDING"
+    printf '[%s]\n%s=%s\n' "$selected_section" "$selected_key" "$selected_value" > "$PENDING"
   else
-    backup_ini_before_magik
-    awk '
-BEGIN { in_mister = 0; saw_mister = 0; wrote_main = 0 }
-function write_main_if_needed() {
-  if (in_mister && !wrote_main) {
-    print "main=MiSTer_MagiK"
-    wrote_main = 1
+    cr="$(awk 'sub(/\r$/, "") { print "\r"; exit }' "$INI")"
+    awk -v selected_section="$selected_section" -v selected_key="$selected_key" -v selected_value="$selected_value" -v cr="$cr" '
+BEGIN { in_selected = 0; saw_section = 0; wrote_value = 0 }
+function is_selected_assignment(line, key) {
+  if (line !~ /=/) return 0
+  key = line
+  sub(/=.*/, "", key)
+  gsub(/[[:space:]]/, "", key)
+  return tolower(key) == tolower(selected_key)
+}
+function write_value_if_needed() {
+  if (in_selected && !wrote_value) {
+    print selected_key "=" selected_value cr
+    wrote_value = 1
   }
 }
+{ sub(/\r$/, "") }
 /^[[:space:]]*\[[^]]+\]/ {
-  write_main_if_needed()
+  write_value_if_needed()
   section = $0
   sub(/^[[:space:]]*\[/, "", section)
   sub(/\].*$/, "", section)
   gsub(/[[:space:]]/, "", section)
-  in_mister = (tolower(section) == "mister")
-  if (in_mister) saw_mister = 1
-  print
+  in_selected = (tolower(section) == tolower(selected_section))
+  if (in_selected) saw_section = 1
+  print $0 cr
   next
 }
-in_mister && /^[[:space:]]*main[[:space:]]*=/ {
-  if (!wrote_main) {
-    print "main=MiSTer_MagiK"
-    wrote_main = 1
+in_selected && is_selected_assignment($0) {
+  if (!wrote_value) {
+    suffix = ""
+    if (match($0, /[;#]/)) suffix = " " substr($0, RSTART)
+    print selected_key "=" selected_value suffix cr
+    wrote_value = 1
+  } else {
+    # Keep duplicate assignments as comments so canonicalization does not
+    # discard user context while still leaving exactly one effective value.
+    print ";" $0 cr
   }
   next
 }
-{ print }
+{ print $0 cr }
 END {
-  write_main_if_needed()
-  if (!saw_mister) {
-    print ""
-    print "[MiSTer]"
-    print "main=MiSTer_MagiK"
+  write_value_if_needed()
+  if (!saw_section) {
+    print cr
+    print "[" selected_section "]" cr
+    print selected_key "=" selected_value cr
   }
 }
 ' "$INI" > "$PENDING"
@@ -276,32 +403,39 @@ END {
   sync "$INI" 2>/dev/null || sync
 }
 
+write_ini_with_main() {
+  mkdir -p "$APP_DIR"
+  backup_ini_before_magik
+  write_ini_with_selected_value MiSTer main MiSTer_MagiK
+  write_ini_with_selected_value Menu video_mode 8
+}
+
 write_ini_with_stock_main() {
-  [ -f "$INI" ] || return 0
-  awk '
-BEGIN { in_mister = 0 }
-/^[[:space:]]*\[[^]]+\]/ {
-  section = $0
-  sub(/^[[:space:]]*\[/, "", section)
-  sub(/\].*$/, "", section)
-  gsub(/[[:space:]]/, "", section)
-  in_mister = (tolower(section) == "mister")
-  print
-  next
+  write_ini_with_selected_value MiSTer main MiSTer
 }
-in_mister && /^[[:space:]]*main[[:space:]]*=[[:space:]]*MiSTer_MagiK[[:space:]]*([;#].*)?$/ {
-  print "main=MiSTer"
-  next
+
+verify_stock_boot() {
+  ini_has_one_main MiSTer || { say "ERROR: MiSTer.ini does not select exactly one stock Main."; return 1; }
+  stock_count="$(grep -c '^::sysinit:/media/fat/MiSTer[[:space:]]*&[[:space:]]*$' "$INITTAB" 2>/dev/null || true)"
+  [ "$stock_count" = 1 ] || { say "ERROR: inittab does not contain exactly one stock Main entry."; return 1; }
+  if grep -Eq '^::sysinit:/media/fat/(MiSTer_MagiK|mister-magik/boot\.sh)' "$INITTAB" 2>/dev/null; then
+    say "ERROR: inittab still contains a MagiK boot entry."
+    return 1
+  fi
 }
-{ print }
-' "$INI" > "$PENDING"
-  sync "$PENDING" 2>/dev/null || sync
-  mv "$PENDING" "$INI"
-  sync "$INI" 2>/dev/null || sync
+
+restore_stock_boot() {
+  snapshot
+  ensure_stock_inittab
+  write_ini_with_stock_main
+  [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
+  verify_stock_boot
 }
 
 install_magik() {
+  confirm_install || return 1
   verify_platform || { say "ERROR: platform verification failed; boot configuration was not changed."; exit 1; }
+  remove_legacy_root_legal_files
   snapshot
   chmod +x "$MAIN_BIN" "$GUI_BIN" "$CATALOG_BUILDER"
   ensure_stock_inittab
@@ -310,12 +444,80 @@ install_magik() {
   say "installed. Reboot to start MiSTer MagiK."
 }
 
-disable_magik() {
-  snapshot
-  ensure_stock_inittab
-  write_ini_with_stock_main
+restore_magik() {
+  restore_stock_boot
+  say "stock MiSTer boot restored. MiSTer MagiK files were preserved."
+  say "Perform a normal reboot to start the stock OSD."
+}
+
+stop_magik_children() {
+  [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && return 0
+  for process in mister-magik-fb mister-magik-catalog-builder mister-magik-agent; do
+    pids="$(pidof "$process" 2>/dev/null || true)"
+    [ -z "$pids" ] || kill $pids 2>/dev/null || true
+  done
+  sleep 1
+  for process in mister-magik-fb mister-magik-catalog-builder mister-magik-agent; do
+    pids="$(pidof "$process" 2>/dev/null || true)"
+    [ -z "$pids" ] || kill -9 $pids 2>/dev/null || true
+  done
+}
+
+remove_agent_boot_hook() {
+  agent_failed=0
+  [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || mount -o remount,rw / 2>/dev/null || true
+  rm -f "$INIT_DIR/S00magik-agent" || agent_failed=1
+  if [ -e "$INIT_DIR/disabled-S00fastnet.magik-agent" ]; then
+    if [ -e "$INIT_DIR/S00fastnet" ]; then
+      rm -f "$INIT_DIR/disabled-S00fastnet.magik-agent" || agent_failed=1
+    else
+      mv "$INIT_DIR/disabled-S00fastnet.magik-agent" "$INIT_DIR/S00fastnet" || agent_failed=1
+    fi
+  fi
+  [ "$agent_failed" = 0 ]
+}
+
+remove_owned_files() {
+  cleanup_failed=0
+  rm -rf "$APP_DIR" || cleanup_failed=1
+  rm -f "$MAIN_BIN" "$CHANNEL_SCRIPT" "$DOWNLOADER_DROP_IN" || cleanup_failed=1
+  rm -f "$FAT"/downloader_mister_magik.ini.tmp.* "$FAT"/.downloader_mister_magik.ini* || cleanup_failed=1
+  rm -f "$INI_BACKUP" "$FAT"/.MiSTer.ini.bak.before-magik.new.* "$FAT"/.MiSTer.ini.magik.new* || cleanup_failed=1
+  remove_legacy_root_legal_files || cleanup_failed=1
+  remove_agent_boot_hook || cleanup_failed=1
+
+  # The installed copy removes itself only after every other owned path.
+  rm -f "$INSTALLED_SCRIPT" || cleanup_failed=1
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
-  say "disabled. Reboot to return to stock MiSTer boot."
+
+  for path in "$APP_DIR" "$MAIN_BIN" "$INSTALLED_SCRIPT" "$CHANNEL_SCRIPT" \
+    "$DOWNLOADER_DROP_IN" "$INI_BACKUP" "$INIT_DIR/S00magik-agent" \
+    "$INIT_DIR/disabled-S00fastnet.magik-agent" "$FAT/THIRD-PARTY-NOTICES.txt" \
+    "$FAT/SOURCE-OFFER.txt"; do
+    if [ -e "$path" ]; then say "ERROR: uninstall residue: $path"; cleanup_failed=1; fi
+  done
+  for path in \
+    "$FAT/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt" \
+    "$FAT/licenses/RUST-LIBRARIES.txt" \
+    "$FAT/licenses/FFMPEG-LGPL-2.1-or-later.txt" \
+    "$FAT/licenses/PRESS-START-2P-OFL-1.1.txt" \
+    "$FAT"/downloader_mister_magik.ini.tmp.* "$FAT"/.downloader_mister_magik.ini* \
+    "$FAT"/.MiSTer.ini.bak.before-magik.new.* "$FAT"/.MiSTer.ini.magik.new*; do
+    if [ -e "$path" ]; then say "ERROR: uninstall residue: $path"; cleanup_failed=1; fi
+  done
+  [ "$cleanup_failed" = 0 ]
+}
+
+uninstall_magik() {
+  confirm_uninstall || return 1
+  restore_stock_boot
+  stop_magik_children
+  if ! remove_owned_files; then
+    say "ERROR: uninstall incomplete; review the residue above. Stock boot is restored."
+    return 1
+  fi
+  say "fully uninstalled."
+  say "Perform a normal reboot to start the stock OSD."
 }
 
 action="${1:-}"
@@ -329,14 +531,17 @@ if [ -z "$action" ] && ini_selects_magik; then
 fi
 
 case "$action" in
-  install|enable|"")
+  install|"")
     install_magik
     ;;
-  disable|uninstall)
-    disable_magik
+  restore)
+    restore_magik
+    ;;
+  uninstall)
+    uninstall_magik
     ;;
   *)
-    echo "Usage: $0 [install|disable]"
+    echo "Usage: $0 [install|restore|uninstall]"
     exit 2
     ;;
 esac

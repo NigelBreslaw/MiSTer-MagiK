@@ -221,14 +221,14 @@ import zipfile
 with zipfile.ZipFile(sys.argv[1]) as archive:
     names = set(archive.namelist())
     required = {
-        "THIRD-PARTY-NOTICES.txt",
-        "SOURCE-OFFER.txt",
+        "mister-magik/THIRD-PARTY-NOTICES.txt",
+        "mister-magik/SOURCE-OFFER.txt",
         "Scripts/mister-magik.sh",
         "Scripts/mister-magik-channel.sh",
-        "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
-        "licenses/RUST-LIBRARIES.txt",
-        "licenses/FFMPEG-LGPL-2.1-or-later.txt",
-        "licenses/PRESS-START-2P-OFL-1.1.txt",
+        "mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+        "mister-magik/licenses/RUST-LIBRARIES.txt",
+        "mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt",
+        "mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt",
         "MiSTer_MagiK",
         "mister-magik/mister-magik-catalog-builder",
         "mister-magik/platform-v1.manifest",
@@ -242,8 +242,19 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     missing = sorted(required - names)
     if missing:
         raise SystemExit(f"distribution missing legal files: {', '.join(missing)}")
-    notices = archive.read("THIRD-PARTY-NOTICES.txt").decode()
-    source_offer = archive.read("SOURCE-OFFER.txt").decode()
+    legacy_root_paths = {
+        "THIRD-PARTY-NOTICES.txt",
+        "SOURCE-OFFER.txt",
+        "licenses/MiSTer-MagiK-GPL-3.0-or-later.txt",
+        "licenses/RUST-LIBRARIES.txt",
+        "licenses/FFMPEG-LGPL-2.1-or-later.txt",
+        "licenses/PRESS-START-2P-OFL-1.1.txt",
+    }
+    unexpected = sorted(legacy_root_paths & names)
+    if unexpected:
+        raise SystemExit(f"distribution leaks legal files outside mister-magik/: {', '.join(unexpected)}")
+    notices = archive.read("mister-magik/THIRD-PARTY-NOTICES.txt").decode()
+    source_offer = archive.read("mister-magik/SOURCE-OFFER.txt").decode()
     release = archive.read("mister-magik/release-v1.txt").decode()
     if "game_database_version=1" not in release:
         raise SystemExit("distribution release identity is missing game database version")
