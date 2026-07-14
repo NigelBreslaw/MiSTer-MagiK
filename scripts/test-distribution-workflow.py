@@ -41,5 +41,6 @@ for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_
 
 assert "gh run list --workflow fpga-vblank-latch.yml" not in text
 assert "gh run list --workflow kernel-scanout.yml" not in text
+assert 'unzip -q -o "$archive" -d build/qualified' in text
 
 print("distribution workflow contract ok")
