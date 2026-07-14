@@ -1470,7 +1470,9 @@ pub(super) fn run_launcher_loop(
         && !arcade_navigation_ready(catalog_ready, &catalog);
     bridge.set_menu_title(nav.current_menu_title().into());
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
+    bridge.set_update_available(false);
     bridge.set_menu_items(bridge_models.menu_items(&nav, catalog_version));
+    let mut update_check = UpdateCheck::start(launcher_bench_scenario.is_none());
     print_startup_event(
         start,
         "catalog_bridge_systems",
@@ -1685,6 +1687,14 @@ pub(super) fn run_launcher_loop(
                 full_bridge_dirty = true;
             }
             last_clock_update = Instant::now();
+        }
+        if let Some(available) = update_check.try_recv() {
+            if available {
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                bridge.set_update_available(true);
+                light_bridge_dirty = true;
+                runtime_status::event("update_available", "source=downloader_mister_magik");
+            }
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);

@@ -100,6 +100,7 @@ mod tear_pattern_loop;
 pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
+mod update_checker;
 #[cfg(mister_video_scene)]
 mod video_loop;
 
@@ -131,6 +132,7 @@ use tear_pattern_loop::*;
 use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
+use update_checker::*;
 #[cfg(mister_video_scene)]
 use video_loop::*;
 
