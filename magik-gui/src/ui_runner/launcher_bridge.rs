@@ -79,9 +79,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
 
 fn build_label() -> String {
     let version = env!("MISTER_MAGIK_VERSION");
-    let build_number = env!("MISTER_MAGIK_BUILD_NUMBER");
     let build_time = env!("MISTER_MAGIK_BUILD_TIME");
-    format!("Version {version}  Build {build_number}  {build_time}")
+    format_build_label(version, build_time)
+}
+
+fn format_build_label(version: &str, build_time: &str) -> String {
+    format!("Version {version}  {build_time}")
 }
 
 fn kernel_version() -> String {
@@ -1077,6 +1080,14 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Once;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn info_build_label_uses_version_without_repeating_build_number() {
+        assert_eq!(
+            format_build_label("0.2.323", "14.7.2026 18:47"),
+            "Version 0.2.323  14.7.2026 18:47"
+        );
+    }
 
     #[test]
     fn summary_only_system_header_keeps_known_game_count_while_rows_load() {

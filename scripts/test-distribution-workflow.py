@@ -5,6 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 text = (ROOT / ".github/workflows/distribution.yml").read_text()
+cross = (ROOT / "magik-gui/Cross.toml").read_text()
+
+for variable in (
+    "MISTER_MAGIK_BUILD_NUMBER",
+    "MISTER_MAGIK_VERSION",
+    "MISTER_MAGIK_BUILD_TIME",
+):
+    assert f'"{variable}"' in cross, f"cross build does not pass through {variable}"
 
 trigger = text.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
 assert trigger.startswith("  workflow_dispatch:\n")
@@ -30,6 +38,7 @@ required = (
     "--game-databases-manifest",
     "platform-bundle-v0.1.json",
     "MAIN_REF: mister-magik",
+    'assert version.encode() in package.read("mister-magik/mister-magik-fb")',
 )
 for value in required:
     assert value in text, f"distribution workflow is missing: {value}"
