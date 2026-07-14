@@ -59,6 +59,7 @@ run_installer_with_keys() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
     MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
     MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 MISTER_MAGIK_TEST_KEYS="$keys" \
+    MISTER_MAGIK_TEST_REBOOT_TRACE="${MISTER_MAGIK_TEST_REBOOT_TRACE:-}" \
     MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/mister-magik.sh" "$@"
 }
 
@@ -151,11 +152,18 @@ test -x "$APP/mister-magik-fb"
 ini_before_cancel="$(sha256sum "$FAT/MiSTer.ini")"
 run_installer_with_keys cancel >/dev/null
 test "$(sha256sum "$FAT/MiSTer.ini")" = "$ini_before_cancel"
-run_installer_with_keys enter >/dev/null
+MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
+  run_installer_with_keys enter,enter >"$TMP/restore-reboot.log"
 assert_one_main MiSTer
 assert_menu_1080p
 test -f "$FAT/MiSTer.ini.bak.before-magik"
-run_installer install >/dev/null
+grep -q 'TEST: normal reboot requested' "$TMP/restore-reboot.log"
+test "$(cat "$TMP/reboot.trace")" = "$(printf 'sync\nreboot')"
+rm -f "$TMP/reboot.trace"
+MISTER_MAGIK_TEST_REBOOT_TRACE="$TMP/reboot.trace" \
+  run_installer_with_keys other install >"$TMP/install-reboot-skip.log"
+grep -q 'reboot skipped' "$TMP/install-reboot-skip.log"
+test ! -e "$TMP/reboot.trace"
 if run_installer_with_keys down,enter,other >"$TMP/menu-uninstall-cancel.log" 2>&1; then
   echo "menu uninstall cancellation unexpectedly succeeded" >&2
   exit 1
@@ -339,7 +347,8 @@ test -e "$FAT/MiSTer" && test -e "$FAT/menu.rbf"
 test -e "$FAT/MiSTer.ini.bak"
 test -e "$FAT/licenses/USER-LICENSE.txt"
 test ! -e "$FAT/THIRD-PARTY-NOTICES.txt" && test ! -e "$FAT/SOURCE-OFFER.txt"
-grep -q 'Perform a normal reboot' "$TMP/uninstall.log"
+grep -q 'Reboot now? Press A/Enter to reboot' "$TMP/uninstall.log"
+grep -q 'interactive input is unavailable; reboot not requested' "$TMP/uninstall.log"
 
 # Full uninstall is idempotent and must not recreate persistent MagiK state.
 run_confirmed_uninstall >/dev/null

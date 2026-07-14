@@ -138,6 +138,10 @@ because other launcher output modes are not yet release-tested. Restore and
 uninstall retain that safe menu mode while returning the Main selection to
 stock.
 
+After install, restore, or uninstall, the public script offers a normal reboot.
+It syncs storage and calls the regular `reboot` command only after explicit
+A/Enter confirmation; any other input leaves the system running.
+
 If HDMI is black but SSH works, prefer scripted recovery/reboot over manual
 process experiments.
 

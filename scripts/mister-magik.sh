@@ -224,6 +224,40 @@ confirm_uninstall() {
   fi
 }
 
+sync_before_normal_reboot() {
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
+    [ -z "${MISTER_MAGIK_TEST_REBOOT_TRACE:-}" ] || printf 'sync\n' >>"$MISTER_MAGIK_TEST_REBOOT_TRACE"
+  else
+    sync
+  fi
+}
+
+request_normal_reboot() {
+  if [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ]; then
+    [ -z "${MISTER_MAGIK_TEST_REBOOT_TRACE:-}" ] || printf 'reboot\n' >>"$MISTER_MAGIK_TEST_REBOOT_TRACE"
+    say "TEST: normal reboot requested."
+  else
+    reboot
+  fi
+}
+
+offer_normal_reboot() {
+  echo
+  echo "Reboot now? Press A/Enter to reboot. Any other key exits without rebooting."
+  if ! read_menu_key; then
+    say "interactive input is unavailable; reboot not requested."
+    return 0
+  fi
+  if [ "$MENU_KEY" != enter ]; then
+    say "reboot skipped."
+    return 0
+  fi
+
+  say "syncing storage and rebooting normally."
+  sync_before_normal_reboot
+  request_normal_reboot
+}
+
 snapshot() {
   stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo unknown)"
   snap="$SNAP_DIR/$stamp-script"
@@ -442,12 +476,13 @@ install_magik() {
   write_ini_with_main
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
   say "installed. Reboot to start MiSTer MagiK."
+  offer_normal_reboot
 }
 
 restore_magik() {
   restore_stock_boot
   say "stock MiSTer boot restored. MiSTer MagiK files were preserved."
-  say "Perform a normal reboot to start the stock OSD."
+  offer_normal_reboot
 }
 
 stop_magik_children() {
@@ -517,7 +552,7 @@ uninstall_magik() {
     return 1
   fi
   say "fully uninstalled."
-  say "Perform a normal reboot to start the stock OSD."
+  offer_normal_reboot
 }
 
 action="${1:-}"

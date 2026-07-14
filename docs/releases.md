@@ -82,7 +82,10 @@ Choose **Fully uninstall MiSTer MagiK** from the menu, or run the interactive
 `uninstall` command, to restore and verify stock boot before deleting MagiK's
 application directory, Main fork, scripts, Downloader entry, saved backup,
 optional agent hook, and legacy legal files. Uninstall never reboots
-automatically and refuses to run without interactive confirmation.
+automatically and refuses to run without interactive confirmation. After a
+successful install, restore, or uninstall, the script offers a normal reboot;
+A/Enter syncs storage and reboots, while any other input exits without
+rebooting. Downloader itself is not configured to reboot for MagiK updates.
 
 If an update is interrupted, run `update_all` again before rebooting. The
 platform manifest and hashes prevent activation of an incomplete initial

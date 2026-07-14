@@ -49,6 +49,9 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 self.assertEqual(database["db_id"], "mister_magik")
                 self.assertEqual(database["timestamp"], 1_700_000_000)
                 self.assertIn("v0.2.42", json.dumps(database))
+                database_text = json.dumps(database).lower()
+                self.assertNotIn("reboot", database_text)
+                self.assertNotIn("restart", database_text)
                 item = database["files"]["Scripts/mister-magik.sh"]
                 self.assertEqual(item["hash"], receipt["files"][0]["md5"])
                 self.assertIn("/releases/download/v0.2.42/", item["url"])
@@ -57,6 +60,8 @@ class DownloaderDatabaseTests(unittest.TestCase):
                     self.assertEqual(names, ["downloader_mister_magik.ini"])
                     ini = archive.read(names[0]).decode()
                     self.assertIn(f"mister-magik-{channel}-db.json.zip", ini)
+                    self.assertNotIn("reboot", ini.lower())
+                    self.assertNotIn("restart", ini.lower())
                 self.assertNotIn("downloader_mister_magik.ini", database["files"])
 
     def test_rejects_forbidden_owned_path_and_version_mismatch(self) -> None:
