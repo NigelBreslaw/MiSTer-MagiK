@@ -50,7 +50,6 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
   ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
-  ./build-arm64-apple-container.sh --video-lab  → include video comparison/fallback paths
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --bench-tools → include device benchmark commands
   ./build-arm64-apple-container.sh --catalog-builder → build only the Slint-free catalog builder
@@ -79,10 +78,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
-    --video-lab)
-      add_feature video
-      add_feature video-lab
-      ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
     --catalog-builder)
@@ -233,11 +228,7 @@ fi
 
 EXTRA_ENVS=()
 if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
-  if [[ " ${FEATURES[*]-} " == *" video-lab "* ]]; then
-    MISTER_FFMPEG_VIDEO_LAB=1 "$PWD/scripts/build-minimal-ffmpeg.sh"
-  else
-    "$PWD/scripts/build-minimal-ffmpeg.sh"
-  fi
+  "$PWD/scripts/build-minimal-ffmpeg.sh"
   EXTRA_ENVS+=(
     --env FFMPEG_DIR=/project/magik-gui/target/ffmpeg-minimal/armv7/dist
     --env PKG_CONFIG_PATH=/project/magik-gui/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig
@@ -250,7 +241,7 @@ if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
 fi
 
 HOST_RUSTFLAGS="${RUSTFLAGS:-}"
-CONTAINER_RUSTFLAGS="${HOST_RUSTFLAGS:+$HOST_RUSTFLAGS }-D warnings -C target-cpu=cortex-a9 -C target-feature=+neon"
+CONTAINER_RUSTFLAGS="${HOST_RUSTFLAGS:+$HOST_RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
 if [ "$PROFILE" = release-device-profile ]; then
   CONTAINER_RUSTFLAGS="$CONTAINER_RUSTFLAGS -C force-frame-pointers=yes"
 fi

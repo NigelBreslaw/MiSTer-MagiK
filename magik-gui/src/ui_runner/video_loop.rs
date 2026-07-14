@@ -177,48 +177,6 @@ impl VideoWindowTotals {
 }
 
 #[cfg(mister_video_scene)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum VideoRenderMode {
-    #[cfg(feature = "video-lab")]
-    SlintImage,
-    DirectBlit,
-}
-
-#[cfg(mister_video_scene)]
-impl VideoRenderMode {
-    pub(super) fn from_env() -> Self {
-        match std::env::var("MISTER_VIDEO_RENDER_MODE")
-            .unwrap_or_else(|_| "direct-blit".to_string())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "direct" | "direct-blit" | "direct_blit" => Self::DirectBlit,
-            #[cfg(feature = "video-lab")]
-            "slint-image" | "slint_image" => Self::SlintImage,
-            #[cfg(not(feature = "video-lab"))]
-            "slint-image" | "slint_image" => {
-                crate::ui_errln!(
-                    "MISTER_VIDEO_RENDER_MODE=slint-image requires a --video-lab build; production video supports only direct-blit"
-                );
-                std::process::exit(2);
-            }
-            other => {
-                crate::ui_errln!("unknown MISTER_VIDEO_RENDER_MODE={other:?}; use direct-blit");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            #[cfg(feature = "video-lab")]
-            Self::SlintImage => "slint-image",
-            Self::DirectBlit => "direct-blit",
-        }
-    }
-}
-
-#[cfg(mister_video_scene)]
 pub(super) fn video_copy_rect(
     dirty: DirtyRect,
     video_dirty_clip_ready: bool,
@@ -231,31 +189,13 @@ pub(super) fn video_copy_rect(
     }
 }
 
-#[cfg(all(mister_video_scene, feature = "video-lab"))]
-pub(super) fn rgb565_frame_to_slint_image(
-    frame: &crate::video_player::VideoRgb565Frame,
-) -> slint::Image {
-    let mut buffer = SharedPixelBuffer::<Rgb8Pixel>::new(frame.width, frame.height);
-    let dst = buffer.make_mut_bytes();
-    for (word, rgb) in frame.pixels.iter().copied().zip(dst.chunks_exact_mut(3)) {
-        let r5 = ((word >> 11) & 0x1f) as u8;
-        let g6 = ((word >> 5) & 0x3f) as u8;
-        let b5 = (word & 0x1f) as u8;
-        rgb[0] = (r5 << 3) | (r5 >> 2);
-        rgb[1] = (g6 << 2) | (g6 >> 4);
-        rgb[2] = (b5 << 3) | (b5 >> 2);
-    }
-    slint::Image::from_rgb8(buffer)
-}
-
 #[cfg(mister_video_scene)]
 pub(super) fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
     disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MinimalSoftwareWindow>,
-    #[cfg_attr(not(feature = "video-lab"), allow(unused_variables))]
-    app: slint_ui::video_playback::VideoPlayback,
+    _app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,
 ) {
     let paths = match crate::video_player::video_paths_from_env() {
@@ -294,7 +234,6 @@ pub(super) fn run_video_playback_loop(
     let cpu = cpu_profile::start();
     let profile_on = profiler.enabled();
     let frame_order = FrameOrder::from_env();
-    let render_mode = VideoRenderMode::from_env();
     let mut pacer = VsyncPacer::from_env();
 
     let mut fps_window_start = Instant::now();
@@ -310,20 +249,17 @@ pub(super) fn run_video_playback_loop(
         format!("{secs}s")
     };
     crate::ui_logln!(
-        "video_playback running {label} playlist={playlist_label} frame-order={} animation-clock={} video-render-mode={}",
+        "video_playback running {label} playlist={playlist_label} frame-order={} animation-clock={} video-render-mode=direct-blit",
         frame_order.label(),
-        animation_clock.label(),
-        render_mode.label()
+        animation_clock.label()
     );
-    crate::ui_logln!("video_render_mode={}", render_mode.label());
+    crate::ui_logln!("video_render_mode=direct-blit");
     crate::ui_logln!(
-        "video_controls queue_depth={} scale={} profile={} threads={}",
-        std::env::var("MISTER_VIDEO_QUEUE_DEPTH").unwrap_or_else(|_| "2".into()),
+        "video_controls queue_depth=2 scale={} profile={}",
         std::env::var("MISTER_VIDEO_SCALE").unwrap_or_else(|_| "source".into()),
         std::env::var("MISTER_VIDEO_PROFILE")
             .or_else(|_| std::env::var("MISTER_PROFILE"))
-            .unwrap_or_else(|_| "off".into()),
-        std::env::var("MISTER_VIDEO_THREADS").unwrap_or_else(|_| "auto".into())
+            .unwrap_or_else(|_| "off".into())
     );
     crate::ui_logln!(
         "video_dirty_clip=on rect={}x{}+{},{}",
@@ -362,7 +298,6 @@ pub(super) fn run_video_playback_loop(
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
-                                decode_us: _decode_us,
                                 metrics,
                             } = frame;
                             phases.frame_updated = true;
@@ -388,19 +323,7 @@ pub(super) fn run_video_playback_loop(
                                 audio_codec: metrics.audio_codec,
                                 ..Default::default()
                             };
-                            match render_mode {
-                                #[cfg(feature = "video-lab")]
-                                VideoRenderMode::SlintImage => {
-                                    let image_t0 = Instant::now();
-                                    app.set_frame(rgb565_frame_to_slint_image(&frame));
-                                    phases.image_us = image_t0.elapsed().as_micros() as u64;
-                                    video_profile.video_image_us = phases.image_us;
-                                    window.request_redraw();
-                                }
-                                VideoRenderMode::DirectBlit => {
-                                    direct_frame = Some(frame);
-                                }
-                            }
+                            direct_frame = Some(frame);
                             if !enqueue_audio_write(
                                 &audio_writer,
                                 &frame_worker,
@@ -459,6 +382,9 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
+                if let Some(frame) = direct_frame.take() {
+                    frame_worker.recycle_pixels(frame.pixels);
+                }
                 if rows > 0 {
                     video_dirty_clip_ready = true;
                 }
@@ -507,7 +433,6 @@ pub(super) fn run_video_playback_loop(
                                 audio,
                                 audio_requested_frames,
                                 loop_count,
-                                decode_us: _decode_us,
                                 metrics,
                             } = frame;
                             phases.frame_updated = true;
@@ -533,19 +458,7 @@ pub(super) fn run_video_playback_loop(
                                 audio_codec: metrics.audio_codec,
                                 ..Default::default()
                             };
-                            match render_mode {
-                                #[cfg(feature = "video-lab")]
-                                VideoRenderMode::SlintImage => {
-                                    let image_t0 = Instant::now();
-                                    app.set_frame(rgb565_frame_to_slint_image(&frame));
-                                    phases.image_us = image_t0.elapsed().as_micros() as u64;
-                                    video_profile.video_image_us = phases.image_us;
-                                    window.request_redraw();
-                                }
-                                VideoRenderMode::DirectBlit => {
-                                    direct_frame = Some(frame);
-                                }
-                            }
+                            direct_frame = Some(frame);
                             if !enqueue_audio_write(
                                 &audio_writer,
                                 &frame_worker,
@@ -602,6 +515,9 @@ pub(super) fn run_video_playback_loop(
                 } else {
                     0
                 };
+                if let Some(frame) = direct_frame.take() {
+                    frame_worker.recycle_pixels(frame.pixels);
+                }
                 if rows > 0 {
                     video_dirty_clip_ready = true;
                 }
@@ -639,7 +555,7 @@ pub(super) fn run_video_playback_loop(
         frames += 1;
     }
 
-    let _ = drain_audio_write_results(&audio_writer, &frame_worker, &mut audio_stats);
+    finish_audio_writer(audio_writer, &frame_worker, &mut audio_stats);
     let elapsed = start.elapsed().as_secs_f64();
     crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
@@ -716,8 +632,9 @@ struct AudioWriteResult {
 
 #[cfg(mister_video_scene)]
 struct AudioWriteWorker {
-    tx: mpsc::SyncSender<AudioWriteJob>,
+    tx: Option<mpsc::SyncSender<AudioWriteJob>>,
     rx: mpsc::Receiver<AudioWriteResult>,
+    join: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(mister_video_scene)]
@@ -726,7 +643,7 @@ impl AudioWriteWorker {
         let mut sink = crate::mr_audio::MrAudioSink::open_default()?;
         let (tx, job_rx) = mpsc::sync_channel::<AudioWriteJob>(4);
         let (result_tx, rx) = mpsc::channel::<AudioWriteResult>();
-        std::thread::Builder::new()
+        let join = std::thread::Builder::new()
             .name("video-audio-write".to_string())
             .spawn(move || {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
@@ -759,15 +676,35 @@ impl AudioWriteWorker {
                 }
             })
             .map_err(|e| format!("spawn video-audio-write: {e}"))?;
-        Ok(Self { tx, rx })
+        Ok(Self {
+            tx: Some(tx),
+            rx,
+            join: Some(join),
+        })
     }
 
     fn try_send(&self, job: AudioWriteJob) -> Result<(), mpsc::TrySendError<AudioWriteJob>> {
-        self.tx.try_send(job)
+        match &self.tx {
+            Some(tx) => tx.try_send(job),
+            None => Err(mpsc::TrySendError::Disconnected(job)),
+        }
     }
 
     fn try_recv(&self) -> Result<AudioWriteResult, mpsc::TryRecvError> {
         self.rx.try_recv()
+    }
+
+    fn finish(mut self) -> Result<Vec<AudioWriteResult>, String> {
+        self.tx.take();
+        let mut results = Vec::new();
+        while let Ok(result) = self.rx.recv() {
+            results.push(result);
+        }
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| "video audio writer panicked during shutdown".to_string())?;
+        }
+        Ok(results)
     }
 }
 
@@ -799,6 +736,42 @@ fn drain_audio_write_results(
                 return false;
             }
         }
+    }
+}
+
+#[cfg(mister_video_scene)]
+fn finish_audio_writer(
+    audio_writer: AudioWriteWorker,
+    frame_worker: &crate::video_player::VideoFrameWorker,
+    audio_stats: &mut AudioWindowStats,
+) {
+    match audio_writer.finish() {
+        Ok(results) => {
+            let mut requested = 0usize;
+            let mut written = 0usize;
+            for result in results {
+                if let Some(e) = result.error {
+                    crate::ui_errln!("video_playback audio shutdown: {e}");
+                }
+                requested = requested.saturating_add(result.requested_frames);
+                written = written.saturating_add(result.written_frames);
+                audio_stats.add(
+                    Duration::from_micros(result.write_us),
+                    result.requested_frames,
+                    result.written_frames,
+                    result.loop_count,
+                );
+                frame_worker.recycle_audio(result.audio);
+            }
+            crate::ui_logln!(
+                "video_playback audio shutdown requested={} written={} lost={} underruns={}",
+                requested,
+                written,
+                requested.saturating_sub(written),
+                audio_stats.underruns
+            );
+        }
+        Err(e) => crate::ui_errln!("video_playback audio shutdown: {e}"),
     }
 }
 
