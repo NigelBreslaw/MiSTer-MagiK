@@ -65,6 +65,7 @@ for script in \
   "$ROOT/scripts/profile-screenshot-download.sh" \
   "$ROOT/scripts/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
+  "$ROOT/scripts/switch-ui.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
 done
@@ -72,6 +73,20 @@ done
 while IFS= read -r script; do
   bash -n "$script"
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
+
+switch_log="$TMP/switch-ui-calls.log"
+cat >"$TMP/fake-mister" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$SWITCH_UI_TEST_LOG"
+EOF
+chmod +x "$TMP/fake-mister"
+MISTER="$TMP/fake-mister" SWITCH_UI_TEST_LOG="$switch_log" \
+  "$ROOT/scripts/switch-ui.sh" -magik >/dev/null
+if ! grep -qx 'reboot-wait --raw' "$switch_log"; then
+  echo "frontend switch must use a normal raw reboot independent of the active Main fork" >&2
+  exit 1
+fi
 
 "$ROOT/scripts/test-mister-magik-installer.sh"
 python3 "$ROOT/scripts/test-platform-component-id.py"
