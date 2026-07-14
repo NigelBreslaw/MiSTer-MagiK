@@ -13,26 +13,11 @@ from pathlib import Path
 FORMAT = "mister-magik-platform-component-v0.1"
 BUNDLE_FORMAT = "mister-magik-platform-bundle-v0.1"
 
-COMPONENT_INPUTS = {
-    "fpga": (
-        "fpga/menu-vblank-latch",
-        "kernel/scanout-slots/mister_magik_scanout_platform.h",
-        "scripts/build-fpga-vblank-latch-core.sh",
-        "scripts/install-quartus-lite-docker.sh",
-        "scripts/check-fpga-quartus-delta.py",
-        "scripts/verify-fpga-rbf-manifest.py",
-        ".github/workflows/fpga-vblank-latch.yml",
-        "scripts/platform-component-id.py",
-    ),
-    "kernel": (
-        "kernel/scanout-slots",
-        "scripts/build-scanout-slots-module.sh",
-        "scripts/check-scanout-slots-contract.sh",
-        "scripts/test-scanout-platform-contract.py",
-        ".github/workflows/kernel-scanout.yml",
-        "scripts/platform-component-id.py",
-    ),
+COMPONENT_INPUT_MANIFESTS = {
+    "fpga": "scripts/platform-component-inputs/fpga-v0.1.txt",
+    "kernel": "scripts/platform-component-inputs/kernel-v0.1.txt",
 }
+IDENTITY_IMPLEMENTATION = "scripts/platform-component-id.py"
 
 
 class IdentityError(ValueError):
@@ -68,8 +53,35 @@ def require_clean_repository(root: Path) -> None:
         raise IdentityError("platform component identities require a clean checkout")
 
 
+def component_inputs(root: Path, component: str) -> tuple[str, ...]:
+    manifest_relative = COMPONENT_INPUT_MANIFESTS[component]
+    manifest = root / manifest_relative
+    if not manifest.is_file() or manifest.is_symlink():
+        raise IdentityError(f"missing or invalid {component} input manifest: {manifest_relative}")
+    inputs: list[str] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(manifest.read_text().splitlines(), 1):
+        relative = raw_line.strip()
+        if not relative or relative.startswith("#"):
+            continue
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts or path.as_posix() != relative:
+            raise IdentityError(
+                f"invalid {component} input at {manifest_relative}:{line_number}: {relative}"
+            )
+        if relative in seen:
+            raise IdentityError(
+                f"duplicate {component} input at {manifest_relative}:{line_number}: {relative}"
+            )
+        seen.add(relative)
+        inputs.append(relative)
+    if not inputs:
+        raise IdentityError(f"empty {component} input manifest: {manifest_relative}")
+    return (*inputs, manifest_relative, IDENTITY_IMPLEMENTATION)
+
+
 def selected_files(root: Path, component: str) -> tuple[Path, ...]:
-    inputs = COMPONENT_INPUTS[component]
+    inputs = component_inputs(root, component)
     tracked = run_git(root, "ls-files", "-z", "--", *inputs)
     files: set[Path] = set()
     for relative in filter(None, tracked.split("\0")):
@@ -95,7 +107,7 @@ def selected_files(root: Path, component: str) -> tuple[Path, ...]:
 
 
 def component_revision(root: Path, component: str) -> str:
-    revision = run_git(root, "log", "-1", "--format=%H", "--", *COMPONENT_INPUTS[component])
+    revision = run_git(root, "log", "-1", "--format=%H", "--", *component_inputs(root, component))
     if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
         raise IdentityError(f"no complete history is available for {component} inputs")
     return revision
@@ -127,7 +139,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     commands = parser.add_subparsers(dest="command", required=True)
     component = commands.add_parser("component")
-    component.add_argument("name", choices=sorted(COMPONENT_INPUTS))
+    component.add_argument("name", choices=sorted(COMPONENT_INPUT_MANIFESTS))
     component.add_argument("--github-output", type=Path)
     bundle = commands.add_parser("bundle")
     bundle.add_argument("--fpga-id", required=True)

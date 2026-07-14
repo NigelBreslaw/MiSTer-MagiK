@@ -238,7 +238,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release
-          key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/main.rs', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+          key: target-agent-arm-${{ runner.os }}-${{ hashFiles('tools/magik-agent/Cargo.lock', 'tools/magik-agent/Cargo.toml', 'tools/magik-agent/src/**', 'scripts/build-mister-agent.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
             target-agent-arm-${{ runner.os }}-
 

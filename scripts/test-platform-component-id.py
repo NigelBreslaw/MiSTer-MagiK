@@ -39,15 +39,29 @@ class ComponentIdentityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="mister-magik-component-id-")
         self.root = Path(self.temp.name)
-        for component, inputs in component_id.COMPONENT_INPUTS.items():
-            for relative in inputs:
+        source_root = SCRIPT.parent.parent
+        for manifest_relative in component_id.COMPONENT_INPUT_MANIFESTS.values():
+            source = source_root / manifest_relative
+            destination = self.root / manifest_relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(source.read_text())
+        implementation = self.root / component_id.IDENTITY_IMPLEMENTATION
+        implementation.parent.mkdir(parents=True, exist_ok=True)
+        implementation.write_text("identity implementation\n")
+        for component in component_id.COMPONENT_INPUT_MANIFESTS:
+            for relative in component_id.component_inputs(self.root, component):
+                if relative in (*component_id.COMPONENT_INPUT_MANIFESTS.values(), component_id.IDENTITY_IMPLEMENTATION):
+                    continue
                 path = self.root / relative
                 if path.suffix or path.name.startswith("."):
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(f"{component}:{relative}\n")
+                    if not path.exists():
+                        path.write_text(f"{component}:{relative}\n")
                 else:
                     path.mkdir(parents=True, exist_ok=True)
-                    (path / "input.txt").write_text(f"{component}:{relative}\n")
+                    fixture = path / "input.txt"
+                    if not fixture.exists():
+                        fixture.write_text(f"{component}:{relative}\n")
         subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=git_env())
         run_git(self.root, "config", "user.email", "test@example.invalid")
         run_git(self.root, "config", "user.name", "Test")
@@ -62,26 +76,72 @@ class ComponentIdentityTests(unittest.TestCase):
         run_git(self.root, "commit", "-qm", message)
 
     def test_irrelevant_file_does_not_change_identity(self) -> None:
-        before, _ = component_id.component_id(self.root, "fpga")
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
         (self.root / "docs").mkdir()
         (self.root / "docs/notes.md").write_text("unrelated\n")
         self.commit("docs")
-        after, _ = component_id.component_id(self.root, "fpga")
-        self.assertEqual(before, after)
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertEqual(fpga_before, fpga_after)
+        self.assertEqual(kernel_before, kernel_after)
 
-    def test_relevant_change_invalidates_identity(self) -> None:
-        before, _ = component_id.component_id(self.root, "kernel")
+    def test_kernel_input_change_only_invalidates_kernel_identity(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
         path = self.root / "kernel/scanout-slots/input.txt"
         path.write_text("changed\n")
         self.commit("kernel")
-        after, _ = component_id.component_id(self.root, "kernel")
-        self.assertNotEqual(before, after)
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertEqual(fpga_before, fpga_after)
+        self.assertNotEqual(kernel_before, kernel_after)
+
+    def test_fpga_manifest_change_leaves_kernel_identity_unchanged(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
+        manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["fpga"]
+        manifest.write_text(manifest.read_text() + "fpga/extra-identity-input.txt\n")
+        extra = self.root / "fpga/extra-identity-input.txt"
+        extra.write_text("extra FPGA input\n")
+        self.commit("extend FPGA identity manifest")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertNotEqual(fpga_before, fpga_after)
+        self.assertEqual(kernel_before, kernel_after)
+
+    def test_kernel_manifest_change_only_invalidates_kernel_identity(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
+        manifest = self.root / component_id.COMPONENT_INPUT_MANIFESTS["kernel"]
+        manifest.write_text(manifest.read_text() + "kernel/extra-identity-input.txt\n")
+        extra = self.root / "kernel/extra-identity-input.txt"
+        extra.write_text("extra kernel input\n")
+        self.commit("extend kernel identity manifest")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertEqual(fpga_before, fpga_after)
+        self.assertNotEqual(kernel_before, kernel_after)
+
+    def test_shared_identity_implementation_invalidates_both_components(self) -> None:
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
+        implementation = self.root / component_id.IDENTITY_IMPLEMENTATION
+        implementation.write_text("changed identity implementation\n")
+        self.commit("change shared identity implementation")
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertNotEqual(fpga_before, fpga_after)
+        self.assertNotEqual(kernel_before, kernel_after)
 
     def test_generated_untracked_file_does_not_change_identity(self) -> None:
-        before, _ = component_id.component_id(self.root, "kernel")
+        fpga_before, _ = component_id.component_id(self.root, "fpga")
+        kernel_before, _ = component_id.component_id(self.root, "kernel")
         (self.root / "kernel/scanout-slots/mister_magik_scanout_slots.ko").write_bytes(b"generated")
-        after, _ = component_id.component_id(self.root, "kernel")
-        self.assertEqual(before, after)
+        fpga_after, _ = component_id.component_id(self.root, "fpga")
+        kernel_after, _ = component_id.component_id(self.root, "kernel")
+        self.assertEqual(fpga_before, fpga_after)
+        self.assertEqual(kernel_before, kernel_after)
 
     def test_dirty_checkout_is_rejected(self) -> None:
         (self.root / "scripts/build-fpga-vblank-latch-core.sh").write_text("dirty\n")

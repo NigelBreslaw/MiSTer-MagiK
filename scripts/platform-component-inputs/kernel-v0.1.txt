@@ -1,0 +1,6 @@
+# MiSTer MagiK kernel component identity inputs, format v0.1.
+kernel/scanout-slots
+scripts/build-scanout-slots-module.sh
+scripts/check-scanout-slots-contract.sh
+scripts/test-scanout-platform-contract.py
+.github/workflows/kernel-scanout.yml
