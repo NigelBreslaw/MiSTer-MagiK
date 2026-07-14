@@ -24,4 +24,7 @@ for value in (
 ):
     assert value in text, f"platform bundle workflow is missing: {value}"
 
+publish = text.split("  publish:\n", 1)[1]
+assert "- uses: actions/checkout@v7" in publish
+
 print("platform bundle workflow contract ok")
