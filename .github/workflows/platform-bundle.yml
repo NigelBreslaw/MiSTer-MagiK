@@ -109,6 +109,8 @@ jobs:
         if: github.ref != 'refs/heads/main'
         run: exit 1
 
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           name: platform-bundle-v0.1-candidate
