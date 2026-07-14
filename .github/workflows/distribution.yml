@@ -245,7 +245,7 @@ jobs:
           test -n "$archive"
           python3 scripts/platform-bundle.py verify "$archive" \
             --manifest build/qualified/platform-bundle-v0.1.json >/dev/null
-          unzip -q "$archive" -d build/qualified
+          unzip -q -o "$archive" -d build/qualified
 
       - name: Install Rust toolchain
         working-directory: magik-gui
