@@ -7,7 +7,6 @@
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
 #   ./build-arm.sh --video      → release-device with production fast-path video
-#   ./build-arm.sh --video-lab  → release-device with video comparison/fallback paths
 #   ./build-arm.sh --diagnostics → release-device with diagnostics commands
 #   ./build-arm.sh --bench-tools → release-device with device benchmark commands
 #
@@ -82,10 +81,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       add_feature profile
       ;;
     --video) add_feature video ;;
-    --video-lab)
-      add_feature video
-      add_feature video-lab
-      ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
     --catalog-builder)
@@ -110,7 +105,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     -h|--help)
       sed -n '4,9p' ./build-arm.sh | sed 's/^# \{0,1\}//'
       echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
-      echo "  ./build-arm.sh --video-lab   → include video comparison/fallback paths"
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
       echo "  ./build-arm.sh --catalog-builder → build only the Slint-free catalog builder"
@@ -162,12 +156,12 @@ if ! docker info >/dev/null 2>"$DOCKER_INFO_ERR"; then
 fi
 rm -f "$DOCKER_INFO_ERR"
 
-export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9 -C target-feature=+neon"
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings -C target-cpu=cortex-a9"
 if [ "$PROFILE" = release-device-profile ]; then
   export RUSTFLAGS="$RUSTFLAGS -C force-frame-pointers=yes"
-  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9/NEON target, warnings denied)"
+  echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-device ]; then
-  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9/NEON target, warnings denied)"
+  echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 target, warnings denied)"
 fi
 
 BUILD_LOG="$(mktemp)"
@@ -199,11 +193,7 @@ if [ "${#FEATURES[@]}" -gt 0 ]; then
 fi
 
 if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
-  if [[ " ${FEATURES[*]-} " == *" video-lab "* ]]; then
-    MISTER_FFMPEG_VIDEO_LAB=1 "$PWD/scripts/build-minimal-ffmpeg.sh"
-  else
-    "$PWD/scripts/build-minimal-ffmpeg.sh"
-  fi
+  "$PWD/scripts/build-minimal-ffmpeg.sh"
   export FFMPEG_DIR="/target/ffmpeg-minimal/armv7/dist"
   export PKG_CONFIG_PATH="/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
   export PKG_CONFIG_ALLOW_CROSS=1

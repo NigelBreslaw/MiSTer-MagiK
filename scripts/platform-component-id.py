@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -39,8 +40,22 @@ class IdentityError(ValueError):
 
 
 def run_git(root: Path, *args: str) -> str:
+    env = os.environ.copy()
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+    ):
+        env.pop(name, None)
     result = subprocess.run(
-        ["git", "-C", str(root), *args], text=True, capture_output=True, check=False
+        ["git", "-C", str(root), *args],
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
     )
     if result.returncode:
         raise IdentityError(result.stderr.strip() or "git command failed")
