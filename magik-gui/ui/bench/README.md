@@ -103,7 +103,7 @@ scene SVG.
 Toolchain bench (automated TSV + PNG — kills `mister-magik-fb` + MiSTer before each scene):
 
 ```bash
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
+scripts/bench-toolchain.sh P2 --skip-build --replace-label --device
 ```
 
 `history/toolchain-bench/results.tsv` keeps the legacy `visual_ok` column as
@@ -120,5 +120,5 @@ Sync the local Neo Geo MP4 snaps and run only the video scene:
 ```bash
 scripts/reencode-video-snaps-cortex-a9.sh SOURCE_DIR
 scripts/sync-video-snaps.sh
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-scale source --replace-label
+scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-scale source --replace-label
 ```

@@ -175,7 +175,7 @@ for source in "${sources[@]}"; do
   probed_audio="${out_audio[0]}"
 
   [[ "$out_codec" == "h264" ]] || die "$out_name: video codec is $out_codec"
-  [[ "$profile" == "Constrained Baseline" || "$profile" == "Baseline" ]] || die "$out_name: profile is $profile"
+  [[ "$profile" == "Constrained Baseline" ]] || die "$out_name: profile is $profile"
   [[ "${probed_width}x${probed_height}" == "${out_width}x${out_height}" ]] || die "$out_name: geometry is ${probed_width}x${probed_height}"
   [[ "$pix_fmt" == "yuv420p" ]] || die "$out_name: pixel format is $pix_fmt"
   [[ "$has_b_frames" == "0" ]] || die "$out_name: has_b_frames is $has_b_frames"

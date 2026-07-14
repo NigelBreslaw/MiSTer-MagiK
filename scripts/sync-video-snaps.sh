@@ -135,6 +135,7 @@ while IFS=$'\t' read -r file source_sha output_sha source_geometry output_geomet
   grep -qx "luma_psnr=$luma_psnr" "$provenance" || die "provenance luma PSNR mismatch for $file"
   [[ "$source_geometry" == "$SOURCE_GEOMETRY" ]] || die "$file source geometry is $source_geometry, expected $SOURCE_GEOMETRY"
   [[ "$output_geometry" == "$OUTPUT_GEOMETRY" ]] || die "$file output geometry is $output_geometry, expected $OUTPUT_GEOMETRY"
+  [[ "$profile" == "Constrained Baseline" ]] || die "$file profile is $profile, expected Constrained Baseline"
   quality_ge "$ssim" "$SSIM_MIN" || die "$file SSIM $ssim below $SSIM_MIN"
   quality_ge "$luma_psnr" "$LUMA_PSNR_MIN" || die "$file luma PSNR $luma_psnr below $LUMA_PSNR_MIN"
 
