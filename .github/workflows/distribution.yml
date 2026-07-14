@@ -299,6 +299,7 @@ jobs:
                   line.split("=", 1)
                   for line in package.read("mister-magik/release-v1.txt").decode().splitlines()
               )
+              assert version.encode() in package.read("mister-magik/mister-magik-fb")
               game_databases = json.loads(
                   package.read("mister-magik/game-databases-manifest.json")
               )
