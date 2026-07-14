@@ -18,6 +18,9 @@ The first install is a one-time bootstrap:
 4. Run `Scripts` -> `mister-magik` once. The installer verifies the platform
    manifest, every required file hash, the shared platform contract, module
    metadata, RBF metadata, and executables before enabling the handoff.
+   Before its first boot-configuration edit, it preserves the existing INI as
+   `/media/fat/MiSTer.ini.bak.before-magik`. That backup is never replaced by a
+   later install or reinstall.
 5. Reboot normally. In Settings -> Info, confirm the displayed version matches
    the GitHub prerelease version.
 
@@ -28,6 +31,12 @@ the installer exits before changing boot state.
 After installation, update by running `update_all` and rebooting normally.
 Existing catalogs, media, settings, snapshots, and user content are outside the
 Downloader database and are preserved.
+
+Running `Scripts` -> `mister-magik` again while the MagiK handoff is active
+offers UP to reinstall or DOWN to disable it, followed by an A/Enter
+confirmation. Any other input cancels. If the pre-MagiK backup is unexpectedly
+missing during a reinstall, the installer warns and leaves it missing rather
+than copying the already-modified live INI under a misleading backup name.
 
 ## Beta and Release channels
 
@@ -57,7 +66,7 @@ MiSTer shell and reboot normally:
 sh /media/fat/Scripts/mister-magik.sh disable
 ```
 
-This removes only the `main=MiSTer_MagiK` selection, restores the stock inittab
+This changes `main=MiSTer_MagiK` to `main=MiSTer`, restores the stock inittab
 shape, and retains the application, catalogs, settings, snapshots, and media.
 To enable it again, run `Scripts` -> `mister-magik` and reboot.
 
