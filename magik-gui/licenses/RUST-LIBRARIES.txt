@@ -710,55 +710,55 @@ Authors: Jeremie Drouet <jeremie.drouet@gmail.com>
 Source: https://github.com/jdrouet/htmlparser.git
 Full license text: Text 4, Text 89
 
-i-slint-backend-linuxkms 1.17.0
+i-slint-backend-linuxkms 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92, Text 40
 
-i-slint-backend-selector 1.17.0
+i-slint-backend-selector 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-backend-testing 1.17.0
+i-slint-backend-testing 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-backend-winit 1.17.0
+i-slint-backend-winit 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-common 1.17.0
+i-slint-common 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-compiler 1.17.0
+i-slint-compiler 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 39, Text 93, Text 90, Text 91, Text 92, Text 40
 
-i-slint-core 1.17.0
+i-slint-core 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-core-macros 1.17.0
+i-slint-core-macros 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-i-slint-renderer-software 1.17.0
+i-slint-renderer-software 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
@@ -1568,13 +1568,13 @@ Authors: Carl Lerche <me@carllerche.com>
 Source: https://github.com/tokio-rs/slab
 Full license text: Text 158
 
-slint 1.17.0
+slint 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
 Full license text: Text 90, Text 91, Text 92
 
-slint-macros 1.17.0
+slint-macros 1.17.1
 License: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 Authors: Slint Developers <info@slint.dev>
 Source: https://github.com/slint-ui/slint
