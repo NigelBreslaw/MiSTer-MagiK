@@ -1,4 +1,5 @@
 mod agent_client;
+mod analytics_ui_state;
 mod app_state;
 mod file_icons;
 mod frame_profile;
@@ -2270,7 +2271,10 @@ fn spawn_compiled_synthetic_display_source(
         let frame_interval = Duration::from_nanos(16_666_667);
         let mut next_frame_at = Instant::now();
         let mut sequence = 0_u64;
-        while stream_generation.load(Ordering::SeqCst) == generation {
+        while analytics_ui_state::generation_is_current(
+            stream_generation.load(Ordering::SeqCst),
+            generation,
+        ) {
             let received_at = Instant::now();
             let timestamp_us = stream_start.elapsed().as_micros() as u64;
             let frame = synthetic_stream_frame(sequence, timestamp_us);
@@ -3957,19 +3961,19 @@ fn apply_compiled_snapshot(ui: &AppWindow, snapshot: &DashboardSnapshot) {
 
 #[cfg(feature = "live-ui")]
 fn set_live_analytics_loading(instance: &slint_interpreter::ComponentInstance) {
-    use slint::SharedString;
     use slint_interpreter::Value;
+    let state = analytics_ui_state::loading_capture_state();
 
-    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(true));
+    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(state.loading));
     let _ = instance.set_global_property(
         "AnalyticsState",
         "status",
-        Value::String(SharedString::from("Capturing framebuffer stream...")),
+        Value::String(state.status.into()),
     );
     let _ = instance.set_global_property(
         "AnalyticsState",
         "last-error",
-        Value::String(SharedString::from("")),
+        Value::String(state.last_error.into()),
     );
 }
 
@@ -3985,19 +3989,28 @@ fn apply_live_framebuffer_stream_capture(
     let image = pixels.map(slint::Image::from_rgba8).unwrap_or_default();
     let _ =
         instance.set_global_property("AnalyticsState", "framebuffer-image", Value::Image(image));
-    if geometry_changed {
-        let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(false));
-        let _ = instance.set_global_property("AnalyticsState", "has-image", Value::Bool(true));
-        let _ = instance.set_global_property("AnalyticsState", "can-save-image", Value::Bool(true));
+    if let Some(state) = analytics_ui_state::stream_capture_state(capture, geometry_changed) {
+        let _ =
+            instance.set_global_property("AnalyticsState", "loading", Value::Bool(state.loading));
+        let _ = instance.set_global_property(
+            "AnalyticsState",
+            "has-image",
+            Value::Bool(state.has_image),
+        );
+        let _ = instance.set_global_property(
+            "AnalyticsState",
+            "can-save-image",
+            Value::Bool(state.can_save_image),
+        );
         let _ = instance.set_global_property(
             "AnalyticsState",
             "framebuffer-width",
-            Value::Number(capture.width as f64),
+            Value::Number(state.width as f64),
         );
         let _ = instance.set_global_property(
             "AnalyticsState",
             "framebuffer-height",
-            Value::Number(capture.height as f64),
+            Value::Number(state.height as f64),
         );
     }
 }
@@ -4007,10 +4020,10 @@ fn apply_live_framebuffer_capture_result(
     instance: &slint_interpreter::ComponentInstance,
     result: Result<agent_client::FramebufferCapture, String>,
 ) {
-    use slint::SharedString;
     use slint_interpreter::Value;
 
-    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(false));
+    let state = analytics_ui_state::capture_result_state(result.as_ref().map_err(String::as_str));
+    let _ = instance.set_global_property("AnalyticsState", "loading", Value::Bool(state.loading));
     match result {
         Ok(capture) => {
             let image = framebuffer_capture_image(&capture);
@@ -4019,41 +4032,48 @@ fn apply_live_framebuffer_capture_result(
                 "framebuffer-image",
                 Value::Image(image),
             );
-            let _ = instance.set_global_property("AnalyticsState", "has-image", Value::Bool(true));
-            let _ =
-                instance.set_global_property("AnalyticsState", "can-save-image", Value::Bool(true));
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "has-image",
+                Value::Bool(state.has_image),
+            );
+            let _ = instance.set_global_property(
+                "AnalyticsState",
+                "can-save-image",
+                Value::Bool(state.can_save_image),
+            );
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "framebuffer-width",
-                Value::Number(capture.width as f64),
+                Value::Number(state.width as f64),
             );
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "framebuffer-height",
-                Value::Number(capture.height as f64),
+                Value::Number(state.height as f64),
             );
             clear_live_dirty_rects(instance);
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "status",
-                Value::String(SharedString::from(framebuffer_capture_status(&capture))),
+                Value::String(state.status.clone().into()),
             );
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "last-error",
-                Value::String(SharedString::from("")),
+                Value::String(state.last_error.clone().into()),
             );
         }
-        Err(err) => {
+        Err(_) => {
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "status",
-                Value::String(SharedString::from("Framebuffer capture failed.")),
+                Value::String(state.status.into()),
             );
             let _ = instance.set_global_property(
                 "AnalyticsState",
                 "last-error",
-                Value::String(SharedString::from(err)),
+                Value::String(state.last_error.into()),
             );
         }
     }
@@ -4061,10 +4081,11 @@ fn apply_live_framebuffer_capture_result(
 
 #[cfg(feature = "compiled-ui")]
 fn set_compiled_analytics_loading(ui: &AppWindow) {
+    let next = analytics_ui_state::loading_capture_state();
     let state = ui.global::<AnalyticsState>();
-    state.set_loading(true);
-    state.set_status("Capturing framebuffer stream...".into());
-    state.set_last_error("".into());
+    state.set_loading(next.loading);
+    state.set_status(next.status.into());
+    state.set_last_error(next.last_error.into());
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -4076,12 +4097,12 @@ fn apply_compiled_framebuffer_stream_capture(
 ) {
     let state = ui.global::<AnalyticsState>();
     state.set_framebuffer_image(pixels.map(slint::Image::from_rgba8).unwrap_or_default());
-    if geometry_changed {
-        state.set_loading(false);
-        state.set_has_image(true);
-        state.set_can_save_image(true);
-        state.set_framebuffer_width(capture.width as i32);
-        state.set_framebuffer_height(capture.height as i32);
+    if let Some(next) = analytics_ui_state::stream_capture_state(capture, geometry_changed) {
+        state.set_loading(next.loading);
+        state.set_has_image(next.has_image);
+        state.set_can_save_image(next.can_save_image);
+        state.set_framebuffer_width(next.width as i32);
+        state.set_framebuffer_height(next.height as i32);
     }
 }
 
@@ -4090,26 +4111,28 @@ fn apply_compiled_framebuffer_capture_result(
     ui: &AppWindow,
     result: Result<agent_client::FramebufferCapture, String>,
 ) {
+    let next = analytics_ui_state::capture_result_state(result.as_ref().map_err(String::as_str));
     let state = ui.global::<AnalyticsState>();
-    state.set_loading(false);
+    state.set_loading(next.loading);
     match result {
         Ok(capture) => {
             state.set_framebuffer_image(framebuffer_capture_image(&capture));
-            state.set_has_image(true);
-            state.set_can_save_image(true);
-            state.set_framebuffer_width(capture.width as i32);
-            state.set_framebuffer_height(capture.height as i32);
+            state.set_has_image(next.has_image);
+            state.set_can_save_image(next.can_save_image);
+            state.set_framebuffer_width(next.width as i32);
+            state.set_framebuffer_height(next.height as i32);
             clear_compiled_dirty_rects(ui);
-            state.set_status(framebuffer_capture_status(&capture).into());
-            state.set_last_error("".into());
+            state.set_status(next.status.into());
+            state.set_last_error(next.last_error.into());
         }
-        Err(err) => {
-            state.set_status("Framebuffer capture failed.".into());
-            state.set_last_error(err.into());
+        Err(_) => {
+            state.set_status(next.status.into());
+            state.set_last_error(next.last_error.into());
         }
     }
 }
 
+#[cfg(test)]
 fn framebuffer_capture_status(capture: &agent_client::FramebufferCapture) -> String {
     format!(
         "Captured {}x{} {}bpp framebuffer ({} payload; {} raw; {}).",
@@ -5442,15 +5465,7 @@ fn compiled_profile_table_rows(prefix: &str, rows: &[Vec<String>]) -> slint::Mod
 }
 
 fn format_byte_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / MB)
-    } else if bytes >= 1024 {
-        format!("{:.0} KB", bytes as f64 / KB)
-    } else {
-        format!("{bytes} B")
-    }
+    analytics_ui_state::format_byte_size(bytes)
 }
 
 #[cfg(feature = "compiled-ui")]
@@ -6110,12 +6125,18 @@ fn spawn_live_framebuffer_stream(
                 return;
             }
         };
-        if stream_generation.load(Ordering::SeqCst) != generation {
+        if !analytics_ui_state::generation_is_current(
+            stream_generation.load(Ordering::SeqCst),
+            generation,
+        ) {
             control.shutdown();
             return;
         }
         register_framebuffer_stream(&stream_control, generation, control);
-        while stream_generation.load(Ordering::SeqCst) == generation {
+        while analytics_ui_state::generation_is_current(
+            stream_generation.load(Ordering::SeqCst),
+            generation,
+        ) {
             match stream.next_frame() {
                 Ok(frame) => {
                     let received_at = Instant::now();

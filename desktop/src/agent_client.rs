@@ -567,15 +567,25 @@ fn drain_framebuffer_stream_until(
 fn request_framebuffer_stream_with_retry(
     client: &AgentClient,
 ) -> Result<(Value, BufReader<TcpStream>), AgentError> {
+    retry_framebuffer_stream(
+        || client.request_stream("framebuffer_stream_v1", json!({})),
+        thread::sleep,
+    )
+}
+
+fn retry_framebuffer_stream<T>(
+    mut request: impl FnMut() -> Result<T, AgentError>,
+    mut delay: impl FnMut(Duration),
+) -> Result<T, AgentError> {
     let mut last_error = None;
     for attempt in 0..5 {
-        match client.request_stream("framebuffer_stream_v1", json!({})) {
+        match request() {
             Ok(stream) => return Ok(stream),
             Err(AgentError::Command(err))
                 if err.contains("framebuffer stream already has a desktop consumer") =>
             {
                 last_error = Some(AgentError::Command(err));
-                thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+                delay(Duration::from_millis(50 * (attempt + 1)));
             }
             Err(err) => return Err(err),
         }
@@ -588,6 +598,37 @@ fn request_framebuffer_stream_with_retry(
 struct AgentClient {
     host: String,
     token: String,
+}
+
+trait AgentConnector {
+    type Transport: Read + Write;
+
+    fn connect(&self, host: &str, read_timeout: Duration) -> Result<Self::Transport, AgentError>;
+}
+
+struct TcpAgentConnector;
+
+impl AgentConnector for TcpAgentConnector {
+    type Transport = TcpStream;
+
+    fn connect(&self, host: &str, read_timeout: Duration) -> Result<Self::Transport, AgentError> {
+        let addr = format!("{host}:{AGENT_PORT}")
+            .to_socket_addrs()
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?
+            .next()
+            .ok_or_else(|| {
+                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
+            })?;
+        let stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_read_timeout(Some(read_timeout))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        stream
+            .set_write_timeout(Some(REQUEST_TIMEOUT))
+            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        Ok(stream)
+    }
 }
 
 impl AgentClient {
@@ -605,83 +646,37 @@ impl AgentClient {
         args: Value,
         read_timeout: Duration,
     ) -> Result<Value, AgentError> {
-        let addr = format!("{}:{AGENT_PORT}", self.host)
-            .to_socket_addrs()
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?
-            .next()
-            .ok_or_else(|| {
-                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
-            })?;
-
-        let start = Instant::now();
-        let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .set_read_timeout(Some(read_timeout))
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .set_write_timeout(Some(REQUEST_TIMEOUT))
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-
-        let request = json!({
-            "token": self.token,
-            "id": 1,
-            "cmd": cmd,
-            "args": args,
-        });
-        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .flush()
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-
-        let mut line = String::new();
-        BufReader::new(stream)
-            .read_line(&mut line)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        parse_response(&line, start.elapsed())
+        self.request_with_connector(cmd, args, read_timeout, &TcpAgentConnector)
     }
 
     fn request_binary(&self, cmd: &str, args: Value) -> Result<(Value, Vec<u8>), AgentError> {
-        let addr = format!("{}:{AGENT_PORT}", self.host)
-            .to_socket_addrs()
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?
-            .next()
-            .ok_or_else(|| {
-                AgentError::Unreachable("could not resolve MiSTer agent host".to_string())
-            })?;
+        self.request_binary_with_connector(cmd, args, &TcpAgentConnector)
+    }
 
-        let mut stream = TcpStream::connect_timeout(&addr, REQUEST_TIMEOUT)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .set_read_timeout(Some(BINARY_REQUEST_TIMEOUT))
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .set_write_timeout(Some(REQUEST_TIMEOUT))
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+    fn request_with_connector<C: AgentConnector>(
+        &self,
+        cmd: &str,
+        args: Value,
+        read_timeout: Duration,
+        connector: &C,
+    ) -> Result<Value, AgentError> {
+        let mut transport = connector.connect(&self.host, read_timeout)?;
+        let started = Instant::now();
+        write_request(&mut transport, &self.token, cmd, args)?;
+        let mut reader = BufReader::new(transport);
+        read_response(&mut reader, started.elapsed())
+    }
 
-        let request = json!({
-            "token": self.token,
-            "id": 1,
-            "cmd": cmd,
-            "args": args,
-        });
-        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .flush()
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        let value = parse_response(&line, Duration::ZERO)?;
-        let payload_bytes = binary_payload_len(&value)?;
-        let mut payload = zeroed_buffer(payload_bytes, "binary response payload")?;
-        reader
-            .read_exact(&mut payload)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        Ok((value, payload))
+    fn request_binary_with_connector<C: AgentConnector>(
+        &self,
+        cmd: &str,
+        args: Value,
+        connector: &C,
+    ) -> Result<(Value, Vec<u8>), AgentError> {
+        let mut transport = connector.connect(&self.host, BINARY_REQUEST_TIMEOUT)?;
+        write_request(&mut transport, &self.token, cmd, args)?;
+        let mut reader = BufReader::new(transport);
+        read_binary_response(&mut reader)
     }
 
     fn request_stream(
@@ -706,25 +701,48 @@ impl AgentClient {
             .set_write_timeout(Some(REQUEST_TIMEOUT))
             .map_err(|err| AgentError::Unreachable(err.to_string()))?;
 
-        let request = json!({
-            "token": self.token,
-            "id": 1,
-            "cmd": cmd,
-            "args": args,
-        });
-        writeln!(stream, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        stream
-            .flush()
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+        write_request(&mut stream, &self.token, cmd, args)?;
 
         let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|err| AgentError::Unreachable(err.to_string()))?;
-        let value = parse_response(&line, Duration::ZERO)?;
+        let value = read_response(&mut reader, Duration::ZERO)?;
         Ok((value, reader))
     }
+}
+
+fn write_request(
+    writer: &mut impl Write,
+    token: &str,
+    cmd: &str,
+    args: Value,
+) -> Result<(), AgentError> {
+    let request = json!({
+        "token": token,
+        "id": 1,
+        "cmd": cmd,
+        "args": args,
+    });
+    writeln!(writer, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
+    writer
+        .flush()
+        .map_err(|err| AgentError::Unreachable(err.to_string()))
+}
+
+fn read_response(reader: &mut impl BufRead, elapsed: Duration) -> Result<Value, AgentError> {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+    parse_response(&line, elapsed)
+}
+
+fn read_binary_response(reader: &mut impl BufRead) -> Result<(Value, Vec<u8>), AgentError> {
+    let value = read_response(reader, Duration::ZERO)?;
+    let payload_bytes = binary_payload_len(&value)?;
+    let mut payload = zeroed_buffer(payload_bytes, "binary response payload")?;
+    reader
+        .read_exact(&mut payload)
+        .map_err(|err| AgentError::Unreachable(err.to_string()))?;
+    Ok((value, payload))
 }
 
 fn binary_payload_len(value: &Value) -> Result<usize, AgentError> {
@@ -2077,9 +2095,194 @@ impl std::error::Error for AgentError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::io::Cursor;
+    use std::sync::Arc;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScriptedTransport {
+        response: Cursor<Vec<u8>>,
+        writes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Read for ScriptedTransport {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.response.read(buffer)
+        }
+    }
+
+    impl Write for ScriptedTransport {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.writes.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ScriptedConnector {
+        responses: Mutex<VecDeque<Vec<u8>>>,
+        writes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl ScriptedConnector {
+        fn new(responses: impl IntoIterator<Item = Vec<u8>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+                writes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn written_json(&self) -> Value {
+            let bytes = self.writes.lock().unwrap();
+            serde_json::from_slice(bytes.as_slice()).unwrap()
+        }
+    }
+
+    impl AgentConnector for ScriptedConnector {
+        type Transport = ScriptedTransport;
+
+        fn connect(
+            &self,
+            _host: &str,
+            _read_timeout: Duration,
+        ) -> Result<Self::Transport, AgentError> {
+            let response = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| AgentError::Unreachable("no scripted transport".into()))?;
+            Ok(ScriptedTransport {
+                response: Cursor::new(response),
+                writes: Arc::clone(&self.writes),
+            })
+        }
+    }
+
+    #[test]
+    fn in_memory_transport_round_trips_request_and_response() {
+        let connector = ScriptedConnector::new([br#"{"id":1,"ok":true,"result":{"pong":true}}
+"#
+        .to_vec()]);
+        let client = AgentClient::new("unused.test".into(), "secret".into());
+        let result = client
+            .request_with_connector(
+                "ping",
+                json!({"detail": true}),
+                Duration::from_secs(9),
+                &connector,
+            )
+            .unwrap();
+        assert_eq!(result, json!({"pong": true}));
+        assert_eq!(
+            connector.written_json(),
+            json!({
+                "token": "secret",
+                "id": 1,
+                "cmd": "ping",
+                "args": {"detail": true}
+            })
+        );
+    }
+
+    #[test]
+    fn in_memory_transport_classifies_empty_malformed_auth_and_command_responses() {
+        for (response, expected) in [
+            (b"".as_slice(), "protocol"),
+            (b"not-json\n".as_slice(), "protocol"),
+            (
+                br#"{"id":1,"ok":false,"error":"unauthorized"}
+"#,
+                "unauthorized",
+            ),
+            (
+                br#"{"id":1,"ok":false,"error":"bad command"}
+"#,
+                "command",
+            ),
+        ] {
+            let connector = ScriptedConnector::new([response.to_vec()]);
+            let client = AgentClient::new("unused.test".into(), "secret".into());
+            let error = client
+                .request_with_connector("fixture", json!({}), Duration::ZERO, &connector)
+                .unwrap_err();
+            assert!(matches!(
+                (expected, error),
+                ("protocol", AgentError::Protocol(_))
+                    | ("unauthorized", AgentError::Unauthorized)
+                    | ("command", AgentError::Command(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn in_memory_binary_transport_reads_exact_payload_and_rejects_truncation() {
+        let connector =
+            ScriptedConnector::new([br#"{"id":1,"ok":true,"result":{"payload_bytes":4}}
+data"#
+                .to_vec()]);
+        let client = AgentClient::new("unused.test".into(), "secret".into());
+        let (metadata, payload) = client
+            .request_binary_with_connector("binary", json!({}), &connector)
+            .unwrap();
+        assert_eq!(metadata["payload_bytes"], 4);
+        assert_eq!(payload, b"data");
+
+        let connector =
+            ScriptedConnector::new([br#"{"id":1,"ok":true,"result":{"payload_bytes":5}}
+tiny"#
+                .to_vec()]);
+        let error = client
+            .request_binary_with_connector("binary", json!({}), &connector)
+            .unwrap_err();
+        assert!(matches!(error, AgentError::Unreachable(_)));
+    }
+
+    #[test]
+    fn framebuffer_busy_retry_is_bounded_and_skips_delay_for_other_failures() {
+        let busy = || {
+            Err::<(), _>(AgentError::Command(
+                "framebuffer stream already has a desktop consumer".into(),
+            ))
+        };
+        let mut delays = Vec::new();
+        let error = retry_framebuffer_stream(busy, |delay| delays.push(delay)).unwrap_err();
+        assert!(matches!(error, AgentError::Command(_)));
+        assert_eq!(delays, [50, 100, 150, 200, 250].map(Duration::from_millis));
+
+        let mut attempts = 0;
+        let mut delays = Vec::new();
+        let value = retry_framebuffer_stream(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(AgentError::Command(
+                        "framebuffer stream already has a desktop consumer".into(),
+                    ))
+                } else {
+                    Ok(42)
+                }
+            },
+            |delay| delays.push(delay),
+        )
+        .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(delays, [Duration::from_millis(50)]);
+
+        let mut delayed = false;
+        let error = retry_framebuffer_stream::<()>(
+            || Err(AgentError::Protocol("bad hello".into())),
+            |_| delayed = true,
+        )
+        .unwrap_err();
+        assert!(matches!(error, AgentError::Protocol(_)));
+        assert!(!delayed);
+    }
 
     #[test]
     fn parse_response_returns_result() {
