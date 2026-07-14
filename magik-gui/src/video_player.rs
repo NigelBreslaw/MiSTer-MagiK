@@ -9,7 +9,9 @@ use ffmpeg::util::format::sample::{Sample, Type as SampleType};
 use ffmpeg::util::frame::audio::Audio;
 use ffmpeg::util::frame::video::Video;
 use ffmpeg::ChannelLayout;
+use ffmpeg::{codec::packet::Packet, util::error::EAGAIN};
 use ffmpeg_next as ffmpeg;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -126,6 +128,7 @@ pub struct VideoPlayer {
     audio_channels: u16,
     queued_audio: Vec<i16>,
     audio_start: usize,
+    pending_video_packets: VecDeque<Packet>,
     pending_audio_decode_us: u64,
     pending_audio_resample_us: u64,
     loop_count: u64,
@@ -401,6 +404,7 @@ impl VideoPlayer {
             audio_channels,
             queued_audio: Vec::new(),
             audio_start: 0,
+            pending_video_packets: VecDeque::new(),
             pending_audio_decode_us: 0,
             pending_audio_resample_us: 0,
             loop_count,
@@ -465,19 +469,25 @@ impl VideoPlayer {
             }));
         }
 
+        while let Some(packet) = self.pending_video_packets.pop_front() {
+            if let Some((frame, video_metrics)) = self.send_video_packet(packet)? {
+                self.ensure_audio(audio_frames)?;
+                self.take_audio_into(audio_frames, &mut audio);
+                return Ok(Some(PlaybackFrame {
+                    frame,
+                    audio,
+                    audio_requested_frames: audio_frames,
+                    loop_count: self.loop_count,
+                    metrics: self.take_playback_metrics(video_metrics),
+                }));
+            }
+        }
+
         for item in self.input.packets() {
             let (stream, packet) = item;
             let stream_index = stream.index();
             if stream_index == self.video_stream_index {
-                self.video_decoder
-                    .send_packet(&packet)
-                    .map_err(|e| format!("send video packet: {e}"))?;
-                if let Some((frame, video_metrics)) = receive_rgb565_frame(
-                    &mut self.video_decoder,
-                    self.scale_mode,
-                    self.output_width,
-                    self.output_height,
-                )? {
+                if let Some((frame, video_metrics)) = self.send_video_packet(packet)? {
                     self.ensure_audio(audio_frames)?;
                     self.take_audio_into(audio_frames, &mut audio);
                     return Ok(Some(PlaybackFrame {
@@ -563,12 +573,35 @@ impl VideoPlayer {
                     return Ok(());
                 }
             } else if stream_index == self.video_stream_index {
-                self.video_decoder
-                    .send_packet(&packet)
-                    .map_err(|e| format!("send video packet while filling audio: {e}"))?;
+                self.pending_video_packets.push_back(packet);
             }
         }
         Ok(())
+    }
+
+    fn send_video_packet(
+        &mut self,
+        packet: Packet,
+    ) -> Result<Option<(VideoRgb565Frame, VideoDecodeMetrics)>, String> {
+        match self.video_decoder.send_packet(&packet) {
+            Ok(()) => receive_rgb565_frame(
+                &mut self.video_decoder,
+                self.scale_mode,
+                self.output_width,
+                self.output_height,
+            ),
+            Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {
+                let frame = receive_rgb565_frame(
+                    &mut self.video_decoder,
+                    self.scale_mode,
+                    self.output_width,
+                    self.output_height,
+                )?;
+                self.pending_video_packets.push_front(packet);
+                Ok(frame)
+            }
+            Err(e) => Err(format!("send video packet: {e}")),
+        }
     }
 
     fn take_audio_into(&mut self, frames: usize, out: &mut Vec<i16>) {
