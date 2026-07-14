@@ -186,7 +186,7 @@ scripts/bench-toolchain.sh LABEL --replace-label --device --scene-secs 30 --laun
 ```
 
 Use the strict zero-drop gate when the symptom is visible missed frames while
-holding left/right across a launcher menu row. Run both the five-item root and
+holding left/right across a launcher menu row. Run both the four-item root and
 a longer submenu for hierarchy changes:
 
 ```bash

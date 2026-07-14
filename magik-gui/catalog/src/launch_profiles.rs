@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-pub const PROFILE_SET_VERSION: u32 = 8;
+pub const PROFILE_SET_VERSION: u32 = 9;
 pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
@@ -1576,7 +1576,14 @@ fn mra_profile() -> LaunchProfile {
         payload_rules: vec![launcher_payload_rule()],
         archive_entry_rules: Vec::new(),
         collection_rules: Vec::new(),
-        ignore_rules: Vec::new(),
+        ignore_rules: vec![IgnoreRule {
+            file_names: str_vec(&["NeoGeo Pocket.mra", "NeoGeo Pocket Color.mra"]),
+            extensions: Vec::new(),
+            reason: IgnoreReason::Tool,
+            provenance: RuleProvenance::magik(
+                "NeoGeo Pocket MRAs boot a handheld system core rather than an arcade game",
+            ),
+        }],
         provenance: RuleProvenance::mra("Main mra_loader parses .mra as launch XML"),
     }
 }

@@ -1,8 +1,6 @@
 //! Stable, catalog-derived hierarchy used by the launcher home screen.
 
-use crate::arcade_catalog::{
-    ArcadeCatalog, GameSystemEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID, MENU_SNK_ARCADE_SYSTEM_ID,
-};
+use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};
 #[cfg(test)]
 use mister_magik_catalog::catalog_classify::system_definitions;
 use mister_magik_catalog::catalog_classify::{system_definition, LauncherSection};
@@ -268,8 +266,8 @@ impl<'a> TaxonomyBuilder<'a> {
     fn build(mut self) -> LauncherTaxonomy {
         self.classify_catalog_systems();
         self.build_exact_collection_menus();
-        self.build_category_menus();
         self.build_snk_menu();
+        self.build_category_menus();
         self.build_root_menu();
         self.record_collection_destinations();
         self.taxonomy
@@ -504,6 +502,7 @@ impl<'a> TaxonomyBuilder<'a> {
                 CONSOLES_SONY_MENU_ID,
                 CONSOLES_NINTENDO_MENU_ID,
                 CONSOLES_NEC_MENU_ID,
+                SNK_NEOGEO_MENU_ID,
                 CONSOLES_OTHER_MENU_ID,
             ],
         );
@@ -538,26 +537,6 @@ impl<'a> TaxonomyBuilder<'a> {
 
     fn build_snk_menu(&mut self) {
         let mut items = Vec::new();
-        let snk_arcade_count = self.catalog.system_game_count(MENU_SNK_ARCADE_SYSTEM_ID);
-        if snk_arcade_count > 0 {
-            self.taxonomy.collections.insert(
-                MENU_SNK_ARCADE_SYSTEM_ID.to_string(),
-                LauncherCollection {
-                    id: MENU_SNK_ARCADE_SYSTEM_ID.to_string(),
-                    title: "Arcade".to_string(),
-                    count: snk_arcade_count,
-                    system_id: None,
-                    legacy_system_id: "arcade".to_string(),
-                },
-            );
-            items.push(LauncherMenuItem {
-                id: MENU_SNK_ARCADE_SYSTEM_ID.to_string(),
-                title: "Arcade".to_string(),
-                count: snk_arcade_count,
-                kind: LauncherMenuItemKind::Collection,
-            });
-        }
-
         self.snk_systems.sort_by(|a, b| {
             a.rank
                 .cmp(&b.rank)
@@ -573,13 +552,22 @@ impl<'a> TaxonomyBuilder<'a> {
             self.taxonomy.primary_system_destinations.insert(
                 normalize_system_id(&system.entry.id),
                 LauncherDestination {
-                    menu_path: vec![ROOT_MENU_ID.to_string(), SNK_NEOGEO_MENU_ID.to_string()],
+                    menu_path: vec![
+                        ROOT_MENU_ID.to_string(),
+                        CONSOLES_MENU_ID.to_string(),
+                        SNK_NEOGEO_MENU_ID.to_string(),
+                    ],
                     collection_id: system.entry.id.clone(),
                 },
             );
         }
 
-        self.insert_menu(SNK_NEOGEO_MENU_ID, "SNK NeoGeo", Some(ROOT_MENU_ID), items);
+        self.insert_menu(
+            SNK_NEOGEO_MENU_ID,
+            "SNK NeoGeo",
+            Some(CONSOLES_MENU_ID),
+            items,
+        );
     }
 
     fn build_root_menu(&mut self) {
@@ -603,12 +591,7 @@ impl<'a> TaxonomyBuilder<'a> {
                 kind: LauncherMenuItemKind::Collection,
             });
         }
-        for menu_id in [
-            SNK_NEOGEO_MENU_ID,
-            CONSOLES_MENU_ID,
-            HANDHELDS_MENU_ID,
-            COMPUTERS_MENU_ID,
-        ] {
+        for menu_id in [CONSOLES_MENU_ID, HANDHELDS_MENU_ID, COMPUTERS_MENU_ID] {
             if let Some(menu) = self.taxonomy.menu(menu_id) {
                 items.push(LauncherMenuItem {
                     id: menu.id.clone(),
@@ -628,22 +611,14 @@ impl<'a> TaxonomyBuilder<'a> {
                 .entry(destination.collection_id.clone())
                 .or_insert_with(|| destination.clone());
         }
-        for (collection_id, menu_path) in [
-            (MENU_ARCADE_SYSTEM_ID, vec![ROOT_MENU_ID.to_string()]),
-            (
-                MENU_SNK_ARCADE_SYSTEM_ID,
-                vec![ROOT_MENU_ID.to_string(), SNK_NEOGEO_MENU_ID.to_string()],
-            ),
-        ] {
-            if self.taxonomy.collection(collection_id).is_some() {
-                self.taxonomy.primary_collection_destinations.insert(
-                    collection_id.to_string(),
-                    LauncherDestination {
-                        menu_path,
-                        collection_id: collection_id.to_string(),
-                    },
-                );
-            }
+        if self.taxonomy.collection(MENU_ARCADE_SYSTEM_ID).is_some() {
+            self.taxonomy.primary_collection_destinations.insert(
+                MENU_ARCADE_SYSTEM_ID.to_string(),
+                LauncherDestination {
+                    menu_path: vec![ROOT_MENU_ID.to_string()],
+                    collection_id: MENU_ARCADE_SYSTEM_ID.to_string(),
+                },
+            );
         }
     }
 
@@ -653,7 +628,10 @@ impl<'a> TaxonomyBuilder<'a> {
             let Some(menu) = self.taxonomy.menu(child_id).cloned() else {
                 continue;
             };
-            if menu.items.len() == 1 && menu.items[0].kind == LauncherMenuItemKind::Collection {
+            if *child_id != SNK_NEOGEO_MENU_ID
+                && menu.items.len() == 1
+                && menu.items[0].kind == LauncherMenuItemKind::Collection
+            {
                 let mut item = menu.items[0].clone();
                 item.title = flattened_vendor_title(&menu.title, &item.title);
                 if let Some(destination) = self
@@ -811,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn root_uses_fixed_five_item_order_when_every_branch_is_populated() {
+    fn root_uses_fixed_four_item_order_when_every_branch_is_populated() {
         let catalog = catalog(
             vec![game("arcade", "Metal Slug", "SNK")],
             vec![
@@ -834,7 +812,6 @@ mod tests {
             ids,
             vec![
                 MENU_ARCADE_SYSTEM_ID,
-                SNK_NEOGEO_MENU_ID,
                 CONSOLES_MENU_ID,
                 HANDHELDS_MENU_ID,
                 COMPUTERS_MENU_ID,
@@ -864,6 +841,37 @@ mod tests {
     }
 
     #[test]
+    fn snk_neogeo_is_a_consoles_group_without_an_arcade_shortcut() {
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(
+            vec![game("arcade", "P.O.W.", "SNK")],
+            vec![
+                system("arcade", 1),
+                system("neogeo", 2),
+                system("neogeo-cd", 3),
+            ],
+        ));
+
+        assert!(!taxonomy.menu_contains_item(ROOT_MENU_ID, SNK_NEOGEO_MENU_ID));
+        assert!(taxonomy.menu_contains_item(CONSOLES_MENU_ID, SNK_NEOGEO_MENU_ID));
+        let snk = taxonomy.menu(SNK_NEOGEO_MENU_ID).expect("SNK NeoGeo");
+        assert_eq!(snk.parent_id.as_deref(), Some(CONSOLES_MENU_ID));
+        assert_eq!(
+            snk.items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["neogeo", "neogeo-cd"]
+        );
+        assert_eq!(
+            taxonomy
+                .primary_destination_for_system("neogeo")
+                .expect("NeoGeo destination")
+                .menu_path,
+            vec![ROOT_MENU_ID, CONSOLES_MENU_ID, SNK_NEOGEO_MENU_ID]
+        );
+    }
+
+    #[test]
     fn single_collection_vendor_is_flattened_into_its_category() {
         let taxonomy = LauncherTaxonomy::from_catalog(&catalog(
             Vec::new(),
@@ -888,21 +896,29 @@ mod tests {
     }
 
     #[test]
-    fn snk_arcade_collection_uses_whole_token_matcher_from_catalog() {
-        let catalog = catalog(
-            vec![
-                game("arcade", "One", "SNK (Rock-Ola license)"),
-                game("arcade", "Two", "FunSNKWorks"),
-            ],
-            vec![system("arcade", 2)],
-        );
-        let taxonomy = LauncherTaxonomy::from_catalog(&catalog);
+    fn amiga_cd32_is_grouped_with_commodore_computers() {
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(
+            Vec::new(),
+            vec![system("amiga", 4), system("amigacd32", 2)],
+        ));
+
+        assert!(taxonomy.menu_contains_item(COMPUTERS_MENU_ID, COMPUTERS_COMMODORE_MENU_ID));
         assert_eq!(
             taxonomy
-                .collection(MENU_SNK_ARCADE_SYSTEM_ID)
-                .expect("SNK Arcade")
-                .count,
-            1
+                .menu(COMPUTERS_COMMODORE_MENU_ID)
+                .expect("Commodore")
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["amiga", "amigacd32"]
+        );
+        assert_eq!(
+            taxonomy
+                .primary_destination_for_system("amigacd32")
+                .expect("Amiga CD32 destination")
+                .menu_path,
+            vec![ROOT_MENU_ID, COMPUTERS_MENU_ID, COMPUTERS_COMMODORE_MENU_ID]
         );
     }
 
@@ -926,7 +942,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing primary destination for {id}"));
             let expected = match definition.section {
                 LauncherSection::Arcade => vec![ROOT_MENU_ID],
-                LauncherSection::SnkNeogeo => vec![ROOT_MENU_ID, SNK_NEOGEO_MENU_ID],
+                LauncherSection::SnkNeogeo => {
+                    vec![ROOT_MENU_ID, CONSOLES_MENU_ID, SNK_NEOGEO_MENU_ID]
+                }
                 LauncherSection::Consoles => vec![ROOT_MENU_ID, CONSOLES_MENU_ID],
                 LauncherSection::Handhelds => vec![ROOT_MENU_ID, HANDHELDS_MENU_ID],
                 LauncherSection::Computers => vec![ROOT_MENU_ID, COMPUTERS_MENU_ID],
@@ -1030,7 +1048,15 @@ mod tests {
         };
         assert_eq!(
             menu_ids(CONSOLES_MENU_ID),
-            vec!["atari2600", "sms", "psx", "nes", "tgfx16", "colecovision",]
+            vec![
+                "atari2600",
+                "sms",
+                "psx",
+                "nes",
+                "tgfx16",
+                SNK_NEOGEO_MENU_ID,
+                "colecovision",
+            ]
         );
         assert_eq!(
             menu_ids(HANDHELDS_MENU_ID),
@@ -1058,13 +1084,6 @@ mod tests {
             ]
         );
         assert_eq!(taxonomy.collection(MENU_ARCADE_SYSTEM_ID).unwrap().count, 2);
-        assert_eq!(
-            taxonomy
-                .collection(MENU_SNK_ARCADE_SYSTEM_ID)
-                .unwrap()
-                .count,
-            2
-        );
-        assert_eq!(taxonomy.menu(SNK_NEOGEO_MENU_ID).unwrap().count, 3);
+        assert_eq!(taxonomy.menu(SNK_NEOGEO_MENU_ID).unwrap().count, 1);
     }
 }

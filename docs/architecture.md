@@ -401,8 +401,8 @@ root stamp semantics, SQLite publish model, and benchmark gates.
 ## Launcher Navigation Model
 
 The Home launcher is a dynamic hierarchy rather than a flat catalog-system
-row. Its root order is `Arcade`, `SNK NeoGeo`, `Consoles`, `Handhelds`, then
-`Computers`; empty leaves and their empty parent groups are removed. Console,
+row. Its root order is `Arcade`, `Consoles`, `Handhelds`, then `Computers`;
+empty leaves and their empty parent groups are removed. Console,
 handheld, and computer levels group installed systems by manufacturer or
 family, with an `Other` node retaining every catalogable system that has no
 explicit mapping. The catalog's normalized platform kind supplies that
@@ -415,20 +415,22 @@ level that opened it. Launch return state records the active collection and
 menu path; older system-only state is resolved to that system's primary path.
 Vendor groups with only one installed collection are flattened into a single
 branded collection tile, such as `Sony PlayStation`, so a vendor grouping never
-adds a level solely for one child. SNK Arcade is a pre-indexed subset of the
-normal Arcade catalog selected by an `SNK` manufacturer token. NeoGeo Pocket is
-only available under Handhelds/SNK and is not duplicated under SNK NeoGeo.
+adds a level solely for one child. `SNK NeoGeo` is retained as a stable Consoles
+submenu even when only one of NeoGeo or NeoGeo CD is installed. NeoGeo Pocket is
+only available under Handhelds/SNK. The NeoGeo Pocket system-launcher MRAs under
+`_Arcade` are ignored because they boot a handheld core rather than an arcade
+game.
 
 The curated hierarchy and ordering are fixed; empty branches are removed, and
 vendor branches with one installed collection are flattened into their parent:
 
 | Level | Ordered children / owned system IDs |
 | --- | --- |
-| Root | Arcade; SNK NeoGeo; Consoles; Handhelds; Computers |
-| SNK NeoGeo | Arcade shortcut; NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`) |
-| Consoles | Atari (`atari2600`, `atari5200`, `atari7800`, `jaguar`); Sega (`sg1000`, `sms`, `megadrive`, `megacd`, `s32x`, `saturn`); Sony (`psx`); Nintendo (`nes`, `fds`, `snes`, `satellaview`, `n64`); NEC (`tgfx16`, `tgfx16-cd`, `supergrafx`); Other |
+| Root | Arcade; Consoles; Handhelds; Computers |
+| Consoles | Atari (`atari2600`, `atari5200`, `atari7800`, `jaguar`); Sega (`sg1000`, `sms`, `megadrive`, `megacd`, `s32x`, `saturn`); Sony (`psx`); Nintendo (`nes`, `fds`, `snes`, `satellaview`, `n64`); NEC (`tgfx16`, `tgfx16-cd`, `supergrafx`); SNK NeoGeo; Other |
+| Consoles / SNK NeoGeo | NeoGeo (`neogeo`, `neo-geo`, `snk-neo-geo`); NeoGeo CD (`neogeo-cd`) |
 | Handhelds | Nintendo (`gb`, `gameboy`, `gameboy2p`, `gbc`, `gba`, `gba2p`, `sgb`, `sgb2`, `pokemonmini`); Sega (`gamegear`); Atari (`atarilynx`); SNK (`neogeopocket`, `ngpc`); Bandai (`wonderswan`, `wonderswancolor`); Other |
-| Computers | Acorn (`acornatom`, `acornelectron`, `bbcmicro`, `archie`); Apple (`apple-ii`, `macplus`, `maclc`); Commodore (`amiga`, `c64`, `c128`, `c16`, `vic20`, `pet2001`); Atari (`atari800`, `atarist`); Sinclair (`zx81`, `zx-spectrum`, `ql`); Tandy/Radio Shack (`trs-80`, `coco2`, `coco3`); DOS/PC (`ao486`, `dos`); Japanese Computers (`msx`, `msx2`, `pc88`, `pc98`, `x68000`, `x1`, `sharp-x1`, `fm7`, `fmtowns`); Other |
+| Computers | Acorn (`acornatom`, `acornelectron`, `bbcmicro`, `archie`); Apple (`apple-ii`, `macplus`, `maclc`); Commodore (`amiga`, `amigacd32`, `c64`, `c128`, `c16`, `vic20`, `pet2001`); Atari (`atari800`, `atarist`); Sinclair (`zx81`, `zx-spectrum`, `ql`); Tandy/Radio Shack (`trs-80`, `coco2`, `coco3`); DOS/PC (`ao486`, `dos`); Japanese Computers (`msx`, `msx2`, `pc88`, `pc98`, `x68000`, `x1`, `sharp-x1`, `fm7`, `fmtowns`); Other |
 
 After those explicit mappings, the catalog profile category determines the
 fallback: `Arcade` joins the root Arcade aggregate, `Console` goes to
