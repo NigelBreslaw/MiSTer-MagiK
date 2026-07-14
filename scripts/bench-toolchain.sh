@@ -20,7 +20,7 @@ MISTER="$HERE/scripts/mister"
 # Active benchmark scene set; retired synthetic Slint scenes are archived under
 # history/bench-scenes/.
 BENCH_SCENES=(launcher)
-VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-halfres}"
+VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-cortex-a9}"
 VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
 VIDEO_FILE="${MISTER_VIDEO_FILE:-}"
 VIDEO_PATH_REMOTE=""

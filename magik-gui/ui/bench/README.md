@@ -28,15 +28,19 @@ folder is absent.
 For 60 fps Neo Geo video snaps on the MiSTer, use half-resolution source assets
 (`320x240` for the original `640x480` snaps) and leave
 `MISTER_VIDEO_SCALE=source`. This keeps the fast YUV420P-to-RGB565 conversion
-path active and avoids runtime upscaling or FFmpeg swscale in the hot frame
-loop. `scripts/sync-video-snaps.sh` defaults to
-`build/video-snaps-neogeo-halfres` and mirrors that set to the device so stale
-full-size MP4s do not remain in the playlist.
+path active and avoids runtime scaling in the hot frame loop.
+`scripts/reencode-video-snaps-cortex-a9.sh` writes validated Lanczos-half,
+Constrained Baseline H.264/AAC assets under
+`build/video-snaps-neogeo-cortex-a9`, with per-file provenance and a manifest.
+`scripts/sync-video-snaps.sh` validates that manifest, stages the files on the
+MiSTer, verifies remote hashes, and then swaps the playlist folder atomically so
+stale full-size MP4s do not remain live.
 
-Production `--video` supports the fast path only: `direct-blit`, `source`,
-`custom-neon`, and decoder thread type `none`. Build with `--video-lab` when
-comparing Slint-image upload, FFmpeg swscale conversion, non-source scaling, or
-decoder threading experiments.
+Production `--video` supports only the maintained presentation paths:
+direct framebuffer blit, `MISTER_VIDEO_SCALE=source`, and
+`MISTER_VIDEO_SCALE=2x` for the explicit 320x240-to-640x480 pixel-doubled path.
+Removed lab comparisons include Slint-image upload, FFmpeg swscale conversion,
+alternate conversion backends, and decoder threading.
 
 Classic camera/sprite/text/raster/transition effect scenes are experiments, not
 production benchmark scenes. Build them with `scripts/deploy-rust.sh
@@ -66,16 +70,10 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_PROFILE_FILE=…` | Write per-frame TSV |
 | `MISTER_TRACE_FILE=…` | Write Chrome/Perfetto trace JSON |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
-| `MISTER_VIDEO_RENDER_MODE=direct-blit` | Production fast path |
-| `MISTER_VIDEO_RENDER_MODE=slint-image` | Lab-only comparison; requires `--video-lab` |
 | `MISTER_VIDEO_QUEUE_DEPTH=N` | Decode worker channel depth, default 2 |
-| `MISTER_VIDEO_SCALE=source` | Production fast path; keeps the custom RGB565 converter eligible |
-| `MISTER_VIDEO_SCALE=fit-height\|fit-width\|native` | Lab-only scaling modes; require `--video-lab` |
+| `MISTER_VIDEO_SCALE=source` | Native-size presentation, used for 320x240 assets displayed at 320x240 |
+| `MISTER_VIDEO_SCALE=2x` | Pixel-doubled presentation for 320x240 assets displayed at 640x480 |
 | `MISTER_VIDEO_PROFILE=summary\|full\|trace` | Video-specific alias for `MISTER_PROFILE` |
-| `MISTER_VIDEO_THREADS=N` | Lab-only FFmpeg decoder thread count where supported |
-| `MISTER_VIDEO_THREAD_TYPE=none\|frame\|slice\|auto` | `none` is production; other modes require `--video-lab` |
-| `MISTER_VIDEO_CONVERT=custom-neon` | Production ARM custom YUV420P-to-RGB565 converter |
-| `MISTER_VIDEO_CONVERT=swscale-rgb565` | Lab-only FFmpeg swscale fallback; requires `--video-lab` |
 
 Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
 timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·
@@ -120,6 +118,7 @@ bytes, and stage timings.
 Sync the local Neo Geo MP4 snaps and run only the video scene:
 
 ```bash
+scripts/reencode-video-snaps-cortex-a9.sh SOURCE_DIR
 scripts/sync-video-snaps.sh
-MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-render-mode direct-blit --video-scale source --video-convert custom-neon --video-thread-type none --replace-label
+MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-scale source --replace-label
 ```
