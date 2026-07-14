@@ -28,7 +28,10 @@ folder is absent.
 For 60 fps Neo Geo video snaps on the MiSTer, use half-resolution source assets
 (`320x240` for the original `640x480` snaps) and leave
 `MISTER_VIDEO_SCALE=source`. This keeps the fast YUV420P-to-RGB565 conversion
-path active and avoids runtime scaling in the hot frame loop.
+path active. Pressing A toggles presentation between `320x240` and `640x480`
+with a 200 ms-response smooth, critically damped spring animation and
+nearest-neighbour scaling; pressing A again during the transition reverses
+continuously from the current size and velocity.
 `scripts/reencode-video-snaps-cortex-a9.sh` writes validated `640x480` to
 `320x240` Lanczos-half, Constrained Baseline H.264/AAC assets under
 `build/video-snaps-neogeo-cortex-a9`, with per-file provenance and a manifest.
@@ -71,8 +74,9 @@ MISTER_PPROF_OUT=/tmp/cpu.svg \
 | `MISTER_TRACE_FILE=…` | Write Chrome/Perfetto trace JSON |
 | `MISTER_PPROF=1` | CPU flamegraph via `pprof` (needs `build-arm.sh --profile`; **may get 0 samples on MiSTer** — use frame TSV if so) |
 | `MISTER_VIDEO_QUEUE_DEPTH=N` | Decode worker channel depth, default 2 |
-| `MISTER_VIDEO_SCALE=source` | Native-size presentation, used for 320x240 assets displayed at 320x240 |
-| `MISTER_VIDEO_SCALE=2x` | Pixel-doubled presentation for 320x240 assets displayed at 640x480 |
+| `MISTER_VIDEO_SCALE=source` | Start at 320x240; A toggles to/from 640x480 |
+| `MISTER_VIDEO_SCALE=2x` | Start at 640x480; A toggles to/from 320x240 |
+| `MISTER_VIDEO_AUTO_TOGGLE_MS=N` | Benchmark hook: toggle automatically every N milliseconds; unset for controller-only input |
 | `MISTER_VIDEO_PROFILE=summary\|full\|trace` | Video-specific alias for `MISTER_PROFILE` |
 
 Phase breakdown each frame: **prepare** (input/catalog/bridge work before Slint
