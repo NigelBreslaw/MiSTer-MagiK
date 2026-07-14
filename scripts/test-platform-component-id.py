@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,24 @@ SPEC = importlib.util.spec_from_file_location("platform_component_id", SCRIPT)
 assert SPEC and SPEC.loader
 component_id = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(component_id)
+
+
+def git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+    ):
+        env.pop(name, None)
+    return env
+
+
+def run_git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, env=git_env())
 
 
 class ComponentIdentityTests(unittest.TestCase):
@@ -29,18 +48,18 @@ class ComponentIdentityTests(unittest.TestCase):
                 else:
                     path.mkdir(parents=True, exist_ok=True)
                     (path / "input.txt").write_text(f"{component}:{relative}\n")
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
-        subprocess.run(["git", "-C", str(self.root), "config", "user.email", "test@example.invalid"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "Test"], check=True)
-        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", "initial"], check=True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=git_env())
+        run_git(self.root, "config", "user.email", "test@example.invalid")
+        run_git(self.root, "config", "user.name", "Test")
+        run_git(self.root, "add", ".")
+        run_git(self.root, "commit", "-qm", "initial")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
 
     def commit(self, message: str) -> None:
-        subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qm", message], check=True)
+        run_git(self.root, "add", ".")
+        run_git(self.root, "commit", "-qm", message)
 
     def test_irrelevant_file_does_not_change_identity(self) -> None:
         before, _ = component_id.component_id(self.root, "fpga")

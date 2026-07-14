@@ -22,6 +22,8 @@ MISTER="$HERE/scripts/mister"
 BENCH_SCENES=(launcher)
 VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-halfres}"
 VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
+VIDEO_FILE="${MISTER_VIDEO_FILE:-}"
+VIDEO_PATH_REMOTE=""
 
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
@@ -31,24 +33,20 @@ LABEL="A0"
 DO_CLEAN=0
 SKIP_BUILD=0
 SKIP_DEVICE=0
+SKIP_DEPLOY=0
 REPLACE_LABEL=0
 INCLUDE_VIDEO=0
-VIDEO_LAB=0
 SCENE_FILTER=0
 SELF_TEST=0
+PRINT_RESULTS=1
 SCENE_SECS=15
 SETTLE_SECS="${MISTER_BENCH_SETTLE_SECS:-5}"
 FRAME_ORDER="${MISTER_FRAME_ORDER:-render-then-vsync}"
 DIRTY_RECT_BROAD_PCT="${MISTER_DIRTY_RECT_BROAD_PCT:-85}"
 LAUNCHER_SCENARIO="${MISTER_LAUNCHER_BENCH_SCENARIO:-}"
 LAUNCHER_DIRTY_OPT="${MISTER_LAUNCHER_DIRTY_OPT:-on}"
-VIDEO_RENDER_MODE="${MISTER_VIDEO_RENDER_MODE:-direct-blit}"
-VIDEO_QUEUE_DEPTH="${MISTER_VIDEO_QUEUE_DEPTH:-2}"
 VIDEO_SCALE="${MISTER_VIDEO_SCALE:-source}"
 VIDEO_PROFILE="${MISTER_VIDEO_PROFILE:-summary}"
-VIDEO_THREADS="${MISTER_VIDEO_THREADS:-}"
-VIDEO_THREAD_TYPE="${MISTER_VIDEO_THREAD_TYPE:-none}"
-VIDEO_CONVERT="${MISTER_VIDEO_CONVERT:-custom-neon}"
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-launcher}"
 MIN_FPS="${MISTER_BENCH_MIN_FPS:-55}"
 MAX_VSYNC_FALLBACK="${MISTER_BENCH_MAX_VSYNC_FALLBACK:-0}"
@@ -62,16 +60,13 @@ usage() {
   echo ""
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
-  echo "Options: --clean  --skip-build  --skip-device  --replace-label  --scene-secs N"
-  echo "         --device (default; build profile release-device / A3)  --video  --video-lab  --scene NAME  --self-test  -h"
+  echo "Options: --clean  --skip-build  --skip-device  --skip-deploy  --quiet-results  --replace-label  --scene-secs N"
+  echo "         --device (default; build profile release-device / A3)  --video  --scene NAME  --self-test  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
   echo "         --launcher-dirty-opt on|off"
-  echo "         --video-render-mode direct-blit (slint-image requires --video-lab)"
-  echo "         --video-queue-depth N  --video-scale source (fit-height|fit-width|native require --video-lab)"
-  echo "         --video-profile summary|full|trace  --video-threads N  --video-thread-type none|frame|slice|auto (--video-threads/thread modes require --video-lab)"
-  echo "         --video-convert custom-neon (swscale-rgb565 requires --video-lab)"
+  echo "         --video-scale source|2x  --video-profile summary|full|trace  --video-file FILE"
   echo "         --ui-scope launcher|arcade|all (default: launcher)"
   echo "  (--ui-secs N is an alias for --scene-secs)"
   echo ""
@@ -87,11 +82,12 @@ while [[ $# -gt 0 ]]; do
     --clean) DO_CLEAN=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-device) SKIP_DEVICE=1; shift ;;
+    --skip-deploy) SKIP_DEPLOY=1; shift ;;
+    --quiet-results) PRINT_RESULTS=0; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     --self-test) SELF_TEST=1; shift ;;
     --device) BUILD_PROFILE=release-device; shift ;;
     --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
-    --video-lab) INCLUDE_VIDEO=1; VIDEO_LAB=1; BUILD_FLAG+=(--video-lab); shift ;;
     --scene)
       SCENE_FILTER=1
       BENCH_SCENES=("${2:?}")
@@ -106,13 +102,9 @@ while [[ $# -gt 0 ]]; do
     --dirty-rect-broad-pct) DIRTY_RECT_BROAD_PCT="${2:?}"; shift 2 ;;
     --launcher-scenario) LAUNCHER_SCENARIO="${2:?}"; shift 2 ;;
     --launcher-dirty-opt) LAUNCHER_DIRTY_OPT="${2:?}"; shift 2 ;;
-    --video-render-mode) VIDEO_RENDER_MODE="${2:?}"; shift 2 ;;
-    --video-queue-depth) VIDEO_QUEUE_DEPTH="${2:?}"; shift 2 ;;
     --video-scale) VIDEO_SCALE="${2:?}"; shift 2 ;;
     --video-profile) VIDEO_PROFILE="${2:?}"; shift 2 ;;
-    --video-threads) VIDEO_THREADS="${2:?}"; shift 2 ;;
-    --video-thread-type) VIDEO_THREAD_TYPE="${2:?}"; shift 2 ;;
-    --video-convert) VIDEO_CONVERT="${2:?}"; shift 2 ;;
+    --video-file) VIDEO_FILE="${2:?}"; shift 2 ;;
     --ui-scope) UI_SCOPE="${2:?}"; shift 2 ;;
     -*) echo "Unknown option: $1" >&2; usage 1 ;;
     *) LABEL="$1"; shift ;;
@@ -142,33 +134,14 @@ case "$LAUNCHER_DIRTY_OPT" in
   on|off|1|0|true|false) ;;
   *) echo "Unknown --launcher-dirty-opt: $LAUNCHER_DIRTY_OPT" >&2; exit 1 ;;
 esac
-case "$VIDEO_RENDER_MODE" in
-  slint-image|direct-blit) ;;
-  *) echo "Unknown --video-render-mode: $VIDEO_RENDER_MODE" >&2; exit 1 ;;
-esac
-case "$VIDEO_QUEUE_DEPTH" in
-  ''|*[!0-9]*) echo "Invalid --video-queue-depth: $VIDEO_QUEUE_DEPTH" >&2; exit 1 ;;
-  *) ;;
-esac
 case "$VIDEO_SCALE" in
-  source|fit-height|fit-width|native) ;;
+  source|2x) ;;
   *) echo "Unknown --video-scale: $VIDEO_SCALE" >&2; exit 1 ;;
 esac
 case "$VIDEO_PROFILE" in
   summary|full|trace) ;;
   *) echo "Unknown --video-profile: $VIDEO_PROFILE" >&2; exit 1 ;;
 esac
-case "$VIDEO_THREADS" in
-  '') ;;
-  *[!0-9]*) echo "Invalid --video-threads: $VIDEO_THREADS" >&2; exit 1 ;;
-  *) ;;
-esac
-if [[ "$VIDEO_RENDER_MODE" != "direct-blit" || "$VIDEO_SCALE" != "source" || -n "$VIDEO_THREADS" || "$VIDEO_THREAD_TYPE" != "none" || "$VIDEO_CONVERT" != "custom-neon" ]]; then
-  if [[ "$VIDEO_LAB" -ne 1 ]]; then
-    echo "Video comparison/fallback options require --video-lab; production --video supports direct-blit/source/custom-neon/thread-type none only." >&2
-    exit 1
-  fi
-fi
 case "$UI_SCOPE" in
   all|launcher|arcade) ;;
   *) echo "Unknown --ui-scope: $UI_SCOPE (use all|launcher|arcade)" >&2; exit 1 ;;
@@ -410,6 +383,7 @@ function value_after(line, key, rest) {
   video_scale = value_after($0, "scale=")
   video_profile = value_after($0, "profile=")
   video_threads = value_after($0, "threads=")
+  video_pipeline = value_after($0, "pipeline=")
 }
 /^display-config:/ {
   fb0 = value_after($0, "fb0=")
@@ -438,6 +412,7 @@ END {
   add_note("video_scale", video_scale)
   add_note("video_profile", video_profile)
   add_note("video_threads", video_threads)
+  add_note("video_pipeline", video_pipeline)
   print out
 }
 ' "$ui_log"
@@ -637,7 +612,7 @@ set -e
 kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true
 sleep $SETTLE_SECS
 if [ '$scene' = 'video_playback' ]; then
-  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_RENDER_MODE=$VIDEO_RENDER_MODE MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_QUEUE_DEPTH=$VIDEO_QUEUE_DEPTH MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_VIDEO_THREADS=$VIDEO_THREADS MISTER_VIDEO_THREAD_TYPE=$VIDEO_THREAD_TYPE MISTER_VIDEO_CONVERT=$VIDEO_CONVERT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
+  MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT MISTER_VIDEO_PATH='$VIDEO_PATH_REMOTE' MISTER_VIDEO_DIR='$VIDEO_REMOTE_DIR' MISTER_VIDEO_SCALE=$VIDEO_SCALE MISTER_VIDEO_PROFILE=$VIDEO_PROFILE MISTER_PROFILE_FILE=/tmp/mister-video-profile.tsv $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 else
   MISTER_FRAME_ORDER=$FRAME_ORDER MISTER_DIRTY_RECT_BROAD_PCT=$DIRTY_RECT_BROAD_PCT MISTER_LAUNCHER_BENCH_SCENARIO=$LAUNCHER_SCENARIO MISTER_LAUNCHER_DIRTY_OPT=$LAUNCHER_DIRTY_OPT $REMOTE ui $scene $secs > /tmp/bench-ui.log 2>&1 &
 fi
@@ -690,6 +665,9 @@ cat /tmp/bench-ui.log
     cp "$ui_full" "$ui_log"
   fi
   cp "$ui_log" "$BENCH_DIR/${LABEL}-${scene}-ui.log" 2>/dev/null || true
+  if [[ "$scene" == "video_playback" ]]; then
+    mister get /tmp/mister-video-profile.tsv "$BENCH_DIR/${LABEL}-${scene}-frames.tsv" || true
+  fi
 
   local cpu_mean cpu_max rss_kb ui_rc parse_stats
   cpu_mean="$(sed -n '/___BENCH_CPU_MEAN___/{n;p;}' "$ui_full" 2>/dev/null | head -1)"
@@ -822,15 +800,27 @@ fi
 echo "    rustc=$rustc_ver  compile_sec=${HOST_COMPILE_SEC:-n/a}  bytes=$HOST_BYTES"
 
 if [[ "$SKIP_DEVICE" -eq 0 ]]; then
-  echo "==> Deploy $BIN"
   mister_suspend_launcher
   trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
-  mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
-  mister put "$BIN" "$REMOTE"
-  mister run "chmod +x $REMOTE"
-  if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
-    echo "==> Sync video snaps $VIDEO_SRC_DIR -> $VIDEO_REMOTE_DIR"
-    "$HERE/scripts/sync-video-snaps.sh" "$VIDEO_SRC_DIR" "$VIDEO_REMOTE_DIR"
+  if [[ -n "$VIDEO_FILE" ]]; then
+    [[ -f "$VIDEO_FILE" ]] || { echo "Video file not found: $VIDEO_FILE" >&2; exit 1; }
+    VIDEO_PATH_REMOTE="$VIDEO_REMOTE_DIR/$(basename "$VIDEO_FILE")"
+  fi
+  if [[ "$SKIP_DEPLOY" -eq 0 ]]; then
+    echo "==> Deploy $BIN"
+    mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+    mister put "$BIN" "$REMOTE"
+    mister run "chmod +x $REMOTE"
+    if [[ "$INCLUDE_VIDEO" -eq 1 && -n "$VIDEO_FILE" ]]; then
+      echo "==> Sync single video $VIDEO_FILE -> $VIDEO_PATH_REMOTE"
+      mister run "mkdir -p '$VIDEO_REMOTE_DIR'; rm -f '$VIDEO_REMOTE_DIR'/*.mp4 '$VIDEO_REMOTE_DIR'/*.MP4"
+      mister put "$VIDEO_FILE" "$VIDEO_PATH_REMOTE"
+    elif [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+      echo "==> Sync video snaps $VIDEO_SRC_DIR -> $VIDEO_REMOTE_DIR"
+      "$HERE/scripts/sync-video-snaps.sh" "$VIDEO_SRC_DIR" "$VIDEO_REMOTE_DIR"
+    fi
+  else
+    echo "==> Reuse deployed binary and video fixture"
   fi
   mister run "file $REMOTE && ldd $REMOTE 2>&1 | head -3" || HOST_NOTES="${HOST_NOTES:+$HOST_NOTES; }ldd-fail"
   ini_mode_notes="$(detect_ini_mode_notes || true)"
@@ -851,8 +841,10 @@ else
 fi
 
 echo "==> Results: $TSV"
-echo ""
-column -t -s $'\t' "$TSV" 2>/dev/null || cat "$TSV"
+if [[ "$PRINT_RESULTS" -eq 1 ]]; then
+  echo ""
+  column -t -s $'\t' "$TSV" 2>/dev/null || cat "$TSV"
+fi
 
 if [[ "$BENCH_FAILURES" -gt 0 ]]; then
   echo "==> Benchmark gate failed: $BENCH_FAILURES scene(s) exceeded thresholds" >&2
