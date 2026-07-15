@@ -322,6 +322,9 @@ jobs:
   publish:
     name: Publish ${{ github.event.inputs.release_channel }} release
     runs-on: ubuntu-24.04
+    concurrency:
+      group: mister-magik-downloader-feed
+      cancel-in-progress: false
     needs:
       - release-metadata
       - distribution
@@ -383,10 +386,35 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
           set -euo pipefail
-          if ! gh api "repos/$GH_REPO/git/ref/heads/downloader" >/dev/null 2>&1; then
+          initialize_feed_branch() {
+            local source="$1" destination="$2" blob_sha tree_sha commit_sha
+            blob_sha="$(gh api --method POST "repos/$GH_REPO/git/blobs" \
+              -f content="$(base64 -w 0 "$source")" \
+              -f encoding=base64 \
+              --jq .sha)"
+            tree_sha="$(
+              jq -n \
+                --arg path "$destination" \
+                --arg sha "$blob_sha" \
+                '{tree: [{path: $path, mode: "100644", type: "blob", sha: $sha}]}' \
+                | gh api --method POST "repos/$GH_REPO/git/trees" --input - --jq .sha
+            )"
+            commit_sha="$(gh api --method POST "repos/$GH_REPO/git/commits" \
+              -f message="Initialize MiSTer MagiK Downloader feed with $RELEASE_VERSION $destination" \
+              -f tree="$tree_sha" \
+              --jq .sha)"
+            test "$(gh api "repos/$GH_REPO/git/commits/$commit_sha" --jq '.parents | length')" = 0
             gh api --method POST "repos/$GH_REPO/git/refs" \
               -f ref=refs/heads/downloader \
-              -f sha="$GITHUB_SHA" >/dev/null
+              -f sha="$commit_sha" >/dev/null
+          }
+          if ! gh api "repos/$GH_REPO/git/ref/heads/downloader" >/dev/null 2>&1; then
+            initialize_feed_branch \
+              "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
+              "mister-magik-$RELEASE_CHANNEL-db.json.zip"
+            feed_initialized=1
+          else
+            feed_initialized=0
           fi
           publish_file() {
             local source="$1" destination="$2" existing_sha
@@ -402,11 +430,20 @@ jobs:
             fi
             gh api "${args[@]}" >/dev/null
           }
-          publish_file \
-            "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
-            "mister-magik-$RELEASE_CHANNEL-db.json.zip"
+          if [ "$feed_initialized" = 0 ]; then
+            publish_file \
+              "candidate/mister-magik-$RELEASE_CHANNEL-db.json.zip" \
+              "mister-magik-$RELEASE_CHANNEL-db.json.zip"
+          fi
           if [ "$RELEASE_CHANNEL" = release ]; then
             publish_file \
               candidate/mister-magik-beta-db.json.zip \
               mister-magik-beta-db.json.zip
           fi
+          feed_head="$(gh api "repos/$GH_REPO/git/ref/heads/downloader" --jq .object.sha)"
+          feed_tree="$(gh api "repos/$GH_REPO/git/commits/$feed_head" --jq .tree.sha)"
+          unexpected_paths="$(gh api "repos/$GH_REPO/git/trees/$feed_tree" --jq \
+            '.tree[].path | select(. != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")')"
+          test -z "$unexpected_paths"
+          gh api "repos/$GH_REPO/contents/mister-magik-$RELEASE_CHANNEL-db.json.zip?ref=downloader" \
+            --jq .sha >/dev/null

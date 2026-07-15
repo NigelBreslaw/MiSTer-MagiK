@@ -39,6 +39,11 @@ required = (
     "platform-bundle-v0.1.json",
     "MAIN_REF: mister-magik",
     'assert version.encode() in package.read("mister-magik/mister-magik-fb")',
+    "initialize_feed_branch()",
+    "group: mister-magik-downloader-feed",
+    "cancel-in-progress: false",
+    'test "$(gh api "repos/$GH_REPO/git/commits/$commit_sha" --jq \'.parents | length\')" = 0',
+    'select(. != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")',
 )
 for value in required:
     assert value in text, f"distribution workflow is missing: {value}"
@@ -46,6 +51,7 @@ for value in required:
 before_publish, publish = text.split("\n  publish:\n", 1)
 assert "contents: write" not in before_publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
+assert '-f sha="$GITHUB_SHA"' not in publish
 
 for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_ref:"):
     assert forbidden_input not in trigger, f"internal input leaked into dispatch UI: {forbidden_input}"
