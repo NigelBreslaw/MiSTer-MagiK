@@ -68,6 +68,19 @@ def main() -> int:
         fail("distribution ARM target must be restore-only")
     if "target-arm-v2-" not in distribution:
         fail("distribution does not restore the normal ARM target cache")
+    for fragment in (
+        "packages: read",
+        "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        'docker pull "${{ steps.cache-id.outputs.cross_image }}"',
+        "magik-gui/target/ffmpeg-minimal/armv7",
+        "ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}",
+    ):
+        if fragment not in distribution:
+            fail(f"distribution is missing canonical cross-image setup: {fragment}")
+    if distribution.index('docker pull "${{ steps.cache-id.outputs.cross_image }}"') > distribution.index(
+        "magik-gui/build-arm.sh --device"
+    ):
+        fail("distribution pulls the cross image after the ARM build starts")
 
     cross_toml = (ROOT / "magik-gui/Cross.toml").read_text(encoding="utf-8")
     image_match = re.search(r'^image\s*=\s*"([^"]+)"', cross_toml, re.MULTILINE)
@@ -76,6 +89,19 @@ def main() -> int:
     for workflow in ("rust-arm.yml", "distribution.yml", "cross-image.yml"):
         if "ci-cache-identity.py" not in texts[workflow]:
             fail(f"{workflow} does not consume the canonical cache identity")
+
+    cross_image = texts["cross-image.yml"]
+    for fragment in (
+        "if: github.ref != 'refs/heads/main'",
+        "group: mister-magik-cross-image",
+        "cancel-in-progress: false",
+        "sha256sum magik-gui/Dockerfile.cross-armv7",
+        "ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-$dockerfile_hash",
+        'docker manifest inspect "$IMAGE"',
+        "content-versioned images are immutable",
+    ):
+        if fragment not in cross_image:
+            fail(f"cross-image workflow is missing write-once protection: {fragment}")
 
     ffmpeg_helper = (ROOT / "magik-gui/scripts/build-minimal-ffmpeg.sh").read_text(
         encoding="utf-8"

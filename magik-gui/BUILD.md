@@ -292,6 +292,12 @@ architecture plus the Rust/cross ABI; `incremental/` directories are excluded
 from transfer. `scripts/test-ci-cache-contract.py` is the policy gate for every
 workflow cache key.
 
+The manual **Cross image** workflow is main-only and publishes each
+Dockerfile-hash tag exactly once. When changing `Dockerfile.cross-armv7`, update
+the `ubuntu20-<first-12-SHA256-characters>` tag in `Cross.toml`, merge that
+change to `main`, then dispatch **Cross image**. Re-dispatching an existing tag
+fails rather than replacing the image behind existing CI cache identities.
+
 The manual FPGA workflow does not use GitHub Actions cache for Quartus. Its
 installed Quartus 17.0/Cyclone V runtime is stored as a private,
 content-addressed `tar.zst` in the dedicated R2 Standard bucket

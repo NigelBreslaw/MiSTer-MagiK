@@ -10,11 +10,21 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: mister-magik-cross-image
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Refuse non-main publication
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Cross images must be dispatched from the main branch; got $GITHUB_REF" >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -22,10 +32,31 @@ jobs:
         id: cache-id
         run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
+      - name: Verify content-versioned image tag
+        env:
+          IMAGE: ${{ steps.cache-id.outputs.cross_image }}
+        run: |
+          set -euo pipefail
+          dockerfile_hash="$(sha256sum magik-gui/Dockerfile.cross-armv7 | awk '{print substr($1, 1, 12)}')"
+          expected_image="ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-$dockerfile_hash"
+          if [ "$IMAGE" != "$expected_image" ]; then
+            echo "Cross.toml image must be $expected_image; got $IMAGE" >&2
+            exit 1
+          fi
+
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Refuse an existing image tag
+        env:
+          IMAGE: ${{ steps.cache-id.outputs.cross_image }}
+        run: |
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "Image tag $IMAGE already exists; content-versioned images are immutable." >&2
+            exit 1
+          fi
 
       - name: Build and publish image
         env:

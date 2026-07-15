@@ -18,6 +18,7 @@ on:
 permissions:
   contents: read
   actions: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -84,6 +85,18 @@ jobs:
       - name: Compute cache identities
         id: cache-id
         run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: |
+          started="$(date +%s)"
+          docker pull "${{ steps.cache-id.outputs.cross_image }}"
+          finished="$(date +%s)"
+          printf 'cross_image_pull_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout Main_MiSTer fork
         uses: actions/checkout@v7
@@ -165,6 +178,12 @@ jobs:
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Cache minimal FFmpeg
+        uses: actions/cache@v6
+        with:
+          path: magik-gui/target/ffmpeg-minimal/armv7
+          key: ffmpeg-minimal-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-8.1.2-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.ffmpeg }}
 
       - name: Restore ARM frontend build outputs
         uses: actions/cache/restore@v6
