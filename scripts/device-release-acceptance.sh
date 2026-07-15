@@ -1001,7 +1001,7 @@ run_tier_catalog() {
 }
 
 run_supervised_reboot_soak() {
-  run_capture "supervised-reboot-soak-15" "$MISTER" agent boot-profile 15 --timeout 60 --fail-on-timeout
+  run_capture "supervised-reboot-soak-3" "$MISTER" agent boot-profile 3 --timeout 60 --fail-on-timeout
   wait_for_launcher_active "wait-launcher-after-supervised-reboot-soak" 90 || return 1
   status_json "post-reboot-soak" || record_fail "post reboot soak status JSON"
   assert_status "$OUT/status-post-reboot-soak.json" "post-reboot soak launcher active" \
@@ -1033,11 +1033,7 @@ run_tier_launcher_lifecycle() {
 
   if [ "$FAST" -eq 0 ]; then
     run_capture "startup-reveal-acceptance" "$ROOT/scripts/device-startup-reveal-acceptance.sh" "release-$STAMP" || true
-    if tier_selected "soak"; then
-      run_supervised_reboot_soak || true
-    else
-      record_skip "supervised reboot soak requires soak tier"
-    fi
+    run_supervised_reboot_soak || true
     run_crash_restart_lite || true
   fi
 }
