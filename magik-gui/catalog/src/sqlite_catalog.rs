@@ -2037,7 +2037,7 @@ pub(crate) fn write_sqlite_scan_with_catalog(
     discovery_history: Option<DiscoveryHistory>,
     stamp: Option<&catalog_stamp::CatalogStamp>,
 ) -> Result<LibraryCatalogLoad, String> {
-    let preview_paths = PreviewArchivePaths::from_paths(
+    let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
     let mame_sqlite_path = default_mame_sqlite_path();
@@ -2070,7 +2070,7 @@ fn write_sqlite_scan_without_catalog_rebuild(
     canonical_catalog: Option<&ArcadeCatalog>,
     materialize_runtime_catalog: bool,
 ) -> Result<(), String> {
-    let preview_paths = PreviewArchivePaths::from_paths(
+    let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
     let mame_sqlite_path = default_mame_sqlite_path();
@@ -2149,7 +2149,9 @@ pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack(
     mame_sqlite_path: &Path,
     preview_asset_pack: &preview_worker::PreviewArchiveIndex,
 ) -> Result<(), String> {
-    let preview_paths = PreviewArchivePaths::from_paths(vec![preview_asset_pack.path.clone()]);
+    let preview_paths = PreviewArchivePaths::from_preview_indexes(std::slice::from_ref(
+        preview_asset_pack,
+    ));
     write_sqlite_scan_with_sources(
         path,
         scan,
@@ -2883,6 +2885,22 @@ fn write_sqlite_scan_with_sources_inner(
                 .map(|game| game.mra_path.as_ref())
                 .collect::<HashSet<_>>()
         });
+        let canonical_preview_flags = canonical_catalog.map(|catalog| {
+            catalog
+                .games
+                .iter()
+                .map(|game| {
+                    (
+                        (
+                            game.mra_path.to_string(),
+                            game.title.to_string(),
+                            game.system_id.to_string(),
+                        ),
+                        game.has_preview,
+                    )
+                })
+                .collect::<HashMap<_, _>>()
+        });
         let mut canonical_launch_ids = CanonicalLaunchIdIndex::default();
         let mut system_stmt = tx
             .prepare("INSERT OR IGNORE INTO systems(system_id,title,platform_kind,classification_source) VALUES (?1,?2,?3,?4)")
@@ -3198,6 +3216,21 @@ fn write_sqlite_scan_with_sources_inner(
                     &family_id,
                     discovery,
                 );
+                let canonical_key = (
+                    plan_launch_ref.clone(),
+                    discovery.title.clone(),
+                    system_id.clone(),
+                );
+                let has_preview = canonical_preview_flags
+                    .as_ref()
+                    .and_then(|flags| flags.get(&canonical_key))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        !preview_asset_key.is_empty()
+                            && sources
+                                .preview_paths
+                                .has_entry(&system_id, preview_asset_key.as_str())
+                    });
                 arcade_compatibility_rows.push(ArcadeCompatibilityRow {
                     launch_id,
                     family_id,
@@ -3205,11 +3238,7 @@ fn write_sqlite_scan_with_sources_inner(
                     title: discovery.title.clone(),
                     system_id: system_id.clone(),
                     launch_ref: plan_launch_ref.clone(),
-                    has_preview: !preview_asset_key.is_empty()
-                        && sources
-                            .preview_paths
-                            .archive_for_platform(&system_id)
-                            .is_some(),
+                    has_preview,
                     preview_asset_key,
                 });
             }
