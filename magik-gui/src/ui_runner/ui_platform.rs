@@ -45,7 +45,7 @@ impl AnimationClock {
         self.fixed_time.clone()
     }
 
-    #[cfg(any(mister_bench_scenes, mister_video_scene))]
+    #[cfg(any(mister_bench_scenes, all(target_os = "linux", target_arch = "arm")))]
     pub(super) fn label(&self) -> &'static str {
         if self.fixed_time.is_some() {
             "fixed60"

@@ -90,7 +90,7 @@ else
 fi
 
 if echo "$NEEDED" | grep -E '^libav(codec|format|util|filter|device)|^libsw(resample|scale)' >/dev/null; then
-  echo "ERROR: FFmpeg is dynamically linked; video builds must use static project-local FFmpeg." >&2
+  echo "ERROR: FFmpeg is dynamically linked; frontend builds must use static project-local FFmpeg." >&2
   exit 1
 fi
 

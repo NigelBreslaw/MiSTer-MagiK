@@ -3,7 +3,6 @@
 
 use super::*;
 
-#[cfg(mister_video_scene)]
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 
 pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
@@ -13,19 +12,14 @@ pub(super) const VIDEO_IMAGE_RECT: DirtyRect = DirtyRect {
     y1: 510,
 };
 
-#[cfg(mister_video_scene)]
 const VIDEO_SOURCE_W: usize = crate::video_player::CANONICAL_VIDEO_WIDTH as usize;
-#[cfg(mister_video_scene)]
 const VIDEO_SOURCE_H: usize = crate::video_player::CANONICAL_VIDEO_HEIGHT as usize;
-#[cfg(mister_video_scene)]
 const VIDEO_SCALE_ANIMATION_RESPONSE: Duration = Duration::from_millis(200);
 
-#[cfg(mister_video_scene)]
 fn video_scale_spring_configuration() -> SpringConfiguration {
     SpringConfiguration::smooth_with_response(VIDEO_SCALE_ANIMATION_RESPONSE)
 }
 
-#[cfg(mister_video_scene)]
 pub(super) fn video_frame_rect(width: usize, height: usize) -> DirtyRect {
     DirtyRect {
         x0: VIDEO_IMAGE_RECT.x0,
@@ -35,14 +29,12 @@ pub(super) fn video_frame_rect(width: usize, height: usize) -> DirtyRect {
     }
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug)]
 struct VideoSizeAnimation {
     spring: SpringAnimation,
     updated_at: Duration,
 }
 
-#[cfg(mister_video_scene)]
 impl VideoSizeAnimation {
     fn new(doubled: bool) -> Self {
         let progress = if doubled { 1.0 } else { 0.0 };
@@ -92,19 +84,16 @@ impl VideoSizeAnimation {
     }
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Default)]
 struct VideoButtonEdge {
     previous_a: bool,
 }
 
-#[cfg(mister_video_scene)]
 struct VideoAutoToggle {
     interval: Option<Duration>,
     next: Duration,
 }
 
-#[cfg(mister_video_scene)]
 impl VideoAutoToggle {
     fn from_env() -> Self {
         let interval = std::env::var("MISTER_VIDEO_AUTO_TOGGLE_MS")
@@ -133,7 +122,6 @@ impl VideoAutoToggle {
     }
 }
 
-#[cfg(mister_video_scene)]
 impl VideoButtonEdge {
     fn a_pressed(&mut self, current_a: bool) -> bool {
         let pressed = current_a && !self.previous_a;
@@ -142,7 +130,6 @@ impl VideoButtonEdge {
     }
 }
 
-#[cfg(mister_video_scene)]
 struct VideoRgb565Scaler {
     pixels: Vec<u16>,
     x_map: Vec<usize>,
@@ -153,7 +140,6 @@ struct VideoRgb565Scaler {
     mapped_height: usize,
 }
 
-#[cfg(mister_video_scene)]
 impl Default for VideoRgb565Scaler {
     fn default() -> Self {
         Self {
@@ -168,7 +154,6 @@ impl Default for VideoRgb565Scaler {
     }
 }
 
-#[cfg(mister_video_scene)]
 impl VideoRgb565Scaler {
     fn scale<'a>(
         &'a mut self,
@@ -236,7 +221,6 @@ impl VideoRgb565Scaler {
     }
 }
 
-#[cfg(mister_video_scene)]
 fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
     debug_assert_eq!(
         std::mem::size_of::<Rgb565Pixel>(),
@@ -251,7 +235,6 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<Rgb565Pixel>(), words.len()) }
 }
 
-#[cfg(mister_video_scene)]
 fn present_video_frame_direct(
     disp: &mut MappedRgb565Framebuffer,
     pixels: &[u16],
@@ -273,7 +256,6 @@ fn present_video_frame_direct(
     }
 }
 
-#[cfg(mister_video_scene)]
 fn present_direct_video_frame(
     disp: &mut MappedRgb565Framebuffer,
     ui: &UiDisplay,
@@ -319,7 +301,6 @@ fn present_direct_video_frame(
     (rows, copied_rect)
 }
 
-#[cfg(mister_video_scene)]
 fn video_exposed_background_rects(
     previous: DirtyRect,
     current: DirtyRect,
@@ -339,7 +320,7 @@ fn video_exposed_background_rects(
     [right, bottom]
 }
 
-#[cfg(all(test, mister_video_scene))]
+#[cfg(test)]
 fn exposed_background_union(previous: DirtyRect, current: DirtyRect) -> Option<DirtyRect> {
     video_exposed_background_rects(previous, current)
         .into_iter()
@@ -347,7 +328,7 @@ fn exposed_background_union(previous: DirtyRect, current: DirtyRect) -> Option<D
         .reduce(DirtyRect::union)
 }
 
-#[cfg(all(test, mister_video_scene))]
+#[cfg(test)]
 fn growing_video_exposes_no_background(previous: DirtyRect, current: DirtyRect) -> bool {
     if current.x1 >= previous.x1 && current.y1 >= previous.y1 {
         exposed_background_union(previous, current).is_none()
@@ -356,7 +337,6 @@ fn growing_video_exposes_no_background(previous: DirtyRect, current: DirtyRect) 
     }
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct VideoFramePhases {
     frame_updated: bool,
@@ -374,7 +354,6 @@ pub(super) struct VideoFramePhases {
     audio_underrun: bool,
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct VideoWindowTotals {
     frames: u64,
@@ -396,7 +375,6 @@ pub(super) struct VideoWindowTotals {
     copy_px: u128,
 }
 
-#[cfg(mister_video_scene)]
 impl VideoWindowTotals {
     pub(super) fn record(
         &mut self,
@@ -450,7 +428,6 @@ impl VideoWindowTotals {
     }
 }
 
-#[cfg(mister_video_scene)]
 pub(super) fn run_video_playback_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -936,7 +913,6 @@ pub(super) fn run_video_playback_loop(
     }
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Default)]
 pub(super) struct AudioWindowStats {
     write_us: u128,
@@ -946,7 +922,6 @@ pub(super) struct AudioWindowStats {
     loop_count: u64,
 }
 
-#[cfg(mister_video_scene)]
 impl AudioWindowStats {
     pub(super) fn add(
         &mut self,
@@ -969,14 +944,12 @@ impl AudioWindowStats {
     }
 }
 
-#[cfg(mister_video_scene)]
 struct AudioWriteJob {
     audio: Vec<i16>,
     requested_frames: usize,
     loop_count: u64,
 }
 
-#[cfg(mister_video_scene)]
 struct AudioWriteResult {
     audio: Vec<i16>,
     requested_frames: usize,
@@ -986,14 +959,12 @@ struct AudioWriteResult {
     error: Option<String>,
 }
 
-#[cfg(mister_video_scene)]
 struct AudioWriteWorker {
     tx: Option<mpsc::SyncSender<AudioWriteJob>>,
     rx: mpsc::Receiver<AudioWriteResult>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(mister_video_scene)]
 impl AudioWriteWorker {
     fn start() -> Result<Self, String> {
         let mut sink = crate::mr_audio::MrAudioSink::open_default()?;
@@ -1064,7 +1035,6 @@ impl AudioWriteWorker {
     }
 }
 
-#[cfg(mister_video_scene)]
 fn drain_audio_write_results(
     audio_writer: &AudioWriteWorker,
     frame_worker: &crate::video_player::VideoFrameWorker,
@@ -1095,7 +1065,6 @@ fn drain_audio_write_results(
     }
 }
 
-#[cfg(mister_video_scene)]
 fn finish_audio_writer(
     audio_writer: AudioWriteWorker,
     frame_worker: &crate::video_player::VideoFrameWorker,
@@ -1131,7 +1100,6 @@ fn finish_audio_writer(
     }
 }
 
-#[cfg(mister_video_scene)]
 #[allow(clippy::too_many_arguments)]
 fn enqueue_audio_write(
     audio_writer: &AudioWriteWorker,
@@ -1177,7 +1145,6 @@ fn enqueue_audio_write(
     }
 }
 
-#[cfg(mister_video_scene)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_video_sample(
     phases: VideoFramePhases,
@@ -1246,7 +1213,6 @@ pub(super) fn record_video_sample(
     }
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct VideoCpuTicks {
     process: u64,
@@ -1254,7 +1220,6 @@ pub(super) struct VideoCpuTicks {
     decode: u64,
 }
 
-#[cfg(mister_video_scene)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct VideoCpuSample {
     main_pct: f64,
@@ -1262,14 +1227,12 @@ pub(super) struct VideoCpuSample {
     process_pct: f64,
 }
 
-#[cfg(mister_video_scene)]
 pub(super) struct VideoCpuSampler {
     ticks_per_sec: f64,
     start: Option<(Instant, VideoCpuTicks)>,
     last: Option<(Instant, VideoCpuTicks)>,
 }
 
-#[cfg(mister_video_scene)]
 impl VideoCpuSampler {
     pub(super) fn new() -> Self {
         let ticks_per_sec = linux_ticks_per_sec();
@@ -1313,7 +1276,6 @@ impl VideoCpuSampler {
     }
 }
 
-#[cfg(mister_video_scene)]
 fn cpu_sample_between(
     start: Instant,
     end: Instant,
@@ -1330,7 +1292,6 @@ fn cpu_sample_between(
     }
 }
 
-#[cfg(mister_video_scene)]
 fn linux_ticks_per_sec() -> f64 {
     #[cfg(target_os = "linux")]
     // SAFETY: sysconf(_SC_CLK_TCK) does not dereference Rust memory.
@@ -1343,7 +1304,6 @@ fn linux_ticks_per_sec() -> f64 {
     100.0
 }
 
-#[cfg(mister_video_scene)]
 fn read_video_cpu_ticks() -> Option<VideoCpuTicks> {
     let process = read_stat_ticks("/proc/self/stat")?;
     let main = read_stat_ticks(format!("/proc/self/task/{}/stat", std::process::id()))?;
@@ -1355,7 +1315,6 @@ fn read_video_cpu_ticks() -> Option<VideoCpuTicks> {
     })
 }
 
-#[cfg(mister_video_scene)]
 fn find_thread_ticks(name: &str) -> Option<u64> {
     let tasks = std::fs::read_dir("/proc/self/task").ok()?;
     for task in tasks.flatten() {
@@ -1368,7 +1327,6 @@ fn find_thread_ticks(name: &str) -> Option<u64> {
     None
 }
 
-#[cfg(mister_video_scene)]
 fn read_stat_ticks(path: impl AsRef<std::path::Path>) -> Option<u64> {
     let stat = std::fs::read_to_string(path).ok()?;
     let after_comm = stat.rsplit_once(") ")?.1;
@@ -1378,7 +1336,7 @@ fn read_stat_ticks(path: impl AsRef<std::path::Path>) -> Option<u64> {
     Some(utime + stime)
 }
 
-#[cfg(all(test, mister_video_scene))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

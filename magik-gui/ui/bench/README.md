@@ -18,7 +18,7 @@ kill -9 $(pidof mister-magik-fb) 2>/dev/null
 printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd
 ```
 
-With a production `--video` build, run `video_playback`. It accepts a single
+Every production build includes `video_playback`. It accepts a single
 looping file through `MISTER_VIDEO_PATH` or a filename-sorted `.mp4` folder
 playlist through `MISTER_VIDEO_DIR`. The folder default is
 `/media/fat/mister-magik/video-snaps/neogeo`, with the legacy
@@ -39,7 +39,7 @@ continuously from the current size and velocity.
 MiSTer, verifies remote hashes, and then swaps the playlist folder atomically so
 stale full-size MP4s do not remain live.
 
-Production `--video` supports only the maintained presentation paths:
+Production video supports only the maintained presentation paths:
 direct framebuffer blit, `MISTER_VIDEO_SCALE=source`, and
 `MISTER_VIDEO_SCALE=2x` for the explicit 320x240-to-640x480 pixel-doubled path.
 Removed lab comparisons include Slint-image upload, FFmpeg swscale conversion,
@@ -84,7 +84,7 @@ timers) · **anim** (Slint timers) · **slint-render** (software renderer) ·
 **custom-draw** (project-owned drawing such as arcade list layers) · **vsync**
 (`FBIO_WAITFORVSYNC`) · **fb-present** (dirty rect/rows → fb0). `fb-present` is
 also split into **cached-present** and **overlay-present** where applicable.
-Video builds also add **video-decode**, **video-scale**, **video-recv**,
+Video playback also adds **video-decode**, **video-scale**, **video-recv**,
 **video-image**, **video-blit**, **audio-decode**, **audio-resample**, and
 **audio-write**, plus queue depth, audio buffer frames, underrun, codec, size,
 and file metadata. **wall** = whole iteration.
@@ -124,5 +124,5 @@ Sync the local Neo Geo MP4 snaps and run only the video scene:
 ```bash
 scripts/reencode-video-snaps-cortex-a9.sh SOURCE_DIR
 scripts/sync-video-snaps.sh
-scripts/bench-toolchain.sh VIDEO-SNAPS --video --scene video_playback --video-scale source --replace-label
+scripts/bench-toolchain.sh VIDEO-SNAPS --scene video_playback --video-scale source --replace-label
 ```

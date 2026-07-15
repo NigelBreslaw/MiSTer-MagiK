@@ -9,7 +9,6 @@
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
-#   ./build-arm.sh --video      → release-device with production fast-path video
 #   ./build-arm.sh --diagnostics → release-device with diagnostics commands
 #   ./build-arm.sh --bench-tools → release-device with device benchmark commands
 #
@@ -83,7 +82,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       PROFILE=release-device-profile
       add_feature profile
       ;;
-    --video) add_feature video ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
     --catalog-builder)
@@ -107,7 +105,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
     -h|--help)
       sed -n '4,9p' ./build-arm.sh | sed 's/^# \{0,1\}//'
-      echo "  ./build-arm.sh --video       → include FFmpeg-backed video benchmark"
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
       echo "  ./build-arm.sh --catalog-builder → build only the Slint-free catalog builder"
@@ -195,7 +192,7 @@ if [ "${#FEATURES[@]}" -gt 0 ]; then
   BUILD_ARGS+=(--features "$FEATURE_LIST")
 fi
 
-if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
+if [ "$BIN_NAME" = "mister-magik-fb" ]; then
   "$PWD/scripts/build-minimal-ffmpeg.sh"
   export FFMPEG_DIR="/target/ffmpeg-minimal/armv7/dist"
   export PKG_CONFIG_PATH="/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"

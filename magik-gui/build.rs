@@ -15,7 +15,6 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
     println!("cargo:rustc-check-cfg=cfg(mister_experiments)");
-    println!("cargo:rustc-check-cfg=cfg(mister_video_scene)");
     println!("cargo:rustc-check-cfg=cfg(mister_arm_scalar_decimator)");
     let build_number = git_commit_count();
     let version = release_version(&build_number);
@@ -38,10 +37,6 @@ fn main() {
     let bench_scenes = std::env::var_os("CARGO_FEATURE_BENCH_SCENES").is_some();
     if bench_scenes {
         println!("cargo:rustc-cfg=mister_bench_scenes");
-    }
-    let video = std::env::var_os("CARGO_FEATURE_VIDEO").is_some();
-    if video {
-        println!("cargo:rustc-cfg=mister_video_scene");
     }
     let experiments = std::env::var_os("CARGO_FEATURE_EXPERIMENTS").is_some();
     if experiments {

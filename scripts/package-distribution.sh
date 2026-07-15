@@ -248,8 +248,8 @@ receipt_field() {
   local key="$1"
   awk -F '\t' -v key="$key" 'NR == 1 { for (i = 2; i <= NF; i++) { if ($i ~ ("^" key "=")) { sub("^[^=]*=", "", $i); print $i; exit } } }' "$BIN_RECEIPT"
 }
-if [[ "$BIN_FEATURES" != "ui,video" ]]; then
-  echo "ERROR: production distribution requires ui,video; got ${BIN_FEATURES:-missing}." >&2
+if [[ "$BIN_FEATURES" != "ui" ]]; then
+  echo "ERROR: production distribution requires the video-capable ui build; got ${BIN_FEATURES:-missing}." >&2
   exit 1
 fi
 if [[ ! -f "$BIN_RECEIPT" || "$(receipt_field build_number)" != "$BUILD_NUMBER" || "$(receipt_field version)" != "$VERSION" ]]; then
@@ -474,7 +474,7 @@ Menu_MiSTer source matching the shipped FPGA latch RBF:
 The MiSTer MagiK patch applied to that source is:
   https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)/fpga/menu-vblank-latch
 
-FFmpeg 8.1.2 source, used by the optional video build:
+FFmpeg 8.1.2 source, used by the production UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in:
   magik-gui/scripts/build-minimal-ffmpeg.sh

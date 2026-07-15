@@ -152,9 +152,8 @@ magik-gui/build-arm.sh --profile
 # → target/.../release-device-profile/mister-magik-fb
 # Run on device: scripts/cpu-flamegraph-scene.sh video_playback 10 VIDEO-CPU
 
-# Production video/audio benchmark build
-magik-gui/build-arm.sh --video
-# Builds/uses a minimal static FFmpeg under target/ffmpeg-minimal/armv7.
+# Every UI build includes production video/audio support and builds/uses a
+# minimal static FFmpeg under target/ffmpeg-minimal/armv7.
 # Keeps only the production paths: direct blit, source-size RGB565 conversion,
 # and optional 2x RGB565 expansion for already-half-size assets.
 # Default media folder on MiSTer: /media/fat/mister-magik/video-snaps/neogeo
@@ -216,7 +215,7 @@ MISTER_PPROF=1 MISTER_PPROF_OUT=/tmp/smoke.svg \
 
 ## Minimal FFmpeg
 
-Generate the alpha release's ARM `ui,video` Rust dependency inventory and the
+Generate the alpha release's ARM `ui` Rust dependency inventory and the
 bundled FFmpeg/font notices after changing `Cargo.lock` or release features:
 
 ```bash
@@ -236,10 +235,10 @@ scripts/package-alpha-release.sh [OUT_DIR]
 ```
 
 Pass `--skip-build` as the second argument only when the current ARM
-`ui,video` release binary has already been built and verified.
+`ui` release binary has already been built and verified.
 
-`--video` builds do not use a crate-managed broad FFmpeg builder. Instead,
-`build-arm.sh` runs `magik-gui/scripts/build-minimal-ffmpeg.sh`, then passes the
+UI builds do not use a crate-managed broad FFmpeg builder. Instead, `build-arm.sh`
+runs `magik-gui/scripts/build-minimal-ffmpeg.sh`, then passes the
 resulting static libraries into the selected ARM Rust build backend. The cross-rs
 backend sees FFmpeg under `/target/ffmpeg-minimal/armv7/dist`; the local Apple
 container backend sees the same host cache under
@@ -270,14 +269,11 @@ any C++-probing native crates see the same compiler family locally and in CI.
 
 GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
 
-The matrix covers the local build modes that matter:
-
-- `magik-gui/build-arm.sh --device`
-- `magik-gui/build-arm.sh --device --video`
+CI builds the single production frontend with `magik-gui/build-arm.sh --device`.
 
 CI runs on Linux, so `build-arm.sh` uses pinned `cross` 0.2.5 there. Each job
 uses `magik-gui/Dockerfile.cross-armv7` via `magik-gui/Cross.toml`, caches Cargo
-registry/git data, caches the minimal FFmpeg tree for video jobs, records
+registry/git data, caches the minimal FFmpeg tree, records
 `build/binary-size.tsv`, checks the ARM ELF dynamic dependencies with
 `magik-gui/scripts/check-arm-shared-libs.sh`, and uploads the binary plus size
 TSV as artifacts.
@@ -289,8 +285,9 @@ project-local minimal build.
 ## Config files
 
 - **`Cargo.toml`** — `[profile.release]` vs `[profile.release-device]` (inherits release, overrides LTO/CGU).
-- **Cargo feature `ui`** — enables Slint and the `mister-magik-ui` generated UI
-  crate; `build-arm.sh` passes it for every MiSTer binary build.
+- **Cargo feature `ui`** — enables Slint, the `mister-magik-ui` generated UI
+  crate, and mandatory ARM/Linux FFmpeg video support; `build-arm.sh` passes it
+  for every MiSTer frontend build.
 - **Cargo feature `bench-scenes`** — enables generated Slint benchmark scenes.
 - **Cargo feature `bench-tools`** — enables on-device benchmark commands and
   launcher benchmark automation that are intentionally absent from production
@@ -301,8 +298,6 @@ project-local minimal build.
   `scripts/bench-toolchain.sh` opt in.
 - **Cargo feature `diagnostics`** — enables low-level runtime probes that are
   intentionally absent from the production command surface.
-- **Cargo feature `video`** — enables the slim production video scene and static
-  FFmpeg fast path without generated bench/effect scenes or FFmpeg swscale.
 - **`MISTER_ARM_BUILD_BACKEND`** — local Apple-Silicon builds default to
   `apple-container`; set `cross` to force the CI/Linux Docker backend.
 - **`MISTER_UI_BUILD_SCOPE` / `--ui-scope`** — controls the generated UI build

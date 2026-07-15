@@ -120,21 +120,9 @@ jobs:
         run: cargo clippy --lib --no-default-features -- -D warnings
 
   arm-build:
-    name: ${{ matrix.name }}
+    name: release
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: release
-            args: --device
-            profile: release-device
-            features: none
-          - name: release-video
-            args: --device --video
-            profile: release-device
-            features: video
 
     steps:
       - name: Checkout
@@ -166,7 +154,6 @@ jobs:
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
       - name: Cache minimal FFmpeg
-        if: matrix.features == 'video'
         uses: actions/cache@v6
         with:
           path: magik-gui/target/ffmpeg-minimal/armv7
@@ -176,30 +163,29 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            magik-gui/target/${{ matrix.profile }}
-            magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}
-          key: target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+            magik-gui/target/release-device
+            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
+          key: target-arm-${{ runner.os }}-release-device-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
-            target-arm-${{ runner.os }}-${{ matrix.name }}-${{ matrix.profile }}-${{ matrix.features }}-
-            target-arm-${{ runner.os }}-${{ matrix.name }}-
+            target-arm-${{ runner.os }}-release-device-
 
       - name: Build ARM binary
-        run: magik-gui/build-arm.sh ${{ matrix.args }}
+        run: magik-gui/build-arm.sh --device
 
       - name: Check ARM shared libraries
-        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
-          name: mister-magik-fb-${{ matrix.name }}
-          path: magik-gui/target/armv7-unknown-linux-gnueabihf/${{ matrix.profile }}/mister-magik-fb
+          name: mister-magik-fb-release
+          path: magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
           if-no-files-found: error
 
       - name: Upload size history
         uses: actions/upload-artifact@v7
         with:
-          name: binary-size-${{ matrix.name }}
+          name: binary-size-release
           path: build/binary-size.tsv
           if-no-files-found: error
 

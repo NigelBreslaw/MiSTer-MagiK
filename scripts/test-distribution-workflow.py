@@ -29,7 +29,7 @@ required = (
     "- release",
     "fetch-depth: 0",
     "github.ref != 'refs/heads/main'",
-    "magik-gui/build-arm.sh --device --video",
+    "magik-gui/build-arm.sh --device",
     "environment:\n      name: publish-${{ github.event.inputs.release_channel }}",
     "contents: write",
     "gh release create",

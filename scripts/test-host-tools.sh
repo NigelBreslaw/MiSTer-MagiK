@@ -111,9 +111,9 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   mkdir -p "$package_tmp/out"
   printf '#!/bin/sh\nexit 0\n' >"$package_tmp/mister-magik-fb"
   chmod 755 "$package_tmp/mister-magik-fb"
-  printf 'ui,video\n' >"$package_tmp/mister-magik-fb.features"
+  printf 'ui\n' >"$package_tmp/mister-magik-fb.features"
   MISTER_MAGIK_BUILD_NUMBER=42 MISTER_MAGIK_VERSION=0.2.42 \
-    bash -c 'source "$1/scripts/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui,video all' \
+    bash -c 'source "$1/scripts/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui all' \
     _ "$ROOT" "$package_tmp/mister-magik-fb"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/mister-magik-catalog-builder"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
