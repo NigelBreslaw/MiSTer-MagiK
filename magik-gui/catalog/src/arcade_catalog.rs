@@ -305,6 +305,24 @@ impl ArcadeCatalog {
         launch_plans: Vec<StructuredLaunchPlan>,
         platform_kinds: HashMap<String, PlatformKind>,
     ) -> Self {
+        Self::new_with_deferred_text_indexes_and_platform_kinds_with_progress(
+            root,
+            games,
+            systems,
+            launch_plans,
+            platform_kinds,
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_deferred_text_indexes_and_platform_kinds_with_progress(
+        root: PathBuf,
+        games: Vec<ArcadeGameEntry>,
+        systems: Vec<GameSystemEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kinds: HashMap<String, PlatformKind>,
+        index_progress: Option<&mut dyn FnMut(usize, usize)>,
+    ) -> Self {
         Self::new_with_launch_plans_and_index_mode_and_platform_kinds(
             root,
             games,
@@ -312,6 +330,7 @@ impl ArcadeCatalog {
             launch_plans,
             CatalogIndexMode::DeferredText,
             platform_kinds,
+            index_progress,
         )
     }
 
@@ -330,6 +349,7 @@ impl ArcadeCatalog {
             launch_plans,
             index_mode,
             platform_kinds,
+            None,
         )
     }
 
@@ -340,12 +360,18 @@ impl ArcadeCatalog {
         launch_plans: Vec<StructuredLaunchPlan>,
         index_mode: CatalogIndexMode,
         mut platform_kinds: HashMap<String, PlatformKind>,
+        index_progress: Option<&mut dyn FnMut(usize, usize)>,
     ) -> Self {
         sort_systems_by_title(&mut systems);
         fill_missing_platform_kinds(&systems, &mut platform_kinds);
         let platform_kinds = Arc::new(platform_kinds);
-        let indexes =
-            build_arcade_catalog_indexes(&games, &platform_kinds, launch_plans, index_mode);
+        let indexes = build_arcade_catalog_indexes(
+            &games,
+            &platform_kinds,
+            launch_plans,
+            index_mode,
+            index_progress,
+        );
         Self {
             root,
             games: Arc::new(games),
@@ -405,6 +431,7 @@ impl ArcadeCatalog {
             launch_plans,
             index_mode,
             platform_kinds,
+            None,
         )
     }
 
@@ -859,6 +886,7 @@ fn build_arcade_catalog_indexes(
     platform_kinds: &HashMap<String, PlatformKind>,
     launch_plans: Vec<StructuredLaunchPlan>,
     mode: CatalogIndexMode,
+    mut index_progress: Option<&mut dyn FnMut(usize, usize)>,
 ) -> ArcadeCatalogIndexes {
     let mut games_by_system: HashMap<String, Vec<usize>> = HashMap::new();
     let mut games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>> = HashMap::new();
@@ -870,6 +898,10 @@ fn build_arcade_catalog_indexes(
         CatalogIndexMode::DeferredText => ArcadeTextIndexes::default(),
     };
 
+    let total = games.len();
+    if let Some(report) = index_progress.as_deref_mut() {
+        report(0, total);
+    }
     for (idx, game) in games.iter().enumerate() {
         for system_id in game_collection_ids(game, platform_kinds)
             .into_iter()
@@ -942,6 +974,9 @@ fn build_arcade_catalog_indexes(
                     preview_indexes.push(idx);
                 }
             }
+        }
+        if let Some(report) = index_progress.as_deref_mut() {
+            report(idx + 1, total);
         }
     }
 

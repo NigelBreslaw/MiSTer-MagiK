@@ -71,17 +71,8 @@ pub(super) fn start_library_catalog_worker(
             apply_runtime_thread_policy(execution_mode.thread_role());
             let progress_tx = tx.clone();
             let mut progress_coalescer = CatalogProgressCoalescer::default();
-            let mut progress = move |title: &str, detail: &str| {
-                let phase = library_db::CatalogProgressPhase::from_display_title(title);
-                let percent = library_db::catalog_progress_percent_from_display(title, detail);
-                if !progress_coalescer.should_send(phase, title, percent) {
-                    return;
-                }
-                let _ = progress_tx.send(CatalogWorkerMessage::Progress {
-                    title: title.to_string(),
-                    detail: detail.to_string(),
-                    percent,
-                });
+            let mut progress = |title: &str, detail: &str| {
+                send_catalog_progress_text(&progress_tx, &mut progress_coalescer, title, detail);
             };
             let scan_event_tx = tx.clone();
             let mut scan_events = move |event: library_db::LibraryScanEvent| match event {
@@ -345,7 +336,14 @@ pub(super) fn start_library_catalog_worker(
                     | CatalogWorkerPlan::ForceBuild
                     | CatalogWorkerPlan::FreshBuild
             ) {
-                run_catalog_builder_subprocess(&root, plan, execution_mode, &tx);
+                drop(progress);
+                run_catalog_builder_subprocess(
+                    &root,
+                    plan,
+                    execution_mode,
+                    &tx,
+                    &mut progress_coalescer,
+                );
                 return;
             }
             if plan == CatalogWorkerPlan::ForceBuild {
@@ -358,6 +356,21 @@ pub(super) fn start_library_catalog_worker(
                         Ok(artifact) => artifact,
                         Err(e) => {
                             crate::ui_errln!("library scan failed: {e}");
+                            send_catalog_progress(
+                                &tx,
+                                library_db::CatalogProgress::library_scan_failed(e),
+                            );
+                            return;
+                        }
+                    };
+                    let (ram_artifact, catalog, timing) = match ram_artifact
+                        .complete_coverage_audit_and_catalog_foreground_with_progress(
+                            &root,
+                            &mut progress,
+                        ) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            crate::ui_errln!("library catalog preparation failed: {e}");
                             send_catalog_progress(
                                 &tx,
                                 library_db::CatalogProgress::library_scan_failed(e),
@@ -379,11 +392,17 @@ pub(super) fn start_library_catalog_worker(
                             stats.entries
                         ),
                     });
-                    let catalog_t = Instant::now();
-                    let catalog = ram_artifact.catalog(&root);
-                    let load_us = catalog_t.elapsed().as_micros() as u64;
+                    let load_us = timing.catalog_us;
                     let catalog_len = catalog.len();
                     let projection_catalog = catalog.clone();
+                    progress(
+                        "Indexing library",
+                        "Creating compressed navigation catalog…",
+                    );
+                    progress(
+                        "Indexing library",
+                        &format!("Opening library — {catalog_len} games"),
+                    );
                     send_ready_catalog(
                         &tx,
                         catalog,
@@ -402,6 +421,16 @@ pub(super) fn start_library_catalog_worker(
                         name: "catalog_worker_ram_catalog".to_string(),
                         detail: format!("games={catalog_len} catalog_us={load_us}"),
                     });
+                    for (name, elapsed_us) in [
+                        ("builder_catalog_metadata", timing.metadata_us),
+                        ("builder_catalog_projection_rows", timing.projection_rows_us),
+                        ("builder_catalog_indexes", timing.indexes_us),
+                    ] {
+                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                            name: name.to_string(),
+                            detail: format!("elapsed_us={elapsed_us}"),
+                        });
+                    }
                     send_catalog_progress(
                         &tx,
                         library_db::CatalogProgress::saving_before_opening_launcher(),
@@ -582,6 +611,7 @@ fn run_catalog_builder_subprocess(
     plan: CatalogWorkerPlan,
     execution_mode: CatalogExecutionMode,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
+    progress_coalescer: &mut CatalogProgressCoalescer,
 ) {
     let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN").unwrap_or_else(|_| {
         mister_magik_catalog::device_layout::current_app_path("mister-magik-catalog-builder")
@@ -672,12 +702,7 @@ fn run_catalog_builder_subprocess(
                 break;
             }
             CatalogBuilderEvent::Progress { title, detail, .. } => {
-                let percent = library_db::catalog_progress_percent_from_display(&title, &detail);
-                let _ = tx.send(CatalogWorkerMessage::Progress {
-                    title,
-                    detail,
-                    percent,
-                });
+                send_catalog_progress_text(tx, progress_coalescer, &title, &detail);
             }
             CatalogBuilderEvent::SystemDiscovered { system_id, .. } => {
                 let _ = tx.send(CatalogWorkerMessage::SystemDiscovered { system_id });
@@ -986,6 +1011,7 @@ struct CatalogProgressCoalescer {
     last_sent: Option<Instant>,
     last_phase: Option<library_db::CatalogProgressPhase>,
     last_title: String,
+    last_detail: String,
     last_percent: i32,
 }
 
@@ -994,10 +1020,11 @@ impl CatalogProgressCoalescer {
         &mut self,
         phase: library_db::CatalogProgressPhase,
         title: &str,
+        detail: &str,
         percent: i32,
     ) -> bool {
         let now = Instant::now();
-        let phase_changed = self.last_sent.is_none()
+        let immediate = self.last_sent.is_none()
             || self.last_phase != Some(phase)
             || self.last_title != title
             || self.last_percent != percent
@@ -1006,16 +1033,36 @@ impl CatalogProgressCoalescer {
             .last_sent
             .map(|last| now.duration_since(last))
             .unwrap_or(Duration::MAX);
-        if !phase_changed && elapsed < Duration::from_millis(250) {
+        if !immediate && elapsed < Duration::from_millis(250) {
             return false;
         }
         self.last_sent = Some(now);
         self.last_phase = Some(phase);
         self.last_title.clear();
         self.last_title.push_str(title);
+        self.last_detail.clear();
+        self.last_detail.push_str(detail);
         self.last_percent = percent;
         true
     }
+}
+
+fn send_catalog_progress_text(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    coalescer: &mut CatalogProgressCoalescer,
+    title: &str,
+    detail: &str,
+) {
+    let phase = library_db::CatalogProgressPhase::from_display_title(title);
+    let percent = library_db::catalog_progress_percent_from_display(title, detail);
+    if !coalescer.should_send(phase, title, detail, percent) {
+        return;
+    }
+    let _ = tx.send(CatalogWorkerMessage::Progress {
+        title: title.to_string(),
+        detail: detail.to_string(),
+        percent,
+    });
 }
 
 fn send_catalog_progress(
@@ -1475,17 +1522,20 @@ mod tests {
         assert!(coalescer.should_send(
             library_db::CatalogProgressPhase::ClassifyingLibrary,
             "Classifying library",
+            "Classifying 1 games",
             -1
         ));
         assert!(!coalescer.should_send(
             library_db::CatalogProgressPhase::ClassifyingLibrary,
             "Classifying library",
+            "Classifying 1 games",
             -1
         ));
         coalescer.last_sent = Some(Instant::now() - Duration::from_millis(300));
         assert!(coalescer.should_send(
             library_db::CatalogProgressPhase::ClassifyingLibrary,
             "Classifying library",
+            "Classifying 1 games",
             -1
         ));
     }
@@ -1496,17 +1546,44 @@ mod tests {
         assert!(coalescer.should_send(
             library_db::CatalogProgressPhase::ClassifyingLibrary,
             "Classifying library",
+            "Classifying 1 games",
             -1
         ));
         assert!(coalescer.should_send(
             library_db::CatalogProgressPhase::IndexingLibrary,
             "Indexing library",
+            "Resolving playable games — 1 of 2",
             90
         ));
         assert!(coalescer.should_send(
             library_db::CatalogProgressPhase::LoadingLibrary,
             "Loading library",
+            "Opening library — 2 games",
             100
+        ));
+    }
+
+    #[test]
+    fn catalog_progress_coalescer_throttles_changed_counter_details_but_keeps_heartbeats() {
+        let mut coalescer = CatalogProgressCoalescer::default();
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::IndexingLibrary,
+            "Indexing library",
+            "Resolving playable games — 250 of 500",
+            -1,
+        ));
+        assert!(!coalescer.should_send(
+            library_db::CatalogProgressPhase::IndexingLibrary,
+            "Indexing library",
+            "Resolving playable games — 251 of 500",
+            -1,
+        ));
+        coalescer.last_sent = Some(Instant::now() - Duration::from_secs(1));
+        assert!(coalescer.should_send(
+            library_db::CatalogProgressPhase::IndexingLibrary,
+            "Indexing library",
+            "Resolving playable games — 250 of 500 — Still working… 1s",
+            -1,
         ));
     }
 

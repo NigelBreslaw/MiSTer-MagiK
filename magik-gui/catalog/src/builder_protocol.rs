@@ -154,4 +154,53 @@ mod tests {
             event
         );
     }
+
+    #[test]
+    fn final_projection_progress_events_round_trip_before_catalog_ready() {
+        let protocol = CATALOG_BUILDER_PROTOCOL_VERSION;
+        let events = vec![
+            CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Indexing library".into(),
+                detail: "Preparing library — 53,458 discoveries".into(),
+            },
+            CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Indexing library".into(),
+                detail: "Resolving playable games — 51,101 of 53,458".into(),
+            },
+            CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Indexing library".into(),
+                detail: "Building launcher indexes — 51,101 of 51,101".into(),
+            },
+            CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Indexing library".into(),
+                detail: "Creating compressed navigation catalog…".into(),
+            },
+            CatalogBuilderEvent::Progress {
+                protocol,
+                title: "Indexing library".into(),
+                detail: "Opening library — 51,101 games".into(),
+            },
+            CatalogBuilderEvent::CatalogReady {
+                protocol,
+                snapshot_path: "/tmp/catalog.nav.lz4b".into(),
+                games: 51_101,
+                load_us: 28_000_000,
+            },
+        ];
+        let decoded = events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .map(|line| serde_json::from_str::<CatalogBuilderEvent>(&line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(decoded, events);
+        assert!(matches!(
+            decoded.last(),
+            Some(CatalogBuilderEvent::CatalogReady { .. })
+        ));
+    }
 }

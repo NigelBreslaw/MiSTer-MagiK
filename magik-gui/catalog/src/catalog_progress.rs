@@ -125,9 +125,7 @@ impl CatalogProgress {
     pub fn saving_finalizing() -> Self {
         Self {
             phase: CatalogProgressPhase::SavingLibrary,
-            detail: CatalogProgressDetail::Static(
-                "Finalizing catalog views and search indexes...",
-            ),
+            detail: CatalogProgressDetail::Static("Finalizing catalog views and search indexes..."),
         }
     }
 
@@ -160,15 +158,13 @@ impl CatalogProgress {
         let detail = match &self.detail {
             CatalogProgressDetail::Static(detail) => Cow::Borrowed(*detail),
             CatalogProgressDetail::Owned(detail) => Cow::Borrowed(detail.as_str()),
-            CatalogProgressDetail::GamesFound(count) => {
-                Cow::Owned(format!("Games found: {count}"))
-            }
+            CatalogProgressDetail::GamesFound(count) => Cow::Owned(format!("Games found: {count}")),
             CatalogProgressDetail::IndexSummary { games, archives } => {
                 Cow::Owned(format!("Writing {games} games, {archives} archives..."))
             }
-            CatalogProgressDetail::SqliteImport { written, total } => Cow::Owned(format!(
-                "Writing {written} of {total} games into SQLite..."
-            )),
+            CatalogProgressDetail::SqliteImport { written, total } => {
+                Cow::Owned(format!("Writing {written} of {total} games into SQLite..."))
+            }
             CatalogProgressDetail::SqlitePublish { done, total } => {
                 Cow::Owned(format!("Saving {done} of {total} bytes to disk..."))
             }
@@ -205,10 +201,7 @@ impl CatalogProgressDisplay<'_> {
     }
 }
 
-pub(crate) fn report_catalog_progress(
-    progress: &mut ProgressCallback<'_>,
-    event: CatalogProgress,
-) {
+pub(crate) fn report_catalog_progress(progress: &mut ProgressCallback<'_>, event: CatalogProgress) {
     let display = event.display();
     if let Some(report) = progress.as_mut() {
         report(display.title(), display.detail());
@@ -410,6 +403,13 @@ mod tests {
         );
         assert_eq!(
             catalog_progress_percent_from_display("Mystery phase", "Saving 5 of 10 bytes"),
+            -1
+        );
+        assert_eq!(
+            catalog_progress_percent_from_display(
+                "Indexing library",
+                "Resolving playable games — 250 of 500 (still working: 3s)"
+            ),
             -1
         );
     }
