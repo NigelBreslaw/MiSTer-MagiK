@@ -24,7 +24,8 @@ Production boot stays compatible with stock MiSTer:
 3. `[MiSTer] main=MiSTer_MagiK` or `MiSTer_MagiKDev` re-execs the selected
    MagiK Main fork.
 4. The fork selects `mister-magik/` or `mister-magik-dev/` from its own
-   executable name, verifies that layout's `platform-v1.manifest`, and redirects
+   executable name, prefers that layout's `platform-v2.manifest` (with v1 as an
+   installed-system compatibility fallback), and redirects
    an empty/default Menu boot to the manifest-owned production RBF at
    the Menu boot to that layout's `fpga/menu-magik-vblank-latch.rbf`.
 5. The fork initializes HDMI/video through the normal Main path.
@@ -47,7 +48,7 @@ to stock behavior without rebooting repeatedly.
 
 Each manifest binds its layout's fixed installed paths, SHA-256 hashes, Main/MagiK/Menu source
 revisions, and the framebuffer platform-contract hash for Main, the Rust
-frontend, the matching catalog builder, the scanout module and metadata, and the
+frontend, the scanout module and metadata, and the
 latch RBF and metadata. Deployment uploads and verifies the complete inactive
 bundle, syncs it, and activates the manifest last. Distribution packages
 contain only the public layout and deliberately exclude root `menu.rbf`, the
@@ -553,8 +554,8 @@ tracking, and CI details. Do not duplicate those details here.
 - Continue controller mapping and hot-plug polish.
 - Keep the fork patch surface small and documented in `../Main_MiSTer`
   `MAGIK_PATCHSET.md`.
-Catalog scanning, validation, and database publication are owned by the
-Slint-free `mister-magik-catalog-builder` subprocess. The frontend retains only
-catalog hydration/navigation behavior and translates the builder's versioned
-JSON-lines event stream into launcher lifecycle events. This keeps catalog
-optimization builds independently deployable without relinking Slint.
+Catalog scanning, validation, and database publication run inside
+`mister-magik-fb` through `mister_magik_catalog::builder_service`. The launcher
+translates typed builder events directly into lifecycle events. The standalone
+`mister-magik-catalog-builder` is a developer-only adapter over the same service
+for isolated optimization profiling; it is not a production artifact.

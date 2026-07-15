@@ -10,9 +10,7 @@ MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/magik-layout.sh"
 magik_layout_select dev
 REMOTE_BIN="$MISTER_MAGIK_BIN"
-REMOTE_CATALOG_BUILDER="$MISTER_MAGIK_CATALOG_BUILDER"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_REFRESH_LOG="/tmp/mister-magik-library-refresh.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
 REMOTE_SUMMARY="$MISTER_MAGIK_APP_DIR/library.summary.json"
@@ -41,7 +39,7 @@ source "$HERE/scripts/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--deploy-catalog|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample]
        scripts/profile-first-scan.sh --self-test
 
 Deletes the launcher catalog database and summary projection, reboots the
@@ -95,7 +93,7 @@ first_scan_commit_is_dirty() {
 }
 
 first_scan_extract_complete_pair() {
-  local builder_log="$1" launcher_log="$2" events_log="${3:-}"
+  local launcher_log="$1" events_log="${2:-}"
   local ready_ms="" saved_ms="" ready_us="" saved_us="" event_pair="" event_pid="" event_boot_epoch_ms=""
   if [[ -f "$events_log" ]]; then
     if ! event_pair="$(first_scan_runtime_event_pair "$events_log")"; then
@@ -103,9 +101,9 @@ first_scan_extract_complete_pair() {
     fi
     IFS=$'\t' read -r ready_ms saved_ms event_pid event_boot_epoch_ms <<<"$event_pair"
   fi
-  if [[ -f "$builder_log" ]]; then
-    ready_us="$(sed -n 's/.*"name":"builder_catalog_ready","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$builder_log" | tail -1)"
-    saved_us="$(sed -n 's/.*"name":"builder_persisted","detail":"elapsed_us=\([0-9][0-9]*\).*/\1/p' "$builder_log" | tail -1)"
+  if [[ -f "$launcher_log" ]]; then
+    ready_us="$(awk -F '\t' '$1 == "startup_timing" && $2 == "builder_catalog_ready" { value=$4; sub(/^.*elapsed_us=/, "", value); sub(/ .*/, "", value); latest=value } END { print latest }' "$launcher_log")"
+    saved_us="$(awk -F '\t' '$1 == "startup_timing" && $2 == "builder_persisted" { value=$4; sub(/^.*elapsed_us=/, "", value); sub(/ .*/, "", value); latest=value } END { print latest }' "$launcher_log")"
   fi
   if [[ "$ready_ms" =~ ^[0-9]+$ && "$saved_ms" =~ ^[0-9]+$ ]]; then
     printf '%s\t%s\tlauncher-events\t%s\t%s\n' "$ready_ms" "$saved_ms" "${ready_us:-missing}" "${saved_us:-missing}"
@@ -119,11 +117,6 @@ first_scan_extract_complete_pair() {
   fi
   if [[ "$ready_ms" =~ ^[0-9]+$ && "$saved_ms" =~ ^[0-9]+$ ]]; then
     printf '%s\t%s\tlauncher-log\t%s\t%s\n' "$ready_ms" "$saved_ms" "${ready_us:-missing}" "${saved_us:-missing}"
-    return 0
-  fi
-  if [[ "$ready_us" =~ ^[0-9]+$ && "$saved_us" =~ ^[0-9]+$ ]]; then
-    printf '%s\t%s\tstandalone-builder\t%s\t%s\n' \
-      "$(( (ready_us + 500) / 1000 ))" "$(( (saved_us + 500) / 1000 ))" "$ready_us" "$saved_us"
     return 0
   fi
   return 1
@@ -211,113 +204,56 @@ with source:
 PY
 }
 
-first_scan_normalize_builder_timings() {
-  local builder_log="$1"
-  python3 - "$builder_log" <<'PY'
-import json
-import re
-import sys
-
-path = sys.argv[1]
-metric_keys = {
-    "builder_deferred_audit_stamp": "elapsed_us",
-    "builder_catalog_projection": "elapsed_us",
-    "builder_catalog_prepare_overlap": "wall_us",
-}
-try:
-    source = open(path, encoding="utf-8", errors="replace")
-except OSError:
-    raise SystemExit(0)
-with source:
-    for line in source:
-        try:
-            row = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if row.get("event") != "timing":
-            continue
-        name = str(row.get("name") or "")
-        metric_key = metric_keys.get(name)
-        if metric_key is None:
-            continue
-        detail = str(row.get("detail") or "")
-        match = re.search(rf"(?:^|\s){re.escape(metric_key)}=(\d+)(?:\s|$)", detail)
-        if match is None:
-            continue
-        elapsed_us = int(match.group(1))
-        elapsed_ms = (elapsed_us + 500) // 1000
-        print(
-            f"startup_timing\t{name}\t{elapsed_ms}ms\t"
-            f"{detail} source=standalone-builder"
-        )
-PY
-}
-
 first_scan_write_canonical_log() {
-  local output="$1" builder_log="$2" launcher_log="$3" events_log="${4:-}"
-  local pair ready_ms saved_ms marker_source ready_us saved_us normalized_events normalized_builder_timings
-  pair="$(first_scan_extract_complete_pair "$builder_log" "$launcher_log" "$events_log")" || return 1
+  local output="$1" launcher_log="$2" events_log="${3:-}"
+  local pair ready_ms saved_ms marker_source ready_us saved_us normalized_events
+  pair="$(first_scan_extract_complete_pair "$launcher_log" "$events_log")" || return 1
   IFS=$'\t' read -r ready_ms saved_ms marker_source ready_us saved_us <<<"$pair"
   normalized_events="$(mktemp)"
-  normalized_builder_timings="$(mktemp)"
   first_scan_normalize_events "$events_log" >"$normalized_events"
-  first_scan_normalize_builder_timings "$builder_log" >"$normalized_builder_timings"
   {
-    if [[ "$marker_source" == launcher-* ]]; then
-      printf 'startup_timing\tlibrary_ready\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$ready_ms" "$marker_source" "$ready_ms" "$ready_us"
-      printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$saved_ms" "$marker_source" "$saved_ms" "$saved_us"
-    else
-      printf 'startup_timing\tlibrary_ready\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$ready_ms" "$ready_us"
-      printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=standalone-builder elapsed_us=%s\n' "$saved_ms" "$saved_us"
-    fi
-    cat "$normalized_builder_timings"
-    awk -F '\t' '!($1 == "startup_timing" && ($2 == "library_ready" || $2 == "library_db_saved" || $2 == "builder_deferred_audit_stamp" || $2 == "builder_catalog_projection" || $2 == "builder_catalog_prepare_overlap"))' "$builder_log" "$launcher_log" "$normalized_events"
+    printf 'startup_timing\tlibrary_ready\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$ready_ms" "$marker_source" "$ready_ms" "${ready_us:-missing}"
+    printf 'startup_timing\tlibrary_db_saved\t%sms\tsource=%s elapsed_ms=%s builder_elapsed_us=%s\n' "$saved_ms" "$marker_source" "$saved_ms" "${saved_us:-missing}"
+    awk -F '\t' '!($1 == "startup_timing" && ($2 == "library_ready" || $2 == "library_db_saved"))' "$launcher_log" "$normalized_events"
   } >"$output"
-  rm -f "$normalized_events" "$normalized_builder_timings"
+  rm -f "$normalized_events"
 }
 
 first_scan_marker_self_test() {
-  local tmp builder launcher events combined pair
+  local tmp launcher events combined pair
   tmp="$(mktemp -d)"
-  builder="$tmp/builder.log"
   launcher="$tmp/launcher.log"
   events="$tmp/events.jsonl"
   combined="$tmp/combined.log"
-  printf '%s\n' '{"event":"timing","name":"builder_catalog_ready","detail":"elapsed_us=1000500"}' \
-    '{"event":"timing","name":"builder_deferred_audit_stamp","detail":"elapsed_us=12500 audit_us=11000 stamp_us=1500 audit_rows=4"}' \
-    '{"event":"timing","name":"builder_catalog_projection","detail":"elapsed_us=23500 games=10"}' \
-    '{"event":"timing","name":"builder_catalog_prepare_overlap","detail":"wall_us=24000 audit_stamp_worker_us=12500 audit_us=11000 stamp_us=1500 catalog_us=23500 overlapped_us=12000 mode=scoped-dual-core"}' \
-    '{"event":"timing","name":"builder_persisted","detail":"elapsed_us=2000500"}' >"$builder"
-  : >"$launcher"
-  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
-  [[ "$pair" == $'1001\t2001\tstandalone-builder\t1000500\t2000500' ]]
-  printf 'startup_timing\tlibrary_ready\t1100ms\tgames=10\nstartup_timing\tlibrary_db_saved\t2200ms\tbytes=20\n' >"$launcher"
-  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  printf '%s\n' \
+    $'startup_timing\tbuilder_catalog_ready\t1001ms\telapsed_us=1000500 snapshot_us=20' \
+    $'startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 audit_us=11000 stamp_us=1500 audit_rows=4' \
+    $'startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 games=10' \
+    $'startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=24000 audit_stamp_worker_us=12500 audit_us=11000 stamp_us=1500 catalog_us=23500 overlapped_us=12000 mode=scoped-dual-core' \
+    $'startup_timing\tbuilder_persisted\t2001ms\telapsed_us=2000500' \
+    $'startup_timing\tlibrary_ready\t1100ms\tgames=10' \
+    $'startup_timing\tlibrary_db_saved\t2200ms\tbytes=20' >"$launcher"
+  pair="$(first_scan_extract_complete_pair "$launcher" "$events")"
   [[ "$pair" == $'1100\t2200\tlauncher-log\t1000500\t2000500' ]]
   printf '%s\n' \
     '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
     '{"ts_unix_ms":102400,"ts_boot_ms":2400,"pid":42,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
-  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
+  pair="$(first_scan_extract_complete_pair "$launcher" "$events")"
   [[ "$pair" == $'1200\t2400\tlauncher-events\t1000500\t2000500' ]]
-  first_scan_write_canonical_log "$combined" "$builder" "$launcher" "$events"
+  first_scan_write_canonical_log "$combined" "$launcher" "$events"
   [[ "$(grep -c $'^startup_timing\tlibrary_ready\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tlibrary_db_saved\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tbuilder_deferred_audit_stamp\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tbuilder_catalog_projection\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tbuilder_catalog_prepare_overlap\t' "$combined")" == "1" ]]
   grep -q $'^startup_timing\tlibrary_ready\t1200ms\tsource=launcher-events elapsed_ms=1200 builder_elapsed_us=1000500$' "$combined"
-  grep -q $'^startup_timing\tbuilder_deferred_audit_stamp\t13ms\telapsed_us=12500 .*source=standalone-builder$' "$combined"
-  grep -q $'^startup_timing\tbuilder_catalog_projection\t24ms\telapsed_us=23500 .*source=standalone-builder$' "$combined"
-  grep -q $'^startup_timing\tbuilder_catalog_prepare_overlap\t24ms\twall_us=24000 .*source=standalone-builder$' "$combined"
-  if grep -q $'source=launcher-.* elapsed_us=' "$combined"; then
-    rm -rf "$tmp"
-    echo "first-scan canonical log mislabeled builder microseconds as the launcher clock" >&2
-    return 1
-  fi
+  grep -q $'^startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 ' "$combined"
+  grep -q $'^startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 ' "$combined"
+  grep -q $'^startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=24000 ' "$combined"
   printf '%s\n' \
     '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
     '{"ts_unix_ms":102400,"ts_boot_ms":2400,"pid":43,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
-  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+  if first_scan_extract_complete_pair "$launcher" "$events" >/dev/null; then
     rm -rf "$tmp"
     echo "first-scan marker parser accepted runtime events from two launcher PIDs" >&2
     return 1
@@ -325,19 +261,16 @@ first_scan_marker_self_test() {
   printf '%s\n' \
     '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
     '{"ts_unix_ms":202400,"ts_boot_ms":2400,"pid":42,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
-  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+  if first_scan_extract_complete_pair "$launcher" "$events" >/dev/null; then
     rm -rf "$tmp"
     echo "first-scan marker parser accepted runtime events from two boot epochs" >&2
     return 1
   fi
   printf 'startup_timing\tlibrary_ready\t1100ms\tgames=10\n' >"$launcher"
   : >"$events"
-  pair="$(first_scan_extract_complete_pair "$builder" "$launcher" "$events")"
-  [[ "$pair" == $'1001\t2001\tstandalone-builder\t1000500\t2000500' ]]
-  printf '%s\n' '{"event":"timing","name":"builder_catalog_ready","detail":"elapsed_us=1000500"}' >"$builder"
-  if first_scan_extract_complete_pair "$builder" "$launcher" "$events" >/dev/null; then
+  if first_scan_extract_complete_pair "$launcher" "$events" >/dev/null; then
     rm -rf "$tmp"
-    echo "first-scan marker parser accepted two incomplete clocks" >&2
+    echo "first-scan marker parser accepted an incomplete embedded launcher clock" >&2
     return 1
   fi
   rm -rf "$tmp"
@@ -406,7 +339,7 @@ first_scan_self_test() {
 }
 
 first_scan_thread_sample_process() {
-  printf 'mister-magik-catalog-builder\n'
+  printf 'mister-magik-fb\n'
 }
 
 first_scan_thread_sample_has_builder_evidence() {
@@ -444,7 +377,7 @@ first_scan_has_catalog_audit_policy_evidence() {
 
 first_scan_thread_sample_self_test() {
   local tmp sample policy
-  [[ "$(first_scan_thread_sample_process)" == "mister-magik-catalog-builder" ]]
+  [[ "$(first_scan_thread_sample_process)" == "mister-magik-fb" ]]
   tmp="$(mktemp -d)"
   sample="$tmp/sample.tsv"
   printf '%s\n' \
@@ -534,7 +467,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --self-test) first_scan_self_test; exit 0 ;;
     --deploy-device) DEPLOY="device"; shift ;;
-    --deploy-catalog) DEPLOY="catalog"; shift ;;
     --skip-build) DEPLOY="skip"; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
@@ -586,7 +518,6 @@ fi
 
 case "$DEPLOY" in
   device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher ;;
-  catalog) "$HERE/scripts/deploy-catalog-builder.sh" ;;
   skip) : ;;
 esac
 
@@ -615,17 +546,14 @@ fi
 echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
-local_refresh_log="$(mktemp)"
 local_events="$(mktemp)"
 combined_log="$(mktemp)"
 raw_log="$OUT_DIR/${LABEL}-launcher.log"
-raw_refresh_log="$OUT_DIR/${LABEL}-catalog-builder.log"
 raw_events="$OUT_DIR/${LABEL}-events.jsonl"
 artifact_report="$OUT_DIR/${LABEL}-artifacts.tsv"
 cleanup_report="$OUT_DIR/${LABEL}-cleanup.txt"
 launcher_suspended=0
 binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-catalog_builder_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 deployment_state="verified"
 deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_BIN" || true)"
 deployed_sha256="${deployed_sha256:-missing}"
@@ -634,15 +562,7 @@ if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" ui 
   echo "first-scan launcher identity verification failed local=$local_sha256 deployed=$deployed_sha256 features=$(bench_context_binary_features "$binary_path") expected_features=ui" >&2
   exit 1
 fi
-catalog_builder_deployed_sha256="$(bench_context_remote_sha256 "$MISTER" "$REMOTE_CATALOG_BUILDER" || true)"
-catalog_builder_deployed_sha256="${catalog_builder_deployed_sha256:-missing}"
-catalog_builder_local_sha256="$(bench_context_sha256_file "$catalog_builder_path")"
-if ! bench_context_require_binary_contract "$catalog_builder_path" "$catalog_builder_deployed_sha256" builder release-device all; then
-  echo "first-scan catalog-builder identity verification failed local=$catalog_builder_local_sha256 deployed=$catalog_builder_deployed_sha256 features=$(bench_context_binary_features "$catalog_builder_path") expected_features=builder" >&2
-  exit 1
-fi
 binary_fields="$(bench_context_binary_fields release-device launcher ui "$binary_path" production "$deployment_state" "$deployed_sha256")"
-catalog_builder_fields="$(bench_context_binary_fields release-device all builder "$catalog_builder_path" production "$deployment_state" "$catalog_builder_deployed_sha256")"
 source_fields="$(bench_context_source_fields "$HERE")"
 emit_thread_sample_artifact_report() {
   local raw_log_bytes=0
@@ -651,24 +571,17 @@ emit_thread_sample_artifact_report() {
   fi
   printf 'artifact_tsv\tlabel=%s\tkind=launcher_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
     "$LABEL" "$raw_log" "$REMOTE_LOG" "$([[ -f "$raw_log" ]] && echo true || echo false)" "$raw_log_bytes"
-  local raw_refresh_log_bytes=0
-  if [[ -f "$raw_refresh_log" ]]; then
-    raw_refresh_log_bytes="$(wc -c <"$raw_refresh_log" | tr -d ' ')"
-  fi
-  printf 'artifact_tsv\tlabel=%s\tkind=catalog_builder_log\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
-    "$LABEL" "$raw_refresh_log" "$REMOTE_REFRESH_LOG" "$([[ -f "$raw_refresh_log" ]] && echo true || echo false)" "$raw_refresh_log_bytes"
   printf 'artifact_tsv\tlabel=%s\tkind=runtime_events\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
     "$LABEL" "$raw_events" "$REMOTE_EVENTS" "$([[ -f "$raw_events" ]] && echo true || echo false)" "$([[ -f "$raw_events" ]] && wc -c <"$raw_events" | tr -d ' ' || echo 0)"
   printf 'run_context_tsv\tlabel=%s\tcommit=%s\tdeploy=%s\t%s\t%s\n' "$LABEL" "$commit" "$DEPLOY" "$source_fields" "$binary_fields"
-  printf 'binary_context_tsv\tlabel=%s\trole=catalog-builder\t%s\n' "$LABEL" "$catalog_builder_fields"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     thread_sample_emit_artifacts
-    thread_sample_emit_summary "$LABEL" "first-scan-builder" "$thread_sample_local_tsv"
+    thread_sample_emit_summary "$LABEL" "first-scan-embedded-builder" "$thread_sample_local_tsv"
   fi
 }
 profile_first_scan_cleanup() {
   local cleanup_status=0
-  rm -f "$local_log" "$local_refresh_log" "$local_events" "$combined_log" "$env_file"
+  rm -f "$local_log" "$local_events" "$combined_log" "$env_file"
   if [[ "$launcher_suspended" == "1" ]]; then
     mister_supervision_command "mister_magik_resume" 0.5 >/dev/null 2>&1 || cleanup_status=1
     launcher_suspended=0
@@ -710,7 +623,6 @@ if [ -n \"\$builder_pids\" ]; then
     kill -9 \$builder_pids 2>/dev/null || true
   fi
 fi
-rm -f /tmp/mister-magik/catalog-builder.lock
 for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
   if [ -e \"\$path\" ]; then
     bytes=\$(wc -c <\"\$path\" 2>/dev/null || echo 0)
@@ -719,7 +631,7 @@ for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
     echo \"artifact_reset_tsv	$LABEL	missing	\$path	0\"
   fi
 done
-rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_REFRESH_LOG' '$REMOTE_EVENTS'
+rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_EVENTS'
 sync
 for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
   if [ -e \"\$path\" ]; then
@@ -750,44 +662,39 @@ thread_sample_start \
 
 deadline=$((SECONDS + TIMEOUT_SECS))
 while (( SECONDS < deadline )); do
-  "$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
   "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
   "$MISTER" get "$REMOTE_EVENTS" "$local_events" >/dev/null 2>&1 || true
-  if grep -q '"event":"failure"' "$local_refresh_log" ||
-     grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+  if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
     break
   fi
-  if first_scan_extract_complete_pair "$local_refresh_log" "$local_log" "$local_events" >/dev/null; then
+  if first_scan_extract_complete_pair "$local_log" "$local_events" >/dev/null; then
     break
   fi
   sleep 2
 done
 
-"$MISTER" get "$REMOTE_REFRESH_LOG" "$local_refresh_log" >/dev/null 2>&1 || true
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null 2>&1 || true
 "$MISTER" get "$REMOTE_EVENTS" "$local_events" >/dev/null 2>&1 || true
 cp "$local_log" "$raw_log"
-cp "$local_refresh_log" "$raw_refresh_log"
 cp "$local_events" "$raw_events"
 thread_sample_stop
 thread_sample_collect
 if [[ "$thread_sample_enabled" == "1" ]] &&
    { ! first_scan_thread_sample_has_builder_evidence "$thread_sample_local_tsv" ||
-     ! first_scan_has_catalog_audit_policy_evidence "$local_refresh_log"; }; then
+     ! first_scan_has_catalog_audit_policy_evidence "$local_log"; }; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
-  echo "first-scan evidence did not prove catalog-builder CPU/HWM and catalog-audit foreground all-core policy" >&2
+  echo "first-scan evidence did not prove embedded builder CPU/HWM and catalog-audit foreground all-core policy" >&2
   exit 1
 fi
-if grep -q '"event":"failure"' "$local_refresh_log" ||
-   grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
+if grep -q $'^startup_timing\tlibrary_db_save_failed\t' "$local_log"; then
   emit_thread_sample_artifact_report | tee "$artifact_report" || true
   echo "first scan failed while saving the catalog; latest log follows" >&2
   tail -80 "$local_log" >&2 || true
   exit 1
 fi
-if marker_pair="$(first_scan_extract_complete_pair "$local_refresh_log" "$local_log" "$local_events")"; then
+if marker_pair="$(first_scan_extract_complete_pair "$local_log" "$local_events")"; then
   IFS=$'\t' read -r ready_ms saved_ms marker_source ready_us saved_us <<<"$marker_pair"
-  first_scan_write_canonical_log "$combined_log" "$local_refresh_log" "$local_log" "$local_events"
+  first_scan_write_canonical_log "$combined_log" "$local_log" "$local_events"
 else
   ready_ms=""
   saved_ms=""

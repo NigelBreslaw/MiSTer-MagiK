@@ -203,12 +203,6 @@ jobs:
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: magik-gui/build-arm.sh --device
 
-      - name: Build ARM catalog builder
-        env:
-          MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
-          MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: scripts/build-catalog-builder.sh --device
-
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
@@ -261,10 +255,9 @@ jobs:
           module_meta="$(find build/qualified/scanout -name provenance.txt -print -quit)"
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
           scripts/platform-manifest.py generate \
-            --output build/platform-v1.manifest \
+            --output build/platform-v2.manifest \
             --main Main_MiSTer/bin/MiSTer \
             --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
-            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
@@ -272,14 +265,13 @@ jobs:
             --main-revision "${{ steps.main-rev.outputs.sha }}" \
             --magik-revision "$GITHUB_SHA"
           scripts/package-distribution.sh \
-            --catalog-builder magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder \
             --main-bin Main_MiSTer/bin/MiSTer \
             --main-source-revision "${{ steps.main-rev.outputs.sha }}" \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
-            --platform-manifest build/platform-v1.manifest \
+            --platform-manifest build/platform-v2.manifest \
             --platform-bundle-manifest build/qualified/platform-bundle-v0.1.json \
             --game-databases-release-dir build/game-databases \
             --version "$RELEASE_VERSION" \

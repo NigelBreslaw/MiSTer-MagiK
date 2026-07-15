@@ -205,14 +205,17 @@ The known-good activation sequence is:
    re-execs itself on that core, loads the scanout-slots module, then starts the
    launcher.
 
-   `scripts/deploy-platform.sh` installs Main, the matched Rust frontend and
-   catalog builder, the scanout module and metadata, the CI-built latch RBF and metadata, and activates
-   `platform-v1.manifest` last. `scripts/install-slint-boot.sh` refuses to arm
-   MagiK boot unless the complete installed bundle verifies.
+   `scripts/deploy-platform.sh` installs Main, the matched Rust frontend, the
+   scanout module and metadata, the CI-built latch RBF and metadata, and the
+   newest verified published `game-databases-vN` release. It activates the game
+   database manifest and `platform-v2.manifest` last. The deploy fails before
+   device writes if GitHub has no valid numbered database release.
+   `scripts/install-slint-boot.sh` refuses to arm MagiK boot unless the complete
+   installed bundle verifies.
 
    Release packages additionally retain `platform-bundle-v0.1.json`: it
    identifies the immutable main-qualified FPGA/kernel promotion that supplied
-   the platform files. It is release provenance; `platform-v1.manifest` remains
+   the platform files. It is release provenance; `platform-v2.manifest` remains
    the device activation integrity contract.
 
 For one-shot diagnosis only, load that RBF through Main's MagiK launch command

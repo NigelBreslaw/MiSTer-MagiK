@@ -14,10 +14,9 @@ INI_BACKUP_PENDING="$FAT/.MiSTer.ini.bak.before-magik.new.$$"
 APP_DIR="$FAT/mister-magik"
 MAIN_BIN="$FAT/MiSTer_MagiK"
 GUI_BIN="$APP_DIR/mister-magik-fb"
-CATALOG_BUILDER="$APP_DIR/mister-magik-catalog-builder"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
-MANIFEST="$APP_DIR/platform-v1.manifest"
+MANIFEST="$APP_DIR/platform-v2.manifest"
 INSTALLED_SCRIPT="$FAT/Scripts/MiSTer-MagiK.sh"
 LEGACY_INSTALLED_SCRIPT="$FAT/Scripts/mister-magik.sh"
 LEGACY_CHANNEL_SCRIPT="$FAT/Scripts/mister-magik-channel.sh"
@@ -290,14 +289,13 @@ verify_platform() {
   [ -r "$MANIFEST" ] || { say "ERROR: missing $MANIFEST."; return 1; }
   fields="$(awk -F= 'NF == 2 && $1 != "" && $2 != "" { count++ } END { print count + 0 }' "$MANIFEST")"
   records="$(awk 'NF && $0 !~ /^#/ { count++ } END { print count + 0 }' "$MANIFEST")"
-  [ "$fields" = 19 ] && [ "$records" = 19 ] || { say "ERROR: platform manifest has unexpected fields."; return 1; }
-  [ "$(manifest_field format)" = mister-magik-platform-v1 ] || return 1
+  [ "$fields" = 17 ] && [ "$records" = 17 ] || { say "ERROR: platform manifest has unexpected fields."; return 1; }
+  [ "$(manifest_field format)" = mister-magik-platform-v2 ] || return 1
 
-  for name in main gui catalog_builder scanout_module scanout_metadata latch_rbf latch_metadata; do
+  for name in main gui scanout_module scanout_metadata latch_rbf latch_metadata; do
     case "$name" in
       main) expected=/media/fat/MiSTer_MagiK ;;
       gui) expected=/media/fat/mister-magik/mister-magik-fb ;;
-      catalog_builder) expected=/media/fat/mister-magik/mister-magik-catalog-builder ;;
       scanout_module) expected=/media/fat/mister-magik/mister_magik_scanout_slots.ko ;;
       scanout_metadata) expected=/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt ;;
       latch_rbf) expected=/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf ;;
@@ -469,7 +467,7 @@ install_magik() {
   verify_platform || { say "ERROR: platform verification failed; boot configuration was not changed."; exit 1; }
   remove_legacy_root_legal_files
   snapshot
-  chmod +x "$MAIN_BIN" "$GUI_BIN" "$CATALOG_BUILDER"
+  chmod +x "$MAIN_BIN" "$GUI_BIN"
   ensure_stock_inittab
   write_ini_with_main
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
@@ -485,12 +483,12 @@ restore_magik() {
 
 stop_magik_children() {
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && return 0
-  for process in mister-magik-fb mister-magik-catalog-builder; do
+  for process in mister-magik-fb; do
     pids="$(pidof "$process" 2>/dev/null || true)"
     [ -z "$pids" ] || kill $pids 2>/dev/null || true
   done
   sleep 1
-  for process in mister-magik-fb mister-magik-catalog-builder; do
+  for process in mister-magik-fb; do
     pids="$(pidof "$process" 2>/dev/null || true)"
     [ -z "$pids" ] || kill -9 $pids 2>/dev/null || true
   done

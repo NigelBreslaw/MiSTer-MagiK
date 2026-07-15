@@ -429,21 +429,13 @@ fn print_experiment_capabilities() {
 }
 
 fn run_library_refresh() {
-    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN").unwrap_or_else(|_| {
-        mister_magik_catalog::device_layout::current_app_path("mister-magik-catalog-builder")
-            .to_string_lossy()
-            .into_owned()
-    });
-    match std::process::Command::new(&binary).arg("rebuild").status() {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            crate::ui_errln!("library_refresh\tfailed\tbuilder exited {status}");
-            std::process::exit(1);
-        }
-        Err(error) => {
-            crate::ui_errln!("library_refresh\tfailed\tstart {binary}: {error}");
-            std::process::exit(1);
-        }
+    let result = mister_magik_catalog::builder_service::run(
+        mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
+        |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
+    );
+    if let Err(error) = result {
+        crate::ui_errln!("library_refresh\tfailed\t{error}");
+        std::process::exit(1);
     }
 }
 

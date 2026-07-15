@@ -14,7 +14,7 @@ manual pre-release gate rather than GitHub-hosted CI.
 - The distribution zip contains the installer script, `MiSTer_MagiK`,
   `mister-magik-fb`, the qualified scanout module and metadata, the production
   latch RBF and metadata under `mister-magik/fpga/`, and
-  `mister-magik/platform-v1.manifest` and
+  `mister-magik/platform-v2.manifest` and
   `mister-magik/platform-bundle-v0.1.json`, plus the numbered database provenance
   in `mister-magik/game-databases-manifest.json`. It contains neither root
   `menu.rbf` nor a production `experiments/` directory.

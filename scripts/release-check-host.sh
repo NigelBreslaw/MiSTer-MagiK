@@ -7,7 +7,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 WORK="$ROOT/build/release-check-host"
 MAIN_BIN="${MISTER_MAIN_BIN:-$ROOT/../Main_MiSTer/bin/MiSTer}"
 
@@ -74,9 +73,6 @@ cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets 
 
 step "ARM release-device UI build"
 "$ROOT/magik-gui/build-arm.sh" --device
-
-step "ARM catalog builder build"
-"$ROOT/scripts/build-catalog-builder.sh" --device
 
 step "ARM shared-library check"
 "$ROOT/magik-gui/scripts/check-arm-shared-libs.sh" "$BIN"
@@ -151,21 +147,19 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
 "$ROOT/scripts/platform-manifest.py" generate \
   --layout public \
-  --output "$WORK/platform-v1.manifest" --main "$MAIN_BIN" --gui "$BIN" \
-  --catalog-builder "$CATALOG_BUILDER" \
+  --output "$WORK/platform-v2.manifest" --main "$MAIN_BIN" --gui "$BIN" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf" --latch-metadata "$WORK/latch.metadata.txt" \
   --main-revision "$MAIN_SOURCE_REVISION" --magik-revision "$MAGIK_REVISION" >/dev/null
 printf '{"format":"mister-magik-platform-bundle-v0.1","bundle_id":"%064d"}\n' 0 \
   >"$WORK/platform-bundle-v0.1.json"
 package_args+=(
-  --catalog-builder "$CATALOG_BUILDER"
   --main-bin "$MAIN_BIN" --main-source-revision "$MAIN_SOURCE_REVISION"
   --scanout-module "$WORK/mister_magik_scanout_slots.ko"
   --scanout-metadata "$WORK/scanout.metadata.txt"
   --latch-rbf "$WORK/menu-magik-vblank-latch.rbf"
   --latch-metadata "$WORK/latch.metadata.txt"
-  --platform-manifest "$WORK/platform-v1.manifest"
+  --platform-manifest "$WORK/platform-v2.manifest"
   --platform-bundle-manifest "$WORK/platform-bundle-v0.1.json"
 )
 EXPECT_MAIN=1
@@ -182,7 +176,6 @@ expect_main = os.environ["EXPECT_MAIN"] == "1"
 required = {
     "Scripts/MiSTer-MagiK.sh",
     "mister-magik/mister-magik-fb",
-    "mister-magik/mister-magik-catalog-builder",
     "mister-magik/mame.sqlite3",
     "mister-magik/THIRD-PARTY-NOTICES.txt",
     "mister-magik/SOURCE-OFFER.txt",
@@ -194,7 +187,7 @@ required = {
 if expect_main:
     required.add("MiSTer_MagiK")
     required.update({
-        "mister-magik/platform-v1.manifest",
+        "mister-magik/platform-v2.manifest",
         "mister-magik/platform-bundle-v0.1.json",
         "mister-magik/game-databases-manifest.json",
         "mister-magik/mister_magik_scanout_slots.ko",

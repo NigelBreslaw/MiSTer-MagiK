@@ -144,6 +144,7 @@ python3 "$ROOT/scripts/test-platform-component-id.py"
 python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"
 python3 "$ROOT/scripts/test-platform-bundle.py"
 python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
+python3 "$ROOT/scripts/test-embedded-catalog-release.py"
 python3 "$ROOT/scripts/test-game-databases-bundle.py"
 python3 "$ROOT/scripts/test-select-published-release.py"
 python3 "$ROOT/scripts/test-game-databases-workflow.py"
@@ -158,7 +159,6 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   MISTER_MAGIK_BUILD_NUMBER=42 MISTER_MAGIK_VERSION=0.2.42 \
     bash -c 'source "$1/scripts/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui all' \
     _ "$ROOT" "$package_tmp/mister-magik-fb"
-  cp "$package_tmp/mister-magik-fb" "$package_tmp/mister-magik-catalog-builder"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
   printf 'module fixture\n' >"$package_tmp/mister_magik_scanout_slots.ko"
   printf 'rbf fixture\n' >"$package_tmp/menu-magik-vblank-latch.rbf"
@@ -174,10 +174,9 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     "$(sha256sum "$package_tmp/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
     >"$package_tmp/latch.metadata.txt"
   "$ROOT/scripts/platform-manifest.py" generate \
-    --output "$package_tmp/platform-v1.manifest" \
+    --output "$package_tmp/platform-v2.manifest" \
     --main "$package_tmp/MiSTer_MagiK" \
     --gui "$package_tmp/mister-magik-fb" \
-    --catalog-builder "$package_tmp/mister-magik-catalog-builder" \
     --scanout-module "$package_tmp/mister_magik_scanout_slots.ko" \
     --scanout-metadata "$package_tmp/scanout.metadata.txt" \
     --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf" \
@@ -188,14 +187,13 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   platform_args=(
     --version 0.2.42
     --build-number 42
-    --catalog-builder "$package_tmp/mister-magik-catalog-builder"
     --main-bin "$package_tmp/MiSTer_MagiK"
     --main-source-revision "$fixture_main"
     --scanout-module "$package_tmp/mister_magik_scanout_slots.ko"
     --scanout-metadata "$package_tmp/scanout.metadata.txt"
     --latch-rbf "$package_tmp/menu-magik-vblank-latch.rbf"
     --latch-metadata "$package_tmp/latch.metadata.txt"
-    --platform-manifest "$package_tmp/platform-v1.manifest"
+    --platform-manifest "$package_tmp/platform-v2.manifest"
     --platform-bundle-manifest "$package_tmp/platform-bundle-v0.1.json"
   )
   sqlite3 "$package_tmp/mame.sqlite3" \
@@ -265,8 +263,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         "mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt",
         "mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt",
         "MiSTer_MagiK",
-        "mister-magik/mister-magik-catalog-builder",
-        "mister-magik/platform-v1.manifest",
+        "mister-magik/platform-v2.manifest",
         "mister-magik/platform-bundle-v0.1.json",
         "mister-magik/game-databases-manifest.json",
         "mister-magik/mister_magik_scanout_slots.ko",

@@ -148,12 +148,10 @@ scripts/deploy-platform.sh --clean-main
 The development script deploys:
 
 - `magik-gui` to `/media/fat/mister-magik-dev/mister-magik-fb`
-- the matching catalog builder to
-  `/media/fat/mister-magik-dev/mister-magik-catalog-builder`
 - `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiKDev`
 - the qualified scanout module and metadata to `/media/fat/mister-magik-dev/`
 - the qualified Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
-- the complete platform contract to `/media/fat/mister-magik-dev/platform-v1.manifest`
+- the complete platform contract to `/media/fat/mister-magik-dev/platform-v2.manifest`
 
 It does not change the selected Main. Activate it with
 `scripts/magik-mode.sh dev` after the complete manifest verifies.
