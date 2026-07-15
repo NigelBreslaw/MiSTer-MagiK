@@ -5,6 +5,7 @@
 image = "ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737"
 
 [build.env]
+volumes = ["MISTER_REPO_ROOT=.."]
 passthrough = [
     "FFMPEG_DIR",
     "CFLAGS",
