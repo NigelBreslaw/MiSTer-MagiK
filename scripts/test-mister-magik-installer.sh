@@ -14,7 +14,6 @@ mkdir -p "$APP/fpga" "$FAT/Scripts" "$INIT_DIR"
 
 printf '#!/bin/sh\n' >"$FAT/MiSTer_MagiK"
 printf '#!/bin/sh\n' >"$APP/mister-magik-fb"
-printf '#!/bin/sh\n' >"$APP/mister-magik-catalog-builder"
 printf 'module\n' >"$APP/mister_magik_scanout_slots.ko"
 printf 'rbf\n' >"$APP/fpga/menu-magik-vblank-latch.rbf"
 contract="$(printf contract | sha256sum | awk '{print $1}')"
@@ -28,9 +27,8 @@ printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fi
 printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
   "$contract" "$magik" "$menu" "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
 "$ROOT/scripts/platform-manifest.py" generate \
-  --output "$APP/platform-v1.manifest" \
+  --output "$APP/platform-v2.manifest" \
   --main "$FAT/MiSTer_MagiK" --gui "$APP/mister-magik-fb" \
-  --catalog-builder "$APP/mister-magik-catalog-builder" \
   --scanout-module "$APP/mister_magik_scanout_slots.ko" \
   --scanout-metadata "$APP/mister_magik_scanout_slots.metadata.txt" \
   --latch-rbf "$APP/fpga/menu-magik-vblank-latch.rbf" \

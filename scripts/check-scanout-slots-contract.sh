@@ -59,7 +59,7 @@ trap 'rm -f "$policy_test"' EXIT
 ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
   "$ROOT/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
 "$policy_test"
-for text in platform-v1.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
+for text in platform-v2.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
   require_text "$DEPLOY" "$text"
   require_text "$INSTALL" "$text"
 done

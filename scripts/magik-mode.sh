@@ -22,12 +22,11 @@ verify_layout() {
   esac
   "$MISTER" run "
 set -e
-manifest='$app/platform-v1.manifest'
+manifest='$app/platform-v2.manifest'
 get() { value=\$(sed -n \"s/^\$1=//p\" \"\$manifest\"); test -n \"\$value\"; test \"\$(grep -c \"^\$1=\" \"\$manifest\")\" -eq 1; printf '%s' \"\$value\"; }
-test \"\$(get format)\" = mister-magik-platform-v1
+test \"\$(get format)\" = mister-magik-platform-v2
 test \"\$(get main_path)\" = '$main'
 test \"\$(get gui_path)\" = '$app/mister-magik-fb'
-test \"\$(get catalog_builder_path)\" = '$app/mister-magik-catalog-builder'
 test \"\$(get scanout_module_path)\" = '$app/mister_magik_scanout_slots.ko'
 test \"\$(get scanout_metadata_path)\" = '$app/mister_magik_scanout_slots.metadata.txt'
 test \"\$(get latch_rbf_path)\" = '$app/fpga/menu-magik-vblank-latch.rbf'
@@ -35,7 +34,6 @@ test \"\$(get latch_metadata_path)\" = '$app/fpga/menu-magik-vblank-latch.metada
 check() { path=\$1; key=\$2; test -r \"\$path\"; test \"\$(sha256sum \"\$path\" | awk '{print \$1}')\" = \"\$(get \"\$key\")\"; }
 check '$main' main_sha256
 check '$app/mister-magik-fb' gui_sha256
-check '$app/mister-magik-catalog-builder' catalog_builder_sha256
 check '$app/mister_magik_scanout_slots.ko' scanout_module_sha256
 check '$app/mister_magik_scanout_slots.metadata.txt' scanout_metadata_sha256
 check '$app/fpga/menu-magik-vblank-latch.rbf' latch_rbf_sha256

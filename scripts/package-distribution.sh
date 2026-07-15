@@ -7,11 +7,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
 
 BIN="$DEFAULT_BIN"
-CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
 GAME_DATABASES_RELEASE_DIR=""
 MAME_SQLITE=""
 HBMAME_SQLITE=""
@@ -42,9 +40,6 @@ Usage:
 Options:
   --binary PATH        ARM mister-magik-fb binary.
                        Default: $DEFAULT_BIN
-  --catalog-builder PATH
-                       Matching ARM catalog builder (required).
-                       Default: $DEFAULT_CATALOG_BUILDER
   --game-databases-release-dir PATH
                        Verified numbered release directory containing exactly
                        its archive, manifest, and SHA256SUMS (required).
@@ -76,12 +71,11 @@ Options:
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/MiSTer-MagiK.sh
   mister-magik/mister-magik-fb
-  mister-magik/mister-magik-catalog-builder
   mister-magik/mame.sqlite3
   mister-magik/hbmame.sqlite3
   mister-magik/assets/...     when --asset-pack is provided
   MiSTer_MagiK
-  mister-magik/platform-v1.manifest
+  mister-magik/platform-v2.manifest
   mister-magik/platform-bundle-v0.1.json
   mister-magik/game-databases-manifest.json
   mister-magik/mister_magik_scanout_slots.ko
@@ -100,10 +94,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --binary)
       BIN="${2:?--binary requires a path}"
-      shift 2
-      ;;
-    --catalog-builder)
-      CATALOG_BUILDER="${2:?--catalog-builder requires a path}"
       shift 2
       ;;
     --game-databases-release-dir)
@@ -187,10 +177,6 @@ if ! command -v zip >/dev/null 2>&1; then
 fi
 if [[ ! -f "$BIN" ]]; then
   echo "ERROR: binary not found: $BIN" >&2
-  exit 1
-fi
-if [[ ! -f "$CATALOG_BUILDER" ]]; then
-  echo "ERROR: catalog builder not found: $CATALOG_BUILDER" >&2
   exit 1
 fi
 if [[ -z "$GAME_DATABASES_RELEASE_DIR" || ! -d "$GAME_DATABASES_RELEASE_DIR" ]]; then
@@ -323,8 +309,6 @@ cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
 chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
-cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"
-chmod 755 "$STAGE/mister-magik/mister-magik-catalog-builder"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"
@@ -340,7 +324,7 @@ cp "$SCANOUT_MODULE" "$STAGE/mister-magik/mister_magik_scanout_slots.ko"
 cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.txt"
 cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
 cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
-cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v1.manifest"
+cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v2.manifest"
 cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/platform-bundle-v0.1.json"
 cp "$GAME_DATABASES_MANIFEST" "$STAGE/mister-magik/game-databases-manifest.json"
 cat >"$STAGE/mister-magik/release-v1.txt" <<EOF
@@ -355,7 +339,7 @@ game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
 python3 "$ROOT/scripts/platform-manifest.py" verify \
-  "$STAGE/mister-magik/platform-v1.manifest" --root "$STAGE" --layout public >/dev/null
+  "$STAGE/mister-magik/platform-v2.manifest" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
   exit 1

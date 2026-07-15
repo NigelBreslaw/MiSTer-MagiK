@@ -18,7 +18,11 @@ pub enum DeviceLayout {
 
 impl DeviceLayout {
     pub fn for_executable(path: &Path) -> Self {
-        match path.parent().and_then(Path::file_name).and_then(|name| name.to_str()) {
+        match path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+        {
             Some("mister-magik-dev") => Self::Dev,
             _ => Self::Public,
         }
@@ -65,7 +69,6 @@ pub fn initialize_process_env() {
         ("MISTER_HBMAME_SQLITE", "hbmame.sqlite3"),
         ("MISTER_PREVIEW_CACHE_DIR", "assets"),
         ("MISTER_MEDIA_ASSET_DIR", "assets"),
-        ("MISTER_CATALOG_BUILDER_BIN", "mister-magik-catalog-builder"),
         ("MISTER_LIBRARY_BENCH_SQLITE", "library-scan-bench.sqlite3"),
     ] {
         if std::env::var_os(name).is_none() {
@@ -81,15 +84,11 @@ mod tests {
     #[test]
     fn resolves_fixed_layout_from_executable_parent() {
         assert_eq!(
-            DeviceLayout::for_executable(Path::new(
-                "/media/fat/mister-magik/mister-magik-fb"
-            )),
+            DeviceLayout::for_executable(Path::new("/media/fat/mister-magik/mister-magik-fb")),
             DeviceLayout::Public
         );
         assert_eq!(
-            DeviceLayout::for_executable(Path::new(
-                "/media/fat/mister-magik-dev/mister-magik-fb"
-            )),
+            DeviceLayout::for_executable(Path::new("/media/fat/mister-magik-dev/mister-magik-fb")),
             DeviceLayout::Dev
         );
         assert_eq!(DeviceLayout::Dev.main_path(), DEV_MAIN);

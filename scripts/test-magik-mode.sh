@@ -16,11 +16,11 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$MAGIK_MODE_TEST_LOG"
 if [[ "${1:-}" == run ]]; then
   command="${2:-}"
-  if [[ "$command" == *"manifest='/media/fat/mister-magik-dev/platform-v1.manifest'"* ]]; then
+  if [[ "$command" == *"manifest='/media/fat/mister-magik-dev/platform-v2.manifest'"* ]]; then
     [[ "${MAGIK_MODE_TEST_DEV_VALID:-0}" == 1 ]]
     exit
   fi
-  if [[ "$command" == *"manifest='/media/fat/mister-magik/platform-v1.manifest'"* ]]; then
+  if [[ "$command" == *"manifest='/media/fat/mister-magik/platform-v2.manifest'"* ]]; then
     [[ "${MAGIK_MODE_TEST_PUBLIC_VALID:-0}" == 1 ]]
     exit
   fi

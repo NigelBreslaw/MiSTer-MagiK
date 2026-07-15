@@ -17,9 +17,9 @@ usage() {
 Usage: scripts/deploy-platform.sh [--clean-main]
 
 Builds Main and the ARM frontend, verifies the prebuilt qualified FPGA/module
-artifacts, uploads every file with a temporary suffix, and activates
-platform-v1.manifest last. It never writes /media/fat/menu.rbf and never
-reboots the device.
+artifacts, downloads and verifies the latest published game databases, uploads
+every file with a temporary suffix, and activates manifests last. It never
+writes /media/fat/menu.rbf and never reboots the device.
 EOF
 }
 
@@ -32,15 +32,17 @@ for arg in "$@"; do
 done
 
 GUI_BIN="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
-CATALOG_BUILDER="$GUI_DIR/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 MAIN_BIN="$MAIN_DIR/bin/MiSTer"
 MODULE="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 MODULE_META="$ROOT/build/scanout-slots/provenance.txt"
 RBF="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.rbf"
 RBF_META="$ROOT/build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt"
-MANIFEST="$ROOT/build/platform-v1.manifest"
+MANIFEST="$ROOT/build/platform-v2.manifest"
 REMOTE_APP="$MISTER_MAGIK_APP_DIR"
 REMOTE_MAIN="$MISTER_MAGIK_MAIN"
+DATABASE_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dev-databases.XXXXXX")"
+rm -rf "$DATABASE_STAGE"
+trap 'rm -rf "$DATABASE_STAGE"' EXIT
 
 if [[ ! -d "$MAIN_DIR" || ! -x "$MAIN_DIR/build-container.sh" ]]; then
   echo "ERROR: Main_MiSTer fork checkout not found: $MAIN_DIR" >&2
@@ -60,10 +62,14 @@ for artifact in "$MODULE" "$MODULE_META" "$RBF" "$RBF_META"; do
 done
 "$ROOT/scripts/verify-fpga-rbf-manifest.py" "$RBF_META" >/dev/null
 
+"$ROOT/scripts/fetch-game-databases-release.sh" "$DATABASE_STAGE"
+MAME_DATABASE="$DATABASE_STAGE/mame.sqlite3"
+HBMAME_DATABASE="$DATABASE_STAGE/hbmame.sqlite3"
+DATABASE_MANIFEST="$DATABASE_STAGE/game-databases-manifest.json"
+DATABASE_CHECKSUMS="$DATABASE_STAGE/SHA256SUMS"
+
 echo "==> Building magik-gui development binary"
 "$GUI_DIR/build-arm.sh" --device
-echo "==> Building matching catalog builder"
-"$ROOT/scripts/build-catalog-builder.sh" --device
 echo "==> Building Main fork"
 if [[ "$CLEAN_MAIN" == 1 ]]; then "$MAIN_DIR/build-container.sh" clean; fi
 "$MAIN_DIR/build-container.sh"
@@ -74,7 +80,6 @@ MAGIK_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
   --output "$MANIFEST" \
   --main "$MAIN_BIN" \
   --gui "$GUI_BIN" \
-  --catalog-builder "$CATALOG_BUILDER" \
   --scanout-module "$MODULE" \
   --scanout-metadata "$MODULE_META" \
   --latch-rbf "$RBF" \
@@ -91,7 +96,7 @@ SNAP="/media/fat/mister-magik-dev/snapshots/$STAMP-deploy"
 mkdir -p "$SNAP" /media/fat/mister-magik-dev/fpga
 cp /etc/inittab "$SNAP/inittab" 2>/dev/null || true
 cp /media/fat/MiSTer.ini "$SNAP/MiSTer.ini" 2>/dev/null || true
-cp /media/fat/mister-magik-dev/platform-v1.manifest "$SNAP/platform-v1.manifest" 2>/dev/null || true
+cp /media/fat/mister-magik-dev/platform-v2.manifest "$SNAP/platform-v2.manifest" 2>/dev/null || true
 if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then
   printf "mister_magik_suspend\n" > /dev/MiSTer_cmd
   sleep 1
@@ -99,16 +104,23 @@ fi
 echo "snapshot: $SNAP"
 '
 
-declare -a LOCAL=("$GUI_BIN" "$CATALOG_BUILDER" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META" "$MANIFEST")
+declare -a LOCAL=(
+  "$GUI_BIN" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META"
+  "$MAME_DATABASE" "$HBMAME_DATABASE" "$DATABASE_MANIFEST" "$DATABASE_CHECKSUMS"
+  "$MANIFEST"
+)
 declare -a REMOTE=(
   /media/fat/mister-magik-dev/mister-magik-fb
-  /media/fat/mister-magik-dev/mister-magik-catalog-builder
   /media/fat/MiSTer_MagiKDev
   /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko
   /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt
   /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf
   /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt
-  /media/fat/mister-magik-dev/platform-v1.manifest
+  /media/fat/mister-magik-dev/mame.sqlite3
+  /media/fat/mister-magik-dev/hbmame.sqlite3
+  /media/fat/mister-magik-dev/game-databases-manifest.json
+  /media/fat/mister-magik-dev/game-databases-SHA256SUMS
+  /media/fat/mister-magik-dev/platform-v2.manifest
 )
 echo "==> Uploading inactive development bundle"
 for index in "${!LOCAL[@]}"; do
@@ -118,12 +130,11 @@ done
 echo "==> Verifying inactive bundle and activating manifest last"
 "$ROOT/scripts/mister" run '
 set -e
-manifest=/media/fat/mister-magik-dev/platform-v1.manifest.upload
+manifest=/media/fat/mister-magik-dev/platform-v2.manifest.upload
 get() { sed -n "s/^$1=//p" "$manifest"; }
-test "$(get format)" = mister-magik-platform-v1
+test "$(get format)" = mister-magik-platform-v2
 test "$(get main_path)" = /media/fat/MiSTer_MagiKDev
 test "$(get gui_path)" = /media/fat/mister-magik-dev/mister-magik-fb
-test "$(get catalog_builder_path)" = /media/fat/mister-magik-dev/mister-magik-catalog-builder
 test "$(get scanout_module_path)" = /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko
 test "$(get scanout_metadata_path)" = /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt
 test "$(get latch_rbf_path)" = /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf
@@ -131,7 +142,6 @@ test "$(get latch_metadata_path)" = /media/fat/mister-magik-dev/fpga/menu-magik-
 check() { test "$(sha256sum "$1.upload" | awk "{print \$1}")" = "$(get "$2")"; }
 check /media/fat/MiSTer_MagiKDev main_sha256
 check /media/fat/mister-magik-dev/mister-magik-fb gui_sha256
-check /media/fat/mister-magik-dev/mister-magik-catalog-builder catalog_builder_sha256
 check /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko scanout_module_sha256
 check /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt scanout_metadata_sha256
 check /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf latch_rbf_sha256
@@ -145,17 +155,25 @@ grep -qx "platform_contract_sha256=$contract" /media/fat/mister-magik-dev/fpga/m
 grep -qx "module_sha256=$module_hash" /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt.upload
 grep -qx "rbf_sha256=$rbf_hash" /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload
 grep -qx "source_commit=$menu_revision" /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload
+while read -r expected name; do
+  test -n "$expected" && test -n "$name"
+  actual=$(sha256sum "/media/fat/mister-magik-dev/$name.upload" | awk "{print \$1}")
+  test "$actual" = "$expected"
+done < /media/fat/mister-magik-dev/game-databases-SHA256SUMS.upload
 mv /media/fat/mister-magik-dev/mister-magik-fb.upload /media/fat/mister-magik-dev/mister-magik-fb
-mv /media/fat/mister-magik-dev/mister-magik-catalog-builder.upload /media/fat/mister-magik-dev/mister-magik-catalog-builder
 mv /media/fat/MiSTer_MagiKDev.upload /media/fat/MiSTer_MagiKDev
 mv /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko.upload /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko
 mv /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt.upload /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt
 mv /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf.upload /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf
 mv /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt
-chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb /media/fat/mister-magik-dev/mister-magik-catalog-builder
-chmod 600 /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt
+mv /media/fat/mister-magik-dev/mame.sqlite3.upload /media/fat/mister-magik-dev/mame.sqlite3
+mv /media/fat/mister-magik-dev/hbmame.sqlite3.upload /media/fat/mister-magik-dev/hbmame.sqlite3
+mv /media/fat/mister-magik-dev/game-databases-SHA256SUMS.upload /media/fat/mister-magik-dev/game-databases-SHA256SUMS
+mv /media/fat/mister-magik-dev/game-databases-manifest.json.upload /media/fat/mister-magik-dev/game-databases-manifest.json
+chmod 755 /media/fat/MiSTer_MagiKDev /media/fat/mister-magik-dev/mister-magik-fb
+chmod 600 /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt /media/fat/mister-magik-dev/mame.sqlite3 /media/fat/mister-magik-dev/hbmame.sqlite3 /media/fat/mister-magik-dev/game-databases-manifest.json /media/fat/mister-magik-dev/game-databases-SHA256SUMS
 sync
-mv "$manifest" /media/fat/mister-magik-dev/platform-v1.manifest
+mv "$manifest" /media/fat/mister-magik-dev/platform-v2.manifest
 sync
 '
 

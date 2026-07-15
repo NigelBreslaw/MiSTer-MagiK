@@ -57,8 +57,8 @@ Production acceptance runners do not permit `deployed-unknown`.
 `profile-preview-scroll.sh`, `profile-library-io.sh`,
 `device-catalog-acceptance.sh`, and `profile-first-scan.sh` require the deployed
 SHA-256 to match the local binary and the local `.features` sidecar to
-match the declared feature set, including both launcher and catalog-builder
-contracts for first scan. ARM builds also emit a hash-bound
+match the declared feature set. First scan verifies the embedded frontend;
+standalone builder profiling has its own explicit harness contract. ARM builds also emit a hash-bound
 `.build-receipt.tsv` beside each binary; it records the build-time source
 commit, dirty state, profile, feature set, and UI scope. Benchmark contracts
 reject a missing, stale, or mismatched receipt. Context rows separately record
@@ -101,8 +101,8 @@ prefetch, media coordination, index sidecar repair, and other background jobs
 after a usable catalog exists.
 Use `--thread-sample` when changing catalog scheduling so the run proves the
 first-build roles are foreground and the later background roles remain isolated.
-For first-scan runs the sampler targets the standalone
-`mister-magik-catalog-builder`, not the dormant launcher. Its retained summary
+For first-scan runs the sampler targets `mister-magik-fb`, which owns the
+embedded builder. Its retained summary
 must include builder thread/core residency and `vmhwm_kb`; a header-only sample
 invalidates the run.
 The post-scan preparation overlap emits
@@ -754,9 +754,9 @@ performance.
 `profile-first-scan.sh` deletes the production catalog database plus
 `library.summary.json`, syncs, and reboots with
 the normal `scripts/mister reboot-wait` path. It collects canonical UI markers
-from `/tmp/mister-magik/events.jsonl`, falls back to the launcher log when
-needed, and explicitly labels standalone-builder fallback timings rather than
-mixing clocks. It records first-frame/catalog-ready timings in
+from `/tmp/mister-magik/events.jsonl` and embedded-builder timing rows from the
+`mister-magik-fb` launcher log. Standalone builder evidence is collected only by
+`profile-catalog-builder.sh`. It records first-frame/catalog-ready timings in
 `history/toolchain-bench/results-first-scan.tsv`. The reference regression gates
 are `library_ready <= 96592ms` for RAM catalog usability and
 `library_db_saved <= 117766ms` for durable SQLite save completion, plus the

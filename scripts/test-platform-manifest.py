@@ -34,7 +34,6 @@ class PlatformManifestTests(unittest.TestCase):
         for relative in (
             "MiSTer_MagiK",
             "mister-magik/mister-magik-fb",
-            "mister-magik/mister-magik-catalog-builder",
             "mister-magik/mister_magik_scanout_slots.ko",
             "mister-magik/fpga/menu-magik-vblank-latch.rbf",
         ):
@@ -54,7 +53,7 @@ class PlatformManifestTests(unittest.TestCase):
             f"magik_commit={self.magik}\nsource_commit={self.menu_revision}\n"
             f"rbf_sha256={sha(self.rbf)}\n"
         )
-        self.manifest = self.root / "mister-magik/platform-v1.manifest"
+        self.manifest = self.root / "mister-magik/platform-v2.manifest"
         values = {
             "format": platform_manifest.FORMAT,
             **{
@@ -63,9 +62,6 @@ class PlatformManifestTests(unittest.TestCase):
             },
             "main_sha256": sha(self.root / "MiSTer_MagiK"),
             "gui_sha256": sha(self.root / "mister-magik/mister-magik-fb"),
-            "catalog_builder_sha256": sha(
-                self.root / "mister-magik/mister-magik-catalog-builder"
-            ),
             "scanout_module_sha256": sha(self.module),
             "scanout_metadata_sha256": sha(self.module_meta),
             "latch_rbf_sha256": sha(self.rbf),
@@ -102,7 +98,7 @@ class PlatformManifestTests(unittest.TestCase):
             self.verify()
 
     def test_duplicate_field_is_rejected(self) -> None:
-        self.manifest.write_text(self.valid + "format=mister-magik-platform-v1\n")
+        self.manifest.write_text(self.valid + "format=mister-magik-platform-v2\n")
         with self.assertRaisesRegex(ValueError, "duplicate field format"):
             self.verify()
 
@@ -120,11 +116,8 @@ class PlatformManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incorrect installed latch_rbf hash"):
             self.verify()
 
-    def test_stale_catalog_builder_is_rejected(self) -> None:
-        builder = self.root / "mister-magik/mister-magik-catalog-builder"
-        builder.write_bytes(b"standalone stale builder")
-        with self.assertRaisesRegex(ValueError, "incorrect installed catalog_builder hash"):
-            self.verify()
+    def test_catalog_builder_is_not_part_of_manifest(self) -> None:
+        self.assertNotIn("catalog_builder", self.valid)
 
     def test_old_experiments_path_is_rejected(self) -> None:
         self.manifest.write_text(self.valid.replace(

@@ -874,32 +874,29 @@ scripts/profile-library-io.sh LABEL --replace-label
 
 Use device evidence before claiming the catalog meets the performance gates.
 
-## Builder process boundary
+## Builder boundary
 
-Catalog validation and writes run in the Slint-free
-`/media/fat/mister-magik/mister-magik-catalog-builder` executable. The launcher
-starts `check`, `build`, or `rebuild` and consumes versioned JSON-lines events
-from stdout; builder diagnostics are written to stderr. A cold build publishes
+Catalog validation and writes run in-process through the catalog crate's
+`builder_service`. The launcher maps typed events directly into its lifecycle.
+A cold build publishes
 a validated temporary navigation snapshot before durable SQLite publication so
 the launcher can become usable at the existing RAM-catalog gate. The existing
 SQLite, summary, navigation, stamp, and rebuild-marker formats remain the
 on-disk contract.
 
-Normal runtime/platform deploys explicitly build and install the frontend and
-its matching catalog builder. Build or deploy only the builder for a rare
+Normal runtime/platform deploys build and install only the frontend. Build,
+deploy, and profile the standalone developer harness for an isolated
 catalog-optimization iteration with:
 
 ```bash
 scripts/build-catalog-builder.sh --device
 scripts/deploy-catalog-builder.sh
-scripts/profile-first-scan.sh LABEL --deploy-catalog --replace-label
+scripts/profile-catalog-builder.sh LABEL
 ```
 
-Catalog-only deployment atomically replaces the builder and does not suspend or
-restart the launcher. It is deliberately not a normal release deployment and
-does not update the platform manifest. A normal `scripts/deploy-rust.sh`
-deployment builds both executables before changing the device; production
-platform deployment and packaging hash-pin both in `platform-v1.manifest`.
+Catalog-only deployment atomically replaces the developer harness and does not
+update the platform manifest. Production deployment and packaging hash-pin the
+embedded frontend in `platform-v2.manifest`; no standalone builder is shipped.
 Runtime folder classification treats names, installed core identities, payload
 extensions, and support firmware as evidence. Strong normalized numeric-family
 aliases such as `PC88` and `PC8801` may learn the folder's observed payload

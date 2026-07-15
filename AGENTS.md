@@ -222,6 +222,7 @@ scripts/profile-first-preview.sh LABEL --skip-build
 scripts/gate-preview-60fps.sh LABEL --skip-build --visual-captures 0
 scripts/bench-toolchain.sh LABEL --replace-label
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
+scripts/profile-catalog-builder.sh LABEL
 scripts/profile-library-io.sh LABEL --replace-label
 ```
 
