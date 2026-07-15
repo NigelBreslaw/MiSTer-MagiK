@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Helpers for bounded writes to /dev/MiSTer_cmd from device scripts.
 
 mister_fifo_remote_command() {

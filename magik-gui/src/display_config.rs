@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::fpga::{FbParams, Fpga, VideoInfo};
 use crate::ui_display::{RuntimeDisplayGeometry, UiDisplay};
 use mister_magik_fb::framebuffer::mapped::FbInfo;

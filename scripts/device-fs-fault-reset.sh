@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Destructively reset-fault MagiK filesystem writes on a real MiSTer.
 set -euo pipefail
 

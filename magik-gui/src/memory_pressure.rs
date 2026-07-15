@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Lightweight memory-pressure sampling for the launcher.
 
 use std::time::{Duration, Instant};

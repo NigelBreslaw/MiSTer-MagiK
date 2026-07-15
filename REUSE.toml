@@ -1,0 +1,78 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+version = 1
+
+# These first-party files cannot safely carry inline comments, or are retained
+# records where inserting a header would damage their format or evidentiary
+# value. Active source and configuration files carry inline SPDX headers.
+[[annotations]]
+path = [
+  "AGENTS.md",
+  "README.md",
+  "disclaimer.md",
+  "desktop/AGENTS.md",
+  "desktop/README.md",
+  "docs/**",
+  "documentation/src/content/docs/**",
+  "history/**",
+  "magik-gui/BUILD.md",
+  "magik-gui/ui/bench/README.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Nigel Breslaw"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = [
+  "fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Nigel Breslaw", "MiSTer project contributors"]
+SPDX-License-Identifier = "GPL-3.0-only"
+
+[[annotations]]
+path = [
+  "fpga/menu-vblank-latch/Menu_MiSTer.commit",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Nigel Breslaw"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = [
+  "magik-gui/licenses/FFMPEG.txt",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "1991, 1999 Free Software Foundation, Inc."
+SPDX-License-Identifier = "LGPL-2.1-or-later"
+
+[[annotations]]
+path = [
+  "magik-gui/licenses/PRESS-START-2P.txt",
+  "magik-gui/ui/fonts/PressStart2P-Regular.ttf",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2012 The Press Start 2P Project Authors"
+SPDX-License-Identifier = "OFL-1.1"
+
+[[annotations]]
+path = [
+  "desktop/.mcp.json",
+  "desktop/Cargo.lock",
+  "documentation/package.json",
+  "documentation/pnpm-lock.yaml",
+  "documentation/public/screenshots/home.png",
+  "documentation/public/screenshots/meta/home.json",
+  "documentation/tsconfig.json",
+  "framebuffer-stream/Cargo.lock",
+  "magik-gui/Cargo.lock",
+  "magik-gui/catalog/Cargo.lock",
+  "magik-gui/catalog/data/*.json",
+  "magik-gui/testdata/*.ppm",
+  "tools/magik-agent/Cargo.lock",
+  "tools/mister/Cargo.lock",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Nigel Breslaw"
+SPDX-License-Identifier = "GPL-3.0-or-later"

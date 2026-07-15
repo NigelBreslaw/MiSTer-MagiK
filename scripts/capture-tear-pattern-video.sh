@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Record the HDMI capture device while the Slint tear-pattern scene runs.
 set -euo pipefail
 

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use ssh2::{ExtendedData, Session};
 use std::env;
 use std::fs::{self, File};

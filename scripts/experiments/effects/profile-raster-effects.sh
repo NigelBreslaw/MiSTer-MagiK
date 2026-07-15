@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Experimental: run the full-screen classic raster/palette effects scene on the MiSTer and summarize frame pacing.
 set -euo pipefail
 

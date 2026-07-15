@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared vsync render loop and Slint bench scene dispatch.
 #![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
 
@@ -11,10 +14,7 @@ use slint::platform::software_renderer::{
     MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
 };
 use slint::platform::{Platform, WindowAdapter};
-use slint::{
-    ComponentHandle, Model, ModelRc, PhysicalSize, Rgba8Pixel, SharedPixelBuffer, SharedString,
-    VecModel,
-};
+use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 

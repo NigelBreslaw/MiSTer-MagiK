@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Attended MiSTer resource-exhaustion repros for MagiK launcher robustness.
 #
 # The script never edits boot config or arms reboot/fault injection. It creates

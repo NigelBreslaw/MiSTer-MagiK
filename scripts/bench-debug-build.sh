@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Measure local Rust/ARM build iteration time for the MiSTer Slint frontend.
 #
 # Raw run logs and TSV rows are written under build/ (gitignored). Curated

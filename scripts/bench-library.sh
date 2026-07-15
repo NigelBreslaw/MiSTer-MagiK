@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Benchmark MiSTer library-refresh scan/index performance on the device.
 #
 #   scripts/bench-library.sh LIB-BASE-20260605 --device --replace-label

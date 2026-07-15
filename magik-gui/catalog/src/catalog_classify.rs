@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Canonical product taxonomy for launcher systems.
 
 use serde::{Deserialize, Serialize};

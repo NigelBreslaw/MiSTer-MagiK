@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::app_state::{
     catalog_summary, input_summary, process_summary, screen_summary, string_at, uptime_label,
     ConnectionOutcome, DashboardSnapshot,

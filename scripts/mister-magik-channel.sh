@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Select the MiSTer MagiK Downloader/update_all channel without touching boot state.
 set -eu
 

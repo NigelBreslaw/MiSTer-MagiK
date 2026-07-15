@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 name: FPGA Vblank Latch RBF
 
 # This workflow is intentionally manual-only. Quartus/RBF builds are heavyweight

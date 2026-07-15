@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Build the profiling binary, verify pprof sampling, run a scene, and pull the SVG flamegraph.
 set -euo pipefail
 

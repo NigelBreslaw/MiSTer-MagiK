@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use serde_json::{json, Map, Value};
 use ssh2::{ExtendedData, Session};
 use std::collections::BTreeMap;

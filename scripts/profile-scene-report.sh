@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run a profiled scene on the MiSTer and generate local TSV/trace/SVG/HTML reports.
 set -euo pipefail
 

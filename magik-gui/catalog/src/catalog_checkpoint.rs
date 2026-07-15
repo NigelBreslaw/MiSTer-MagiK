@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Cheap discovery checkpoint for warm catalog drift detection.
 //!
 //! The checkpoint records stable, low-cost catalog inputs. It is intentionally

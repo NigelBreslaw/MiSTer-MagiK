@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::launcher_worker_intents::{
     cached_catalog_validation_intent, catalog_persistence_failed_intent,
     catalog_rebuild_started_intent, parse_games_found_detail, CatalogCounterPhase,

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Game discovery and playable filtering.
 
 use crate::catalog_scan::{self, FoundFile};

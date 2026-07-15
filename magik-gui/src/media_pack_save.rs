@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::artifact_publish::{
     cleanup_static_and_timestamped_temps, prepare_artifact_publish, static_temp_path_for,
     sync_path_rust_best_effort, ArtifactPublishLabels,

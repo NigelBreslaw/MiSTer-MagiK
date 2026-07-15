@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run MiSTer library SQLite publish/save benchmarks and append publish rows.
 set -euo pipefail
 

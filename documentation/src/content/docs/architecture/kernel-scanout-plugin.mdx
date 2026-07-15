@@ -44,8 +44,9 @@ interfaces remain in the plugin.
 The stock device tree describes the visible 8 MiB framebuffer aperture, not the
 whole hidden scanout layout. The two hidden regions are instead bound to a
 reviewed, pinned kernel/driver/DT/Main/RBF platform contract. At load time the
-plugin requires that exact platform, rejects any System RAM intersection, and
-reserves both complete ranges exclusively before registering the device.
+plugin requires the qualified kernel, machine, and framebuffer identity, then
+reserves both complete ranges exclusively before registering the device. The
+exclusive reservations reject System RAM and any occupied resource range.
 
 The Rust and Agent clients reject any ABI, geometry,
 address, mapping-size, or reserved-field mismatch. If the module is missing or

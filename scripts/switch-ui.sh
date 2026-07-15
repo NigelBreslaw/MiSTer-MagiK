@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Swap in a complete Zaparoo or MiSTer MagiK INI file and reboot the MiSTer.
 set -euo pipefail
 

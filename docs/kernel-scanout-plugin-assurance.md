@@ -14,9 +14,9 @@ The stock DT resource describes only the visible 8 MiB framebuffer aperture;
 it does not claim both hidden slots. Semantic ownership therefore comes from
 the reviewed kernel/driver/DT/Main/RBF platform contract. Build, deployment and
 boot checks prove the complete artifact fingerprint. At runtime the module
-proves the observable kernel/machine/DT/framebuffer subset, rejects any System
-RAM intersection, and reserves both complete ranges exclusively before
-registering its device.
+proves the qualified kernel/machine/framebuffer subset and reserves both
+complete ranges exclusively before registering its device; those reservations
+reject System RAM and occupied resource ranges.
 
 The FPGA manifest pins the reviewed MagiK/Menu/patch/RTL identities separately
 from the builder commit and fixes Menu's embedded `BUILD_DATE` to `260711`.
@@ -30,7 +30,7 @@ wall clock.
 | KS-003 | Slot bases are `0x227e9000` and `0x22fd2000` | compile-time checks; userspace exact-layout validation |
 | KS-004 | Both mappings are exactly 1,040,384 bytes | boundary tests; device mmap rejection matrix |
 | KS-005 | Mappings are shared, read/write, non-executable and write-combined | source audit; device VMA/PTE inspection |
-| KS-006 | Unsupported kernel/framebuffer platforms, System RAM intersections and resource collisions fail before device registration | host source test; negative instrumented-kernel test |
+| KS-006 | Unsupported kernel/framebuffer platforms and occupied resource ranges fail before device registration | host source test; negative instrumented-kernel test |
 | KS-007 | The module allocates nothing and performs no DMA, routing or presentation | source and binary denylist |
 | KS-008 | A missing or rejected module leaves `/dev/fb0` available as fallback | boot and launcher lifecycle test |
 | KS-009 | Module identity is tied to repository source, platform contract, kernel/driver/DT config, UAPI, RBF and toolchain evidence | build provenance and deploy verification |

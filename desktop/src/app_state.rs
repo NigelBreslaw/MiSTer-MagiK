@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use serde_json::Value;
 
 pub const DEFAULT_HOST: &str = "192.168.1.117";

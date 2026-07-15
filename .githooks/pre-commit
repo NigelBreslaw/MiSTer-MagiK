@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Keep commit-time Rust checks aligned with the fast CI host gates.
 set -euo pipefail
 

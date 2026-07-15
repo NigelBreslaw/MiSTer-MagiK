@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #include "Vtb_mister_magik_vblank_latch.h"
 #include "verilated.h"
 #include "verilated_cov.h"

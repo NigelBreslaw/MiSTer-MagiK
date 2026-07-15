@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::platform_lifecycle::{TitlebarAdapter, TitlebarController};
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{

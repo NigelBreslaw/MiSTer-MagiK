@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Bounded host model for the pinned scanout platform admission policy."""
 
 from pathlib import Path
@@ -15,12 +18,21 @@ def number(name: str) -> int:
     return int(match.group(1), 0)
 
 
-DT_BASE = number("MISTER_MAGIK_PLATFORM_FB_DT_BASE")
-DT_BYTES = number("MISTER_MAGIK_PLATFORM_FB_DT_BYTES")
 VISIBLE_BASE = number("MISTER_MAGIK_PLATFORM_FB_VISIBLE_BASE")
 SLOTS = (number("MISTER_MAGIK_PLATFORM_SLOT0_PHYS"), number("MISTER_MAGIK_PLATFORM_SLOT1_PHYS"))
 MAP_BYTES = number("MISTER_MAGIK_PLATFORM_MAP_BYTES")
 MAX_PHYS = (1 << 32) - 1
+
+
+def text(name: str) -> str:
+    match = re.search(rf'^#define {name} "([^"]+)"$', HEADER.read_text(), re.M)
+    assert match, name
+    return match.group(1)
+
+
+KERNEL_RELEASE = text("MISTER_MAGIK_PLATFORM_KERNEL_RELEASE")
+MACHINE = text("MISTER_MAGIK_PLATFORM_MACHINE")
+FB_ID = text("MISTER_MAGIK_PLATFORM_FB_ID")
 
 
 def overlaps(start: int, size: int, other_start: int, other_size: int) -> bool:
@@ -29,9 +41,10 @@ def overlaps(start: int, size: int, other_start: int, other_size: int) -> bool:
     return start <= other_end and other_start <= end
 
 
-def accepts(*, dt_base=DT_BASE, dt_bytes=DT_BYTES, fb_start=VISIBLE_BASE,
-            fb_len=MAP_BYTES, slots=SLOTS, ram=(), occupied=()) -> bool:
-    if dt_base != DT_BASE or dt_bytes != DT_BYTES or fb_start != VISIBLE_BASE or fb_len <= 0:
+def accepts(*, kernel_release=KERNEL_RELEASE, machine=MACHINE, fb_id=FB_ID,
+            fb_start=VISIBLE_BASE, fb_len=MAP_BYTES, slots=SLOTS, ram=(), occupied=()) -> bool:
+    if (kernel_release != KERNEL_RELEASE or machine != MACHINE or fb_id != FB_ID
+            or fb_start != VISIBLE_BASE or fb_len <= 0):
         return False
     if fb_start + fb_len - 1 > slots[0] - 1:
         return False
@@ -60,9 +73,10 @@ def reserve_with_rollback(fail_index: Optional[int] = None) -> Tuple[bool, Tuple
 
 def main() -> None:
     assert accepts()
-    assert not accepts(dt_base=DT_BASE + 0x1000)
-    assert not accepts(dt_bytes=DT_BYTES + 0x1000)
-    assert not accepts(fb_start=DT_BASE)
+    assert not accepts(kernel_release="5.15.1-other")
+    assert not accepts(machine="other-machine")
+    assert not accepts(fb_id="other-fb")
+    assert not accepts(fb_start=VISIBLE_BASE - 0x1000)
     assert not accepts(fb_len=SLOTS[0] - VISIBLE_BASE + 1)
     assert not accepts(slots=(SLOTS[0], SLOTS[0] + MAP_BYTES - 1))
     assert not accepts(slots=(SLOTS[0], MAX_PHYS - MAP_BYTES + 2))
@@ -73,7 +87,7 @@ def main() -> None:
     assert reserve_with_rollback() == (True, SLOTS)
     assert reserve_with_rollback(0) == (False, ())
     assert reserve_with_rollback(1) == (False, ())
-    print("scanout platform contract model: ok cases=14")
+    print("scanout platform contract model: ok cases=15")
 
 
 if __name__ == "__main__":

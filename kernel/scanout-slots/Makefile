@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Nigel Breslaw
+
 KERNEL_SRC ?= ../../reference/Linux-Kernel_MiSTer
 KERNEL_BUILD ?=
 ARCH ?= arm

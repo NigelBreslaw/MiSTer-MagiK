@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Launcher navigation and arcade game launch.
 
 use crate::arcade_button_overrides::{remove_button_overrides, write_button_overrides_for_mra};

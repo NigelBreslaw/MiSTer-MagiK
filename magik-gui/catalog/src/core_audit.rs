@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Catalog coverage audit for Main-derived core/game surfaces.
 //!
 //! The audit records launchable-looking things the catalog scanner did not turn

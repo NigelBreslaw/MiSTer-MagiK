@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! FFmpeg-backed media pump for the Slint video benchmark.
 
 use ffmpeg::codec;

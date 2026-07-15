@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Source-derived launch profiles for MiSTer library scanning.
 //!
 //! Profiles are built from explicit special cases plus a generated manifest of

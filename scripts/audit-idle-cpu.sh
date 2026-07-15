@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Audit MagiK settled idle CPU and memory on the MiSTer.
 #
 # Uses only scripts/mister device entrypoints. The script restarts the

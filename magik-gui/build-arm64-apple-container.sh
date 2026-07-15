@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Native Apple-container path for ARMv7 MiSTer builds on Apple Silicon.
 #
 # This is the GitHub macos-26 / local Apple Silicon build path. It intentionally

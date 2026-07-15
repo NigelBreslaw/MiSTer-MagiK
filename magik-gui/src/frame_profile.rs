@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Per-frame render-loop instrumentation (env `MISTER_PROFILE`).
 //!
 //! Records prepare / anim / slint-render / custom-draw / vsync / fb-present timings every frame and prints a factual

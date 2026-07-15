@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Install/remove a reversible S11 dhcpcd boot-order experiment on MiSTer.
 set -euo pipefail
 

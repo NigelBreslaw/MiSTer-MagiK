@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-testable logic for the MiSTer frontend.
 //!
 //! The framebuffer, FPGA, Linux input, and Slint renderer stay in the binary

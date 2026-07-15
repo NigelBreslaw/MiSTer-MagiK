@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::super::*;
 
 pub(in crate::ui_runner) struct Fb0DirtyPresentRequest<'a> {

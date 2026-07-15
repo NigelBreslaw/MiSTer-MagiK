@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Launch installed prepared collections through the production MagiK list and
 # Main handoff, then return to MagiK without rebooting.
 set -euo pipefail

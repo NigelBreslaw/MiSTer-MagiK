@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Nigel Breslaw
+
 /*
  * MiSTer MagiK production scanout-slot mappings.
  *
@@ -15,7 +17,6 @@
 #include <linux/module.h>
 #include <linux/ioport.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/overflow.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -51,7 +52,6 @@ static const struct scanout_slot scanout_slots[] = {
 };
 
 static void *scanout_slot_resources[MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT];
-static struct resource framebuffer_resource;
 
 static const struct mister_magik_scanout_slots_layout scanout_slots_layout = {
 	.abi_version = MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION,
@@ -133,24 +133,10 @@ static struct miscdevice scanout_slots_device = {
 static int scanout_slots_validate_platform(void)
 {
 	struct fb_info *info = registered_fb[0];
-	struct device_node *fb_node;
-	unsigned int i;
-	int ret;
 
 	if (strcmp(UTS_RELEASE, MISTER_MAGIK_PLATFORM_KERNEL_RELEASE))
 		return -ENODEV;
 	if (!of_machine_is_compatible(MISTER_MAGIK_PLATFORM_MACHINE))
-		return -ENODEV;
-	fb_node = of_find_compatible_node(NULL, NULL,
-					  MISTER_MAGIK_PLATFORM_FB_COMPATIBLE);
-	if (!fb_node)
-		return -ENODEV;
-	ret = of_address_to_resource(fb_node, 0, &framebuffer_resource);
-	of_node_put(fb_node);
-	if (ret ||
-	    framebuffer_resource.start != MISTER_MAGIK_PLATFORM_FB_DT_BASE ||
-	    resource_size(&framebuffer_resource) !=
-		MISTER_MAGIK_PLATFORM_FB_DT_BYTES)
 		return -ENODEV;
 	if (!info || strcmp(info->fix.id, MISTER_MAGIK_PLATFORM_FB_ID))
 		return -ENODEV;
@@ -164,12 +150,6 @@ static int scanout_slots_validate_platform(void)
 					      scanout_slots[1].phys,
 					      RGB565_MAP_BYTES, ULONG_MAX))
 		return -ENODEV;
-	for (i = 0; i < ARRAY_SIZE(scanout_slots); i++) {
-		if (region_intersects(scanout_slots[i].phys, RGB565_MAP_BYTES,
-				      IORESOURCE_SYSTEM_RAM,
-				      IORES_DESC_NONE) != REGION_DISJOINT)
-			return -ENODEV;
-	}
 	return 0;
 }
 
@@ -268,5 +248,7 @@ module_init(scanout_slots_init);
 module_exit(scanout_slots_exit);
 
 MODULE_DESCRIPTION("MiSTer MagiK write-combined scanout slot mappings");
-MODULE_AUTHOR("MiSTer MagiK");
-MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("Nigel Breslaw");
+/* Linux uses "Proprietary" for source licenses outside its compatible set. */
+MODULE_LICENSE("Proprietary");
+MODULE_INFO(mister_magik_source_license, "GPL-3.0-or-later");

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::rc::Rc;
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel};
@@ -36,12 +39,6 @@ fn main() {
     bridge.set_present_mode_label("RGB565 /dev/fb0".into());
     bridge.set_info_database_build("1,284 ms (scan 1,107 ms, save 177 ms)".into());
     bridge.set_info_kernel_version("Kernel version detected at launcher startup".into());
-    bridge.set_slint_logo_image(
-        slint::Image::load_from_path(std::path::Path::new(
-            "magik-gui/ui/art/slint-logo-pixel.png",
-        ))
-        .expect("load Slint logo snapshot asset"),
-    );
     bridge.set_licenses_selected(1);
     bridge.set_licenses_expanded(expanded);
     bridge.set_license_lines(ModelRc::new(VecModel::from(

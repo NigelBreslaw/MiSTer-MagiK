@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-testable retro framebuffer effects used by the device benchmark.
 
 use std::sync::OnceLock;

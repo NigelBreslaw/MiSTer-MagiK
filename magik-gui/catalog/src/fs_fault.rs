@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Test-only filesystem fault injection for destructive device experiments.
 
 use serde_json::json;

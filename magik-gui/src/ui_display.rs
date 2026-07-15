@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Menu-output framebuffer vs Slint render buffer.
 //!
 //! Slint layouts stay at **`MisterUi.scale = 1`**. The launcher chooses a

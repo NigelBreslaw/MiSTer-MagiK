@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Measure warm launcher startup catalog timing without forcing a rebuild.
 set -euo pipefail
 

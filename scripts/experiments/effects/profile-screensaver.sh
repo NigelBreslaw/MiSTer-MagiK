@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run the experimental full-screen RGB565 screensaver scene on the MiSTer.
 set -euo pipefail
 

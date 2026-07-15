@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::*;
 #[cfg(any(test, mister_experiments))]
 use mister_magik_fb::framebuffer::target::blend_565;

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Summarize max-speed launcher scroll drops from a frame trace."""
 
 from __future__ import annotations

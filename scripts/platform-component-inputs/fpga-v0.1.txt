@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # MiSTer MagiK FPGA component identity inputs, format v0.1.
 fpga/menu-vblank-latch
 kernel/scanout-slots/mister_magik_scanout_platform.h

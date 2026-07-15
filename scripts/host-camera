@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Capture still images or short videos from a macOS USB camera via FFmpeg.
 set -euo pipefail
 

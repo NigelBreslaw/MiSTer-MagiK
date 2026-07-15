@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Canonical MiSTer hardware acceptance gate for public-beta releases.
 set -euo pipefail
 

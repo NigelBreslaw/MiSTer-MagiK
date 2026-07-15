@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Runtime thread scheduling policy for production background work.
 
 use std::sync::OnceLock;

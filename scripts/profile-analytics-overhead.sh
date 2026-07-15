@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Measure live frame analytics overhead on the MiSTer.
 #
 # This script uses scripts/mister only. It toggles the volatile analytics lease

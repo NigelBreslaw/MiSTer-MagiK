@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Input routing while the controller setup overlay has focus.
 
 use crate::input::PadPool;

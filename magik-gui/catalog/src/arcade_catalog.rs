@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Arcade catalog helpers.
 //!
 //! The runtime launcher catalog is SQLite-backed. This module keeps the shared

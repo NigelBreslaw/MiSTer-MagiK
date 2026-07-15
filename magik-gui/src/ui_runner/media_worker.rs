@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::artifact_publish::{
     hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_rust_best_effort,
     timestamped_temp_path_for, ArtifactPublishLabels,

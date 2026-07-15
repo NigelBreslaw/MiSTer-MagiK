@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';

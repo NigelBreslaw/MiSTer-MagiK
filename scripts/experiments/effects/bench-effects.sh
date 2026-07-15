@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Experimental: benchmark native retro framebuffer effects on the MiSTer.
 #
 #   scripts/experiments/effects/bench-effects.sh EFFECTS-20260607 --device --replace-label

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Timing fields needed to position the HPS framebuffer inside a MiSTer video mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramebufferRouteMode {

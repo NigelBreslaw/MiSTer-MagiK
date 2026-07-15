@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared filesystem facts for catalog profile planning and audit.
 
 use crate::catalog_scan::should_ignore_path;

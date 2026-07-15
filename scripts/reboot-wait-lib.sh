@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Shared reboot handling for install/restore scripts.
 
 mister_reboot_wait_with_raw_fallback() {

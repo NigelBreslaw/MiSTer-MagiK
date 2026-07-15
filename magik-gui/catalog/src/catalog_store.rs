@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! SQLite catalog storage and publish support.
 //!
 //! Catalog v2 builds SQLite off SD/exFAT and publishes only the completed file.

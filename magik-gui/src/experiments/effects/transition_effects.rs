@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Host-testable classic arcade screen transition effects.
 #![allow(clippy::too_many_arguments)]
 

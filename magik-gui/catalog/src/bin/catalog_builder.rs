@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use mister_magik_catalog::builder_protocol::CatalogBuilderEvent;
 use mister_magik_catalog::builder_service::{run, BuilderOperation};
 use std::io::{self, Write};

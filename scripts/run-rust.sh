@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run the already-deployed Rust frontend on the MiSTer.
 #
 # This is intentionally separate from deploy-rust.sh: use it when the binary on

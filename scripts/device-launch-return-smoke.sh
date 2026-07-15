@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Device smoke for launcher return state.
 #
 # Drives a real launcher-selected game handoff without controller injection:

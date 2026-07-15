@@ -1,8 +1,12 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [package]
 name = "mister-magik-catalog"
 version = "0.1.0"
 edition = "2021"
 description = "Catalog, library scan, and preview-loading logic for MiSTer MagiK."
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "mister-magik-catalog-builder"

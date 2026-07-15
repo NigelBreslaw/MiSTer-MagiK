@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Shared helpers for experimental MiSTer MagiK profiling scripts.
 
 experiment_repo_root() {

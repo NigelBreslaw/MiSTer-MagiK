@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Regenerate/annotate the baked core launch manifest from host evidence.
 
 The checked-in manifest is still curated: this tool does not guess new launch

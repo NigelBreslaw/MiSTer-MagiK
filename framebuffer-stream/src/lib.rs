@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::io::{Read, Write};
 
 pub const SCHEMA: &str = "mister-magik-framebuffer-stream-v1";

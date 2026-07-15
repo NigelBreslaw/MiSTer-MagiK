@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Rust <-> Slint bridge for MiSTer input and app state.
 import { ArcadeGame } from "arcade_game.slint";
 import { MenuItem } from "launcher_menu.slint";
@@ -59,7 +62,6 @@ export global MisterBridge {
     in-out property <string> present-mode-label;
     in-out property <string> info-kernel-version;
     in-out property <string> info-database-build;
-    in-out property <image> slint-logo-image;
     // Home focus: selected menu-item index, with settings-focused as the top cog target.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;

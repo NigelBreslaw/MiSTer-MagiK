@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Structured catalog progress phases and the legacy title/detail adapter.
 
 use std::borrow::Cow;
