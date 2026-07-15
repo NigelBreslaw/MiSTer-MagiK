@@ -6,6 +6,7 @@
 use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};
 use crate::library_db;
 use crate::media_identity::ScreenshotAssetId;
+use crate::preview_worker;
 use rusqlite::{params, params_from_iter, Connection};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -830,11 +831,13 @@ pub(crate) fn software_asset_key(list_name: &str, software_name: &str) -> String
 pub(crate) struct ConsolePreviewAsset {
     pub(crate) archive_path: String,
     pub(crate) asset_key: ScreenshotAssetId,
+    pub(crate) has_preview: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PreviewArchivePaths {
     pub(crate) by_platform: HashMap<String, String>,
+    entries_by_platform: HashMap<String, HashSet<String>>,
 }
 
 impl PreviewArchivePaths {
@@ -845,11 +848,60 @@ impl PreviewArchivePaths {
                 .entry(preview_asset_pack_platform(&path).to_string())
                 .or_insert(path);
         }
-        Self { by_platform }
+        Self {
+            by_platform,
+            entries_by_platform: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn from_paths_with_sidecar_entries(paths: Vec<String>) -> Self {
+        let mut this = Self::from_paths(paths);
+        for (platform, path) in &this.by_platform {
+            let resolved = preview_worker::resolved_preview_archive_path(path);
+            let entries = preview_worker::preview_archive_sidecar_entry_stems(Path::new(&resolved))
+                .ok()
+                .flatten()
+                .map(|stems| stems.entries.into_iter().collect::<HashSet<_>>())
+                .unwrap_or_default();
+            this.entries_by_platform.insert(platform.clone(), entries);
+        }
+        this
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_preview_indexes(indexes: &[preview_worker::PreviewArchiveIndex]) -> Self {
+        let mut this = Self::from_paths(indexes.iter().map(|index| index.path.clone()).collect());
+        for index in indexes {
+            let platform = preview_asset_pack_platform(&index.path).to_string();
+            this.entries_by_platform.insert(
+                platform,
+                index
+                    .entries
+                    .iter()
+                    .filter_map(|name| {
+                        Path::new(name)
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(str::to_ascii_lowercase)
+                    })
+                    .collect(),
+            );
+        }
+        this
     }
 
     pub(crate) fn archive_for_platform(&self, platform: &str) -> Option<&str> {
         self.by_platform.get(platform).map(String::as_str)
+    }
+
+    pub(crate) fn has_entry(&self, platform: &str, asset_key: &str) -> bool {
+        if asset_key.is_empty() || self.archive_for_platform(platform).is_none() {
+            return false;
+        }
+        match self.entries_by_platform.get(platform) {
+            Some(entries) => entries.contains(&asset_key.to_ascii_lowercase()),
+            None => true,
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -869,9 +921,12 @@ pub(crate) fn console_preview_asset(
         .filter(|(list_name, _)| *list_name == identity.list_name)
         .map(|(_, family_name)| family_name)
         .unwrap_or(identity.software_name.as_str());
+    let asset_key = ScreenshotAssetId::from_mame_software(&identity.list_name, software_name);
+    let has_preview = preview_paths.has_entry(platform, &asset_key.to_string());
     Some(ConsolePreviewAsset {
         archive_path: archive_path.to_string(),
-        asset_key: ScreenshotAssetId::from_mame_software(&identity.list_name, software_name),
+        asset_key,
+        has_preview,
     })
 }
 
@@ -1219,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn console_preview_derives_key_without_reading_pack_entries() {
+    fn console_preview_derives_key_but_requires_index_membership() {
         let root = unique_temp_dir("derived-console-preview");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
@@ -1263,7 +1318,7 @@ mod tests {
             )
             .expect("launcher row");
 
-        assert_eq!(row, (software_asset_key("saturn", "albert"), 1));
+        assert_eq!(row, (software_asset_key("saturn", "albert"), 0));
         assert!(!sqlite_table_exists(&conn, "asset_entries").expect("check asset_entries table"));
         let _ = std::fs::remove_dir_all(root);
     }

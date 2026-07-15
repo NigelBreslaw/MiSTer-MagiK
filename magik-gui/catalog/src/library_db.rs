@@ -1193,7 +1193,7 @@ fn build_catalog_from_scan_with_preferred_and_progress(
 ) -> (ArcadeCatalog, CatalogProjectionTiming) {
     let mame_sqlite_path = default_mame_sqlite_path();
     let hbmame_sqlite_path = default_hbmame_sqlite_path();
-    let preview_paths = PreviewArchivePaths::from_paths(
+    let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
     build_catalog_from_scan_with_sources_and_preferred_and_progress(
@@ -1570,9 +1570,10 @@ impl CatalogProjectionBuildContext<'_> {
                         .as_ref()
                         .and_then(|identity| console_preview_asset(identity, self.preview_paths))
                         .map(|asset| {
-                            LauncherPreviewAsset::new(
+                            LauncherPreviewAsset::with_availability(
                                 preview_worker::preview_archive_path_for_system(&system_id),
                                 asset.asset_key.to_string(),
+                                asset.has_preview,
                             )
                         })
                 })
@@ -1611,8 +1612,7 @@ impl CatalogProjectionBuildContext<'_> {
             row.game.has_preview = row.game.has_preview
                 && self
                     .preview_paths
-                    .archive_for_platform(&system_id)
-                    .is_some();
+                    .has_entry(&system_id, row.game.preview_asset_key.as_ref());
         }
         Some(CatalogProjectionForDiscovery {
             row,
@@ -1631,10 +1631,15 @@ fn amigavision_preview_asset(
         return None;
     }
     preview_paths.archive_for_platform("amiga")?;
-    Some(LauncherPreviewAsset::new(
+    Some(LauncherPreviewAsset::with_availability(
         preview_worker::preview_archive_path_for_system("amiga"),
         crate::media_identity::ScreenshotAssetId::from_amigavision_title(&discovery.title)
             .into_string(),
+        preview_paths.has_entry(
+            "amiga",
+            &crate::media_identity::ScreenshotAssetId::from_amigavision_title(&discovery.title)
+                .into_string(),
+        ),
     ))
 }
 
@@ -2095,6 +2100,64 @@ mod tests {
 
         discovery.genre = Some("AmigaVision demos".to_string());
         assert!(amigavision_preview_asset(&discovery, "amiga", &paths).is_none());
+    }
+
+    #[test]
+    fn fresh_arcade_catalog_marks_preview_only_for_index_members() {
+        let root = unique_temp_dir("fresh-arcade-preview-index");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("mpatrol", None, "Moon Patrol", Some("1982"), Some("Irem")),
+                (
+                    "adcanoe",
+                    None,
+                    "Agent X",
+                    Some("1983"),
+                    Some("Atari"),
+                ),
+            ],
+        );
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: root
+                .join("arcade-screenshots-320x320.mmlz4b")
+                .display()
+                .to_string(),
+            codec: "mmlz4b",
+            entries: vec!["mpatrol.rgb565".to_string()],
+        };
+        let preview_paths = PreviewArchivePaths::from_preview_indexes(&[pack]);
+        let mut with_preview = mra_discovery(1, "Moon Patrol");
+        with_preview.setname = Some("mpatrol".to_string());
+        let mut without_preview = mra_discovery(2, "Agent X");
+        without_preview.setname = Some("adcanoe".to_string());
+        let scan = sqlite_scan_with_discoveries(vec![with_preview, without_preview]);
+
+        let catalog = build_catalog_from_scan_with_sources(
+            "/media/fat/_Arcade",
+            &scan,
+            &mame_db,
+            &PathBuf::new(),
+            &preview_paths,
+            SoftwareHashCache::load(&root.join("library.sqlite3")),
+            None,
+        );
+
+        let present = catalog
+            .games
+            .iter()
+            .find(|game| game.preview_asset_key.as_ref() == "mpatrol")
+            .expect("indexed arcade preview row");
+        assert!(present.has_preview);
+        let absent = catalog
+            .games
+            .iter()
+            .find(|game| game.preview_asset_key.as_ref() == "adcanoe")
+            .expect("non-indexed arcade preview row");
+        assert!(!absent.has_preview);
+        assert_eq!(absent.preview_asset_key.as_ref(), "adcanoe");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

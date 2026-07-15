@@ -23,6 +23,7 @@ use std::path::Path;
 pub(crate) struct LauncherPreviewAsset {
     pub(crate) archive_path: String,
     pub(crate) asset_key: String,
+    available: bool,
 }
 
 impl LauncherPreviewAsset {
@@ -34,6 +35,21 @@ impl LauncherPreviewAsset {
         let archive_path = archive_path.into();
         let asset_key = asset_key.into();
         Self {
+            available: !archive_path.is_empty() && !asset_key.is_empty(),
+            archive_path,
+            asset_key,
+        }
+    }
+
+    pub(crate) fn with_availability(
+        archive_path: impl Into<String>,
+        asset_key: impl Into<String>,
+        available: bool,
+    ) -> Self {
+        let archive_path = archive_path.into();
+        let asset_key = asset_key.into();
+        Self {
+            available,
             archive_path,
             asset_key,
         }
@@ -41,12 +57,18 @@ impl LauncherPreviewAsset {
 
     pub(crate) fn from_console_asset(asset: Option<&ConsolePreviewAsset>) -> Self {
         asset
-            .map(|asset| Self::new(asset.archive_path.clone(), asset.asset_key.to_string()))
+            .map(|asset| {
+                Self::with_availability(
+                    asset.archive_path.clone(),
+                    asset.asset_key.to_string(),
+                    asset.has_preview,
+                )
+            })
             .unwrap_or_default()
     }
 
     pub(crate) fn has_preview(&self) -> bool {
-        !self.archive_path.is_empty() && !self.asset_key.is_empty()
+        self.available && !self.archive_path.is_empty() && !self.asset_key.is_empty()
     }
 }
 
