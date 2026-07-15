@@ -272,7 +272,8 @@ GitHub Actions builds the ARM frontend in `.github/workflows/rust-arm.yml`.
 CI builds the single production frontend with `magik-gui/build-arm.sh --device`.
 
 CI runs on Linux, so `build-arm.sh` uses pinned `cross` 0.2.5 there. Each job
-uses `magik-gui/Dockerfile.cross-armv7` via `magik-gui/Cross.toml`, caches Cargo
+pulls the content-versioned GHCR image selected by `magik-gui/Cross.toml`; the
+image is built from `magik-gui/Dockerfile.cross-armv7`. CI caches Cargo
 registry/git data, caches the minimal FFmpeg tree, records
 `build/binary-size.tsv`, checks the ARM ELF dynamic dependencies with
 `magik-gui/scripts/check-arm-shared-libs.sh`, and uploads the binary plus size
@@ -361,9 +362,10 @@ the build script can use it.
 
 ## cross-rs
 
-CI and non-Apple local builds use **0.2.5** from crates.io. Builds use the
-checked-in `magik-gui/Dockerfile.cross-armv7` through `magik-gui/Cross.toml`;
-the image is based on Ubuntu 20.04 to match the MiSTer glibc 2.31 runtime:
+CI and non-Apple local builds use **0.2.5** from crates.io. CI uses the
+content-versioned GHCR image named in `magik-gui/Cross.toml`; it is built from
+the checked-in `magik-gui/Dockerfile.cross-armv7`. The image is based on Ubuntu
+20.04 to match the MiSTer glibc 2.31 runtime:
 
 ```bash
 cargo install cross --version 0.2.5 --locked
