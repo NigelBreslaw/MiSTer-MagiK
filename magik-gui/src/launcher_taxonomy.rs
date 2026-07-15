@@ -594,7 +594,7 @@ impl<'a> TaxonomyBuilder<'a> {
                 kind: LauncherMenuItemKind::Collection,
             });
         }
-        for menu_id in [CONSOLES_MENU_ID, HANDHELDS_MENU_ID, COMPUTERS_MENU_ID] {
+        for menu_id in [CONSOLES_MENU_ID, COMPUTERS_MENU_ID, HANDHELDS_MENU_ID] {
             if let Some(menu) = self.taxonomy.menu(menu_id) {
                 items.push(LauncherMenuItem {
                     id: menu.id.clone(),
@@ -816,8 +816,8 @@ mod tests {
             vec![
                 MENU_ARCADE_SYSTEM_ID,
                 CONSOLES_MENU_ID,
-                HANDHELDS_MENU_ID,
                 COMPUTERS_MENU_ID,
+                HANDHELDS_MENU_ID,
             ]
         );
     }
