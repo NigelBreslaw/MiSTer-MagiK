@@ -25,8 +25,13 @@ REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
 NAMESPACE_BACKEND=""
-RAM_CATALOG_READY_GATE_MS=100000
-DB_SAVE_GATE_MS=127000
+# Reference-MiSTer regression gates. They detect performance/content drift; they
+# are not beta shipping blockers.
+RAM_CATALOG_READY_GATE_MS=96592
+DB_SAVE_GATE_MS=117766
+CATALOG_GAME_COUNT_GATE=53457
+CATALOG_SYSTEM_COUNT_GATE=71
+CATALOG_DB_MAX_BYTES=13151232
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/mister-supervision-lib.sh"
 source "$HERE/scripts/bench-context-lib.sh"
@@ -55,6 +60,14 @@ first_scan_gate_check() {
     return 1
   fi
   return 0
+}
+
+first_scan_catalog_gate_check() {
+  local games="$1" systems="$2" db_bytes="$3"
+  [[ "$games" == "$CATALOG_GAME_COUNT_GATE" ]] || return 1
+  [[ "$systems" == "$CATALOG_SYSTEM_COUNT_GATE" ]] || return 1
+  [[ "$db_bytes" =~ ^[0-9]+$ ]] || return 1
+  (( db_bytes <= CATALOG_DB_MAX_BYTES )) || return 1
 }
 
 first_scan_commit_is_dirty_from_statuses() {
@@ -337,6 +350,38 @@ first_scan_self_test() {
   fi
   if first_scan_gate_check "$RAM_CATALOG_READY_GATE_MS" $((DB_SAVE_GATE_MS + 1)); then
     echo "save gate accepted gate+1" >&2
+    return 1
+  fi
+  first_scan_catalog_gate_check \
+    "$CATALOG_GAME_COUNT_GATE" \
+    "$CATALOG_SYSTEM_COUNT_GATE" \
+    "$CATALOG_DB_MAX_BYTES"
+  if first_scan_catalog_gate_check \
+    "$CATALOG_GAME_COUNT_GATE" \
+    "$CATALOG_SYSTEM_COUNT_GATE" \
+    $((CATALOG_DB_MAX_BYTES + 1)); then
+    echo "catalog size gate accepted max+1" >&2
+    return 1
+  fi
+  if first_scan_catalog_gate_check \
+    $((CATALOG_GAME_COUNT_GATE - 1)) \
+    "$CATALOG_SYSTEM_COUNT_GATE" \
+    "$CATALOG_DB_MAX_BYTES"; then
+    echo "catalog game-count gate accepted the wrong count" >&2
+    return 1
+  fi
+  if first_scan_catalog_gate_check \
+    "$CATALOG_GAME_COUNT_GATE" \
+    $((CATALOG_SYSTEM_COUNT_GATE - 1)) \
+    "$CATALOG_DB_MAX_BYTES"; then
+    echo "catalog system-count gate accepted the wrong count" >&2
+    return 1
+  fi
+  if first_scan_catalog_gate_check \
+    "$CATALOG_GAME_COUNT_GATE" \
+    "$CATALOG_SYSTEM_COUNT_GATE" \
+    ""; then
+    echo "catalog size gate accepted a missing size" >&2
     return 1
   fi
   if first_scan_commit_is_dirty_from_statuses 0 0; then
@@ -796,13 +841,22 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   }
 ' "$combined_log" >>"$TSV"
 
-db_count="$("$MISTER" db "SELECT count(*) FROM game_rows" 2>/dev/null | awk -F '\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { print $1; exit }' | tr -d '\r' || true)"
+catalog_metrics="$("$MISTER" db "SELECT 'games' AS metric, count(*) AS value FROM games UNION ALL SELECT 'systems', count(*) FROM systems;" 2>/dev/null || true)"
+catalog_games="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "games" { print $2; exit }' | tr -d '\r')"
+catalog_systems="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "systems" { print $2; exit }' | tr -d '\r')"
+catalog_db_bytes="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "library_sql_timing_tsv" { print $3; exit }' | tr -d '\r')"
 status="$("$MISTER" status 2>/dev/null || true)"
-printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "db_count" "0" "$db_count" >>"$TSV"
+printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_games" "0" "$catalog_games" >>"$TSV"
+printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_systems" "0" "$catalog_systems" >>"$TSV"
+printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_db_bytes" "0" "$catalog_db_bytes" >>"$TSV"
+if ! first_scan_catalog_gate_check "$catalog_games" "$catalog_systems" "$catalog_db_bytes"; then
+  gate_failed=1
+  echo "first scan catalog regression gate failed: games=${catalog_games:-missing}/${CATALOG_GAME_COUNT_GATE} systems=${catalog_systems:-missing}/${CATALOG_SYSTEM_COUNT_GATE} db_bytes=${catalog_db_bytes:-missing}/${CATALOG_DB_MAX_BYTES}" >&2
+fi
 emit_thread_sample_artifact_report | tee "$artifact_report"
 
 echo "appended to $TSV"
-echo "db_count=$db_count"
+echo "catalog_games=$catalog_games catalog_systems=$catalog_systems catalog_db_bytes=$catalog_db_bytes"
 printf '%s\n' "$status"
 if [[ "$gate_failed" -eq 1 ]]; then
   exit 1

@@ -10,9 +10,10 @@ APIs, progress states, and benchmark expectations.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
-  The ratified cold first-scan acceptance is RAM catalog usable within 100000ms
-  on the target MiSTer and durable SQLite save complete within 127000ms. Anything
-  above either threshold fails `scripts/profile-first-scan.sh`.
+  Reference-MiSTer cold first-scan regression checks are RAM catalog usable
+  within 96592ms, durable SQLite save complete within 117766ms, exactly 53457
+  persisted games and 71 systems, and a database no larger than 13151232 bytes.
+  They detect benchmark regressions and are not beta shipping blockers.
 - First database creation is a foreground bootstrap job. The catalog worker and
   library walker must run at full priority with unrestricted CPU affinity until
   the RAM catalog is usable. It is acceptable for the scan/build screen to

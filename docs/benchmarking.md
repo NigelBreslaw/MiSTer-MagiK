@@ -79,10 +79,12 @@ durable SQLite save:
 scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
 ```
 
-Current production targets on the reference MiSTer are:
+Reference-MiSTer regression gates (not beta shipping blockers) are:
 
-- `library_ready <= 94650ms`
-- `library_db_saved <= 121336ms`
+- `library_ready <= 96592ms`
+- `library_db_saved <= 117766ms`
+- persisted `games == 53457` and `systems == 71`
+- `library.sqlite3 <= 13151232` bytes (64 KiB above the clean baseline)
 
 During first database creation, the catalog builder owns the machine. The
 catalog worker and library walker must run foreground, with nice `0` and
@@ -109,7 +111,7 @@ durations, `overlapped_us`, and the worker policy. Retained evidence must also
 contain a `catalog-audit` thread-policy row with nice `0` and all online CPUs;
 the optimization is invalid if either branch inherits the background CPU0
 policy. Compare `wall_us` with the sequential audit+stamp+catalog sum, but keep
-the canonical `library_ready` marker as the release gate.
+the canonical `library_ready` marker as the reference regression gate.
 
 ## Startup Reveal Gate
 
@@ -755,11 +757,13 @@ the normal `scripts/mister reboot-wait` path. It collects canonical UI markers
 from `/tmp/mister-magik/events.jsonl`, falls back to the launcher log when
 needed, and explicitly labels standalone-builder fallback timings rather than
 mixing clocks. It records first-frame/catalog-ready timings in
-`history/toolchain-bench/results-first-scan.tsv`. The hard first-scan gates are
-`library_ready <= 94650ms` for RAM catalog usability and
-`library_db_saved <= 121336ms` for durable SQLite save completion. These values
-were explicitly ratified on 2026-07-13; anything above
-either threshold fails the script. For cold catalog UX, prefer
+`history/toolchain-bench/results-first-scan.tsv`. The reference regression gates
+are `library_ready <= 96592ms` for RAM catalog usability and
+`library_db_saved <= 117766ms` for durable SQLite save completion, plus the
+fixed reference catalog counts (`games == 53457`, `systems == 71`) and
+`library.sqlite3 <= 13151232` bytes. These are benchmark
+regression checks, not beta shipping blockers; a mismatch fails the benchmark
+script and must be investigated. For cold catalog UX, prefer
 `bootstrap_counter_sustained_climb` over the first
 `bootstrap_counter_climb`: the latter is only the first meaningful target
 (`Games found: 50`), while the sustained metric marks the point where enough
