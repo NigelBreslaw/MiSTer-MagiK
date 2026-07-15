@@ -77,6 +77,12 @@ def main() -> int:
         if "ci-cache-identity.py" not in texts[workflow]:
             fail(f"{workflow} does not consume the canonical cache identity")
 
+    ffmpeg_helper = (ROOT / "magik-gui/scripts/build-minimal-ffmpeg.sh").read_text(
+        encoding="utf-8"
+    )
+    if '"$HERE/../scripts/ci-cache-identity.py"' not in ffmpeg_helper:
+        fail("minimal FFmpeg helper does not resolve the canonical cache identity from repo root")
+
     fpga = texts["fpga-vblank-latch.yml"]
     if "actions/cache" in fpga or "prepare-quartus" in fpga:
         fail("Quartus still uses GitHub cache or a duplicate preparation job")
