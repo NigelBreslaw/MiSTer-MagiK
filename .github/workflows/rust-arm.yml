@@ -29,14 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - candidate: baseline
-            dockerfile: magik-gui/Dockerfile.cross-armv7
-          - candidate: ubuntu-runtime-resources
+          - candidate: ubuntu-runtime-resources-gcc
             dockerfile: magik-gui/ci/cross-images/Dockerfile.ubuntu-clang-runtime
-          - candidate: ubuntu-runtime-only
+          - candidate: ubuntu-runtime-only-gcc
             dockerfile: magik-gui/ci/cross-images/Dockerfile.ubuntu-clang-runtime-only
-          - candidate: debian-bullseye
-            dockerfile: magik-gui/ci/cross-images/Dockerfile.debian-bullseye
     steps:
       - name: Checkout
         uses: actions/checkout@v7
