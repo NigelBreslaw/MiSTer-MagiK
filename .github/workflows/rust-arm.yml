@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,6 +21,27 @@ env:
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
 
 jobs:
+  publish-cross-image:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      IMAGE: ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish image
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --tag "$IMAGE" --file magik-gui/Dockerfile.cross-armv7 magik-gui
+          docker push "$IMAGE"
+
   host-dev:
     name: host-dev
     runs-on: ubuntu-24.04
