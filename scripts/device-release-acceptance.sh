@@ -1004,7 +1004,7 @@ run_tier_catalog() {
 }
 
 run_supervised_reboot_soak() {
-  run_capture "supervised-reboot-soak-3" "$MISTER" agent boot-profile 3 --timeout 60 --fail-on-timeout
+  run_capture "supervised-reboot-soak-4" "$MISTER" agent boot-profile 4 --timeout 60 --fail-on-timeout
   wait_for_launcher_active "wait-launcher-after-supervised-reboot-soak" 90 || return 1
   status_json "post-reboot-soak" || record_fail "post reboot soak status JSON"
   assert_status "$OUT/status-post-reboot-soak.json" "post-reboot soak launcher active" \
