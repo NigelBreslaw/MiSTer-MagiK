@@ -5,9 +5,6 @@ use std::sync::OnceLock;
 
 pub const LICENSE_TITLES: [&str; 4] = ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"];
 
-#[cfg(target_arch = "arm")]
-const GPL3: &str = include_str!("../LICENSE");
-#[cfg(not(target_arch = "arm"))]
 const GPL3: &str = include_str!("../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");

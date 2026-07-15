@@ -518,9 +518,11 @@ Current rules:
   preview entries fail at runtime and show the blank preview state.
 - Catalog code must not read `gamelist.xml`; runtime catalog loading goes
   through the SQLite library cache and materialized projections.
-- MAME XML and MAME software-list XML are host-side metadata inputs only. Convert
-  them to `mame.sqlite3` with `scripts/mister mame-metadata-build`; the runtime
-  scanner consumes the SQLite rows, not those XML files.
+- MAME XML and MAME software-list XML are database-publisher inputs only. The
+  production conversion to `mame.sqlite3` runs exclusively in
+  `.github/workflows/game-databases.yml`; application distribution consumes a
+  verified immutable `game-databases-vN` release. The runtime scanner consumes
+  SQLite rows, never XML. Local synthetic conversion is test-only.
 - Runtime preview loading is raw565-oriented. Build source screenshots, raw565
   caches, fixed LZ4-block `.mmlz4b` preview packs, and `.mmlz4b.idx` seek
   sidecars from the private `private/magik-cloud` submodule. The sidecar is a

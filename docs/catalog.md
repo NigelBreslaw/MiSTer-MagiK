@@ -738,10 +738,19 @@ only supported screenshot-pack publish path; record performance evidence in
 MAME and HBMAME identity metadata are fixed SQLite artifacts. The manual,
 main-only game-database workflow publishes both in sequential
 `game-databases-vN` releases and rebuilds only upstreams whose tag or revision
-changed. `scripts/package-distribution.sh` verifies the selected numbered
-manifest before including both databases, and the catalog stamp tracks their
-file signatures. Runtime deploy and ordinary application publication never
-build those metadata databases.
+changed. This workflow, `.github/workflows/game-databases.yml`, is the only
+production path permitted to create a bundle or run `mame-metadata-build`.
+Distribution assembly downloads one numbered archive, its manifest, and
+`SHA256SUMS` into a release directory and passes only that directory to
+`scripts/package-distribution.sh`. The packager fails closed on missing,
+ambiguous, mismatched, corrupt, or unsafe bundles before extracting into private
+staging. The catalog stamp tracks the verified database file signatures.
+Runtime deploy and application publication never build or accept raw database
+inputs.
+
+Synthetic SQLite bundles are permitted only as temporary isolated test fixtures
+for corruption, mismatch, undersized-data, and traversal coverage. They are not
+package defaults, release candidates, or publication inputs.
 
 ## SQLite Build And Publish
 

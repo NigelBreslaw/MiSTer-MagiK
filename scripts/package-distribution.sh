@@ -8,13 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
-DEFAULT_MAME="$ROOT/build/mame.sqlite3"
-DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
 DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
 
 BIN="$DEFAULT_BIN"
 CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
-MAME_SQLITE="$DEFAULT_MAME"
+GAME_DATABASES_RELEASE_DIR=""
+MAME_SQLITE=""
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
 ASSET_PACK=""
@@ -27,8 +26,6 @@ LATCH_METADATA=""
 PLATFORM_MANIFEST=""
 PLATFORM_BUNDLE_MANIFEST=""
 GAME_DATABASES_MANIFEST=""
-MAME_SOURCE_REF=""
-HBMAME_SOURCE_REVISION=""
 NAME="mister-magik"
 OUT_DIR="$ROOT/dist"
 VERSION=""
@@ -48,15 +45,12 @@ Options:
   --catalog-builder PATH
                        Matching ARM catalog builder (required).
                        Default: $DEFAULT_CATALOG_BUILDER
-  --mame-sqlite PATH   MAME metadata SQLite database.
-                       Default: $DEFAULT_MAME
-  --hbmame-sqlite PATH HBMame metadata SQLite database (required).
-                       Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
+  --game-databases-release-dir PATH
+                       Verified numbered release directory containing exactly
+                       its archive, manifest, and SHA256SUMS (required).
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
   --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
-  --hbmame-sqlite-default
-                       Use the default HBMame metadata DB.
   --main-bin PATH      Required MiSTer_MagiK Main fork binary.
   --main-source-revision SHA
                        Source revision for --main-bin (required when it is supplied).
@@ -71,12 +65,6 @@ Options:
                        Required canonical manifest matching every platform artifact.
   --platform-bundle-manifest PATH
                        Required durable platform bundle v0.1 manifest.
-  --game-databases-manifest PATH
-                       Required numbered game-database release manifest.
-  --mame-source-ref REF
-                       Optional compatibility check against the database manifest.
-  --hbmame-source-revision SHA
-                       Optional compatibility check against the database manifest.
   --name NAME          Output basename. Default: mister-magik
   --out-dir PATH       Output directory. Default: dist
   --version VERSION    Required release version (0.2.BUILD).
@@ -118,12 +106,8 @@ while [[ $# -gt 0 ]]; do
       CATALOG_BUILDER="${2:?--catalog-builder requires a path}"
       shift 2
       ;;
-    --mame-sqlite)
-      MAME_SQLITE="${2:?--mame-sqlite requires a path}"
-      shift 2
-      ;;
-    --hbmame-sqlite)
-      HBMAME_SQLITE="${2:?--hbmame-sqlite requires a path}"
+    --game-databases-release-dir)
+      GAME_DATABASES_RELEASE_DIR="${2:?--game-databases-release-dir requires a path}"
       shift 2
       ;;
     --installer)
@@ -133,10 +117,6 @@ while [[ $# -gt 0 ]]; do
     --asset-pack)
       ASSET_PACK="${2:?--asset-pack requires a path}"
       shift 2
-      ;;
-    --hbmame-sqlite-default)
-      HBMAME_SQLITE="$DEFAULT_HBMAME"
-      shift
       ;;
     --main-bin)
       MAIN_BIN="${2:?--main-bin requires a path}"
@@ -168,18 +148,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --platform-bundle-manifest)
       PLATFORM_BUNDLE_MANIFEST="${2:?--platform-bundle-manifest requires a path}"
-      shift 2
-      ;;
-    --game-databases-manifest)
-      GAME_DATABASES_MANIFEST="${2:?--game-databases-manifest requires a path}"
-      shift 2
-      ;;
-    --mame-source-ref)
-      MAME_SOURCE_REF="${2:?--mame-source-ref requires a ref}"
-      shift 2
-      ;;
-    --hbmame-source-revision)
-      HBMAME_SOURCE_REVISION="${2:?--hbmame-source-revision requires a revision}"
       shift 2
       ;;
     --name)
@@ -225,11 +193,17 @@ if [[ ! -f "$CATALOG_BUILDER" ]]; then
   echo "ERROR: catalog builder not found: $CATALOG_BUILDER" >&2
   exit 1
 fi
-if [[ ! -f "$MAME_SQLITE" ]]; then
-  echo "ERROR: MAME metadata DB not found: $MAME_SQLITE" >&2
-  echo "       Build it with: scripts/mister mame-metadata-build --out '$MAME_SQLITE' [--category-ini /path/to/catver.ini]" >&2
-  exit 1
+if [[ -z "$GAME_DATABASES_RELEASE_DIR" || ! -d "$GAME_DATABASES_RELEASE_DIR" ]]; then
+  echo "ERROR: --game-databases-release-dir is required and must be a directory." >&2
+  exit 2
 fi
+DATABASE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-game-databases.XXXXXX")"
+trap 'rm -rf "$DATABASE_TMP"' EXIT
+python3 "$ROOT/scripts/game-databases-bundle.py" extract-release \
+  "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
+MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
+HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
+GAME_DATABASES_MANIFEST="$DATABASE_TMP/game-databases-manifest.json"
 if [[ ! -f "$INSTALLER" ]]; then
   echo "ERROR: installer not found: $INSTALLER" >&2
   exit 1
@@ -264,15 +238,6 @@ fi
 if [[ -n "$ASSET_PACK" && ! -f "$ASSET_PACK" ]]; then
   echo "ERROR: asset pack not found: $ASSET_PACK" >&2
   exit 1
-fi
-if [[ -n "$HBMAME_SQLITE" && ! -f "$HBMAME_SQLITE" ]]; then
-  echo "ERROR: HBMame metadata DB not found: $HBMAME_SQLITE" >&2
-  echo "       Build it with: scripts/mister mame-metadata-build --out '$HBMAME_SQLITE' --mame /path/to/hbmame [--category-ini /path/to/catver.ini]" >&2
-  exit 1
-fi
-if [[ -z "$HBMAME_SQLITE" ]]; then
-  echo "ERROR: numbered game-database releases require both MAME and HBMAME databases." >&2
-  exit 2
 fi
 if [[ -z "$MAIN_BIN" || -z "$MAIN_SOURCE_REVISION" ]]; then
   echo "ERROR: --main-bin and --main-source-revision are required." >&2
@@ -313,13 +278,6 @@ if [[ ! "$LATCH_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
   echo "ERROR: latch metadata lacks a valid source_commit." >&2
   exit 1
 fi
-if [[ -z "$GAME_DATABASES_MANIFEST" || ! -f "$GAME_DATABASES_MANIFEST" ]]; then
-  echo "ERROR: --game-databases-manifest is required." >&2
-  exit 2
-fi
-python3 "$ROOT/scripts/game-databases-bundle.py" verify-files \
-  --manifest "$GAME_DATABASES_MANIFEST" \
-  --mame-sqlite "$MAME_SQLITE" --hbmame-sqlite "$HBMAME_SQLITE" >/dev/null
 manifest_field() {
   python3 - "$GAME_DATABASES_MANIFEST" "$1" <<'PY'
 import json
@@ -332,18 +290,8 @@ print(value)
 PY
 }
 GAME_DATABASE_VERSION="$(manifest_field release_version)"
-MANIFEST_MAME_SOURCE_REF="$(manifest_field sources.mame.tag)"
-MANIFEST_HBMAME_SOURCE_REVISION="$(manifest_field sources.hbmame.sha)"
-if [[ -n "$MAME_SOURCE_REF" && "$MAME_SOURCE_REF" != "$MANIFEST_MAME_SOURCE_REF" ]]; then
-  echo "ERROR: --mame-source-ref does not match the game-database manifest." >&2
-  exit 2
-fi
-if [[ -n "$HBMAME_SOURCE_REVISION" && "$HBMAME_SOURCE_REVISION" != "$MANIFEST_HBMAME_SOURCE_REVISION" ]]; then
-  echo "ERROR: --hbmame-source-revision does not match the game-database manifest." >&2
-  exit 2
-fi
-MAME_SOURCE_REF="$MANIFEST_MAME_SOURCE_REF"
-HBMAME_SOURCE_REVISION="$MANIFEST_HBMAME_SOURCE_REVISION"
+MAME_SOURCE_REF="$(manifest_field sources.mame.tag)"
+HBMAME_SOURCE_REVISION="$(manifest_field sources.hbmame.sha)"
 if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_REVISION" ]]; then
   echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
@@ -368,7 +316,7 @@ PY
 
 mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
-trap 'rm -rf "$STAGE"' EXIT
+trap 'rm -rf "$STAGE" "$DATABASE_TMP"' EXIT
 
 mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"

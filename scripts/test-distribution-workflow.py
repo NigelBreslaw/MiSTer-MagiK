@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 text = (ROOT / ".github/workflows/distribution.yml").read_text()
 cross = (ROOT / "magik-gui/Cross.toml").read_text()
+packager = (ROOT / "scripts/package-distribution.sh").read_text()
 
 for variable in (
     "MISTER_MAGIK_BUILD_NUMBER",
@@ -39,7 +40,8 @@ required = (
     "select-published-release.py game-databases",
     "game-databases-bundle.py verify",
     "game-databases-manifest.json",
-    "--game-databases-manifest",
+    "--checksums build/game-databases/SHA256SUMS",
+    "--game-databases-release-dir",
     "platform-bundle-v0.1.json",
     "MAIN_REF: mister-magik",
     'assert version.encode() in package.read("mister-magik/mister-magik-fb")',
@@ -69,8 +71,27 @@ for forbidden in (
     "mame-metadata-build",
     "Build HBMAME",
     "MAME_LISTXML_URL",
+    "game-databases-bundle.py create",
+    "--mame-sqlite",
+    "--hbmame-sqlite",
 ):
     assert forbidden not in text, f"distribution still builds support bundle content: {forbidden}"
 assert 'unzip -q -o "$archive" -d build/qualified' in text
+
+for forbidden in (
+    "--mame-sqlite)",
+    "--hbmame-sqlite)",
+    "--hbmame-sqlite-default)",
+    "--game-databases-manifest)",
+):
+    assert forbidden not in packager, f"production packager still accepts raw database input: {forbidden}"
+assert "--game-databases-release-dir)" in packager
+
+for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+    if workflow.name == "game-databases.yml":
+        continue
+    workflow_text = workflow.read_text()
+    assert "game-databases-bundle.py create" not in workflow_text, f"{workflow.name} creates production databases"
+    assert "mame-metadata-build" not in workflow_text, f"{workflow.name} builds production database content"
 
 print("distribution workflow contract ok")

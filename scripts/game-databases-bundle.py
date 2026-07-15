@@ -199,7 +199,11 @@ def validate_manifest(payload: dict[str, object]) -> None:
     require_digest("MAME listxml SHA-256", str(mame.get("listxml_sha256", "")))
 
 
-def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object]:
+def verify(
+    archive: Path,
+    manifest_path: Path | None = None,
+    checksums_path: Path | None = None,
+) -> dict[str, object]:
     if not archive.is_file():
         raise BundleError(f"missing bundle archive: {archive}")
     with tempfile.TemporaryDirectory(prefix="mister-magik-game-databases-verify-") as temporary:
@@ -223,8 +227,10 @@ def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object
         expected_archive = f"mister-magik-game-databases-v{payload['release_version']}.zip"
         if archive.name != expected_archive:
             raise BundleError("archive name does not match release version")
-        if manifest_path is not None and json.loads(manifest_path.read_text()) != payload:
+        if manifest_path is not None and manifest_path.read_bytes() != manifest.read_bytes():
             raise BundleError("release manifest differs from archive manifest")
+        if checksums_path is not None and checksums_path.read_text() != (root / CHECKSUMS_NAME).read_text():
+            raise BundleError("release checksums differ from archive checksums")
         file_entries = payload.get("files")
         if not isinstance(file_entries, list):
             raise BundleError("manifest files are missing")
@@ -252,6 +258,34 @@ def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object
         validate_database(root / DATABASES[0], "MAME", str(mame["tag"]))
         validate_database(root / DATABASES[1], "HBMAME")
         return payload
+
+
+def release_archive(release_dir: Path) -> tuple[Path, Path, Path]:
+    if not release_dir.is_dir():
+        raise BundleError("game-database release directory is missing")
+    manifest = release_dir / MANIFEST_NAME
+    checksums = release_dir / CHECKSUMS_NAME
+    if not manifest.is_file() or not checksums.is_file():
+        raise BundleError("game-database release manifest or checksums are missing")
+    payload = json.loads(manifest.read_text())
+    validate_manifest(payload)
+    expected = release_dir / f"mister-magik-game-databases-v{payload['release_version']}.zip"
+    archives = sorted(release_dir.glob("mister-magik-game-databases-v*.zip"))
+    if archives != [expected]:
+        raise BundleError("game-database release directory must contain exactly its numbered archive")
+    return expected, manifest, checksums
+
+
+def extract_release(release_dir: Path, output: Path) -> dict[str, object]:
+    archive, manifest, checksums = release_archive(release_dir)
+    payload = verify(archive, manifest, checksums)
+    output.mkdir(parents=True, exist_ok=True)
+    if any(output.iterdir()):
+        raise BundleError("game-database extraction directory must be empty")
+    with zipfile.ZipFile(archive) as source:
+        for name in (*DATABASES, MANIFEST_NAME, CHECKSUMS_NAME):
+            (output / name).write_bytes(source.read(name))
+    return payload
 
 
 def verify_files(manifest: Path, mame_sqlite: Path, hbmame_sqlite: Path) -> dict[str, object]:
@@ -319,6 +353,10 @@ def main() -> int:
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("archive", type=Path)
     verify_parser.add_argument("--manifest", type=Path)
+    verify_parser.add_argument("--checksums", type=Path)
+    extract_parser = commands.add_parser("extract-release")
+    extract_parser.add_argument("release_dir", type=Path)
+    extract_parser.add_argument("--output", required=True, type=Path)
     files_parser = commands.add_parser("verify-files")
     files_parser.add_argument("--manifest", required=True, type=Path)
     files_parser.add_argument("--mame-sqlite", required=True, type=Path)
@@ -335,7 +373,9 @@ def main() -> int:
         if args.command == "create":
             print(create(args))
         elif args.command == "verify":
-            print(json.dumps(verify(args.archive, args.manifest), sort_keys=True))
+            print(json.dumps(verify(args.archive, args.manifest, args.checksums), sort_keys=True))
+        elif args.command == "extract-release":
+            print(json.dumps(extract_release(args.release_dir, args.output), sort_keys=True))
         elif args.command == "verify-files":
             print(json.dumps(verify_files(args.manifest, args.mame_sqlite, args.hbmame_sqlite), sort_keys=True))
         else:

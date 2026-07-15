@@ -91,9 +91,49 @@ class GameDatabaseBundleTests(unittest.TestCase):
     def test_round_trip(self) -> None:
         archive = bundle.create(self.args())
         self.assertEqual(archive.name, "mister-magik-game-databases-v1.zip")
-        payload = bundle.verify(archive, self.root / "output/game-databases-manifest.json")
+        payload = bundle.verify(
+            archive,
+            self.root / "output/game-databases-manifest.json",
+            self.root / "output/SHA256SUMS",
+        )
         self.assertEqual(payload["release_version"], 1)
         self.assertEqual(payload["sources"]["hbmame"]["tag"], "tag24532")
+        extracted = self.root / "extracted"
+        bundle.extract_release(self.root / "output", extracted)
+        self.assertEqual(
+            set(path.name for path in extracted.iterdir()),
+            {"mame.sqlite3", "hbmame.sqlite3", "game-databases-manifest.json", "SHA256SUMS"},
+        )
+
+    def test_release_directory_requires_external_checksums(self) -> None:
+        bundle.create(self.args())
+        (self.root / "output/SHA256SUMS").unlink()
+        with self.assertRaisesRegex(ValueError, "manifest or checksums"):
+            bundle.extract_release(self.root / "output", self.root / "extracted")
+
+    def test_release_directory_rejects_ambiguous_archives(self) -> None:
+        archive = bundle.create(self.args())
+        (self.root / "output/mister-magik-game-databases-v2.zip").write_bytes(archive.read_bytes())
+        with self.assertRaisesRegex(ValueError, "exactly its numbered archive"):
+            bundle.extract_release(self.root / "output", self.root / "extracted")
+
+    def test_release_directory_rejects_missing_archive(self) -> None:
+        archive = bundle.create(self.args())
+        archive.unlink()
+        with self.assertRaisesRegex(ValueError, "exactly its numbered archive"):
+            bundle.extract_release(self.root / "output", self.root / "extracted")
+
+    def test_release_directory_rejects_corrupt_archive(self) -> None:
+        archive = bundle.create(self.args())
+        archive.write_bytes(b"not a zip archive")
+        with self.assertRaises(zipfile.BadZipFile):
+            bundle.extract_release(self.root / "output", self.root / "extracted")
+
+    def test_release_directory_rejects_external_checksum_disagreement(self) -> None:
+        bundle.create(self.args())
+        (self.root / "output/SHA256SUMS").write_text("tampered\n")
+        with self.assertRaisesRegex(ValueError, "checksums differ"):
+            bundle.extract_release(self.root / "output", self.root / "extracted")
 
     def test_tampered_reused_database_is_rejected(self) -> None:
         archive = bundle.create(self.args())
@@ -109,6 +149,27 @@ class GameDatabaseBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest|checksum"):
             bundle.verify(altered)
 
+    def test_undersized_database_is_rejected(self) -> None:
+        undersized = self.root / "undersized.sqlite3"
+        with closing(sqlite3.connect(undersized)) as database, database:
+            database.execute(
+                "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY, parent_setname TEXT, title TEXT)"
+            )
+        with self.assertRaisesRegex(ValueError, "too few machine rows"):
+            bundle.validate_database(undersized, "HBMAME")
+
+    def test_corrupt_database_is_rejected(self) -> None:
+        corrupt = self.root / "corrupt.sqlite3"
+        corrupt.write_bytes(b"not sqlite")
+        with self.assertRaisesRegex(ValueError, "invalid HBMAME SQLite database"):
+            bundle.validate_database(corrupt, "HBMAME")
+
+    def test_mame_source_mismatch_is_rejected(self) -> None:
+        mismatched = self.root / "mismatched.sqlite3"
+        build_mame(mismatched, "mame0287")
+        with self.assertRaisesRegex(ValueError, "source version does not match"):
+            bundle.validate_database(mismatched, "MAME", "mame0288")
+
     def test_external_manifest_disagreement_is_rejected(self) -> None:
         archive = bundle.create(self.args())
         manifest = self.root / "different.json"
@@ -117,6 +178,13 @@ class GameDatabaseBundleTests(unittest.TestCase):
         manifest.write_text(json.dumps(payload))
         with self.assertRaisesRegex(ValueError, "differs"):
             bundle.verify(archive, manifest)
+
+    def test_external_manifest_byte_tampering_is_rejected(self) -> None:
+        archive = bundle.create(self.args())
+        manifest = self.root / "output/game-databases-manifest.json"
+        manifest.write_text(manifest.read_text() + "\n")
+        with self.assertRaisesRegex(ValueError, "differs"):
+            bundle.verify(archive, manifest, self.root / "output/SHA256SUMS")
 
     def test_archive_traversal_is_rejected(self) -> None:
         unsafe = self.root / "mister-magik-game-databases-v1.zip"
