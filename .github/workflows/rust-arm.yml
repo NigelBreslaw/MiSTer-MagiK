@@ -20,6 +20,117 @@ env:
   MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
 
 jobs:
+  cross-image-benchmark:
+    if: github.event_name == 'workflow_dispatch'
+    name: cross-image-${{ matrix.candidate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - candidate: baseline
+            dockerfile: magik-gui/Dockerfile.cross-armv7
+          - candidate: ubuntu-runtime-resources
+            dockerfile: magik-gui/ci/cross-images/Dockerfile.ubuntu-clang-runtime
+          - candidate: ubuntu-runtime-only
+            dockerfile: magik-gui/ci/cross-images/Dockerfile.ubuntu-clang-runtime-only
+          - candidate: debian-bullseye
+            dockerfile: magik-gui/ci/cross-images/Dockerfile.debian-bullseye
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Cache cross binary
+        uses: actions/cache@v6
+        id: benchmark-cross-cache
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-${{ runner.os }}-${{ env.CROSS_VERSION }}
+
+      - name: Install cross
+        if: steps.benchmark-cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Build and measure candidate image
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci
+          image="mister-cross-benchmark:$CANDIDATE"
+          started="$(date +%s)"
+          docker build --platform linux/amd64 --tag "$image" --file "$DOCKERFILE" magik-gui
+          finished="$(date +%s)"
+          uncompressed_bytes="$(docker image inspect "$image" --format '{{.Size}}')"
+          docker save "$image" | gzip -6 > "build/ci/$CANDIDATE-image.tar.gz"
+          compressed_bytes="$(wc -c < "build/ci/$CANDIDATE-image.tar.gz" | tr -d ' ')"
+          package_count="$(docker run --rm "$image" sh -c "dpkg-query -W -f='\${binary:Package}\n' | wc -l")"
+          {
+            printf 'candidate=%s\n' "$CANDIDATE"
+            printf 'dockerfile=%s\n' "$DOCKERFILE"
+            printf 'image_build_seconds=%s\n' "$((finished - started))"
+            printf 'uncompressed_bytes=%s\n' "$uncompressed_bytes"
+            printf 'gzip_bytes=%s\n' "$compressed_bytes"
+            printf 'installed_packages=%s\n' "$package_count"
+            printf '\nlargest_packages_installed_kibibytes:\n'
+            docker run --rm "$image" sh -c "dpkg-query -W -f='\${Installed-Size}\t\${binary:Package}\n' | sort -nr | head -30"
+          } | tee "build/ci/$CANDIDATE.txt"
+          rm "build/ci/$CANDIDATE-image.tar.gz"
+
+      - name: Clean-build production binary with candidate
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          set -euo pipefail
+          image="mister-cross-benchmark:$CANDIDATE"
+          cp magik-gui/Cross.toml build/ci/Cross.benchmark.toml
+          sed -i "s|dockerfile = .*|image = \"$image\"|" build/ci/Cross.benchmark.toml
+          started="$(date +%s)"
+          set +e
+          CROSS_CONFIG="$GITHUB_WORKSPACE/build/ci/Cross.benchmark.toml" \
+            MISTER_CROSS_IMAGE="$image" \
+            MISTER_CARGO_TIMINGS=0 \
+            magik-gui/build-arm.sh --device
+          status="$?"
+          set -e
+          finished="$(date +%s)"
+          {
+            printf '\nproduction_build_seconds=%s\n' "$((finished - started))"
+            printf 'production_build_status=%s\n' "$status"
+          } | tee -a "build/ci/$CANDIDATE.txt"
+          exit "$status"
+
+      - name: Check ARM shared libraries
+        if: success()
+        env:
+          MISTER_CROSS_IMAGE: mister-cross-benchmark:${{ matrix.candidate }}
+        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
+
+      - name: Upload candidate measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-image-${{ matrix.candidate }}
+          path: build/ci/${{ matrix.candidate }}.txt
+          if-no-files-found: warn
+          retention-days: 14
+
   host-dev:
     name: host-dev
     runs-on: ubuntu-24.04
