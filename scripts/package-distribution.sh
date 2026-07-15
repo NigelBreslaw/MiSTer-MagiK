@@ -10,15 +10,13 @@ DEFAULT_BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
 DEFAULT_CATALOG_BUILDER="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-catalog-builder"
 DEFAULT_MAME="$ROOT/build/mame.sqlite3"
 DEFAULT_HBMAME="$ROOT/build/hbmame.sqlite3"
-DEFAULT_INSTALLER="$ROOT/scripts/mister-magik.sh"
-DEFAULT_CHANNEL_SELECTOR="$ROOT/scripts/mister-magik-channel.sh"
+DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
 
 BIN="$DEFAULT_BIN"
 CATALOG_BUILDER="$DEFAULT_CATALOG_BUILDER"
 MAME_SQLITE="$DEFAULT_MAME"
 HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
-CHANNEL_SELECTOR="$DEFAULT_CHANNEL_SELECTOR"
 ASSET_PACK=""
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
@@ -56,9 +54,6 @@ Options:
                        Default if --hbmame-sqlite-default: $DEFAULT_HBMAME
   --installer PATH     MiSTer Scripts menu installer.
                        Default: $DEFAULT_INSTALLER
-  --channel-selector PATH
-                       Beta/Release feed selector.
-                       Default: $DEFAULT_CHANNEL_SELECTOR
   --asset-pack PATH    Optional preview asset pack. Build/publish packs from private/magik-cloud.
   --hbmame-sqlite-default
                        Use the default HBMame metadata DB.
@@ -91,8 +86,7 @@ Options:
   -h, --help           Show this help.
 
 The zip is laid out relative to the MiSTer SD-card root:
-  Scripts/mister-magik.sh
-  Scripts/mister-magik-channel.sh
+  Scripts/MiSTer-MagiK.sh
   mister-magik/mister-magik-fb
   mister-magik/mister-magik-catalog-builder
   mister-magik/mame.sqlite3
@@ -134,10 +128,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --installer)
       INSTALLER="${2:?--installer requires a path}"
-      shift 2
-      ;;
-    --channel-selector)
-      CHANNEL_SELECTOR="${2:?--channel-selector requires a path}"
       shift 2
       ;;
     --asset-pack)
@@ -246,10 +236,6 @@ if [[ ! -f "$INSTALLER" ]]; then
 fi
 if grep -Eq 'mister-magik-agent|S00magik-agent|disabled-S00fastnet\.magik-agent' "$INSTALLER"; then
   echo "ERROR: public installer must not contain development-agent hook management." >&2
-  exit 1
-fi
-if [[ ! -f "$CHANNEL_SELECTOR" ]]; then
-  echo "ERROR: channel selector not found: $CHANNEL_SELECTOR" >&2
   exit 1
 fi
 if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ || "$VERSION" != "0.2.$BUILD_NUMBER" ]]; then
@@ -385,10 +371,8 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
-cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
-chmod 755 "$STAGE/Scripts/mister-magik.sh"
-cp "$CHANNEL_SELECTOR" "$STAGE/Scripts/mister-magik-channel.sh"
-chmod 755 "$STAGE/Scripts/mister-magik-channel.sh"
+cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
+chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
 cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"
