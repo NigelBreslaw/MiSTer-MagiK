@@ -2,52 +2,9 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Keep commit-time Rust checks aligned with the fast CI host gates.
+# Run only checks affected by staged paths. Complete assurance remains in CI.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-
-export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
-
-step() {
-  echo
-  echo "==> $*"
-}
-
-step "Format"
-"$ROOT/scripts/dev-rust" fmt
-
-step "Host logic tests"
-"$ROOT/scripts/dev-rust" test
-
-step "Catalog crate tests"
-cargo test --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml"
-
-step "Clippy catalog crate"
-cargo clippy --manifest-path "$ROOT/magik-gui/catalog/Cargo.toml" --all-targets -- -D warnings
-
-step "Clippy magik-gui host logic"
-(
-  cd magik-gui
-  cargo clippy --lib --no-default-features -- -D warnings
-)
-
-step "Check production magik-gui binary"
-cargo check --manifest-path "$ROOT/magik-gui/Cargo.toml" \
-  --bin mister-magik-fb --no-default-features --features ui
-
-step "Check host logic"
-"$ROOT/scripts/dev-rust" check
-
-step "Check host tools"
-"$ROOT/scripts/dev-rust" host-tools
-
-step "Check MagiK agent"
-cargo check --manifest-path "$ROOT/tools/magik-agent/Cargo.toml"
-
-step "Clippy host tools"
-cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D warnings
-
-step "Clippy MagiK agent"
-cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings
+exec "$ROOT/scripts/validate" affected

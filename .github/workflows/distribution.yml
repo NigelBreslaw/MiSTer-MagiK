@@ -125,11 +125,11 @@ jobs:
           mkdir -p build/game-databases
           gh release download "$databases_tag" --repo "$GITHUB_REPOSITORY" --dir build/game-databases \
             --pattern "mister-magik-game-databases-v${databases_version}.zip" \
-            --pattern game-databases-manifest.json
+            --pattern game-databases-manifest.json --pattern SHA256SUMS
           databases_archive="build/game-databases/mister-magik-game-databases-v${databases_version}.zip"
           python3 scripts/game-databases-bundle.py verify "$databases_archive" \
-            --manifest build/game-databases/game-databases-manifest.json >/dev/null
-          unzip -q "$databases_archive" mame.sqlite3 hbmame.sqlite3 -d build
+            --manifest build/game-databases/game-databases-manifest.json \
+            --checksums build/game-databases/SHA256SUMS >/dev/null
 
       - name: Install Rust toolchain
         working-directory: magik-gui
@@ -252,8 +252,7 @@ jobs:
             --latch-metadata "$rbf_meta" \
             --platform-manifest build/platform-v1.manifest \
             --platform-bundle-manifest build/qualified/platform-bundle-v0.1.json \
-            --game-databases-manifest build/game-databases/game-databases-manifest.json \
-            --hbmame-sqlite-default \
+            --game-databases-release-dir build/game-databases \
             --version "$RELEASE_VERSION" \
             --build-number "$RELEASE_BUILD_NUMBER" \
             --name "mister-magik-$RELEASE_VERSION" \

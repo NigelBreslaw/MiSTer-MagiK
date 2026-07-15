@@ -19,6 +19,7 @@ Commands:
   test      Run fast host logic tests without Slint/UI
   check     Compile the host-testable library without Slint/UI
   host-tools  Run cheap host-side script/Rust checks
+  host-tools-fast  Run pre-commit-safe static host checks
   check-arm-lib      Cross-check host-testable library for ARM, without Slint/UI
   check-arm-ui       Cross-check launcher/controller Slint UI for ARM
   check-ui           Alias for check-arm-ui
@@ -87,44 +88,22 @@ case "$cmd" in
     cargo check --lib --no-default-features
     ;;
   host-tools)
-    "$ROOT/scripts/test-host-tools.sh"
+    "$ROOT/scripts/test-host-tools.sh" --full
+    ;;
+  host-tools-fast)
+    "$ROOT/scripts/test-host-tools.sh" --fast
     ;;
   check-arm-lib)
-    cd "$RUST_DIR"
-    cross_env
-    cross check \
-      --lib \
-      --target armv7-unknown-linux-gnueabihf \
-      --no-default-features \
-      --timings \
-      --locked
+    "$RUST_DIR/build-arm.sh" --check --lib-only
     ;;
   check-arm-ui|check-ui)
-    cd "$RUST_DIR"
-    cross_ui_env
-    MISTER_UI_BUILD_SCOPE=launcher cross check \
-      --target armv7-unknown-linux-gnueabihf \
-      --features ui \
-      --timings \
-      --locked
+    "$RUST_DIR/build-arm.sh" --check --ui-scope launcher
     ;;
   check-arm-arcade-ui)
-    cd "$RUST_DIR"
-    cross_ui_env
-    MISTER_UI_BUILD_SCOPE=arcade cross check \
-      --target armv7-unknown-linux-gnueabihf \
-      --features ui \
-      --timings \
-      --locked
+    "$RUST_DIR/build-arm.sh" --check --ui-scope arcade
     ;;
   check-arm-ui-full|check-ui-full)
-    cd "$RUST_DIR"
-    cross_ui_env
-    MISTER_UI_BUILD_SCOPE=all cross check \
-      --target armv7-unknown-linux-gnueabihf \
-      --features ui,experiments \
-      --timings \
-      --locked
+    "$RUST_DIR/build-arm.sh" --check --ui-scope all --experiments
     ;;
   build-arm-debug)
     cd "$RUST_DIR"

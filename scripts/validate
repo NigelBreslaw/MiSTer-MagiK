@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Affected-path pre-commit validation and the complete CI host gate.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+usage() {
+  cat <<'EOF'
+usage:
+  scripts/validate affected [--paths-file FILE] [--print-plan]
+  scripts/validate full-host
+
+Without --paths-file, affected mode reads added, copied, modified, renamed,
+and deleted paths from the staged Git index. --print-plan performs no checks.
+EOF
+}
+
+step() {
+  echo
+  echo "==> $*"
+}
+
+run_full_host() {
+  step "Format"
+  scripts/dev-rust fmt
+  step "Host logic tests"
+  scripts/dev-rust test
+  step "Catalog crate tests"
+  cargo test --manifest-path magik-gui/catalog/Cargo.toml
+  step "Clippy catalog crate"
+  cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings
+  step "Clippy magik-gui host logic"
+  (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings)
+  step "Check production magik-gui binary"
+  cargo check --manifest-path magik-gui/Cargo.toml \
+    --bin mister-magik-fb --no-default-features --features ui
+  step "Full host tools"
+  scripts/dev-rust host-tools
+  step "Clippy host tools"
+  cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
+  step "Clippy MagiK agent"
+  cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings
+}
+
+run_check() {
+  local check="$1"
+  case "$check" in
+    format) step "Format"; scripts/dev-rust fmt ;;
+    host-tools-fast) step "Fast host tools"; scripts/dev-rust host-tools-fast ;;
+    host-tests) step "Host logic tests"; scripts/dev-rust test ;;
+    magik-gui-clippy) step "Clippy magik-gui host logic"; (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings) ;;
+    catalog-tests) step "Catalog crate tests"; cargo test --manifest-path magik-gui/catalog/Cargo.toml ;;
+    catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings ;;
+    production-ui-check) step "Check production magik-gui binary"; cargo check --manifest-path magik-gui/Cargo.toml --bin mister-magik-fb --no-default-features --features ui ;;
+    mister-tests) step "Test host tools"; cargo test --manifest-path tools/mister/Cargo.toml ;;
+    mister-clippy) step "Clippy host tools"; cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings ;;
+    agent-clippy) step "Clippy MagiK agent"; cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings ;;
+  esac
+}
+
+run_parallel() {
+  local tmp status check pid i
+  local checks=("$@")
+  local pids=()
+  tmp="$(mktemp -d)"
+  status=0
+  for check in "${checks[@]}"; do
+    (run_check "$check") >"$tmp/$check.log" 2>&1 &
+    pids+=("$!")
+  done
+  for ((i = 0; i < ${#checks[@]}; i++)); do
+    pid="${pids[$i]}"
+    if ! wait "$pid"; then
+      status=1
+    fi
+    cat "$tmp/${checks[$i]}.log"
+  done
+  rm -rf "$tmp"
+  return "$status"
+}
+
+mode="${1:-}"
+case "$mode" in
+  full-host)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    run_full_host
+    exit 0
+    ;;
+  affected) shift ;;
+  -h|--help|"") usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+paths_file=""
+print_plan=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --paths-file) paths_file="${2:?--paths-file requires a path}"; shift 2 ;;
+    --print-plan) print_plan=1; shift ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+
+paths=()
+if [ -n "$paths_file" ]; then
+  [ -f "$paths_file" ] || { echo "paths file not found: $paths_file" >&2; exit 2; }
+  while IFS= read -r path; do
+    [ -n "$path" ] && paths+=("$path")
+  done <"$paths_file"
+else
+  while IFS= read -r -d '' status; do
+    case "$status" in
+      R*|C*)
+        IFS= read -r -d '' old_path
+        IFS= read -r -d '' new_path
+        paths+=("$old_path" "$new_path")
+        ;;
+      *)
+        IFS= read -r -d '' path
+        paths+=("$path")
+        ;;
+    esac
+  done < <(git diff --cached --name-status -z --diff-filter=ACMRD)
+fi
+
+need_host=0
+need_catalog=0
+need_ui=0
+need_mister=0
+need_agent=0
+
+for path in "${paths[@]}"; do
+  case "$path" in
+    magik-gui/catalog/*)
+      need_catalog=1; need_host=1; need_ui=1 ;;
+    magik-gui/src/*)
+      need_host=1; need_ui=1 ;;
+    magik-gui/ui/*|magik-gui/ui-generated/*)
+      need_ui=1 ;;
+    magik-gui/Cargo.toml|magik-gui/Cargo.lock|magik-gui/rust-toolchain.toml|magik-gui/build.rs|magik-gui/.cargo/*)
+      need_catalog=1; need_host=1; need_ui=1 ;;
+    magik-gui/build-arm*.sh|magik-gui/Dockerfile*|magik-gui/Cross.toml|magik-gui/scripts/*)
+      need_catalog=1; need_host=1; need_ui=1 ;;
+    tools/mister/*)
+      need_mister=1 ;;
+    tools/magik-agent/*)
+      need_agent=1 ;;
+    framebuffer-stream/*)
+      need_host=1; need_ui=1; need_agent=1 ;;
+    Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*)
+      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1 ;;
+  esac
+done
+
+plan=(format host-tools-fast)
+[ "$need_host" -eq 1 ] && plan+=(host-tests magik-gui-clippy)
+[ "$need_catalog" -eq 1 ] && plan+=(catalog-tests catalog-clippy)
+[ "$need_ui" -eq 1 ] && plan+=(production-ui-check)
+[ "$need_mister" -eq 1 ] && plan+=(mister-tests mister-clippy)
+[ "$need_agent" -eq 1 ] && plan+=(agent-clippy)
+
+if [ "$print_plan" -eq 1 ]; then
+  printf '%s\n' "${plan[@]}"
+  exit 0
+fi
+
+run_parallel "${plan[@]}"

@@ -125,9 +125,7 @@ PY
 
 package_args=(
   --binary "$BIN"
-  --mame-sqlite "$MAME_SQLITE"
-  --hbmame-sqlite "$HBMAME_SQLITE"
-  --game-databases-manifest "$WORK/game-databases/game-databases-manifest.json"
+  --game-databases-release-dir "$WORK/game-databases"
   --name release-check
   --out-dir "$WORK"
   --version "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" version)"

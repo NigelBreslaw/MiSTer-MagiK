@@ -659,6 +659,21 @@ pub enum ArcadeFilterLevel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArcadeFilterGroup {
+    Games,
+    Search,
+    Decades,
+    Manufacturers,
+    Categories,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArcadeTopDrawerItem {
+    group: ArcadeFilterGroup,
+    item: ArcadeDrawerItem,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArcadeSearchPane {
     Keyboard,
     Results,
@@ -766,13 +781,13 @@ impl ArcadeFilterState {
         self.scroll.is_scroll_active()
     }
 
-    fn active_group_index(&self) -> usize {
+    fn active_group(&self) -> ArcadeFilterGroup {
         match self.active {
-            ArcadeFilter::All => 0,
-            ArcadeFilter::Search => 1,
-            ArcadeFilter::Decade(_) => 2,
-            ArcadeFilter::Manufacturer(_) => 3,
-            ArcadeFilter::Category(_) => 4,
+            ArcadeFilter::All => ArcadeFilterGroup::Games,
+            ArcadeFilter::Search => ArcadeFilterGroup::Search,
+            ArcadeFilter::Decade(_) => ArcadeFilterGroup::Decades,
+            ArcadeFilter::Manufacturer(_) => ArcadeFilterGroup::Manufacturers,
+            ArcadeFilter::Category(_) => ArcadeFilterGroup::Categories,
         }
     }
 
@@ -907,6 +922,13 @@ impl LauncherNav {
             }
         } else if self.screen == Screen::Home {
             self.restore_current_menu_view();
+        }
+        if self.screen == Screen::Arcade {
+            if let Some(collection_id) = self.active_collection_id.clone() {
+                if self.resolve_arcade_filter_for_collection(catalog, &collection_id) {
+                    self.arcade.reset();
+                }
+            }
         }
         true
     }
@@ -1102,7 +1124,9 @@ impl LauncherNav {
             .get(&collection.id)
             .cloned()
             .unwrap_or_else(|| default_filter_for_system(catalog, &collection.id));
-        self.arcade_filter.active = filter;
+        self.arcade_filter.active = self.available_arcade_filter(catalog, &collection.id, &filter);
+        self.collection_filters
+            .insert(collection.id.clone(), self.arcade_filter.active.clone());
         if matches!(self.arcade_filter.active, ArcadeFilter::Search) {
             self.arcade_search.query = self
                 .collection_search_queries
@@ -1913,33 +1937,115 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Vec<ArcadeDrawerItem> {
-        vec![
-            ArcadeDrawerItem {
-                label: "Games A-Z".to_string(),
-                count: catalog.system_game_count(system_id),
-                active: self.arcade_filter.active == ArcadeFilter::All,
+        self.arcade_filter_top_group_items(catalog, system_id)
+            .into_iter()
+            .map(|row| row.item)
+            .collect()
+    }
+
+    fn arcade_filter_top_group_items(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> Vec<ArcadeTopDrawerItem> {
+        let mut items = vec![
+            ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Games,
+                item: ArcadeDrawerItem {
+                    label: "Games A-Z".to_string(),
+                    count: catalog.system_game_count(system_id),
+                    active: self.arcade_filter.active == ArcadeFilter::All,
+                },
             },
-            ArcadeDrawerItem {
-                label: "Search".to_string(),
-                count: catalog.system_game_count(system_id),
-                active: matches!(self.arcade_filter.active, ArcadeFilter::Search),
+            ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Search,
+                item: ArcadeDrawerItem {
+                    label: "Search".to_string(),
+                    count: catalog.system_game_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Search),
+                },
             },
-            ArcadeDrawerItem {
-                label: "Decades".to_string(),
-                count: catalog.decade_option_count(system_id),
-                active: matches!(self.arcade_filter.active, ArcadeFilter::Decade(_)),
-            },
-            ArcadeDrawerItem {
-                label: "Manufacturer".to_string(),
-                count: catalog.manufacturer_option_count(system_id),
-                active: matches!(self.arcade_filter.active, ArcadeFilter::Manufacturer(_)),
-            },
-            ArcadeDrawerItem {
-                label: "Categories".to_string(),
-                count: catalog.category_option_count(system_id),
-                active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
-            },
-        ]
+        ];
+        if catalog.decade_option_count(system_id) > 1 {
+            items.push(ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Decades,
+                item: ArcadeDrawerItem {
+                    label: "Decades".to_string(),
+                    count: catalog.decade_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Decade(_)),
+                },
+            });
+        }
+        if catalog.manufacturer_option_count(system_id) > 1 {
+            items.push(ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Manufacturers,
+                item: ArcadeDrawerItem {
+                    label: "Manufacturer".to_string(),
+                    count: catalog.manufacturer_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Manufacturer(_)),
+                },
+            });
+        }
+        if catalog.category_option_count(system_id) > 1 {
+            items.push(ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Categories,
+                item: ArcadeDrawerItem {
+                    label: "Categories".to_string(),
+                    count: catalog.category_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
+                },
+            });
+        }
+        items
+    }
+
+    fn arcade_filter_top_group_index(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        group: ArcadeFilterGroup,
+    ) -> usize {
+        self.arcade_filter_top_group_items(catalog, system_id)
+            .iter()
+            .position(|row| row.group == group)
+            .unwrap_or(0)
+    }
+
+    fn available_arcade_filter(
+        &self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+        filter: &ArcadeFilter,
+    ) -> ArcadeFilter {
+        let Some(resolved) = catalog.resolve_filter(system_id, filter) else {
+            return ArcadeFilter::All;
+        };
+        let group_is_visible = match resolved {
+            ArcadeFilter::All | ArcadeFilter::Search => true,
+            ArcadeFilter::Decade(_) => catalog.decade_option_count(system_id) > 1,
+            ArcadeFilter::Manufacturer(_) => catalog.manufacturer_option_count(system_id) > 1,
+            ArcadeFilter::Category(_) => catalog.category_option_count(system_id) > 1,
+        };
+        if group_is_visible {
+            resolved
+        } else {
+            ArcadeFilter::All
+        }
+    }
+
+    fn resolve_arcade_filter_for_collection(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        system_id: &str,
+    ) -> bool {
+        let resolved = self.available_arcade_filter(catalog, system_id, &self.arcade_filter.active);
+        if resolved == self.arcade_filter.active {
+            return false;
+        }
+        self.arcade_filter.active = resolved.clone();
+        self.collection_filters
+            .insert(system_id.to_string(), resolved);
+        true
     }
 
     fn open_arcade_alphabet(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
@@ -1958,10 +2064,15 @@ impl LauncherNav {
 
     fn open_arcade_filter(&mut self, catalog: &ArcadeCatalog, system_id: &str) {
         self.save_game_list_state(system_id);
+        self.resolve_arcade_filter_for_collection(catalog, system_id);
         self.arcade_filter.drawer_open = true;
         self.arcade_filter.level = self.arcade_filter.active_level();
         self.arcade_filter.selected = if self.arcade_filter.level == ArcadeFilterLevel::Top {
-            self.arcade_filter.active_group_index()
+            self.arcade_filter_top_group_index(
+                catalog,
+                system_id,
+                self.arcade_filter.active_group(),
+            )
         } else {
             0
         };
@@ -1994,7 +2105,11 @@ impl LauncherNav {
             self.open_arcade_filter(catalog, system_id);
         } else {
             self.arcade_filter.level = ArcadeFilterLevel::Top;
-            self.arcade_filter.selected = self.arcade_filter.active_group_index();
+            self.arcade_filter.selected = self.arcade_filter_top_group_index(
+                catalog,
+                system_id,
+                self.arcade_filter.active_group(),
+            );
             let top_count = self.arcade_filter_items(catalog, system_id).len();
             self.snap_arcade_filter_scroll(top_count);
         }
@@ -2014,16 +2129,24 @@ impl LauncherNav {
                 let label = items[self.arcade_filter.selected].label.clone();
                 self.jump_arcade_to_alphabet_group(catalog, system_id, &label);
             }
-            ArcadeFilterLevel::Top => match self.arcade_filter.selected {
-                0 => self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All),
-                1 => self.enter_arcade_search(catalog, system_id),
-                2 => self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Decades),
-                3 => self.enter_arcade_filter_level(
+            ArcadeFilterLevel::Top => match self
+                .arcade_filter_top_group_items(catalog, system_id)
+                .get(self.arcade_filter.selected)
+                .map(|row| row.group)
+            {
+                Some(ArcadeFilterGroup::Games) => {
+                    self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All)
+                }
+                Some(ArcadeFilterGroup::Search) => self.enter_arcade_search(catalog, system_id),
+                Some(ArcadeFilterGroup::Decades) => {
+                    self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Decades)
+                }
+                Some(ArcadeFilterGroup::Manufacturers) => self.enter_arcade_filter_level(
                     catalog,
                     system_id,
                     ArcadeFilterLevel::Manufacturers,
                 ),
-                4 => self.enter_arcade_filter_level(
+                Some(ArcadeFilterGroup::Categories) => self.enter_arcade_filter_level(
                     catalog,
                     system_id,
                     ArcadeFilterLevel::Categories,
@@ -4569,6 +4692,172 @@ mod tests {
 
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+    }
+
+    #[test]
+    fn arcade_filter_top_hides_empty_and_singleton_dimensions() {
+        let empty = arcade_catalog(
+            vec![arcade_game("Plain").system_id("arcade").build()],
+            vec![arcade_system("arcade", 1)],
+        );
+        let singleton = arcade_catalog(
+            vec![arcade_game("Known")
+                .system_id("arcade")
+                .year(1984)
+                .manufacturer("Capcom")
+                .category("Shooter")
+                .build()],
+            vec![arcade_system("arcade", 1)],
+        );
+        let two_categories = arcade_catalog(
+            vec![
+                arcade_game("Shooter")
+                    .system_id("arcade")
+                    .category("Shooter")
+                    .build(),
+                arcade_game("Maze")
+                    .system_id("arcade")
+                    .category("Maze")
+                    .build(),
+            ],
+            vec![arcade_system("arcade", 2)],
+        );
+        let nav = LauncherNav::new();
+
+        for catalog in [&empty, &singleton] {
+            assert_eq!(
+                nav.arcade_filter_top_items(catalog, "arcade")
+                    .into_iter()
+                    .map(|item| item.label)
+                    .collect::<Vec<_>>(),
+                vec!["Games A-Z", "Search"]
+            );
+        }
+        assert_eq!(
+            nav.arcade_filter_top_items(&two_categories, "arcade")
+                .into_iter()
+                .map(|item| item.label)
+                .collect::<Vec<_>>(),
+            vec!["Games A-Z", "Search", "Categories"]
+        );
+    }
+
+    #[test]
+    fn arcade_filter_top_visibility_covers_every_dimension_count_combination() {
+        for decades in 0..=2 {
+            for manufacturers in 0..=2 {
+                for categories in 0..=2 {
+                    let mut first = arcade_game("First").system_id("arcade").build();
+                    let mut second = arcade_game("Second").system_id("arcade").build();
+                    if decades > 0 {
+                        first.year = Some(1984);
+                        second.year = Some(if decades == 1 { 1984 } else { 1994 });
+                    }
+                    if manufacturers > 0 {
+                        first.manufacturer = "Capcom".into();
+                        second.manufacturer = if manufacturers == 1 {
+                            "Capcom".into()
+                        } else {
+                            "Sega".into()
+                        };
+                    }
+                    if categories > 0 {
+                        first.category = "Shooter".into();
+                        second.category = if categories == 1 {
+                            "Shooter".into()
+                        } else {
+                            "Maze".into()
+                        };
+                    }
+                    let catalog =
+                        arcade_catalog(vec![first, second], vec![arcade_system("arcade", 2)]);
+                    let nav = LauncherNav::new();
+                    let rows = nav.arcade_filter_top_group_items(&catalog, "arcade");
+                    let labels = rows
+                        .iter()
+                        .map(|row| row.item.label.clone())
+                        .collect::<Vec<_>>();
+
+                    assert_eq!(labels.contains(&"Decades".to_string()), decades == 2);
+                    assert_eq!(
+                        labels.contains(&"Manufacturer".to_string()),
+                        manufacturers == 2
+                    );
+                    assert_eq!(labels.contains(&"Categories".to_string()), categories == 2);
+                    assert_eq!(rows[0].item.count, 2);
+                    assert_eq!(rows[1].item.count, 2);
+                    assert!(rows
+                        .iter()
+                        .skip(2)
+                        .all(|row| row.item.count == 2 && !row.item.active));
+
+                    for (selected, row) in rows.iter().enumerate().skip(2) {
+                        let mut activated = LauncherNav::new();
+                        activated.screen = Screen::Arcade;
+                        activated.arcade_filter.drawer_open = true;
+                        activated.arcade_filter.level = ArcadeFilterLevel::Top;
+                        activated.arcade_filter.selected = selected;
+                        let items = activated.arcade_filter_items(&catalog, "arcade");
+                        activated.activate_arcade_filter_selection(&catalog, "arcade", &items);
+                        let expected_level = match row.group {
+                            ArcadeFilterGroup::Decades => ArcadeFilterLevel::Decades,
+                            ArcadeFilterGroup::Manufacturers => ArcadeFilterLevel::Manufacturers,
+                            ArcadeFilterGroup::Categories => ArcadeFilterLevel::Categories,
+                            ArcadeFilterGroup::Games | ArcadeFilterGroup::Search => unreachable!(),
+                        };
+                        assert_eq!(activated.arcade_filter.level, expected_level);
+                        assert_eq!(activated.arcade_filter.selected, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arcade_filter_top_dispatches_pruned_rows_by_group_identity() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("Shooter")
+                    .system_id("arcade")
+                    .category("Shooter")
+                    .build(),
+                arcade_game("Maze")
+                    .system_id("arcade")
+                    .category("Maze")
+                    .build(),
+            ],
+            vec![arcade_system("arcade", 2)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade_filter.drawer_open = true;
+        nav.arcade_filter.level = ArcadeFilterLevel::Top;
+        nav.arcade_filter.selected = 2;
+        let items = nav.arcade_filter_items(&catalog, "arcade");
+
+        nav.activate_arcade_filter_selection(&catalog, "arcade", &items);
+
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Categories);
+    }
+
+    #[test]
+    fn remembered_filter_resets_when_dimension_is_hidden() {
+        let catalog = arcade_catalog(
+            vec![arcade_game("Only Shooter")
+                .system_id("arcade")
+                .category("Shooter")
+                .build()],
+            vec![arcade_system("arcade", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.arcade_filter.active = ArcadeFilter::Category("Shooter".to_string());
+
+        nav.open_arcade_filter(&catalog, "arcade");
+
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Top);
+        assert_eq!(nav.arcade_filter.selected, 0);
     }
 
     #[test]
