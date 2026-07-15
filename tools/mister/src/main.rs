@@ -2131,7 +2131,7 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
     println!(
         "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
-        &remote,
+        remote,
         encoding,
         compression_decision,
         bytes.len(),
