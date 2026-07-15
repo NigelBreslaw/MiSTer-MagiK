@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 GAME_DATABASE_TAG = re.compile(r"game-databases-v([1-9][0-9]*)")
-PLATFORM_TAG = re.compile(r"platform-v0\.1-[0-9a-f]{64}")
+PLATFORM_TAG = re.compile(r"platform-v0\.([1-9][0-9]*)")
+LEGACY_PLATFORM_TAG = re.compile(r"platform-v0\.1-[0-9a-f]{64}")
 
 
 def select_game_databases(releases: list[dict[str, object]]) -> dict[str, object] | None:
@@ -25,15 +26,22 @@ def select_game_databases(releases: list[dict[str, object]]) -> dict[str, object
     return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
+def platform_version(tag: str) -> int | None:
+    match = PLATFORM_TAG.fullmatch(tag)
+    if match:
+        return int(match.group(1))
+    if LEGACY_PLATFORM_TAG.fullmatch(tag):
+        return 1
+    return None
+
+
 def select_platform(releases: list[dict[str, object]]) -> dict[str, object] | None:
-    candidates = [
-        release
-        for release in releases
-        if PLATFORM_TAG.fullmatch(str(release.get("tag_name", "")))
-        and not release.get("draft")
-        and release.get("published_at")
-    ]
-    return max(candidates, key=lambda release: str(release["published_at"])) if candidates else None
+    candidates: list[tuple[int, str, dict[str, object]]] = []
+    for release in releases:
+        version = platform_version(str(release.get("tag_name", "")))
+        if version is not None and not release.get("draft") and release.get("published_at"):
+            candidates.append((version, str(release["published_at"]), release))
+    return max(candidates, key=lambda item: (item[0], item[1]))[2] if candidates else None
 
 
 def main() -> int:
@@ -56,9 +64,10 @@ def main() -> int:
             return 1
         tag = str(selected["tag_name"])
         if args.field == "version":
-            if args.kind != "game-databases":
-                raise ValueError("version output is only valid for game databases")
-            print(GAME_DATABASE_TAG.fullmatch(tag).group(1))
+            if args.kind == "game-databases":
+                print(GAME_DATABASE_TAG.fullmatch(tag).group(1))
+            else:
+                print(platform_version(tag))
         else:
             print(tag)
     except (OSError, json.JSONDecodeError, ValueError) as error:

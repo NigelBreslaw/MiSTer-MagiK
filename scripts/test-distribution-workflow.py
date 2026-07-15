@@ -35,6 +35,7 @@ required = (
     "gh release create",
     "mister-magik-$RELEASE_CHANNEL-db.json.zip",
     "select-published-release.py platform",
+    "mister-magik-platform-v0.*.zip",
     "select-published-release.py game-databases",
     "game-databases-bundle.py verify",
     "game-databases-manifest.json",

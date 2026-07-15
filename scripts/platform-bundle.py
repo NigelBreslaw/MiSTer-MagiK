@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Create and verify durable MiSTer MagiK platform bundle v0.1 archives."""
+"""Create, plan, and verify durable numbered MiSTer MagiK platform bundles."""
 
 from __future__ import annotations
 
@@ -68,6 +68,56 @@ def bundle_id(fpga_id: str, kernel_id: str) -> str:
         raise BundleError(str(error)) from error
 
 
+def require_release_version(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise BundleError("invalid platform release version")
+    return value
+
+
+def update_plan(
+    current: dict[str, object] | None,
+    current_version: int,
+    fpga_id: str,
+    kernel_id: str,
+) -> dict[str, object]:
+    require_hex("fpga_input_sha256", fpga_id, HEX64)
+    require_hex("kernel_input_sha256", kernel_id, HEX64)
+    identity = bundle_id(fpga_id, kernel_id)
+    if current is None:
+        if current_version != 0:
+            raise BundleError("current platform version requires a manifest")
+        result = {
+            "current_version": 0,
+            "next_version": 1,
+            "current_bundle_id": "",
+            "bundle_id": identity,
+            "update_needed": True,
+        }
+        result["release_tag"] = "platform-v0.1"
+        return result
+    if current_version < 1:
+        raise BundleError("current platform manifest requires a positive version")
+    if current.get("format") != FORMAT:
+        raise BundleError("unsupported platform bundle format")
+    stored_version = current.get("release_version")
+    if stored_version is not None and require_release_version(stored_version) != current_version:
+        raise BundleError("platform release tag and manifest version differ")
+    current_fpga = str(current.get("fpga_input_sha256", ""))
+    current_kernel = str(current.get("kernel_input_sha256", ""))
+    current_identity = bundle_id(current_fpga, current_kernel)
+    if current.get("bundle_id") != current_identity:
+        raise BundleError("current bundle identity does not match components")
+    result = {
+        "current_version": current_version,
+        "next_version": current_version + 1,
+        "current_bundle_id": current_identity,
+        "bundle_id": identity,
+        "update_needed": current_identity != identity,
+    }
+    result["release_tag"] = f"platform-v0.{result['next_version']}"
+    return result
+
+
 def tree_entries(root: Path) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
@@ -119,6 +169,7 @@ def write_checksums(root: Path, paths: list[Path]) -> None:
 
 
 def create(args: argparse.Namespace) -> Path:
+    release_version = require_release_version(args.release_version)
     fpga_id = args.fpga_id
     kernel_id = args.kernel_id
     require_hex("fpga_input_sha256", fpga_id, HEX64)
@@ -132,7 +183,7 @@ def create(args: argparse.Namespace) -> Path:
     identity = bundle_id(fpga_id, kernel_id)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    archive = output / f"mister-magik-platform-v0.1-{identity}.zip"
+    archive = output / f"mister-magik-platform-v0.{release_version}.zip"
     manifest = output / MANIFEST_NAME
     with tempfile.TemporaryDirectory(prefix="mister-magik-platform-bundle-") as temporary:
         stage = Path(temporary) / "bundle"
@@ -140,6 +191,7 @@ def create(args: argparse.Namespace) -> Path:
         shutil.copytree(args.scanout_dir, stage / "scanout")
         payload = {
             "format": FORMAT,
+            "release_version": release_version,
             "bundle_id": identity,
             "fpga_input_sha256": fpga_id,
             "kernel_input_sha256": kernel_id,
@@ -161,7 +213,11 @@ def create(args: argparse.Namespace) -> Path:
     return archive
 
 
-def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object]:
+def verify(
+    archive: Path,
+    manifest_path: Path | None = None,
+    expected_release_version: int | None = None,
+) -> dict[str, object]:
     if not archive.is_file():
         raise BundleError(f"missing bundle archive: {archive}")
     with tempfile.TemporaryDirectory(prefix="mister-magik-platform-verify-") as temporary:
@@ -180,6 +236,15 @@ def verify(archive: Path, manifest_path: Path | None = None) -> dict[str, object
             raise BundleError("release manifest differs from archive manifest")
         if payload.get("format") != FORMAT:
             raise BundleError("unsupported platform bundle format")
+        release_version = payload.get("release_version")
+        if release_version is not None:
+            require_release_version(release_version)
+        if expected_release_version is not None:
+            expected_release_version = require_release_version(expected_release_version)
+            if release_version is None and expected_release_version != 1:
+                raise BundleError("numbered platform release is missing its version")
+            if release_version is not None and release_version != expected_release_version:
+                raise BundleError("platform release tag and manifest version differ")
         fpga_id = str(payload.get("fpga_input_sha256", ""))
         kernel_id = str(payload.get("kernel_input_sha256", ""))
         expected = bundle_id(fpga_id, kernel_id)
@@ -221,16 +286,33 @@ def main() -> int:
     create_parser.add_argument("--kernel-run-id", required=True)
     create_parser.add_argument("--fpga-head-sha", required=True)
     create_parser.add_argument("--kernel-head-sha", required=True)
+    create_parser.add_argument("--release-version", required=True, type=int)
     create_parser.add_argument("--output", required=True, type=Path)
     check = commands.add_parser("verify")
     check.add_argument("archive", type=Path)
     check.add_argument("--manifest", type=Path)
+    check.add_argument("--release-version", type=int)
+    plan = commands.add_parser("plan-update")
+    plan.add_argument("--manifest", type=Path)
+    plan.add_argument("--current-version", required=True, type=int)
+    plan.add_argument("--fpga-id", required=True)
+    plan.add_argument("--kernel-id", required=True)
+    plan.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "create":
             print(create(args))
+        elif args.command == "verify":
+            print(json.dumps(verify(args.archive, args.manifest, args.release_version), sort_keys=True))
         else:
-            print(json.dumps(verify(args.archive, args.manifest), sort_keys=True))
+            current = json.loads(args.manifest.read_text()) if args.manifest else None
+            result = update_plan(current, args.current_version, args.fpga_id, args.kernel_id)
+            if args.github_output:
+                with args.github_output.open("a") as output:
+                    for key, value in result.items():
+                        rendered = str(value).lower() if isinstance(value, bool) else str(value)
+                        output.write(f"{key}={rendered}\n")
+            print(json.dumps(result, sort_keys=True))
     except (BundleError, OSError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         print(f"platform bundle invalid: {error}", file=sys.stderr)
         return 1
