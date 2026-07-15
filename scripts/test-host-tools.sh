@@ -314,9 +314,11 @@ body = match.group("body")
 if "run_supervised_reboot_soak" not in body:
     print("launcher lifecycle no longer references supervised reboot soak", file=sys.stderr)
     sys.exit(1)
-gate = re.search(r'if tier_selected "soak"; then\s+run_supervised_reboot_soak', body)
-if not gate:
-    print("launcher lifecycle supervised reboot soak is not gated by selected soak tier", file=sys.stderr)
+if 'run_capture "supervised-reboot-soak-3" "$MISTER" agent boot-profile 3 --timeout 60 --fail-on-timeout' not in text:
+    print("launcher lifecycle supervised reboot soak is not fixed at three required samples", file=sys.stderr)
+    sys.exit(1)
+if re.search(r'if tier_selected "soak"; then\s+run_supervised_reboot_soak', body):
+    print("launcher lifecycle supervised reboot soak must not be gated by the optional long-soak tier", file=sys.stderr)
     sys.exit(1)
 PY
 

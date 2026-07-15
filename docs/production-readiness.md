@@ -151,11 +151,11 @@ The gate verifies supervised reboot while the launcher is active. It uses raw
 reboot only as recovery after the exit-to-menu and game-handoff smokes, because
 those tests intentionally leave launcher command mode.
 
-In the non-fast release preset, the launcher lifecycle tier also runs a
-15-sample supervised reboot soak:
+Every non-fast launcher lifecycle run includes a mandatory three-sample
+supervised reboot soak; it does not depend on the optional long-soak tier:
 
 ```bash
-scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
+scripts/mister agent boot-profile 3 --timeout 60 --fail-on-timeout
 ```
 
 Every sample must recover the agent port, SSH command execution, and Main
@@ -183,7 +183,7 @@ Block a public beta release if any of these fail:
 - Restart after crash-policy smoke does not return to `LauncherActive` without
   raw reboot recovery.
 - Supervised reboot does not return to `LauncherActive`.
-- Any sample in the 15-reboot supervised Ethernet soak misses agent, SSH, or
+- Any sample in the three-reboot supervised Ethernet soak misses agent, SSH, or
   `LauncherActive` recovery.
 - The acceptance script does not produce `report.md`, `summary.json`, and
   artifacts.

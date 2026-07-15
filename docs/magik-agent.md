@@ -72,7 +72,7 @@ scripts/mister agent magik restart-launcher
 scripts/mister agent reboot-wait --timeout 40
 scripts/mister agent reboot-wait --direct-reset --timeout 40
 scripts/mister agent boot-profile 3 --timeout 40
-scripts/mister agent boot-profile 15 --timeout 60 --fail-on-timeout
+scripts/mister agent boot-profile 3 --timeout 60 --fail-on-timeout
 ```
 
 `ping` confirms the authenticated TCP path. `status` returns:
@@ -226,7 +226,7 @@ testing or recovering through the old path.
 `boot-profile` reboots the device, waits for ports to drop, then compares first
 agent response against first SSH command readiness. It defaults to the
 supervised MagiK reboot path and accepts `--fail-on-timeout` for release gates
-such as the 15-reboot Ethernet soak. Pass `--raw` only when testing the detached
+such as the three-reboot Ethernet soak. Pass `--raw` only when testing the detached
 Linux reboot path. Pass `--direct-reset` for fast quiescent dev-loop reboot
 samples after writes are complete; keep the supervised default for release soak
 evidence. `--direct-reset-no-sync` is only for attended A/B testing. New rows include
