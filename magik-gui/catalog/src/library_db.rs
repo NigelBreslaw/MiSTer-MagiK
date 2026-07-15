@@ -228,6 +228,9 @@ pub struct CatalogPrepareTiming {
     pub stamp_us: u64,
     pub audit_stamp_worker_us: u64,
     pub catalog_us: u64,
+    pub metadata_us: u64,
+    pub projection_rows_us: u64,
+    pub indexes_us: u64,
     pub wall_us: u64,
     pub overlapped_us: u64,
 }
@@ -339,13 +342,21 @@ impl LibraryRamScanArtifact {
     /// returned catalog and stamp retain the same generation boundary as the
     /// sequential path.
     pub fn complete_coverage_audit_and_catalog_foreground(
+        self,
+        root: impl AsRef<Path>,
+    ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
+        self.complete_coverage_audit_and_catalog_foreground_with_progress(root, &mut |_, _| {})
+    }
+
+    pub fn complete_coverage_audit_and_catalog_foreground_with_progress(
         mut self,
         root: impl AsRef<Path>,
+        progress: &mut dyn FnMut(&str, &str),
     ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
         let root = root.as_ref().to_path_buf();
         apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
         let wall_t = std::time::Instant::now();
-        let ((audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us), catalog, catalog_us) =
+        let ((audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us), catalog, timing) =
             std::thread::scope(|scope| {
                 let scan = &self.scan;
                 let audit_worker = std::thread::Builder::new()
@@ -365,21 +376,20 @@ impl LibraryRamScanArtifact {
                     })
                     .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
 
-                let catalog_t = std::time::Instant::now();
-                let catalog = build_catalog_from_scan_with_preferred(
+                let (catalog, timing) = build_catalog_from_scan_with_preferred_and_progress(
                     &root,
                     scan,
                     &self.preferred_discoveries,
+                    progress,
                 );
-                let catalog_us = catalog_t.elapsed().as_micros() as u64;
                 let audit_result = audit_worker
                     .join()
                     .map_err(|_| "catalog audit/stamp worker panicked".to_string())?;
-                Ok::<_, String>((audit_result, catalog, catalog_us))
+                Ok::<_, String>((audit_result, catalog, timing))
             })?;
         let wall_us = wall_t.elapsed().as_micros() as u64;
         let overlapped_us = audit_stamp_worker_us
-            .saturating_add(catalog_us)
+            .saturating_add(timing.total_us)
             .saturating_sub(wall_us);
 
         self.scan.audit_rows = audit_rows;
@@ -402,7 +412,10 @@ impl LibraryRamScanArtifact {
                 audit_us,
                 stamp_us,
                 audit_stamp_worker_us,
-                catalog_us,
+                catalog_us: timing.total_us,
+                metadata_us: timing.metadata_us,
+                projection_rows_us: timing.projection_rows_us,
+                indexes_us: timing.indexes_us,
                 wall_us,
                 overlapped_us,
             },
@@ -1155,12 +1168,35 @@ fn build_catalog_from_scan_with_preferred(
     scan: &LibraryScan,
     preferred_discoveries: &BTreeMap<String, usize>,
 ) -> ArcadeCatalog {
+    build_catalog_from_scan_with_preferred_and_progress(
+        root,
+        scan,
+        preferred_discoveries,
+        &mut |_, _| {},
+    )
+    .0
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CatalogProjectionTiming {
+    metadata_us: u64,
+    projection_rows_us: u64,
+    indexes_us: u64,
+    total_us: u64,
+}
+
+fn build_catalog_from_scan_with_preferred_and_progress(
+    root: impl AsRef<Path>,
+    scan: &LibraryScan,
+    preferred_discoveries: &BTreeMap<String, usize>,
+    progress: &mut dyn FnMut(&str, &str),
+) -> (ArcadeCatalog, CatalogProjectionTiming) {
     let mame_sqlite_path = default_mame_sqlite_path();
     let hbmame_sqlite_path = default_hbmame_sqlite_path();
     let preview_paths = PreviewArchivePaths::from_paths(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
-    build_catalog_from_scan_with_sources_and_preferred(
+    build_catalog_from_scan_with_sources_and_preferred_and_progress(
         root,
         scan,
         CatalogBuildSources {
@@ -1171,6 +1207,7 @@ fn build_catalog_from_scan_with_preferred(
             discovery_history: sqlite_catalog::DiscoveryHistory::load(&default_sqlite_path()),
         },
         preferred_discoveries,
+        progress,
     )
 }
 
@@ -1209,12 +1246,36 @@ fn build_catalog_from_scan_with_sources(
     )
 }
 
+#[cfg(test)]
 fn build_catalog_from_scan_with_sources_and_preferred(
     root: impl AsRef<Path>,
     scan: &LibraryScan,
     sources: CatalogBuildSources<'_>,
     discoveries: &BTreeMap<String, usize>,
 ) -> ArcadeCatalog {
+    build_catalog_from_scan_with_sources_and_preferred_and_progress(
+        root,
+        scan,
+        sources,
+        discoveries,
+        &mut |_, _| {},
+    )
+    .0
+}
+
+fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
+    root: impl AsRef<Path>,
+    scan: &LibraryScan,
+    sources: CatalogBuildSources<'_>,
+    discoveries: &BTreeMap<String, usize>,
+    progress: &mut dyn FnMut(&str, &str),
+) -> (ArcadeCatalog, CatalogProjectionTiming) {
+    let total_t = std::time::Instant::now();
+    progress(
+        "Indexing library",
+        &format!("Preparing library — {} discoveries", discoveries.len()),
+    );
+    let metadata_t = std::time::Instant::now();
     let mut software_hash_cache = sources.software_hash_cache;
     let mut platform_kinds = scan
         .profiles
@@ -1253,12 +1314,24 @@ fn build_catalog_from_scan_with_sources_and_preferred(
         .collect::<HashSet<_>>();
     let arcade_setnames =
         arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
-    let software_metadata = load_mame_software_metadata(sources.mame_sqlite_path);
-    let arcade_metadata = load_arcade_machine_metadata_for_setnames(
-        sources.mame_sqlite_path,
-        sources.hbmame_sqlite_path,
-        &arcade_setnames,
+    let software_metadata = with_catalog_progress_heartbeat(
+        progress,
+        "Preparing library — loading software metadata",
+        || load_mame_software_metadata(sources.mame_sqlite_path),
     );
+    let arcade_metadata = with_catalog_progress_heartbeat(
+        progress,
+        "Preparing library — loading arcade metadata",
+        || {
+            load_arcade_machine_metadata_for_setnames(
+                sources.mame_sqlite_path,
+                sources.hbmame_sqlite_path,
+                &arcade_setnames,
+            )
+        },
+    );
+    let metadata_us = metadata_t.elapsed().as_micros() as u64;
+    let projection_rows_t = std::time::Instant::now();
     let now = unix_now_secs();
     let mut arcade_rows = Vec::<CatalogProjectionRow>::new();
     let mut launcher_rows = Vec::<CatalogProjectionRow>::new();
@@ -1273,34 +1346,149 @@ fn build_catalog_from_scan_with_sources_and_preferred(
         now,
     };
 
-    for (key, index) in discoveries {
-        let discovery = &scan.discoveries[*index];
-        if is_raw_arcade_zip_set_discovery(discovery) {
-            continue;
-        }
-        if !promoted_systems.contains(&catalog_system_id_for_discovery(discovery)) {
-            continue;
-        }
-        let Some(projection) = projection_context.projection_for_discovery(key, discovery) else {
-            continue;
-        };
-        if let Some(plan) = projection.launch_plan {
-            launch_plans.push(plan);
-        }
-        if projection.is_arcade {
-            arcade_rows.push(projection.row);
-        } else {
-            launcher_rows.push(projection.row);
+    {
+        let mut row_progress =
+            CatalogProjectionProgress::new(progress, "Resolving playable games", discoveries.len());
+        row_progress.report(0, true);
+        for (position, (key, index)) in discoveries.iter().enumerate() {
+            let completed = position + 1;
+            let discovery = &scan.discoveries[*index];
+            if is_raw_arcade_zip_set_discovery(discovery) {
+                row_progress.report(completed, completed == discoveries.len());
+                continue;
+            }
+            if !promoted_systems.contains(&catalog_system_id_for_discovery(discovery)) {
+                row_progress.report(completed, completed == discoveries.len());
+                continue;
+            }
+            let Some(projection) = projection_context.projection_for_discovery(key, discovery)
+            else {
+                row_progress.report(completed, completed == discoveries.len());
+                continue;
+            };
+            if let Some(plan) = projection.launch_plan {
+                launch_plans.push(plan);
+            }
+            if projection.is_arcade {
+                arcade_rows.push(projection.row);
+            } else {
+                launcher_rows.push(projection.row);
+            }
+            row_progress.report(completed, completed == discoveries.len());
         }
     }
+    let projection_rows_us = projection_rows_t.elapsed().as_micros() as u64;
+    let indexes_t = std::time::Instant::now();
+    let projected_games = arcade_rows.len() + launcher_rows.len();
+    let mut index_progress =
+        CatalogProjectionProgress::new(progress, "Building launcher indexes", projected_games);
+    index_progress.report(0, true);
+    let mut report_index_progress = |completed: usize, _total: usize| {
+        index_progress.report(completed, completed == projected_games);
+    };
 
-    catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
+    let catalog = catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progress(
         root,
         arcade_rows,
         launcher_rows,
         launch_plans,
         platform_kinds,
+        Some(&mut report_index_progress),
+    );
+    let indexes_us = indexes_t.elapsed().as_micros() as u64;
+    (
+        catalog,
+        CatalogProjectionTiming {
+            metadata_us,
+            projection_rows_us,
+            indexes_us,
+            total_us: total_t.elapsed().as_micros() as u64,
+        },
     )
+}
+
+fn catalog_progress_counter_detail(
+    label: &str,
+    completed: usize,
+    total: usize,
+    elapsed: std::time::Duration,
+) -> String {
+    let elapsed_seconds = elapsed.as_secs();
+    if elapsed_seconds == 0 {
+        format!("{label} — {completed} of {total}")
+    } else {
+        format!("{label} — {completed} of {total} — Still working… {elapsed_seconds}s")
+    }
+}
+
+struct CatalogProjectionProgress<'a> {
+    progress: &'a mut dyn FnMut(&str, &str),
+    label: &'static str,
+    total: usize,
+    started: std::time::Instant,
+    last_report: std::time::Instant,
+}
+
+impl<'a> CatalogProjectionProgress<'a> {
+    fn new(progress: &'a mut dyn FnMut(&str, &str), label: &'static str, total: usize) -> Self {
+        let started = std::time::Instant::now();
+        Self {
+            progress,
+            label,
+            total,
+            started,
+            last_report: started,
+        }
+    }
+
+    fn report(&mut self, completed: usize, force: bool) {
+        let now = std::time::Instant::now();
+        if !force
+            && !completed.is_multiple_of(250)
+            && now.duration_since(self.last_report) < std::time::Duration::from_secs(1)
+        {
+            return;
+        }
+        (self.progress)(
+            "Indexing library",
+            &catalog_progress_counter_detail(
+                self.label,
+                completed,
+                self.total,
+                now.duration_since(self.started),
+            ),
+        );
+        self.last_report = now;
+    }
+}
+
+fn with_catalog_progress_heartbeat<T: Send>(
+    progress: &mut dyn FnMut(&str, &str),
+    detail: &str,
+    work: impl FnOnce() -> T + Send,
+) -> T {
+    let started = std::time::Instant::now();
+    progress("Indexing library", detail);
+    std::thread::scope(|scope| {
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        scope.spawn(move || {
+            let _ = result_tx.send(work());
+        });
+        loop {
+            match result_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    progress(
+                        "Indexing library",
+                        &format!("{detail} — Still working… {}s", started.elapsed().as_secs()),
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("catalog metadata worker disconnected")
+                }
+            }
+        }
+    })
 }
 
 struct CatalogProjectionBuildContext<'a> {
@@ -1474,12 +1662,31 @@ fn catalog_from_sqlite_launcher_projection_order(
     )
 }
 
+#[cfg(test)]
 fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
+    root: impl AsRef<Path>,
+    arcade_rows: Vec<CatalogProjectionRow>,
+    launcher_rows: Vec<CatalogProjectionRow>,
+    launch_plans: Vec<StructuredLaunchPlan>,
+    platform_kinds: HashMap<String, PlatformKind>,
+) -> ArcadeCatalog {
+    catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progress(
+        root,
+        arcade_rows,
+        launcher_rows,
+        launch_plans,
+        platform_kinds,
+        None,
+    )
+}
+
+fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progress(
     root: impl AsRef<Path>,
     mut arcade_rows: Vec<CatalogProjectionRow>,
     mut launcher_rows: Vec<CatalogProjectionRow>,
     mut launch_plans: Vec<StructuredLaunchPlan>,
     platform_kinds: HashMap<String, PlatformKind>,
+    index_progress: Option<&mut dyn FnMut(usize, usize)>,
 ) -> ArcadeCatalog {
     arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
@@ -1495,12 +1702,13 @@ fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds(
         .collect::<HashSet<_>>();
     launch_plans.retain(|plan| visible_refs.contains(plan.launch_ref.as_ref()));
     let systems = arcade_catalog::systems_from_games(&games);
-    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds_with_progress(
         root.as_ref().to_path_buf(),
         games,
         systems,
         launch_plans,
         platform_kinds,
+        index_progress,
     )
 }
 
@@ -2744,5 +2952,27 @@ mod tests {
             .iter()
             .any(|(title, detail)| title == "Finding games" && detail == "Games found: 1"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_projection_progress_counter_includes_elapsed_heartbeat() {
+        assert_eq!(
+            catalog_progress_counter_detail(
+                "Resolving playable games",
+                250,
+                500,
+                std::time::Duration::ZERO,
+            ),
+            "Resolving playable games — 250 of 500"
+        );
+        assert_eq!(
+            catalog_progress_counter_detail(
+                "Building launcher indexes",
+                500,
+                500,
+                std::time::Duration::from_secs(3),
+            ),
+            "Building launcher indexes — 500 of 500 — Still working… 3s"
+        );
     }
 }

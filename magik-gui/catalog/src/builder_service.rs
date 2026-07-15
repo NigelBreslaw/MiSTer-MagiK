@@ -118,13 +118,18 @@ trait BuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
         system_discovered: &mut dyn FnMut(String),
     ) -> Result<StageOutput<Self::Scan>, String>;
-    fn prepare(&mut self, scan: Self::Scan) -> Result<StageOutput<Self::Prepared>, String>;
+    fn prepare(
+        &mut self,
+        scan: Self::Scan,
+        progress: &mut dyn FnMut(&str, &str),
+    ) -> Result<StageOutput<Self::Prepared>, String>;
     fn games(&self, prepared: &Self::Prepared) -> usize;
     fn load_us(&self, prepared: &Self::Prepared) -> u64;
     fn write_snapshot(
         &mut self,
         path: &Path,
         prepared: &Self::Prepared,
+        progress: &mut dyn FnMut(&str, &str),
     ) -> Result<Vec<(String, String)>, String>;
     fn persist(
         &mut self,
@@ -205,9 +210,19 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
     emit_timings(protocol, scanned.timings, emit);
-    let prepared = backend
-        .prepare(scanned.value)
-        .map_err(|error| fail(protocol, "prepare-catalog", error, emit))?;
+    let prepared = {
+        let protocol_output = RefCell::new(&mut *emit);
+        let mut prepare_progress = |title: &str, detail: &str| {
+            (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
+                protocol,
+                title: title.into(),
+                detail: detail.into(),
+            });
+        };
+        backend
+            .prepare(scanned.value, &mut prepare_progress)
+            .map_err(|error| fail(protocol, "prepare-catalog", error, emit))?
+    };
     emit_timings(protocol, prepared.timings, emit);
     let games = backend.games(&prepared.value);
     let load_us = backend.load_us(&prepared.value);
@@ -219,10 +234,25 @@ fn run_with_backend<B: BuilderBackend>(
             .map_err(|error| fail(protocol, "snapshot", error.to_string(), emit))?;
     }
     snapshot_cleanup.arm();
-    let snapshot_timings = backend
-        .write_snapshot(&snapshot_path, &prepared.value)
-        .map_err(|error| fail(protocol, "snapshot", error, emit))?;
+    let snapshot_timings = {
+        let protocol_output = RefCell::new(&mut *emit);
+        let mut snapshot_progress = |title: &str, detail: &str| {
+            (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
+                protocol,
+                title: title.into(),
+                detail: detail.into(),
+            });
+        };
+        backend
+            .write_snapshot(&snapshot_path, &prepared.value, &mut snapshot_progress)
+            .map_err(|error| fail(protocol, "snapshot", error, emit))?
+    };
     emit_timings(protocol, snapshot_timings, emit);
+    emit(CatalogBuilderEvent::Progress {
+        protocol,
+        title: "Indexing library".into(),
+        detail: format!("Opening library — {games} games"),
+    });
     emit(CatalogBuilderEvent::Timing {
         protocol,
         name: "builder_catalog_ready".into(),
@@ -375,10 +405,14 @@ impl BuilderBackend for SystemBuilderBackend {
         })
     }
 
-    fn prepare(&mut self, scan: Self::Scan) -> Result<StageOutput<Self::Prepared>, String> {
+    fn prepare(
+        &mut self,
+        scan: Self::Scan,
+        progress: &mut dyn FnMut(&str, &str),
+    ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
         let (artifact, catalog, timing) =
-            scan.complete_coverage_audit_and_catalog_foreground(root)?;
+            scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
         let load_us = timing.catalog_us;
         let timings = vec![
             (
@@ -394,6 +428,18 @@ impl BuilderBackend for SystemBuilderBackend {
             (
                 "builder_catalog_projection".into(),
                 format!("elapsed_us={} games={}", load_us, catalog.len()),
+            ),
+            (
+                "builder_catalog_metadata".into(),
+                format!("elapsed_us={}", timing.metadata_us),
+            ),
+            (
+                "builder_catalog_projection_rows".into(),
+                format!("elapsed_us={}", timing.projection_rows_us),
+            ),
+            (
+                "builder_catalog_indexes".into(),
+                format!("elapsed_us={}", timing.indexes_us),
             ),
             (
                 "builder_catalog_prepare_overlap".into(),
@@ -435,25 +481,50 @@ impl BuilderBackend for SystemBuilderBackend {
         &mut self,
         path: &Path,
         prepared: &Self::Prepared,
+        progress: &mut dyn FnMut(&str, &str),
     ) -> Result<Vec<(String, String)>, String> {
-        let timing = write_catalog_navigation_snapshot_with_timing(
-            path,
-            &prepared.catalog,
-            prepared.artifact.stamp(),
+        let timing = with_builder_progress_heartbeat(
+            progress,
+            "Creating compressed navigation catalog…",
+            || {
+                write_catalog_navigation_snapshot_with_timing(
+                    path,
+                    &prepared.catalog,
+                    prepared.artifact.stamp(),
+                )
+            },
         )?;
-        Ok(vec![(
-            "builder_navigation_snapshot".into(),
-            format!(
-                "conversion_us={} encode_us={} compress_us={} write_us={} total_us={} encoded_bytes={} compressed_bytes={}",
-                timing.conversion_us,
-                timing.encode_us,
-                timing.compress_us,
-                timing.write_us,
-                timing.total_us,
-                timing.encoded_bytes,
-                timing.compressed_bytes,
+        Ok(vec![
+            (
+                "builder_navigation_snapshot".into(),
+                format!(
+                    "conversion_us={} encode_us={} compress_us={} write_us={} total_us={} encoded_bytes={} compressed_bytes={}",
+                    timing.conversion_us,
+                    timing.encode_us,
+                    timing.compress_us,
+                    timing.write_us,
+                    timing.total_us,
+                    timing.encoded_bytes,
+                    timing.compressed_bytes,
+                ),
             ),
-        )])
+            (
+                "builder_navigation_snapshot_conversion".into(),
+                format!("elapsed_us={}", timing.conversion_us),
+            ),
+            (
+                "builder_navigation_snapshot_encode".into(),
+                format!("elapsed_us={}", timing.encode_us),
+            ),
+            (
+                "builder_navigation_snapshot_compress".into(),
+                format!("elapsed_us={}", timing.compress_us),
+            ),
+            (
+                "builder_navigation_snapshot_write".into(),
+                format!("elapsed_us={}", timing.write_us),
+            ),
+        ])
     }
 
     fn persist(
@@ -474,6 +545,35 @@ impl BuilderBackend for SystemBuilderBackend {
     ) -> Result<u64, String> {
         catalog_build_record::write_completed_build_duration(sqlite_path, elapsed)
     }
+}
+
+fn with_builder_progress_heartbeat<T: Send>(
+    progress: &mut dyn FnMut(&str, &str),
+    detail: &str,
+    work: impl FnOnce() -> T + Send,
+) -> T {
+    let started = Instant::now();
+    progress("Indexing library", detail);
+    std::thread::scope(|scope| {
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        scope.spawn(move || {
+            let _ = result_tx.send(work());
+        });
+        loop {
+            match result_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    progress(
+                        "Indexing library",
+                        &format!("{detail} — Still working… {}s", started.elapsed().as_secs()),
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("catalog snapshot worker disconnected")
+                }
+            }
+        }
+    })
 }
 
 struct SnapshotCleanup {
@@ -626,9 +726,16 @@ mod tests {
             })
         }
 
-        fn prepare(&mut self, _scan: Self::Scan) -> Result<StageOutput<Self::Prepared>, String> {
+        fn prepare(
+            &mut self,
+            _scan: Self::Scan,
+            progress: &mut dyn FnMut(&str, &str),
+        ) -> Result<StageOutput<Self::Prepared>, String> {
             self.calls.push("prepare-catalog");
             self.fail("prepare-catalog")?;
+            progress("Indexing library", "Preparing library — 2 discoveries");
+            progress("Indexing library", "Resolving playable games — 2 of 2");
+            progress("Indexing library", "Building launcher indexes — 2 of 2");
             Ok(StageOutput {
                 value: (),
                 timings: vec![("builder_catalog_projection".into(), "fixture".into())],
@@ -647,8 +754,10 @@ mod tests {
             &mut self,
             path: &Path,
             _prepared: &Self::Prepared,
+            progress: &mut dyn FnMut(&str, &str),
         ) -> Result<Vec<(String, String)>, String> {
             self.calls.push("snapshot");
+            progress("Indexing library", "Creating compressed navigation catalog…");
             std::fs::write(path, b"fixture-navigation").map_err(|error| error.to_string())?;
             self.fail("snapshot")?;
             Ok(vec![(
@@ -752,6 +861,31 @@ mod tests {
                 names.iter().position(|name| *name == pair.0)
                     < names.iter().position(|name| *name == pair.1),
                 "event order {pair:?}: {names:?}"
+            );
+        }
+        let opening_library = events
+            .iter()
+            .position(|event| {
+                matches!(event, CatalogBuilderEvent::Progress { detail, .. } if detail == "Opening library — 2 games")
+            })
+            .expect("opening-library progress event");
+        let ready = events
+            .iter()
+            .position(|event| matches!(event, CatalogBuilderEvent::CatalogReady { .. }))
+            .expect("catalog-ready event");
+        assert!(opening_library < ready);
+        for detail in [
+            "Preparing library — 2 discoveries",
+            "Resolving playable games — 2 of 2",
+            "Building launcher indexes — 2 of 2",
+            "Creating compressed navigation catalog…",
+            "Opening library — 2 games",
+        ] {
+            assert!(
+                events.iter().any(
+                    |event| matches!(event, CatalogBuilderEvent::Progress { detail: actual, .. } if actual == detail)
+                ),
+                "missing final-phase progress {detail}"
             );
         }
         assert_eq!(

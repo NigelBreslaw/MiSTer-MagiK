@@ -403,6 +403,13 @@ slowly while the full scanner catches up. Later `Classifying library` updates
 must not pull the displayed number down; they take over only after their real
 discovery count exceeds the currently displayed count.
 
+After classification completes, the foreground screen switches from the game
+counter to real RAM-catalog projection progress: preparation discovery count,
+playable-row resolution, launcher-index construction, navigation snapshot
+creation, and library opening. Counter details include an elapsed `still
+working` heartbeat after one second; this confirms liveness without claiming an
+ETA. SQLite persistence remains post-`Ready` background work.
+
 The bottom-right `scanning...` badge is progress-driven background UI. It appears
 only when the worker emits real background progress after a usable catalog is
 already visible. It clears on `Unchanged`, `Ready`, `Done`, persistence failure,
