@@ -110,8 +110,9 @@ Before dispatch:
    dispatch exits successfully without publishing another release.
 4. Configure protected GitHub environments named `publish-platform`,
    `publish-game-databases`, `publish-beta`, and `publish-release`, with required
-   reviewers. Enable GitHub Release immutability before the first support-bundle
-   promotion.
+   reviewers. Keep repository-wide GitHub Release immutability disabled while
+   Beta uses its rolling release; the numbered platform, database, and
+   production workflows enforce immutability by refusing existing tags.
 5. Dispatch **Promote MiSTer MagiK Game Databases** from `main`. The first run
    publishes `game-databases-v1`; later no-change runs exit without publishing.
 6. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
@@ -127,9 +128,10 @@ support release is absent, run its manual promotion workflow before retrying
 publication. The application version is computed from the dispatched commit:
 
 ```text
-build   = git rev-list --count <dispatched-commit>
-version = 0.2.<build>
-tag     = v0.2.<build>
+build        = git rev-list --count <dispatched-commit>
+version      = 0.2.<build>
+beta tag     = beta
+release tag  = v0.2.<build>
 ```
 
 The build job uploads `mister-magik-0.2.<build>-candidate` before the protected
@@ -149,10 +151,13 @@ Beta-to-Beta update, interrupted-update repair, non-destructive stock restore
 and re-enable, and full uninstall. Approve `publish-beta` only after those
 checks pass.
 
-The publish job rejects non-`main` dispatches and existing tags, verifies all
-candidate checksums again, creates a prerelease titled
-`MiSTer MagiK 0.2.<build> Beta`, and updates only the Beta feed. Release assets
-and version tags are immutable and are never overwritten.
+The publish job rejects non-`main` dispatches and verifies all candidate
+checksums again. Beta publication creates or updates the single rolling
+prerelease titled `MiSTer MagiK 0.2.<build> Beta`, replaces its assets, moves
+the `beta` tag, and then updates only the Beta feed. After the new feed is live,
+it removes superseded `v0.2.<build>` prereleases and their tags. This
+deliberately keeps the repository at one application-beta tag. Production
+releases use immutable `v0.2.<build>` tags and are never overwritten.
 
 ## Platform bundle recovery
 

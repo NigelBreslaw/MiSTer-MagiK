@@ -20,7 +20,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 class DownloaderDatabaseTests(unittest.TestCase):
-    def test_channels_share_identity_and_reference_immutable_assets(self) -> None:
+    def test_channels_reference_their_release_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             files = root / "files"
@@ -42,22 +42,28 @@ class DownloaderDatabaseTests(unittest.TestCase):
             receipt_path = root / "release-assets.json"
             receipt_path.write_text(json.dumps(receipt))
 
-            for channel in ("beta", "release"):
-                output = root / channel
+            cases = (
+                ("rolling-beta", "beta", "beta"),
+                ("promoted-beta", "beta", "v0.2.42"),
+                ("release", "release", "v0.2.42"),
+            )
+            for case, channel, tag in cases:
+                output = root / case
                 MODULE.generate(
-                    receipt_path, output, channel, "Owner/Repo", "v0.2.42", 1_700_000_000
+                    receipt_path, output, channel, "Owner/Repo", tag, 1_700_000_000
                 )
                 database = json.loads((output / f"mister-magik-{channel}-db.json").read_text())
                 self.assertEqual(database["v"], 1)
                 self.assertEqual(database["db_id"], "mister_magik")
                 self.assertEqual(database["timestamp"], 1_700_000_000)
-                self.assertIn("v0.2.42", json.dumps(database))
+                self.assertEqual(database["release"]["version"], "0.2.42")
+                self.assertEqual(database["release"]["build_number"], 42)
                 database_text = json.dumps(database).lower()
                 self.assertNotIn("reboot", database_text)
                 self.assertNotIn("restart", database_text)
                 item = database["files"]["Scripts/MiSTer-MagiK.sh"]
                 self.assertEqual(item["hash"], receipt["files"][0]["md5"])
-                self.assertIn("/releases/download/v0.2.42/", item["url"])
+                self.assertIn(f"/releases/download/{tag}/", item["url"])
                 with zipfile.ZipFile(output / f"mister-magik-{channel}-installer.zip") as archive:
                     names = archive.namelist()
                     self.assertEqual(names, ["downloader_mister_magik.ini"])
@@ -83,11 +89,11 @@ class DownloaderDatabaseTests(unittest.TestCase):
             receipt.write_text(json.dumps(base))
             with self.assertRaisesRegex(ValueError, "forbidden"):
                 MODULE.generate(
-                    receipt, root / "out", "beta", "Owner/Repo", "v0.2.7", 1_700_000_000
+                    receipt, root / "out", "beta", "Owner/Repo", "beta", 1_700_000_000
                 )
             with self.assertRaisesRegex(ValueError, "disagree"):
                 MODULE.generate(
-                    receipt, root / "out", "beta", "Owner/Repo", "v0.2.8", 1_700_000_000
+                    receipt, root / "out", "release", "Owner/Repo", "v0.2.8", 1_700_000_000
                 )
 
 

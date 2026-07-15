@@ -137,6 +137,14 @@ fn release_build_number(marker: &str) -> Option<u64> {
 }
 
 fn database_release_build_number(database: &Value) -> Option<u64> {
+    if let Some(release) = database.get("release") {
+        let build = release.get("build_number").and_then(Value::as_u64);
+        let version = release.get("version").and_then(Value::as_str);
+        return match (build, version) {
+            (Some(build), Some(version)) if version == format!("0.2.{build}") => Some(build),
+            _ => None,
+        };
+    }
     let url = database
         .get("files")?
         .get(RELEASE_MARKER_KEY)?
@@ -273,7 +281,23 @@ mod tests {
     }
 
     #[test]
-    fn extracts_release_build_number_from_database_asset_url() {
+    fn reads_explicit_release_build_number_from_database() {
+        let database = serde_json::json!({
+            "release": {
+                "version": "0.2.19",
+                "build_number": 19
+            },
+            "files": {
+                RELEASE_MARKER_KEY: {
+                    "url": "https://github.com/Owner/Repo/releases/download/beta/mister-magik-release-v1.txt"
+                }
+            }
+        });
+        assert_eq!(database_release_build_number(&database), Some(19));
+    }
+
+    #[test]
+    fn reads_legacy_release_build_number_from_versioned_asset_url() {
         let database = serde_json::json!({
             "files": {
                 RELEASE_MARKER_KEY: {
@@ -282,6 +306,22 @@ mod tests {
             }
         });
         assert_eq!(database_release_build_number(&database), Some(19));
+    }
+
+    #[test]
+    fn rejects_inconsistent_explicit_release_identity() {
+        let database = serde_json::json!({
+            "release": {
+                "version": "0.2.18",
+                "build_number": 19
+            },
+            "files": {
+                RELEASE_MARKER_KEY: {
+                    "url": "https://github.com/Owner/Repo/releases/download/v0.2.19/mister-magik-release-v1.txt"
+                }
+            }
+        });
+        assert_eq!(database_release_build_number(&database), None);
     }
 
     #[test]
