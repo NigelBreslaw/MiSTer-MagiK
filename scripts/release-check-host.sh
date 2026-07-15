@@ -182,7 +182,7 @@ import zipfile
 zip_path = os.environ["ZIP"]
 expect_main = os.environ["EXPECT_MAIN"] == "1"
 required = {
-    "Scripts/mister-magik.sh",
+    "Scripts/MiSTer-MagiK.sh",
     "mister-magik/mister-magik-fb",
     "mister-magik/mister-magik-catalog-builder",
     "mister-magik/mame.sqlite3",
@@ -207,7 +207,7 @@ if expect_main:
 
 with zipfile.ZipFile(zip_path) as zf:
     names = set(zf.namelist())
-    installer = zf.read("Scripts/mister-magik.sh").decode()
+    installer = zf.read("Scripts/MiSTer-MagiK.sh").decode()
     release = zf.read("mister-magik/release-v1.txt").decode()
     notices = zf.read("mister-magik/THIRD-PARTY-NOTICES.txt").decode()
     source_offer = zf.read("mister-magik/SOURCE-OFFER.txt").decode()

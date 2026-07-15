@@ -45,14 +45,14 @@ run_installer() {
     MISTER_MAGIK_INIT_DIR="$INIT_DIR" \
     MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 \
     MISTER_MAGIK_NO_PAUSE=1 \
-    "$ROOT/scripts/mister-magik.sh" "$@"
+    "$ROOT/scripts/MiSTer-MagiK.sh" "$@"
 }
 
 run_confirmed_uninstall() {
   MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
     MISTER_MAGIK_INIT_DIR="$INIT_DIR" \
     MISTER_MAGIK_TEST_MODE=1 MISTER_MAGIK_TEST_CONFIRM_UNINSTALL=1 \
-    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/mister-magik.sh" uninstall
+    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" uninstall
 }
 
 run_installer_with_keys() {
@@ -62,7 +62,7 @@ run_installer_with_keys() {
     MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
     MISTER_MAGIK_TEST_CONFIRM_INSTALL=1 MISTER_MAGIK_TEST_KEYS="$keys" \
     MISTER_MAGIK_TEST_REBOOT_TRACE="${MISTER_MAGIK_TEST_REBOOT_TRACE:-}" \
-    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/mister-magik.sh" "$@"
+    MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" "$@"
 }
 
 assert_one_main() {
@@ -131,7 +131,7 @@ ini_before_confirmation="$(sha256sum "$FAT/MiSTer.ini")"
 inittab_before_confirmation="$(sha256sum "$TMP/inittab")"
 if MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/inittab" \
   MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
-  MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/mister-magik.sh" install \
+  MISTER_MAGIK_NO_PAUSE=1 "$ROOT/scripts/MiSTer-MagiK.sh" install \
   >"$TMP/noninteractive-install.log" 2>&1; then
   echo "noninteractive install unexpectedly succeeded" >&2
   exit 1
@@ -175,7 +175,7 @@ assert_one_main MiSTer_MagiK
 test -d "$APP"
 
 if command -v expect >/dev/null 2>&1; then
-  export TEST_INSTALLER="$ROOT/scripts/mister-magik.sh"
+  export TEST_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
   export TEST_FAT="$FAT"
   export TEST_INITTAB="$TMP/inittab"
   expect <<'EOF' >/dev/null
@@ -303,7 +303,7 @@ assert_one_main MiSTer_MagiK
 if MISTER_MAGIK_FAT="$FAT" MISTER_MAGIK_INITTAB="$TMP/missing/inittab" \
   MISTER_MAGIK_INIT_DIR="$INIT_DIR" MISTER_MAGIK_TEST_MODE=1 \
   MISTER_MAGIK_TEST_CONFIRM_UNINSTALL=1 MISTER_MAGIK_NO_PAUSE=1 \
-  "$ROOT/scripts/mister-magik.sh" uninstall >"$TMP/failed-restore.log" 2>&1; then
+  "$ROOT/scripts/MiSTer-MagiK.sh" uninstall >"$TMP/failed-restore.log" 2>&1; then
   echo "uninstall unexpectedly survived boot-restore failure" >&2
   exit 1
 fi
@@ -314,8 +314,8 @@ test -f "$FAT/MiSTer_MagiK"
 # every owned legacy/current path plus unrelated files that must survive.
 printf '#!/bin/sh\n' >"$APP/mister-magik-fb"
 chmod +x "$APP/mister-magik-fb"
-cp "$ROOT/scripts/mister-magik.sh" "$FAT/Scripts/mister-magik.sh"
-cp "$ROOT/scripts/mister-magik-channel.sh" "$FAT/Scripts/mister-magik-channel.sh"
+cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
+touch "$FAT/Scripts/mister-magik.sh" "$FAT/Scripts/mister-magik-channel.sh"
 printf '[mister_magik]\n' >"$FAT/downloader_mister_magik.ini"
 touch "$FAT/downloader_mister_magik.ini.tmp.12" "$FAT/.downloader_mister_magik.ini.tmp.13"
 touch "$FAT/.MiSTer.ini.bak.before-magik.new.12" "$FAT/.MiSTer.ini.magik.new.stale"
@@ -341,6 +341,7 @@ assert_menu_1080p
 grep -qx '::sysinit:/media/fat/MiSTer &' "$TMP/inittab"
 test ! -e "$APP"
 test ! -e "$FAT/MiSTer_MagiK"
+test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
 test ! -e "$FAT/Scripts/mister-magik.sh"
 test ! -e "$FAT/Scripts/mister-magik-channel.sh"
 test ! -e "$FAT/downloader_mister_magik.ini"

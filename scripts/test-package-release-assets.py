@@ -23,7 +23,7 @@ class ReleaseAssetTests(unittest.TestCase):
             root = Path(temporary)
             stage = root / "stage"
             (stage / "Scripts").mkdir(parents=True)
-            (stage / "Scripts/mister-magik.sh").write_bytes(b"installer")
+            (stage / "Scripts/MiSTer-MagiK.sh").write_bytes(b"installer")
             archive = root / "mister-magik-0.2.42.zip"
             archive.write_bytes(b"zip")
             output = root / "assets"
@@ -33,9 +33,9 @@ class ReleaseAssetTests(unittest.TestCase):
             receipt = json.loads((output / "release-assets.json").read_text())
             self.assertEqual(receipt["version"], "0.2.42")
             self.assertEqual(receipt["build_number"], 42)
-            self.assertEqual(receipt["files"][0]["path"], "Scripts/mister-magik.sh")
-            self.assertTrue((output / "files/mister-magik--Scripts--mister-magik.sh").is_file())
-            self.assertIn("files/mister-magik--Scripts--mister-magik.sh", (output / "SHA256SUMS").read_text())
+            self.assertEqual(receipt["files"][0]["path"], "Scripts/MiSTer-MagiK.sh")
+            self.assertTrue((output / "files/mister-magik--Scripts--MiSTer-MagiK.sh").is_file())
+            self.assertIn("files/mister-magik--Scripts--MiSTer-MagiK.sh", (output / "SHA256SUMS").read_text())
 
     def test_rejects_mismatched_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

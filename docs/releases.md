@@ -2,8 +2,7 @@
 
 MiSTer MagiK is distributed through GitHub Releases and a MiSTer Downloader
 database consumed by `update_all`. Publication is manual. The current public
-channel is Beta; the Release channel is wired for later use but should not be
-selected until a stable release is approved.
+channel is Beta.
 
 ## Install the Beta channel
 
@@ -15,7 +14,7 @@ The first install is a one-time bootstrap:
    `downloader_mister_magik.ini`, which points at the Beta database.
 3. Boot the MiSTer and run `update_all`. Downloader fetches the complete
    platform without changing `MiSTer.ini` or boot configuration.
-4. Run `Scripts` -> `mister-magik` once. The installer verifies the platform
+4. Run `Scripts` -> `MiSTer-MagiK` once. The installer verifies the platform
    manifest, every required file hash, the shared platform contract, module
    metadata, RBF metadata, and executables before enabling the handoff.
    It canonicalizes `[Menu] video_mode=8` (1920x1080 at 60 Hz), the only
@@ -36,7 +35,7 @@ After installation, update by running `update_all` and rebooting normally.
 Existing catalogs, media, settings, snapshots, and user content are outside the
 Downloader database and are preserved.
 
-Running `Scripts` -> `mister-magik` again while the MagiK handoff is active
+Running `Scripts` -> `MiSTer-MagiK` again while the MagiK handoff is active
 opens a controller-friendly menu for restoring stock boot or fully uninstalling
 MiSTer MagiK. Use UP/DOWN to select, A/Enter to continue, and B/Escape to
 cancel. Full uninstall has a second A/Enter confirmation. If the pre-MagiK
@@ -44,30 +43,18 @@ backup is unexpectedly missing during a reinstall, the installer warns and
 leaves it missing rather than copying the already-modified live INI under a
 misleading backup name.
 
-## Beta and Release channels
+## Beta feed
 
-Both channels use the permanent database identity `mister_magik`. The drop-in
-selects one rolling feed:
+The permanent Downloader identity is `mister_magik`; its installed drop-in
+selects the Beta feed:
 
 ```text
-Beta:    https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-beta-db.json.zip
-Release: https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-release-db.json.zip
+https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-beta-db.json.zip
 ```
 
 The `downloader` ref is an orphan, artifact-only branch. Its root commit has no
-source-history parent, and publication rejects any tip containing files other
-than the Beta and Release database ZIPs. Beta and Release publications are
-serialized because both channels update this shared ref. Do not base development
-work on it.
-
-Run `Scripts` -> `mister-magik-channel` to switch feeds, then run `update_all`
-and reboot. The selector changes only `downloader_mister_magik.ini`; it never
-edits boot configuration. Beta can move ahead of Release. Selecting Release in
-the future may therefore install an older, stable build.
-
-The first Beta publication updates only the Beta feed. A future Release
-publication updates the Release feed and points Beta at that same stable build
-until a newer Beta is published.
+source-history parent. The current release package intentionally includes no
+channel-selection script.
 
 ## Restore and uninstall
 
@@ -75,13 +62,13 @@ To restore stock boot without deleting MiSTer MagiK data, run this from a
 MiSTer shell and reboot normally:
 
 ```sh
-sh /media/fat/Scripts/mister-magik.sh restore
+sh /media/fat/Scripts/MiSTer-MagiK.sh restore
 ```
 
 This canonicalizes the active Main as `main=MiSTer`, restores the stock inittab
 shape, and retains the application, catalogs, settings, snapshots, media,
 Downloader entry, scripts, and pre-MagiK INI backup. To enable it again, run
-`Scripts` -> `mister-magik` and reboot. The release-tested
+`Scripts` -> `MiSTer-MagiK` and reboot. The release-tested
 `[Menu] video_mode=8` setting remains in place when stock boot is restored.
 
 Choose **Fully uninstall MiSTer MagiK** from the menu, or run the interactive

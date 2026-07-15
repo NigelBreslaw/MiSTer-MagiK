@@ -225,7 +225,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    targets = [path for path in tracked_files() if is_target(path)]
+    targets = [
+        path for path in tracked_files() if is_target(path) and (ROOT / path).is_file()
+    ]
     missing: list[str] = []
     changed = 0
 
