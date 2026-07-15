@@ -10,11 +10,11 @@ MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/media-cold-boot"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-media-cold-boot.tsv"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
+REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
+REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
 DEFAULT_MANIFEST_URL="https://assets.mistermagik.com/mister-magik/v1/manifest.json"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
@@ -50,7 +50,7 @@ neogeo, and saturn were discovered, ensured, queued, downloaded, and visible in
 the media progress UI model.
 
 The default asset directory is a label-scoped temporary path under
-/media/fat/mister-magik and is removed after the run. Use --keep-assets to
+/media/fat/mister-magik-dev and is removed after the run. Use --keep-assets to
 preserve it for inspection. Use --keep-catalog to reuse the installed catalog
 database instead of forcing the first-boot scan path.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
@@ -117,7 +117,7 @@ if [[ "$arcade_trace_secs" -gt 0 ]]; then
   thread_sample_enabled="1"
 fi
 if [[ -z "$asset_dir" ]]; then
-  asset_dir="/media/fat/mister-magik/media-cold-boot-${label}-assets"
+  asset_dir="/media/fat/mister-magik-dev/media-cold-boot-${label}-assets"
 fi
 
 mkdir -p "$OUT_DIR" "$BENCH_DIR"

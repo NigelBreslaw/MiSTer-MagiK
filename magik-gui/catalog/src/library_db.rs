@@ -12,7 +12,6 @@ use crate::arcade_catalog::{
 use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_checkpoint::CatalogDriftSummary;
 use crate::catalog_config;
-use crate::catalog_config::DEFAULT_SQLITE_PATH;
 pub use crate::catalog_config::{
     default_hbmame_sqlite_path, default_mame_sqlite_path, default_sqlite_path,
 };
@@ -917,7 +916,9 @@ impl BenchConfig {
         let roots = catalog_config::library_roots_from_env();
         let sqlite_path = std::env::var("MISTER_LIBRARY_BENCH_SQLITE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH));
+            .unwrap_or_else(|_| {
+                crate::device_layout::current_app_path("library-scan-bench.sqlite3")
+            });
         Self { roots, sqlite_path }
     }
 

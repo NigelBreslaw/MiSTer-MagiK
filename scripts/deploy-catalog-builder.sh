@@ -6,6 +6,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/bench-context-lib.sh"
+source "$ROOT/scripts/magik-layout.sh"
+magik_layout_select dev
 PROFILE=release-device
 SKIP_BUILD=0
 for arg in "$@"; do
@@ -23,7 +25,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
   "$ROOT/scripts/build-catalog-builder.sh" --device
 fi
 LOCAL="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-catalog-builder"
-REMOTE_DIR="/media/fat/mister-magik"
+REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-catalog-builder"
 TEMP="$REMOTE.new"
 test -x "$LOCAL"

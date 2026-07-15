@@ -718,7 +718,7 @@ mod library_snapshot {
     use std::time::UNIX_EPOCH;
 
     pub const SCHEMA: &str = "mister-magik-library-db-snapshot-v1";
-    pub const LIBRARY_DB_PATH: &str = "/media/fat/mister-magik/library.sqlite3";
+    pub const LIBRARY_DB_PATH: &str = "/media/fat/mister-magik-dev/library.sqlite3";
 
     #[derive(Debug)]
     pub struct LibraryDatabaseSnapshot {
@@ -830,7 +830,7 @@ mod linux {
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
     const AGENT_PORT: u16 = 7498;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
-    const TOKEN_PATH: &str = "/media/fat/mister-magik/agent.token";
+    const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
@@ -845,13 +845,13 @@ mod linux {
     // Temporary while the host/device file-transfer auth flow is being reworked.
     const CONTROL_AUTH_DISABLED: bool = true;
     const LOG: &str = "/tmp/mister-magik-agent.log";
-    const PLOG: &str = "/media/fat/mister-magik/bootlogs/agent.log";
+    const PLOG: &str = "/media/fat/mister-magik-dev/bootlogs/agent.log";
     const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
     static FRAMEBUFFER_STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
-    const BOOTLOG_DIR: &str = "/media/fat/mister-magik/bootlogs";
-    const SEQ: &str = "/media/fat/mister-magik/bootlogs/agent.seq";
-    const CRASH_DIR: &str = "/media/fat/mister-magik/crashes";
-    const LATEST_CRASH_REPORT: &str = "/media/fat/mister-magik/crashes/latest.json";
+    const BOOTLOG_DIR: &str = "/media/fat/mister-magik-dev/bootlogs";
+    const SEQ: &str = "/media/fat/mister-magik-dev/bootlogs/agent.seq";
+    const CRASH_DIR: &str = "/media/fat/mister-magik-dev/crashes";
+    const LATEST_CRASH_REPORT: &str = "/media/fat/mister-magik-dev/crashes/latest.json";
     const ETH_P_ARP: u16 = 0x0806;
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
@@ -1478,7 +1478,17 @@ mod linux {
                     });
 
             let magik = process_telemetry("mister-magik-fb");
-            let main = process_telemetry("MiSTer_MagiK");
+            let main_dev = process_telemetry("MiSTer_MagiKDev");
+            let main_public = process_telemetry("MiSTer_MagiK");
+            let main = if main_dev
+                .get("pids")
+                .and_then(Value::as_array)
+                .is_some_and(|pids| !pids.is_empty())
+            {
+                &main_dev
+            } else {
+                &main_public
+            };
             let magik_rss_kb = magik.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
             let main_rss_kb = main.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
             let slint_status = read_json_value("/tmp/mister-magik/status.json");
@@ -1496,7 +1506,8 @@ mod linux {
                 "memory": memory_json(magik_rss_kb, main_rss_kb),
                 "processes": {
                     "mister-magik-fb": magik,
-                    "MiSTer_MagiK": main,
+                    "MiSTer_MagiKDev": main_dev,
+                    "MiSTer_MagiK": main_public,
                 },
                 "network": network,
                 "storage": storage_json("/media/fat", disk_activity),
@@ -2135,6 +2146,7 @@ mod linux {
             },
             "processes": {
                 "sshd": read_pid_list("sshd"),
+                "MiSTer_MagiKDev": read_pid_list("MiSTer_MagiKDev"),
                 "MiSTer_MagiK": read_pid_list("MiSTer_MagiK"),
                 "mister-magik-fb": read_pid_list("mister-magik-fb"),
             },
@@ -2170,6 +2182,7 @@ mod linux {
             "processes": {
                 "ps": command_text_value("ps", &["w"]),
                 "sshd": read_pid_list("sshd"),
+                "MiSTer_MagiKDev": read_pid_list("MiSTer_MagiKDev"),
                 "MiSTer_MagiK": read_pid_list("MiSTer_MagiK"),
                 "mister-magik-fb": read_pid_list("mister-magik-fb"),
             },
@@ -2932,7 +2945,7 @@ mod linux {
         let remote = args
             .get("remote")
             .and_then(Value::as_str)
-            .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+            .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
         validate_deploy_remote(remote)?;
         let expectations = deploy_expectations(&args)?;
         let hex = args
@@ -2956,7 +2969,7 @@ mod linux {
         let remote = args
             .get("remote")
             .and_then(Value::as_str)
-            .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+            .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
         validate_deploy_remote(remote)?;
         let expectations = deploy_expectations(&args)?;
         let receive_t = Instant::now();
@@ -3131,8 +3144,8 @@ mod linux {
     }
 
     fn validate_deploy_remote(remote: &str) -> Result<(), String> {
-        if !remote.starts_with("/media/fat/mister-magik/") {
-            return Err("deploy remote must be under /media/fat/mister-magik".to_string());
+        if !remote.starts_with("/media/fat/mister-magik-dev/") {
+            return Err("deploy remote must be under /media/fat/mister-magik-dev".to_string());
         }
         if remote.ends_with('/') || remote.contains('\0') || remote.contains("/../") {
             return Err(format!("unsupported deploy remote: {remote}"));
@@ -3169,7 +3182,9 @@ mod linux {
             _ => return Err(format!("unsupported magik action: {action}")),
         };
 
-        let before_main = pid_string("MiSTer_MagiK");
+        let main_name = active_magik_main_name()
+            .ok_or_else(|| "no MiSTer MagiK Main is running".to_string())?;
+        let before_main = pid_string(main_name);
         let before_launcher = pid_string("mister-magik-fb");
         append_log_line(format!(
             "magik_command action={action} command={command} main_pids={before_main} launcher_pids={before_launcher}"
@@ -3180,12 +3195,6 @@ mod linux {
             append_log_line(format!("magik_command_error action={action} err={err}"));
             return Err(err);
         }
-        if before_main.is_empty() {
-            let err = "MiSTer_MagiK is not running".to_string();
-            append_log_line(format!("magik_command_error action={action} err={err}"));
-            return Err(err);
-        }
-
         fs::write("/dev/MiSTer_cmd", format!("{command}\n")).map_err(|err| {
             append_log_line(format!("magik_command_error action={action} err={err}"));
             err.to_string()
@@ -3193,7 +3202,7 @@ mod linux {
 
         let settle_ms = if action == "suspend" { 400 } else { 1500 };
         thread::sleep(Duration::from_millis(settle_ms));
-        let after_main = pid_string("MiSTer_MagiK");
+        let after_main = pid_string(main_name);
         let after_launcher = pid_string("mister-magik-fb");
         if before_main != after_main || before_launcher != after_launcher {
             append_log_line(format!(
@@ -3211,7 +3220,8 @@ mod linux {
     }
 
     fn magik_status_json(action: &str, command: Option<String>, settle_ms: Option<u64>) -> Value {
-        let main_pids = read_pid_list("MiSTer_MagiK");
+        let main_dev_pids = read_pid_list("MiSTer_MagiKDev");
+        let main_public_pids = read_pid_list("MiSTer_MagiK");
         let launcher_pids = read_pid_list("mister-magik-fb");
         let main_status = read_json_value("/tmp/mister-magik/main-status.json");
         let slint_status = read_json_value("/tmp/mister-magik/status.json");
@@ -3221,7 +3231,8 @@ mod linux {
             "command": command,
             "settle_ms": settle_ms,
             "processes": {
-                "MiSTer_MagiK": main_pids,
+                "MiSTer_MagiKDev": main_dev_pids,
+                "MiSTer_MagiK": main_public_pids,
                 "mister-magik-fb": launcher_pids,
             },
             "files": {
@@ -3477,6 +3488,12 @@ mod linux {
         read_pidof(name).unwrap_or_default().replace(' ', ",")
     }
 
+    fn active_magik_main_name() -> Option<&'static str> {
+        ["MiSTer_MagiKDev", "MiSTer_MagiK"]
+            .into_iter()
+            .find(|name| read_pidof(name).is_some())
+    }
+
     fn append_log_line(msg: String) {
         let line = format!("{} agent {msg}", stamp());
         if let Some(ring) = LOG_RING.get() {
@@ -3659,8 +3676,10 @@ mod linux {
         if sshd_pid != "none" {
             timeline_record_once("sshd_seen", format!("pid={sshd_pid}"));
         }
-        if let Some(pid) = read_pidof("MiSTer_MagiK") {
-            timeline_record_once("magik_main_seen", format!("pid={pid}"));
+        if let Some(name) = active_magik_main_name() {
+            if let Some(pid) = read_pidof(name) {
+                timeline_record_once("magik_main_seen", format!("name={name} pid={pid}"));
+            }
         }
         if let Some(pid) = read_pidof("mister-magik-fb") {
             timeline_record_once("magik_launcher_seen", format!("pid={pid}"));
@@ -4163,10 +4182,10 @@ mod tests {
 
     #[test]
     fn library_snapshot_rejects_non_allowlisted_paths() {
-        assert!(
-            library_snapshot::validate_remote_path("/media/fat/mister-magik/other.sqlite3")
-                .is_err()
-        );
+        assert!(library_snapshot::validate_remote_path(
+            "/media/fat/mister-magik-dev/other.sqlite3"
+        )
+        .is_err());
         assert!(library_snapshot::validate_remote_path("/tmp/library.sqlite3").is_err());
         assert!(library_snapshot::validate_remote_path(library_snapshot::LIBRARY_DB_PATH).is_ok());
     }
@@ -4179,7 +4198,7 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&missing);
         let err = library_snapshot::snapshot_test_path(&missing).unwrap_err();
-        assert!(err.contains("stat /media/fat/mister-magik/library.sqlite3"));
+        assert!(err.contains("stat /media/fat/mister-magik-dev/library.sqlite3"));
     }
 
     #[test]

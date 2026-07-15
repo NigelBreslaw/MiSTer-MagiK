@@ -28,7 +28,7 @@ benchmark_cleanup_report_is_clean() {
 
 benchmark_cleanup_assert_no_arming_files() {
   local mister="$1" report="${2:-}" output
-  output="$("$mister" run "for path in /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot; do if [ -e \"\$path\" ]; then ls -ld \"\$path\"; fi; done" 2>/dev/null)" || return 1
+  output="$("$mister" run "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if [ -e \"\$path\" ]; then ls -ld \"\$path\"; fi; done" 2>/dev/null)" || return 1
   if [[ -n "$report" ]]; then
     printf '%s\n' "$output" >"$report"
   fi

@@ -7,15 +7,17 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_DIR="/media/fat/mister-magik"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
+REMOTE="$MISTER_MAGIK_BIN"
+REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
 BENCH_DIR="$HERE/history/toolchain-bench"
 OUT_DIR="$HERE/build/library-io-profiles"
 TSV="$BENCH_DIR/results-library-io.tsv"
 LABEL=""
 REPLACE_LABEL=0
-SQLITE_PATH="/media/fat/mister-magik/library-io-bench.sqlite3"
+SQLITE_PATH="$MISTER_MAGIK_APP_DIR/library-io-bench.sqlite3"
 SQLITE_BUILD_DIR=""
 SAMPLE_LIMIT=180
 source "$HERE/scripts/bench-context-lib.sh"
@@ -36,12 +38,12 @@ library_io_mark_lock_attempt() {
 }
 
 library_io_self_test() {
-  library_io_pid_identity_valid "/media/fat/mister-magik/mister-magik-fb" "/media/fat/mister-magik/mister-magik-fb library-refresh"
+  library_io_pid_identity_valid "/media/fat/mister-magik-dev/mister-magik-fb" "/media/fat/mister-magik-dev/mister-magik-fb library-refresh"
   if library_io_pid_identity_valid "/bin/sh" "sh -c mister-magik-fb library-refresh"; then
     echo "library I/O PID identity accepted a shell wrapper" >&2
     return 1
   fi
-  if library_io_pid_identity_valid "/media/fat/mister-magik/mister-magik-fb" "/media/fat/mister-magik/mister-magik-fb ui launcher 0"; then
+  if library_io_pid_identity_valid "/media/fat/mister-magik-dev/mister-magik-fb" "/media/fat/mister-magik-dev/mister-magik-fb ui launcher 0"; then
     echo "library I/O PID identity accepted the wrong subcommand" >&2
     return 1
   fi
@@ -119,7 +121,7 @@ remote_run() {
 }
 
 magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; else echo 'MiSTer_MagiK supervision unavailable' >&2; exit 12; fi" >/dev/null
+  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; else echo 'MiSTer_MagiKDev supervision unavailable' >&2; exit 12; fi" >/dev/null
 }
 
 launcher_suspended=0

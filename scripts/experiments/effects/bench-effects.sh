@@ -13,7 +13,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
 source "$HERE/scripts/mister-supervision-lib.sh"
 RUST_DIR="$HERE/magik-gui"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-effects.tsv"
 MISTER="$HERE/scripts/mister"
@@ -255,7 +255,7 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   echo "==> Deploy $BIN"
   mister_suspend_launcher
   BENCH_EFFECTS_RESUME_ARMED=1
-  mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+  mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik-dev"
   mister put "$BIN" "$REMOTE"
   mister run "chmod +x $REMOTE"
   require_experiment_binary "$MISTER" "$REMOTE" "effect benchmark experiments"

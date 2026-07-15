@@ -7,8 +7,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_DIR="/media/fat/mister-magik"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
+REMOTE_DIR="/media/fat/mister-magik-dev"
 REMOTE_ENV="$REMOTE_DIR/launcher.env"
 REMOTE_DB="$REMOTE_DIR/library.sqlite3"
 REMOTE_SUMMARY="$REMOTE_DIR/library.summary.json"
@@ -18,6 +18,9 @@ REMOTE_STATE="$REMOTE_ASSETS/.screenshot-media-state.json"
 REMOTE_MARKER="/tmp/mister-magik/fs-fault.json"
 REMOTE_SESSION="/tmp/mister-magik/fs-fault-session"
 REMOTE_FAULT_ENV="/tmp/mister-magik/fs-fault-launcher.env"
+PUBLIC_ENV="/media/fat/mister-magik/launcher.env"
+PUBLIC_REBUILD_MARKER="/media/fat/mister-magik/rebuild-on-next-boot"
+REMOTE_REBUILD_MARKER="$REMOTE_DIR/rebuild-on-next-boot"
 REMOTE_LOCK="/tmp/mister-magik/library-refresh.lock"
 REMOTE_LOG="/tmp/mister-magik-fs-fault-refresh.log"
 TSV="$ROOT/history/toolchain-bench/results-fs-fault-reset.tsv"
@@ -344,7 +347,7 @@ stop_active_trigger() {
 
 cleanup_on_exit() {
   stop_active_trigger
-  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION") $(sq "$REMOTE_REBUILD_MARKER")" >/dev/null 2>&1 || true
+  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$PUBLIC_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION") $(sq "$REMOTE_REBUILD_MARKER") $(sq "$PUBLIC_REBUILD_MARKER")" >/dev/null 2>&1 || true
 }
 
 trap cleanup_on_exit EXIT INT TERM

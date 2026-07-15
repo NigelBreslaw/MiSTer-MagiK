@@ -13,8 +13,8 @@ TSV="$BENCH_DIR/results-library-save.tsv"
 LABEL=""
 ITERATIONS=1
 REPLACE_LABEL=0
-REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
-SQLITE_BASE="/media/fat/mister-magik/library-save-bench"
+REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik-dev/mister-magik-fb}"
+SQLITE_BASE="/media/fat/mister-magik-dev/library-save-bench"
 
 usage() {
   cat <<'EOF'
@@ -76,7 +76,7 @@ remote_run() {
 }
 
 magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 
 run_with_launcher_suspended() {

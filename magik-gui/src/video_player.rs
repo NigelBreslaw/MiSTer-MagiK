@@ -49,14 +49,18 @@ pub fn video_paths_from_env() -> Result<Vec<String>, String> {
     {
         return sorted_mp4_files(PathBuf::from(dir));
     }
-    let default_dir = PathBuf::from(DEFAULT_VIDEO_DIR);
+    let default_dir = mister_magik_catalog::device_layout::current_app_path("video-snaps/neogeo");
     if default_dir.is_dir() {
         let paths = sorted_mp4_files(default_dir)?;
         if !paths.is_empty() {
             return Ok(paths);
         }
     }
-    Ok(vec![DEFAULT_VIDEO_PATH.to_string()])
+    Ok(vec![mister_magik_catalog::device_layout::current_app_path(
+        "mslug3.mov",
+    )
+    .display()
+    .to_string()])
 }
 
 fn sorted_mp4_files(dir: PathBuf) -> Result<Vec<String>, String> {

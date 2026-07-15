@@ -12,10 +12,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 source "$HERE/scripts/mister-supervision-lib.sh"
 BUILD_PROFILE=release-device
 BUILD_FLAG=(--device)
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="$MISTER_MAGIK_BIN"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results.tsv"
 MISTER="$HERE/scripts/mister"
@@ -24,7 +26,7 @@ MISTER="$HERE/scripts/mister"
 # history/bench-scenes/.
 BENCH_SCENES=(launcher)
 VIDEO_SRC_DIR="${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-cortex-a9}"
-VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}"
+VIDEO_REMOTE_DIR="${MISTER_VIDEO_REMOTE_DIR:-$MISTER_MAGIK_APP_DIR/video-snaps/neogeo}"
 VIDEO_PATH_REMOTE=""
 VIDEO_AUTO_TOGGLE_MS=""
 
@@ -882,7 +884,7 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
   trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
   if [[ "$SKIP_DEPLOY" -eq 0 ]]; then
     echo "==> Deploy $BIN"
-    mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
+    mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p '$MISTER_MAGIK_APP_DIR'"
     mister put "$BIN" "$REMOTE"
     mister run "chmod +x $REMOTE"
     if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then

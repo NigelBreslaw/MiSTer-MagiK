@@ -7,7 +7,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-warm-catalog.tsv"

@@ -8,12 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/library-sql-output-lib.sh"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_STATUS="/tmp/mister-magik/status.json"
-REMOTE_MARKER="/media/fat/mister-magik/rebuild-on-next-boot"
+REMOTE_MARKER="/media/fat/mister-magik-dev/rebuild-on-next-boot"
 BENCH_DIR="$ROOT/history/toolchain-bench"
 TSV="$BENCH_DIR/results-library-change-flow.tsv"
 LABEL=""
@@ -116,7 +116,7 @@ dump_failure_artifacts() {
   echo "== status =="
   "$MISTER" status --json || true
   echo "== process list =="
-  remote "ps w | grep -E 'MiSTer|MiSTer_MagiK|mister-magik-fb' | grep -v grep || true" || true
+  remote "ps w | grep -E 'MiSTer|MiSTer_MagiKDev|mister-magik-fb' | grep -v grep || true" || true
   echo "== marker =="
   remote "test -e $(sq "$REMOTE_MARKER") && echo marker=present || echo marker=absent" || true
   echo "== db counts =="

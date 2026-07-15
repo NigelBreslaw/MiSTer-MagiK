@@ -7,11 +7,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
-TRACE_DIR="/media/fat/mister-magik/shutdown-trace"
-REMOTE_SCRIPT="/media/fat/mister-magik/shutdown-trace.sh"
+TRACE_DIR="/media/fat/mister-magik-dev/shutdown-trace"
+REMOTE_SCRIPT="/media/fat/mister-magik-dev/shutdown-trace.sh"
 REMOTE_INITTAB_BAK="$TRACE_DIR/inittab.bak"
 REMOTE_MARKER="$TRACE_DIR/installed"
-REMOTE_LOG="/media/fat/mister-magik/bootlogs/shutdown-trace.log"
+REMOTE_LOG="/media/fat/mister-magik-dev/bootlogs/shutdown-trace.log"
 
 usage() {
   cat <<EOF
@@ -41,14 +41,14 @@ install_trace() {
   tmp="$(mktemp)"
   cat >"$tmp" <<'EOS'
 #!/bin/sh
-LOG=/media/fat/mister-magik/bootlogs/shutdown-trace.log
+LOG=/media/fat/mister-magik-dev/bootlogs/shutdown-trace.log
 
 stamp() {
   awk '{ printf "%.2f", $1 }' /proc/uptime 2>/dev/null || echo 0
 }
 
 log() {
-  mkdir -p /media/fat/mister-magik/bootlogs 2>/dev/null || true
+  mkdir -p /media/fat/mister-magik-dev/bootlogs 2>/dev/null || true
   echo "$(stamp) shutdown-trace $*" >>"$LOG" 2>/dev/null || true
   sync
 }
@@ -127,7 +127,7 @@ EOS
   rm -f "$tmp"
   "$MISTER" run "
 set -eu
-mkdir -p '$TRACE_DIR' /media/fat/mister-magik/bootlogs
+mkdir -p '$TRACE_DIR' /media/fat/mister-magik-dev/bootlogs
 mount -o remount,rw / 2>/dev/null || true
 if [ ! -f '$REMOTE_INITTAB_BAK' ]; then
   cp /etc/inittab '$REMOTE_INITTAB_BAK'
@@ -163,10 +163,10 @@ if [ -f '$REMOTE_INITTAB_BAK' ]; then
 else
   tmp=/tmp/inittab.shutdown-trace-remove.\$\$
   sed \
-    -e 's#^::shutdown:/media/fat/mister-magik/shutdown-trace.sh rcK\$#::shutdown:/etc/init.d/rcK#' \
-    -e 's#^::shutdown:/media/fat/mister-magik/shutdown-trace.sh rcK-deep\$#::shutdown:/etc/init.d/rcK#' \
-    -e 's#^::shutdown:/media/fat/mister-magik/shutdown-trace.sh swapoff\$#::shutdown:/sbin/swapoff -a#' \
-    -e 's#^::shutdown:/media/fat/mister-magik/shutdown-trace.sh umount\$#::shutdown:/bin/umount -a -r#' \
+    -e 's#^::shutdown:/media/fat/mister-magik-dev/shutdown-trace.sh rcK\$#::shutdown:/etc/init.d/rcK#' \
+    -e 's#^::shutdown:/media/fat/mister-magik-dev/shutdown-trace.sh rcK-deep\$#::shutdown:/etc/init.d/rcK#' \
+    -e 's#^::shutdown:/media/fat/mister-magik-dev/shutdown-trace.sh swapoff\$#::shutdown:/sbin/swapoff -a#' \
+    -e 's#^::shutdown:/media/fat/mister-magik-dev/shutdown-trace.sh umount\$#::shutdown:/bin/umount -a -r#' \
     /etc/inittab > \"\$tmp\"
   cp \"\$tmp\" /etc/inittab
 fi

@@ -11,7 +11,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 const DEFAULT_DROP_IN: &str = "/media/fat/downloader_mister_magik.ini";
-const DEFAULT_RELEASE_MARKER: &str = "/media/fat/mister-magik/release-v1.txt";
 const DB_SECTION: &str = "mister_magik";
 const RELEASE_MARKER_KEY: &str = "mister-magik/release-v1.txt";
 const BETA_DATABASE_URL: &str = "https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-beta-db.json.zip";
@@ -21,6 +20,10 @@ const UPDATE_CHECK_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(10),
     Duration::from_secs(30),
 ];
+
+pub(super) fn should_check_for_updates(launcher_bench: bool, dev_mode: bool) -> bool {
+    !launcher_bench && !dev_mode
+}
 
 pub(super) struct UpdateCheck {
     rx: Option<mpsc::Receiver<bool>>,
@@ -33,8 +36,11 @@ impl UpdateCheck {
         }
         let drop_in = std::env::var("MISTER_MAGIK_DOWNLOADER_INI")
             .unwrap_or_else(|_| DEFAULT_DROP_IN.to_string());
-        let release_marker = std::env::var("MISTER_MAGIK_RELEASE_MARKER")
-            .unwrap_or_else(|_| DEFAULT_RELEASE_MARKER.to_string());
+        let release_marker = std::env::var("MISTER_MAGIK_RELEASE_MARKER").unwrap_or_else(|_| {
+            mister_magik_catalog::device_layout::current_app_path("release-v1.txt")
+                .display()
+                .to_string()
+        });
         if !Path::new(&drop_in).is_file() || !Path::new(&release_marker).is_file() {
             return Self { rx: None };
         }
@@ -284,5 +290,13 @@ mod tests {
             release_build_number("version=0.2.19\nbuild_number=19\n"),
             Some(19)
         );
+    }
+
+    #[test]
+    fn development_layout_never_checks_public_updates() {
+        assert!(should_check_for_updates(false, false));
+        assert!(!should_check_for_updates(false, true));
+        assert!(!should_check_for_updates(true, false));
+        assert!(!should_check_for_updates(true, true));
     }
 }

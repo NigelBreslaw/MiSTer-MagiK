@@ -14,8 +14,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-pub const CONTROLLERS_PATH: &str = "/media/fat/mister-magik/controllers.json";
-
 const DB_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,7 +123,8 @@ pub struct ControllerDb {
 
 impl ControllerDb {
     pub fn load() -> Self {
-        Self::load_from(CONTROLLERS_PATH)
+        let path = mister_magik_catalog::device_layout::current_app_path("controllers.json");
+        Self::load_from(&path.to_string_lossy())
     }
 
     pub fn load_from(path: &str) -> Self {

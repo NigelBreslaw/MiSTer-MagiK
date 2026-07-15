@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-launch-prep.tsv"
 LABEL=""

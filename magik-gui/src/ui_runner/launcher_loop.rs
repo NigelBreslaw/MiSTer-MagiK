@@ -1475,7 +1475,10 @@ pub(super) fn run_launcher_loop(
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_update_available(false);
     bridge.set_menu_items(bridge_models.menu_items(&nav, catalog_version));
-    let mut update_check = UpdateCheck::start(launcher_bench_scenario.is_none());
+    let mut update_check = UpdateCheck::start(should_check_for_updates(
+        launcher_bench_scenario.is_some(),
+        bridge.get_dev_mode(),
+    ));
     print_startup_event(
         start,
         "catalog_bridge_systems",

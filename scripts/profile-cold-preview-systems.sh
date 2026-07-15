@@ -7,8 +7,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 OUT_DIR="$HERE/build/preview-state-profiles"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 label="cold-preview-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -75,7 +77,7 @@ write_env_for_system() {
     printf 'export MISTER_PREVIEW_SCROLL_TRACE_SECS=%q\n' "$secs"
     printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
   } >"$env_file"
-  "$MISTER" run "mkdir -p /media/fat/mister-magik; rm -f '$REMOTE_LOG'" >/dev/null
+  "$MISTER" run "mkdir -p '$MISTER_MAGIK_APP_DIR'; rm -f '$REMOTE_LOG'" >/dev/null
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   "$MISTER" run "sync" >/dev/null
 }

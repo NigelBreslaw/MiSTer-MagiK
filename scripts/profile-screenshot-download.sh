@@ -7,6 +7,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-screenshot-download.tsv"
 
@@ -20,7 +22,7 @@ SAVE_PREFERENCE=0
 MAX_SAVE_MS=""
 SAVE_STRATEGY="staged"
 REPLACE_LABEL=0
-REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
+REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-$MISTER_MAGIK_BIN}"
 
 usage() {
   cat <<'EOF'

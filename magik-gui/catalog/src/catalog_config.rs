@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::device_layout::current_app_path;
+
 pub const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Arcade",
     "/media/fat/games",
@@ -26,19 +28,19 @@ pub const CATALOG_BUILD_VERSION: u32 = 10;
 pub fn default_sqlite_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_SQLITE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SQLITE_PATH))
+        .unwrap_or_else(|_| current_app_path("library.sqlite3"))
 }
 
 pub fn default_mame_sqlite_path() -> PathBuf {
     std::env::var("MISTER_MAME_SQLITE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_MAME_SQLITE_PATH))
+        .unwrap_or_else(|_| current_app_path("mame.sqlite3"))
 }
 
 pub fn default_hbmame_sqlite_path() -> PathBuf {
     std::env::var("MISTER_HBMAME_SQLITE")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH))
+        .unwrap_or_else(|_| current_app_path("hbmame.sqlite3"))
 }
 
 pub fn library_roots_from_env() -> Vec<String> {

@@ -24,7 +24,8 @@ The maintained fork repo is `NigelBreslaw/Main_MiSTer`, a real GitHub fork of
 - Upstream project: `MiSTer-devel/Main_MiSTer`
 - Baseline commit: `93d13fb690db4581768389450fb639822ae88333`
 - Baseline release: `Release 20260707.`
-- Device binary: `/media/fat/MiSTer_MagiK`
+- Public device binary: `/media/fat/MiSTer_MagiK`
+- Development device binary: `/media/fat/MiSTer_MagiKDev`
 - Ledger: `MAGIK_PATCHSET.md` in the fork repo
 - Provenance doc: `FORK.md` in the fork repo
 
@@ -42,12 +43,13 @@ Production boot still starts stock `/media/fat/MiSTer` from `/etc/inittab`.
 Stock Main reads `MiSTer.ini`, then `[MiSTer] main=MiSTer_MagiK` re-execs the
 fork.
 
-The fork then:
+The fork selects its application root from its executable name, then:
 
 1. Initializes video/menu-core prerequisites.
 2. Runs Rust `early-black` after `video_init()` so Rust owns the launcher
    framebuffer mode and scan-out route.
-3. Starts `/media/fat/mister-magik/mister-magik-fb ui launcher 0` on `tty2`.
+3. Starts the matching public or development `mister-magik-fb ui launcher 0`
+   on `tty2`.
 4. Enters dormant launcher mode.
 5. Polls only launcher lifecycle and explicit handoff commands while Slint owns
    the launcher UI.
@@ -59,7 +61,7 @@ existing `LauncherCrashed` recovery path available for
 `mister_magik_restart_launcher`.
 
 The generated launcher script invokes `mister-magik-fb library-refresh` only
-when the SQLite catalog is missing or empty. The Rust command intentionally
+when that layout's SQLite catalog is missing or empty. The Rust command intentionally
 defers that foreground refresh when `MISTER_MAGIK_PARENT` is set, so first boot
 and Reset Database reach Slint immediately and show the scan screen. With a
 usable catalog present, the Rust launcher background stamp check is the only
@@ -143,16 +145,18 @@ when stale Main objects are suspected:
 scripts/deploy-platform.sh --clean-main
 ```
 
-The script deploys:
+The development script deploys:
 
-- `magik-gui` to `/media/fat/mister-magik/mister-magik-fb`
+- `magik-gui` to `/media/fat/mister-magik-dev/mister-magik-fb`
 - the matching catalog builder to
-  `/media/fat/mister-magik/mister-magik-catalog-builder`
-- `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiK`
-- the qualified scanout module and metadata to `/media/fat/mister-magik/`
-- the qualified Menu latch RBF and metadata to `/media/fat/mister-magik/fpga/`
-- the complete platform contract to `/media/fat/mister-magik/platform-v1.manifest`
-- stock inittab plus `[MiSTer] main=MiSTer_MagiK`
+  `/media/fat/mister-magik-dev/mister-magik-catalog-builder`
+- `$MISTER_MAIN_DIR/bin/MiSTer` to `/media/fat/MiSTer_MagiKDev`
+- the qualified scanout module and metadata to `/media/fat/mister-magik-dev/`
+- the qualified Menu latch RBF and metadata to `/media/fat/mister-magik-dev/fpga/`
+- the complete platform contract to `/media/fat/mister-magik-dev/platform-v1.manifest`
+
+It does not change the selected Main. Activate it with
+`scripts/magik-mode.sh dev` after the complete manifest verifies.
 
 The manifest is activated last. The deploy script never writes root
 `/media/fat/menu.rbf`, which remains owned by `update_all`.

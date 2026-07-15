@@ -9,9 +9,9 @@ MISTER="$ROOT/scripts/mister"
 RBF_DIR="${MISTER_FPGA_RELEASE_DIR:-$ROOT/build/fpga-vblank-latch}"
 RBF="$RBF_DIR/menu-magik-vblank-latch.rbf"
 META="$RBF_DIR/menu-magik-vblank-latch.metadata.txt"
-REMOTE_RBF="/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf"
-REMOTE_META="/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_RBF="/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf"
+REMOTE_META="/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 LABEL="FPGA-LATCH-QUAL-$(date -u +%Y%m%dT%H%M%SZ)"
 SOAK_SECS=0
 HDMI_EVIDENCE=""
@@ -80,7 +80,7 @@ self_test() {
   expected="$(printf 'a%.0s' {1..64})"
   require_equal_hash "$expected" "$expected"
   ! require_equal_hash "$expected" "$(printf 'b%.0s' {1..64})"
-  runtime=$'rbf_sha256='"$expected"$'\nmain_rbf=/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf\nmodule_ready=1\ndevice_ready=1'
+  runtime=$'rbf_sha256='"$expected"$'\nmain_rbf=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf\nmodule_ready=1\ndevice_ready=1'
   require_runtime "$runtime" "$expected"
   ! require_runtime "${runtime/module_ready=1/module_ready=0}" "$expected"
   marker="$(mktemp)"
@@ -106,13 +106,13 @@ fi
 
 cleanup() {
   set +e
-  "$MISTER" run "rm -f /media/fat/mister-magik/launcher.env /tmp/mister-magik/fpga-latch-qualification.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot; ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
+  "$MISTER" run "rm -f /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fpga-latch-qualification.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik-dev/rebuild-on-next-boot; ls -l /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik-dev/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
   set -e
 }
 trap cleanup EXIT INT TERM
 
 echo "==> Verify exact local/deployed RBF and runtime"
-REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiK); cmdline=\$(tr '\\000' ' ' < /proc/\$pid/cmdline); echo \"\$cmdline\" | grep -Fq '$REMOTE_RBF'; echo rbf_sha256=\$actual; echo main_rbf='$REMOTE_RBF'; echo module_ready=1; echo device_ready=1; '$REMOTE_BIN' fpga-latch-report")"
+REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiKDev); cmdline=\$(tr '\\000' ' ' < /proc/\$pid/cmdline); echo \"\$cmdline\" | grep -Fq '$REMOTE_RBF'; echo rbf_sha256=\$actual; echo main_rbf='$REMOTE_RBF'; echo module_ready=1; echo device_ready=1; '$REMOTE_BIN' fpga-latch-report")"
 require_runtime "$REMOTE_STATE" "$EXPECTED_HASH"
 require_probe "$REMOTE_STATE"
 BEFORE="$REMOTE_STATE"
@@ -125,7 +125,7 @@ RECOVERY="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_P
 grep -q 'unsupported_posts=0' <<<"$RECOVERY"
 $MISTER run "set -e; for i in \$(seq 1 10); do report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0'; then exit 0; fi; sleep 1; done; echo \"\$report\"; exit 1" >/dev/null
 $MISTER run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
-$MISTER run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiK 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0' && echo \"\$report\" | grep -q 'drop_count=0'; then exit 0; fi; fi; sleep 1; done; echo \"\${report:-no latch report}\"; exit 1" >/dev/null
+$MISTER run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiKDev 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0' && echo \"\$report\" | grep -q 'drop_count=0'; then exit 0; fi; fi; sleep 1; done; echo \"\${report:-no latch report}\"; exit 1" >/dev/null
 
 echo "==> Motion gates at both framebuffer geometries"
 for geometry in 960x540 1280x720; do
@@ -139,7 +139,7 @@ echo "==> Lifecycle, reload, and fallback"
 "$ROOT/scripts/run-rust.sh" launcher 0
 "$ROOT/scripts/device-launch-return-smoke.sh"
 "$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
-"$MISTER" run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiK 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then exit 0; fi; sleep 1; done; exit 1"
+"$MISTER" run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiKDev 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then exit 0; fi; sleep 1; done; exit 1"
 "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-FB0" --skip-build --present-backend fb0-dirty
 MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden "$ROOT/scripts/run-rust.sh" launcher 0
 

@@ -14,7 +14,7 @@ AGENT="$ROOT/tools/magik-agent/src/scanout_slots_contract.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/scripts/deploy-platform.sh"
-INSTALL="$ROOT/scripts/install-slint-boot.sh"
+INSTALL="$ROOT/scripts/magik-mode.sh"
 
 require_text() {
   local file="$1" text="$2"

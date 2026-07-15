@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 
 SRC_DIR="${1:-${MISTER_VIDEO_SRC_DIR:-$HERE/build/video-snaps-neogeo-cortex-a9}}"
-REMOTE_DIR="${2:-${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik/video-snaps/neogeo}}"
+REMOTE_DIR="${2:-${MISTER_VIDEO_REMOTE_DIR:-/media/fat/mister-magik-dev/video-snaps/neogeo}}"
 MANIFEST="$SRC_DIR/manifest.tsv"
 SSIM_MIN="${MISTER_VIDEO_SSIM_MIN:-0.995}"
 LUMA_PSNR_MIN="${MISTER_VIDEO_LUMA_PSNR_MIN:-45}"

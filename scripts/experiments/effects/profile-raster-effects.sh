@@ -10,7 +10,7 @@ HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/raster-effect-profiles"
 RESULTS="$HERE/history/toolchain-bench/results-raster-effects.tsv"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 EFFECT_COUNT=15
 
 usage() {

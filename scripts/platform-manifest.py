@@ -13,14 +13,25 @@ import sys
 from pathlib import Path
 
 FORMAT = "mister-magik-platform-v1"
-DEVICE_PATHS = {
-    "main": "/media/fat/MiSTer_MagiK",
-    "gui": "/media/fat/mister-magik/mister-magik-fb",
-    "catalog_builder": "/media/fat/mister-magik/mister-magik-catalog-builder",
-    "scanout_module": "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
-    "scanout_metadata": "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
-    "latch_rbf": "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
-    "latch_metadata": "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
+LAYOUT_PATHS = {
+    "public": {
+        "main": "/media/fat/MiSTer_MagiK",
+        "gui": "/media/fat/mister-magik/mister-magik-fb",
+        "catalog_builder": "/media/fat/mister-magik/mister-magik-catalog-builder",
+        "scanout_module": "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
+        "scanout_metadata": "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
+        "latch_rbf": "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
+        "latch_metadata": "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
+    },
+    "dev": {
+        "main": "/media/fat/MiSTer_MagiKDev",
+        "gui": "/media/fat/mister-magik-dev/mister-magik-fb",
+        "catalog_builder": "/media/fat/mister-magik-dev/mister-magik-catalog-builder",
+        "scanout_module": "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
+        "scanout_metadata": "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
+        "latch_rbf": "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
+        "latch_metadata": "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
+    },
 }
 FIELDS = (
     "format",
@@ -115,6 +126,7 @@ def validate_metadata(
 
 
 def generate(args: argparse.Namespace) -> None:
+    device_paths = LAYOUT_PATHS[args.layout]
     artifacts = {
         "main": args.main,
         "gui": args.gui,
@@ -137,7 +149,7 @@ def generate(args: argparse.Namespace) -> None:
     )
     values = {
         "format": FORMAT,
-        **{f"{name}_path": path for name, path in DEVICE_PATHS.items()},
+        **{f"{name}_path": path for name, path in device_paths.items()},
         **{f"{name}_sha256": digest(path) for name, path in artifacts.items()},
         "platform_contract_sha256": contract,
         "main_revision": args.main_revision,
@@ -146,25 +158,28 @@ def generate(args: argparse.Namespace) -> None:
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("".join(f"{field}={values[field]}\n" for field in FIELDS))
-    verify_manifest(args.output, artifact_root=args.artifact_root)
+    verify_manifest(args.output, artifact_root=args.artifact_root, layout=args.layout)
     print(args.output)
 
 
-def verify_manifest(path: Path, *, artifact_root: Path | None = None) -> None:
+def verify_manifest(
+    path: Path, *, artifact_root: Path | None = None, layout: str = "public"
+) -> None:
+    device_paths = LAYOUT_PATHS[layout]
     fields = parse_fields(path, exact=FIELDS)
     if fields["format"] != FORMAT:
         raise ManifestError(f"unsupported manifest format: {fields['format']}")
-    for name, expected in DEVICE_PATHS.items():
+    for name, expected in device_paths.items():
         if fields[f"{name}_path"] != expected:
             raise ManifestError(f"incorrect {name}_path")
-    for name in DEVICE_PATHS:
+    for name in device_paths:
         require_hex(f"{name}_sha256", fields[f"{name}_sha256"], HEX64)
     require_hex("platform_contract_sha256", fields["platform_contract_sha256"], HEX64)
     for name in ("main_revision", "magik_revision", "menu_revision"):
         require_hex(name, fields[name], HEX40)
     if artifact_root is None:
         return
-    files = {name: device_file(artifact_root, DEVICE_PATHS[name]) for name in DEVICE_PATHS}
+    files = {name: device_file(artifact_root, device_paths[name]) for name in device_paths}
     for name, artifact in files.items():
         if not artifact.is_file():
             raise ManifestError(f"missing installed {name}: {artifact}")
@@ -198,9 +213,11 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--main-revision", required=True)
     create.add_argument("--magik-revision", required=True)
     create.add_argument("--artifact-root", type=Path)
+    create.add_argument("--layout", choices=tuple(LAYOUT_PATHS), default="public")
     check = commands.add_parser("verify")
     check.add_argument("manifest", type=Path)
     check.add_argument("--root", type=Path)
+    check.add_argument("--layout", choices=tuple(LAYOUT_PATHS), default="public")
     return root
 
 
@@ -210,7 +227,7 @@ def main() -> None:
         if args.command == "generate":
             generate(args)
         else:
-            verify_manifest(args.manifest, artifact_root=args.root)
+            verify_manifest(args.manifest, artifact_root=args.root, layout=args.layout)
             print(f"platform manifest valid=1 path={args.manifest}")
     except ManifestError as error:
         print(f"platform manifest invalid: {error}", file=sys.stderr)

@@ -57,7 +57,10 @@ class PlatformManifestTests(unittest.TestCase):
         self.manifest = self.root / "mister-magik/platform-v1.manifest"
         values = {
             "format": platform_manifest.FORMAT,
-            **{f"{name}_path": path for name, path in platform_manifest.DEVICE_PATHS.items()},
+            **{
+                f"{name}_path": path
+                for name, path in platform_manifest.LAYOUT_PATHS["public"].items()
+            },
             "main_sha256": sha(self.root / "MiSTer_MagiK"),
             "gui_sha256": sha(self.root / "mister-magik/mister-magik-fb"),
             "catalog_builder_sha256": sha(
@@ -81,7 +84,9 @@ class PlatformManifestTests(unittest.TestCase):
         self.temp.cleanup()
 
     def verify(self) -> None:
-        platform_manifest.verify_manifest(self.manifest, artifact_root=self.root)
+        platform_manifest.verify_manifest(
+            self.manifest, artifact_root=self.root, layout="public"
+        )
 
     def test_complete_bundle_is_valid(self) -> None:
         self.verify()
@@ -131,6 +136,23 @@ class PlatformManifestTests(unittest.TestCase):
 
     def test_root_menu_rbf_is_never_part_of_manifest(self) -> None:
         self.assertNotIn("/media/fat/menu.rbf", self.valid)
+
+    def test_public_manifest_is_rejected_as_dev(self) -> None:
+        with self.assertRaisesRegex(ValueError, "incorrect main_path"):
+            platform_manifest.verify_manifest(
+                self.manifest, artifact_root=self.root, layout="dev"
+            )
+
+    def test_dev_paths_are_rejected_as_public(self) -> None:
+        dev = self.valid
+        for name, public_path in platform_manifest.LAYOUT_PATHS["public"].items():
+            dev = dev.replace(
+                f"{name}_path={public_path}",
+                f"{name}_path={platform_manifest.LAYOUT_PATHS['dev'][name]}",
+            )
+        self.manifest.write_text(dev)
+        with self.assertRaisesRegex(ValueError, "incorrect main_path"):
+            self.verify()
 
 
 if __name__ == "__main__":

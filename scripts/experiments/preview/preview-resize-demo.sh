@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 MAX_SIZE="${1:-320x320}"
 SECS="${2:-2}"
 FORMAT="${3:-raw-rgb565}"

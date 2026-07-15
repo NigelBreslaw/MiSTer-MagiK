@@ -4,7 +4,7 @@
 
 # Cross-build the Rust frontend and deploy the binary to the MiSTer.
 #
-# This is a production-safe file deploy: when Main_MiSTer supervises the
+# This is a development-layout file deploy: when Main_MiSTer supervises the
 # launcher, deploy asks it to suspend MagiK, swaps the binary, then resumes.
 #
 #   MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
@@ -19,7 +19,9 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/scripts/bench-context-lib.sh"
-REMOTE_DIR="/media/fat/mister-magik"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
+REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
 DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
 
@@ -138,7 +140,7 @@ printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path
 
 echo "==> Deployed ($PROFILE)."
 echo "    Main-supervised launcher was suspended and resumed when available."
-echo "    Production boot: scripts/install-slint-boot.sh  (once — MiSTer.ini main= handoff)"
+echo "    Development boot: scripts/magik-mode.sh dev"
 echo "    Restart only:    scripts/run-rust.sh launcher 0  (no build, no copy)"
 echo "    Arcade bench:    scripts/profile-preview-scroll.sh 30 held-scroll LABEL"
 echo "    Restore stock:   scripts/restore-stock-boot.sh"

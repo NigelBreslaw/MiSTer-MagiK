@@ -13,10 +13,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release-device
 BUILD_FLAG=(--device)
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_DIR="/media/fat/mister-magik"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
+REMOTE_DIR="/media/fat/mister-magik-dev"
 DEPLOY_LOCK="$REMOTE_DIR/deploy.lock"
-BENCH_SQLITE="/media/fat/mister-magik/library-scan-bench.sqlite3"
+BENCH_SQLITE="/media/fat/mister-magik-dev/library-scan-bench.sqlite3"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-library.tsv"
 ITERATIONS=3
@@ -59,7 +59,7 @@ remote_run() {
 }
 
 magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
 }
 
 cleanup_deploy_lock() {

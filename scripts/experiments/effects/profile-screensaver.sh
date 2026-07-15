@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/screensaver-profiles"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 
 usage() {
   cat <<'EOF'

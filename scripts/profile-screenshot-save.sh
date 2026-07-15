@@ -15,7 +15,7 @@ SYSTEM="neogeo"
 ITERATIONS=1
 SIZE_BYTES=""
 REPLACE_LABEL=0
-REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik/mister-magik-fb}"
+REMOTE_BIN="${MISTER_MAGIK_REMOTE_BIN:-/media/fat/mister-magik-dev/mister-magik-fb}"
 
 usage() {
   cat <<'EOF'

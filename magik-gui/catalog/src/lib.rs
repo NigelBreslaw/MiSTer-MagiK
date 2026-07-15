@@ -19,6 +19,7 @@ mod catalog_scan;
 pub mod catalog_stamp;
 pub mod catalog_store;
 pub mod catalog_summary;
+pub mod device_layout;
 mod core_audit;
 mod fallible_log;
 pub mod fs_fault;

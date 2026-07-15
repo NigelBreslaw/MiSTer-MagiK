@@ -16,7 +16,7 @@ effect_profile_setup() {
   HERE="$(experiment_repo_root)"
   MISTER="$HERE/scripts/mister"
   source "$HERE/scripts/mister-supervision-lib.sh"
-  REMOTE="${EFFECT_REMOTE:-/media/fat/mister-magik/mister-magik-fb}"
+  REMOTE="${EFFECT_REMOTE:-/media/fat/mister-magik-dev/mister-magik-fb}"
   OUT_DIR="$HERE/build/$output_subdir"
   RESULTS="$HERE/history/toolchain-bench/$results_file"
 }

@@ -532,8 +532,11 @@ fn run_catalog_builder_subprocess(
     execution_mode: CatalogExecutionMode,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
-    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN")
-        .unwrap_or_else(|_| "/media/fat/mister-magik/mister-magik-catalog-builder".into());
+    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN").unwrap_or_else(|_| {
+        mister_magik_catalog::device_layout::current_app_path("mister-magik-catalog-builder")
+            .to_string_lossy()
+            .into_owned()
+    });
     let operation = match plan {
         CatalogWorkerPlan::CheckStamp => "check",
         CatalogWorkerPlan::ForceBuild

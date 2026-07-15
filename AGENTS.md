@@ -13,7 +13,7 @@ device repeatedly, design and verify a one-boot or volatile-only arming path
 before running it.
 
 The known dangerous failure mode is a persistent
-`/media/fat/mister-magik/launcher.env` that arms
+either layout's persistent `launcher.env` that arms
 `MISTER_FS_FAULT_ACTION=direct-reset-no-sync`. If MagiK reads that env on every
 boot, it can repeatedly send `mister_magik_direct_reset_no_sync` through
 `/dev/MiSTer_cmd`. Prevent this exact trap:
@@ -26,17 +26,19 @@ boot, it can repeatedly send `mister_magik_direct_reset_no_sync` through
 - Cleanup and exit traps for destructive runners must remove both persistent
   and volatile arming files:
   `/media/fat/mister-magik/launcher.env`,
+  `/media/fat/mister-magik-dev/launcher.env`,
   `/tmp/mister-magik/fs-fault-launcher.env`,
   `/tmp/mister-magik/fs-fault-session`,
   `/tmp/mister-magik/fs-fault.json`, and
-  `/media/fat/mister-magik/rebuild-on-next-boot`.
+  `/media/fat/mister-magik/rebuild-on-next-boot`, and
+  `/media/fat/mister-magik-dev/rebuild-on-next-boot`.
 - Host-side wait/recovery loops must use bounded local timeouts. Do not let a
   half-open SSH connection hang the runner while the MiSTer is flapping.
 - Before running any reset-fault test, confirm the runner has a non-network
   recovery story and a cleanup path that works if interrupted. If the SD card is
   mounted on the Mac, remove stale arming files directly before booting again.
 - After any direct-reset-no-sync experiment, verify there is no live arming file
-  with `scripts/mister run "ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true"`.
+  with `scripts/mister run "ls -l /media/fat/mister-magik*/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik*/rebuild-on-next-boot 2>/dev/null || true"`.
 - If the MiSTer starts rebooting repeatedly, stop trying normal deploys. First
   break the loop by removing stale arming files; if SSH is unstable, power down,
   mount the SD card on the Mac, remove the files above, and inspect
@@ -48,12 +50,13 @@ MiSTer MagiK is a Rust/Slint frontend for MiSTer FPGA. The app renders a 960x540
 software UI into `/dev/fb0`; the FPGA scales it to 1080p HDMI. The Rust app owns
 the launcher framebuffer mode and scan-out route while it is active.
 
-Production boot uses stock `/media/fat/MiSTer` from `/etc/inittab`, then
-`[MiSTer] main=MiSTer_MagiK` re-execs the external Main_MiSTer fork. That fork
+Boot uses stock `/media/fat/MiSTer` from `/etc/inittab`, then `[MiSTer] main=`
+selects public `MiSTer_MagiK`, development `MiSTer_MagiKDev`, or stock MiSTer.
+The selected MagiK fork
 initializes HDMI/video and starts:
 
 ```text
-/media/fat/mister-magik/mister-magik-fb ui launcher 0
+/media/fat/mister-magik[-dev]/mister-magik-fb ui launcher 0
 ```
 
 The maintained Main_MiSTer fork is a sibling checkout at `../Main_MiSTer` by
@@ -62,7 +65,8 @@ default. Override with `MISTER_MAIN_DIR`.
 ## Canonical Names
 
 - Product/UI text: **MiSTer MagiK**.
-- Main_MiSTer fork binary/process/device path: `MiSTer_MagiK`.
+- Main_MiSTer public/dev binary and process names: `MiSTer_MagiK` and
+  `MiSTer_MagiKDev`.
 - Slug for directories and scripts: `mister-magik`.
 - Slint framebuffer binary/package: `mister-magik-fb`.
 - Rust crate/import spelling: `mister_magik_fb`.
@@ -188,6 +192,10 @@ Boot and recovery:
 ```bash
 scripts/install-slint-boot.sh
 scripts/restore-stock-boot.sh
+scripts/magik-mode.sh status
+scripts/magik-mode.sh dev
+scripts/magik-mode.sh public
+scripts/magik-mode.sh stock
 scripts/mister reboot-wait
 scripts/mister reboot-wait --direct-reset  # fast dev reboot after writes are synced/stopped
 scripts/mister recover
@@ -220,7 +228,8 @@ Effect-scene and mega-transition work is experimental only; see
   or fault-injection runner leave the MiSTer in a persistent boot loop. Follow
   `Critical Boot-Loop Safety` before any direct-reset-no-sync work.
 - Do not set `main=mister-magik-fb`. Slint is not Main; it cannot initialize
-  HDMI before Main's `video_init()`. Use `main=MiSTer_MagiK`.
+  HDMI before Main's `video_init()`. Use the selected Main,
+  `main=MiSTer_MagiK` or `main=MiSTer_MagiKDev`.
 - Do not launch cores with external `rbf_load` from Slint. Use Main's command
   path / fifo handoff (`load_core` or `mister_magik_launch`) so HDMI survives.
 - Do not SIGSTOP MiSTer for the launcher. A stopped Main can keep evdev grabs

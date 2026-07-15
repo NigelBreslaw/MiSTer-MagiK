@@ -244,6 +244,10 @@ if [[ ! -f "$INSTALLER" ]]; then
   echo "ERROR: installer not found: $INSTALLER" >&2
   exit 1
 fi
+if grep -Eq 'mister-magik-agent|S00magik-agent|disabled-S00fastnet\.magik-agent' "$INSTALLER"; then
+  echo "ERROR: public installer must not contain development-agent hook management." >&2
+  exit 1
+fi
 if [[ ! -f "$CHANNEL_SELECTOR" ]]; then
   echo "ERROR: channel selector not found: $CHANNEL_SELECTOR" >&2
   exit 1
@@ -419,7 +423,7 @@ game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
 python3 "$ROOT/scripts/platform-manifest.py" verify \
-  "$STAGE/mister-magik/platform-v1.manifest" --root "$STAGE" >/dev/null
+  "$STAGE/mister-magik/platform-v1.manifest" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
   exit 1

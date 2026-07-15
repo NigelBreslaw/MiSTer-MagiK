@@ -14,14 +14,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 source "$HERE/scripts/mister-supervision-lib.sh"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="$MISTER_MAGIK_BIN"
 SCENE="${1:-launcher}"
 SECS="${2:-0}"
 LOG="/tmp/mister-magik-${SCENE}.log"
 REMOTE_SCENE="$SCENE"
 EXTRA_ENV=""
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 
 usage() {
   cat <<'EOF'

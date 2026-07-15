@@ -119,7 +119,7 @@ assert_cpu_under_limit() {
 
 check_no_stale_arming_files() {
   local out="$OUT_DIR/stale-arming-files.txt"
-  "$MISTER" run "ls -l /media/fat/mister-magik/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot 2>/dev/null || true" >"$out"
+  "$MISTER" run "ls -l /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot 2>/dev/null || true" >"$out"
   if [[ -s "$out" ]]; then
     echo "stale arming files remain:" >&2
     cat "$out" >&2

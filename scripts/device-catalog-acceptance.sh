@@ -6,12 +6,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
+source "$ROOT/scripts/magik-layout.sh"
+magik_layout_select dev
 source "$ROOT/scripts/bench-context-lib.sh"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
-REMOTE_NAVIGATION="/media/fat/mister-magik/library.nav.lz4b"
-REMOTE_ASSETS="/media/fat/mister-magik/assets"
+REMOTE_BIN="$MISTER_MAGIK_BIN"
+REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
+REMOTE_SUMMARY="$MISTER_MAGIK_APP_DIR/library.summary.json"
+REMOTE_NAVIGATION="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
+REMOTE_ASSETS="$MISTER_MAGIK_ASSET_DIR"
 EXPECTED_DURABLE_GAMES=69646
 EXPECTED_VISIBLE_GAMES=67288
 EXPECTED_SYSTEMS=71
@@ -367,7 +369,7 @@ else
 fi
 
 progress_log_count="$(
-  remote "grep -h 'screenshot_media_progress' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
+  remote "grep -h 'screenshot_media_progress' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log '$MISTER_MAGIK_APP_DIR'/*.log 2>/dev/null | wc -l" | last_number
 )"
 if [ "${progress_log_count:-0}" -gt 0 ]; then
   echo "ok: screenshot media progress log rows = $progress_log_count"
@@ -376,7 +378,7 @@ else
 fi
 
 catalog_seed_count="$(
-  remote "grep -h 'screenshot_media_catalog_ensure' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log /media/fat/mister-magik/*.log 2>/dev/null | wc -l" | last_number
+  remote "grep -h 'screenshot_media_catalog_ensure' /tmp/mister-magik-slint.log /tmp/mister-magik-launcher.log '$MISTER_MAGIK_APP_DIR'/*.log 2>/dev/null | wc -l" | last_number
 )"
 if [ "${catalog_seed_count:-0}" -gt 0 ]; then
   echo "ok: cached catalog screenshot media ensure rows = $catalog_seed_count"
