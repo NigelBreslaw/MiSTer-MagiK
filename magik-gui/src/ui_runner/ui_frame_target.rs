@@ -320,7 +320,7 @@ pub(super) fn copy_arcade_list_update(
             renderer.copy_layer_to_fb0(disp, true);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, true)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), true)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }
@@ -332,7 +332,7 @@ pub(super) fn copy_arcade_list_update(
             renderer.copy_layer_to_fb0(disp, false);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, false)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), false)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }
@@ -349,7 +349,7 @@ pub(super) fn compose_arcade_list_update(
             renderer.compose_layer_to_cached(target, true);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, true)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), true)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }
@@ -357,7 +357,7 @@ pub(super) fn compose_arcade_list_update(
             renderer.compose_layer_to_cached(target, false);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, false)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), false)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }
@@ -374,7 +374,7 @@ pub(super) fn copy_arcade_list_update_to_hidden(
             renderer.copy_layer_to_hidden(hidden, true);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, true)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), true)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }
@@ -382,7 +382,7 @@ pub(super) fn copy_arcade_list_update_to_hidden(
             renderer.copy_layer_to_hidden(hidden, false);
             PresentCopyStats {
                 rows: rect.rows(),
-                bytes: arcade_list_present_pixels(&update, false)
+                bytes: arcade_list_present_pixels(&update, renderer.width(), false)
                     * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
             }
         }

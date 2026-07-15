@@ -139,6 +139,7 @@ fn sync_arcade_list_geometry_bridge(
     };
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
+    bridge.set_arcade_list_width(geometry.width as i32);
 }
 
 pub(super) struct CatalogScanBridgeStatus {
@@ -782,6 +783,12 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         get_arcade_list_y,
         set_arcade_list_y,
         geometry.y as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_list_width,
+        set_arcade_list_width,
+        geometry.width as i32
     );
 }
 

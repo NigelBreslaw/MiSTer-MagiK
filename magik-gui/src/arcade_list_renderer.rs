@@ -21,6 +21,7 @@ pub(crate) const ARCADE_LIST_Y: usize = 56;
 // Wider than the half-screen pane on purpose: the list can borrow boundary
 // space without covering the centered preview cabinet.
 pub(crate) const ARCADE_LIST_W: usize = 510;
+pub(crate) const ARCADE_SEARCH_LIST_W: usize = 464;
 pub(crate) const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
 pub(crate) const ARCADE_SEARCH_LIST_Y: usize = 56;
 pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
@@ -49,18 +50,21 @@ const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 pub(crate) struct ArcadeListGeometry {
     pub(crate) x: usize,
     pub(crate) y: usize,
+    pub(crate) width: usize,
 }
 
 impl ArcadeListGeometry {
     pub(crate) const NORMAL: Self = Self {
         x: ARCADE_LIST_X,
         y: ARCADE_LIST_Y,
+        width: ARCADE_LIST_W,
     };
 
     pub(crate) fn search_for_render_w(render_w: usize) -> Self {
         Self {
-            x: render_w.saturating_sub(ARCADE_LIST_X + ARCADE_LIST_W),
+            x: render_w.saturating_sub(ARCADE_LIST_X + ARCADE_SEARCH_LIST_W),
             y: ARCADE_SEARCH_LIST_Y,
+            width: ARCADE_SEARCH_LIST_W,
         }
     }
 
@@ -68,7 +72,7 @@ impl ArcadeListGeometry {
         DirtyRect {
             x0: self.x,
             y0: self.y,
-            x1: self.x + ARCADE_LIST_W,
+            x1: self.x + self.width,
             y1: self.y + ARCADE_LIST_H,
         }
     }
@@ -90,6 +94,7 @@ pub(crate) struct ArcadeListRenderer {
     last_draw: Option<ArcadeListDrawKey>,
     last_filter_draw: Option<ArcadeFilterListDrawKey>,
     geometry: ArcadeListGeometry,
+    width: usize,
 }
 
 pub(crate) struct CachedArcadeRow {
@@ -165,6 +170,7 @@ impl ArcadeListRenderer {
             last_draw: None,
             last_filter_draw: None,
             geometry: ArcadeListGeometry::NORMAL,
+            width: ARCADE_LIST_W,
         }
     }
 
@@ -172,8 +178,18 @@ impl ArcadeListRenderer {
         self.geometry.dirty_rect()
     }
 
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
     pub(crate) fn set_geometry(&mut self, geometry: ArcadeListGeometry) {
         if self.geometry != geometry {
+            if self.width != geometry.width {
+                self.width = geometry.width;
+                self.surface = vec![ARCADE_LIST_BG_COLOR_565; self.width * ARCADE_LIST_H];
+                self.row_cache.clear();
+                self.row_fingerprint_cache.clear();
+            }
             self.geometry = geometry;
             self.last_draw = None;
             self.last_filter_draw = None;
@@ -339,7 +355,7 @@ impl ArcadeListRenderer {
         DirtyRect {
             x0: self.geometry.x,
             y0: self.geometry.y + y,
-            x1: self.geometry.x + ARCADE_LIST_W,
+            x1: self.geometry.x + self.width,
             y1: self.geometry.y + y + ARCADE_ROW_HEIGHT as usize,
         }
     }
@@ -363,12 +379,12 @@ impl ArcadeListRenderer {
         let band_h = band_h.min(ARCADE_LIST_H - band_y);
         if games.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
-            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_BG_COLOR);
+            band.resize(self.width * band_h, ARCADE_LIST_BG_COLOR);
             band.fill(ARCADE_LIST_BG_COLOR);
             self.meta_font.draw_text_clipped(
                 &mut band,
-                ARCADE_LIST_W,
-                ARCADE_LIST_W,
+                self.width,
+                self.width,
                 0,
                 band_h,
                 96,
@@ -413,12 +429,12 @@ impl ArcadeListRenderer {
         self.fill_surface_band(band_y, band_h, ARCADE_LIST_BG_COLOR_565);
         if items.is_empty() {
             let mut band = std::mem::take(&mut self.band_scratch);
-            band.resize(ARCADE_LIST_W * band_h, ARCADE_LIST_BG_COLOR);
+            band.resize(self.width * band_h, ARCADE_LIST_BG_COLOR);
             band.fill(ARCADE_LIST_BG_COLOR);
             self.meta_font.draw_text_clipped(
                 &mut band,
-                ARCADE_LIST_W,
-                ARCADE_LIST_W,
+                self.width,
+                self.width,
                 0,
                 band_h,
                 96,
@@ -445,12 +461,11 @@ impl ArcadeListRenderer {
             let copy_h = (clip_y1 - clip_y0) as usize;
             let src_y = (clip_y0 - y) as usize;
             for row_y in 0..copy_h {
-                let src = (src_y + row_y) * ARCADE_LIST_W;
+                let src = (src_y + row_y) * self.width;
                 let viewport_y = clip_y0 as usize + row_y;
                 let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-                let dst = dst_y * ARCADE_LIST_W;
-                self.surface[dst..dst + ARCADE_LIST_W]
-                    .copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+                let dst = dst_y * self.width;
+                self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
             }
         }
     }
@@ -498,19 +513,19 @@ impl ArcadeListRenderer {
         let src_y = (clip_y0 - y) as usize;
         let dst_y = (clip_y0 as usize).saturating_sub(band_y);
         for row_y in 0..copy_h {
-            let src = (src_y + row_y) * ARCADE_LIST_W;
+            let src = (src_y + row_y) * self.width;
             let viewport_y = band_y + dst_y + row_y;
             let dst_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-            let dst = dst_y * ARCADE_LIST_W;
-            self.surface[dst..dst + ARCADE_LIST_W].copy_from_slice(&row[src..src + ARCADE_LIST_W]);
+            let dst = dst_y * self.width;
+            self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
         }
     }
 
     fn fill_surface_band(&mut self, band_y: usize, band_h: usize, color: Rgb565Pixel) {
         for row in 0..band_h {
             let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
-            let dst = dst_y * ARCADE_LIST_W;
-            self.surface[dst..dst + ARCADE_LIST_W].fill(color);
+            let dst = dst_y * self.width;
+            self.surface[dst..dst + self.width].fill(color);
         }
     }
 
@@ -568,12 +583,12 @@ impl ArcadeListRenderer {
 
     fn copy_band_to_surface(&mut self, band: &[Pixel], band_y: usize, band_h: usize) {
         for row in 0..band_h {
-            let src = row * ARCADE_LIST_W;
+            let src = row * self.width;
             let dst_y = (self.surface_y + band_y + row) % ARCADE_LIST_H;
-            let dst = dst_y * ARCADE_LIST_W;
+            let dst = dst_y * self.width;
             copy_pixel_to_rgb565_row(
-                &band[src..src + ARCADE_LIST_W],
-                &mut self.surface[dst..dst + ARCADE_LIST_W],
+                &band[src..src + self.width],
+                &mut self.surface[dst..dst + self.width],
             );
         }
     }
@@ -627,15 +642,17 @@ impl ArcadeListRenderer {
             return;
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
-            ArcadeListPresentKind::Normal => {
-                self.copy_surface_rect_to_fb0(disp, x, y, w, h);
-            }
-            ArcadeListPresentKind::Inverted => {
-                if arcade_selection_inversion_enabled() {
-                    self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
-                } else {
+        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
+            match kind {
+                ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_fb0(disp, x, y, w, h);
+                }
+                ArcadeListPresentKind::Inverted => {
+                    if arcade_selection_inversion_enabled() {
+                        self.copy_inverted_surface_rect_to_fb0(disp, x, y, w, h);
+                    } else {
+                        self.copy_surface_rect_to_fb0(disp, x, y, w, h);
+                    }
                 }
             }
         });
@@ -670,15 +687,15 @@ impl ArcadeListRenderer {
             return;
         }
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
-        if x == 0 && w == ARCADE_LIST_W {
-            let src = src_y * ARCADE_LIST_W;
+        if x == 0 && w == self.width {
+            let src = src_y * self.width;
             copy_dense_rect_565(
                 disp,
                 self.geometry.x,
                 self.geometry.y + viewport_y,
-                ARCADE_LIST_W,
+                self.width,
                 h,
-                &self.surface[src..src + h * ARCADE_LIST_W],
+                &self.surface[src..src + h * self.width],
             );
             return;
         }
@@ -689,7 +706,7 @@ impl ArcadeListRenderer {
             w,
             h,
             &self.surface,
-            ARCADE_LIST_W,
+            self.width,
             x,
             src_y,
         );
@@ -729,7 +746,7 @@ impl ArcadeListRenderer {
         }
         let src_y = (self.surface_y + viewport_y) % ARCADE_LIST_H;
         for row in 0..h {
-            let src = (src_y + row) * ARCADE_LIST_W + x;
+            let src = (src_y + row) * self.width + x;
             let dst = row * w;
             for col in 0..w {
                 self.selection_invert_scratch[dst + col] =
@@ -745,13 +762,13 @@ impl ArcadeListRenderer {
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
-            .resize(ARCADE_LIST_W * thickness, color);
+            .resize(self.width * thickness, color);
         self.selection_horizontal.fill(color);
         copy_dense_rect_565(
             disp,
             rect.x0,
             rect.y0,
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
         );
@@ -759,7 +776,7 @@ impl ArcadeListRenderer {
             disp,
             rect.x0,
             rect.y1.saturating_sub(thickness),
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
         );
@@ -793,15 +810,17 @@ impl ArcadeListRenderer {
             return;
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
-            ArcadeListPresentKind::Normal => {
-                self.compose_surface_rect_to_cached(target, x, y, w, h);
-            }
-            ArcadeListPresentKind::Inverted => {
-                if arcade_selection_inversion_enabled() {
-                    self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
-                } else {
+        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
+            match kind {
+                ArcadeListPresentKind::Normal => {
                     self.compose_surface_rect_to_cached(target, x, y, w, h);
+                }
+                ArcadeListPresentKind::Inverted => {
+                    if arcade_selection_inversion_enabled() {
+                        self.compose_inverted_surface_rect_to_cached(target, x, y, w, h);
+                    } else {
+                        self.compose_surface_rect_to_cached(target, x, y, w, h);
+                    }
                 }
             }
         });
@@ -817,15 +836,17 @@ impl ArcadeListRenderer {
             return;
         }
         let h = h.min(ARCADE_LIST_H - viewport_y);
-        for_each_arcade_list_present_segment(viewport_y, h, |kind, x, y, w, h| match kind {
-            ArcadeListPresentKind::Normal => {
-                self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
-            }
-            ArcadeListPresentKind::Inverted => {
-                if arcade_selection_inversion_enabled() {
-                    self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
-                } else {
+        for_each_arcade_list_present_segment(self.width, viewport_y, h, |kind, x, y, w, h| {
+            match kind {
+                ArcadeListPresentKind::Normal => {
                     self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
+                }
+                ArcadeListPresentKind::Inverted => {
+                    if arcade_selection_inversion_enabled() {
+                        self.copy_inverted_surface_rect_to_hidden(hidden, x, y, w, h);
+                    } else {
+                        self.copy_surface_rect_to_hidden(hidden, x, y, w, h);
+                    }
                 }
             }
         });
@@ -849,7 +870,7 @@ impl ArcadeListRenderer {
                 w,
                 copy_h,
                 &self.surface,
-                ARCADE_LIST_W,
+                self.width,
                 x,
                 src_y,
             );
@@ -875,7 +896,7 @@ impl ArcadeListRenderer {
                 w,
                 copy_h,
                 &self.surface,
-                ARCADE_LIST_W,
+                self.width,
                 x,
                 src_y,
             ) {
@@ -935,19 +956,19 @@ impl ArcadeListRenderer {
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
-            .resize(ARCADE_LIST_W * thickness, color);
+            .resize(self.width * thickness, color);
         self.selection_horizontal.fill(color);
         target.compose_rect_565(
             rect.x0,
             rect.y0,
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
         );
         target.compose_rect_565(
             rect.x0,
             rect.y1.saturating_sub(thickness),
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
         );
@@ -969,15 +990,15 @@ impl ArcadeListRenderer {
         let thickness = ARCADE_SELECTION_FRAME_THICKNESS;
         let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
         self.selection_horizontal
-            .resize(ARCADE_LIST_W * thickness, color);
+            .resize(self.width * thickness, color);
         self.selection_horizontal.fill(color);
         if let Err(e) = hidden.copy_rect_565_strided(
             rect.x0,
             rect.y0,
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
-            ARCADE_LIST_W,
+            self.width,
             0,
             0,
         ) {
@@ -986,10 +1007,10 @@ impl ArcadeListRenderer {
         if let Err(e) = hidden.copy_rect_565_strided(
             rect.x0,
             rect.y1.saturating_sub(thickness),
-            ARCADE_LIST_W,
+            self.width,
             thickness,
             &self.selection_horizontal,
-            ARCADE_LIST_W,
+            self.width,
             0,
             0,
         ) {
@@ -1024,13 +1045,16 @@ impl ArcadeListRenderer {
     }
 
     fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
-        let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(title, if is_new { 26 } else { 33 });
+        let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
+        draw_arcade_row_background(&mut row, self.width, idx);
+        let title = clipped_title(
+            title,
+            scaled_title_max_chars(self.width, if is_new { 26 } else { 33 }),
+        );
         self.title_font.draw_text_clipped_gradient(
             &mut row,
-            ARCADE_LIST_W,
-            ARCADE_LIST_W,
+            self.width,
+            self.width,
             0,
             ARCADE_ROW_HEIGHT as usize,
             12,
@@ -1039,15 +1063,18 @@ impl ArcadeListRenderer {
             ARCADE_TITLE_GRADIENT,
         );
         if is_new {
-            draw_new_badge(&mut row, &mut self.meta_font);
+            draw_new_badge(&mut row, self.width, &mut self.meta_font);
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
 
     fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
-        let mut row = vec![Pixel(0); ARCADE_LIST_W * ARCADE_ROW_HEIGHT as usize];
-        draw_arcade_row_background(&mut row, idx);
-        let title = clipped_title(&item.title, if item.count.is_some() { 29 } else { 33 });
+        let mut row = vec![Pixel(0); self.width * ARCADE_ROW_HEIGHT as usize];
+        draw_arcade_row_background(&mut row, self.width, idx);
+        let title = clipped_title(
+            &item.title,
+            scaled_title_max_chars(self.width, if item.count.is_some() { 29 } else { 33 }),
+        );
         let gradient = if item.active {
             ARCADE_FILTER_ACTIVE_GRADIENT
         } else {
@@ -1055,8 +1082,8 @@ impl ArcadeListRenderer {
         };
         self.title_font.draw_text_clipped_gradient(
             &mut row,
-            ARCADE_LIST_W,
-            ARCADE_LIST_W,
+            self.width,
+            self.width,
             0,
             ARCADE_ROW_HEIGHT as usize,
             12,
@@ -1068,11 +1095,11 @@ impl ArcadeListRenderer {
             let count = count.to_string();
             self.meta_font.draw_text_clipped(
                 &mut row,
-                ARCADE_LIST_W,
-                ARCADE_LIST_W,
+                self.width,
+                self.width,
                 0,
                 ARCADE_ROW_HEIGHT as usize,
-                (ARCADE_LIST_W - 60) as isize,
+                self.width.saturating_sub(60) as isize,
                 29,
                 &count,
                 Pixel(0x00706080),
@@ -1082,8 +1109,8 @@ impl ArcadeListRenderer {
     }
 }
 
-fn draw_new_badge(row: &mut [Pixel], font: &mut ConsoleFont) {
-    let x = ARCADE_LIST_W.saturating_sub(58);
+fn draw_new_badge(row: &mut [Pixel], width: usize, font: &mut ConsoleFont) {
+    let x = width.saturating_sub(58);
     let y = 14usize;
     let w = 42usize;
     let h = 18usize;
@@ -1092,14 +1119,14 @@ fn draw_new_badge(row: &mut [Pixel], font: &mut ConsoleFont) {
         if row_y >= ARCADE_ROW_HEIGHT as usize {
             break;
         }
-        let start = row_y * ARCADE_LIST_W + x;
-        let end = (start + w).min((row_y + 1) * ARCADE_LIST_W);
+        let start = row_y * width + x;
+        let end = (start + w).min((row_y + 1) * width);
         row[start..end].fill(ARCADE_NEW_BADGE_FILL);
     }
     font.draw_text_clipped(
         row,
-        ARCADE_LIST_W,
-        ARCADE_LIST_W,
+        width,
+        width,
         0,
         ARCADE_ROW_HEIGHT as usize,
         x as isize + 9,
@@ -1116,6 +1143,7 @@ pub(crate) enum ArcadeListPresentKind {
 }
 
 pub(crate) fn for_each_arcade_list_present_segment(
+    width: usize,
     viewport_y: usize,
     h: usize,
     emit: impl FnMut(ArcadeListPresentKind, usize, usize, usize, usize),
@@ -1136,7 +1164,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
         y0..y1,
         0..selection_y,
         0,
-        ARCADE_LIST_W,
+        width,
         ArcadeListPresentKind::Normal,
         &mut emit,
     );
@@ -1144,7 +1172,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
         y0..y1,
         inner_top..inner_bottom,
         ARCADE_SELECTION_FRAME_THICKNESS,
-        ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
+        width.saturating_sub(ARCADE_SELECTION_FRAME_THICKNESS * 2),
         ArcadeListPresentKind::Inverted,
         &mut emit,
     );
@@ -1152,7 +1180,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
         y0..y1,
         selection_bottom..ARCADE_LIST_H,
         0,
-        ARCADE_LIST_W,
+        width,
         ArcadeListPresentKind::Normal,
         &mut emit,
     );
@@ -1160,6 +1188,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
 
 pub(crate) fn arcade_list_present_pixels(
     update: &ArcadeListUpdate,
+    width: usize,
     redraw_selection_frame: bool,
 ) -> usize {
     let rect = match update {
@@ -1167,12 +1196,12 @@ pub(crate) fn arcade_list_present_pixels(
         ArcadeListUpdate::Scroll { rect, .. } => *rect,
     };
     let mut pixels = 0usize;
-    for_each_arcade_list_present_segment(rect.y0, rect.rows() as usize, |_, _, _, w, h| {
+    for_each_arcade_list_present_segment(width, 0, rect.rows() as usize, |_, _, _, w, h| {
         pixels += w * h;
     });
     if redraw_selection_frame {
         let selection_h = ARCADE_ROW_HEIGHT as usize;
-        let horizontal = ARCADE_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2;
+        let horizontal = width * ARCADE_SELECTION_FRAME_THICKNESS * 2;
         let vertical = ARCADE_SELECTION_FRAME_THICKNESS * selection_h * 2;
         pixels += horizontal + vertical;
     }
@@ -1337,7 +1366,7 @@ fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
     Arc::ptr_eq(left, right) || left.as_ref() == right.as_ref()
 }
 
-pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
+pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], width: usize, idx: usize) {
     let bg = if idx.is_multiple_of(2) {
         Pixel(0x001a1424)
     } else {
@@ -1346,7 +1375,7 @@ pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], idx: usize) {
     let border = Pixel(0x00251c34);
     for row_y in 0..ARCADE_ROW_HEIGHT as isize {
         let dy = row_y as usize;
-        let line = &mut row[dy * ARCADE_LIST_W..(dy + 1) * ARCADE_LIST_W];
+        let line = &mut row[dy * width..(dy + 1) * width];
         for px in line.iter_mut() {
             *px = bg;
         }
@@ -1424,6 +1453,10 @@ fn clipped_title(title: &str, max_chars: usize) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+fn scaled_title_max_chars(width: usize, normal_width_max_chars: usize) -> usize {
+    width.saturating_mul(normal_width_max_chars) / ARCADE_LIST_W
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1446,11 +1479,11 @@ mod tests {
     }
 
     fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
-        let mut pixels = Vec::with_capacity(ARCADE_LIST_W * ARCADE_LIST_H);
+        let mut pixels = Vec::with_capacity(renderer.width * ARCADE_LIST_H);
         for y in 0..ARCADE_LIST_H {
             let src_y = (renderer.surface_y + y) % ARCADE_LIST_H;
-            let src = src_y * ARCADE_LIST_W;
-            pixels.extend_from_slice(&renderer.surface[src..src + ARCADE_LIST_W]);
+            let src = src_y * renderer.width;
+            pixels.extend_from_slice(&renderer.surface[src..src + renderer.width]);
         }
         pixels
     }
@@ -1460,15 +1493,20 @@ mod tests {
         assert_eq!(
             ArcadeListGeometry::search_for_render_w(960),
             ArcadeListGeometry {
-                x: 442,
+                x: 488,
                 y: ARCADE_SEARCH_LIST_Y,
+                width: ARCADE_SEARCH_LIST_W,
             }
         );
+        let search = ArcadeListGeometry::search_for_render_w(960);
+        assert_eq!(search.x, 960 / 2 + ARCADE_LIST_X);
+        assert_eq!(search.x + search.width, 960 - ARCADE_LIST_X);
         assert_eq!(
             ArcadeListGeometry::search_for_render_w(1280),
             ArcadeListGeometry {
-                x: 762,
+                x: 808,
                 y: ARCADE_SEARCH_LIST_Y,
+                width: ARCADE_SEARCH_LIST_W,
             }
         );
     }
@@ -1668,9 +1706,14 @@ mod tests {
     fn arcade_present_segments_invert_selected_row_inner_and_skip_frame_pixels() {
         let mut segments = Vec::new();
 
-        for_each_arcade_list_present_segment(0, ARCADE_LIST_H, |kind, x, y, w, h| {
-            segments.push((kind, x, y, w, h));
-        });
+        for_each_arcade_list_present_segment(
+            ARCADE_LIST_W,
+            0,
+            ARCADE_LIST_H,
+            |kind, x, y, w, h| {
+                segments.push((kind, x, y, w, h));
+            },
+        );
 
         assert_eq!(
             segments,
@@ -1705,6 +1748,7 @@ mod tests {
                     x1: ARCADE_LIST_W,
                     y1: ARCADE_LIST_H,
                 }),
+                ARCADE_LIST_W,
                 true
             ),
             copied_px + frame_present_px
@@ -1720,6 +1764,7 @@ mod tests {
                         y1: ARCADE_LIST_H,
                     },
                 },
+                ARCADE_LIST_W,
                 false
             ),
             copied_px
@@ -1730,7 +1775,7 @@ mod tests {
     fn arcade_present_segments_keep_fixed_selection_aperture_for_partial_bands() {
         let mut segments = Vec::new();
 
-        for_each_arcade_list_present_segment(250, 20, |kind, x, y, w, h| {
+        for_each_arcade_list_present_segment(ARCADE_LIST_W, 250, 20, |kind, x, y, w, h| {
             segments.push((kind, x, y, w, h));
         });
 
@@ -1743,6 +1788,57 @@ mod tests {
                 ARCADE_LIST_W - ARCADE_SELECTION_FRAME_THICKNESS * 2,
                 20
             )]
+        );
+    }
+
+    #[test]
+    fn search_layout_rebuilds_the_renderer_at_its_own_width() {
+        let mut renderer = ArcadeListRenderer::new();
+        let games = games("arcade", 3);
+        assert!(matches!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        renderer.set_geometry(ArcadeListGeometry::search_for_render_w(960));
+        assert_eq!(renderer.width(), ARCADE_SEARCH_LIST_W);
+        assert_eq!(renderer.surface.len(), ARCADE_SEARCH_LIST_W * ARCADE_LIST_H);
+        assert!(renderer.row_cache.is_empty());
+        assert!(matches!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(rect)) if rect.x0 == 488 && rect.x1 == 952
+        ));
+        assert_eq!(
+            renderer.selection_rect().x1 - renderer.selection_rect().x0,
+            ARCADE_SEARCH_LIST_W
+        );
+    }
+
+    #[test]
+    fn search_present_segments_and_accounting_use_the_narrow_width() {
+        let mut segments = Vec::new();
+        for_each_arcade_list_present_segment(
+            ARCADE_SEARCH_LIST_W,
+            0,
+            ARCADE_LIST_H,
+            |_, _, _, w, h| segments.push((w, h)),
+        );
+        assert!(segments
+            .iter()
+            .all(|&(width, _)| width <= ARCADE_SEARCH_LIST_W));
+
+        let update = ArcadeListUpdate::Full(DirtyRect {
+            x0: 488,
+            y0: ARCADE_SEARCH_LIST_Y,
+            x1: 952,
+            y1: ARCADE_SEARCH_LIST_Y + ARCADE_LIST_H,
+        });
+        let expected = segments.iter().map(|&(w, h)| w * h).sum::<usize>()
+            + ARCADE_SEARCH_LIST_W * ARCADE_SELECTION_FRAME_THICKNESS * 2
+            + ARCADE_SELECTION_FRAME_THICKNESS * ARCADE_ROW_HEIGHT as usize * 2;
+        assert_eq!(
+            arcade_list_present_pixels(&update, ARCADE_SEARCH_LIST_W, true),
+            expected
         );
     }
 
