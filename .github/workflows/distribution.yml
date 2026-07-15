@@ -24,7 +24,6 @@ env:
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
-  MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
   MAIN_REF: mister-magik
   MAIN_TOOLCHAIN_VERSION: gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf
 
@@ -75,6 +74,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
       - name: Checkout Main_MiSTer fork
         uses: actions/checkout@v7
@@ -141,32 +144,33 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-dist-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock', 'tools/mister/Cargo.lock') }}
+          key: cargo-dist-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_dist }}
           restore-keys: |
-            cargo-dist-${{ runner.os }}-
-            cargo-${{ runner.os }}-
+            cargo-dist-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+            cargo-arm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
       - name: Cache cross binary
         uses: actions/cache@v6
         id: cross-cache
         with:
           path: ~/.cargo/bin/cross
-          key: cross-${{ runner.os }}-${{ env.CROSS_VERSION }}
+          key: cross-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.CROSS_VERSION }}-${{ steps.cache-id.outputs.cross_abi }}
 
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
-      - name: Cache ARM frontend build outputs
-        uses: actions/cache@v6
+      - name: Restore ARM frontend build outputs
+        uses: actions/cache/restore@v6
         with:
           path: |
             magik-gui/target/release-device
+            !magik-gui/target/release-device/incremental
             magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
-          key: target-arm-dist-${{ runner.os }}-${{ needs.release-metadata.outputs.build-number }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
+            !magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/incremental
+          key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
           restore-keys: |
-            target-arm-dist-${{ runner.os }}-
-            target-arm-${{ runner.os }}-release-device-
+            target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-device-${{ steps.cache-id.outputs.cross_abi }}-
 
       - name: Build ARM frontend
         env:
@@ -191,7 +195,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: Main_MiSTer/bin
-          key: main-mister-bin-${{ runner.os }}-${{ steps.main-rev.outputs.sha }}
+          key: main-mister-bin-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}-${{ steps.main-rev.outputs.sha }}
 
       - name: Cache Main_MiSTer toolchain
         if: steps.main-build-cache.outputs.cache-hit != 'true'
@@ -199,7 +203,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/mister-magik/${{ env.MAIN_TOOLCHAIN_VERSION }}
-          key: main-toolchain-${{ runner.os }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
+          key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
 
       - name: Install Main_MiSTer toolchain
         if: steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'

@@ -179,6 +179,10 @@ The production vblank-latched Menu RBF is built only by manually starting the
 every push or pull request; Quartus builds are heavyweight and should be kicked
 off only when a new shared RBF artifact is actually needed. The manual form has
 no custom inputs: select the MiSTer MagiK branch, normally `main`, and run it.
+The workflow restores the installed Quartus runtime from the private
+`mister-magik-ci-cache` R2 bucket and installs from the official Intel payloads
+only on a content-addressed miss. See `magik-gui/BUILD.md` for the required
+bucket-scoped Actions credentials.
 That branch supplies the latch patch and scripts; the workflow builds the exact
 qualified `Menu_MiSTer` revision in
 `fpga/menu-vblank-latch/Menu_MiSTer.commit`. It does not build the separate

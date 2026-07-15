@@ -25,25 +25,53 @@ step() {
 }
 
 run_full_host() {
-  step "Format"
-  scripts/dev-rust fmt
-  step "Host logic tests"
-  scripts/dev-rust test
-  step "Catalog crate tests"
-  cargo test --manifest-path magik-gui/catalog/Cargo.toml
-  step "Clippy catalog crate"
-  cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings
-  step "Clippy magik-gui host logic"
-  (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings)
-  step "Check production magik-gui binary"
-  cargo check --manifest-path magik-gui/Cargo.toml \
-    --bin mister-magik-fb --no-default-features --features ui
-  step "Full host tools"
-  scripts/dev-rust host-tools
-  step "Clippy host tools"
-  cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings
-  step "Clippy MagiK agent"
-  cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings
+  run_parallel_groups core catalog tools
+}
+
+run_group() {
+  local group="$1"
+  case "$group" in
+    core)
+      CARGO_BUILD_JOBS=2 run_check format
+      CARGO_BUILD_JOBS=2 run_check host-tests
+      CARGO_BUILD_JOBS=2 run_check magik-gui-clippy
+      CARGO_BUILD_JOBS=2 run_check production-ui-check
+      ;;
+    catalog)
+      CARGO_BUILD_JOBS=1 run_check catalog-tests
+      CARGO_BUILD_JOBS=1 run_check catalog-clippy
+      ;;
+    tools)
+      CARGO_BUILD_JOBS=1 run_check host-tools
+      CARGO_BUILD_JOBS=1 run_check mister-clippy
+      CARGO_BUILD_JOBS=1 run_check agent-clippy
+      ;;
+    *)
+      echo "unknown validation group: $group" >&2
+      return 2
+      ;;
+  esac
+}
+
+run_parallel_groups() {
+  local tmp status group pid i
+  local groups=("$@")
+  local pids=()
+  tmp="$(mktemp -d)"
+  status=0
+  for group in "${groups[@]}"; do
+    (run_group "$group") >"$tmp/$group.log" 2>&1 &
+    pids+=("$!")
+  done
+  for ((i = 0; i < ${#groups[@]}; i++)); do
+    pid="${pids[$i]}"
+    if ! wait "$pid"; then
+      status=1
+    fi
+    cat "$tmp/${groups[$i]}.log"
+  done
+  rm -rf "$tmp"
+  return "$status"
 }
 
 run_check() {
@@ -56,6 +84,7 @@ run_check() {
     catalog-tests) step "Catalog crate tests"; cargo test --manifest-path magik-gui/catalog/Cargo.toml ;;
     catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings ;;
     production-ui-check) step "Check production magik-gui binary"; cargo check --manifest-path magik-gui/Cargo.toml --bin mister-magik-fb --no-default-features --features ui ;;
+    host-tools) step "Full host tools"; scripts/dev-rust host-tools ;;
     mister-tests) step "Test host tools"; cargo test --manifest-path tools/mister/Cargo.toml ;;
     mister-clippy) step "Clippy host tools"; cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings ;;
     agent-clippy) step "Clippy MagiK agent"; cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings ;;
