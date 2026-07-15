@@ -93,6 +93,8 @@ default. Override with `MISTER_MAIN_DIR`.
 
 ## Workflow Rules
 
+- Never use the Codex GitHub plugin for repository, issue, pull-request, or
+  Actions operations. Always use the `gh` CLI for GitHub reads and writes.
 - Use `scripts/mister` for all device comms. Do not use raw ssh or raw scp.
 - The wrapper defaults to `MISTER_IP=192.168.1.117` and `MISTER_PASS=1`; avoid
   inline environment assignments unless intentionally targeting another MiSTer.
