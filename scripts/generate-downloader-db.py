@@ -59,10 +59,13 @@ def generate(
     build = receipt.get("build_number")
     if receipt.get("format") != "mister-magik-release-assets-v1":
         raise ValueError("unsupported release-assets receipt")
-    if version != f"0.2.{build}" or tag != f"v{version}":
-        raise ValueError("receipt version, build number, and tag disagree")
     if channel not in {"beta", "release"}:
         raise ValueError(f"unsupported release channel: {channel}")
+    allowed_tags = {f"v{version}"}
+    if channel == "beta":
+        allowed_tags.add("beta")
+    if version != f"0.2.{build}" or tag not in allowed_tags:
+        raise ValueError("receipt version, build number, and tag disagree")
     if timestamp < 1_000_000_000:
         raise ValueError("timestamp must be a UNIX generation time")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -95,6 +98,7 @@ def generate(
         "v": 1,
         "db_id": DB_ID,
         "timestamp": timestamp,
+        "release": {"version": version, "build_number": build},
         "files": files,
         "folders": {folder: {} for folder in sorted(folders)},
     }

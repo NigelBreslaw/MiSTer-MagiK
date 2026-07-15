@@ -34,6 +34,13 @@ required = (
     "environment:\n      name: publish-${{ github.event.inputs.release_channel }}",
     "contents: write",
     "gh release create",
+    'if [ "$RELEASE_CHANNEL" = beta ]; then',
+    'gh release upload beta "${assets[@]}" --repo "$GH_REPO" --clobber',
+    'repos/$GH_REPO/git/refs/tags/beta',
+    'repos/$GH_REPO/releases/assets/$asset_id',
+    'expected_assets["$(basename "$asset_path")"]',
+    'gh release delete "$tag" --repo "$GH_REPO" --cleanup-tag --yes',
+    "if: github.event.inputs.release_channel == 'beta'",
     "mister-magik-$RELEASE_CHANNEL-db.json.zip",
     "select-published-release.py platform",
     "mister-magik-platform-v0.*.zip",
@@ -57,7 +64,9 @@ for value in required:
 before_publish, publish = text.split("\n  publish:\n", 1)
 assert "contents: write" not in before_publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
-assert '-f sha="$GITHUB_SHA"' not in publish
+feed_publish = publish.split("      - name: Update channel feed\n", 1)[1]
+assert '-f sha="$GITHUB_SHA"' not in feed_publish
+assert 'tag=beta' in text
 
 for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_ref:"):
     assert forbidden_input not in trigger, f"internal input leaked into dispatch UI: {forbidden_input}"

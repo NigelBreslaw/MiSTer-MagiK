@@ -57,9 +57,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           build_number="$(git rev-list --count "$GITHUB_SHA")"
           version="0.2.$build_number"
+          channel='${{ github.event.inputs.release_channel }}'
+          if [ "$channel" = beta ]; then
+            tag=beta
+          else
+            tag="v$version"
+          fi
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "artifact_name=mister-magik-$version-candidate" >> "$GITHUB_OUTPUT"
           echo "timestamp=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
@@ -300,7 +306,8 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           channel = os.environ["RELEASE_CHANNEL"]
           assert receipt["version"] == version == f"0.2.{build}"
-          assert tag == f"v{version}"
+          expected_tag = "beta" if channel == "beta" else f"v{version}"
+          assert tag == expected_tag
           assert receipt["archive"] == f"mister-magik-{version}.zip"
           with zipfile.ZipFile(root / receipt["archive"]) as package:
               release = dict(
@@ -316,6 +323,7 @@ jobs:
           assert int(release["game_database_version"]) == game_databases["release_version"]
           database = json.loads((root / f"mister-magik-{channel}-db.json").read_text())
           assert database["db_id"] == "mister_magik"
+          assert database["release"] == {"version": version, "build_number": build}
           assert tag in json.dumps(database)
           PY
 
@@ -349,7 +357,7 @@ jobs:
           name: ${{ needs.release-metadata.outputs.artifact-name }}
           path: candidate
 
-      - name: Refuse an existing immutable version
+      - name: Verify publication target
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -357,13 +365,14 @@ jobs:
         run: |
           set -euo pipefail
           (cd candidate && sha256sum --check SHA256SUMS)
-          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+          if [ '${{ github.event.inputs.release_channel }}' = release ] && \
+             gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Tag $RELEASE_TAG already exists; immutable releases are never overwritten." >&2
             exit 1
           fi
           test "${{ github.ref }}" = refs/heads/main
 
-      - name: Publish immutable GitHub Release
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -373,18 +382,39 @@ jobs:
         run: |
           set -euo pipefail
           title="MiSTer MagiK $RELEASE_VERSION"
-          prerelease=()
           if [ "$RELEASE_CHANNEL" = beta ]; then
             title="$title Beta"
-            prerelease=(--prerelease)
           fi
           mapfile -t assets < <(find candidate -type f -print | sort)
-          gh release create "$RELEASE_TAG" "${assets[@]}" \
-            --repo "$GH_REPO" \
-            --target "$GITHUB_SHA" \
-            --title "$title" \
-            --generate-notes \
-            "${prerelease[@]}"
+          if [ "$RELEASE_CHANNEL" = beta ]; then
+            notes="Rolling beta for build $RELEASE_VERSION. Assets and the beta tag are replaced by each approved beta publication."
+            if gh release view beta --repo "$GH_REPO" >/dev/null 2>&1; then
+              gh release upload beta "${assets[@]}" --repo "$GH_REPO" --clobber
+              gh release edit beta --repo "$GH_REPO" --title "$title" --notes "$notes" --prerelease
+              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/beta" \
+                -f sha="$GITHUB_SHA" -F force=true >/dev/null
+              declare -A expected_assets=()
+              for asset_path in "${assets[@]}"; do
+                expected_assets["$(basename "$asset_path")"]=1
+              done
+              while IFS=$'\t' read -r asset_id asset_name; do
+                if [[ -z "${expected_assets[$asset_name]+present}" ]]; then
+                  gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
+                fi
+              done < <(gh release view beta --repo "$GH_REPO" --json assets \
+                --jq '.assets[] | [.id, .name] | @tsv')
+            else
+              gh release create beta "${assets[@]}" \
+                --repo "$GH_REPO" --target "$GITHUB_SHA" --title "$title" \
+                --notes "$notes" --prerelease
+            fi
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GH_REPO" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --generate-notes
+          fi
 
       - name: Update channel feed
         env:
@@ -455,3 +485,16 @@ jobs:
           test -z "$unexpected_paths"
           gh api "repos/$GH_REPO/contents/mister-magik-$RELEASE_CHANNEL-db.json.zip?ref=downloader" \
             --jq .sha >/dev/null
+
+      - name: Remove superseded versioned beta releases
+        if: github.event.inputs.release_channel == 'beta'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            gh release delete "$tag" --repo "$GH_REPO" --cleanup-tag --yes
+          done < <(gh release list --repo "$GH_REPO" --limit 1000 \
+            --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease and (.tagName | test("^v0\\.2\\.[0-9]+$"))) | .tagName')
