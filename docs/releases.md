@@ -54,6 +54,12 @@ Beta:    https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/
 Release: https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-release-db.json.zip
 ```
 
+The `downloader` ref is an orphan, artifact-only branch. Its root commit has no
+source-history parent, and publication rejects any tip containing files other
+than the Beta and Release database ZIPs. Beta and Release publications are
+serialized because both channels update this shared ref. Do not base development
+work on it.
+
 Run `Scripts` -> `mister-magik-channel` to switch feeds, then run `update_all`
 and reboot. The selector changes only `downloader_mister_magik.ini`; it never
 edits boot configuration. Beta can move ahead of Release. Selecting Release in
