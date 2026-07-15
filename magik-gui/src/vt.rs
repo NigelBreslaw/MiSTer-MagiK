@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Hide the framebuffer console cursor (fbcon) while we own `/dev/fb0`.
 //!
 //! MiSTer often runs with `fb_terminal=1`; without graphics mode the kernel VT

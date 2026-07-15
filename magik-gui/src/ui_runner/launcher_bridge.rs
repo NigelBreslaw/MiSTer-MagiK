@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::*;
 
 macro_rules! set_bridge_if_changed {
@@ -27,7 +30,6 @@ pub(super) fn open_pads() -> PadPool {
 
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    load_slint_logo_image(&bridge);
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
     bridge.set_build_label(build_label().into());
@@ -107,72 +109,6 @@ fn last_database_build() -> String {
     .flatten()
     .map(mister_magik_catalog::catalog_build_record::format_duration)
     .unwrap_or_else(|| "No completed database build recorded yet".to_string())
-}
-
-fn load_slint_logo_image(bridge: &slint_ui::launcher::MisterBridge) {
-    const DEFAULT_PATH: &str = "/media/fat/mister-magik/art/slint-logo-pixel.rgba";
-    match load_raw_rgba_image(std::path::Path::new(DEFAULT_PATH)) {
-        Ok(image) => bridge.set_slint_logo_image(image),
-        Err(error) => {
-            crate::ui_errln!("launcher: failed to load Slint logo {DEFAULT_PATH}: {error}")
-        }
-    }
-}
-
-fn load_raw_rgba_image(path: &std::path::Path) -> Result<slint::Image, String> {
-    const MAGIC: &[u8] = b"MISTER_MAGIK_RGBA_RLE\n";
-    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    if !bytes.starts_with(MAGIC) {
-        return Err("bad raw image header".into());
-    }
-    let size_start = MAGIC.len();
-    let size_end = bytes[size_start..]
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .map(|offset| size_start + offset)
-        .ok_or_else(|| "missing raw image size".to_string())?;
-    let size = std::str::from_utf8(&bytes[size_start..size_end])
-        .map_err(|e| format!("invalid raw image size: {e}"))?;
-    let mut parts = size.split_whitespace();
-    let width = parts
-        .next()
-        .ok_or_else(|| "missing raw image width".to_string())?
-        .parse::<u32>()
-        .map_err(|e| format!("invalid raw image width: {e}"))?;
-    let height = parts
-        .next()
-        .ok_or_else(|| "missing raw image height".to_string())?
-        .parse::<u32>()
-        .map_err(|e| format!("invalid raw image height: {e}"))?;
-    if parts.next().is_some() || width == 0 || height == 0 {
-        return Err("invalid raw image dimensions".into());
-    }
-    let chunks = &bytes[size_end + 1..];
-    let expected_len = width as usize * height as usize * 4;
-    let mut pixels = Vec::with_capacity(expected_len);
-    for chunk in chunks.chunks_exact(6) {
-        let count = u16::from_le_bytes([chunk[0], chunk[1]]) as usize;
-        let pixel = &chunk[2..6];
-        for _ in 0..count {
-            pixels.extend_from_slice(pixel);
-        }
-        if pixels.len() > expected_len {
-            return Err("raw image RLE expands past expected dimensions".into());
-        }
-    }
-    if chunks.len() % 6 != 0 {
-        return Err("raw image RLE has a partial chunk".into());
-    }
-    if pixels.len() != expected_len {
-        return Err(format!(
-            "raw image expands to {} RGBA bytes, expected {expected_len}",
-            pixels.len()
-        ));
-    }
-
-    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(width, height);
-    buffer.make_mut_bytes().copy_from_slice(&pixels);
-    Ok(slint::Image::from_rgba8(buffer))
 }
 
 pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::MisterBridge) {

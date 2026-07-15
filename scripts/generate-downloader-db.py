@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Generate a MiSTer Downloader v1 database and initial-install bootstrap."""
 
 from __future__ import annotations

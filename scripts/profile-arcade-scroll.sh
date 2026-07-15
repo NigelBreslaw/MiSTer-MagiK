@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Capture a real launcher Arcade velocity-scroll trace through MiSTer_MagiK.
 set -euo pipefail
 

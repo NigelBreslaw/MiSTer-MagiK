@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::effect_loop_support::{run_effect_picker_loop, EffectLoopConfig, EffectTraceRow};
 use super::*;
 use mister_magik_fb::experiments::effects::sprite_effects::{

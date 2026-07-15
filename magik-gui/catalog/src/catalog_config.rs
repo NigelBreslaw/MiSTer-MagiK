@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Catalog v2 configuration, path, and version ownership.
 //!
 //! This module is intentionally small at first. The catalog refactor moves

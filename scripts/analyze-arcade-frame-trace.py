@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Summarize real arcade-screen frame traces.
 
 The current trace is produced by `MISTER_PREVIEW_SCROLL_TRACE` from the

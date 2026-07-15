@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Compare stock and patched Quartus reports for FPGA release signoff."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Launch-ref classification and materialization before Main handoff.
 
 use crate::arcade_catalog::LaunchTarget;

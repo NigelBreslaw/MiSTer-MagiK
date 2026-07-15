@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Media metadata parsing helpers.
 
 use crate::catalog_scan::FoundFile;

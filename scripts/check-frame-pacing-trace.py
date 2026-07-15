@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Validate launcher frame pacing traces and emit frame_pacing_gate_tsv."""
 
 from __future__ import annotations

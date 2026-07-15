@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs;

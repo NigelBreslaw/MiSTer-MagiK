@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Root-level catalog stamp support.
 //!
 //! Warm cached validation uses this module to decide whether the full catalog

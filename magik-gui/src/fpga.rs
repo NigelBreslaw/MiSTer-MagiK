@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Native port of MiSTer's HPS↔FPGA "SPI" layer (the GPO/GPI bit-bang in
 //! `fpga_io.cpp` / `spi.cpp`). Proven from Python in the framebuffer spike
 //! documented in `history/2026-5-2/framebuffer-experiments.md`; this is the real

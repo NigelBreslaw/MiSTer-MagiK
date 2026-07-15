@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Display backend: the MiSTer HPS framebuffer via /dev/fb0.
 //!
 //! Key hardware fact (measured): the /dev/fb0 driver mapping is *write-combining*

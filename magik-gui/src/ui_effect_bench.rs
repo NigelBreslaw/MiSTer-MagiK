@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Native framebuffer effect benchmark scene.
 #![cfg_attr(not(mister_experiments), allow(unused_imports, dead_code))]
 

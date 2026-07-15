@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Frame-driven spring animation with persistent position and velocity.
 
 use std::f64::consts::TAU;

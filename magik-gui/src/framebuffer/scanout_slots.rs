@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Production mappings exposed by the stock-kernel scanout-slots module.
 //!
 //! The scanout-slot module maps framebuffer-owned physical ranges with write-combined

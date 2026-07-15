@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader as XmlReader;
 use quick_xml::XmlVersion;

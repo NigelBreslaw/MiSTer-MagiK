@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Public-beta host release gate for MiSTer MagiK.
 set -euo pipefail
 
@@ -143,8 +146,8 @@ MENU_REVISION="3333333333333333333333333333333333333333"
 printf 'module release-check\n' > "$WORK/mister_magik_scanout_slots.ko"
 printf 'rbf release-check\n' > "$WORK/menu-magik-vblank-latch.rbf"
 CONTRACT="$(printf release-check-contract | sha256sum | awk '{print $1}')"
-printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
-  "$CONTRACT" "$(sha256sum "$WORK/mister_magik_scanout_slots.ko" | awk '{print $1}')" > "$WORK/scanout.metadata.txt"
+printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\nsource_revision=%s\n' \
+  "$CONTRACT" "$(sha256sum "$WORK/mister_magik_scanout_slots.ko" | awk '{print $1}')" "$MAGIK_REVISION" > "$WORK/scanout.metadata.txt"
 printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
   "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
@@ -169,7 +172,7 @@ package_args+=(
 EXPECT_MAIN=1
 
 ZIP="$("$ROOT/scripts/package-distribution.sh" "${package_args[@]}")"
-export ZIP EXPECT_MAIN
+export ZIP EXPECT_MAIN MAGIK_REVISION MENU_REVISION
 python3 - <<'PY'
 import os
 import sys
@@ -204,6 +207,8 @@ if expect_main:
 with zipfile.ZipFile(zip_path) as zf:
     names = set(zf.namelist())
     release = zf.read("mister-magik/release-v1.txt").decode()
+    notices = zf.read("mister-magik/THIRD-PARTY-NOTICES.txt").decode()
+    source_offer = zf.read("mister-magik/SOURCE-OFFER.txt").decode()
 missing = sorted(required - names)
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
@@ -222,6 +227,23 @@ if unexpected:
     sys.exit(1)
 if "game_database_version=1" not in release:
     print("package validation failed: missing game database version", file=sys.stderr)
+    sys.exit(1)
+if "mister_magik_scanout_slots kernel module is also\nGPL-3.0-or-later" not in notices:
+    print("package validation failed: missing kernel-module license notice", file=sys.stderr)
+    sys.exit(1)
+module_source = (
+    "https://github.com/NigelBreslaw/MiSTer-MagiK/tree/"
+    f"{os.environ['MAGIK_REVISION']}/kernel/scanout-slots"
+)
+if module_source not in source_offer:
+    print("package validation failed: missing exact kernel-module source", file=sys.stderr)
+    sys.exit(1)
+menu_source = (
+    "https://github.com/MiSTer-devel/Menu_MiSTer/tree/"
+    f"{os.environ['MENU_REVISION']}"
+)
+if menu_source not in source_offer:
+    print("package validation failed: missing exact Menu_MiSTer source", file=sys.stderr)
     sys.exit(1)
 
 print(f"package validation ok: {zip_path}")

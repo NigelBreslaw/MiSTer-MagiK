@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};

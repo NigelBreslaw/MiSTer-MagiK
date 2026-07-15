@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Cheap host-side checks for retained shell/Rust tooling.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+python3 "$ROOT/scripts/check-license-headers.py"
 
 cat >"$TMP/MiSTer.ini" <<'EOF'
 [MiSTer]
@@ -114,8 +119,8 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   fixture_magik="$(git -C "$ROOT" rev-parse HEAD)"
   fixture_main="1111111111111111111111111111111111111111"
   fixture_menu="3333333333333333333333333333333333333333"
-  printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
-    "$fixture_contract" "$(sha256sum "$package_tmp/mister_magik_scanout_slots.ko" | awk '{print $1}')" \
+  printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\nsource_revision=%s\n' \
+    "$fixture_contract" "$(sha256sum "$package_tmp/mister_magik_scanout_slots.ko" | awk '{print $1}')" "$fixture_magik" \
     >"$package_tmp/scanout.metadata.txt"
   printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
     "$fixture_contract" "$fixture_magik" "$fixture_menu" \
@@ -214,7 +219,7 @@ SQL
     --out-dir "$package_tmp/out" >/dev/null
   test -f "$package_tmp/release-assets/release-assets.json"
   test -f "$package_tmp/release-assets/SHA256SUMS"
-  python3 - "$package_tmp/out/valid-hbmame.zip" <<'PY'
+  python3 - "$package_tmp/out/valid-hbmame.zip" "$fixture_magik" "$fixture_menu" <<'PY'
 import sys
 import zipfile
 
@@ -261,6 +266,20 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     for expected in ("mame0288", "2222222222222222222222222222222222222222", "not ROM, BIOS, firmware, or game media"):
         if expected not in notices:
             raise SystemExit(f"distribution notices missing: {expected}")
+    if "mister_magik_scanout_slots kernel module is also\nGPL-3.0-or-later" not in notices:
+        raise SystemExit("distribution notices omit the kernel-module license")
+    module_source = (
+        "https://github.com/NigelBreslaw/MiSTer-MagiK/tree/"
+        f"{sys.argv[2]}/kernel/scanout-slots"
+    )
+    if module_source not in source_offer:
+        raise SystemExit("distribution source offer omits exact kernel-module source")
+    menu_source = (
+        "https://github.com/MiSTer-devel/Menu_MiSTer/tree/"
+        f"{sys.argv[3]}"
+    )
+    if menu_source not in source_offer:
+        raise SystemExit("distribution source offer omits exact Menu_MiSTer source")
     if "FFmpeg 8.1.2 source" not in source_offer:
         raise SystemExit("distribution source offer is missing FFmpeg source")
 PY

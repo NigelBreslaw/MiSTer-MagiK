@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Controller identity metadata shared by host-testable logic and Linux input.
 
 /// Static metadata read from sysfs / ioctl when the pad is opened.

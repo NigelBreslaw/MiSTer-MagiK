@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Shared local Apple-container resource policy: all online CPUs and 8 GiB RAM.
 
 apple_container_cpus() {

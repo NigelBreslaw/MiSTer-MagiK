@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Compact catalog summary projection for warm launcher startup.
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};

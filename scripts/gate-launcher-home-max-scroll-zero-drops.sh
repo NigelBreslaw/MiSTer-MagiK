@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Gate max-speed Home launcher system-row scrolling with zero over-budget frames.
 set -euo pipefail
 

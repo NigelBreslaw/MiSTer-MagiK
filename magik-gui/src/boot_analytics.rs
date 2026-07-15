@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Opt-in boot analytics for the Main->Slint handoff.
 //!
 //! Enabled only by `MISTER_BOOT_ANALYTICS=1`, which the Main fork injects when

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Restore stock MiSTer boot.
 #
 # Keep stock /media/fat/MiSTer in inittab and disable MagiK's MiSTer.ini handoff.

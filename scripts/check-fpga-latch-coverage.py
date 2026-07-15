@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Require every Verilator flow/branch point in the custom RTL to be hit."""
 
 from __future__ import annotations

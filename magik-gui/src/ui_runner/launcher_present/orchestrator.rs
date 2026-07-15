@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::super::*;
 use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
 use mister_magik_fb::framebuffer::vsync::VsyncPace;

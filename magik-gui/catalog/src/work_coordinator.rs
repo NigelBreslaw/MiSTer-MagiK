@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Cooperative process-wide arbitration between interactive and maintenance work.
 //!
 //! This intentionally does not change the first catalog builder's scheduling

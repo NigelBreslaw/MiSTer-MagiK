@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Build a MiSTer SD-card-root distribution zip for MiSTer MagiK.
 set -euo pipefail
 
@@ -310,6 +313,16 @@ for artifact in "$MAIN_BIN" "$SCANOUT_MODULE" "$SCANOUT_METADATA" "$LATCH_RBF" "
     exit 1
   fi
 done
+SCANOUT_SOURCE_REVISION="$(sed -n 's/^source_revision=//p' "$SCANOUT_METADATA")"
+if [[ ! "$SCANOUT_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ERROR: scanout metadata lacks a valid source_revision." >&2
+  exit 1
+fi
+LATCH_SOURCE_REVISION="$(sed -n 's/^source_commit=//p' "$LATCH_METADATA")"
+if [[ ! "$LATCH_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ERROR: latch metadata lacks a valid source_commit." >&2
+  exit 1
+fi
 if [[ -z "$GAME_DATABASES_MANIFEST" || ! -f "$GAME_DATABASES_MANIFEST" ]]; then
   echo "ERROR: --game-databases-manifest is required." >&2
   exit 2
@@ -367,7 +380,7 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/art" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
+mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/mister-magik.sh"
 chmod 755 "$STAGE/Scripts/mister-magik.sh"
 cp "$CHANNEL_SELECTOR" "$STAGE/Scripts/mister-magik-channel.sh"
@@ -376,9 +389,6 @@ cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
 chmod 755 "$STAGE/mister-magik/mister-magik-fb"
 cp "$CATALOG_BUILDER" "$STAGE/mister-magik/mister-magik-catalog-builder"
 chmod 755 "$STAGE/mister-magik/mister-magik-catalog-builder"
-python3 "$ROOT/scripts/png-to-slint-rgba.py" \
-  "$ROOT/magik-gui/ui/art/slint-logo-pixel.png" \
-  "$STAGE/mister-magik/art/slint-logo-pixel.rgba"
 cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"
@@ -425,8 +435,20 @@ cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
 
+Copyright (C) 2026 Nigel Breslaw
+
 MiSTer MagiK is GPL-3.0-or-later. Its full license is in
 mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt.
+
+The first-party mister_magik_scanout_slots kernel module is also
+GPL-3.0-or-later. Corresponding source is included in the MiSTer MagiK source
+revision named by SOURCE-OFFER.txt.
+Its Linux loader classification is a compatibility marker, not its source
+license; see the module metadata and corresponding source in this package.
+
+The FPGA latch RBF combines MiSTer MagiK latch code with Menu_MiSTer source at
+the exact upstream revision named by SOURCE-OFFER.txt. The Menu_MiSTer-derived
+portion remains under its upstream GPL-3.0 terms.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
@@ -455,6 +477,14 @@ Corresponding source and relinking instructions
 
 MiSTer MagiK source (including build and installation scripts):
   https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)
+
+MiSTer MagiK scanout kernel-module source matching the shipped module:
+  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$SCANOUT_SOURCE_REVISION/kernel/scanout-slots
+
+Menu_MiSTer source matching the shipped FPGA latch RBF:
+  https://github.com/MiSTer-devel/Menu_MiSTer/tree/$LATCH_SOURCE_REVISION
+The MiSTer MagiK patch applied to that source is:
+  https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)/fpga/menu-vblank-latch
 
 FFmpeg 8.1.2 source, used by the optional video build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2

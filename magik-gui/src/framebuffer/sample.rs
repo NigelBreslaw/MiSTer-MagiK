@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::boot_analytics;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::fs::OpenOptions;

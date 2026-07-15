@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::{arcade_update_dirty_rect, ArcadeListUpdate};
 use mister_magik_fb::framebuffer::target::{subtract_dirty_rects, DirtyRect, DirtyRectList};
 

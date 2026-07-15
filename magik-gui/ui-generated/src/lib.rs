@@ -1,4 +1,6 @@
 #![allow(clippy::all, unused_imports)]
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #[cfg(mister_bench_scenes)]
 pub mod effect_hud {

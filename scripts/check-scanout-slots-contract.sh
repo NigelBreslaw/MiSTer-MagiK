@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,7 +48,7 @@ for text in 0x227e_9000 0x22fd_2000 1_040_384; do
   require_text "$AGENT" "$text"
 done
 if [[ "$(sha256sum "$UAPI" | awk '{print $1}')" != \
-      "2d8dffc12b76c7346cbd6291ece440e824719ebb6b564192e3ba3f692eb8c5b9" ]]; then
+      "51b6f4a53efb76abbe1f5f1f1c7c248007aeb443f3a337ba86981940748c8fd6" ]]; then
   echo "scanout UAPI changed without updating the qualified contract" >&2
   exit 1
 fi
@@ -67,6 +70,10 @@ done
 if rg -n 'probe_|kzalloc|kmalloc|dma_|mailbox|ownership|fence|cacheable|workqueue|INIT_WORK|timer_setup|hrtimer_|debugfs|proc_create|sysfs|ioremap|request_irq|free_irq' \
     "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY"; then
   echo "forbidden scanout-slot kernel surface found" >&2
+  exit 1
+fi
+if rg -n 'of_address_to_resource|of_find_compatible_node|of_node_put|region_intersects' "$SOURCE"; then
+  echo "scanout-slot module must not import restricted kernel helpers" >&2
   exit 1
 fi
 if rg -n 'HiddenRgb565Framebuffer|MISTER_PLUGIN_MAP_BANDWIDTH|hidden-dev-mem|framebuffer::hidden' \

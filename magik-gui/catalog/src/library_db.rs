@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Whole-MiSTer library database scanning and loading.
 //!
 //! This is deliberately TOC/header-only for archives. Indexing must never

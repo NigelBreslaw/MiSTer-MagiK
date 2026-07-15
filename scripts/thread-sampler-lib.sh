@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Shared real-device per-thread sampler for benchmark scripts.
 
 thread_sample_enabled="${thread_sample_enabled:-0}"

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use mister_magik_catalog::sqlite_inspect::{sqlite_query_hash, sqlite_query_to_tsv};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;

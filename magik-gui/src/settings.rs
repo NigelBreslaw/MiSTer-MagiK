@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Persistent MagiK settings stored on `/media/fat`.
 
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Nigel Breslaw */
+
 #ifndef MISTER_MAGIK_SCANOUT_POLICY_H
 #define MISTER_MAGIK_SCANOUT_POLICY_H
 

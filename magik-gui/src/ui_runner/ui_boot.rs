@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use super::*;
 use mister_magik_fb::framebuffer::mode::{fb_mode_action, FbModeAction, FbModeGuard};
 

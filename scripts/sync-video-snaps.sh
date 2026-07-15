@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Validate and atomically sync canonical Cortex-A9 MP4 video snaps to the MiSTer.
 set -euo pipefail
 

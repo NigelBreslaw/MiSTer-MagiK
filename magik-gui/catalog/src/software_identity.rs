@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! MAME and software-list identity enrichment.
 
 use crate::game_discovery::{DiscoverySourceKind, GameDiscovery};

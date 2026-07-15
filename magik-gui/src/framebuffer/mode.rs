@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::framebuffer::format::{rgb565_stride_bytes, RGB565_BITS_PER_PIXEL};
 use crate::framebuffer::mapped::{FbInfo, MappedRgb565Framebuffer};
 use std::sync::{Mutex, OnceLock};

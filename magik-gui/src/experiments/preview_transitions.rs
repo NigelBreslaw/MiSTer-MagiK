@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Experiment-only screenshot preview transition catalog.
 
 use crate::screenshot_transitions::PreviewTransitionEffect;

@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # MiSTer MagiK installer for MiSTer Scripts menu / Downloader / update_all.
 
 set -eu
@@ -13,7 +16,6 @@ APP_DIR="$FAT/mister-magik"
 MAIN_BIN="$FAT/MiSTer_MagiK"
 GUI_BIN="$APP_DIR/mister-magik-fb"
 CATALOG_BUILDER="$APP_DIR/mister-magik-catalog-builder"
-SLINT_LOGO_FILE="$APP_DIR/art/slint-logo-pixel.rgba"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
 MANIFEST="$APP_DIR/platform-v1.manifest"
@@ -331,10 +333,6 @@ verify_platform() {
     5.15.1-MiSTer\ *) ;;
     *) say "ERROR: scanout module vermagic is incompatible."; return 1 ;;
   esac
-  if [ ! -f "$SLINT_LOGO_FILE" ]; then
-    say "ERROR: $SLINT_LOGO_FILE is missing."
-    return 1
-  fi
   say "verified platform $(manifest_field magik_revision)"
 }
 

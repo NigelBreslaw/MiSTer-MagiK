@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Inspect a MiSTer over SSH — CPU, glibc, framebuffer, memory.
 # Also verifies Cortex-A9 + NEON in /proc/cpuinfo (A1 toolchain prerequisite).
 #

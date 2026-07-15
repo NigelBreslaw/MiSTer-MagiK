@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Library walking and archive candidate discovery.
 
 use crate::catalog_discovery::{GameDirFact, GameDirHeader};

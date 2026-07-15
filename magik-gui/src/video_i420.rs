@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 pub(crate) fn convert_i420_to_rgb565(
     src_y: &[u8],
     src_stride_y: usize,

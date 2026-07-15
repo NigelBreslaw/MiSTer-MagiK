@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Vsync pacing policy and `/dev/fb0` wait worker.
 
 use crate::boot_analytics;

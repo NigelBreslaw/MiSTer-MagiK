@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Summarize and compare launcher present-path frame traces.
 
 The trace is produced by MISTER_PREVIEW_SCROLL_TRACE from the real

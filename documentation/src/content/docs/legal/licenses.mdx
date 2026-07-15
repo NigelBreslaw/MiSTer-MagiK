@@ -5,9 +5,15 @@ description: Complete license texts for MiSTer MagiK and the components bundled 
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-MiSTer MagiK is GPL-3.0-or-later. The launcher’s Licenses screen presents the
-three directly bundled license texts below. Every distribution ZIP also carries
-the complete third-party inventory in `licenses/RUST-LIBRARIES.txt`.
+MiSTer MagiK first-party source is Copyright (C) 2026 Nigel Breslaw and is
+GPL-3.0-or-later, including the first-party scanout kernel module. Every
+distribution ZIP carries the applicable GPL text and the complete third-party
+inventory in `licenses/RUST-LIBRARIES.txt`.
+
+The scanout module records its GPL-3.0-or-later source license separately from
+the Linux loader's compatibility classification. The shipped FPGA latch also
+includes Menu_MiSTer-derived material under its upstream GPL-3.0 terms; each
+release ZIP names the exact corresponding source revisions.
 
 The launcher uses Slint under its GPL-3.0-only option. Its applicable GPL text
 is the MiSTer MagiK GPL below. The Rust inventory covers normal runtime

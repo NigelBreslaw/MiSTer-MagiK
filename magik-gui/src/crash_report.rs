@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Local crash reports for MiSTer MagiK.
 
 use serde_json::{json, Value};

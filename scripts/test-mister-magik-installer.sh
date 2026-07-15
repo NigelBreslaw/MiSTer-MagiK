@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -7,14 +10,13 @@ trap 'rm -rf "$TMP"' EXIT
 FAT="$TMP/fat"
 APP="$FAT/mister-magik"
 INIT_DIR="$TMP/init.d"
-mkdir -p "$APP/fpga" "$APP/art" "$FAT/Scripts" "$INIT_DIR"
+mkdir -p "$APP/fpga" "$FAT/Scripts" "$INIT_DIR"
 
 printf '#!/bin/sh\n' >"$FAT/MiSTer_MagiK"
 printf '#!/bin/sh\n' >"$APP/mister-magik-fb"
 printf '#!/bin/sh\n' >"$APP/mister-magik-catalog-builder"
 printf 'module\n' >"$APP/mister_magik_scanout_slots.ko"
 printf 'rbf\n' >"$APP/fpga/menu-magik-vblank-latch.rbf"
-printf 'logo\n' >"$APP/art/slint-logo-pixel.rgba"
 contract="$(printf contract | sha256sum | awk '{print $1}')"
 magik="1111111111111111111111111111111111111111"
 main="2222222222222222222222222222222222222222"

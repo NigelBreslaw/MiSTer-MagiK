@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Shared host-side helpers for experimental effect profiling scripts.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"

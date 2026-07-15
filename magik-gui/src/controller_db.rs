@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Persistent registry of known game controllers on `/media/fat`.
 //!
 //! Database keys are **logical ids** (`vid:pid[:serial]`) — stable across USB port

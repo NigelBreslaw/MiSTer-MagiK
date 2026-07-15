@@ -1,19 +1,5 @@
-import { MisterBridge } from "../api.slint";
-
-component SlintLogo inherits Rectangle {
-    height: 72px;
-    horizontal-stretch: 1;
-    HorizontalLayout {
-        Rectangle { horizontal-stretch: 1; background: transparent; }
-        Image {
-            width: 32px;
-            height: 32px;
-            source: MisterBridge.slint-logo-image;
-            image-rendering: pixelated;
-        }
-        Rectangle { horizontal-stretch: 1; background: transparent; }
-    }
-}
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 export component AboutScreen inherits Rectangle {
     background: #0b0d14;
@@ -40,7 +26,6 @@ export component AboutScreen inherits Rectangle {
             wrap: word-wrap;
             horizontal-alignment: center;
         }
-        SlintLogo { }
         Text {
             text: "Made with Slint. Delivering beautiful UI's on the most challenging of hardware www.slint.dev";
             color: #70e1f5;

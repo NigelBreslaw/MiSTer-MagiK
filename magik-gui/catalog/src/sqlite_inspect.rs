@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared SQLite inspection helpers for read-only catalog query entrypoints.
 
 use std::fmt::Write as _;

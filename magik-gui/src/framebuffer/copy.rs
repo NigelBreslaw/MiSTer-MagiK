@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /// Copy a source rectangle into a destination buffer, nearest-neighbor scaled.
 // Flat rectangle parameters keep framebuffer call sites allocation-free and easy
 // to inline in copy-heavy paths.

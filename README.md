@@ -54,7 +54,12 @@ a serious look.
 
 ## Licenses
 
-MiSTer MagiK is licensed under the terms in this repository's `LICENSE` file.
+MiSTer MagiK first-party source is Copyright (C) 2026 Nigel Breslaw and is
+licensed under GPL-3.0-or-later. Active source and configuration files carry
+machine-readable SPDX headers. This includes the first-party Linux kernel
+module. The module source license is GPL-3.0-or-later; its Linux loader
+classification is a compatibility marker and is recorded separately in its
+metadata.
 
 MiSTer MagiK also includes or builds on open source software, fonts, tools, and
 libraries from the broader Rust, Slint, and MiSTer ecosystems. Their respective

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Record the real Arcade velocity-scroll scenario with the host USB capture device.
 set -euo pipefail
 

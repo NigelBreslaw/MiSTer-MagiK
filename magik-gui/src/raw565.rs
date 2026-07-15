@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared decoder for MiSTer MagiK raw RGB565 preview cache files.
 
 const RAW565_MAGIC: &[u8; 8] = b"MM56501\0";

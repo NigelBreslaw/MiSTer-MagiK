@@ -1,8 +1,12 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [package]
 name = "mister-magik-fb"
 version = "0.1.0"
 edition = "2021"
 description = "Native MiSTer MagiK frontend: owns the FPGA framebuffer and renders Slint."
+license = "GPL-3.0-or-later"
 
 [lints.rust]
 warnings = "deny"

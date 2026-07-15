@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 name: Kernel scanout slots
 
 on:
@@ -115,7 +118,11 @@ jobs:
       - name: Kernel style checks
         run: |
           set -eu
+          # The pinned Linux tree predates SPDX GPL-3.0-or-later. The project
+          # license check enforces the current identifier; checkpatch still
+          # verifies every other kernel style rule here.
           "$PWD/build/Linux-Kernel_MiSTer/scripts/checkpatch.pl" --no-tree --strict --file \
+            --ignore SPDX_LICENSE_TAG \
             kernel/scanout-slots/mister_magik_scanout_slots.c \
             kernel/scanout-slots/mister_magik_scanout_slots_uapi.h \
             kernel/scanout-slots/mister_magik_scanout_platform.h \
@@ -132,6 +139,8 @@ jobs:
             "$(sed -n 's/^observed_source_revision=//p' build/scanout-slots/provenance.txt)"
           grep -q '^observed_source_dirty=0$' build/scanout-slots/provenance.txt
           grep -q '^platform_contract_sha256=[0-9a-f]\{64\}$' build/scanout-slots/provenance.txt
+          grep -q '^license:[[:space:]]*Proprietary$' build/scanout-slots/modinfo.txt
+          grep -q '^mister_magik_source_license:[[:space:]]*GPL-3.0-or-later$' build/scanout-slots/modinfo.txt
 
       - name: Upload attested module
         if: github.ref == 'refs/heads/main'

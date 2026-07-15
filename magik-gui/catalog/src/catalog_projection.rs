@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Launcher catalog projection policy.
 //!
 //! Scanning, SQLite materialization, and runtime loading all need the same

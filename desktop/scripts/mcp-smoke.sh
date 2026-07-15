@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 set -euo pipefail
 
 PORT="${SLINT_MCP_PORT:-9315}"

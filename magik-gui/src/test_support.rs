@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::path::PathBuf;
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, DEFAULT_ARCADE_ROOT};

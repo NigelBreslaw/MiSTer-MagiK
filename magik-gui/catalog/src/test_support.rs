@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared test fixtures for catalog modules.
 
 use crate::arcade_catalog::ArcadeGameEntry;

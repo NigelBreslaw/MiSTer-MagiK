@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Best-effort process logging.
 //!
 //! Rust's standard `println!` and `eprintln!` macros panic when stdout/stderr

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Temporarily switch MiSTer.ini [Menu] video_mode for display-mode validation.
 #
 # Common PR4 flow:

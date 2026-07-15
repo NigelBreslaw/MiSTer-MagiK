@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Catalog, library scan, and preview-loading logic for MiSTer MagiK.
 
 pub mod arcade_catalog;

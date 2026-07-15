@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Userspace view of the qualified scanout-slots kernel ABI.
 
 pub(crate) const DEVICE: &str = "/dev/mister-magik-scanout-slots";

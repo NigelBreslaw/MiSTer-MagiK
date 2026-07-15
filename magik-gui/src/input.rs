@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Linux joystick API (`/dev/input/js*`) — multi-pad poll + per-device layouts.
 
 use std::fs::{File, OpenOptions};

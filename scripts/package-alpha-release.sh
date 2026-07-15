@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,6 +28,8 @@ cp "$ROOT/magik-gui/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
 cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
 MiSTer MagiK alpha distribution notices
 ========================================
+
+Copyright (C) 2026 Nigel Breslaw
 
 MiSTer MagiK is GPL-3.0-or-later. This directory contains the full GPL text,
 plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, and generated

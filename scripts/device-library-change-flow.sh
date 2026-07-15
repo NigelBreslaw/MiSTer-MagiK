@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Exercise the deferred Library changed Continue/Rebuild flow on a real MiSTer.
 set -euo pipefail
 

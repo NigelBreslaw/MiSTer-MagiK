@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Collection-independent namespace traversal backends.
 //!
 //! The established WalkDir backend streams entries directly to the caller.

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Agent-readable runtime status and recent events.
 
 use serde_json::{json, Value};

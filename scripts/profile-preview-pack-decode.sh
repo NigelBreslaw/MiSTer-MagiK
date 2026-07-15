@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run the bench-tools preview-pack-bench command on the MiSTer and summarize decode timings.
 set -euo pipefail
 

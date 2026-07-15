@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 pub(crate) fn decompress_size_prepended(
     input: &[u8],
     max_decoded_len: usize,

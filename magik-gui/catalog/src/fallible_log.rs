@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Best-effort logging for catalog work used by the supervised launcher.
 
 use std::fmt;

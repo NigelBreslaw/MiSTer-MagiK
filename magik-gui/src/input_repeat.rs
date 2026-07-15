@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! D-pad hold-to-repeat: first press immediate, 1 s pause, then every 80 ms.
 
 use std::time::{Duration, Instant};

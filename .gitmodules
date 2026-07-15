@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [submodule "private/magik-cloud"]
 	path = private/magik-cloud
 	url = git@github.com:NigelBreslaw/magik-cloud.git

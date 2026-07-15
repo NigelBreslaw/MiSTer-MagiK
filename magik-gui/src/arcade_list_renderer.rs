@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;

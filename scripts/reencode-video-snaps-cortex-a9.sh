@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Re-encode source video snaps into validated Cortex-A9-friendly MP4 assets.
 set -euo pipefail
 

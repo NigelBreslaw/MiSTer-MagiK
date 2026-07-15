@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Benchmark a toolchain configuration: host compile time + binary size, then the
 # production launcher or media scene on the MiSTer (timings, CPU, framebuffer PNG).
 #

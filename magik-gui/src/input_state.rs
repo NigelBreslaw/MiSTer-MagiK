@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Portable controller state and layout-profile naming.
 
 pub use crate::input_info::PadInfo;

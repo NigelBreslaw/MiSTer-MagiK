@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::sync::OnceLock;
 
 pub const LICENSE_TITLES: [&str; 4] = ["MiSTer MagiK", "FFmpeg", "Press Start 2P", "Slint"];

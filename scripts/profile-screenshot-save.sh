@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Run MiSTer screenshot media save/publish benchmarks and append tool output rows.
 set -euo pipefail
 

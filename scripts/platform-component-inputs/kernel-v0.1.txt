@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # MiSTer MagiK kernel component identity inputs, format v0.1.
 kernel/scanout-slots
 scripts/build-scanout-slots-module.sh

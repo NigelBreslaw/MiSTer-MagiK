@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;

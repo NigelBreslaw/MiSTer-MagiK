@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared metadata for collections that provide their own one-click launch artifacts.
 
 use std::cell::Cell;

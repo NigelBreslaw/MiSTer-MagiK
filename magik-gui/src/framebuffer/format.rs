@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 pub const RGB565_BYTES_PER_PIXEL: usize = 2;
 pub const RGB565_BITS_PER_PIXEL: u32 = 16;
 pub const RGB565_MISTER_MODE_FORMAT: u16 = 565;

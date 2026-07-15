@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Library filesystem indexing and classification.
 //!
 //! This module owns the full-scan product contract: walk configured roots,

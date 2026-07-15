@@ -1,4 +1,7 @@
 #!/bin/bash
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # Cross-compile the native MiSTer frontend for armv7 (the DE10-Nano's ARM core).
 #
 # Profiles (see magik-gui/BUILD.md):

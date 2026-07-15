@@ -1,8 +1,12 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 [package]
 name = "mister-magik-agent"
 version = "0.1.0"
 edition = "2021"
 description = "Small MiSTer MagiK boot/network agent, independent from the Slint UI."
+license = "GPL-3.0-or-later"
 
 [lints.rust]
 warnings = "deny"
