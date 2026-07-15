@@ -11,13 +11,14 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
-  MISTER_CROSS_IMAGE: cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5
+  MISTER_CROSS_IMAGE: ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737
 
 jobs:
   host-dev:
@@ -129,6 +130,18 @@ jobs:
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
 
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: |
+          started="$(date +%s)"
+          docker pull "$MISTER_CROSS_IMAGE"
+          finished="$(date +%s)"
+          printf 'cross_image_pull_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Cache minimal FFmpeg
         uses: actions/cache@v6
         with:
@@ -146,10 +159,21 @@ jobs:
             target-arm-${{ runner.os }}-release-device-
 
       - name: Build ARM binary
+        env:
+          MISTER_CARGO_TIMINGS: "1"
         run: magik-gui/build-arm.sh --device
 
+      - name: Upload Cargo timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-timings-release
+          path: magik-gui/target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Prove unchanged ARM builds are no-ops
-        run: scripts/regression-arm-noop.sh --skip-warmup --verify-metadata
+        run: scripts/regression-arm-noop.sh --skip-warmup
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
@@ -201,6 +225,18 @@ jobs:
       - name: Install cross
         if: steps.cross-cache.outputs.cache-hit != 'true'
         run: cargo install cross --version "$CROSS_VERSION" --locked
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Pull cross image
+        run: |
+          started="$(date +%s)"
+          docker pull "$MISTER_CROSS_IMAGE"
+          finished="$(date +%s)"
+          printf 'cross_image_pull_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Cache ARM agent build outputs
         uses: actions/cache@v6

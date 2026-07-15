@@ -8,9 +8,9 @@ RUN apt-get update \
         ca-certificates \
         gcc \
         g++-arm-linux-gnueabihf \
-        gcc-arm-linux-gnueabihf \
-        libc6-dev-armhf-cross \
-        libclang-dev \
+        libc6-dev \
+        libclang1-10 \
+        libclang-common-10-dev \
         make \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
