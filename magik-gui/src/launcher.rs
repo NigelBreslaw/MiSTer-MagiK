@@ -1667,7 +1667,7 @@ impl LauncherNav {
                 self.screen = Screen::Info;
                 return None;
             }
-            self.confirm_selected = if self.settings_selected == 0 { 1 } else { 0 };
+            self.confirm_selected = 0;
             self.confirm_action = Some(match self.settings_selected {
                 0 => ConfirmAction::ExitToMister,
                 _ => ConfirmAction::ResetDatabase,
@@ -1773,7 +1773,7 @@ impl LauncherNav {
             let action = self.confirm_action;
             let selected = self.confirm_selected;
             let confirmed = match action {
-                Some(ConfirmAction::ExitToMister) => selected == 0,
+                Some(ConfirmAction::ExitToMister) => selected == 1,
                 Some(ConfirmAction::LibraryChanged) => true,
                 Some(ConfirmAction::LibraryUpdateFailed) => false,
                 _ => selected == 1,
@@ -5561,7 +5561,7 @@ mod tests {
         let press_a = pad_with(|pad| pad.btn_a = true);
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
         assert_eq!(nav.confirm_action, Some(ConfirmAction::ExitToMister));
-        assert_eq!(nav.confirm_selected, 1);
+        assert_eq!(nav.confirm_selected, 0);
         assert!(nav
             .handle_input(
                 &PadState::default(),
@@ -5575,6 +5575,44 @@ mod tests {
             .is_none());
         assert_eq!(nav.confirm_action, None);
         assert_eq!(nav.confirm_selected, 0);
+    }
+
+    #[test]
+    fn launcher_exit_confirmation_exits_from_second_button() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 0;
+
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(16),
+                &catalog,
+            )
+            .is_none());
+
+        let right = pad_with(|pad| pad.dpad_right = true);
+        assert!(nav
+            .handle_input(&right, t0 + Duration::from_millis(32), &catalog)
+            .is_none());
+        assert_eq!(nav.confirm_selected, 1);
+        assert!(nav
+            .handle_input(
+                &PadState::default(),
+                t0 + Duration::from_millis(48),
+                &catalog,
+            )
+            .is_none());
+
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .expect("exit button should emit event");
+        assert_eq!(event.action, LauncherAction::ExitToMister);
+        assert_eq!(event.path, None);
     }
 
     #[test]

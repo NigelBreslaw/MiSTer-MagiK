@@ -371,8 +371,8 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
         Some(launcher::ConfirmAction::ExitToMister) => ConfirmBridgeText {
             title: "Exit to MiSTer",
             message: "Use the stock MiSTer menu until reboot.",
-            left_label: "Exit to MiSTer",
-            right_label: "Return to MiSTer MagiK",
+            left_label: "Cancel",
+            right_label: "Exit to MiSTer",
         },
         Some(launcher::ConfirmAction::ResetDatabase) => ConfirmBridgeText {
             title: "Reset Database?",
@@ -1140,6 +1140,14 @@ mod tests {
 
         assert_eq!(text.left_label, "OK");
         assert_eq!(text.right_label, "");
+    }
+
+    #[test]
+    fn exit_to_mister_uses_cancel_first() {
+        let text = confirm_bridge_text(Some(launcher::ConfirmAction::ExitToMister));
+
+        assert_eq!(text.left_label, "Cancel");
+        assert_eq!(text.right_label, "Exit to MiSTer");
     }
 
     fn init_test_slint_platform() {
