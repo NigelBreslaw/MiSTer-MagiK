@@ -17,9 +17,7 @@ use crate::launcher_taxonomy::{
 use crate::library_db;
 use crate::settings::MagikSettings;
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
-use mister_magik_catalog::media_identity::{
-    screenshot_reset_deletes_filename, DEFAULT_SCREENSHOT_ASSET_DIR as DEFAULT_ASSET_DIR,
-};
+use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -38,12 +36,21 @@ const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
 const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
 
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
-const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
-const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiK", "MiSTer"];
+const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 const INPUT_POLICY_MARKER_PATH: &str = "/tmp/mister-magik/input-policy";
-const MAGIK_INPUT_DIR: &str = "/media/fat/mister-magik/input";
-pub const LIBRARY_REBUILD_ON_NEXT_BOOT_PATH: &str = "/media/fat/mister-magik/rebuild-on-next-boot";
+
+fn mister_bin() -> &'static str {
+    mister_magik_catalog::device_layout::DeviceLayout::current().main_path()
+}
+
+fn magik_input_dir() -> PathBuf {
+    mister_magik_catalog::device_layout::current_app_path("input")
+}
+
+fn library_rebuild_on_next_boot_path() -> PathBuf {
+    mister_magik_catalog::device_layout::current_app_path("rebuild-on-next-boot")
+}
 #[cfg(test)]
 const STATE_FILENAME: &str = mister_magik_catalog::media_identity::SCREENSHOT_MEDIA_STATE_FILENAME;
 const ARCADE_NORMAL_PX_PER_SECOND: f64 = 360.0;
@@ -2899,11 +2906,13 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn magik_running(&mut self) -> bool {
-        Command::new("pidof")
-            .arg("MiSTer_MagiK")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        MISTER_PROCESS_NAMES.iter().copied().any(|name| {
+            Command::new("pidof")
+                .arg(name)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
     }
 
     fn simple_joystick_handling(&mut self) -> bool {
@@ -2915,10 +2924,10 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn start_mister(&mut self) -> Result<(), String> {
-        Command::new(MISTER_BIN)
+        Command::new(mister_bin())
             .spawn()
             .map(|_| ())
-            .map_err(|e| format!("failed to spawn {MISTER_BIN}: {e}"))
+            .map_err(|e| format!("failed to spawn {}: {e}", mister_bin()))
     }
 
     fn wait_for_started_mister(&mut self) -> bool {
@@ -2974,15 +2983,21 @@ fn spawn_mister() -> Result<(), String> {
         thread::sleep(Duration::from_millis(200));
         return Ok(());
     }
-    Err(format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"))
+    Err(format!(
+        "timed out waiting for {} + {CMD_FIFO}",
+        mister_bin()
+    ))
 }
 
 fn restore_menu_wallpaper() {
+    let hidden = mister_magik_catalog::device_layout::current_app_path(".menu.png.boot-hide");
     let _ = Command::new("sh")
         .arg("-c")
-        .arg(
-            "[ -f /media/fat/mister-magik/.menu.png.boot-hide ] && mv /media/fat/mister-magik/.menu.png.boot-hide /media/fat/menu.png 2>/dev/null || true",
-        )
+        .arg(format!(
+            "[ -f '{}' ] && mv '{}' /media/fat/menu.png 2>/dev/null || true",
+            hidden.display(),
+            hidden.display()
+        ))
         .status();
 }
 
@@ -3067,9 +3082,10 @@ fn write_builtin_simple_input_profiles() -> Result<(), String> {
 }
 
 fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String> {
-    fs::create_dir_all(MAGIK_INPUT_DIR)
-        .map_err(|e| format!("failed to create {MAGIK_INPUT_DIR}: {e}"))?;
-    let path = Path::new(MAGIK_INPUT_DIR).join(name);
+    let input_dir = magik_input_dir();
+    fs::create_dir_all(&input_dir)
+        .map_err(|e| format!("failed to create {}: {e}", input_dir.display()))?;
+    let path = input_dir.join(name);
     let mut bytes = Vec::with_capacity(map.len() * 4);
     for value in map {
         bytes.extend_from_slice(&value.to_le_bytes());
@@ -3143,7 +3159,7 @@ pub fn mister_running_arcade_core() -> bool {
     let output = Command::new("sh")
         .arg("-c")
         .arg(
-            "pid=$(pidof MiSTer_MagiK 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
+            "pid=$(pidof MiSTer_MagiKDev 2>/dev/null || pidof MiSTer_MagiK 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
         )
         .output();
     let Ok(output) = output else {
@@ -3351,11 +3367,11 @@ fn execute_game_launch_with(
     let spawned = if io.mister_running() {
         false
     } else {
-        crate::ui_logln!("launch: starting {MISTER_BIN} for load_core");
+        crate::ui_logln!("launch: starting {} for load_core", mister_bin());
         io.start_mister().map_err(|e| LaunchError::new(e, false))?;
         if !io.wait_for_started_mister() {
             return Err(LaunchError::new(
-                format!("timed out waiting for {MISTER_BIN} + {CMD_FIFO}"),
+                format!("timed out waiting for {} + {CMD_FIFO}", mister_bin()),
                 true,
             ));
         }
@@ -3453,7 +3469,10 @@ pub fn reset_database_and_reboot() -> Result<(), String> {
 }
 
 pub fn delete_screenshot_packs() -> Result<usize, String> {
-    delete_screenshot_packs_at(Path::new(DEFAULT_ASSET_DIR))
+    let asset_dir = std::env::var("MISTER_MEDIA_ASSET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| mister_magik_catalog::device_layout::current_app_path("assets"));
+    delete_screenshot_packs_at(&asset_dir)
 }
 
 fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
@@ -3499,15 +3518,15 @@ fn screenshot_reset_deletes_file(name: &str) -> bool {
 }
 
 pub fn library_rebuild_on_next_boot_pending() -> bool {
-    Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH).exists()
+    library_rebuild_on_next_boot_path().exists()
 }
 
 pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {
-    request_library_rebuild_on_next_boot_at(Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH))
+    request_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
 }
 
 pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
-    consume_library_rebuild_on_next_boot_at(Path::new(LIBRARY_REBUILD_ON_NEXT_BOOT_PATH))
+    consume_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
 }
 
 fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {

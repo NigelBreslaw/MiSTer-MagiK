@@ -18,6 +18,30 @@ Use `AGENTS.md` for the short checklist.
 Always use `scripts/mister` for device access. Raw ssh and raw scp are unreliable
 in this environment and bypass the wrapper behavior this repo expects.
 
+## Public And Development Layouts
+
+The one SD card carries two independent MagiK installations:
+
+```text
+public: /media/fat/MiSTer_MagiK    + /media/fat/mister-magik/
+dev:    /media/fat/MiSTer_MagiKDev + /media/fat/mister-magik-dev/
+```
+
+The root file in each pair is Main; the directory contains every MagiK-owned
+binary, manifest, catalog, setting, media file, input map, log, crash report,
+snapshot, and benchmark artifact. Stock cores and game directories remain
+shared. `/tmp/mister-magik` is shared because only one layout runs per boot.
+
+Use `scripts/magik-mode.sh status|dev|public|stock` to inspect or switch modes.
+Switches verify the selected platform bundle, clear persistent test arming
+state, preserve both installations, and use a normal reboot. Public mode also
+requires the backup created by the public installer; downloaded files alone
+are not treated as an activated installation.
+
+The development agent and token live under `mister-magik-dev`. Its global boot
+hook is development infrastructure and is never packaged, installed, restored,
+or removed by the public distribution.
+
 ## Production Boot Policy
 
 Production boot must keep stock MiSTer as the inittab entry:
@@ -65,8 +89,8 @@ scripts/mister status
 scripts/mister agent status
 scripts/mister reboot-wait
 scripts/mister recover
-scripts/restore-stock-boot.sh
-scripts/install-slint-boot.sh
+scripts/magik-mode.sh stock
+scripts/magik-mode.sh dev
 ```
 
 `scripts/mister reboot` and `scripts/mister reboot-wait` default to the
@@ -121,13 +145,11 @@ parked legacy FastNet script by renaming
 `/etc/init.d/disabled-S00fastnet.magik-agent` back to
 `/etc/init.d/S00fastnet`.
 
-`scripts/restore-stock-boot.sh` restores stock menu boot by repairing inittab,
-restoring `MiSTer.ini` from `/media/fat/MiSTer.ini.bak` when appropriate, and
-rebooting.
-
-That `.bak` belongs to the developer `install-slint-boot.sh` /
-`restore-stock-boot.sh` workflow. The Downloader-installed `mister-magik`
-menu script instead preserves its original public-install configuration as
+The compatibility helpers `scripts/install-slint-boot.sh` and
+`scripts/restore-stock-boot.sh` now delegate to `magik-mode.sh dev` and
+`magik-mode.sh stock`; they no longer maintain separate INI copies. The
+Downloader-installed `mister-magik` menu script preserves its original
+public-install configuration as
 `/media/fat/MiSTer.ini.bak.before-magik`; reinstalls never replace it. The
 menu-script restore action canonicalizes the active Main as `main=MiSTer` while
 preserving the MagiK installation; full uninstall deletes this backup only

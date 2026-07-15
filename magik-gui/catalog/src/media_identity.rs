@@ -7,6 +7,12 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_SCREENSHOT_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
+
+pub fn default_screenshot_asset_dir() -> PathBuf {
+    std::env::var("MISTER_PREVIEW_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| crate::device_layout::current_app_path("assets"))
+}
 pub const DEFAULT_SCREENSHOT_IMAGE_SIZE: &str = "320x320";
 pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
 

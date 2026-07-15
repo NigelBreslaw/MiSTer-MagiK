@@ -80,7 +80,7 @@ pub(crate) fn create_dir_command(path: &str) -> String {
 
 pub(crate) fn launcher_restart_command(main_status: &str, slint_status: &str) -> String {
     format!(
-        "{}; if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
+        "{}; if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd; echo restarted; else echo 'launcher restart unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi",
         remove_files_command(&[main_status, slint_status])
     )
 }

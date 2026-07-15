@@ -8,9 +8,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$HERE/build/launcher-home-pan-captures"
 MISTER="$HERE/scripts/mister"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_LOG="/tmp/mister-magik-home-pan-capture.log"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 source "$HERE/scripts/mister-supervision-lib.sh"
 
 label="launcher-home-pan-$(date -u +%Y%m%dT%H%M%SZ)"

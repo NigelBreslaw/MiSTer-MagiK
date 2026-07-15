@@ -8,9 +8,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 LABEL="${1:-startup-reveal-$(date -u +%Y%m%dT%H%M%SZ)}"
-REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik/library.summary.json"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
+REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 TSV="$ROOT/history/toolchain-bench/results-startup-reveal.tsv"
@@ -118,8 +118,8 @@ collect_and_assert_common() {
 
 run_cold() {
   echo "== cold no-catalog reveal"
-  local backup_db="/media/fat/mister-magik/library.sqlite3.startup-reveal-$LABEL.bak"
-  local backup_summary="/media/fat/mister-magik/library.summary.startup-reveal-$LABEL.bak"
+  local backup_db="/media/fat/mister-magik-dev/library.sqlite3.startup-reveal-$LABEL.bak"
+  local backup_summary="/media/fat/mister-magik-dev/library.summary.startup-reveal-$LABEL.bak"
   remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$backup_db'; fi; if [ -f '$REMOTE_SUMMARY' ]; then cp '$REMOTE_SUMMARY' '$backup_summary'; fi; rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; sync"
   "$MISTER" reboot-wait --direct-reset
   wait_status cold-ready 300 "data['runtime']['slint_status'].get('input_enabled') is True and data['runtime']['slint_status'].get('catalog_ready') is True" ||

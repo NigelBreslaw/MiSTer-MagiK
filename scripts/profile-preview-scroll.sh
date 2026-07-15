@@ -7,9 +7,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 OUT_DIR="$HERE/build/preview-scroll-profiles"
 PRESENT_TRACE="$HERE/scripts/launcher-present-trace.py"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
@@ -22,7 +24,7 @@ Usage: scripts/profile-preview-scroll.sh [SECS] [SCENARIO] [LABEL] [--secs N] [-
 
 Scenarios: velocity-scroll | held-scroll | turbo-hold | preview-step-hold | preview-idle
 Runs the real launcher Arcade screen under Main_MiSTer supervision by writing
-/media/fat/mister-magik/launcher.env and sending mister_magik_restart_launcher.
+the development layout launcher environment and sending mister_magik_restart_launcher.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
 
 --cpu-profile builds/deploys the profiling binary, runs the same supervised
@@ -283,7 +285,7 @@ emit_run_context_row() {
     deployment_state="verified"
   fi
   binary_path="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$profile/mister-magik-fb"
-  deployed_sha="$(bench_context_remote_sha256 "$MISTER" /media/fat/mister-magik/mister-magik-fb || true)"
+  deployed_sha="$(bench_context_remote_sha256 "$MISTER" "$MISTER_MAGIK_BIN" || true)"
   deployed_sha="${deployed_sha:-missing}"
   if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha" "$features" "$profile" launcher; then
     echo "preview-scroll binary identity verification failed local=$(bench_context_sha256_file "$binary_path") deployed=$deployed_sha features=$(bench_context_binary_features "$binary_path") expected_features=$features" >&2
@@ -341,9 +343,9 @@ if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
   echo "==> Build profiling binary for supervised Arcade CPU profile"
   "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploy profiling binary for supervised Arcade CPU profile"
-  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null; then
+  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" "$MISTER_MAGIK_BIN" >/dev/null; then
     echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
-    "$MISTER" deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+    "$MISTER" deploy-magik-bin "$profile_bin" "$MISTER_MAGIK_BIN" >/dev/null
   fi
 fi
 

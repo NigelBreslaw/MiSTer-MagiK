@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const DEFAULT_REMOTE_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
+#[cfg(test)]
 const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
     "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
 const DEFAULT_IMAGE_SIZE: &str = "320x320";
@@ -21,9 +22,25 @@ const DEFAULT_MANIFEST_URL: &str = "https://assets.mistermagik.com/mister-magik/
 const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = "https://assets.mistermagik.com";
 const OFFICIAL_ASSET_HTTP_ORIGIN: &str = "http://assets.mistermagik.com";
 const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
-const REMOTE_STATE_PATH: &str = "/media/fat/mister-magik/assets/.screenshot-media-state.json";
 const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
 const BENCH_HEADER: &str = "type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
+
+fn remote_asset_dir() -> String {
+    env::var("MISTER_MAGIK_ASSET_DIR").unwrap_or_else(|_| DEFAULT_REMOTE_ASSET_DIR.to_string())
+}
+
+fn remote_state_path() -> String {
+    format!("{}/.screenshot-media-state.json", remote_asset_dir())
+}
+
+fn layout_local_path(path: &str) -> String {
+    let public_prefix = "/media/fat/mister-magik/assets";
+    if let Some(suffix) = path.strip_prefix(public_prefix) {
+        format!("{}{suffix}", remote_asset_dir())
+    } else {
+        path.to_string()
+    }
+}
 
 #[derive(Clone, Debug)]
 struct MediaManifest {
@@ -370,11 +387,13 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
             .and_then(Value::as_str)
             .ok_or("manifest pack missing system/id")?
             .to_string();
-        let local_path = pack
-            .get("local_path")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| default_local_path_for_pack(&system));
+        let local_path = layout_local_path(
+            &pack
+                .get("local_path")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| default_local_path_for_pack(&system)),
+        );
         let asset_count = pack.get("asset_count").and_then(Value::as_u64);
         let version = pack
             .get("version")
@@ -458,8 +477,8 @@ fn manifest_object_base_url(manifest_url: &str) -> String {
 
 fn default_local_path_for_pack(system: &str) -> String {
     match system {
-        "arcade" => DEFAULT_ARCADE_ARCHIVE_PATH.to_string(),
-        other => format!("{DEFAULT_REMOTE_ASSET_DIR}/{other}-screenshots.mmlz4b"),
+        "arcade" => format!("{}/arcade-screenshots.mmlz4b", remote_asset_dir()),
+        other => format!("{}/{other}-screenshots.mmlz4b", remote_asset_dir()),
     }
 }
 
@@ -512,7 +531,10 @@ fn resolve_variant(sess: &Session, pack: &MediaPack, requested: &str) -> Result<
     if requested != "auto" {
         return Ok(requested.to_string());
     }
-    let cmd = format!("cat {} 2>/dev/null || true", shell_quote(REMOTE_STATE_PATH));
+    let cmd = format!(
+        "cat {} 2>/dev/null || true",
+        shell_quote(&remote_state_path())
+    );
     let text = exec_stdout(sess, &cmd)?;
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     Ok(value
@@ -660,7 +682,10 @@ fn update_remote_state_after_download(
     row: Option<&RemoteBenchRow>,
     index_row: Option<&RemoteBenchRow>,
 ) -> Result<()> {
-    let cmd = format!("cat {} 2>/dev/null || true", shell_quote(REMOTE_STATE_PATH));
+    let cmd = format!(
+        "cat {} 2>/dev/null || true",
+        shell_quote(&remote_state_path())
+    );
     let current = exec_stdout(sess, &cmd)?;
     let mut root = serde_json::from_str::<Value>(&current)
         .ok()
@@ -717,9 +742,9 @@ fn update_remote_state_after_download(
     sftp_write(sess, &tmp, &bytes)?;
     let publish = format!(
         "mkdir -p {dir}; cp {tmp} {state}.tmp; sync {state}.tmp 2>/dev/null || sync; mv {state}.tmp {state}; sync {dir} 2>/dev/null || sync; rm -f {tmp}",
-        dir = shell_quote(DEFAULT_REMOTE_ASSET_DIR),
+        dir = shell_quote(&remote_asset_dir()),
         tmp = shell_quote(&tmp),
-        state = shell_quote(REMOTE_STATE_PATH),
+        state = shell_quote(&remote_state_path()),
     );
     let out = exec(sess, &publish)?;
     if out.rc != 0 {

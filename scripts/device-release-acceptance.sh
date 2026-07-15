@@ -6,6 +6,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export MISTER_MAGIK_LAYOUT=public
+source "$ROOT/scripts/magik-layout.sh"
 MISTER="$ROOT/scripts/mister"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$ROOT/build/device-release/$STAMP"
@@ -14,7 +16,6 @@ REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_ASSETS="/media/fat/mister-magik/assets"
 LAUNCH_REF="${MISTER_ACCEPTANCE_LAUNCH_REF:-/media/fat/_Arcade/Missile Command (rev 3).mra}"
-DEPLOY=0
 ALLOW_RESET_CATALOG=0
 FAST=0
 SOAK=0
@@ -34,13 +35,12 @@ FAST_TIERS="health framebuffer-route launcher-lifecycle catalog handoff"
 
 usage() {
   cat <<'EOF'
-usage: scripts/device-release-acceptance.sh [--skip-deploy|--deploy] [--tiers LIST] [--allow-reset-catalog] [--fast] [--soak] [--skip-display-modes] [--skip-install-restore] [--skip-first-boot-reset]
+usage: scripts/device-release-acceptance.sh [--tiers LIST] [--allow-reset-catalog] [--fast] [--soak] [--skip-display-modes] [--skip-install-restore] [--skip-first-boot-reset]
 
 Runs the MiSTer hardware acceptance gate through scripts/mister only.
 
 Options:
-  --skip-deploy          Test the currently deployed device build. This is the default.
-  --deploy               Build and deploy app + Main_MiSTer fork before testing.
+  Tests the already-installed public build; source deployment is intentionally unsupported.
   --tiers LIST           Run selected comma-separated tiers in canonical order.
                          Tiers: health, framebuffer-route, launcher-lifecycle,
                          catalog, handoff, display-modes, install-restore, soak.
@@ -143,8 +143,6 @@ resolve_tiers() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --skip-deploy) DEPLOY=0 ;;
-    --deploy) DEPLOY=1 ;;
     --tiers)
       shift
       [ "$#" -gt 0 ] || die_usage "--tiers requires a comma-separated list"
@@ -784,7 +782,7 @@ write_report_header() {
 
 - started: $STAMP
 - launch_ref: $LAUNCH_REF
-- deploy: $DEPLOY
+- source_deploy: unsupported (installed public build only)
 - preset: $PRESET
 - selected_tiers: $SELECTED_TIERS
 - skipped_tiers: ${SKIPPED_TIERS:-none}
@@ -830,7 +828,7 @@ write_summary_json() {
   local selected_json skipped_json
   selected_json="$(json_array_from_words "$SELECTED_TIERS")"
   skipped_json="$(json_array_from_words "$SKIPPED_TIERS")"
-  python3 - "$SUMMARY" "$result" "$STAMP" "$OUT" "$PRESET" "$PASSES" "$FAILURES" "$SKIPS" "$DEPLOY" "$FAST" "$SOAK" "$BENCH_CHECKS" "$selected_json" "$skipped_json" <<'PY'
+  python3 - "$SUMMARY" "$result" "$STAMP" "$OUT" "$PRESET" "$PASSES" "$FAILURES" "$SKIPS" "$FAST" "$SOAK" "$BENCH_CHECKS" "$selected_json" "$skipped_json" <<'PY'
 import json
 import sys
 
@@ -843,13 +841,12 @@ import sys
     passes,
     failures,
     skips,
-    deploy,
     fast,
     soak,
     bench_checks,
     selected_tiers,
     skipped_tiers,
-) = sys.argv[1:15]
+) = sys.argv[1:14]
 
 summary = {
     "result": result,
@@ -864,7 +861,7 @@ summary = {
         "skip": int(skips),
     },
     "options": {
-        "deploy": deploy == "1",
+        "source_deploy": False,
         "fast": fast == "1",
         "soak": soak == "1",
         "bench_checks": bench_checks == "1",
@@ -875,13 +872,6 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(summary, f, indent=2, sort_keys=True)
     f.write("\n")
 PY
-}
-
-run_deploy_if_requested() {
-  if [ "$DEPLOY" -eq 1 ]; then
-    run_required_capture "deploy-platform" "$ROOT/scripts/deploy-platform.sh"
-    run_required_capture "raw-reboot-after-deploy" "$MISTER" reboot-wait --raw
-  fi
 }
 
 run_initial_gate() {
@@ -1123,11 +1113,11 @@ assert_artifacts_complete() {
 collect_boot_network_logs() {
   remote_get_optional "/tmp/mister-magik-agent.log" "mister-magik-agent-current.log"
   remote_get_optional "/tmp/mister-magik-agent.boot.out" "mister-magik-agent-boot.out"
-  remote_get_optional "/media/fat/mister-magik/bootlogs/agent.log" "mister-magik-agent-persistent.log"
-  remote_get_optional "/media/fat/mister-magik/bootlogs/agent.seq" "mister-magik-agent.seq"
-  remote_get_optional "/media/fat/mister-magik/bootlogs/fastnet.log" "mister-magik-fastnet-persistent.log"
-  remote_get_optional "/media/fat/mister-magik/bootlogs/fastready.log" "mister-magik-fastready.log"
-  remote_get_optional "/media/fat/mister-magik/bootlogs/fastsshd.log" "mister-magik-fastsshd.log"
+  remote_get_optional "/media/fat/mister-magik-dev/bootlogs/agent.log" "mister-magik-agent-persistent.log"
+  remote_get_optional "/media/fat/mister-magik-dev/bootlogs/agent.seq" "mister-magik-agent.seq"
+  remote_get_optional "/media/fat/mister-magik-dev/bootlogs/fastnet.log" "mister-magik-fastnet-persistent.log"
+  remote_get_optional "/media/fat/mister-magik-dev/bootlogs/fastready.log" "mister-magik-fastready.log"
+  remote_get_optional "/media/fat/mister-magik-dev/bootlogs/fastsshd.log" "mister-magik-fastsshd.log"
 }
 
 collect_artifacts() {
@@ -1165,7 +1155,6 @@ finish() {
 trap finish EXIT
 
 write_report_header
-run_deploy_if_requested
 run_initial_gate
 run_selected_tiers
 

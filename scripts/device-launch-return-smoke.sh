@@ -18,7 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/mister-fifo-lib.sh"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 STALE_RETURN_STATE="/tmp/mister-magik/stale-launcher-return-state.json"
 STATUS="/tmp/mister-magik/status.json"
@@ -72,7 +72,7 @@ launcher_is_active() {
 }
 
 dump_failure_artifacts() {
-  remote "echo MAIN; cat '$MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$STATUS' 2>/dev/null || true; echo STATE; cat '$RETURN_STATE' 2>/dev/null || true; echo FBMODE; cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true; echo PROCS; ps w | grep -E 'MiSTer|MiSTer_MagiK|mister-magik-fb' | grep -v grep || true; echo LOG; tail -120 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS; tail -80 '$REMOTE_EVENTS' 2>/dev/null || true" >&2 || true
+  remote "echo MAIN; cat '$MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$STATUS' 2>/dev/null || true; echo STATE; cat '$RETURN_STATE' 2>/dev/null || true; echo FBMODE; cat /sys/module/MiSTer_fb/parameters/mode 2>/dev/null || true; echo PROCS; ps w | grep -E 'MiSTer|MiSTer_MagiKDev|mister-magik-fb' | grep -v grep || true; echo LOG; tail -120 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS; tail -80 '$REMOTE_EVENTS' 2>/dev/null || true" >&2 || true
 }
 
 wait_remote() {

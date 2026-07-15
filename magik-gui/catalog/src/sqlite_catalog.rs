@@ -383,7 +383,7 @@ pub(crate) fn remove_default_catalog_artifacts() -> Result<usize, String> {
         &build_dir,
         snapshot_path.as_deref(),
         Path::new("/tmp/mister-magik"),
-        Path::new("/media/fat/mister-magik/rebuild-on-next-boot"),
+        &crate::device_layout::current_app_path("rebuild-on-next-boot"),
     )
 }
 

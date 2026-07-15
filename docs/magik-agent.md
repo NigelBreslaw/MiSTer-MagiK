@@ -5,7 +5,7 @@ separate from the Slint/MagiK UI binary and is installed as an early init script
 
 ```text
 /etc/init.d/S00magik-agent
-/media/fat/mister-magik/mister-magik-agent
+/media/fat/mister-magik-dev/mister-magik-agent
 ```
 
 The agent currently configures the static Ethernet path at boot and exposes a
@@ -42,7 +42,7 @@ fall back to v1 when connected to an older agent.
 The token lives on the MiSTer at:
 
 ```text
-/media/fat/mister-magik/agent.token
+/media/fat/mister-magik-dev/agent.token
 ```
 
 The install script keeps a local copy for host tooling at:
@@ -79,7 +79,7 @@ scripts/mister agent boot-profile 4 --timeout 60 --fail-on-timeout
 
 - agent version, boot id, uptime, and port
 - `eth0` carrier, operstate, IP, MAC, routes, ARP entries, RX/TX counters
-- `sshd`, `MiSTer_MagiK`, and `mister-magik-fb` process ids
+- `sshd`, `MiSTer_MagiKDev`, and `mister-magik-fb` process ids
 - system uptime
 
 `logs` returns the in-memory ring buffer over the TCP agent protocol. The ring
@@ -165,12 +165,12 @@ falls back to SSH when the agent port is unavailable. The bundle includes:
 Crash reports are local JSON files under:
 
 ```text
-/media/fat/mister-magik/crashes/
+/media/fat/mister-magik-dev/crashes/
 ```
 
 `latest.json` is a copy of the newest report. Reports use schema
 `mister-magik-crash-report-v1` and are written by either `mister-magik-fb` for
-Rust panics or `MiSTer_MagiK` when the supervised launcher child exits
+Rust panics or `MiSTer_MagiKDev` when the supervised launcher child exits
 unexpectedly.
 
 `reboot-wait` asks the agent to schedule a reboot, then waits for the agent port
@@ -183,7 +183,7 @@ reboot through:
 ```
 
 The agent writes a synchronous `reboot_scheduled` breadcrumb to
-`/media/fat/mister-magik/bootlogs/agent.log` before rebooting so a failed reboot
+`/media/fat/mister-magik-dev/bootlogs/agent.log` before rebooting so a failed reboot
 can still be root-caused after manual recovery. Pass `--raw` only for fallback
 recovery or detached Linux reboot testing without MagiK visual lockdown.
 Pass `--direct-reset` for fast dev-loop reboots after all writes have completed
@@ -201,7 +201,7 @@ scripts/mister agent magik restart-launcher
 ```
 
 The control actions write `mister_magik_suspend`, `mister_magik_resume`, or
-`mister_magik_restart_launcher` to `/dev/MiSTer_cmd` only when `MiSTer_MagiK` is
+`mister_magik_restart_launcher` to `/dev/MiSTer_cmd` only when `MiSTer_MagiKDev` is
 running. The agent does not directly kill or spawn the launcher. It logs the
 command, before/after MagiK pids, pid changes, and errors into the RAM ring.
 Responses return parsed Main and Slint status files plus current pids. The
@@ -217,7 +217,7 @@ compressed test. The header includes original byte count, transmitted byte
 count, encoding, and original FNV64 checksum. The agent receives the payload
 into RAM, decompresses if needed, verifies the original bytes, asks Main to
 suspend the launcher, writes a same-directory `.upload` file under
-`/media/fat/mister-magik/`, renames it over the final binary, marks it
+`/media/fat/mister-magik-dev/`, renames it over the final binary, marks it
 executable, then resumes the launcher. Existing `scripts/mister deploy-magik-bin`
 remains the explicit SSH/SFTP fallback. `scripts/deploy-rust.sh` uses the agent
 transport by default; set `MISTER_DEPLOY_TRANSPORT=ssh` only when intentionally
@@ -261,7 +261,7 @@ scripts/mister-magik-agent.sh log
 
 The agent mirrors RAM log lines to `/tmp/mister-magik-agent.log` for compatibility
 with older scripts. It delays SD-card persistence to
-`/media/fat/mister-magik/bootlogs/agent.log` until after the boot hot path.
+`/media/fat/mister-magik-dev/bootlogs/agent.log` until after the boot hot path.
 
 Remove:
 

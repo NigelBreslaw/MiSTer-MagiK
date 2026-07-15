@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 EARLY_LINK="/etc/init.d/S11dhcpcd"
-MARKER="/media/fat/mister-magik/S11dhcpcd.experiment"
+MARKER="/media/fat/mister-magik-dev/S11dhcpcd.experiment"
 
 usage() {
   cat <<EOF
@@ -23,7 +23,7 @@ EOF
 remote_install() {
   "$MISTER" run "
 set -eu
-mkdir -p /media/fat/mister-magik
+mkdir -p /media/fat/mister-magik-dev
 mount -o remount,rw /
 if [ -e '$EARLY_LINK' ] && [ ! -L '$EARLY_LINK' ]; then
   echo early_dhcpcd=blocked_existing_file

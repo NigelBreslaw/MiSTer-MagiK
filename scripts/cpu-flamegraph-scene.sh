@@ -74,12 +74,12 @@ echo "==> Build profiling binary"
 echo "==> Deploy profiling binary"
 mister_suspend_launcher
 trap 'mister_restart_launcher >/dev/null 2>&1 || true' EXIT
-"$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik"
-"$MISTER" put "$bin" /media/fat/mister-magik/mister-magik-fb
-"$MISTER" run "chmod +x /media/fat/mister-magik/mister-magik-fb"
+"$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p /media/fat/mister-magik-dev"
+"$MISTER" put "$bin" /media/fat/mister-magik-dev/mister-magik-fb
+"$MISTER" run "chmod +x /media/fat/mister-magik-dev/mister-magik-fb"
 
 echo "==> Run CPU profiler smoke"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_smoke_svg $remote_smoke_log; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_smoke_svg /media/fat/mister-magik/mister-magik-fb cpu-profile-smoke 3 >$remote_smoke_log 2>&1; status=\$?; grep 'cpu_profile' $remote_smoke_log || true; test -s $remote_smoke_svg || status=1; exit \$status"; then
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_smoke_svg $remote_smoke_log; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_smoke_svg /media/fat/mister-magik-dev/mister-magik-fb cpu-profile-smoke 3 >$remote_smoke_log 2>&1; status=\$?; grep 'cpu_profile' $remote_smoke_log || true; test -s $remote_smoke_svg || status=1; exit \$status"; then
   "$MISTER" get "$remote_smoke_log" "$local_smoke_log" || true
   echo "cpu profiler smoke failed; see $local_smoke_log" >&2
   exit 1
@@ -93,7 +93,7 @@ else
 fi
 
 echo "==> Run CPU profiler scene=$scene secs=$secs"
-if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_svg $remote_log; sleep 5; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_svg /media/fat/mister-magik/mister-magik-fb ui $scene $secs >$remote_log 2>&1; status=\$?; grep 'cpu_profile:' $remote_log || true; test -s $remote_svg || status=1; exit \$status"; then
+if ! "$MISTER" run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; rm -f $remote_svg $remote_log; sleep 5; MISTER_PPROF=1 MISTER_PPROF_OUT=$remote_svg /media/fat/mister-magik-dev/mister-magik-fb ui $scene $secs >$remote_log 2>&1; status=\$?; grep 'cpu_profile:' $remote_log || true; test -s $remote_svg || status=1; exit \$status"; then
   "$MISTER" get "$remote_log" "$local_log" || true
   echo "cpu profiler scene failed; see $local_log" >&2
   exit 1

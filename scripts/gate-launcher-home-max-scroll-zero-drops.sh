@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/launcher-home-scroll-profiles"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 
 label="launcher-home-max-scroll-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -130,7 +130,7 @@ esac
 rm -f "$trace" "$log" "$status_json" "$drop_report" "$fpga_latch_before" "$fpga_latch_after"
 echo "==> Capture supervised launcher menu-row home-repeat-hold menu=$menu secs=$secs label=$label deploy=$deploy ui_fb_size=$ui_fb_size present_delay_us=$present_delay_us catalog_refresh=$catalog_refresh"
 if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
-  "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$fpga_latch_before"
+  "$MISTER" run "'/media/fat/mister-magik-dev/mister-magik-fb' fpga-latch-report" >"$fpga_latch_before"
   echo "wrote $fpga_latch_before"
 fi
 "$MISTER" run "rm -f '$remote_trace' '$REMOTE_LOG'; sync" >/dev/null
@@ -149,7 +149,7 @@ fi
 "$MISTER" get "$REMOTE_LOG" "$log" >/dev/null || true
 "$MISTER" status --json >"$status_json" 2>/dev/null || true
 if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
-  "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$fpga_latch_after" || true
+  "$MISTER" run "'/media/fat/mister-magik-dev/mister-magik-fb' fpga-latch-report" >"$fpga_latch_after" || true
   echo "wrote $fpga_latch_after"
 fi
 

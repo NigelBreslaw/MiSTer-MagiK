@@ -8,7 +8,6 @@ set -eu
 
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
 INITTAB="${MISTER_MAGIK_INITTAB:-/etc/inittab}"
-INIT_DIR="${MISTER_MAGIK_INIT_DIR:-/etc/init.d}"
 INI="$FAT/MiSTer.ini"
 INI_BACKUP="$FAT/MiSTer.ini.bak.before-magik"
 INI_BACKUP_PENDING="$FAT/.MiSTer.ini.bak.before-magik.new.$$"
@@ -485,29 +484,15 @@ restore_magik() {
 
 stop_magik_children() {
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] && return 0
-  for process in mister-magik-fb mister-magik-catalog-builder mister-magik-agent; do
+  for process in mister-magik-fb mister-magik-catalog-builder; do
     pids="$(pidof "$process" 2>/dev/null || true)"
     [ -z "$pids" ] || kill $pids 2>/dev/null || true
   done
   sleep 1
-  for process in mister-magik-fb mister-magik-catalog-builder mister-magik-agent; do
+  for process in mister-magik-fb mister-magik-catalog-builder; do
     pids="$(pidof "$process" 2>/dev/null || true)"
     [ -z "$pids" ] || kill -9 $pids 2>/dev/null || true
   done
-}
-
-remove_agent_boot_hook() {
-  agent_failed=0
-  [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || mount -o remount,rw / 2>/dev/null || true
-  rm -f "$INIT_DIR/S00magik-agent" || agent_failed=1
-  if [ -e "$INIT_DIR/disabled-S00fastnet.magik-agent" ]; then
-    if [ -e "$INIT_DIR/S00fastnet" ]; then
-      rm -f "$INIT_DIR/disabled-S00fastnet.magik-agent" || agent_failed=1
-    else
-      mv "$INIT_DIR/disabled-S00fastnet.magik-agent" "$INIT_DIR/S00fastnet" || agent_failed=1
-    fi
-  fi
-  [ "$agent_failed" = 0 ]
 }
 
 remove_owned_files() {
@@ -517,15 +502,13 @@ remove_owned_files() {
   rm -f "$FAT"/downloader_mister_magik.ini.tmp.* "$FAT"/.downloader_mister_magik.ini* || cleanup_failed=1
   rm -f "$INI_BACKUP" "$FAT"/.MiSTer.ini.bak.before-magik.new.* "$FAT"/.MiSTer.ini.magik.new* || cleanup_failed=1
   remove_legacy_root_legal_files || cleanup_failed=1
-  remove_agent_boot_hook || cleanup_failed=1
 
   # The installed copy removes itself only after every other owned path.
   rm -f "$INSTALLED_SCRIPT" || cleanup_failed=1
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
 
   for path in "$APP_DIR" "$MAIN_BIN" "$INSTALLED_SCRIPT" "$CHANNEL_SCRIPT" \
-    "$DOWNLOADER_DROP_IN" "$INI_BACKUP" "$INIT_DIR/S00magik-agent" \
-    "$INIT_DIR/disabled-S00fastnet.magik-agent" "$FAT/THIRD-PARTY-NOTICES.txt" \
+    "$DOWNLOADER_DROP_IN" "$INI_BACKUP" "$FAT/THIRD-PARTY-NOTICES.txt" \
     "$FAT/SOURCE-OFFER.txt"; do
     if [ -e "$path" ]; then say "ERROR: uninstall residue: $path"; cleanup_failed=1; fi
   done

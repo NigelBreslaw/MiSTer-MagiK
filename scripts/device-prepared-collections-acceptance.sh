@@ -11,7 +11,7 @@ MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/mister-fifo-lib.sh"
 source "$HERE/scripts/library-sql-output-lib.sh"
 
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_TEST_ENV="/tmp/mister-magik/prepared-launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 STATUS="/tmp/mister-magik/status.json"
@@ -341,7 +341,7 @@ run_oneload64() {
 echo "==> Verifying device safety preconditions"
 command -v ffmpeg >/dev/null
 test -x scripts/host-camera-native
-remote "test -p /dev/MiSTer_cmd; test -x /media/fat/mister-magik/mister-magik-fb; rm -f '$REMOTE_ENV' '$REMOTE_GATE'"
+remote "test -p /dev/MiSTer_cmd; test -x /media/fat/mister-magik-dev/mister-magik-fb; rm -f '$REMOTE_ENV' '$REMOTE_GATE'"
 wait_remote "MagiK launcher active before acceptance" 60 \
   "grep -q '\"launcher_state\":\"LauncherActive\"' '$MAIN_STATUS' 2>/dev/null && grep -q '\"scene\":\"launcher\"' '$STATUS' 2>/dev/null"
 

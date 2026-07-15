@@ -84,16 +84,16 @@ fi
 OUT="$ROOT/build/resource-exhaustion/$LABEL"
 REMOTE_FILL_DIR="/tmp/mister-magik-resource-exhaustion"
 REMOTE_FILL_FILE="$REMOTE_FILL_DIR/fill.bin"
-REMOTE_DD_LOG="/media/fat/mister-magik/resource-exhaustion-dd.log"
+REMOTE_DD_LOG="/media/fat/mister-magik-dev/resource-exhaustion-dd.log"
 REMOTE_MEM_SCRIPT="$REMOTE_FILL_DIR/memory-pressure.py"
 REMOTE_MEM_PID="$REMOTE_FILL_DIR/memory-pressure.pid"
-REMOTE_MEM_LOG="/media/fat/mister-magik/resource-exhaustion-memory.log"
+REMOTE_MEM_LOG="/media/fat/mister-magik-dev/resource-exhaustion-memory.log"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_STATUS="/tmp/mister-magik/status.json"
 REMOTE_MAIN_STATUS="/tmp/mister-magik/main-status.json"
-REMOTE_CRASH_DIR="/media/fat/mister-magik/crashes"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_CRASH_DIR="/media/fat/mister-magik-dev/crashes"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 MEMORY_TARGET_MIB="${MISTER_RESOURCE_MEMORY_TARGET_MIB:-360}"
 MEMORY_CHUNK_MIB="${MISTER_RESOURCE_MEMORY_CHUNK_MIB:-8}"
 
@@ -126,7 +126,7 @@ cleanup_remote() {
 
 dump_artifacts() {
   echo "==> Capturing repro artifacts in $OUT"
-  remote "echo MAIN_STATUS; cat '$REMOTE_MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$REMOTE_STATUS' 2>/dev/null || true; echo PROCS; pidof mister-magik-fb 2>/dev/null || true; pidof MiSTer_MagiK 2>/dev/null || true; ps w | grep -E 'MiSTer|mister-magik-fb|resource-exhaustion' | grep -v grep || true; echo TMP; df -h /tmp; echo MEMINFO; sed -n '1,12p' /proc/meminfo; echo DD_LOG; cat '$REMOTE_DD_LOG' 2>/dev/null || true; echo MEMORY_LOG; cat '$REMOTE_MEM_LOG' 2>/dev/null || true; echo SLINT_LOG_TAIL; tail -160 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS_TAIL; tail -120 '$REMOTE_EVENTS' 2>/dev/null || true; echo CRASHES; ls -lt '$REMOTE_CRASH_DIR' 2>/dev/null | sed -n '1,16p' || true" >"$OUT/remote-dump.txt" || true
+  remote "echo MAIN_STATUS; cat '$REMOTE_MAIN_STATUS' 2>/dev/null || true; echo STATUS; cat '$REMOTE_STATUS' 2>/dev/null || true; echo PROCS; pidof mister-magik-fb 2>/dev/null || true; pidof MiSTer_MagiKDev 2>/dev/null || true; ps w | grep -E 'MiSTer|mister-magik-fb|resource-exhaustion' | grep -v grep || true; echo TMP; df -h /tmp; echo MEMINFO; sed -n '1,12p' /proc/meminfo; echo DD_LOG; cat '$REMOTE_DD_LOG' 2>/dev/null || true; echo MEMORY_LOG; cat '$REMOTE_MEM_LOG' 2>/dev/null || true; echo SLINT_LOG_TAIL; tail -160 '$REMOTE_LOG' 2>/dev/null || true; echo EVENTS_TAIL; tail -120 '$REMOTE_EVENTS' 2>/dev/null || true; echo CRASHES; ls -lt '$REMOTE_CRASH_DIR' 2>/dev/null | sed -n '1,16p' || true" >"$OUT/remote-dump.txt" || true
 }
 
 wait_for_launcher() {

@@ -52,6 +52,10 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_confirm_selected(0);
     bridge.set_menu_title("MiSTer MagiK".into());
     bridge.set_menu_breadcrumb("".into());
+    bridge.set_dev_mode(
+        mister_magik_catalog::device_layout::DeviceLayout::current()
+            == mister_magik_catalog::device_layout::DeviceLayout::Dev,
+    );
     bridge.set_menu_items(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::MenuItem,
     >::new())));

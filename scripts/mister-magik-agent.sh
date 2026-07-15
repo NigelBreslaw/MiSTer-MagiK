@@ -7,13 +7,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-agent"
+REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-agent"
 REMOTE_SCRIPT="/etc/init.d/S00magik-agent"
-REMOTE_TOKEN="/media/fat/mister-magik/agent.token"
+REMOTE_TOKEN="/media/fat/mister-magik-dev/agent.token"
 LOCAL_TOKEN="$HERE/build/mister-agent.token"
 FASTNET_SCRIPT="/etc/init.d/S00fastnet"
 FASTNET_DISABLED="/etc/init.d/disabled-S00fastnet.magik-agent"
-MARKER="/media/fat/mister-magik/S00magik-agent.experiment"
+MARKER="/media/fat/mister-magik-dev/S00magik-agent.experiment"
 
 usage() {
   cat <<EOF
@@ -22,7 +22,7 @@ Usage: scripts/mister-magik-agent.sh <build|install|remove|status|log>
 Installs a compiled early network agent as /etc/init.d/S00magik-agent and
 temporarily disables the shell FastNet service so timings are isolated.
 
-The TCP control token lives at /media/fat/mister-magik/agent.token. A local
+The TCP control token lives at /media/fat/mister-magik-dev/agent.token. A local
 copy is kept at build/mister-agent.token for scripts/mister agent commands.
 
 SD-card recovery if SSH is lost: delete /etc/init.d/S00magik-agent. If needed,
@@ -59,7 +59,7 @@ install_agent() {
   local bin
   bin="$(build_agent)"
   ensure_token
-  "$MISTER" run "mkdir -p /media/fat/mister-magik" >/dev/null
+  "$MISTER" run "mkdir -p /media/fat/mister-magik-dev" >/dev/null
   "$MISTER" put "$bin" "$REMOTE_BIN.upload" >/dev/null
   "$MISTER" put "$LOCAL_TOKEN" "$REMOTE_TOKEN.upload" >/dev/null
   "$MISTER" run "
@@ -96,14 +96,14 @@ stop_agent() {
 }
 case \"\$1\" in
   start)
-    /media/fat/mister-magik/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
+    /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
     ;;
   stop)
     stop_agent
     ;;
   restart)
     stop_agent
-    /media/fat/mister-magik/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
+    /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 &
     ;;
   *)
     echo \"Usage: \$0 {start|stop|restart}\"

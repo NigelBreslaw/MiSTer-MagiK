@@ -1261,7 +1261,7 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
                 .and_then(Value::as_u64),
         },
         magik: process_telemetry_at(&value, "/processes/mister-magik-fb"),
-        main: process_telemetry_at(&value, "/processes/MiSTer_MagiK"),
+        main: main_process_telemetry(&value),
         network: NetworkTelemetry {
             rx_bytes_per_sec: u64_at(&value, "/network/rx_bytes_per_sec"),
             tx_bytes_per_sec: u64_at(&value, "/network/tx_bytes_per_sec"),
@@ -1322,6 +1322,30 @@ fn process_telemetry_at(value: &Value, pointer: &str) -> ProcessTelemetry {
     }
 }
 
+fn main_process_telemetry(value: &Value) -> ProcessTelemetry {
+    let dev = process_telemetry_at(value, "/processes/MiSTer_MagiKDev");
+    if dev.pids.is_empty() {
+        process_telemetry_at(value, "/processes/MiSTer_MagiK")
+    } else {
+        dev
+    }
+}
+
+fn main_process_summary(value: &Value) -> String {
+    let dev_running = value
+        .pointer("/processes/MiSTer_MagiKDev")
+        .and_then(Value::as_array)
+        .is_some_and(|pids| !pids.is_empty());
+    process_summary(
+        value,
+        if dev_running {
+            "MiSTer_MagiKDev"
+        } else {
+            "MiSTer_MagiK"
+        },
+    )
+}
+
 fn u64_at(value: &Value, pointer: &str) -> u64 {
     value.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -1352,7 +1376,7 @@ fn apply_agent_status(snapshot: &mut DashboardSnapshot, status: &Value) {
     let operstate = string_at(status, "/network/operstate").unwrap_or("-");
     snapshot.network_summary = format!("ip {ip}; carrier {carrier}; state {operstate}");
     snapshot.mac_address = string_at(status, "/network/mac").unwrap_or("-").to_string();
-    snapshot.main_process = process_summary(status, "MiSTer_MagiK");
+    snapshot.main_process = main_process_summary(status);
     snapshot.launcher_process = process_summary(status, "mister-magik-fb");
     let scanout_slots = status.pointer("/scanout_slots").unwrap_or(&Value::Null);
     (
@@ -1369,7 +1393,7 @@ fn apply_agent_status(snapshot: &mut DashboardSnapshot, status: &Value) {
 }
 
 fn apply_magik_status(snapshot: &mut DashboardSnapshot, status: &Value) {
-    snapshot.main_process = process_summary(status, "MiSTer_MagiK");
+    snapshot.main_process = main_process_summary(status);
     snapshot.launcher_process = process_summary(status, "mister-magik-fb");
     snapshot.slint_status_freshness = status
         .pointer("/files/slint_status_current")

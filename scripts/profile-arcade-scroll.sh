@@ -7,10 +7,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
+REMOTE_BIN="$MISTER_MAGIK_BIN"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/thread-sampler-lib.sh"
 source "$HERE/scripts/bench-context-lib.sh"
@@ -276,7 +278,7 @@ capture_latch_report() {
   if [[ "$latch_reports_enabled" != "1" ]]; then
     return 0
   fi
-  if "$MISTER" run "'/media/fat/mister-magik/mister-magik-fb' fpga-latch-report" >"$out"; then
+  if "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" >"$out"; then
     echo "wrote $out"
     return 0
   fi
@@ -694,7 +696,7 @@ run_boot_prelude() {
   echo "==> Boot flow: Home -> Arcade -> ${scenario} scroll open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
   if [[ "$repair_projections" == "1" || "$repair_projections" == "true" || "$repair_projections" == "yes" ]]; then
     echo "==> Refresh warm catalog projections before measured reboot"
-    "$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections" >/dev/null
+    "$MISTER" run "'$REMOTE_BIN' repair-catalog-projections" >/dev/null
   fi
   local input_script="$entry_input_script"
   if [[ -z "$input_script" ]]; then
@@ -873,9 +875,9 @@ if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
   echo "==> Build profiling binary for boot-entry Arcade CPU profile"
   "$HERE/magik-gui/build-arm.sh" --profile --ui-scope launcher --bench-tools
   echo "==> Deploy profiling binary for boot-entry Arcade CPU profile"
-  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null; then
+  if ! "$MISTER" agent deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null; then
     echo "agent deploy failed for profiling binary; falling back to device deploy transaction" >&2
-    "$MISTER" deploy-magik-bin "$profile_bin" /media/fat/mister-magik/mister-magik-fb >/dev/null
+    "$MISTER" deploy-magik-bin "$profile_bin" "$REMOTE_BIN" >/dev/null
   fi
 fi
 

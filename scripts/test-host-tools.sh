@@ -52,6 +52,8 @@ for script in \
   "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/install-slint-boot.sh" \
+  "$ROOT/scripts/magik-layout.sh" \
+  "$ROOT/scripts/magik-mode.sh" \
   "$ROOT/scripts/library-sql-output-lib.sh" \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
@@ -71,6 +73,7 @@ for script in \
   "$ROOT/scripts/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/scripts/switch-ui.sh" \
+  "$ROOT/scripts/test-magik-mode.sh" \
   "$ROOT/magik-gui/build-arm.sh"; do
   bash -n "$script"
 done
@@ -87,12 +90,13 @@ printf '%s\n' "$*" >>"$SWITCH_UI_TEST_LOG"
 EOF
 chmod +x "$TMP/fake-mister"
 MISTER="$TMP/fake-mister" SWITCH_UI_TEST_LOG="$switch_log" \
-  "$ROOT/scripts/switch-ui.sh" -magik >/dev/null
-if ! grep -qx 'reboot-wait --raw' "$switch_log"; then
-  echo "frontend switch must use a normal raw reboot independent of the active Main fork" >&2
+  "$ROOT/scripts/switch-ui.sh" -stock >/dev/null
+if ! grep -qx 'reboot-wait' "$switch_log"; then
+  echo "frontend switch must delegate to the normal mode-switch reboot" >&2
   exit 1
 fi
 
+"$ROOT/scripts/test-magik-mode.sh"
 "$ROOT/scripts/test-mister-magik-installer.sh"
 python3 "$ROOT/scripts/test-platform-component-id.py"
 python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"

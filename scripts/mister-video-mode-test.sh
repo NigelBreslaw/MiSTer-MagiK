@@ -20,7 +20,7 @@ MISTER="$ROOT/scripts/mister"
 WORK="$ROOT/build/mister-video-mode-test"
 REMOTE_INI="/media/fat/MiSTer.ini"
 REMOTE_BACKUP="/media/fat/MiSTer.ini.magik-mode-test.bak"
-REMOTE_BENCH_REQUEST="/media/fat/mister-magik/bench-boot"
+REMOTE_BENCH_REQUEST="/media/fat/mister-magik-dev/bench-boot"
 
 usage() {
   cat <<EOF
@@ -99,7 +99,7 @@ current TV with both preset 14 and calculated 2560,1440,60, while EDID/native
 auto mode selected stable 1080p. Treat high failure as unsupported
 hardware/timing unless stock MiSTer proves otherwise.
 
-Each run backs up MiSTer.ini, writes the mode, reboots through MiSTer_MagiK,
+Each run backs up MiSTer.ini, writes the mode, reboots through MiSTer_MagiKDev,
 starts the selected benchmark indefinitely, captures a PNG using detected fb
 dimensions, and leaves the scene on screen for visual verification.
 EOF
@@ -276,7 +276,7 @@ write_bench_request() {
     echo "Invalid seconds value: $secs" >&2
     exit 2
   }
-  mister run "mkdir -p /media/fat/mister-magik; printf '%s %s\n' '$scene' '$secs' > '$REMOTE_BENCH_REQUEST'; rm -f '/tmp/mister-magik-bench-$scene.log'"
+  mister run "mkdir -p /media/fat/mister-magik-dev; printf '%s %s\n' '$scene' '$secs' > '$REMOTE_BENCH_REQUEST'; rm -f '/tmp/mister-magik-bench-$scene.log'"
 }
 
 show_bench_log() {
@@ -350,7 +350,7 @@ sweep_mode() {
   fi
   write_bench_request "$scene" 0
 
-  echo "==> Rebooting into $mode and launching $scene through MiSTer_MagiK"
+  echo "==> Rebooting into $mode and launching $scene through MiSTer_MagiKDev"
   mister reboot-wait
   mister run "for i in \$(seq 1 30); do test -f '/tmp/mister-magik-bench-$scene.log' && break; sleep 1; done; sleep 6"
 
@@ -392,7 +392,7 @@ stock_ui_probe() {
   echo "==> Backing up $REMOTE_INI"
   mister get "$REMOTE_INI" "$before"
 
-  echo "==> Commenting main=MiSTer_MagiK so stock MiSTer owns the menu"
+  echo "==> Commenting main=MiSTer_MagiKDev so stock MiSTer owns the menu"
   mister ini-edit-local comment-main "$before" "$after"
   mister put "$after" "$REMOTE_INI"
 
@@ -422,7 +422,7 @@ stock_ui_mode_probe() {
   cp "$before" "$WORK/MiSTer.ini.$stamp.bak"
   mister run "[ -f '$REMOTE_BACKUP' ] || cp '$REMOTE_INI' '$REMOTE_BACKUP'"
 
-  echo "==> Writing [Menu] video_mode=$mode and disabling main=MiSTer_MagiK"
+  echo "==> Writing [Menu] video_mode=$mode and disabling main=MiSTer_MagiKDev"
   mister ini-edit-local menu-mode "$mode" "$before" "$mode_ini"
   mister ini-edit-local comment-main "$mode_ini" "$stock_ini"
   mister put "$stock_ini" "$REMOTE_INI"

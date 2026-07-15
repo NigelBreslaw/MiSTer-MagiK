@@ -166,7 +166,9 @@ where
         label: default_label(),
         variant: "mmlz4b-lz4-fast".to_string(),
         codec: "lz4-flex".to_string(),
-        pack: PathBuf::from("/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b"),
+        pack: mister_magik_catalog::device_layout::current_app_path(
+            "assets/arcade-screenshots-320x320.mmlz4b",
+        ),
         iterations: 5,
         order: Order::Random,
         warm: WarmMode::Full,

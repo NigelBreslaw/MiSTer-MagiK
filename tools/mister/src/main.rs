@@ -41,15 +41,19 @@ const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES: u64 = 17 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
-const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
-const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
-const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MiSTer_MagiK or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn configured_remote_path(name: &str, fallback: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RebootMode {
@@ -165,10 +169,11 @@ fn run_cli() -> Result<()> {
             }
             let remote = args
                 .get(1)
-                .map(String::as_str)
-                .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+                .cloned()
+                .or_else(|| std::env::var("MISTER_MAGIK_BIN").ok())
+                .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
             let sess = connect(10)?;
-            deploy_magik_bin(&sess, Path::new(&args[0]), remote)?;
+            deploy_magik_bin(&sess, Path::new(&args[0]), &remote)?;
         }
         "get" => {
             if args.len() < 2 {
@@ -309,6 +314,20 @@ fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             edit_remote_ini(&sess, IniEdit::MagikBoot, dry_run)?;
         }
+        "ini-select-main" => {
+            let value = args
+                .first()
+                .ok_or("ini-select-main needs <MiSTer|MiSTer_MagiK|MiSTer_MagiKDev>")?;
+            if !matches!(
+                value.as_str(),
+                "MiSTer" | "MiSTer_MagiK" | "MiSTer_MagiKDev"
+            ) {
+                return Err("unsupported main selection".into());
+            }
+            let dry_run = args.iter().any(|a| a == "--dry-run");
+            let sess = connect(10)?;
+            edit_remote_ini(&sess, IniEdit::SelectMain(value.clone()), dry_run)?;
+        }
         "inittab-ensure-stock" => {
             let dry_run = args.iter().any(|a| a == "--dry-run");
             let sess = connect(10)?;
@@ -370,7 +389,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
 }
 
@@ -1386,7 +1405,7 @@ fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
     let out = exec(
         sess,
         &format!(
-            "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiK >/dev/null 2>&1; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
+            "if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
             command
         ),
         true,
@@ -1489,11 +1508,12 @@ fn connection_profile(args: &[String]) -> Result<()> {
                 let sftp_init_ms = sftp_t.elapsed().as_millis();
                 let tag = format!("{}-{sample}-{ts}", std::process::id());
                 let tmp_remote = format!("/tmp/mister-magik-profile-{tag}.bin");
-                let fat_remote = format!("/media/fat/mister-magik/profile-tmp-{tag}.bin");
+                let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
+                let fat_remote = format!("{app}/profile-tmp-{tag}.bin");
                 let put_tmp_ms = sftp_write_profile(&timed.sess, &tmp_remote, &bytes)?;
                 let _ = exec(
                     &timed.sess,
-                    "mkdir -p /media/fat/mister-magik >/dev/null 2>&1 || true",
+                    &format!("mkdir -p {} >/dev/null 2>&1 || true", sh(&app)),
                     true,
                 );
                 let put_fat_ms = sftp_write_profile(&timed.sess, &fat_remote, &bytes)?;
@@ -2042,8 +2062,9 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         .ok_or("agent deploy-magik-bin needs LOCAL [REMOTE]")?;
     let remote = args
         .get(1)
-        .map(String::as_str)
-        .unwrap_or("/media/fat/mister-magik/mister-magik-fb");
+        .cloned()
+        .or_else(|| std::env::var("MISTER_MAGIK_BIN").ok())
+        .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
     let total_t = Instant::now();
     let read_t = Instant::now();
     let bytes = fs::read(local)?;
@@ -2093,7 +2114,7 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         _ => return Err("invalid deploy compression state".into()),
     };
     let args = json!({
-        "remote": remote,
+        "remote": &remote,
         "size": bytes.len() as u64,
         "payload_size": payload.len() as u64,
         "checksum": checksum,
@@ -2106,11 +2127,11 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         Duration::from_secs(120),
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
-    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, remote)?;
+    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, &remote)?;
     println!(
         "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
-        remote,
+        &remote,
         encoding,
         compression_decision,
         bytes.len(),
@@ -2266,7 +2287,10 @@ impl Default for LauncherRestartOptions {
             env_vars: Vec::new(),
             clear_env: false,
             timeout_secs: 20,
-            remote_env: DEFAULT_LAUNCHER_ENV_REMOTE.to_string(),
+            remote_env: configured_remote_path(
+                "MISTER_MAGIK_LAUNCHER_ENV",
+                DEFAULT_LAUNCHER_ENV_REMOTE,
+            ),
         }
     }
 }
@@ -2570,7 +2594,7 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "slint_log_tail": tail_remote(&sess, "/tmp/mister-magik-slint.log", 120).map(|lines| lines.join("\n")),
             "main_log_tail": tail_remote(&sess, "/tmp/mister-magik-main.log", 120).map(|lines| lines.join("\n")),
             "agent_tmp_log_tail": tail_remote(&sess, "/tmp/mister-magik-agent.log", 160).map(|lines| lines.join("\n")),
-            "agent_persistent_log_tail": tail_remote(&sess, "/media/fat/mister-magik/bootlogs/agent.log", 160).map(|lines| lines.join("\n")),
+            "agent_persistent_log_tail": tail_remote(&sess, "/media/fat/mister-magik-dev/bootlogs/agent.log", 160).map(|lines| lines.join("\n")),
             "boot_analytics_tail": tail_remote(&sess, "/tmp/mister-magik-boot-analytics.tsv", 80).map(|lines| lines.join("\n")),
         },
         "crashes": ssh_crash_reports_json(&sess),
@@ -2639,8 +2663,10 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
 }
 
 fn ssh_crash_reports_json(sess: &Session) -> Value {
-    let latest_path = "/media/fat/mister-magik/crashes/latest.json";
-    let latest = remote_read(sess, latest_path)
+    let crash_dir =
+        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik") + "/crashes";
+    let latest_path = format!("{crash_dir}/latest.json");
+    let latest = remote_read(sess, &latest_path)
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or(Value::Null);
     let latest_report_id = latest
@@ -2660,7 +2686,7 @@ fn ssh_crash_reports_json(sess: &Session) -> Value {
         })
         .collect::<Vec<_>>();
     json!({
-        "dir": "/media/fat/mister-magik/crashes",
+        "dir": crash_dir,
         "latest_path": latest_path,
         "latest": latest,
         "recent": recent,
@@ -2672,9 +2698,11 @@ fn remote_crash_report_paths(
     limit: usize,
     latest_name: Option<&str>,
 ) -> Vec<String> {
+    let crash_dir =
+        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik") + "/crashes";
     let cmd = format!(
         "ls -1 {} 2>/dev/null | grep '^report-.*\\.json$' | sort | tail -n {}",
-        sh("/media/fat/mister-magik/crashes"),
+        sh(&crash_dir),
         limit
     );
     let Ok(out) = exec(sess, &cmd, true) else {
@@ -2685,13 +2713,13 @@ fn remote_crash_report_paths(
     }
     let mut paths = Vec::new();
     if let Some(name) = latest_name {
-        paths.push(format!("/media/fat/mister-magik/crashes/{name}"));
+        paths.push(format!("{crash_dir}/{name}"));
     }
     paths.extend(
         out.stdout
             .lines()
             .filter(|line| Some(*line) != latest_name)
-            .map(|line| format!("/media/fat/mister-magik/crashes/{line}")),
+            .map(|line| format!("{crash_dir}/{line}")),
     );
     paths.truncate(limit);
     paths
@@ -3472,11 +3500,11 @@ fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
 fn run_library_db_query(sess: &Session, args: &[String], connect_us: u128) -> Result<()> {
     let total_t = Instant::now();
     let query_args = library_db_query_args(args);
-    let command = remote_subcommand(
+    let binary = configured_remote_path(
+        "MISTER_MAGIK_BIN",
         "/media/fat/mister-magik/mister-magik-fb",
-        "library-sql",
-        &query_args,
     );
+    let command = remote_subcommand(&binary, "library-sql", &query_args);
     let exec_t = Instant::now();
     let out = exec(sess, &command, true)?;
     let exec_us = exec_t.elapsed().as_micros();
@@ -3530,11 +3558,11 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
                 .into(),
         );
     }
-    let command = remote_subcommand(
+    let binary = configured_remote_path(
+        "MISTER_MAGIK_BIN",
         "/media/fat/mister-magik/mister-magik-fb",
-        "catalog-inspect",
-        args,
     );
+    let command = remote_subcommand(&binary, "catalog-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
@@ -3576,7 +3604,8 @@ fn run_library_db_query_via_sftp(sess: &Session, args: &[String]) -> Result<Stri
 }
 
 fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
-    let mut remote_path = DEFAULT_REMOTE_LIBRARY_DB.to_string();
+    let mut remote_path =
+        configured_remote_path("MISTER_MAGIK_LIBRARY_DB", DEFAULT_REMOTE_LIBRARY_DB);
     let mut query_parts = Vec::new();
     let mut queries = Vec::new();
     let mut i = 0usize;
@@ -3750,6 +3779,7 @@ fn remote_trim(sess: &Session, path: &str) -> Option<String> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum IniEdit {
     MagikBoot,
+    SelectMain(String),
     ZaparooBoot,
     ArcadeVideo,
     MenuMode(String),
@@ -3896,6 +3926,10 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
             set_ini_key(&mut lines, "Menu", "direct_video", "0");
             set_ini_key(&mut lines, "Menu", "video_mode", "8");
         }
+        IniEdit::SelectMain(value) => {
+            set_ini_key(&mut lines, "MiSTer", "main", &value);
+            deduplicate_ini_key(&mut lines, "MiSTer", "main");
+        }
         IniEdit::ZaparooBoot => {
             set_ini_key(&mut lines, "MiSTer", "direct_video", "0");
             set_ini_key(&mut lines, "MiSTer", "main", "zaparoo/MiSTer_Zaparoo");
@@ -3948,7 +3982,7 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
                 &mut lines,
                 Some("MiSTer"),
                 "main",
-                &["MiSTer_MagiK", "mister-magik-fb"],
+                &["MiSTer_MagiK", "MiSTer_MagiKDev", "mister-magik-fb"],
                 "MiSTer MagiK stock boot restore",
             );
         }
@@ -4001,6 +4035,27 @@ fn set_ini_key(lines: &mut Vec<String>, section: &str, key: &str, value: &str) {
         }
         lines.push(format!("[{section}]"));
         lines.push(format!("{key}={value}"));
+    }
+}
+
+fn deduplicate_ini_key(lines: &mut Vec<String>, section: &str, key: &str) {
+    let mut current = String::from("global");
+    let mut found = false;
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(name) = section_name(&lines[index]) {
+            current = name;
+            index += 1;
+            continue;
+        }
+        if current.eq_ignore_ascii_case(section) && active_key_eq(&lines[index], key) {
+            if found {
+                lines.remove(index);
+                continue;
+            }
+            found = true;
+        }
+        index += 1;
     }
 }
 
@@ -4162,6 +4217,7 @@ fn collect_status(sess: &Session) -> Result<Value> {
         "processes": {
             "MiSTer": process_list(sess, "MiSTer")?,
             "MiSTer_MagiK": process_list(sess, "MiSTer_MagiK")?,
+            "MiSTer_MagiKDev": process_list(sess, "MiSTer_MagiKDev")?,
             "mister-magik-fb": process_list(sess, "mister-magik-fb")?,
         },
         "boot": {
@@ -4312,7 +4368,7 @@ fn parse_input_devices(text: String) -> Vec<Value> {
 
 fn fd_owners(sess: &Session) -> Result<Value> {
     let script = r#"
-for name in MiSTer MiSTer_MagiK mister-magik-fb; do
+for name in MiSTer MiSTer_MagiK MiSTer_MagiKDev mister-magik-fb; do
   for p in $(pidof "$name" 2>/dev/null); do
     for fd in /proc/$p/fd/*; do
       t=$(readlink "$fd" 2>/dev/null || true)
@@ -4497,7 +4553,12 @@ fn print_status_summary(status: &Value) {
         ini_value(status, "arcade_vertical", "direct_video").unwrap_or("?"),
         ini_value(status, "arcade_vertical", "video_mode").unwrap_or("?")
     );
-    for name in ["MiSTer", "MiSTer_MagiK", "mister-magik-fb"] {
+    for name in [
+        "MiSTer",
+        "MiSTer_MagiK",
+        "MiSTer_MagiKDev",
+        "mister-magik-fb",
+    ] {
         let pid = primary_process(status, name)
             .and_then(|v| v["pid"].as_u64())
             .map(|p| p.to_string())
@@ -4581,8 +4642,13 @@ fn ini_line(status: &Value, section: &str, key: &str) -> Option<u64> {
 
 fn doctor_findings(status: &Value) -> Vec<(String, String)> {
     let mut findings = Vec::new();
-    if ini_value(status, "MiSTer", "main") != Some("MiSTer_MagiK") {
-        findings.push(("error".into(), "[MiSTer] main is not MiSTer_MagiK".into()));
+    let expected_main =
+        std::env::var("MISTER_MAGIK_MAIN_NAME").unwrap_or_else(|_| "MiSTer_MagiK".to_string());
+    if ini_value(status, "MiSTer", "main") != Some(expected_main.as_str()) {
+        findings.push((
+            "error".into(),
+            format!("[MiSTer] main is not {expected_main}"),
+        ));
     }
     if ini_value(status, "MiSTer", "direct_video") != Some("0") {
         findings.push((
@@ -4628,7 +4694,7 @@ fn doctor_findings(status: &Value) -> Vec<(String, String)> {
             ));
         }
     }
-    for name in ["MiSTer_MagiK", "mister-magik-fb"] {
+    for name in [expected_main.as_str(), "mister-magik-fb"] {
         if status["processes"][name]
             .as_array()
             .map(Vec::is_empty)
@@ -4719,7 +4785,12 @@ fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()
     }
     {
         let sess = connect(10)?;
-        let _ = exec(&sess, "mkdir -p /media/fat/mister-magik; : > /media/fat/mister-magik/boot-analytics.enabled; sync", true)?;
+        let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
+        let command = format!(
+            "mkdir -p {0}; : > {0}/boot-analytics.enabled; sync",
+            sh(&app)
+        );
+        let _ = exec(&sess, &command, true)?;
         let issued = issue_reboot(&sess, RebootMode::Supervised)?;
         println!("reboot issued to {} ({issued})", host());
     }
@@ -4751,9 +4822,10 @@ fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()
         }
     }
     if !keep_enabled {
+        let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
         let _ = exec(
             &sess,
-            "rm -f /media/fat/mister-magik/boot-analytics.enabled; sync",
+            &format!("rm -f {}/boot-analytics.enabled; sync", sh(&app)),
             true,
         );
     }
@@ -4769,7 +4841,11 @@ fn display_read(sess: &Session, unsafe_spi: bool, json_out: bool) -> Result<()> 
                 .into(),
         );
     }
-    let out = exec(sess, "/media/fat/mister-magik/mister-magik-fb read", true)?;
+    let binary = configured_remote_path(
+        "MISTER_MAGIK_BIN",
+        "/media/fat/mister-magik/mister-magik-fb",
+    );
+    let out = exec(sess, &format!("{} read", sh(&binary)), true)?;
     if json_out {
         println!("{}", json!({"rc": out.rc, "output": out.stdout}));
     } else {
@@ -4779,11 +4855,13 @@ fn display_read(sess: &Session, unsafe_spi: bool, json_out: bool) -> Result<()> 
 }
 
 fn display_read_needs_unsafe_spi(status: &Value) -> bool {
-    ["MiSTer_MagiK", "MiSTer"].iter().any(|name| {
-        status["processes"][name]
-            .as_array()
-            .is_some_and(|a| !a.is_empty())
-    })
+    ["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"]
+        .iter()
+        .any(|name| {
+            status["processes"][name]
+                .as_array()
+                .is_some_and(|a| !a.is_empty())
+        })
 }
 
 fn profile_summary(path: &Path) -> Result<()> {
@@ -5086,6 +5164,22 @@ video_mode=14
             .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1"));
         assert!(edited.contains("[Menu]\r\ndirect_video=0\r\nvideo_mode=8 ; menu probe"));
         assert!(edited.contains("; keep original core output for external scaler"));
+    }
+
+    #[test]
+    fn select_main_preserves_other_settings_and_deduplicates_active_main() {
+        let ini = "[MiSTer]\nmain=MiSTer\nfoo=keep\nmain=MiSTer_MagiK\n\n[Menu]\nvideo_mode=6\n";
+        let edited = edit_mister_ini(ini, IniEdit::SelectMain("MiSTer_MagiKDev".into()));
+        assert_eq!(edited.matches("main=MiSTer_MagiKDev").count(), 1);
+        assert_eq!(
+            edited
+                .lines()
+                .filter(|line| line.starts_with("main="))
+                .count(),
+            1
+        );
+        assert!(edited.contains("foo=keep"));
+        assert!(edited.contains("[Menu]\nvideo_mode=6"));
     }
 
     #[test]

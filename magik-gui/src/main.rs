@@ -135,9 +135,9 @@ use ui_display::{UiDisplay, UiDisplayPlan};
 use ui_runner::launcher_display_session::LauncherDisplaySession;
 use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_black_frame};
 
-const MISTER_BIN: &str = "/media/fat/MiSTer_MagiK";
 const DEFAULT_PROCESS_LOCK_PATH: &str = "/tmp/mister-magik/process.lock";
 fn main() {
+    mister_magik_catalog::device_layout::initialize_process_env();
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
     boot_analytics::event("process_start", format!("args={}", args.join(" ")));
@@ -429,8 +429,11 @@ fn print_experiment_capabilities() {
 }
 
 fn run_library_refresh() {
-    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN")
-        .unwrap_or_else(|_| "/media/fat/mister-magik/mister-magik-catalog-builder".into());
+    let binary = std::env::var("MISTER_CATALOG_BUILDER_BIN").unwrap_or_else(|_| {
+        mister_magik_catalog::device_layout::current_app_path("mister-magik-catalog-builder")
+            .to_string_lossy()
+            .into_owned()
+    });
     match std::process::Command::new(&binary).arg("rebuild").status() {
         Ok(status) if status.success() => {}
         Ok(status) => {
@@ -2017,8 +2020,9 @@ fn run_direct_vsync_probe(frames: u64, work_us: u64) {
 }
 
 fn exec_mister(args: &[String]) {
-    crate::ui_logln!("core handoff → {MISTER_BIN} {}", args[1..].join(" "));
-    let c_path = CString::new(MISTER_BIN).expect("CString");
+    let mister_bin = mister_magik_catalog::device_layout::DeviceLayout::current().main_path();
+    crate::ui_logln!("core handoff → {mister_bin} {}", args[1..].join(" "));
+    let c_path = CString::new(mister_bin).expect("CString");
     let c_args: Vec<CString> = std::iter::once(c_path.clone())
         .chain(
             args[1..]
@@ -2035,7 +2039,7 @@ fn exec_mister(args: &[String]) {
     // alive across the call, and ptrs is terminated by a null pointer. On
     // success execv does not return; on failure we only inspect errno.
     let err = unsafe { libc::execv(c_path.as_ptr(), ptrs.as_ptr()) };
-    crate::ui_errln!("execv({MISTER_BIN}) failed: {err}");
+    crate::ui_errln!("execv({mister_bin}) failed: {err}");
     std::process::exit(1);
 }
 

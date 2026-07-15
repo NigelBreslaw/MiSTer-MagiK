@@ -8,8 +8,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const SETTINGS_PATH: &str = "/media/fat/mister-magik/settings.json";
-
 const SETTINGS_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +28,9 @@ impl Default for MagikSettings {
 
 impl MagikSettings {
     pub fn load() -> Self {
-        Self::load_from(SETTINGS_PATH)
+        Self::load_from(mister_magik_catalog::device_layout::current_app_path(
+            "settings.json",
+        ))
     }
 
     pub fn load_from(path: impl AsRef<Path>) -> Self {
@@ -63,7 +63,9 @@ impl MagikSettings {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        self.save_to(SETTINGS_PATH)
+        self.save_to(mister_magik_catalog::device_layout::current_app_path(
+            "settings.json",
+        ))
     }
 
     pub fn save_to(&self, path: impl AsRef<Path>) -> io::Result<()> {

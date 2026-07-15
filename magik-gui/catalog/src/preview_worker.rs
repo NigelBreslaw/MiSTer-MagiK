@@ -14,10 +14,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::media_identity::{
-    legacy_screenshot_pack_path, screenshot_media_state_path_in_root,
+    default_screenshot_asset_dir, legacy_screenshot_pack_path, screenshot_media_state_path_in_root,
     screenshot_pack_id_from_legacy_filename, size_qualified_screenshot_pack_path_in_root,
-    supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_ASSET_DIR,
-    DEFAULT_SCREENSHOT_IMAGE_SIZE,
+    supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_IMAGE_SIZE,
 };
 use crate::preview_archive::{
     read_file_entry, read_sidecar_entry, read_u32, validate_entry_count, validate_entry_geometry,
@@ -1594,7 +1593,7 @@ fn default_preview_archive_root() -> PathBuf {
     std::env::var("MISTER_PREVIEW_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_SCREENSHOT_ASSET_DIR))
+        .unwrap_or_else(default_screenshot_asset_dir)
 }
 
 fn auto_preview_archive_path_in_root(root: &Path, resize: PreviewResizeSpec) -> Option<String> {
@@ -1620,7 +1619,7 @@ fn auto_neogeo_archive_path() -> Option<String> {
 }
 
 fn default_neogeo_archive_path() -> String {
-    legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), "neogeo")
+    legacy_archive_path_for_system(&default_screenshot_asset_dir(), "neogeo")
 }
 
 fn console_preview_archive_paths_from_env() -> Vec<String> {
@@ -1652,7 +1651,7 @@ fn default_console_archive_paths() -> Vec<String> {
     supported_screenshot_pack_ids()
         .filter(|system| !matches!(*system, "arcade" | "neogeo"))
         .map(|system| {
-            legacy_archive_path_for_system(Path::new(DEFAULT_SCREENSHOT_ASSET_DIR), system)
+            legacy_archive_path_for_system(&default_screenshot_asset_dir(), system)
         })
         .collect()
 }
@@ -1665,8 +1664,9 @@ fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
     let root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new(DEFAULT_SCREENSHOT_ASSET_DIR));
-    preferred_archive_path_for_system(root, system)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_screenshot_asset_dir);
+    preferred_archive_path_for_system(&root, system)
         .unwrap_or_else(|| preview_archive_path.to_string())
 }
 

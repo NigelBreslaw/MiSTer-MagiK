@@ -48,7 +48,7 @@ local_log="$OUT_DIR/${label}-preview-index-refresh.log"
 remote_tsv="/tmp/${label}-preview-index-refresh.tsv"
 remote_log="/tmp/${label}-preview-index-refresh.log"
 
-if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik/mister-magik-fb preview-index-refresh-bench '$label' >'$remote_tsv' 2>'$remote_log'" >/dev/null; then
+if ! "$MISTER" run "rm -f '$remote_tsv' '$remote_log'; /media/fat/mister-magik-dev/mister-magik-fb preview-index-refresh-bench '$label' >'$remote_tsv' 2>'$remote_log'" >/dev/null; then
   "$MISTER" get "$remote_log" "$local_log" >/dev/null || true
   "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null || true
   if grep -q "unknown command 'preview-index-refresh-bench'" "$local_log" "$local_tsv" 2>/dev/null; then

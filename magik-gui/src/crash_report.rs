@@ -9,15 +9,15 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_CRASH_DIR: &str = "/media/fat/mister-magik/crashes";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const EVENTS_PATH: &str = "/tmp/mister-magik/events.jsonl";
 const SLINT_LOG_PATH: &str = "/tmp/mister-magik-slint.log";
 
 pub fn install_panic_hook(args: Vec<String>) {
+    let crash_dir = mister_magik_catalog::device_layout::current_app_path("crashes");
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = write_panic_report(Path::new(DEFAULT_CRASH_DIR), &args, info);
+        let _ = write_panic_report(&crash_dir, &args, info);
         previous(info);
     }));
 }

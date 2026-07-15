@@ -152,6 +152,7 @@ printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_
   "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
 "$ROOT/scripts/platform-manifest.py" generate \
+  --layout public \
   --output "$WORK/platform-v1.manifest" --main "$MAIN_BIN" --gui "$BIN" \
   --catalog-builder "$CATALOG_BUILDER" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \
@@ -206,6 +207,7 @@ if expect_main:
 
 with zipfile.ZipFile(zip_path) as zf:
     names = set(zf.namelist())
+    installer = zf.read("Scripts/mister-magik.sh").decode()
     release = zf.read("mister-magik/release-v1.txt").decode()
     notices = zf.read("mister-magik/THIRD-PARTY-NOTICES.txt").decode()
     source_offer = zf.read("mister-magik/SOURCE-OFFER.txt").decode()
@@ -213,6 +215,22 @@ missing = sorted(required - names)
 if missing:
     print(f"package validation failed: missing {', '.join(missing)}", file=sys.stderr)
     sys.exit(1)
+forbidden_names = sorted(
+    name for name in names
+    if "mister-magik-agent" in name
+    or "mister-magik-dev/" in name
+    or "MiSTer_MagiKDev" in name
+)
+if forbidden_names:
+    print(
+        f"package validation failed: development payload present: {', '.join(forbidden_names)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+for marker in ("mister-magik-agent", "S00magik-agent", "disabled-S00fastnet.magik-agent"):
+    if marker in installer:
+        print(f"package validation failed: public installer manages agent hook: {marker}", file=sys.stderr)
+        sys.exit(1)
 legacy_root_paths = {
     "THIRD-PARTY-NOTICES.txt",
     "SOURCE-OFFER.txt",

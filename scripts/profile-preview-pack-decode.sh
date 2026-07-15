@@ -42,15 +42,15 @@ else
   shift
 fi
 
-pack="/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b"
+pack="/media/fat/mister-magik-dev/assets/arcade-screenshots-320x320.mmlz4b"
 variant="mmlz4b-lz4-fast"
 codec="lz4-flex"
 iterations="5"
 order="random"
 sample="all"
 arcade_pack=""
-saturn_pack="/media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b"
-neogeo_pack="/media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b"
+saturn_pack="/media/fat/mister-magik-dev/assets/saturn-screenshots-320x320.mmlz4b"
+neogeo_pack="/media/fat/mister-magik-dev/assets/neogeo-screenshots-320x320.mmlz4b"
 deploy_device=0
 
 while (($#)); do
@@ -178,7 +178,7 @@ remote_tsv="/tmp/${label}-preview-pack.tsv"
 remote_log="/tmp/${label}-preview-pack.log"
 
 remote_cmd=(
-  /media/fat/mister-magik/mister-magik-fb preview-pack-bench
+  /media/fat/mister-magik-dev/mister-magik-fb preview-pack-bench
   --label "$label"
   --variant "$variant"
   --codec "$codec"

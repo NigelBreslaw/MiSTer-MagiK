@@ -10,7 +10,7 @@ HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
 OUT_DIR="$HERE/build/text-effect-profiles"
 RESULTS="$HERE/history/toolchain-bench/results-text-effects.tsv"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 EFFECT_COUNT=50
 
 usage() {

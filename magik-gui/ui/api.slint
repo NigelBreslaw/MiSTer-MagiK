@@ -85,6 +85,8 @@ export global MisterBridge {
     in-out property <string> menu-breadcrumb;
     // Set asynchronously after comparing the configured Downloader feed with the installed build.
     in-out property <bool> update-available;
+    // Derived from the executable's fixed public/development installation layout.
+    in-out property <bool> dev-mode;
     in-out property <[MenuItem]> menu-items;
     // Scroll offset in logical pixels (0 = left); translates the Home six-tile ring.
     in-out property <bool> home-scroll-held;

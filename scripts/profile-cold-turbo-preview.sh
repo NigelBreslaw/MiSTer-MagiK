@@ -7,10 +7,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/magik-layout.sh"
+magik_layout_select dev
 OUT_DIR="$HERE/build/preview-turbo-profiles"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_NAV="/media/fat/mister-magik/library.nav.lz4b"
+REMOTE_NAV="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
 source "$HERE/scripts/preview-selection-lib.sh"
 
 label="cold-turbo-preview-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -92,7 +94,7 @@ printf 'artifact_reset_tsv\t%s\t%s\t%s\t%s\n' '$label' \"\$state\" \"\$path\" \"
 
 repair_navigation_projection_for_benchmark() {
   local report
-  report="$("$MISTER" run "/media/fat/mister-magik/mister-magik-fb repair-catalog-projections")"
+  report="$("$MISTER" run "'$MISTER_MAGIK_BIN' repair-catalog-projections")"
   printf '%s\n' "$report" | tee "$OUT_DIR/${label}-projection-repair.tsv"
 }
 
@@ -116,7 +118,7 @@ write_env_for_system() {
       printf 'export MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM=1\n'
     fi
   } >"$env_file"
-  "$MISTER" run "mkdir -p /media/fat/mister-magik; rm -f '$REMOTE_LOG'" >/dev/null
+  "$MISTER" run "mkdir -p '$MISTER_MAGIK_APP_DIR'; rm -f '$REMOTE_LOG'" >/dev/null
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
   "$MISTER" run "sync" >/dev/null
 }

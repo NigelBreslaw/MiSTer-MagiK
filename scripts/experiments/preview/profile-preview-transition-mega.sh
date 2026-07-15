@@ -8,8 +8,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 HERE="$(experiment_repo_root)"
 MISTER="$HERE/scripts/mister"
-REMOTE="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_ENV="/media/fat/mister-magik/launcher.env"
+REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
+REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
 
