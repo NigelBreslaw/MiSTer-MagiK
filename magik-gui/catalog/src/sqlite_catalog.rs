@@ -608,9 +608,31 @@ pub(crate) fn load_arcade_catalog_from_sqlite(
     load_arcade_catalog_from_sqlite_at(root, &path)
 }
 
+pub(crate) fn load_arcade_catalog_from_materialized_sqlite(
+    root: impl AsRef<Path>,
+) -> Result<LibraryCatalogLoad, String> {
+    let path = default_sqlite_path();
+    load_arcade_catalog_from_materialized_sqlite_at(root, &path)
+}
+
 pub(crate) fn load_arcade_catalog_from_sqlite_at(
     root: impl AsRef<Path>,
     path: &Path,
+) -> Result<LibraryCatalogLoad, String> {
+    load_arcade_catalog_from_sqlite_at_with_projection(root, path, true)
+}
+
+pub(crate) fn load_arcade_catalog_from_materialized_sqlite_at(
+    root: impl AsRef<Path>,
+    path: &Path,
+) -> Result<LibraryCatalogLoad, String> {
+    load_arcade_catalog_from_sqlite_at_with_projection(root, path, false)
+}
+
+fn load_arcade_catalog_from_sqlite_at_with_projection(
+    root: impl AsRef<Path>,
+    path: &Path,
+    allow_embedded_navigation: bool,
 ) -> Result<LibraryCatalogLoad, String> {
     let t = Instant::now();
     let open_t = Instant::now();
@@ -622,7 +644,15 @@ pub(crate) fn load_arcade_catalog_from_sqlite_at(
     ensure_sqlite_schema_current(&conn)?;
     let schema_check_us = schema_t.elapsed().as_micros() as u64;
     let stamp = catalog_store::read_catalog_stamp(&conn)?;
-    load_arcade_catalog_from_connection(root, &conn, t, open_us, schema_check_us, stamp)
+    load_arcade_catalog_from_connection(
+        root,
+        &conn,
+        t,
+        open_us,
+        schema_check_us,
+        stamp,
+        allow_embedded_navigation,
+    )
 }
 
 fn load_arcade_catalog_from_connection(
@@ -632,33 +662,36 @@ fn load_arcade_catalog_from_connection(
     open_us: u64,
     schema_check_us: u64,
     stamp: Option<catalog_stamp::CatalogStamp>,
+    allow_embedded_navigation: bool,
 ) -> Result<LibraryCatalogLoad, String> {
     let root = root.as_ref().to_path_buf();
     let query_t = Instant::now();
-    if let Some(stamp) = stamp.as_ref() {
-        if let Some(projection) = load_embedded_catalog_navigation(conn, stamp)? {
-            let query_us = query_t.elapsed().as_micros() as u64;
-            let rows = projection.games.len();
-            let catalog_t = Instant::now();
-            let catalog = ArcadeCatalog::from_navigation_projection(root, projection);
-            let catalog_us = catalog_t.elapsed().as_micros() as u64;
-            return Ok(LibraryCatalogLoad {
-                catalog,
-                stamp: Some(stamp.clone()),
-                projection_repair_safe: true,
-                us: started.elapsed().as_micros() as u64,
-                open_us,
-                schema_check_us,
-                query_us,
-                query_prepare_us: 0,
-                query_first_row_us: 0,
-                query_row_read_us: 0,
-                query_row_hydrate_us: 0,
-                launch_plans_us: 0,
-                systems_us: 0,
-                catalog_us,
-                rows,
-            });
+    if allow_embedded_navigation {
+        if let Some(stamp) = stamp.as_ref() {
+            if let Some(projection) = load_embedded_catalog_navigation(conn, stamp)? {
+                let query_us = query_t.elapsed().as_micros() as u64;
+                let rows = projection.games.len();
+                let catalog_t = Instant::now();
+                let catalog = ArcadeCatalog::from_navigation_projection(root, projection);
+                let catalog_us = catalog_t.elapsed().as_micros() as u64;
+                return Ok(LibraryCatalogLoad {
+                    catalog,
+                    stamp: Some(stamp.clone()),
+                    projection_repair_safe: true,
+                    us: started.elapsed().as_micros() as u64,
+                    open_us,
+                    schema_check_us,
+                    query_us,
+                    query_prepare_us: 0,
+                    query_first_row_us: 0,
+                    query_row_read_us: 0,
+                    query_row_hydrate_us: 0,
+                    launch_plans_us: 0,
+                    systems_us: 0,
+                    catalog_us,
+                    rows,
+                });
+            }
         }
     }
     let mut query_timing = CatalogSqlQueryTiming::default();
@@ -1047,10 +1080,55 @@ pub(crate) fn repair_catalog_projections_for_catalog(
     catalog: &ArcadeCatalog,
     stamp: &catalog_stamp::CatalogStamp,
 ) -> Result<(), String> {
-    if catalog_projection_pair_current(sqlite_path, stamp).unwrap_or(false) {
+    if catalog_projection_pair_current(sqlite_path, stamp).unwrap_or(false)
+        && catalog_projection_filter_mismatches(sqlite_path, catalog, stamp)?.is_empty()
+    {
         return Ok(());
     }
     rewrite_catalog_projections_for_catalog(sqlite_path, catalog, stamp)
+}
+
+pub(crate) fn catalog_projection_filter_mismatches(
+    sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<Vec<String>, String> {
+    let mut mismatches = Vec::new();
+    let navigation_path = catalog_navigation::navigation_path_for_sqlite(sqlite_path);
+    match catalog_navigation::read_catalog_navigation_projection(&navigation_path, stamp)? {
+        Some(projection) => {
+            let projected = ArcadeCatalog::from_navigation_projection(
+                Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
+                projection,
+            );
+            mismatches.extend(
+                catalog
+                    .filter_option_mismatches(&projected)
+                    .into_iter()
+                    .map(|detail| format!("external {detail}")),
+            );
+        }
+        None => mismatches.push("external navigation projection missing or stale".to_string()),
+    }
+
+    let conn = open_sqlite_read_only(sqlite_path)
+        .map_err(|e| format!("open embedded navigation for parity: {e}"))?;
+    match load_embedded_catalog_navigation(&conn, stamp)? {
+        Some(projection) => {
+            let projected = ArcadeCatalog::from_navigation_projection(
+                Path::new(arcade_catalog::DEFAULT_ARCADE_ROOT),
+                projection,
+            );
+            mismatches.extend(
+                catalog
+                    .filter_option_mismatches(&projected)
+                    .into_iter()
+                    .map(|detail| format!("embedded {detail}")),
+            );
+        }
+        None => mismatches.push("embedded navigation projection missing or stale".to_string()),
+    }
+    Ok(mismatches)
 }
 
 pub(crate) fn rewrite_catalog_projections_for_catalog(
@@ -1060,9 +1138,19 @@ pub(crate) fn rewrite_catalog_projections_for_catalog(
 ) -> Result<(), String> {
     let summary = catalog_summary::CatalogSummaryProjection::from_catalog(catalog, stamp);
     let navigation = catalog_navigation::CatalogNavigationProjection::from_catalog(catalog, stamp);
-    remove_catalog_projection_files(sqlite_path)?;
+    let embedded = catalog_navigation::encode_catalog_navigation_for_storage(catalog, stamp)?;
+    // Each projection is replaced atomically. Write navigation first so a
+    // failed repair never removes the previous usable projection.
+    catalog_navigation::write_catalog_navigation_projection_for_sqlite(sqlite_path, &navigation)?;
     catalog_summary::write_catalog_summary_projection(sqlite_path, &summary)?;
-    catalog_navigation::write_catalog_navigation_projection_for_sqlite(sqlite_path, &navigation)
+    let conn = Connection::open(sqlite_path)
+        .map_err(|e| format!("open embedded navigation for repair: {e}"))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO catalog_navigation_projection(id,bytes) VALUES(0,?1)",
+        [&embedded],
+    )
+    .map_err(|e| format!("atomically repair embedded catalog navigation: {e}"))?;
+    Ok(())
 }
 
 pub(crate) fn catalog_projection_pair_current(
@@ -1599,7 +1687,7 @@ fn build_catalog_projections_from_materialized_sqlite(
     root: &Path,
     stamp: &catalog_stamp::CatalogStamp,
 ) -> Result<CatalogProjectionPair, String> {
-    let loaded = load_arcade_catalog_from_sqlite_at(root, sqlite_path)?;
+    let loaded = load_arcade_catalog_from_materialized_sqlite_at(root, sqlite_path)?;
     let summary = catalog_summary::CatalogSummaryProjection::from_catalog(&loaded.catalog, stamp);
     let navigation =
         catalog_navigation::CatalogNavigationProjection::from_catalog(&loaded.catalog, stamp);
@@ -1613,35 +1701,11 @@ fn write_catalog_projection_pair(
     sqlite_path: &Path,
     projections: CatalogProjectionPair,
 ) -> Result<(), String> {
-    remove_catalog_projection_files(sqlite_path)?;
-    catalog_summary::write_catalog_summary_projection(sqlite_path, &projections.summary)?;
     catalog_navigation::write_catalog_navigation_projection_for_sqlite(
         sqlite_path,
         &projections.navigation,
-    )
-}
-
-fn remove_catalog_projection_files(sqlite_path: &Path) -> Result<(), String> {
-    let summary = remove_projection_file(
-        &catalog_summary::summary_path_for_sqlite(sqlite_path),
-        "summary",
-    );
-    let navigation = remove_projection_file(
-        &catalog_navigation::navigation_path_for_sqlite(sqlite_path),
-        "navigation",
-    );
-    summary.and(navigation)
-}
-
-fn remove_projection_file(path: &Path, label: &str) -> Result<(), String> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!(
-            "remove stale catalog {label} projection {}: {e}",
-            path.display()
-        )),
-    }
+    )?;
+    catalog_summary::write_catalog_summary_projection(sqlite_path, &projections.summary)
 }
 
 pub(crate) fn save_sqlite_scan_with_progress_using_writer(
@@ -3399,6 +3463,7 @@ fn write_sqlite_scan_with_sources_inner(
                 0,
                 0,
                 sources.stamp.cloned(),
+                true,
             )?;
             report_library_import_timing(
                 "build_saved_catalog",
@@ -5694,7 +5759,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_publish_failure_removes_stale_projection_pair() {
+    fn projection_publish_failure_preserves_atomic_sidecar_files() {
         let root = unique_temp_dir("sqlite-projection-publish-failure");
         let db = root.join("library.sqlite3");
         let old_stamp = catalog_stamp::CatalogStamp::from_lines(vec![
@@ -5741,13 +5806,26 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(
-            !summary_path.exists(),
-            "old summary must be invalidated before failed publish returns"
+            summary_path.exists(),
+            "failed atomic summary replacement must preserve the old file"
         );
         assert!(
-            !navigation_path.exists(),
-            "old navigation must be invalidated before failed publish returns"
+            navigation_path.exists(),
+            "successful atomic navigation replacement must remain readable"
         );
+        let retained_summary = catalog_summary::read_catalog_summary(&summary_path)
+            .expect("read retained summary")
+            .expect("retained summary exists");
+        assert_eq!(
+            retained_summary.catalog_stamp_fingerprint,
+            old_stamp.fingerprint_hex()
+        );
+        assert!(catalog_navigation::read_catalog_navigation_projection(
+            &navigation_path,
+            &new_stamp
+        )
+        .expect("read replaced navigation")
+        .is_some());
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("new sqlite database should remain live");
         assert_eq!(loaded.catalog.len(), 2);
@@ -5854,6 +5932,103 @@ mod tests {
             repaired_catalog.decade_options("arcade"),
             loaded.catalog.decade_options("arcade")
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialized_hydration_repairs_current_schema_filter_mismatch() {
+        let root = unique_temp_dir("sqlite-projection-filter-parity");
+        let db = root.join("library.sqlite3");
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
+            format!("schema\t{SCHEMA_VERSION}"),
+            "catalog-build\ttest".to_string(),
+            "root\t0\tfixture".to_string(),
+        ]);
+        let mut shooter = mra_discovery(1, "Repair Shooter");
+        shooter.genre = Some("Shooter".to_string());
+        let mut maze = mra_discovery(2, "Repair Maze");
+        maze.genre = Some("Maze".to_string());
+        save_sqlite_scan_with_progress_and_stamp_and_catalog(
+            &db,
+            &sqlite_scan_with_discoveries(vec![shooter, maze]),
+            Some(&stamp),
+            "/media/fat/_Arcade",
+            None,
+        )
+        .expect("write catalog and projection");
+        let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load full sqlite catalog");
+        assert_eq!(loaded.catalog.category_option_count("arcade"), 2);
+
+        let mut incomplete_games = loaded.catalog.games.as_ref().clone();
+        for game in &mut incomplete_games {
+            game.category = "Arcade".into();
+        }
+        let incomplete = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            incomplete_games,
+            loaded.catalog.systems.clone(),
+        );
+        let incomplete_embedded =
+            catalog_navigation::encode_catalog_navigation_for_storage(&incomplete, &stamp)
+                .expect("encode incomplete embedded navigation");
+        let conn = Connection::open(&db).expect("open catalog projection table");
+        conn.execute(
+            "INSERT OR REPLACE INTO catalog_navigation_projection(id,bytes) VALUES(0,?1)",
+            [&incomplete_embedded],
+        )
+        .expect("write valid-schema incomplete embedded navigation");
+        drop(conn);
+        assert!(catalog_projection_pair_current(&db, &stamp).expect("external pair current"));
+        assert!(
+            catalog_projection_filter_mismatches(&db, &loaded.catalog, &stamp)
+                .expect("compare embedded projection")
+                .iter()
+                .any(|detail| detail.starts_with("embedded "))
+        );
+        repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
+            .expect("repair embedded-only mismatch");
+        let repaired_embedded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load repaired embedded recovery cache");
+        assert_eq!(repaired_embedded.catalog.category_option_count("arcade"), 2);
+
+        let conn = Connection::open(&db).expect("reopen catalog projection table");
+        conn.execute(
+            "INSERT OR REPLACE INTO catalog_navigation_projection(id,bytes) VALUES(0,?1)",
+            [&incomplete_embedded],
+        )
+        .expect("restore incomplete embedded navigation");
+        drop(conn);
+        catalog_navigation::write_catalog_navigation_projection_for_catalog(
+            &db,
+            &incomplete,
+            &stamp,
+        )
+        .expect("write valid-schema incomplete navigation projection");
+        assert!(catalog_projection_pair_current(&db, &stamp).expect("projection current"));
+
+        let recovery_cache = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("load embedded recovery cache");
+        assert_eq!(recovery_cache.catalog.category_option_count("arcade"), 1);
+        let hydrated = load_arcade_catalog_from_materialized_sqlite_at("/media/fat/_Arcade", &db)
+            .expect("hydrate retained materialized rows");
+        assert_eq!(hydrated.catalog.category_option_count("arcade"), 2);
+
+        repair_catalog_projections_for_catalog(&db, &hydrated.catalog, &stamp)
+            .expect("repair filter mismatch");
+
+        let repaired = catalog_navigation::read_catalog_navigation_projection(
+            &catalog_navigation::navigation_path_for_sqlite(&db),
+            &stamp,
+        )
+        .expect("read repaired projection")
+        .expect("repaired projection exists");
+        let repaired = ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", repaired);
+        assert!(hydrated
+            .catalog
+            .filter_option_mismatches(&repaired)
+            .is_empty());
+        assert_eq!(repaired.category_option_count("arcade"), 2);
         let _ = std::fs::remove_dir_all(root);
     }
 

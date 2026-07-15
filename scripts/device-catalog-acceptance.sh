@@ -39,6 +39,8 @@ Checks the deployed MiSTer catalog state through scripts/mister:
   - non-empty library.sqlite3
   - current generic catalog facts contain games and discoveries
   - current summary and navigation projections are present
+  - production navigation filter options match full SQLite hydration
+  - aggregate Arcade exposes more than two normalized categories
   - screenshot packs remain runtime-only and are not indexed into asset tables
   - optional duplicate refresh race proves one refresh skips via single-flight
 USAGE
@@ -195,6 +197,17 @@ assert_gt_zero() {
   echo "ok: $label = $actual"
 }
 
+assert_gt() {
+  local label="$1" minimum="$2" actual="$3"
+  if [ -z "$actual" ] || [ "$actual" -le "$minimum" ]; then
+    record_result "$label" fail ">$minimum" "${actual:-empty}"
+    echo "FAIL: $label expected > $minimum actual=${actual:-empty}" >&2
+    exit 1
+  fi
+  record_result "$label" pass ">$minimum" "$actual"
+  echo "ok: $label = $actual"
+}
+
 assert_remote_nonempty() {
   local path="$1"
   if remote "test -s '$path'"; then
@@ -205,6 +218,34 @@ assert_remote_nonempty() {
     echo "FAIL: $path is missing or empty" >&2
     exit 1
   fi
+}
+
+catalog_filter_report() {
+  local prefix="/tmp/mister-magik-catalog-filter-acceptance"
+  local out="$prefix.tsv" err="$prefix.err" rc_file="$prefix.rc" pid state rc
+  pid="$(
+    remote "rm -f '$out' '$err' '$rc_file'; ( '$REMOTE_BIN' catalog-inspect filter-options menu:arcade >'$out' 2>'$err'; echo \$? >'$rc_file' ) & echo \$!" |
+      last_number
+  )"
+  for _ in $(seq 1 60); do
+    state="$(remote "if test -s '$rc_file'; then cat '$rc_file'; else echo running; fi" | awk 'NF { value=$NF } END { print value }')"
+    if [ "$state" != "running" ]; then
+      rc="$state"
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "${rc:-}" ]; then
+    remote "kill '$pid' 2>/dev/null || true"
+    echo "FAIL: catalog filter inspection timed out after 60 seconds" >&2
+    return 1
+  fi
+  if [ "$rc" != "0" ]; then
+    remote "cat '$err' 2>/dev/null || true" >&2
+    echo "FAIL: catalog filter inspection exited rc=$rc" >&2
+    return 1
+  fi
+  remote "cat '$out'"
 }
 
 pack_exists() {
@@ -336,6 +377,24 @@ for expected_mismatch in sms gamegear astrocade; do
   assert_eq "$expected_mismatch core-location mismatch diagnostic" "1" "$(db_scalar "SELECT count(*) FROM system_classification_diagnostics WHERE system_id='$expected_mismatch' AND rejected_source='core-location' AND rejected_kind='arcade';")"
 done
 assert_remote_nonempty "$REMOTE_NAVIGATION"
+filter_report="$(catalog_filter_report)"
+printf '%s\n' "$filter_report"
+filter_parity_status="$(
+  printf '%s\n' "$filter_report" | awk '
+    /^catalog_filter_parity_tsv[[:space:]]/ {
+      for (i = 1; i <= NF; i++) if ($i ~ /^status=/) { sub(/^status=/, "", $i); print $i; exit }
+    }
+  '
+)"
+navigation_category_count="$(
+  printf '%s\n' "$filter_report" | awk '
+    /^catalog_filter_summary_tsv[[:space:]]/ && /source=navigation/ {
+      for (i = 1; i <= NF; i++) if ($i ~ /^categories=/) { sub(/^categories=/, "", $i); print $i; exit }
+    }
+  '
+)"
+assert_eq "catalog filter projection parity" "ok" "$filter_parity_status"
+assert_gt "Arcade normalized category count" "2" "$navigation_category_count"
 
 console_pack_count="$(
   remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number

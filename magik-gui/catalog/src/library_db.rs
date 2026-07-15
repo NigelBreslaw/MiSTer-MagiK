@@ -616,12 +616,28 @@ pub fn load_arcade_catalog_from_sqlite(
     sqlite_catalog::load_arcade_catalog_from_sqlite(root)
 }
 
+/// Hydrate from the retained relational/materialized rows, deliberately
+/// bypassing the embedded navigation recovery cache.
+pub fn load_arcade_catalog_from_materialized_sqlite(
+    root: impl AsRef<Path>,
+) -> Result<LibraryCatalogLoad, String> {
+    sqlite_catalog::load_arcade_catalog_from_materialized_sqlite(root)
+}
+
 pub fn repair_catalog_projections_for_catalog(
     sqlite_path: &Path,
     catalog: &ArcadeCatalog,
     stamp: &catalog_stamp::CatalogStamp,
 ) -> Result<(), String> {
     sqlite_catalog::repair_catalog_projections_for_catalog(sqlite_path, catalog, stamp)
+}
+
+pub fn catalog_projection_filter_mismatches(
+    sqlite_path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &catalog_stamp::CatalogStamp,
+) -> Result<Vec<String>, String> {
+    sqlite_catalog::catalog_projection_filter_mismatches(sqlite_path, catalog, stamp)
 }
 
 #[derive(Clone, Debug)]
@@ -644,7 +660,8 @@ pub(crate) fn rewrite_catalog_projections_from_sqlite(
     root: impl AsRef<Path>,
     sqlite_path: &Path,
 ) -> Result<CatalogProjectionRewriteSummary, String> {
-    let loaded = sqlite_catalog::load_arcade_catalog_from_sqlite_at(root, sqlite_path)?;
+    let loaded =
+        sqlite_catalog::load_arcade_catalog_from_materialized_sqlite_at(root, sqlite_path)?;
     if !loaded.projection_repair_safe {
         return Err(
             "refusing to rewrite catalog projections from degraded joined-SQL fallback".to_string(),
