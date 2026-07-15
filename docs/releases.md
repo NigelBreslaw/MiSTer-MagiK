@@ -189,3 +189,10 @@ reused. The first publication is `game-databases-v1` with
 `mister-magik-game-databases-v1.zip`, and each later upstream change increments
 the whole release number. These support releases are immutable prereleases so
 they do not replace the application release reported by GitHub as latest.
+
+Application distribution downloads the numbered ZIP,
+`game-databases-manifest.json`, and `SHA256SUMS` as one release directory. The
+packager accepts only `--game-databases-release-dir`; it does not accept raw
+MAME/HBMAME SQLite paths. All three release assets must agree before safe
+extraction. Temporary synthetic database bundles exist solely inside tests and
+must never be uploaded or supplied to production packaging.

@@ -658,7 +658,7 @@ fn run_catalog_inspect() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let result = (|| -> Result<String, String> {
         let action = args.first().map(String::as_str).ok_or_else(|| {
-            "usage: catalog-inspect <counts|find-launch-ref|launch-plan|prepared> ...".to_string()
+            "usage: catalog-inspect <counts|filter-options|find-launch-ref|launch-plan|prepared> ...".to_string()
         })?;
         if action == "counts" {
             return library_db::run_sqlite_inspect_cli(&[
@@ -696,6 +696,34 @@ fn run_catalog_inspect() {
         .ok_or_else(|| "catalog navigation projection is missing or stale".to_string())?;
         let catalog = loaded.catalog;
         match action {
+            "filter-options" => {
+                let collection_id = args
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or(mister_magik_catalog::arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+                let hydrated =
+                    library_db::load_arcade_catalog_from_materialized_sqlite(DEFAULT_ARCADE_ROOT)?;
+                let mismatches = hydrated.catalog.filter_option_mismatches(&catalog);
+                let mut out = catalog_filter_inspection_tsv("navigation", collection_id, &catalog);
+                out.push_str(&catalog_filter_inspection_tsv(
+                    "sqlite",
+                    collection_id,
+                    &hydrated.catalog,
+                ));
+                out.push_str(&format!(
+                    "catalog_filter_parity_tsv\tcollection={}\tstatus={}\tmismatched_collections={}\n",
+                    sanitize_tsv_field(collection_id),
+                    if mismatches.is_empty() { "ok" } else { "mismatch" },
+                    mismatches.len()
+                ));
+                for mismatch in mismatches {
+                    out.push_str(&format!(
+                        "catalog_filter_mismatch_tsv\tdetail={}\n",
+                        sanitize_tsv_field(&mismatch)
+                    ));
+                }
+                Ok(out)
+            }
             "find-launch-ref" => {
                 let launch_refs =
                     args.get(1..)
@@ -768,6 +796,44 @@ fn run_catalog_inspect() {
             std::process::exit(1);
         }
     }
+}
+
+fn catalog_filter_inspection_tsv(
+    source: &str,
+    collection_id: &str,
+    catalog: &mister_magik_catalog::arcade_catalog::ArcadeCatalog,
+) -> String {
+    let output_collection_id = sanitize_tsv_field(collection_id);
+    let mut out = format!(
+        "catalog_filter_summary_tsv\tsource={}\tcollection={}\tgames={}\tdecades={}\tmanufacturers={}\tcategories={}\n",
+        source,
+        output_collection_id,
+        catalog.system_game_count(collection_id),
+        catalog.decade_option_count(collection_id),
+        catalog.manufacturer_option_count(collection_id),
+        catalog.category_option_count(collection_id)
+    );
+    for (dimension, options) in [
+        ("decade", catalog.decade_options(collection_id)),
+        ("manufacturer", catalog.manufacturer_options(collection_id)),
+        ("category", catalog.category_options(collection_id)),
+    ] {
+        for option in options {
+            out.push_str(&format!(
+                "catalog_filter_option_tsv\tsource={}\tcollection={}\tdimension={}\tlabel={}\tgames={}\n",
+                source,
+                output_collection_id,
+                dimension,
+                sanitize_tsv_field(&option.label),
+                option.count
+            ));
+        }
+    }
+    out
+}
+
+fn sanitize_tsv_field(value: &str) -> String {
+    value.replace(['\t', '\r', '\n'], " ")
 }
 
 fn run_hbmame_metadata_from_library() {
@@ -2281,6 +2347,39 @@ mod tests {
         fs::write(&db, b"not empty").expect("write nonempty db");
         assert!(usable_library_database_exists(&db));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_filter_inspection_reports_production_option_counts() {
+        use mister_magik_catalog::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry};
+
+        let games = ["Shooter", "Maze"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, category)| ArcadeGameEntry {
+                title: format!("Game {index}").into(),
+                mra_path: format!("/games/{index}.mra").into(),
+                preview_archive_path: "".into(),
+                preview_asset_key: "".into(),
+                has_preview: false,
+                system_id: "arcade".into(),
+                year: Some(1980 + index as u16 * 10),
+                manufacturer: ["Capcom", "Sega"][index].into(),
+                category: category.into(),
+                is_new: false,
+            })
+            .collect();
+        let catalog = ArcadeCatalog::new(PathBuf::from("/games"), games, Vec::new());
+
+        let output = catalog_filter_inspection_tsv("navigation", "arcade", &catalog);
+
+        assert!(output.contains(
+            "catalog_filter_summary_tsv\tsource=navigation\tcollection=arcade\tgames=2\tdecades=2\tmanufacturers=2\tcategories=2"
+        ));
+        assert!(output.contains(
+            "catalog_filter_option_tsv\tsource=navigation\tcollection=arcade\tdimension=category\tlabel=Maze\tgames=1"
+        ));
+        assert_eq!(sanitize_tsv_field("one\ttwo\nthree"), "one two three");
     }
 
     #[test]

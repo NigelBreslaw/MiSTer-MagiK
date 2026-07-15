@@ -738,10 +738,19 @@ only supported screenshot-pack publish path; record performance evidence in
 MAME and HBMAME identity metadata are fixed SQLite artifacts. The manual,
 main-only game-database workflow publishes both in sequential
 `game-databases-vN` releases and rebuilds only upstreams whose tag or revision
-changed. `scripts/package-distribution.sh` verifies the selected numbered
-manifest before including both databases, and the catalog stamp tracks their
-file signatures. Runtime deploy and ordinary application publication never
-build those metadata databases.
+changed. This workflow, `.github/workflows/game-databases.yml`, is the only
+production path permitted to create a bundle or run `mame-metadata-build`.
+Distribution assembly downloads one numbered archive, its manifest, and
+`SHA256SUMS` into a release directory and passes only that directory to
+`scripts/package-distribution.sh`. The packager fails closed on missing,
+ambiguous, mismatched, corrupt, or unsafe bundles before extracting into private
+staging. The catalog stamp tracks the verified database file signatures.
+Runtime deploy and application publication never build or accept raw database
+inputs.
+
+Synthetic SQLite bundles are permitted only as temporary isolated test fixtures
+for corruption, mismatch, undersized-data, and traversal coverage. They are not
+package defaults, release candidates, or publication inputs.
 
 ## SQLite Build And Publish
 
@@ -794,6 +803,16 @@ as "cache unusable" and let the worker rebuild.
 Runtime Arcade filters use metadata already hydrated into `ArcadeCatalog` rows:
 year, manufacturer, and category. Category comes from the offline MAME/HBMAME
 metadata DB when present, not from runtime XML or hot-path database queries.
+Filter indexes preserve the raw stored/searchable category while normalizing
+presentation-only spelling variants. The launcher always offers `Games A-Z`
+and `Search`; Decades, Manufacturer, and Categories are offered only when the
+active system or virtual collection has at least two distinct choices.
+
+`mister-magik-fb catalog-inspect filter-options [COLLECTION]` loads the same
+navigation projection used at startup, compares its filter options with full
+SQLite hydration, and prints `catalog_filter_*_tsv` rows. Device acceptance
+uses `menu:arcade` to prevent a current-schema but incomplete navigation cache
+from silently collapsing the Arcade category list.
 
 Catalog rebuild failures must leave the launcher in an explicit failure state,
 not an indefinite progress state. If persistence or post-save catalog loading

@@ -40,10 +40,12 @@ configuration is clone-local. Enable it on a Mac checkout with:
 git config core.hooksPath .githooks
 ```
 
-The hook runs the fast host CI gates that catch ordinary Rust regressions before
-push: host logic tests, catalog crate tests, catalog clippy, and host-logic
-clippy. Run it directly with `.githooks/pre-commit` when you want the same check
-without committing.
+The hook runs `scripts/validate affected`. It always checks formatting and cheap
+repository contracts, then selects Rust tests, Clippy, and the production UI
+check from the staged paths. Catalog checks run only for catalog or shared-build
+inputs. Use `scripts/validate affected --paths-file FILE` to reproduce routing
+without changing the index, and `scripts/validate full-host` for the complete CI
+assurance gate. There is deliberately no pre-push hook.
 
 The host-testable library contains pure catalog/controller/repeat logic. The
 framebuffer, FPGA, Linux input loop, and Slint renderer stay in the binary target
@@ -85,7 +87,12 @@ scripts/dev-rust check-ui-full
 magik-gui/build-arm.sh            # release-device
 ```
 
-Measured check-loop anchors from
+On Apple Silicon these commands use the native Apple-container backend; Linux
+and CI use `cross check`. Check mode shares the production target, image,
+FFmpeg, Cortex-A9 flags, and caches, but never mirrors a binary, writes a build
+receipt, records binary size, deploys, or contacts a MiSTer.
+
+Historical measured check-loop anchors from
 [`compile-time-experiments-20260609.md`](../history/toolchain-bench/compile-time-experiments-20260609.md):
 warm no-op `check-arm-ui` is about `2.9s`; touching Rust UI code is about
 `3.6s` after the generated UI crate split; touching launcher/shared Slint files

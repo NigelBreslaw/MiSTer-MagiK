@@ -22,10 +22,13 @@ DOCKERFILE=Dockerfile.cross-armv7
 IMAGE_STAMP="${MISTER_APPLE_CONTAINER_IMAGE_STAMP:-$TARGET_DIR.image.sha256}"
 
 PROFILE=release-device
+COMMAND=build
+LIB_ONLY=0
 FEATURES=(ui)
 FEATURE_LIST=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
 LOCKED=1
+VERBOSE=0
 CLEAN=0
 REBUILD_IMAGE="${MISTER_APPLE_CONTAINER_REBUILD_IMAGE:-0}"
 BIN_TARGET=""
@@ -55,9 +58,12 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --bench-tools → include device benchmark commands
   ./build-arm64-apple-container.sh --catalog-builder → build only the Slint-free catalog builder
+  ./build-arm64-apple-container.sh --check       → check ARM UI without producing a binary
+  ./build-arm64-apple-container.sh --check --lib-only → check the Slint-free ARM library
   ./build-arm64-apple-container.sh --ui-scope S → launcher | arcade | all
   ./build-arm64-apple-container.sh --clean      → clear the Apple-container target cache first
   ./build-arm64-apple-container.sh --rebuild-image → rebuild the cross image
+  ./build-arm64-apple-container.sh --verbose    → show Cargo fingerprint detail
 
 One-time host setup:
   rustup toolchain add stable-aarch64-unknown-linux-gnu --profile minimal --force-non-host
@@ -75,6 +81,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
+    --check) COMMAND=check ;;
+    --lib-only) LIB_ONLY=1 ;;
     --profile)
       PROFILE=release-device-profile
       add_feature profile
@@ -102,6 +110,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
     --clean) CLEAN=1 ;;
     --rebuild-image) REBUILD_IMAGE=1 ;;
     --unlocked) LOCKED=0 ;;
+    --verbose) VERBOSE=1 ;;
     -h|--help)
       usage
       exit 0
@@ -113,6 +122,15 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
   esac
 done
+
+if [ "$LIB_ONLY" -eq 1 ]; then
+  if [ "$COMMAND" != check ]; then
+    echo "ERROR: --lib-only requires --check." >&2
+    exit 2
+  fi
+  FEATURES=()
+  BIN_NAME=""
+fi
 
 if [ -z "$UI_SCOPE" ]; then
   UI_SCOPE=all
@@ -129,9 +147,12 @@ MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
   git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
 )}"
 MISTER_MAGIK_VERSION="${MISTER_MAGIK_VERSION:-0.2.$MISTER_MAGIK_BUILD_NUMBER}"
-MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-$(
-  date '+%-d.%-m.%Y %H:%M' 2>/dev/null || date '+%d.%m.%Y %H:%M' 2>/dev/null || echo unknown
-)}"
+if [ -z "${MISTER_MAGIK_BUILD_TIME:-}" ]; then
+  MISTER_MAGIK_BUILD_TIME="$(
+    git -C "$REPO_ROOT" show -s --format='%cd' --date='format:%-d.%-m.%Y %H:%M' HEAD 2>/dev/null || true
+  )"
+  MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-unknown}"
+fi
 
 if [ "$(uname -m)" != arm64 ]; then
   echo "ERROR: Apple-container native path requires an arm64 macOS host; got $(uname -m)." >&2
@@ -206,29 +227,34 @@ echo "==> target triple: $TARGET"
 echo "==> build backend: apple-container"
 echo "==> build CPUs: $CONTAINER_CPUS"
 echo "==> build memory: $CONTAINER_MEMORY"
-STAGED_LICENSE="$PWD/LICENSE"
-if ! (set -o noclobber; : >"$STAGED_LICENSE") 2>/dev/null; then
-  echo "ERROR: refusing to overwrite existing $STAGED_LICENSE" >&2
-  exit 1
-fi
-trap 'rm -f "$STAGED_LICENSE"' EXIT
-cp "$REPO_ROOT/LICENSE" "$STAGED_LICENSE"
 ensure_image
 
 FEATURE_LIST="$(IFS=,; echo "${FEATURES[*]}")"
-BUILD_ARGS=(build --target "$TARGET" --profile "$PROFILE" --features "$FEATURE_LIST")
+BUILD_ARGS=("$COMMAND" --target "$TARGET")
+if [ "$COMMAND" = build ]; then
+  BUILD_ARGS+=(--profile "$PROFILE")
+fi
+if [ -n "$FEATURE_LIST" ]; then
+  BUILD_ARGS+=(--features "$FEATURE_LIST")
+fi
+if [ "$LIB_ONLY" -eq 1 ]; then
+  BUILD_ARGS+=(--lib --no-default-features)
+fi
 if [ -n "$MANIFEST_PATH" ]; then
   BUILD_ARGS+=(--manifest-path "$MANIFEST_PATH")
 fi
 if [ "$LOCKED" -eq 1 ]; then
   BUILD_ARGS+=(--locked)
 fi
+if [ "$VERBOSE" -eq 1 ]; then
+  BUILD_ARGS+=(-vv)
+fi
 if [ -n "$BIN_TARGET" ]; then
   BUILD_ARGS+=(--bin "$BIN_TARGET")
 fi
 
 EXTRA_ENVS=()
-if [ "$BIN_NAME" = "mister-magik-fb" ]; then
+if [ "$LIB_ONLY" -eq 0 ] && [ "$BIN_NAME" = "mister-magik-fb" ]; then
   "$PWD/scripts/build-minimal-ffmpeg.sh"
   EXTRA_ENVS+=(
     --env FFMPEG_DIR=/project/magik-gui/target/ffmpeg-minimal/armv7/dist
@@ -251,6 +277,11 @@ echo "==> image arch probe"
 container run --arch arm64 --rm "$IMAGE" uname -m
 echo "==> container build profile=$PROFILE ui_scope=$UI_SCOPE features=$FEATURE_LIST"
 echo "==> target dir: $TARGET_DIR"
+BUILD_METADATA_ENVS=(
+  --env MISTER_MAGIK_BUILD_NUMBER="$MISTER_MAGIK_BUILD_NUMBER"
+  --env MISTER_MAGIK_VERSION="$MISTER_MAGIK_VERSION"
+  --env MISTER_MAGIK_BUILD_TIME="$MISTER_MAGIK_BUILD_TIME"
+)
 container run --arch arm64 --rm \
   --cpus "$CONTAINER_CPUS" \
   --memory "$CONTAINER_MEMORY" \
@@ -260,9 +291,7 @@ container run --arch arm64 --rm \
   --env CMAKE_BUILD_PARALLEL_LEVEL="$CONTAINER_CPUS" \
   --env MAKEFLAGS="-j$CONTAINER_CPUS" \
   --env MISTER_UI_BUILD_SCOPE="$UI_SCOPE" \
-  --env MISTER_MAGIK_BUILD_NUMBER="$MISTER_MAGIK_BUILD_NUMBER" \
-  --env MISTER_MAGIK_VERSION="$MISTER_MAGIK_VERSION" \
-  --env MISTER_MAGIK_BUILD_TIME="$MISTER_MAGIK_BUILD_TIME" \
+  "${BUILD_METADATA_ENVS[@]}" \
   --env RUSTC_WRAPPER= \
   --env RUSTFLAGS="$CONTAINER_RUSTFLAGS" \
   --env SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}" \
@@ -274,6 +303,11 @@ container run --arch arm64 --rm \
   --workdir /project/magik-gui \
   "$IMAGE" \
   sh -lc 'PATH=/rust/bin:$PATH cargo "$@"' sh "${BUILD_ARGS[@]}"
+
+if [ "$COMMAND" = check ]; then
+  echo "==> check OK (no binary produced)"
+  exit 0
+fi
 
 BIN="$TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
 if [ ! -f "$BIN" ]; then

@@ -87,9 +87,20 @@ fn build_timestamp() -> String {
         }
     }
 
-    command_stdout("date", &["+%-d.%-m.%Y %H:%M"])
-        .or_else(|| command_stdout("date", &["+%d.%m.%Y %H:%M"]))
-        .unwrap_or_else(|| "unknown".into())
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    command_stdout(
+        "git",
+        &[
+            "-C",
+            &manifest_dir,
+            "show",
+            "-s",
+            "--format=%cd",
+            "--date=format:%-d.%-m.%Y %H:%M",
+            "HEAD",
+        ],
+    )
+    .unwrap_or_else(|| "unknown".into())
 }
 
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
