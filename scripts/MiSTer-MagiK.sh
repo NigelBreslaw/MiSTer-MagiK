@@ -18,8 +18,9 @@ CATALOG_BUILDER="$APP_DIR/mister-magik-catalog-builder"
 SNAP_DIR="$APP_DIR/snapshots"
 PENDING="$FAT/.MiSTer.ini.magik.new"
 MANIFEST="$APP_DIR/platform-v1.manifest"
-INSTALLED_SCRIPT="$FAT/Scripts/mister-magik.sh"
-CHANNEL_SCRIPT="$FAT/Scripts/mister-magik-channel.sh"
+INSTALLED_SCRIPT="$FAT/Scripts/MiSTer-MagiK.sh"
+LEGACY_INSTALLED_SCRIPT="$FAT/Scripts/mister-magik.sh"
+LEGACY_CHANNEL_SCRIPT="$FAT/Scripts/mister-magik-channel.sh"
 DOWNLOADER_DROP_IN="$FAT/downloader_mister_magik.ini"
 
 say() {
@@ -498,7 +499,7 @@ stop_magik_children() {
 remove_owned_files() {
   cleanup_failed=0
   rm -rf "$APP_DIR" || cleanup_failed=1
-  rm -f "$MAIN_BIN" "$CHANNEL_SCRIPT" "$DOWNLOADER_DROP_IN" || cleanup_failed=1
+  rm -f "$MAIN_BIN" "$LEGACY_INSTALLED_SCRIPT" "$LEGACY_CHANNEL_SCRIPT" "$DOWNLOADER_DROP_IN" || cleanup_failed=1
   rm -f "$FAT"/downloader_mister_magik.ini.tmp.* "$FAT"/.downloader_mister_magik.ini* || cleanup_failed=1
   rm -f "$INI_BACKUP" "$FAT"/.MiSTer.ini.bak.before-magik.new.* "$FAT"/.MiSTer.ini.magik.new* || cleanup_failed=1
   remove_legacy_root_legal_files || cleanup_failed=1
@@ -507,7 +508,7 @@ remove_owned_files() {
   rm -f "$INSTALLED_SCRIPT" || cleanup_failed=1
   [ "${MISTER_MAGIK_TEST_MODE:-0}" = 1 ] || sync
 
-  for path in "$APP_DIR" "$MAIN_BIN" "$INSTALLED_SCRIPT" "$CHANNEL_SCRIPT" \
+  for path in "$APP_DIR" "$MAIN_BIN" "$INSTALLED_SCRIPT" "$LEGACY_INSTALLED_SCRIPT" "$LEGACY_CHANNEL_SCRIPT" \
     "$DOWNLOADER_DROP_IN" "$INI_BACKUP" "$FAT/THIRD-PARTY-NOTICES.txt" \
     "$FAT/SOURCE-OFFER.txt"; do
     if [ -e "$path" ]; then say "ERROR: uninstall residue: $path"; cleanup_failed=1; fi
