@@ -18,6 +18,7 @@ fails.
 | Main `29439443160` | miss | 4m25s | 3m49s | 3m07s |
 | PR `29443632017` | 257 MB hit | 3m01s | 2m05s | 90.6s |
 | PR `29443910399` (docs-only commit) | 257 MB hit | 3m07s | 2m11s | 86.3s |
+| PR `29447059495` (prebuilt image) | 257 MB hit | 2m24s | 1m33s | 88s |
 
 The PR job totals include a one-off 14-15 second gzip measurement of the cross
 image. That measurement was removed after recording the size below.
@@ -45,30 +46,53 @@ critical path. This is consistent with the production profile's fat LTO and
 single codegen unit. Reducing it requires a release profile tradeoff, not a
 cache or runner-image change.
 
-### 2. The custom cross image is rebuilt on every hosted runner
+### 2. A slim prebuilt cross image removes repeated construction
 
-`Cross.toml` points to `Dockerfile.cross-armv7`, so each ephemeral runner pulls
-Ubuntu 20.04 and installs 75 packages. The PR runs downloaded 134 MB of apt
-archives, installed 727 MB, and spent about 31-33 seconds building/exporting
-the image. Earlier comparable runs were as high as 37 seconds.
+The original `Cross.toml` pointed directly to `Dockerfile.cross-armv7`, so each
+ephemeral runner pulled Ubuntu 20.04 and installed the toolchain again. The PR
+runs spent about 31-33 seconds building/exporting the image; earlier comparable
+runs were as high as 37 seconds.
 
-The measured image is:
+Four clean image/build variants established which packages are actually
+required. Sizes below use the same `docker save | gzip -6` method, unlike the
+earlier one-off archive measurements:
 
-- `814,510,603` bytes unpacked;
-- `267,303,666` to `267,319,287` bytes as a gzip-compressed Docker archive.
+| Variant | Unpacked | gzip-6 archive | Packages | Image build | Clean production build | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Original Ubuntu image | 814,510,603 B | 236,831,095 B | 167 | 34s | 242s | pass |
+| Runtime Clang + host GCC/libc | 534,986,635 B | 178,514,956 B | 157 | 25s | 107s | fail: Clang resource headers missing |
+| Runtime + resource headers + host GCC/libc | 609,406,134 B | 196,616,219 B | 161 | 25s | 239s | pass |
+| Debian Bullseye toolchain | 1,020,397,653 B | 324,653,677 B | - | 81s | - | rejected: larger |
 
-A versioned public GHCR image keyed by the Dockerfile content should remove
-most of the 31-37 second build on hosted runners. This differs from the old
-local prebuilt-image experiment: local Docker already had the layers, while a
-GitHub-hosted runner starts cold.
+The winning image is 25.2% smaller unpacked and 17.0% smaller as a controlled
+gzip archive. Its clean production compile remained effectively unchanged
+(239 seconds versus 242), and it passed FFmpeg compilation, shared-library,
+and GLIBC 2.31 gates. Removing either the host libc headers or Clang resource
+headers produced real build failures, so further package deletion is not
+supported by the current toolchain.
 
-Use the small cross container, not a full custom runner/VM image. The toolchain
-container is the only missing reusable layer and is about 267 MB compressed.
+The image is published at
+`ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737` with
+manifest digest
+`sha256:d199c8f8acc12f8cc0057a2181c96c1685cbbbabad35c1ee61c0ad27bcd5ce4d`.
+The content suffix is the first 12 characters of the canonical Dockerfile's
+SHA-256. A manual publisher workflow makes replacement deliberate.
+
+Two fresh hosted runners pulled the private GHCR image in 12-13 seconds. The
+release path's explicit pull plus build took about 106 seconds, versus 125-131
+seconds for the prior build step that constructed the image. This is a measured
+net saving of about 19-25 seconds on the relevant path. The full warm release
+job fell to 2m24s; the preceding jobs were 3m01s and 3m07s, although 14-15
+seconds of those totals was a temporary archive-size measurement.
+
+Use this small cross container, not a full custom runner/VM image. The
+toolchain container is the only missing reusable layer and is about 197 MB as
+the controlled compressed archive.
 
 Current GitHub billing documentation says public packages are free and Actions
 downloads from GitHub Packages have free data transfer. If the image must be
 private, shared artifact/package storage is $0.25/GB-month. One measured image
-tag is therefore about $0.067/month before included allowance. Keep immutable
+tag is therefore about $0.049/month before included allowance. Keep immutable
 content-addressed tags but prune superseded tags so storage does not grow
 without bound.
 
@@ -90,17 +114,44 @@ On a target-cache miss, Cargo rose from 86-91 seconds to 187 seconds. The cache
 therefore saves about 96-101 seconds and should remain, even though its key and
 restore behavior should continue to be monitored through the timing artifact.
 
+### 4. Thin LTO is faster, but changes the shipped binary
+
+Manual run `29447425776` built a fresh target directory for four combinations
+of LTO mode and codegen-unit count. Run `29448092827` repeated each combination
+from its own restored target cache. Every variant used the prebuilt image and
+cached FFmpeg, uploaded a Cargo timing report, and passed the shared-library
+and GLIBC 2.31 checks.
+
+| Variant | Fresh wrapper / Cargo | Warm wrapper / Cargo | Binary | Versus production |
+| --- | ---: | ---: | ---: | --- |
+| fat LTO, 1 CGU (production) | 196s / 190s | 92s / 85s | 9,196,012 B | baseline |
+| fat LTO, 16 CGUs | 185s / 179s | 87s / 82s | 9,466,348 B | 5-11s faster, 270,336 B larger |
+| thin LTO, 1 CGU | 128s / 122s | 66s / 60s | 9,482,788 B | 26-68s faster, 286,776 B larger |
+| thin LTO, 16 CGUs | 159s / 154s | 59s / 54s | 10,420,764 B | 33-37s faster, 1,224,752 B larger |
+
+Thin LTO with one CGU was the clean-build winner: 34.7% less wrapper time for
+a 3.1% larger binary. It was also 28.3% faster on the warm wrapper path. Thin
+LTO with 16 CGUs won the warm measurement by another seven seconds, but was
+13.3% larger and had a slower fresh build than thin/1. Fat/16 provided only a
+5-11 second improvement for a 2.9% size increase.
+
+These compatibility checks do not prove equivalent on-device performance or
+release behaviour. The profile benchmark is evidence for a separate release
+tradeoff, not authority to replace the production fat-LTO artifact in this CI
+audit.
+
 ## Recommendations
 
 1. Keep the 14-day Cargo timing artifact in `rust-arm.yml`. Its uploaded size
    was only 49 KB in the first measured run.
-2. Publish a versioned public GHCR cross image and A/B its pull time against the
-   measured 31-37 second Dockerfile build. Expected gross saving: about half a
-   minute; measure the net saving before merging the image switch.
+2. Keep the content-versioned GHCR cross image. The measured 12-13 second cold
+   pull saves about 19-25 seconds versus constructing it on every runner.
 3. Keep the actual production profile in release CI. If a faster release is
-   required, separately A/B thin LTO and additional codegen units against
-   binary size, shared-library checks, device performance, and release gates.
-   Do not silently substitute a fast CI-only artifact for the shipped binary.
+   required, thin LTO with one CGU is the only compelling measured candidate:
+   its fresh/warm builds were 68/26 seconds faster and its binary 3.1% larger.
+   Run the device performance and release gates before changing the shipped
+   profile. Do not silently substitute a fast CI-only artifact for the shipped
+   binary.
 4. Treat roughly 1.5 minutes of warm Cargo time as the present production-build
    floor until the fat-LTO profile is deliberately changed. A prebuilt cross
    image can reduce setup time but cannot affect the 64-66 second final unit.

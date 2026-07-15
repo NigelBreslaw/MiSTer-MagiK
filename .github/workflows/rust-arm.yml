@@ -23,7 +23,6 @@ env:
 jobs:
   host-dev:
     name: host-dev
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -87,7 +86,6 @@ jobs:
 
   ci-clippy:
     name: ci-clippy
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -124,7 +122,6 @@ jobs:
 
   arm-build:
     name: release
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -218,7 +215,6 @@ jobs:
 
   agent-arm-build:
     name: agent-arm-build
-    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -280,106 +276,3 @@ jobs:
           name: mister-magik-agent
           path: tools/magik-agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
           if-no-files-found: error
-
-  release-profile-benchmark:
-    name: release-profile-${{ matrix.name }}
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: fat-cgu1
-            lto: fat
-            codegen_units: 1
-          - name: fat-cgu16
-            lto: fat
-            codegen_units: 16
-          - name: thin-cgu1
-            lto: thin
-            codegen_units: 1
-          - name: thin-cgu16
-            lto: thin
-            codegen_units: 16
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        working-directory: magik-gui
-        run: rustup show
-
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-${{ hashFiles('magik-gui/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Cache cross binary
-        uses: actions/cache@v6
-        id: cross-cache
-        with:
-          path: ~/.cargo/bin/cross
-          key: cross-${{ runner.os }}-${{ env.CROSS_VERSION }}
-
-      - name: Install cross
-        if: steps.cross-cache.outputs.cache-hit != 'true'
-        run: cargo install cross --version "$CROSS_VERSION" --locked
-
-      - name: Log in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-
-      - name: Pull cross image
-        run: docker pull "$MISTER_CROSS_IMAGE"
-
-      - name: Cache minimal FFmpeg
-        uses: actions/cache@v6
-        with:
-          path: magik-gui/target/ffmpeg-minimal/armv7
-          key: ffmpeg-minimal-${{ runner.os }}-8.1.2-${{ hashFiles('magik-gui/scripts/build-minimal-ffmpeg.sh', 'magik-gui/Dockerfile.cross-armv7') }}
-
-      - name: Cache profile benchmark outputs
-        uses: actions/cache@v6
-        with:
-          path: |
-            magik-gui/target/release-device
-            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device
-          key: target-profile-bench-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh') }}
-
-      - name: Build profile variant
-        env:
-          CARGO_PROFILE_RELEASE_DEVICE_LTO: ${{ matrix.lto }}
-          CARGO_PROFILE_RELEASE_DEVICE_CODEGEN_UNITS: ${{ matrix.codegen_units }}
-          MISTER_CARGO_TIMINGS: "1"
-        run: |
-          started="$(date +%s)"
-          magik-gui/build-arm.sh --device
-          finished="$(date +%s)"
-          binary=magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
-          {
-            printf 'profile_variant=%s\n' '${{ matrix.name }}'
-            printf 'profile_build_seconds=%s\n' "$((finished - started))"
-            printf 'binary_bytes=%s\n' "$(stat -c %s "$binary")"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Check ARM shared libraries
-        run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
-
-      - name: Upload profile benchmark
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-profile-${{ matrix.name }}
-          path: |
-            magik-gui/target/cargo-timings/*.html
-            magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
-          if-no-files-found: warn
-          retention-days: 14

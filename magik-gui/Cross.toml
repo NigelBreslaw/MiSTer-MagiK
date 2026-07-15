@@ -6,8 +6,6 @@ image = "ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737"
 
 [build.env]
 passthrough = [
-    "CARGO_PROFILE_RELEASE_DEVICE_CODEGEN_UNITS",
-    "CARGO_PROFILE_RELEASE_DEVICE_LTO",
     "FFMPEG_DIR",
     "CFLAGS",
     "HOST_CFLAGS",
