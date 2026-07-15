@@ -111,10 +111,18 @@ if [ "$MODE" = fast ]; then
   python3 "$ROOT/scripts/test-game-databases-workflow.py"
   python3 "$ROOT/scripts/test-distribution-workflow.py"
   python3 "$ROOT/scripts/test-arm-build-contract.py"
+  python3 "$ROOT/scripts/test-ci-cache-identity.py"
+  python3 "$ROOT/scripts/test-ci-cache-contract.py"
+  "$ROOT/scripts/test-quartus-r2-cache.sh"
   "$ROOT/scripts/test-validate.sh"
   echo "fast host tool checks ok"
   exit 0
 fi
+
+python3 "$ROOT/scripts/test-ci-cache-identity.py"
+python3 "$ROOT/scripts/test-ci-cache-contract.py"
+"$ROOT/scripts/test-quartus-r2-cache.sh"
+"$ROOT/scripts/test-validate.sh"
 
 switch_log="$TMP/switch-ui-calls.log"
 cat >"$TMP/fake-mister" <<'EOF'

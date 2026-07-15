@@ -286,6 +286,33 @@ registry/git data, caches the minimal FFmpeg tree, records
 `magik-gui/scripts/check-arm-shared-libs.sh`, and uploads the binary plus size
 TSV as artifacts.
 
+Host, ARM, agent, distribution, and Main caches use the schema-v2 identities
+from `scripts/ci-cache-identity.py`. Binary caches are scoped by runner OS and
+architecture plus the Rust/cross ABI; `incremental/` directories are excluded
+from transfer. `scripts/test-ci-cache-contract.py` is the policy gate for every
+workflow cache key.
+
+The manual FPGA workflow does not use GitHub Actions cache for Quartus. Its
+installed Quartus 17.0/Cyclone V runtime is stored as a private,
+content-addressed `tar.zst` in the dedicated R2 Standard bucket
+`mister-magik-ci-cache`; no installer payload is uploaded. Configure these
+repository Actions values before dispatching the workflow:
+
+```text
+variable  QUARTUS_R2_ACCOUNT_ID
+variable  QUARTUS_R2_BUCKET=mister-magik-ci-cache
+secret    QUARTUS_R2_READ_ACCESS_KEY_ID
+secret    QUARTUS_R2_READ_SECRET_ACCESS_KEY
+secret    QUARTUS_R2_WRITE_ACCESS_KEY_ID
+secret    QUARTUS_R2_WRITE_SECRET_ACCESS_KEY
+```
+
+Create separate, bucket-scoped R2 S3 tokens: Object Read only for the read
+pair and Object Read & Write for the write pair. The bucket must remain private
+with no custom domain or `r2.dev` exposure. `scripts/quartus-r2-cache.sh`
+publishes the checksum manifest last, so an interrupted multipart upload is a
+cache miss rather than a corrupt hit.
+
 The shared-library check intentionally fails if any `libav*`, `libswscale`, or
 `libswresample` dependency appears. FFmpeg must stay statically linked from the
 project-local minimal build.

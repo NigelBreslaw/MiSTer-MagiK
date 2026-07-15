@@ -10,9 +10,6 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE: ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737
-
 jobs:
   publish:
     runs-on: ubuntu-24.04
@@ -21,12 +18,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Read canonical cross image
+        id: cache-id
+        run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
       - name: Log in to GHCR
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Build and publish image
+        env:
+          IMAGE: ${{ steps.cache-id.outputs.cross_image }}
         run: |
           set -euo pipefail
           mkdir -p build/ci

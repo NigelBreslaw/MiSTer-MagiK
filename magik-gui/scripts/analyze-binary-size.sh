@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device-profile/mister-magik-fb}"
 OUT_DIR="${2:-$ROOT/build/binary-size-analysis}"
-IMAGE="${MISTER_CROSS_IMAGE:-cross-custom-rust:armv7-unknown-linux-gnueabihf-b52a5}"
+IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$ROOT/scripts/ci-cache-identity.py" --value cross_image)}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 
 if [ ! -f "$BIN" ]; then
