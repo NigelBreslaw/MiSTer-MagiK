@@ -8,6 +8,7 @@ RUN apt-get update \
         ca-certificates \
         gcc \
         g++-arm-linux-gnueabihf \
+        libc6-dev \
         libclang1-10 \
         libclang-common-10-dev \
         make \
