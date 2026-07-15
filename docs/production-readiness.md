@@ -21,7 +21,9 @@ manual pre-release gate rather than GitHub-hosted CI.
 - Platform binaries originate from an immutable main-qualified platform bundle;
   PR artifacts are never eligible for publication.
 - MAME and HBMAME metadata originate from the highest numbered immutable
-  `game-databases-vN` release. Application publication never rebuilds them.
+  `game-databases-vN` release, with archive, manifest, and `SHA256SUMS` verified
+  together. Application publication never rebuilds them or accepts raw database
+  paths. Synthetic bundles are test fixtures only.
 - Rollback is verified with `scripts/restore-stock-boot.sh` before publishing a
   beta build from a new release flow.
 - The exact workflow candidate passes the full device gate before a reviewer

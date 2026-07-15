@@ -56,6 +56,8 @@ if [ "$BACKEND" = auto ] || [ "$BACKEND" = apple-container ]; then
 fi
 
 PROFILE=release-device
+COMMAND=build
+LIB_ONLY=0
 FEATURES=(ui)
 FEATURE_LIST=""
 BIN_TARGET=""
@@ -78,6 +80,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
+    --check) COMMAND=check ;;
+    --lib-only) LIB_ONLY=1 ;;
     --profile)
       PROFILE=release-device-profile
       add_feature profile
@@ -108,6 +112,8 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
       echo "  ./build-arm.sh --catalog-builder → build only the Slint-free catalog builder"
+      echo "  ./build-arm.sh --check       → check ARM UI without producing a binary"
+      echo "  ./build-arm.sh --check --lib-only → check the Slint-free ARM library"
       echo "  ./build-arm.sh --ui-scope S  → launcher | arcade | all"
       echo "  ./build-arm.sh --clean       → cargo clean before building"
       exit 0
@@ -118,6 +124,15 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
   esac
 done
+
+if [ "$LIB_ONLY" -eq 1 ]; then
+  if [ "$COMMAND" != check ]; then
+    echo "ERROR: --lib-only requires --check." >&2
+    exit 2
+  fi
+  FEATURES=()
+  BIN_NAME=""
+fi
 
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}"
@@ -138,9 +153,13 @@ export MISTER_MAGIK_BUILD_NUMBER="${MISTER_MAGIK_BUILD_NUMBER:-$(
   git -C "$PWD/.." rev-list --count HEAD 2>/dev/null || echo unknown
 )}"
 export MISTER_MAGIK_VERSION="${MISTER_MAGIK_VERSION:-0.2.$MISTER_MAGIK_BUILD_NUMBER}"
-export MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-$(
-  date '+%-d.%-m.%Y %H:%M' 2>/dev/null || date '+%d.%m.%Y %H:%M' 2>/dev/null || echo unknown
-)}"
+if [ -z "${MISTER_MAGIK_BUILD_TIME:-}" ]; then
+  MISTER_MAGIK_BUILD_TIME="$(
+    git -C "$PWD/.." show -s --format='%cd' --date='format:%-d.%-m.%Y %H:%M' HEAD 2>/dev/null || true
+  )"
+  MISTER_MAGIK_BUILD_TIME="${MISTER_MAGIK_BUILD_TIME:-unknown}"
+fi
+export MISTER_MAGIK_BUILD_TIME
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: Docker is not installed or not on PATH — cross needs it for armv7 builds." >&2
@@ -165,19 +184,18 @@ elif [ "$PROFILE" = release-device ]; then
 fi
 
 BUILD_LOG="$(mktemp)"
-STAGED_LICENSE="$PWD/LICENSE"
-if ! (set -o noclobber; : >"$STAGED_LICENSE") 2>/dev/null; then
-  echo "ERROR: refusing to overwrite existing $STAGED_LICENSE" >&2
-  rm -f "$BUILD_LOG"
-  exit 1
-fi
-trap 'rm -f "$BUILD_LOG" "$STAGED_LICENSE"' EXIT
-cp "$PWD/../LICENSE" "$STAGED_LICENSE"
+trap 'rm -f "$BUILD_LOG"' EXIT
 if [ "$CLEAN" -eq 1 ]; then
   echo "==> cargo clean"
   cargo clean
 fi
-BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf --profile "$PROFILE")
+BUILD_ARGS=(--locked --target armv7-unknown-linux-gnueabihf)
+if [ "$COMMAND" = build ]; then
+  BUILD_ARGS+=(--profile "$PROFILE")
+fi
+if [ "$LIB_ONLY" -eq 1 ]; then
+  BUILD_ARGS+=(--lib --no-default-features)
+fi
 if [ -n "$MANIFEST_PATH" ]; then
   BUILD_ARGS+=(--manifest-path "$MANIFEST_PATH")
 fi
@@ -192,7 +210,7 @@ if [ "${#FEATURES[@]}" -gt 0 ]; then
   BUILD_ARGS+=(--features "$FEATURE_LIST")
 fi
 
-if [ "$BIN_NAME" = "mister-magik-fb" ]; then
+if [ "$LIB_ONLY" -eq 0 ] && [ "$BIN_NAME" = "mister-magik-fb" ]; then
   "$PWD/scripts/build-minimal-ffmpeg.sh"
   export FFMPEG_DIR="/target/ffmpeg-minimal/armv7/dist"
   export PKG_CONFIG_PATH="/target/ffmpeg-minimal/armv7/dist/lib/pkgconfig"
@@ -203,19 +221,23 @@ if [ "$BIN_NAME" = "mister-magik-fb" ]; then
   echo "==> using minimal FFmpeg: $FFMPEG_DIR"
 fi
 
-if ! cross build "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG"; then
+if ! cross "$COMMAND" "${BUILD_ARGS[@]}" 2>&1 | tee "$BUILD_LOG"; then
   exit 1
 fi
 if grep -q 'Falling back to `cargo` on the host' "$BUILD_LOG"; then
   echo "ERROR: cross fell back to host cargo (Docker not used). Check Docker and run from magik-gui/." >&2
   exit 1
 fi
-echo "==> cross build OK"
+echo "==> cross $COMMAND OK"
 if [ "${MISTER_CARGO_TIMINGS:-1}" != "0" ]; then
   TIMING_REPORT="$(find "$PWD/target/cargo-timings" -type f -name 'cargo-timing*.html' -print 2>/dev/null | sort | tail -1 || true)"
   if [ -n "$TIMING_REPORT" ]; then
     echo "==> Cargo timing report: $TIMING_REPORT"
   fi
+fi
+
+if [ "$COMMAND" = check ]; then
+  exit 0
 fi
 
 BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/$BIN_NAME"

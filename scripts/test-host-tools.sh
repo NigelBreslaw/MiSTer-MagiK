@@ -9,8 +9,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+MODE=full
+case "${1:-}" in
+  ""|--full) ;;
+  --fast) MODE=fast ;;
+  -h|--help)
+    echo "usage: scripts/test-host-tools.sh [--fast|--full]"
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    exit 2
+    ;;
+esac
+
 python3 "$ROOT/scripts/check-license-headers.py"
 
+if [ "$MODE" = full ]; then
 cat >"$TMP/MiSTer.ini" <<'EOF'
 [MiSTer]
 direct_video=1
@@ -35,6 +50,7 @@ grep -q '^\[arcade_vertical\]$' "$TMP/repaired.ini"
 grep -q '^video_mode=14$' "$TMP/repaired.ini"
 grep -q '^direct_video=0$' "$TMP/repaired.ini"
 grep -q '^video_mode=8$' "$TMP/repaired.ini"
+fi
 
 for script in \
   "$ROOT/scripts/check-no-main-kill.sh" \
@@ -70,17 +86,35 @@ for script in \
   "$ROOT/scripts/profile-preview-pack-decode.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/profile-screenshot-download.sh" \
+  "$ROOT/scripts/regression-arm-noop.sh" \
   "$ROOT/scripts/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/scripts/switch-ui.sh" \
   "$ROOT/scripts/test-magik-mode.sh" \
-  "$ROOT/magik-gui/build-arm.sh"; do
+  "$ROOT/scripts/validate" \
+  "$ROOT/magik-gui/build-arm.sh" \
+  "$ROOT/magik-gui/build-arm64-apple-container.sh"; do
   bash -n "$script"
 done
 
 while IFS= read -r script; do
   bash -n "$script"
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
+
+if [ "$MODE" = fast ]; then
+  "$ROOT/scripts/check-no-main-kill.sh"
+  "$ROOT/scripts/check-no-direct-arcade-scene.sh"
+  "$ROOT/scripts/check-scanout-slots-contract.sh"
+  python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"
+  python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
+  python3 "$ROOT/scripts/test-select-published-release.py"
+  python3 "$ROOT/scripts/test-game-databases-workflow.py"
+  python3 "$ROOT/scripts/test-distribution-workflow.py"
+  python3 "$ROOT/scripts/test-arm-build-contract.py"
+  "$ROOT/scripts/test-validate.sh"
+  echo "fast host tool checks ok"
+  exit 0
+fi
 
 switch_log="$TMP/switch-ui-calls.log"
 cat >"$TMP/fake-mister" <<'EOF'
@@ -105,6 +139,7 @@ python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
 python3 "$ROOT/scripts/test-game-databases-bundle.py"
 python3 "$ROOT/scripts/test-select-published-release.py"
 python3 "$ROOT/scripts/test-game-databases-workflow.py"
+python3 "$ROOT/scripts/test-arm-build-contract.py"
 
 if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   package_tmp="$TMP/package-distribution"
@@ -161,26 +196,12 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
      INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'0.288 (mame0288)' FROM seq;
      CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
      INSERT INTO mame_software_items VALUES('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');"
-  sqlite3 "$package_tmp/tiny-hbmame.sqlite3" \
-    "CREATE TABLE mame_machines(setname TEXT PRIMARY KEY, parent_setname TEXT, title TEXT NOT NULL) WITHOUT ROWID; INSERT INTO mame_machines VALUES('mappyj','mappy','Mappy');"
   if "$ROOT/scripts/package-distribution.sh" \
       --binary "$package_tmp/mister-magik-fb" \
       --mame-sqlite "$package_tmp/mame.sqlite3" \
-      --name missing-provenance \
+      --name forbidden-raw-database \
       --out-dir "$package_tmp/out" >/dev/null 2>&1; then
-    echo "expected package without MAME provenance to fail" >&2
-    exit 1
-  fi
-  if "$ROOT/scripts/package-distribution.sh" \
-      --binary "$package_tmp/mister-magik-fb" \
-      --mame-sqlite "$package_tmp/mame.sqlite3" \
-      --mame-source-ref test-fixture \
-      --hbmame-sqlite "$package_tmp/tiny-hbmame.sqlite3" \
-      --hbmame-source-revision test-fixture \
-      "${platform_args[@]}" \
-      --name tiny-hbmame \
-      --out-dir "$package_tmp/out" >/dev/null 2>&1; then
-    echo "expected tiny HBMAME metadata DB package to fail" >&2
+    echo "expected raw database package input to fail" >&2
     exit 1
   fi
 
@@ -214,10 +235,8 @@ SQL
     --output "$package_tmp/game-databases" >/dev/null
   "$ROOT/scripts/package-distribution.sh" \
     --binary "$package_tmp/mister-magik-fb" \
-    --mame-sqlite "$package_tmp/mame.sqlite3" \
-    --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
+    --game-databases-release-dir "$package_tmp/game-databases" \
     "${platform_args[@]}" \
-    --game-databases-manifest "$package_tmp/game-databases/game-databases-manifest.json" \
     --name valid-hbmame \
     --release-assets-dir "$package_tmp/release-assets" \
     --out-dir "$package_tmp/out" >/dev/null
