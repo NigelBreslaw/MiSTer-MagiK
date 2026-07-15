@@ -170,7 +170,46 @@ jobs:
             target-arm-${{ runner.os }}-release-device-
 
       - name: Build ARM binary
+        env:
+          MISTER_CARGO_TIMINGS: "1"
         run: magik-gui/build-arm.sh --device
+
+      - name: Record cross image size
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/ci
+          report=build/ci/cross-image-size.txt
+          image="$(docker image ls \
+            --filter 'reference=cross-custom-magik-gui:*' \
+            --format '{{.Repository}}:{{.Tag}}' | head -1)"
+          if [[ -z "$image" ]]; then
+            echo "cross image was not created" | tee "$report"
+            exit 0
+          fi
+          echo "image=$image" | tee "$report"
+          docker image inspect \
+            --format 'uncompressed_bytes={{.Size}}' "$image" | tee -a "$report"
+          compressed_bytes="$(docker save "$image" | gzip -1 | wc -c)"
+          echo "compressed_archive_bytes=${compressed_bytes//[[:space:]]/}" | tee -a "$report"
+
+      - name: Upload Cargo timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-timings-release
+          path: magik-gui/target/cargo-timings/*.html
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload cross image size
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-image-size-release
+          path: build/ci/cross-image-size.txt
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
