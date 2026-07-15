@@ -794,6 +794,16 @@ as "cache unusable" and let the worker rebuild.
 Runtime Arcade filters use metadata already hydrated into `ArcadeCatalog` rows:
 year, manufacturer, and category. Category comes from the offline MAME/HBMAME
 metadata DB when present, not from runtime XML or hot-path database queries.
+Filter indexes preserve the raw stored/searchable category while normalizing
+presentation-only spelling variants. The launcher always offers `Games A-Z`
+and `Search`; Decades, Manufacturer, and Categories are offered only when the
+active system or virtual collection has at least two distinct choices.
+
+`mister-magik-fb catalog-inspect filter-options [COLLECTION]` loads the same
+navigation projection used at startup, compares its filter options with full
+SQLite hydration, and prints `catalog_filter_*_tsv` rows. Device acceptance
+uses `menu:arcade` to prevent a current-schema but incomplete navigation cache
+from silently collapsing the Arcade category list.
 
 Catalog rebuild failures must leave the launcher in an explicit failure state,
 not an indefinite progress state. If persistence or post-save catalog loading

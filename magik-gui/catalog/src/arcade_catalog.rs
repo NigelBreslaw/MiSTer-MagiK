@@ -11,7 +11,7 @@ use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -687,6 +687,68 @@ impl ArcadeCatalog {
         self.filter_options(system_id).categories.len()
     }
 
+    pub fn resolve_filter(&self, system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilter> {
+        match filter {
+            ArcadeFilter::All => Some(ArcadeFilter::All),
+            ArcadeFilter::Search => Some(ArcadeFilter::Search),
+            ArcadeFilter::Decade(decade) => self
+                .decade_options(system_id)
+                .iter()
+                .any(|option| option.label == format!("{decade}'s"))
+                .then_some(ArcadeFilter::Decade(*decade)),
+            ArcadeFilter::Manufacturer(manufacturer) => self
+                .manufacturer_options(system_id)
+                .iter()
+                .find(|option| option.label == manufacturer.trim())
+                .map(|option| ArcadeFilter::Manufacturer(option.label.clone())),
+            ArcadeFilter::Category(category) => {
+                let category = canonical_category_label(category);
+                self.category_options(system_id)
+                    .iter()
+                    .find(|option| option.label == category)
+                    .map(|option| ArcadeFilter::Category(option.label.clone()))
+            }
+        }
+    }
+
+    pub fn filter_option_count_detail(&self, system_id: &str) -> String {
+        format!(
+            "collection={} games={} decades={} manufacturers={} categories={}",
+            system_id,
+            self.system_game_count(system_id),
+            self.decade_option_count(system_id),
+            self.manufacturer_option_count(system_id),
+            self.category_option_count(system_id)
+        )
+    }
+
+    pub fn filter_option_mismatches(&self, other: &Self) -> Vec<String> {
+        let collection_ids = self
+            .systems
+            .iter()
+            .map(|system| system.id.as_str())
+            .chain(other.systems.iter().map(|system| system.id.as_str()))
+            .chain([MENU_ARCADE_SYSTEM_ID])
+            .collect::<BTreeSet<_>>();
+        collection_ids
+            .into_iter()
+            .filter(|system_id| {
+                self.system_game_count(system_id) != other.system_game_count(system_id)
+                    || self.decade_options(system_id) != other.decade_options(system_id)
+                    || self.manufacturer_options(system_id) != other.manufacturer_options(system_id)
+                    || self.category_options(system_id) != other.category_options(system_id)
+            })
+            .map(|system_id| {
+                format!(
+                    "{} expected=({}) actual=({})",
+                    system_id,
+                    self.filter_option_count_detail(system_id),
+                    other.filter_option_count_detail(system_id)
+                )
+            })
+            .collect()
+    }
+
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
         self.preview_game_indexes(system_id)
             .iter()
@@ -852,17 +914,16 @@ fn build_arcade_catalog_indexes(
                     .or_default() += 1;
             }
 
-            if !game.category.is_empty() {
+            let category = canonical_category_label(&game.category);
+            if !category.is_empty() {
+                let category: Arc<str> = Arc::from(category);
                 games_by_filter
                     .entry(ArcadeFilterKey {
                         system_id: system_id_arc,
-                        kind: ArcadeFilterKindKey::Category(game.category.clone()),
+                        kind: ArcadeFilterKindKey::Category(category.clone()),
                     })
                     .or_default()
                     .push(idx);
-            }
-            let category = game.category.trim();
-            if !category.is_empty() {
                 *counts.categories.entry(category.to_string()).or_default() += 1;
             }
 
@@ -1246,9 +1307,61 @@ fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey>
         }),
         ArcadeFilter::Category(category) => Some(ArcadeFilterKey {
             system_id: Arc::from(system_id),
-            kind: ArcadeFilterKindKey::Category(Arc::from(category.as_str())),
+            kind: ArcadeFilterKindKey::Category(Arc::from(canonical_category_label(category))),
         }),
     }
+}
+
+fn canonical_category_label(category: &str) -> String {
+    let collapsed = category
+        .replace(['\u{2018}', '\u{2019}'], "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let alias_key = collapsed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    match alias_key.as_str() {
+        "beatemup" => "Beat 'em up".to_string(),
+        "shootemup" | "shmup" => "Shoot 'em up".to_string(),
+        "platformer" => "Platform".to_string(),
+        _ => canonical_category_case(&collapsed),
+    }
+}
+
+fn canonical_category_case(category: &str) -> String {
+    let mut out = String::with_capacity(category.len());
+    let mut run = String::new();
+    let mut after_apostrophe = false;
+    let flush_run = |out: &mut String, run: &mut String, after_apostrophe: bool| {
+        if run.is_empty() {
+            return;
+        }
+        let lower = run.to_ascii_lowercase();
+        if after_apostrophe && matches!(lower.as_str(), "s" | "em" | "n" | "t") {
+            out.push_str(&lower);
+        } else {
+            let mut chars = lower.chars();
+            if let Some(first) = chars.next() {
+                out.push(first.to_ascii_uppercase());
+                out.push_str(chars.as_str());
+            }
+        }
+        run.clear();
+    };
+    for ch in category.chars() {
+        if ch.is_ascii_alphabetic() {
+            run.push(ch);
+            continue;
+        }
+        flush_run(&mut out, &mut run, after_apostrophe);
+        out.push(ch);
+        after_apostrophe = ch == '\'';
+    }
+    flush_run(&mut out, &mut run, after_apostrophe);
+    out
 }
 
 fn mra_basename(path: &str) -> &str {
@@ -1879,6 +1992,82 @@ mod tests {
         assert_eq!(catalog.manufacturer_option_count("amiga"), 1);
         assert!(catalog.decade_options("missing").is_empty());
         assert_eq!(catalog.category_option_count("missing"), 0);
+    }
+
+    #[test]
+    fn category_filters_merge_presentation_aliases_but_preserve_subgenres() {
+        let categories = [
+            "Beat'em Up",
+            "Beat 'em up",
+            "Shoot'em up",
+            "Shmup",
+            "platformer",
+            "Platform",
+            "shooter",
+            "Shooter - Vertical",
+            "SHOOTER - VERTICAL",
+            "Shooter - Gallery",
+            "puzzle/maze",
+            "PUZZLE/MAZE",
+        ];
+        let games = categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| {
+                let mut entry = game(
+                    &format!("Game {index}"),
+                    &format!("/games/{index}.mra"),
+                    "",
+                    "arcade",
+                );
+                entry.category = (*category).into();
+                entry
+            })
+            .collect();
+        let catalog = ArcadeCatalog::new(PathBuf::from("/games"), games, Vec::new());
+
+        assert_eq!(
+            catalog.category_options("arcade"),
+            vec![
+                ArcadeFilterOption {
+                    label: "Beat 'em up".into(),
+                    count: 2,
+                },
+                ArcadeFilterOption {
+                    label: "Platform".into(),
+                    count: 2,
+                },
+                ArcadeFilterOption {
+                    label: "Puzzle/Maze".into(),
+                    count: 2,
+                },
+                ArcadeFilterOption {
+                    label: "Shoot 'em up".into(),
+                    count: 2,
+                },
+                ArcadeFilterOption {
+                    label: "Shooter".into(),
+                    count: 1,
+                },
+                ArcadeFilterOption {
+                    label: "Shooter - Gallery".into(),
+                    count: 1,
+                },
+                ArcadeFilterOption {
+                    label: "Shooter - Vertical".into(),
+                    count: 2,
+                },
+            ]
+        );
+        assert_eq!(
+            catalog.filtered_game_count("arcade", &ArcadeFilter::Category("SHMUP".to_string())),
+            2
+        );
+        assert_eq!(
+            catalog.resolve_filter("arcade", &ArcadeFilter::Category("SHMUP".to_string())),
+            Some(ArcadeFilter::Category("Shoot 'em up".to_string()))
+        );
+        assert_eq!(catalog.games[0].category.as_ref(), "Beat'em Up");
     }
 
     #[test]
