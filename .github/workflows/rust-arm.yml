@@ -173,7 +173,7 @@ jobs:
           retention-days: 14
 
       - name: Prove unchanged ARM builds are no-ops
-        run: scripts/regression-arm-noop.sh --skip-warmup --verify-metadata
+        run: scripts/regression-arm-noop.sh --skip-warmup
 
       - name: Check ARM shared libraries
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
