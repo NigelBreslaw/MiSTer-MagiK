@@ -43,11 +43,23 @@ class PublishedReleaseSelectionTests(unittest.TestCase):
     def test_missing_game_database_release(self) -> None:
         self.assertIsNone(selector.select_game_databases([release("v0.2.1")]))
 
-    def test_platform_selection_uses_newest_publication(self) -> None:
+    def test_platform_selection_accepts_legacy_hash_tags(self) -> None:
         old = release("platform-v0.1-" + "a" * 64, "2026-01-01T00:00:00Z")
         new = release("platform-v0.1-" + "b" * 64, "2026-02-01T00:00:00Z")
         draft = release("platform-v0.1-" + "c" * 64, "2026-03-01T00:00:00Z", draft=True)
         self.assertEqual(selector.select_platform([new, draft, old])["tag_name"], new["tag_name"])
+
+    def test_platform_versions_are_numeric(self) -> None:
+        v9 = release("platform-v0.9", "2026-03-01T00:00:00Z")
+        v10 = release("platform-v0.10", "2026-01-01T00:00:00Z")
+        legacy = release("platform-v0.1-" + "a" * 64, "2026-04-01T00:00:00Z")
+        draft = release("platform-v0.99", "2026-05-01T00:00:00Z", draft=True)
+        self.assertEqual(selector.select_platform([v9, v10, legacy, draft])["tag_name"], "platform-v0.10")
+
+    def test_platform_version_supports_numbered_and_legacy_tags(self) -> None:
+        self.assertEqual(selector.platform_version("platform-v0.12"), 12)
+        self.assertEqual(selector.platform_version("platform-v0.1-" + "f" * 64), 1)
+        self.assertIsNone(selector.platform_version("platform-v1.2"))
 
     def test_cli_flattens_paginated_github_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -60,6 +72,26 @@ class PublishedReleaseSelectionTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(result.stdout.strip(), "game-databases-v3")
+
+    def test_cli_reports_platform_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = Path(temporary) / "releases.json"
+            payload.write_text(json.dumps([release("platform-v0.7")]))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "platform",
+                    "--field",
+                    "version",
+                    "--releases",
+                    str(payload),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.stdout.strip(), "7")
 
 
 if __name__ == "__main__":

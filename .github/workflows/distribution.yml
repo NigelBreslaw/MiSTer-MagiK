@@ -103,16 +103,18 @@ jobs:
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/published/releases.json
 
           if ! platform_tag="$(python3 scripts/select-published-release.py platform --releases build/published/releases.json)"; then
-            echo "::error::No published platform-v0.1 release exists. Run Promote MiSTer MagiK Platform Bundle v0.1."
+            echo "::error::No published numbered platform release exists. Run Promote MiSTer MagiK Platform Bundle."
             exit 1
           fi
+          platform_version="$(python3 scripts/select-published-release.py platform --field version --releases build/published/releases.json)"
           mkdir -p build/qualified
           gh release download "$platform_tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
-            --pattern 'mister-magik-platform-v0.1-*.zip' --pattern platform-bundle-v0.1.json
-          archive="$(find build/qualified -name 'mister-magik-platform-v0.1-*.zip' -print -quit)"
+            --pattern 'mister-magik-platform-v0.*.zip' --pattern platform-bundle-v0.1.json
+          archive="$(find build/qualified -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           test -n "$archive"
           python3 scripts/platform-bundle.py verify "$archive" \
-            --manifest build/qualified/platform-bundle-v0.1.json >/dev/null
+            --manifest build/qualified/platform-bundle-v0.1.json \
+            --release-version "$platform_version" >/dev/null
           unzip -q -o "$archive" -d build/qualified
 
           if ! databases_tag="$(python3 scripts/select-published-release.py game-databases --releases build/published/releases.json)"; then

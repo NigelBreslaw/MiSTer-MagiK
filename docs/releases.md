@@ -114,10 +114,13 @@ Before dispatch:
    deploy, installer, and checked-documentation changes require the lightweight
    Scanout contract check, not new platform artifacts. Pull-request builds are
    validation-only and do not create promotable artifacts.
-3. Dispatch **Promote MiSTer MagiK Platform Bundle v0.1** from `main`. It finds
-   the newest successful main artifacts matching the current component
-   identities and creates the immutable prerelease tag
-   `platform-v0.1-<bundle-id>`.
+3. Dispatch **Promote MiSTer MagiK Platform Bundle** from `main`. It finds the
+   newest successful main artifacts matching the current component identities,
+   compares their bundle ID with the highest published `platform-v0.N` release,
+   and publishes the next immutable number only when the platform changed. The
+   legacy `platform-v0.1-<bundle-id>` tags count as release 1, so the first
+   changed platform promoted under this scheme is `platform-v0.2`. A no-change
+   dispatch exits successfully without publishing another release.
 4. Configure protected GitHub environments named `publish-platform`,
    `publish-game-databases`, `publish-beta`, and `publish-release`, with required
    reviewers. Enable GitHub Release immutability before the first support-bundle
@@ -128,8 +131,9 @@ Before dispatch:
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
 sure the branch is `main`, and select `beta`. This is the only release input.
-The workflow consumes the newest published `platform-v0.1-*` bundle and the
-highest numbered published `game-databases-vN` bundle, plus the latest
+The workflow consumes the highest numbered published `platform-v0.N` bundle
+(with legacy `platform-v0.1-<bundle-id>` compatibility) and the highest
+numbered published `game-databases-vN` bundle, plus the latest
 `Main_MiSTer/mister-magik`. It does not rebuild support databases or require the
 platform bundle to match the current application source identity. If either
 support release is absent, run its manual promotion workflow before retrying
@@ -171,6 +175,21 @@ and version tags are immutable and are never overwritten.
 - An expired staging artifact requires a fresh component workflow on `main`.
 - A mismatched platform contract is a failed qualification and must be fixed
   before promotion; a platform release is never patched in place.
+
+## Numbered platform releases
+
+Run **Promote MiSTer MagiK Platform Bundle** manually from `main`. The workflow
+computes the current FPGA/kernel bundle ID and compares it with the manifest in
+the highest published `platform-v0.N` release. When the identity changed it
+publishes `platform-v0.(N+1)`; otherwise it reports that the current release is
+up to date and publishes nothing. Numeric selection makes `v0.10` newer than
+`v0.9` regardless of publication timestamps.
+
+The human release number is separate from the durable manifest format
+`mister-magik-platform-bundle-v0.1` and from the SHA-256 bundle ID. The format
+changes only for an incompatible manifest schema; the release number changes
+for each qualified FPGA/kernel combination; the bundle ID proves the exact
+contents.
 
 ## Numbered game-database releases
 

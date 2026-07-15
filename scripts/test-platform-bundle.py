@@ -89,6 +89,7 @@ class PlatformBundleTests(unittest.TestCase):
             "kernel_run_id": "456",
             "fpga_head_sha": "8" * 40,
             "kernel_head_sha": "9" * 40,
+            "release_version": 2,
             "output": self.root / "output",
         })()
         return bundle.create(args)
@@ -98,6 +99,68 @@ class PlatformBundleTests(unittest.TestCase):
         payload = bundle.verify(archive, self.root / "output/platform-bundle-v0.1.json")
         self.assertEqual(payload["fpga_input_sha256"], self.fpga_id)
         self.assertEqual(payload["kernel_input_sha256"], self.kernel_id)
+        self.assertEqual(payload["release_version"], 2)
+        self.assertEqual(archive.name, "mister-magik-platform-v0.2.zip")
+
+    def test_update_plan_starts_at_one(self) -> None:
+        plan = bundle.update_plan(None, 0, self.fpga_id, self.kernel_id)
+        self.assertEqual(plan["next_version"], 1)
+        self.assertEqual(plan["release_tag"], "platform-v0.1")
+        self.assertTrue(plan["update_needed"])
+
+    def test_update_plan_increments_only_for_changed_identity(self) -> None:
+        archive = self.create()
+        current = bundle.verify(archive)
+        unchanged = bundle.update_plan(current, 2, self.fpga_id, self.kernel_id)
+        changed = bundle.update_plan(current, 2, self.fpga_id, "d" * 64)
+        self.assertFalse(unchanged["update_needed"])
+        self.assertEqual(unchanged["next_version"], 3)
+        self.assertTrue(changed["update_needed"])
+        self.assertEqual(changed["next_version"], 3)
+        self.assertEqual(changed["release_tag"], "platform-v0.3")
+
+    def test_update_plan_accepts_legacy_v1_manifest(self) -> None:
+        current = bundle.verify(self.create())
+        current.pop("release_version")
+        plan = bundle.update_plan(current, 1, self.fpga_id, self.kernel_id)
+        self.assertFalse(plan["update_needed"])
+
+    def test_update_plan_rejects_tag_manifest_version_mismatch(self) -> None:
+        current = bundle.verify(self.create())
+        with self.assertRaisesRegex(ValueError, "tag and manifest"):
+            bundle.update_plan(current, 3, self.fpga_id, self.kernel_id)
+
+    def test_verify_rejects_tag_manifest_version_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tag and manifest"):
+            bundle.verify(self.create(), expected_release_version=3)
+
+    def test_verify_accepts_legacy_v1_without_release_version(self) -> None:
+        archive = self.create()
+        legacy = self.root / "legacy.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(legacy, "w") as target:
+            manifest = json.loads(source.read("platform-bundle-v0.1.json"))
+            manifest.pop("release_version")
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == "platform-bundle-v0.1.json":
+                    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+                elif info.filename == "SHA256SUMS":
+                    lines = [
+                        line
+                        for line in payload.decode().splitlines()
+                        if not line.endswith("  platform-bundle-v0.1.json")
+                    ]
+                    manifest_bytes = (
+                        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+                    ).encode()
+                    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+                    payload = (
+                        "\n".join(lines + [f"{manifest_hash}  platform-bundle-v0.1.json"])
+                        + "\n"
+                    ).encode()
+                target.writestr(info, payload)
+        payload = bundle.verify(legacy, expected_release_version=1)
+        self.assertNotIn("release_version", payload)
 
     def test_tampering_is_rejected(self) -> None:
         archive = self.create()
