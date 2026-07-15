@@ -52,7 +52,6 @@ Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh --device     → release-device
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
-  ./build-arm64-apple-container.sh --video      → include FFmpeg-backed video benchmark
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
   ./build-arm64-apple-container.sh --bench-tools → include device benchmark commands
   ./build-arm64-apple-container.sh --catalog-builder → build only the Slint-free catalog builder
@@ -80,7 +79,6 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       PROFILE=release-device-profile
       add_feature profile
       ;;
-    --video) add_feature video ;;
     --diagnostics) add_feature diagnostics ;;
     --bench-tools) add_feature bench-tools ;;
     --catalog-builder)
@@ -230,7 +228,7 @@ if [ -n "$BIN_TARGET" ]; then
 fi
 
 EXTRA_ENVS=()
-if [[ " ${FEATURES[*]-} " == *" video "* ]]; then
+if [ "$BIN_NAME" = "mister-magik-fb" ]; then
   "$PWD/scripts/build-minimal-ffmpeg.sh"
   EXTRA_ENVS+=(
     --env FFMPEG_DIR=/project/magik-gui/target/ffmpeg-minimal/armv7/dist

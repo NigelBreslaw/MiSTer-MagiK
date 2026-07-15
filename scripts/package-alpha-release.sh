@@ -9,13 +9,13 @@ OUT="${1:-$ROOT/build/alpha-release}"
 BIN="$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 
 if [[ "${2:-}" != "--skip-build" ]]; then
-  "$ROOT/magik-gui/build-arm.sh" --video
+  "$ROOT/magik-gui/build-arm.sh" --device
 fi
 
 python3 "$ROOT/scripts/generate-third-party-licenses.py"
 test -x "$BIN"
-if [[ "$(cat "$BIN.features" 2>/dev/null || true)" != "ui,video" ]]; then
-  echo "error: $BIN is not the required ui,video release binary" >&2
+if [[ "$(cat "$BIN.features" 2>/dev/null || true)" != "ui" ]]; then
+  echo "error: $BIN is not the required video-capable UI release binary" >&2
   exit 1
 fi
 
@@ -44,7 +44,7 @@ Corresponding source and relinking instructions
 MiSTer MagiK source (including build and installation scripts):
   https://github.com/NigelBreslaw/MiSTer-MagiK/tree/$(git -C "$ROOT" rev-parse HEAD)
 
-FFmpeg 8.1.2 source, used by this ui,video build:
+FFmpeg 8.1.2 source, used by this UI build:
   https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 The exact configure flags and cross-build procedure are in
 magik-gui/scripts/build-minimal-ffmpeg.sh at the source revision above. The

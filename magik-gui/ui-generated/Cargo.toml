@@ -23,7 +23,6 @@ slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2
 [features]
 default = []
 bench-scenes = []
-video = []
 
 [build-dependencies]
 slint-build = "=1.17.1"

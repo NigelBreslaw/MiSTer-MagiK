@@ -42,23 +42,23 @@ swash = { version = "0.2.7", features = ["scale", "render"] }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
 mister-magik-catalog = { path = "catalog", default-features = false, features = ["reader"] }
 mister-magik-ui = { path = "ui-generated", optional = true }
-ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm", "std"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 
+[target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
+ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
+
 [features]
 default = []
 profile = ["dep:pprof"]
-ui = ["dep:slint", "dep:mister-magik-ui"]
+ui = ["dep:slint", "dep:mister-magik-ui", "dep:ffmpeg-next"]
 bench-tools = []
 bench-scenes = ["mister-magik-ui?/bench-scenes"]
 experiments = ["bench-scenes"]
 diagnostics = []
-video = ["dep:ffmpeg-next", "mister-magik-ui?/video"]
 
 [build-dependencies]
 cc = "1"

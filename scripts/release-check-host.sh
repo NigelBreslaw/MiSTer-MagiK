@@ -72,8 +72,8 @@ cargo clippy --manifest-path "$ROOT/tools/mister/Cargo.toml" --all-targets -- -D
 step "Clippy MagiK agent"
 cargo clippy --manifest-path "$ROOT/tools/magik-agent/Cargo.toml" --all-targets -- -D warnings
 
-step "ARM release-device ui,video build"
-"$ROOT/magik-gui/build-arm.sh" --device --video
+step "ARM release-device UI build"
+"$ROOT/magik-gui/build-arm.sh" --device
 
 step "ARM catalog builder build"
 "$ROOT/scripts/build-catalog-builder.sh" --device

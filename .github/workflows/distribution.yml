@@ -166,13 +166,13 @@ jobs:
           key: target-arm-dist-${{ runner.os }}-${{ needs.release-metadata.outputs.build-number }}-${{ hashFiles('magik-gui/rust-toolchain.toml', 'magik-gui/Cargo.lock', 'magik-gui/build.rs', 'magik-gui/build-arm.sh', 'magik-gui/Dockerfile.cross-armv7') }}
           restore-keys: |
             target-arm-dist-${{ runner.os }}-
-            target-arm-${{ runner.os }}-release-release-device-none-
+            target-arm-${{ runner.os }}-release-device-
 
       - name: Build ARM frontend
         env:
           MISTER_MAGIK_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           MISTER_MAGIK_VERSION: ${{ needs.release-metadata.outputs.version }}
-        run: magik-gui/build-arm.sh --device --video
+        run: magik-gui/build-arm.sh --device
 
       - name: Build ARM catalog builder
         env:

@@ -40,7 +40,6 @@ SKIP_BUILD=0
 SKIP_DEVICE=0
 SKIP_DEPLOY=0
 REPLACE_LABEL=0
-INCLUDE_VIDEO=0
 SCENE_FILTER=0
 SELF_TEST=0
 PRINT_RESULTS=1
@@ -66,7 +65,7 @@ usage() {
   echo "Scenes: ${BENCH_SCENES[*]}"
   echo ""
   echo "Options: --clean  --skip-build  --skip-device  --skip-deploy  --quiet-results  --replace-label  --scene-secs N"
-  echo "         --device (default; build profile release-device / A3)  --video  --scene NAME  --self-test  -h"
+  echo "         --device (default; build profile release-device / A3)  --scene NAME  --self-test  -h"
   echo "         --frame-order render-then-vsync|vsync-first"
   echo "         --dirty-rect-broad-pct N"
   echo "         --launcher-scenario idle|home-nav|home-repeat-hold|velocity-scroll|quick-tap|rapid-taps|held-scroll|turbo-hold|preview-step-hold|model-sync"
@@ -93,14 +92,9 @@ while [[ $# -gt 0 ]]; do
     --replace-label) REPLACE_LABEL=1; shift ;;
     --self-test) SELF_TEST=1; shift ;;
     --device) BUILD_PROFILE=release-device; shift ;;
-    --video) INCLUDE_VIDEO=1; BUILD_FLAG+=(--video); shift ;;
     --scene)
       SCENE_FILTER=1
       BENCH_SCENES=("${2:?}")
-      if [[ "$2" == "video_playback" ]]; then
-        INCLUDE_VIDEO=1
-        BUILD_FLAG+=(--video)
-      fi
       shift 2
       ;;
     --scene-secs|--ui-secs) SCENE_SECS="${2:?}"; shift 2 ;;
@@ -183,9 +177,12 @@ for optional_numeric_var in MAX_RENDER_US MAX_COPY_US; do
   esac
 done
 
-if [[ "$INCLUDE_VIDEO" -eq 1 && "$SCENE_FILTER" -eq 0 ]]; then
-  BENCH_SCENES+=(video_playback)
-fi
+VIDEO_SCENE_SELECTED=0
+for scene in "${BENCH_SCENES[@]}"; do
+  if [[ "$scene" == "video_playback" ]]; then
+    VIDEO_SCENE_SELECTED=1
+  fi
+done
 
 BIN="$RUST_DIR/target/armv7-unknown-linux-gnueabihf/$BUILD_PROFILE/mister-magik-fb"
 
@@ -887,7 +884,7 @@ if [[ "$SKIP_DEVICE" -eq 0 ]]; then
     mister run "kill -9 \$(pidof mister-magik-fb) 2>/dev/null || true; mkdir -p '$MISTER_MAGIK_APP_DIR'"
     mister put "$BIN" "$REMOTE"
     mister run "chmod +x $REMOTE"
-    if [[ "$INCLUDE_VIDEO" -eq 1 ]]; then
+    if [[ "$VIDEO_SCENE_SELECTED" -eq 1 ]]; then
       echo "==> Sync video snaps $VIDEO_SRC_DIR -> $VIDEO_REMOTE_DIR"
       "$HERE/scripts/sync-video-snaps.sh" "$VIDEO_SRC_DIR" "$VIDEO_REMOTE_DIR"
     fi

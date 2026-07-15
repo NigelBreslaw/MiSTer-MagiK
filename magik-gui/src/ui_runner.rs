@@ -101,7 +101,7 @@ pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;
-#[cfg(mister_video_scene)]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod video_loop;
 
 use catalog_worker::*;
@@ -133,7 +133,7 @@ use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
 use update_checker::*;
-#[cfg(mister_video_scene)]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 use video_loop::*;
 
 const AUTO_CONTROLLER_SETUP_ENABLED: bool = false;
@@ -169,7 +169,7 @@ pub const UI_SCENES: &[&str] = &[
     "transition-effects",
     "controller_test",
     "tear_pattern",
-    #[cfg(mister_video_scene)]
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     "video_playback",
 ];
 
@@ -338,7 +338,7 @@ pub fn run_ui(f: &mut Fpga) {
     boot_analytics::event("slint_platform_set", "ok=1");
 
     match scene.as_str() {
-        #[cfg(mister_video_scene)]
+        #[cfg(all(target_os = "linux", target_arch = "arm"))]
         "video_playback" => {
             let pad = open_pads();
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {

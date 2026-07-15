@@ -108,7 +108,7 @@ mod ui_display;
 mod ui_effect_bench;
 mod ui_runner;
 mod video_i420;
-#[cfg(feature = "video")]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod video_player;
 mod vt;
 

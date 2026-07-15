@@ -49,7 +49,7 @@ impl DirtyRect {
         self.width() * (self.y1 - self.y0)
     }
 
-    #[cfg_attr(not(feature = "video"), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn union(self, other: DirtyRect) -> DirtyRect {
         DirtyRect {
             x0: self.x0.min(other.x0),
