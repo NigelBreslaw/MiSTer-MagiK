@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [target.armv7-unknown-linux-gnueabihf]
-dockerfile = "Dockerfile.cross-armv7"
+image = "ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737"
 
 [build.env]
+volumes = ["MISTER_REPO_ROOT=.."]
 passthrough = [
     "FFMPEG_DIR",
     "CFLAGS",

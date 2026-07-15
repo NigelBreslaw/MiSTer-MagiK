@@ -1,0 +1,53 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Cross image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/nigelbreslaw/mister-magik-cross-armv7:ubuntu20-d047ace4d737
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish image
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci
+          build_started="$(date +%s)"
+          docker build --platform linux/amd64 --tag "$IMAGE" --file magik-gui/Dockerfile.cross-armv7 magik-gui
+          build_finished="$(date +%s)"
+          push_started="$(date +%s)"
+          docker push "$IMAGE"
+          push_finished="$(date +%s)"
+          {
+            printf 'image=%s\n' "$IMAGE"
+            printf 'build_seconds=%s\n' "$((build_finished - build_started))"
+            printf 'push_seconds=%s\n' "$((push_finished - push_started))"
+            printf 'uncompressed_bytes=%s\n' "$(docker image inspect "$IMAGE" --format '{{.Size}}')"
+            docker image inspect "$IMAGE" --format 'repo_digest={{index .RepoDigests 0}}'
+          } | tee build/ci/cross-image-publish.txt
+
+      - name: Upload publish measurements
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-image-publish
+          path: build/ci/cross-image-publish.txt
+          if-no-files-found: error
+          retention-days: 14

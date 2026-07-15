@@ -4,7 +4,7 @@
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-unset GIT_INDEX_FILE GIT_PREFIX
+unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
