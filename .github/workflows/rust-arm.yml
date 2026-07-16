@@ -28,6 +28,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Initialize public desktop submodules
+        run: git submodule update --init desktop/vendor/github-app desktop/vendor/material-icon-theme
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Enable pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.10.0 --activate
+
+      - name: Install documentation dependencies
+        run: pnpm --dir documentation install --frozen-lockfile
+
       - name: Compute cache identities
         id: cache-id
         run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
@@ -54,6 +70,10 @@ jobs:
             !magik-gui/target/debug/incremental
             magik-gui/catalog/target/debug
             !magik-gui/catalog/target/debug/incremental
+            framebuffer-stream/target/debug
+            !framebuffer-stream/target/debug/incremental
+            desktop/target/debug
+            !desktop/target/debug/incremental
             tools/magik-agent/target/debug
             !tools/magik-agent/target/debug/incremental
             tools/mister/target/debug

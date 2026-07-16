@@ -42,11 +42,15 @@ def main() -> int:
         (fixture / "irrelevant.txt").write_text("ignored\n", encoding="utf-8")
         assert MODULE.identities(fixture) == initial
 
+        ignored_ui = fixture / "magik-gui/ui/.DS_Store"
+        ignored_ui.write_bytes(b"ignored")
+        assert MODULE.identities(fixture) == initial
+
         ui = next(iter(MODULE.files_for(fixture, ("magik-gui/ui/**/*.slint",))))
         ui.write_text(ui.read_text(encoding="utf-8") + "\n// cache identity test\n", encoding="utf-8")
         changed_ui = MODULE.identities(fixture)
         assert changed_ui["host_target"] != initial["host_target"]
-        assert changed_ui["arm_target"] == initial["arm_target"]
+        assert changed_ui["arm_target"] != initial["arm_target"]
 
         cross = fixture / "magik-gui/Cross.toml"
         cross.write_text(cross.read_text(encoding="utf-8").replace("d047ace4d737", "changedimage1"), encoding="utf-8")
@@ -75,6 +79,77 @@ def main() -> int:
         changed_manifest = MODULE.identities(fixture)
         assert changed_manifest["host_target"] != changed_toolchain["host_target"]
         assert changed_manifest["arm_target"] != changed_toolchain["arm_target"]
+
+        desktop_lock = fixture / "desktop/Cargo.lock"
+        desktop_lock.write_text(
+            desktop_lock.read_text(encoding="utf-8") + "\n# cache identity test\n",
+            encoding="utf-8",
+        )
+        changed_desktop_lock = MODULE.identities(fixture)
+        assert changed_desktop_lock["cargo_host"] != changed_manifest["cargo_host"]
+        assert changed_desktop_lock["host_target"] != changed_manifest["host_target"]
+
+        desktop_source = next(
+            iter(MODULE.files_for(fixture, ("desktop/src/**/*.rs",)))
+        )
+        desktop_source.write_text(
+            desktop_source.read_text(encoding="utf-8") + "\n// cache identity test\n",
+            encoding="utf-8",
+        )
+        changed_desktop_source = MODULE.identities(fixture)
+        assert (
+            changed_desktop_source["host_target"]
+            != changed_desktop_lock["host_target"]
+        )
+
+        stream_source = next(
+            iter(MODULE.files_for(fixture, ("framebuffer-stream/src/**/*.rs",)))
+        )
+        stream_source.write_text(
+            stream_source.read_text(encoding="utf-8") + "\n// cache identity test\n",
+            encoding="utf-8",
+        )
+        changed_stream_source = MODULE.identities(fixture)
+        assert (
+            changed_stream_source["host_target"]
+            != changed_desktop_source["host_target"]
+        )
+        assert (
+            changed_stream_source["arm_target"]
+            != changed_desktop_source["arm_target"]
+        )
+
+        source_expectations = (
+            ("magik-gui/src/**/*.rs", ("host_target", "arm_target")),
+            ("magik-gui/catalog/src/**/*.rs", ("host_target", "arm_target")),
+            ("tools/mister/src/**/*.rs", ("host_target",)),
+            ("tools/magik-agent/src/**/*.rs", ("host_target", "agent_target")),
+        )
+        previous = changed_stream_source
+        for pattern, changed_groups in source_expectations:
+            source = next(iter(MODULE.files_for(fixture, (pattern,))))
+            source.write_text(
+                source.read_text(encoding="utf-8") + "\n// cache identity test\n",
+                encoding="utf-8",
+            )
+            current = MODULE.identities(fixture)
+            for group in changed_groups:
+                assert current[group] != previous[group], (pattern, group)
+            previous = current
+
+        compiled_input_expectations = (
+            ("magik-gui/catalog/data/**/*.json", ("host_target", "arm_target")),
+            ("magik-gui/catalog/tests/**/*.rs", ("host_target",)),
+            ("magik-gui/ui/fonts/*.ttf", ("host_target", "arm_target")),
+            ("magik-gui/ui/icons/*.svg", ("host_target", "arm_target")),
+        )
+        for pattern, changed_groups in compiled_input_expectations:
+            source = next(iter(MODULE.files_for(fixture, (pattern,))))
+            source.write_bytes(source.read_bytes() + b"\n")
+            current = MODULE.identities(fixture)
+            for group in changed_groups:
+                assert current[group] != previous[group], (pattern, group)
+            previous = current
 
     print("cache identity tests ok")
     return 0

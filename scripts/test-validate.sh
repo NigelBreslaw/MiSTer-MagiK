@@ -31,17 +31,22 @@ assert_command_plan() {
 base="format host-tools-fast "
 assert_plan docs 'docs/catalog.md' "$base"
 assert_plan rust 'magik-gui/src/launcher.rs' "${base}host-tests magik-gui-clippy production-ui-check "
-assert_plan catalog 'magik-gui/catalog/src/library_db.rs' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check "
+assert_plan catalog 'magik-gui/catalog/src/library_db.rs' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
 assert_plan slint 'magik-gui/ui/launcher.slint' "${base}production-ui-check "
+assert_plan ui-generated 'magik-gui/ui-generated/build.rs' "${base}production-ui-check "
 assert_plan mister 'tools/mister/src/main.rs' "${base}mister-tests mister-clippy "
-assert_plan agent 'tools/magik-agent/src/main.rs' "${base}agent-clippy "
-assert_plan global 'Cargo.lock' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy agent-clippy "
-assert_plan mixed $'magik-gui/catalog/src/library_db.rs\nmagik-gui/ui/launcher.slint\nscripts/deploy-rust.sh' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check "
+assert_plan agent 'tools/magik-agent/src/main.rs' "${base}agent-tests agent-clippy "
+assert_plan stream 'framebuffer-stream/src/lib.rs' "${base}host-tests magik-gui-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
+assert_plan desktop 'desktop/src/main.rs' "${base}desktop-tests desktop-compiled-check "
+assert_plan documentation 'documentation/src/content/docs/index.mdx' "${base}documentation-build "
+assert_plan global 'Cargo.lock' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
+assert_plan mixed $'magik-gui/catalog/src/library_db.rs\nmagik-gui/ui/launcher.slint\nscripts/deploy-rust.sh' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy "
 assert_plan deletion 'magik-gui/src/removed.rs' "${base}host-tests magik-gui-clippy production-ui-check "
 assert_plan rename $'magik-gui/ui/old-name.slint\nmagik-gui/ui/new-name.slint' "${base}production-ui-check "
 assert_plan build-script 'magik-gui/build-arm.sh' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check "
+assert_plan rust-toolchain 'magik-gui/rust-toolchain.toml' "${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
 assert_plan workflow '.github/workflows/rust-arm.yml' "$base"
-assert_plan shared 'framebuffer-stream/src/lib.rs' "${base}host-tests magik-gui-clippy production-ui-check agent-clippy "
+assert_plan shared 'framebuffer-stream/src/lib.rs' "${base}host-tests magik-gui-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check "
 
 repo="$TMP/rename-repo"
 mkdir -p "$repo/magik-gui/src" "$repo/docs"
@@ -92,7 +97,7 @@ actual="$({
   GIT_DIR="$worktree_repo/.git" GIT_WORK_TREE="$worktree_repo" \
     "$ROOT/scripts/validate" working-tree --print-plan
 } | tr '\n' ' ')"
-expected="${base}host-tests magik-gui-clippy production-ui-check mister-tests mister-clippy agent-clippy "
+expected="${base}host-tests magik-gui-clippy production-ui-check mister-tests mister-clippy agent-tests agent-clippy "
 if [ "$actual" != "$expected" ]; then
   echo "working-tree plan mismatch: $actual" >&2
   exit 1
@@ -117,7 +122,7 @@ actual="$({
   GIT_DIR="$untracked_repo/.git" GIT_WORK_TREE="$untracked_repo" \
     "$ROOT/scripts/validate" working-tree --print-plan
 } | tr '\n' ' ')"
-expected="${base}agent-clippy "
+expected="${base}agent-tests agent-clippy "
 if [ "$actual" != "$expected" ]; then
   echo "untracked/ignored plan mismatch: $actual" >&2
   exit 1
@@ -131,7 +136,7 @@ assert_command_plan absolute-file \
   "${base}mister-tests mister-clippy " \
   "$ROOT/scripts/validate" paths "$ROOT/tools/mister/src/main.rs" --print-plan
 
-whole_repo="${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check mister-tests mister-clippy agent-clippy "
+whole_repo="${base}host-tests magik-gui-clippy catalog-tests catalog-clippy production-ui-check framebuffer-stream-tests framebuffer-stream-clippy mister-tests mister-clippy agent-tests agent-clippy desktop-tests desktop-compiled-check documentation-build "
 assert_command_plan relative-root "$whole_repo" \
   "$ROOT/scripts/validate" paths . --print-plan
 assert_command_plan absolute-root "$whole_repo" \
@@ -171,6 +176,88 @@ if "$ROOT/scripts/validate" paths "$TMP/outside.rs" --print-plan >/dev/null 2>&1
 fi
 if "$ROOT/scripts/validate" working-tree --paths-file "$TMP/unused" >/dev/null 2>&1; then
   echo "working-tree accepted --paths-file" >&2
+  exit 1
+fi
+
+prereq_bin="$TMP/prereq-bin"
+prereq_modules="$TMP/prereq-node-modules"
+mkdir -p "$prereq_bin" "$prereq_modules/.pnpm" "$prereq_modules/.bin"
+cat >"$prereq_modules/.bin/astro" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$prereq_modules/.bin/astro"
+cat >"$prereq_bin/node" <<'EOF'
+#!/usr/bin/env bash
+printf 'v24.0.0\n'
+EOF
+cat >"$prereq_bin/corepack" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = pnpm ] && [ "$2" = --version ]; then
+  printf '11.10.0\n'
+  exit 0
+fi
+exit 2
+EOF
+chmod +x "$prereq_bin/node" "$prereq_bin/corepack"
+PATH="$prereq_bin:/usr/bin:/bin" \
+  MISTER_DOCUMENTATION_NODE_MODULES="$prereq_modules" \
+  MISTER_VALIDATE_SELF_TEST=documentation-prerequisites \
+  "$ROOT/scripts/validate"
+
+cat >"$prereq_bin/node" <<'EOF'
+#!/usr/bin/env bash
+printf 'v21.9.0\n'
+EOF
+chmod +x "$prereq_bin/node"
+if PATH="$prereq_bin:/usr/bin:/bin" \
+    MISTER_DOCUMENTATION_NODE_MODULES="$prereq_modules" \
+    MISTER_VALIDATE_SELF_TEST=documentation-prerequisites \
+    "$ROOT/scripts/validate" >/dev/null 2>&1; then
+  echo "documentation prerequisites accepted Node.js older than 22" >&2
+  exit 1
+fi
+
+cat >"$prereq_bin/node" <<'EOF'
+#!/usr/bin/env bash
+printf 'v24.0.0\n'
+EOF
+cat >"$prereq_bin/corepack" <<'EOF'
+#!/usr/bin/env bash
+printf '11.9.0\n'
+EOF
+chmod +x "$prereq_bin/node" "$prereq_bin/corepack"
+if PATH="$prereq_bin:/usr/bin:/bin" \
+    MISTER_DOCUMENTATION_NODE_MODULES="$prereq_modules" \
+    MISTER_VALIDATE_SELF_TEST=documentation-prerequisites \
+    "$ROOT/scripts/validate" >/dev/null 2>&1; then
+  echo "documentation prerequisites accepted the wrong pnpm version" >&2
+  exit 1
+fi
+
+cat >"$prereq_bin/corepack" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = pnpm ] && [ "$2" = --version ]; then
+  printf '11.10.0\n'
+  exit 0
+fi
+exit 2
+EOF
+chmod +x "$prereq_bin/corepack"
+if PATH="$prereq_bin:/usr/bin:/bin" \
+    MISTER_DOCUMENTATION_NODE_MODULES="$TMP/empty-node-modules" \
+    MISTER_VALIDATE_SELF_TEST=documentation-prerequisites \
+    "$ROOT/scripts/validate" >/dev/null 2>&1; then
+  echo "documentation prerequisites accepted an empty dependency directory" >&2
+  exit 1
+fi
+
+mkdir -p "$TMP/partial-node-modules/.pnpm"
+if PATH="$prereq_bin:/usr/bin:/bin" \
+    MISTER_DOCUMENTATION_NODE_MODULES="$TMP/partial-node-modules" \
+    MISTER_VALIDATE_SELF_TEST=documentation-prerequisites \
+    "$ROOT/scripts/validate" >/dev/null 2>&1; then
+  echo "documentation prerequisites accepted partial dependencies" >&2
   exit 1
 fi
 
