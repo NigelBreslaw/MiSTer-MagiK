@@ -39,6 +39,7 @@ def main() -> int:
 
     for path in (
         "build/agent-check.tmp",
+        "outputs/agent-check.tmp",
         "target/agent-check.tmp",
         "documentation/node_modules/agent-check.tmp",
         "private/test-fixtures/agent-check.tmp",

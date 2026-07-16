@@ -35,6 +35,7 @@ htmlcov/
 # MiSTer ARM bundle build artifacts and downloaded toolchains/wheels
 /build/
 /dist/
+/outputs/
 /vendor/
 
 # Toolchain bench framebuffer captures (results.tsv is tracked)

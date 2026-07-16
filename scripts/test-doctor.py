@@ -39,9 +39,29 @@ def fixture(root: Path, bin_dir: Path) -> None:
     write_command(root / "scripts", "validate")
     write_command(root / "scripts", "dev-rust")
     write_command(root / "scripts", "mister")
+    write_command(root / "scripts", "test-host-tools.sh")
+    (root / ".gitignore").write_text(
+        "/build/\n/dist/\n/outputs/\n/target/\n/documentation/dist/\n",
+        encoding="utf-8",
+    )
     for command in ("python3", "git", "cargo"):
         write_command(bin_dir, command)
-    write_command(bin_dir, "rustup", "printf '1.97.0-aarch64-apple-darwin\\n'")
+    write_command(
+        bin_dir,
+        "rustup",
+        """case "$1 $2" in
+"toolchain list") printf '1.97.0-aarch64-apple-darwin\\n' ;;
+"component list") printf 'clippy-aarch64-apple-darwin (installed)\\nrustfmt-aarch64-apple-darwin (installed)\\n' ;;
+"target list") printf 'armv7-unknown-linux-gnueabihf (installed)\\n' ;;
+*) exit 2 ;;
+esac""",
+    )
+    write_command(
+        bin_dir,
+        "git",
+        """if [ "$3" = check-ignore ]; then exit 0; fi
+exit 0""",
+    )
     write_command(bin_dir, "node", "printf 'v24.0.0\\n'")
     write_command(
         bin_dir,
@@ -91,6 +111,17 @@ def main() -> int:
         assert value["requires_device"] is True
         assert value["device_probe"] == "not_attempted"
         assert "password" not in result.stdout.lower()
+        network = next(check for check in value["checks"] if check["id"] == "device-network")
+        assert network["status"] == "warn"
+
+        write_command(bin_dir, "git", "exit 1")
+        result = run(root, bin_dir, "full-host")
+        value = json.loads(result.stdout)
+        assert result.returncode == 1
+        assert any(
+            check["id"].startswith("output-ignored-") and check["status"] == "fail"
+            for check in value["checks"]
+        )
 
     print("doctor tests ok")
     return 0
