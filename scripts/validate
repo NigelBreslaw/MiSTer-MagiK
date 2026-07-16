@@ -12,10 +12,14 @@ usage() {
   cat <<'EOF'
 usage:
   scripts/validate affected [--paths-file FILE] [--print-plan]
+  scripts/validate working-tree [--print-plan]
+  scripts/validate paths PATH... [--print-plan]
   scripts/validate full-host
 
 Without --paths-file, affected mode reads added, copied, modified, renamed,
 and deleted paths from the staged Git index. --print-plan performs no checks.
+working-tree combines staged, unstaged, and untracked non-ignored paths.
+paths validates explicit files or recursively expands explicit directories.
 EOF
 }
 
@@ -176,42 +180,119 @@ case "$mode" in
     run_full_host
     exit 0
     ;;
-  affected) shift ;;
+  affected|working-tree|paths) shift ;;
   -h|--help|"") usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
 
 paths_file=""
 print_plan=0
+explicit_paths=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --paths-file) paths_file="${2:?--paths-file requires a path}"; shift 2 ;;
+    --paths-file)
+      [ "$mode" = affected ] || {
+        echo "--paths-file is only supported by affected mode" >&2
+        exit 2
+      }
+      paths_file="${2:?--paths-file requires a path}"
+      shift 2
+      ;;
     --print-plan) print_plan=1; shift ;;
-    *) usage >&2; exit 2 ;;
+    --*) usage >&2; exit 2 ;;
+    *)
+      [ "$mode" = paths ] || { usage >&2; exit 2; }
+      explicit_paths+=("$1")
+      shift
+      ;;
   esac
 done
 
 paths=()
-if [ -n "$paths_file" ]; then
-  [ -f "$paths_file" ] || { echo "paths file not found: $paths_file" >&2; exit 2; }
-  while IFS= read -r path; do
-    [ -n "$path" ] && paths+=("$path")
-  done <"$paths_file"
-else
+
+repo_relative_path() {
+  local candidate="$1"
+  case "$candidate" in
+    "$ROOT") candidate="." ;;
+    "$ROOT"/*) candidate="${candidate#"$ROOT"/}" ;;
+    /*)
+      echo "path is outside repository: $candidate" >&2
+      return 2
+      ;;
+    *) candidate="${candidate#./}" ;;
+  esac
+  [ -n "$candidate" ] || candidate="."
+  case "$candidate" in
+    ..|../*|*/..|*/../*)
+      echo "path is outside repository: $1" >&2
+      return 2
+      ;;
+  esac
+  printf '%s\n' "$candidate"
+}
+
+append_path() {
+  local candidate existing
+  candidate="$(repo_relative_path "$1")"
+  [ -n "$candidate" ] || return 0
+  for existing in "${paths[@]}"; do
+    [ "$existing" = "$candidate" ] && return 0
+  done
+  paths+=("$candidate")
+}
+
+collect_name_status() {
   while IFS= read -r -d '' status; do
     case "$status" in
       R*|C*)
         IFS= read -r -d '' old_path
         IFS= read -r -d '' new_path
-        paths+=("$old_path" "$new_path")
+        append_path "$old_path"
+        append_path "$new_path"
         ;;
       *)
         IFS= read -r -d '' path
-        paths+=("$path")
+        append_path "$path"
         ;;
     esac
-  done < <(git diff --cached --name-status -z --diff-filter=ACMRD)
-fi
+  done
+}
+
+case "$mode" in
+  affected)
+    if [ -n "$paths_file" ]; then
+      [ -f "$paths_file" ] || { echo "paths file not found: $paths_file" >&2; exit 2; }
+      while IFS= read -r path; do
+        append_path "$path"
+      done <"$paths_file"
+    else
+      collect_name_status < <(git diff --cached --name-status -z --diff-filter=ACMRD)
+    fi
+    ;;
+  working-tree)
+    collect_name_status < <(git diff --cached --name-status -z --diff-filter=ACMRD)
+    collect_name_status < <(git diff --name-status -z --diff-filter=ACMRD)
+    while IFS= read -r -d '' path; do
+      append_path "$path"
+    done < <(git ls-files --others --exclude-standard -z)
+    ;;
+  paths)
+    [ "${#explicit_paths[@]}" -gt 0 ] || {
+      echo "paths mode requires at least one PATH" >&2
+      exit 2
+    }
+    for path in "${explicit_paths[@]}"; do
+      path="$(repo_relative_path "$path")"
+      if [ -d "$path" ]; then
+        while IFS= read -r -d '' child; do
+          append_path "$child"
+        done < <(git ls-files --cached --others --exclude-standard -z -- "$path")
+      else
+        append_path "$path"
+      fi
+    done
+    ;;
+esac
 
 need_host=0
 need_catalog=0
