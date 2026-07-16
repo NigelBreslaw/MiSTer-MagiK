@@ -617,12 +617,13 @@ pub(crate) fn materialize_arcade_ui_projection_rows(
             } else {
                 "variant"
             };
-            let (preview_asset_key, has_preview) =
-                if let Some(canonical) = preferred_games_by_key.get(&key) {
-                    if row.preview_asset_key != canonical.preview_asset_key.as_ref()
-                        || row.has_preview != canonical.has_preview
-                    {
-                        return Err(format!(
+            let (preview_asset_key, has_preview) = if let Some(canonical) =
+                preferred_games_by_key.get(&key)
+            {
+                if row.preview_asset_key != canonical.preview_asset_key.as_ref()
+                    || row.has_preview != canonical.has_preview
+                {
+                    return Err(format!(
                             "canonical arcade preview mismatch for {}: prepared_key={} prepared_has_preview={} canonical_key={} canonical_has_preview={}",
                             canonical.mra_path,
                             row.preview_asset_key,
@@ -630,11 +631,11 @@ pub(crate) fn materialize_arcade_ui_projection_rows(
                             canonical.preview_asset_key,
                             canonical.has_preview
                         ));
-                    }
-                    (canonical.preview_asset_key.as_ref(), canonical.has_preview)
-                } else {
-                    (row.preview_asset_key.as_str(), row.has_preview)
-                };
+                }
+                (canonical.preview_asset_key.as_ref(), canonical.has_preview)
+            } else {
+                (row.preview_asset_key.as_str(), row.has_preview)
+            };
             variant_stmt
                 .execute(params![
                     family_id,

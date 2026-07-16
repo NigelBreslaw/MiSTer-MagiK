@@ -757,7 +757,10 @@ mod tests {
             progress: &mut dyn FnMut(&str, &str),
         ) -> Result<Vec<(String, String)>, String> {
             self.calls.push("snapshot");
-            progress("Indexing library", "Creating compressed navigation catalog…");
+            progress(
+                "Indexing library",
+                "Creating compressed navigation catalog…",
+            );
             std::fs::write(path, b"fixture-navigation").map_err(|error| error.to_string())?;
             self.fail("snapshot")?;
             Ok(vec![(

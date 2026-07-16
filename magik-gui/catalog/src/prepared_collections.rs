@@ -77,11 +77,7 @@ impl PreparedPayloadIndex {
         }
     }
 
-    pub(crate) fn resolve_0mhz_payload_path(
-        &self,
-        mgl_path: &Path,
-        payload: &str,
-    ) -> PathBuf {
+    pub(crate) fn resolve_0mhz_payload_path(&self, mgl_path: &Path, payload: &str) -> PathBuf {
         let local = resolve_mgl_payload_path(mgl_path, payload);
         match self.presence(&local) {
             FilePresence::File => return local,
@@ -739,7 +735,10 @@ mod tests {
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
         assert_eq!(index.complete_root_count(), 2);
-        assert_eq!(index.resolve_0mhz_payload_path(&mgl, "media/doom/doom.vhd"), payload);
+        assert_eq!(
+            index.resolve_0mhz_payload_path(&mgl, "media/doom/doom.vhd"),
+            payload
+        );
         validate_0mhz_mgl_inspection_with_index(&mgl, &inspection, &index)
             .expect("validate from index");
         let stats = index.lookup_stats();
@@ -762,7 +761,10 @@ mod tests {
             r#"<mistergamedescription><rbf>AO486</rbf><file path="media/missing.vhd"/><reset/></mistergamedescription>"#,
         )
         .expect("write MGL");
-        let roots = vec![launchers.display().to_string(), payload_root.display().to_string()];
+        let roots = vec![
+            launchers.display().to_string(),
+            payload_root.display().to_string(),
+        ];
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 
@@ -800,7 +802,10 @@ mod tests {
             ),
         )
         .expect("write MGL");
-        let roots = vec![launchers.display().to_string(), payload_root.display().to_string()];
+        let roots = vec![
+            launchers.display().to_string(),
+            payload_root.display().to_string(),
+        ];
         let index = PreparedPayloadIndex::from_library_roots(&roots);
         let inspection = inspect_mgl(&mgl).expect("inspect MGL");
 

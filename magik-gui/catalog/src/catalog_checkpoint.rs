@@ -341,10 +341,7 @@ pub(crate) fn compute_catalog_discovery_checkpoint_probe(
             .map(|(path, signature)| {
                 let signature =
                     catalog_discovery::GameDirSignature::from_namespace_signature(signature);
-                if matches!(
-                    signature,
-                    catalog_discovery::GameDirSignature::Unavailable
-                ) {
+                if matches!(signature, catalog_discovery::GameDirSignature::Unavailable) {
                     ambiguous = true;
                 }
                 (path, signature)
@@ -364,10 +361,7 @@ pub(crate) fn compute_catalog_discovery_checkpoint_probe(
             payload_extensions: BTreeSet::new(),
         });
     }
-    if !retained_shapes.is_empty()
-        || !top_probes.is_empty()
-        || !child_probe_paths.is_empty()
-    {
+    if !retained_shapes.is_empty() || !top_probes.is_empty() || !child_probe_paths.is_empty() {
         ambiguous = true;
     }
 
@@ -400,9 +394,13 @@ pub(crate) fn compute_catalog_discovery_checkpoint_probe(
             line.starts_with("mame-metadata\t") || line.starts_with("hbmame-metadata\t")
         })
         .unwrap_or(current.lines.len());
-    current.lines.splice(audit_insert..audit_insert, retained_audit);
+    current
+        .lines
+        .splice(audit_insert..audit_insert, retained_audit);
     if ambiguous {
-        current.lines.push("checkpoint-probe\tambiguous".to_string());
+        current
+            .lines
+            .push("checkpoint-probe\tambiguous".to_string());
     }
     current
 }
@@ -662,10 +660,18 @@ mod tests {
         set_mtime_for_test(&root.join("games"), 10, 0);
         let roots = vec![root.display().to_string()];
 
-        let first =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
-        let second =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let first = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
+        let second = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         assert_eq!(first, second);
         assert_eq!(first.fingerprint_hex(), second.fingerprint_hex());
@@ -710,14 +716,22 @@ mod tests {
     fn known_core_addition_changes_checkpoint() {
         let root = unique_temp_dir("checkpoint-known-core");
         let roots = vec![root.display().to_string()];
-        let first =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let first = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         let console = root.join("_Console");
         std::fs::create_dir_all(&console).expect("create console");
         std::fs::write(console.join("ColecoVision_20260630.rbf"), b"core").expect("write core");
-        let second =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let second = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         let drift = CatalogDriftSummary::from_checkpoints(Some(&first), &second);
         assert!(!drift.unchanged);
@@ -733,8 +747,12 @@ mod tests {
     fn unknown_core_and_game_dir_are_checkpoint_inputs() {
         let root = unique_temp_dir("checkpoint-unknown-core");
         let roots = vec![root.display().to_string()];
-        let first =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let first = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         let console = root.join("_Console");
         let game_dir = root.join("games/ChannelF");
@@ -742,8 +760,12 @@ mod tests {
         std::fs::create_dir_all(&game_dir).expect("create game dir");
         std::fs::write(console.join("ChannelF_20260630.rbf"), b"core").expect("write core");
         std::fs::write(game_dir.join("Alien.chf"), b"rom").expect("write payload");
-        let second =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let second = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         let drift = CatalogDriftSummary::from_checkpoints(Some(&first), &second);
         assert!(!drift.unchanged);
@@ -802,8 +824,12 @@ mod tests {
         }
         let roots = vec![root.display().to_string()];
 
-        let checkpoint =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let checkpoint = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         for dir in [
             "screenshots",
@@ -832,8 +858,12 @@ mod tests {
             .expect("write sidecar");
         let roots = vec![root.display().to_string()];
 
-        let checkpoint =
-            compute_catalog_discovery_checkpoint(&roots, &root.join("mame"), &root.join("hbmame"), &[]);
+        let checkpoint = compute_catalog_discovery_checkpoint(
+            &roots,
+            &root.join("mame"),
+            &root.join("hbmame"),
+            &[],
+        );
 
         assert!(!checkpoint
             .lines()

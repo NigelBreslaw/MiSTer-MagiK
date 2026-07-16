@@ -1089,11 +1089,8 @@ mod tests {
         let root = unique_temp_dir("mgl-document-lenient");
         std::fs::create_dir_all(&root).expect("create temp root");
         let path = root.join("Fixture.mgl");
-        std::fs::write(
-            &path,
-            r#"<rbf>NES</rbf><file path="games/NES/Mario.nes"/>"#,
-        )
-        .expect("write rootless mgl fixture");
+        std::fs::write(&path, r#"<rbf>NES</rbf><file path="games/NES/Mario.nes"/>"#)
+            .expect("write rootless mgl fixture");
 
         let document = read_mgl_document(&path).expect("read MGL document");
 

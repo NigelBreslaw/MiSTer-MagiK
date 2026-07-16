@@ -5,6 +5,9 @@
 
 pub mod arcade_catalog;
 mod bounded_lz4;
+pub mod builder_protocol;
+#[cfg(feature = "builder")]
+pub mod builder_service;
 pub mod catalog_build;
 pub mod catalog_build_record;
 pub mod catalog_checkpoint;
@@ -19,8 +22,8 @@ mod catalog_scan;
 pub mod catalog_stamp;
 pub mod catalog_store;
 pub mod catalog_summary;
-pub mod device_layout;
 mod core_audit;
+pub mod device_layout;
 mod fallible_log;
 pub mod fs_fault;
 mod game_discovery;
@@ -32,16 +35,13 @@ mod library_indexer;
 pub mod media_identity;
 mod media_metadata;
 mod namespace_walk;
+pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
-pub mod prepared_collections;
-pub mod builder_protocol;
-#[cfg(feature = "builder")]
-pub mod builder_service;
 pub mod runtime_thread;
-pub mod work_coordinator;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
 #[cfg(test)]
 mod test_support;
+pub mod work_coordinator;

@@ -2149,9 +2149,8 @@ pub(crate) fn write_sqlite_scan_with_mame_and_preview_pack(
     mame_sqlite_path: &Path,
     preview_asset_pack: &preview_worker::PreviewArchiveIndex,
 ) -> Result<(), String> {
-    let preview_paths = PreviewArchivePaths::from_preview_indexes(std::slice::from_ref(
-        preview_asset_pack,
-    ));
+    let preview_paths =
+        PreviewArchivePaths::from_preview_indexes(std::slice::from_ref(preview_asset_pack));
     write_sqlite_scan_with_sources(
         path,
         scan,
