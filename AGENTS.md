@@ -122,8 +122,10 @@ default. Override with `MISTER_MAIN_DIR`.
   repeat the same probe or switch to raw ssh/scp unless the user explicitly asks
   for recovery work.
 - `scripts/deploy-rust.sh` deploys the MagiK binary through the agent by
-  default. It is runtime-only; build/publish catalog metadata and screenshot
-  packs with the catalog/media tools, not deploy flags. Use
+  default. It is runtime-only: it preflights the complete dev manifest and
+  atomically rebinds only that manifest's GUI hash after deployment; it does
+  not replace other platform files. Build/publish catalog metadata and
+  screenshot packs with the catalog/media tools, not deploy flags. Use
   `MISTER_DEPLOY_TRANSPORT=ssh` only as an explicit fallback test or recovery
   path.
 - For catalog database inspection, use the direct query helpers first:

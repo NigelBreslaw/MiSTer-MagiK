@@ -23,6 +23,10 @@ source "$HERE/scripts/magik-layout.sh"
 magik_layout_select dev
 REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
+REMOTE_SCANOUT_MODULE="$REMOTE_DIR/mister_magik_scanout_slots.ko"
+REMOTE_SCANOUT_METADATA="$REMOTE_DIR/mister_magik_scanout_slots.metadata.txt"
+REMOTE_LATCH_RBF="$REMOTE_DIR/fpga/menu-magik-vblank-latch.rbf"
+REMOTE_LATCH_METADATA="$REMOTE_DIR/fpga/menu-magik-vblank-latch.metadata.txt"
 DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
 
 PROFILE=release-device
@@ -79,11 +83,79 @@ human_bytes() {
   }'
 }
 
+verify_dev_platform_manifest() {
+  local mode="$1"
+  local candidate_gui_sha="${2:-}"
+  "$HERE/scripts/mister" run "
+set -e
+manifest='$MISTER_MAGIK_MANIFEST'
+mode='$mode'
+candidate_gui_sha='$candidate_gui_sha'
+tmp=\"\$manifest.runtime-upload\"
+trap 'rm -f \"\$tmp\"' EXIT
+get() { value=\$(sed -n \"s/^\$1=//p\" \"\$manifest\"); test -n \"\$value\"; test \"\$(grep -c \"^\$1=\" \"\$manifest\")\" -eq 1; printf '%s' \"\$value\"; }
+expected_fields='format main_path gui_path scanout_module_path scanout_metadata_path latch_rbf_path latch_metadata_path main_sha256 gui_sha256 scanout_module_sha256 scanout_metadata_sha256 latch_rbf_sha256 latch_metadata_sha256 platform_contract_sha256 main_revision magik_revision menu_revision'
+records=\$(awk 'NF && \$0 !~ /^#/ { count++ } END { print count + 0 }' \"\$manifest\")
+test \"\$records\" -eq 17
+for field in \$expected_fields; do get \"\$field\" >/dev/null; done
+test \"\$(get format)\" = mister-magik-platform-v2
+test \"\$(get main_path)\" = '$MISTER_MAGIK_MAIN'
+test \"\$(get gui_path)\" = '$REMOTE'
+test \"\$(get scanout_module_path)\" = '$REMOTE_SCANOUT_MODULE'
+test \"\$(get scanout_metadata_path)\" = '$REMOTE_SCANOUT_METADATA'
+test \"\$(get latch_rbf_path)\" = '$REMOTE_LATCH_RBF'
+test \"\$(get latch_metadata_path)\" = '$REMOTE_LATCH_METADATA'
+is_hex() { value=\$1; width=\$2; test \"\${#value}\" -eq \"\$width\"; echo \"\$value\" | grep -Eq '^[0-9a-f]+\$'; }
+for field in main_sha256 gui_sha256 scanout_module_sha256 scanout_metadata_sha256 latch_rbf_sha256 latch_metadata_sha256 platform_contract_sha256; do is_hex \"\$(get \"\$field\")\" 64; done
+for field in main_revision magik_revision menu_revision; do is_hex \"\$(get \"\$field\")\" 40; done
+check() { path=\$1; key=\$2; test -r \"\$path\"; test \"\$(sha256sum \"\$path\" | awk '{print \$1}')\" = \"\$(get \"\$key\")\"; }
+check '$MISTER_MAGIK_MAIN' main_sha256
+check '$REMOTE_SCANOUT_MODULE' scanout_module_sha256
+check '$REMOTE_SCANOUT_METADATA' scanout_metadata_sha256
+check '$REMOTE_LATCH_RBF' latch_rbf_sha256
+check '$REMOTE_LATCH_METADATA' latch_metadata_sha256
+contract=\$(get platform_contract_sha256)
+module_hash=\$(get scanout_module_sha256)
+rbf_hash=\$(get latch_rbf_sha256)
+menu_revision=\$(get menu_revision)
+grep -qx \"platform_contract_sha256=\$contract\" '$REMOTE_SCANOUT_METADATA'
+grep -qx \"platform_contract_sha256=\$contract\" '$REMOTE_LATCH_METADATA'
+grep -qx \"module_sha256=\$module_hash\" '$REMOTE_SCANOUT_METADATA'
+grep -qx \"rbf_sha256=\$rbf_hash\" '$REMOTE_LATCH_METADATA'
+grep -qx \"source_commit=\$menu_revision\" '$REMOTE_LATCH_METADATA'
+case \"\$mode\" in
+  verify)
+    check '$REMOTE' gui_sha256
+    ;;
+  rebind)
+    is_hex \"\$candidate_gui_sha\" 64
+    test \"\$(sha256sum '$REMOTE' | awk '{print \$1}')\" = \"\$candidate_gui_sha\"
+    awk -v hash=\"\$candidate_gui_sha\" '
+      BEGIN { seen = 0 }
+      /^gui_sha256=/ { print \"gui_sha256=\" hash; seen++; next }
+      { print }
+      END { if (seen != 1) exit 1 }
+    ' \"\$manifest\" > \"\$tmp\"
+    test \"\$(awk 'NF && \$0 !~ /^#/ { count++ } END { print count + 0 }' \"\$tmp\")\" -eq 17
+    test \"\$(grep -c \"^gui_sha256=\$candidate_gui_sha\$\" \"\$tmp\")\" -eq 1
+    sync
+    mv \"\$tmp\" \"\$manifest\"
+    sync
+    ;;
+  *) exit 2 ;;
+esac
+"
+}
+
 echo "==> Cross-building (armv7 profile=$PROFILE)"
 "$HERE/magik-gui/build-arm.sh" "${BUILD_FLAG[@]}"
 
 LOCAL_BYTES="$(bytes "$BIN")"
+LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
+
+echo "==> Preflighting development platform manifest"
+verify_dev_platform_manifest verify
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 DEPLOY_OUTPUT=""
@@ -117,7 +189,6 @@ REMOTE_BYTES="$(
 if [ -n "$REMOTE_BYTES" ]; then
   echo "==> Deployed binary size: $REMOTE_BYTES bytes ($(human_bytes "$REMOTE_BYTES"))"
 fi
-LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"
 REMOTE_SHA256="$(bench_context_remote_sha256 "$HERE/scripts/mister" "$REMOTE" || true)"
 REMOTE_SHA256="${REMOTE_SHA256:-missing}"
 BUILT_FEATURES="$(bench_context_binary_features "$BIN")"
@@ -127,6 +198,9 @@ if ! bench_context_require_binary_contract "$BIN" "$REMOTE_SHA256" "$BUILT_FEATU
   echo "ERROR: deployed MagiK binary does not match the local build contract" >&2
   exit 1
 fi
+
+echo "==> Rebinding development platform manifest to deployed GUI"
+verify_dev_platform_manifest rebind "$LOCAL_SHA256"
 SOURCE_FIELDS="$(bench_context_source_fields "$HERE")"
 printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=1\t%s\n' \
   "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"

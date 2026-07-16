@@ -165,7 +165,8 @@ magik-gui/build-arm.sh --profile
 # and optional 2x RGB565 expansion for already-half-size assets.
 # Default media folder on MiSTer: /media/fat/mister-magik/video-snaps/neogeo
 
-# Deploy runtime binary only (default = release-device).
+# Deploy the runtime binary only (default = release-device). The command
+# preflights the dev platform and atomically rebinds only its GUI hash.
 MISTER_IP=192.168.1.117 MISTER_PASS=1 scripts/deploy-rust.sh
 
 # Deploy an experiment-enabled binary for lab scripts.

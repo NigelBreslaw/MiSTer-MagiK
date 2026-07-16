@@ -213,6 +213,11 @@ The known-good activation sequence is:
    `scripts/install-slint-boot.sh` refuses to arm MagiK boot unless the complete
    installed bundle verifies.
 
+   A runtime-only `scripts/deploy-rust.sh` update first verifies the installed
+   dev platform, then replaces the GUI and atomically rebinds only
+   `gui_sha256`. The remaining manifest fields retain the complete platform's
+   original provenance and must still match their installed artifacts.
+
    Release packages additionally retain `platform-bundle-v0.1.json`: it
    identifies the immutable main-qualified FPGA/kernel promotion that supplied
    the platform files. It is release provenance; `platform-v2.manifest` remains
