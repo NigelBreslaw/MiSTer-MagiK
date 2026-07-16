@@ -19,6 +19,7 @@ use crate::catalog_discovery::{GameDirFact, InstalledCore};
 use crate::catalog_load_metrics;
 pub use crate::catalog_navigation::{
     navigation_path_for_sqlite, read_catalog_navigation_projection,
+    read_catalog_navigation_projection_with_timing,
     write_catalog_navigation_projection_for_catalog, CatalogNavigationProjection,
 };
 pub(crate) use crate::catalog_progress::ProgressCallback;
@@ -172,6 +173,9 @@ pub struct LibraryCatalogLoad {
     pub launch_plans_us: u64,
     pub systems_us: u64,
     pub catalog_us: u64,
+    pub navigation_file_read_us: u64,
+    pub navigation_decompress_us: u64,
+    pub navigation_decode_us: u64,
     pub rows: usize,
 }
 
@@ -193,6 +197,9 @@ impl LibraryCatalogLoad {
             launch_plans_us: 0,
             systems_us: 0,
             catalog_us: us,
+            navigation_file_read_us: 0,
+            navigation_decompress_us: 0,
+            navigation_decode_us: 0,
             rows,
         }
     }
@@ -492,7 +499,7 @@ pub fn load_arcade_catalog_from_navigation_projection(
 ) -> Result<Option<LibraryCatalogLoad>, String> {
     let started = std::time::Instant::now();
     let read_t = std::time::Instant::now();
-    let Some(projection) = read_catalog_navigation_projection(
+    let Some(loaded_projection) = read_catalog_navigation_projection_with_timing(
         &navigation_path_for_sqlite(sqlite_path),
         expected_stamp,
     )?
@@ -500,10 +507,12 @@ pub fn load_arcade_catalog_from_navigation_projection(
         return Ok(None);
     };
     let read_us = read_t.elapsed().as_micros() as u64;
-    let rows = projection.games.len();
+    let rows = loaded_projection.projection.games.len();
     let catalog_t = std::time::Instant::now();
-    let catalog =
-        ArcadeCatalog::from_navigation_projection(root.as_ref().to_path_buf(), projection);
+    let catalog = ArcadeCatalog::from_navigation_projection(
+        root.as_ref().to_path_buf(),
+        loaded_projection.projection,
+    );
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(Some(LibraryCatalogLoad {
         catalog,
@@ -520,6 +529,9 @@ pub fn load_arcade_catalog_from_navigation_projection(
         launch_plans_us: 0,
         systems_us: 0,
         catalog_us,
+        navigation_file_read_us: loaded_projection.file_read_us,
+        navigation_decompress_us: loaded_projection.decompress_us,
+        navigation_decode_us: loaded_projection.decode_us,
         rows,
     }))
 }
