@@ -114,7 +114,6 @@ fn start_framebuffer_display_clock(
     callback: impl FnMut(FramebufferDisplayClockTick) + 'static,
 ) -> FramebufferDisplayClock {
     struct Adapter<'a> {
-        #[cfg_attr(not(target_os = "macos"), expect(dead_code))]
         window: &'a slint::Window,
         callback: SharedDisplayClockCallback,
     }
