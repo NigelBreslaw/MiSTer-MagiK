@@ -137,8 +137,21 @@ pub(crate) fn agent_stream_request(
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     writeln!(stream, "{request}")?;
-    stream.write_all(payload)?;
-    stream.flush()?;
+    write_agent_stream_payload(stream, payload, start)
+}
+
+fn write_agent_stream_payload<T: Read + Write>(
+    mut stream: T,
+    payload: &[u8],
+    start: Instant,
+) -> Result<AgentResponse> {
+    if let Err(write_error) = stream.write_all(payload).and_then(|_| stream.flush()) {
+        let mut line = String::new();
+        match BufReader::new(stream).read_line(&mut line) {
+            Ok(0) | Err(_) => return Err(write_error.into()),
+            Ok(_) => return parse_agent_response_line(line, start),
+        }
+    }
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
@@ -207,6 +220,27 @@ pub(crate) fn verify_agent_deploy_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Error, ErrorKind};
+
+    struct RejectingStream {
+        response: Cursor<Vec<u8>>,
+    }
+
+    impl Read for RejectingStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.response.read(buffer)
+        }
+    }
+
+    impl Write for RejectingStream {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(Error::new(ErrorKind::BrokenPipe, "broken pipe"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn agent_response_parser_rejects_empty_and_error_responses() {
@@ -275,5 +309,25 @@ mod tests {
         .expect_err("oversized payload len should fail")
         .to_string()
         .contains("payload too large"));
+    }
+
+    #[test]
+    fn stream_request_surfaces_agent_rejection_instead_of_broken_pipe() {
+        let stream = RejectingStream {
+            response: Cursor::new(
+                serde_json::to_vec(&json!({
+                    "id": 1,
+                    "ok": false,
+                    "error": "deploy remote must be under /media/fat/mister-magik"
+                }))
+                .expect("encode rejection"),
+            ),
+        };
+        let payload = [0u8; 1];
+        let error = write_agent_stream_payload(stream, &payload, Instant::now())
+            .expect_err("agent rejection should fail")
+            .to_string();
+
+        assert_eq!(error, "deploy remote must be under /media/fat/mister-magik");
     }
 }

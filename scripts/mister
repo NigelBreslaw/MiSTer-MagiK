@@ -15,10 +15,11 @@ cd "$HERE"
 BIN="$HERE/tools/mister/target/debug/mister"
 MANIFEST="$HERE/tools/mister/Cargo.toml"
 LOCK="$HERE/tools/mister/Cargo.lock"
-SRC="$HERE/tools/mister/src/main.rs"
-MEDIA_SRC="$HERE/tools/mister/src/media.rs"
 
-if [ ! -x "$BIN" ] || [ "$MANIFEST" -nt "$BIN" ] || [ "$LOCK" -nt "$BIN" ] || [ "$SRC" -nt "$BIN" ] || [ "$MEDIA_SRC" -nt "$BIN" ]; then
+if [ ! -x "$BIN" ] ||
+  [ "$MANIFEST" -nt "$BIN" ] ||
+  [ "$LOCK" -nt "$BIN" ] ||
+  find "$HERE/tools/mister/src" -type f -newer "$BIN" -print -quit | grep -q .; then
   if ! cargo build --quiet --manifest-path "$MANIFEST"; then
     if [ -x "$BIN" ]; then
       echo "warning: cargo build failed; using existing $BIN" >&2
