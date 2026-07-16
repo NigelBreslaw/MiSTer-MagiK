@@ -381,7 +381,8 @@ fn scan_targets_for_plan(
 }
 
 fn same_library_path(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+    a.to_string_lossy()
+        .eq_ignore_ascii_case(&b.to_string_lossy())
 }
 
 fn walk_index_candidates_streaming(
@@ -462,63 +463,63 @@ fn scan_target_candidates_with_facts(
         signature_capture,
         should_ignore_path,
         |entry| {
-        let p = entry.path.as_path();
-        if entry.kind == NamespaceEntryKind::Directory {
-            dirs += 1;
-            if facts.is_some() {
-                nested_directory_seen = true;
+            let p = entry.path.as_path();
+            if entry.kind == NamespaceEntryKind::Directory {
+                dirs += 1;
+                if facts.is_some() {
+                    nested_directory_seen = true;
+                }
+                return true;
             }
-            return true;
-        }
-        if entry.kind != NamespaceEntryKind::File {
-            return true;
-        }
-        files += 1;
-        let ext = p
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if let Some(facts) = facts.as_mut() {
-            let depth = p
-                .strip_prefix(target)
-                .ok()
-                .map(|relative| relative.components().count())
-                .unwrap_or(usize::MAX);
-            if depth <= 2 {
-                if ext.eq_ignore_ascii_case("zip") {
-                    facts.has_zip_files = true;
-                    if depth == 1 {
-                        let relative = p.strip_prefix(target).unwrap_or(p);
-                        facts.direct_zip_paths.push(facts.path.join(relative));
-                    }
-                } else {
-                    facts.has_payload_files = true;
-                    if !ext.is_empty() {
-                        facts.payload_extensions.insert(ext.clone());
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
+            }
+            files += 1;
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if let Some(facts) = facts.as_mut() {
+                let depth = p
+                    .strip_prefix(target)
+                    .ok()
+                    .map(|relative| relative.components().count())
+                    .unwrap_or(usize::MAX);
+                if depth <= 2 {
+                    if ext.eq_ignore_ascii_case("zip") {
+                        facts.has_zip_files = true;
+                        if depth == 1 {
+                            let relative = p.strip_prefix(target).unwrap_or(p);
+                            facts.direct_zip_paths.push(facts.path.join(relative));
+                        }
+                    } else {
+                        facts.has_payload_files = true;
+                        if !ext.is_empty() {
+                            facts.payload_extensions.insert(ext.clone());
+                        }
                     }
                 }
             }
-        }
-        if !is_source_index_extension(candidate_exts, p, &ext) {
-            return true;
-        }
-        if !is_index_candidate(profiles, p, &ext) {
-            return true;
-        }
-        let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
-        let file = FoundFile {
-            path: p.to_path_buf(),
-            ext,
-            size,
-            mtime_secs,
-        };
-        candidates += 1;
-        if !emit(file) {
-            aborted = true;
-            return false;
-        }
-        true
+            if !is_source_index_extension(candidate_exts, p, &ext) {
+                return true;
+            }
+            if !is_index_candidate(profiles, p, &ext) {
+                return true;
+            }
+            let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
+            let file = FoundFile {
+                path: p.to_path_buf(),
+                ext,
+                size,
+                mtime_secs,
+            };
+            candidates += 1;
+            if !emit(file) {
+                aborted = true;
+                return false;
+            }
+            true
         },
     );
     let target_signature = namespace_stats.target_signature;

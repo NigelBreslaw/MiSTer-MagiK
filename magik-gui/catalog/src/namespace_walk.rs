@@ -43,10 +43,7 @@ impl NamespaceSignatureCapture {
 
     #[cfg(target_os = "linux")]
     fn depth_one_directories(self) -> bool {
-        matches!(
-            self,
-            Self::TargetAndDepthOneDirectories
-        )
+        matches!(self, Self::TargetAndDepthOneDirectories)
     }
 }
 
@@ -325,10 +322,7 @@ fn visit_walkdir(
     }
 }
 
-fn metadata_signature(
-    len: u64,
-    modified: Option<std::time::SystemTime>,
-) -> Option<(u64, i64)> {
+fn metadata_signature(len: u64, modified: Option<std::time::SystemTime>) -> Option<(u64, i64)> {
     let mtime_nanos = modified?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
@@ -357,8 +351,8 @@ fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        is_zip_path, unix_timestamp_nanos, NamespaceEntry, NamespaceEntryKind,
-        DirectorySignatureProbe, NamespaceSignatureCapture, NamespaceWalkStats,
+        is_zip_path, unix_timestamp_nanos, DirectorySignatureProbe, NamespaceEntry,
+        NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
     };
     use std::ffi::{CString, OsString};
     use std::io;
@@ -507,9 +501,7 @@ mod linux {
         }
         let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
         let target_signature_before = if signature_capture.target() {
-            stat_fd(root.as_raw_fd())
-                .ok()
-                .and_then(directory_signature)
+            stat_fd(root.as_raw_fd()).ok().and_then(directory_signature)
         } else {
             None
         };
@@ -538,13 +530,10 @@ mod linux {
             budget,
         )?;
         if signature_capture.target() {
-            let target_signature_after = stat_fd(root.as_raw_fd())
-                .ok()
-                .and_then(directory_signature);
-            stats.target_signature = super::stable_directory_signature(
-                target_signature_before,
-                target_signature_after,
-            );
+            let target_signature_after =
+                stat_fd(root.as_raw_fd()).ok().and_then(directory_signature);
+            stats.target_signature =
+                super::stable_directory_signature(target_signature_before, target_signature_after);
         }
         stats.captured_entries = entries.len();
         Ok(NamespaceCapture { entries, stats })
@@ -670,7 +659,8 @@ mod linux {
                     };
                     Some((
                         u64::try_from(value.st_size).unwrap_or(0),
-                        #[allow(clippy::unnecessary_cast)] // libc field widths vary by Unix target.
+                        #[allow(clippy::unnecessary_cast)]
+                        // libc field widths vary by Unix target.
                         unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
                     ))
                 } else {
@@ -695,10 +685,7 @@ mod linux {
                         libc::openat(
                             directory.as_raw_fd(),
                             child_name.as_ptr(),
-                            libc::O_RDONLY
-                                | libc::O_DIRECTORY
-                                | libc::O_CLOEXEC
-                                | libc::O_NOFOLLOW,
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
                         )
                     };
                     if raw_child < 0 {
@@ -717,8 +704,8 @@ mod linux {
                             .and_then(directory_signature);
                     }
                 }
-                let captured_directory_signature =
-                    if capture_directory_signature && !should_descend {
+                let captured_directory_signature = if capture_directory_signature && !should_descend
+                {
                     let value = match stat {
                         Some(value) => Some(value),
                         None => stat_entry(directory.as_raw_fd(), &child_name, &child_path).ok(),
@@ -950,12 +937,17 @@ mod tests {
         fs::write(dir.join("direct/deep/game.rom"), b"game").unwrap();
 
         let mut default_direct = None;
-        let default = visit(&dir, Some(2), |_| false, |entry| {
-            if entry.path == dir.join("direct") {
-                default_direct = entry.directory_signature;
-            }
-            true
-        });
+        let default = visit(
+            &dir,
+            Some(2),
+            |_| false,
+            |entry| {
+                if entry.path == dir.join("direct") {
+                    default_direct = entry.directory_signature;
+                }
+                true
+            },
+        );
         assert_eq!(default.target_signature, None);
         assert_eq!(default_direct, None);
 
@@ -1005,10 +997,7 @@ mod tests {
         fs::create_dir_all(&child).unwrap();
         fs::write(&file, b"file").unwrap();
 
-        let probe = probe_directory_signatures(
-            &dir,
-            &[child.clone(), file, missing],
-        );
+        let probe = probe_directory_signatures(&dir, &[child.clone(), file, missing]);
 
         assert!(probe.target_signature.is_some());
         assert!(probe.child_signatures[0].is_some());
@@ -1024,23 +1013,19 @@ mod tests {
         max_depth: Option<usize>,
         ignore: &dyn Fn(&Path) -> bool,
     ) -> Snapshot {
-        let mut entries = linux::collect_fd_relative(
-            root,
-            max_depth,
-            NamespaceSignatureCapture::None,
-            ignore,
-        )
-            .unwrap()
-            .entries
-            .into_iter()
-            .map(|entry| {
-                (
-                    entry.path.strip_prefix(root).unwrap().to_path_buf(),
-                    entry.kind,
-                    entry.zip_signature,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut entries =
+            linux::collect_fd_relative(root, max_depth, NamespaceSignatureCapture::None, ignore)
+                .unwrap()
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    (
+                        entry.path.strip_prefix(root).unwrap().to_path_buf(),
+                        entry.kind,
+                        entry.zip_signature,
+                    )
+                })
+                .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
     }
@@ -1089,18 +1074,17 @@ mod tests {
         fs::write(dir.join("one.rom"), b"one").unwrap();
         fs::write(dir.join("nested/two.rom"), b"two").unwrap();
 
-        let error =
-            linux::collect_with_budget_for_test(
-                &dir,
-                None,
-                NamespaceSignatureCapture::None,
-                &|_| false,
-                1,
-                usize::MAX,
-                usize::MAX,
-            )
-            .err()
-            .unwrap();
+        let error = linux::collect_with_budget_for_test(
+            &dir,
+            None,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            1,
+            usize::MAX,
+            usize::MAX,
+        )
+        .err()
+        .unwrap();
         assert!(error.starts_with("capture budget:"));
 
         fs::remove_dir_all(dir).unwrap();

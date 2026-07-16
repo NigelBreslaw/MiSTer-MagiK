@@ -160,7 +160,11 @@ fn append_mgl_system_descriptors(
                 continue;
             };
             let core_id = launch_profiles::canonical_core_id(&setname);
-            let key = format!("{}\t{}", core_id.to_ascii_lowercase(), target.path.display());
+            let key = format!(
+                "{}\t{}",
+                core_id.to_ascii_lowercase(),
+                target.path.display()
+            );
             if seen.insert(key) {
                 out.push(InstalledCore {
                     core_id,
@@ -204,32 +208,57 @@ pub(crate) fn archive_member_extensions_for_dir(path: &Path) -> BTreeSet<String>
 }
 
 fn append_zip_member_extensions(path: &Path, extensions: &mut BTreeSet<String>) {
-    let Ok(mut file) = File::open(path) else { return };
-    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else { return };
-    if len < 22 { return; }
+    let Ok(mut file) = File::open(path) else {
+        return;
+    };
+    let Ok(len) = file.metadata().map(|metadata| metadata.len()) else {
+        return;
+    };
+    if len < 22 {
+        return;
+    }
     let tail_len = len.min(66_000) as usize;
-    if file.seek(SeekFrom::End(-(tail_len as i64))).is_err() { return; }
+    if file.seek(SeekFrom::End(-(tail_len as i64))).is_err() {
+        return;
+    }
     let mut tail = vec![0; tail_len];
-    if file.read_exact(&mut tail).is_err() { return; }
-    let Some(eocd) = crate::library_db::find_eocd(&tail) else { return };
+    if file.read_exact(&mut tail).is_err() {
+        return;
+    }
+    let Some(eocd) = crate::library_db::find_eocd(&tail) else {
+        return;
+    };
     let entries = usize::from(crate::library_db::le_u16(&tail[eocd + 10..eocd + 12])).min(4096);
     let size = u64::from(crate::library_db::le_u32(&tail[eocd + 12..eocd + 16]));
     let offset = u64::from(crate::library_db::le_u32(&tail[eocd + 16..eocd + 20]));
     if offset.checked_add(size).is_none_or(|end| end > len)
         || file.seek(SeekFrom::Start(offset)).is_err()
-    { return; }
+    {
+        return;
+    }
     for _ in 0..entries {
         let mut header = [0; 46];
         if file.read_exact(&mut header).is_err()
             || crate::library_db::le_u32(&header[0..4]) != 0x0201_4b50
-        { return; }
+        {
+            return;
+        }
         let name_len = usize::from(crate::library_db::le_u16(&header[28..30]));
         let extra_len = usize::from(crate::library_db::le_u16(&header[30..32]));
         let comment_len = usize::from(crate::library_db::le_u16(&header[32..34]));
-        if name_len > 4096 { return; }
+        if name_len > 4096 {
+            return;
+        }
         let mut name = vec![0; name_len];
-        if file.read_exact(&mut name).is_err() { return; }
-        if file.seek(SeekFrom::Current((extra_len + comment_len) as i64)).is_err() { return; }
+        if file.read_exact(&mut name).is_err() {
+            return;
+        }
+        if file
+            .seek(SeekFrom::Current((extra_len + comment_len) as i64))
+            .is_err()
+        {
+            return;
+        }
         let name = String::from_utf8_lossy(&name);
         let member = Path::new(name.as_ref());
         if !name.ends_with('/') && !should_ignore_hidden_path(member) {
@@ -645,10 +674,7 @@ mod tests {
         let roots = vec![root.display().to_string()];
 
         let cold = top_level_game_dir_headers_for_roots_excluding(&roots, &BTreeSet::new());
-        let probe = top_level_game_dir_probe_headers_for_roots_excluding(
-            &roots,
-            &BTreeSet::new(),
-        );
+        let probe = top_level_game_dir_probe_headers_for_roots_excluding(&roots, &BTreeSet::new());
 
         assert_eq!(cold.len(), 1);
         assert_eq!(cold[0].signature, GameDirSignature::Unavailable);

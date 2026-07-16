@@ -1650,9 +1650,7 @@ fn auto_console_archive_paths() -> Vec<String> {
 fn default_console_archive_paths() -> Vec<String> {
     supported_screenshot_pack_ids()
         .filter(|system| !matches!(*system, "arcade" | "neogeo"))
-        .map(|system| {
-            legacy_archive_path_for_system(&default_screenshot_asset_dir(), system)
-        })
+        .map(|system| legacy_archive_path_for_system(&default_screenshot_asset_dir(), system))
         .collect()
 }
 

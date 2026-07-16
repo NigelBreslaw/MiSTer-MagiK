@@ -63,9 +63,16 @@ impl WorkCoordinator {
         drop(state);
         crate::catalog_logln!(
             "work_coordinator_tsv\tphase=acquire\tclass={}\tlabel={}\twait_us={}",
-            class.label(), label, started.elapsed().as_micros()
+            class.label(),
+            label,
+            started.elapsed().as_micros()
         );
-        WorkLease { coordinator: self, class, label, acquired: started }
+        WorkLease {
+            coordinator: self,
+            class,
+            label,
+            acquired: started,
+        }
     }
 
     fn cooperate_background(&self, label: &'static str) -> bool {
@@ -101,8 +108,12 @@ impl WorkCoordinator {
     fn release(&self, class: WorkClass, label: &'static str, acquired: Instant) {
         let mut state = self.state.lock().expect("work coordinator lock poisoned");
         match class {
-            WorkClass::Foreground => state.foreground_active = state.foreground_active.saturating_sub(1),
-            WorkClass::Background => state.background_active = state.background_active.saturating_sub(1),
+            WorkClass::Foreground => {
+                state.foreground_active = state.foreground_active.saturating_sub(1)
+            }
+            WorkClass::Background => {
+                state.background_active = state.background_active.saturating_sub(1)
+            }
         }
         let foreground_active = state.foreground_active;
         let background_active = state.background_active;
@@ -124,11 +135,15 @@ impl Default for WorkCoordinator {
 static GLOBAL: OnceLock<WorkCoordinator> = OnceLock::new();
 
 pub fn foreground(label: &'static str) -> WorkLease {
-    GLOBAL.get_or_init(WorkCoordinator::new).acquire(WorkClass::Foreground, label)
+    GLOBAL
+        .get_or_init(WorkCoordinator::new)
+        .acquire(WorkClass::Foreground, label)
 }
 
 pub fn background(label: &'static str) -> WorkLease {
-    GLOBAL.get_or_init(WorkCoordinator::new).acquire(WorkClass::Background, label)
+    GLOBAL
+        .get_or_init(WorkCoordinator::new)
+        .acquire(WorkClass::Background, label)
 }
 
 /// Allows bounded background helpers to yield at a safe chunk boundary.
@@ -157,7 +172,8 @@ impl WorkLease {
 
 impl Drop for WorkLease {
     fn drop(&mut self) {
-        self.coordinator.release(self.class, self.label, self.acquired);
+        self.coordinator
+            .release(self.class, self.label, self.acquired);
     }
 }
 

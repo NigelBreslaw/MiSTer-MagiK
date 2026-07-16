@@ -421,7 +421,11 @@ mod tests {
             ),
             (RuntimeThreadRole::PreviewPrefetch, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::MediaWorker, 10, ThreadAffinity::Cpu0),
-            (RuntimeThreadRole::MediaDownload, 0, ThreadAffinity::AllOnline),
+            (
+                RuntimeThreadRole::MediaDownload,
+                0,
+                ThreadAffinity::AllOnline,
+            ),
             (RuntimeThreadRole::MediaIndex, 10, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::FramebufferStream,

@@ -2110,13 +2110,7 @@ mod tests {
             &mame_db,
             &[
                 ("mpatrol", None, "Moon Patrol", Some("1982"), Some("Irem")),
-                (
-                    "adcanoe",
-                    None,
-                    "Agent X",
-                    Some("1983"),
-                    Some("Atari"),
-                ),
+                ("adcanoe", None, "Agent X", Some("1983"), Some("Atari")),
             ],
         );
         let pack = preview_worker::PreviewArchiveIndex {

@@ -8,7 +8,9 @@ use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
-    let _guard = log_line_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = log_line_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     stdout_line_unlocked(args)
 }
 
@@ -21,7 +23,9 @@ fn stdout_line_unlocked(args: fmt::Arguments<'_>) -> io::Result<()> {
 }
 
 pub(crate) fn stderr_line(args: fmt::Arguments<'_>) -> io::Result<()> {
-    let _guard = log_line_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = log_line_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     stderr_line_unlocked(args)
 }
 

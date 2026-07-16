@@ -80,7 +80,11 @@ impl ScreenshotPackId {
     }
 
     pub fn size_qualified_filename(self, image_size: &ScreenshotImageSize) -> String {
-        format!("{}-screenshots-{}.mmlz4b", self.as_str(), image_size.as_str())
+        format!(
+            "{}-screenshots-{}.mmlz4b",
+            self.as_str(),
+            image_size.as_str()
+        )
     }
 
     pub fn legacy_path_in(self, root: &Path) -> PathBuf {
@@ -284,12 +288,8 @@ mod tests {
             "arcade-screenshots-320x320.mmlz4b"
         );
         assert_eq!(
-            size_qualified_screenshot_pack_path(
-                DEFAULT_SCREENSHOT_ASSET_DIR,
-                "saturn",
-                "240x240"
-            )
-            .unwrap(),
+            size_qualified_screenshot_pack_path(DEFAULT_SCREENSHOT_ASSET_DIR, "saturn", "240x240")
+                .unwrap(),
             "/media/fat/mister-magik/assets/saturn-screenshots-240x240.mmlz4b"
         );
         assert_eq!(
@@ -320,9 +320,7 @@ mod tests {
         assert!(screenshot_reset_deletes_filename(
             "neogeo-screenshots-240x240.mmlz4b.tmp-123"
         ));
-        assert!(screenshot_reset_deletes_filename(
-            "nes-screenshots.mmlz4b"
-        ));
+        assert!(screenshot_reset_deletes_filename("nes-screenshots.mmlz4b"));
         assert!(screenshot_reset_deletes_filename(
             SCREENSHOT_MEDIA_STATE_FILENAME
         ));
