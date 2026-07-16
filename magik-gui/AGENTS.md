@@ -1,6 +1,8 @@
 # AGENTS.md - magik-gui
 
 Root `AGENTS.md` applies, especially device and boot-loop safety.
+Consult `docs/agents/file-authority.md` before editing generated or derived
+files.
 
 ## Ownership
 

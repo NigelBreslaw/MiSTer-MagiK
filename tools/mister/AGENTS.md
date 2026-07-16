@@ -1,6 +1,7 @@
 # AGENTS.md - tools/mister
 
 Root `AGENTS.md` applies.
+File authority is documented in `docs/agents/file-authority.md`.
 
 ## Ownership
 

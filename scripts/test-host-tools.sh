@@ -24,6 +24,7 @@ case "${1:-}" in
 esac
 
 python3 "$ROOT/scripts/check-license-headers.py"
+python3 "$ROOT/scripts/check-agent-guidance.py"
 python3 "$ROOT/scripts/test-doctor.py"
 
 if [ "$MODE" = full ]; then
