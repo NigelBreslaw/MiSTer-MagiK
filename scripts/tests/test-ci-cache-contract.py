@@ -13,7 +13,6 @@ WORKFLOWS = ROOT / ".github/workflows"
 CACHE_USE = re.compile(r"uses:\s*actions/cache(?:/(?:restore|save))?@v(\d+)")
 KEY_LINE = re.compile(r"^\s*key:\s*(.+)$", re.MULTILINE)
 BINARY_PREFIXES = (
-    "target-host-",
     "target-arm-",
     "target-agent-arm-",
     "cross-",
@@ -51,16 +50,17 @@ def main() -> int:
                 fail(f"binary cache lacks schema v2: {key}")
 
     rust = texts["rust-arm.yml"]
-    required_host_fragments = (
-        "magik-gui/catalog/target/debug",
-        "!magik-gui/catalog/target/debug/incremental",
-        "steps.cache-id.outputs.cargo_host",
-        "steps.cache-id.outputs.host_target",
-    )
+    required_host_fragments = ("steps.cache-id.outputs.cargo_host",)
     for fragment in required_host_fragments:
         if fragment not in rust:
             fail(f"host cache is missing {fragment}")
     for forbidden in (
+        "target-host-",
+        "Cache host build outputs",
+        "magik-gui/target/debug",
+        "magik-gui/catalog/target/debug",
+        "tools/magik-agent/target/debug",
+        "tools/mister/target/debug",
         "desktop-docs",
         "desktop/target/debug",
         "libfontconfig1-dev",
