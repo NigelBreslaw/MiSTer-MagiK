@@ -66,6 +66,7 @@ pub(super) struct ScreenshotMediaUpdateSession {
     progress_clear_at: Option<Instant>,
     interaction_block_until: Option<Instant>,
     last_gate: MediaInteractionGate,
+    low_memory_paused: bool,
 }
 
 impl Default for ScreenshotMediaUpdateSession {
@@ -80,6 +81,7 @@ impl Default for ScreenshotMediaUpdateSession {
                 active: true,
                 reason: "startup",
             },
+            low_memory_paused: false,
         }
     }
 }
@@ -106,6 +108,7 @@ impl ScreenshotMediaUpdateSession {
         first_visible_copy_done: bool,
         launch_handoff_active: bool,
         benchmark_interaction_active: bool,
+        suppress_arcade_scroll_gate: bool,
         now: Instant,
     ) -> MediaInteractionGate {
         if !first_visible_copy_done {
@@ -126,9 +129,10 @@ impl ScreenshotMediaUpdateSession {
                 reason: "benchmark",
             };
         }
-        if self
-            .interaction_block_until
-            .is_some_and(|until| now < until)
+        if !suppress_arcade_scroll_gate
+            && self
+                .interaction_block_until
+                .is_some_and(|until| now < until)
         {
             return MediaInteractionGate {
                 active: true,
@@ -143,6 +147,7 @@ impl ScreenshotMediaUpdateSession {
 
     pub(super) fn sync_gate(&mut self, gate: MediaInteractionGate) -> ScreenshotMediaUpdateEffects {
         let mut effects = ScreenshotMediaUpdateEffects::default();
+        self.low_memory_paused = gate.active && gate.reason == "low-memory";
         if self.last_gate == gate {
             return effects;
         }
@@ -225,7 +230,10 @@ impl ScreenshotMediaUpdateSession {
         effects
     }
 
-    pub(super) fn pause_for_low_memory(&mut self) -> ScreenshotMediaUpdateEffects {
+    pub(super) fn pause_for_low_memory(
+        &mut self,
+        retain_worker_for_benchmark: bool,
+    ) -> ScreenshotMediaUpdateEffects {
         let mut effects = ScreenshotMediaUpdateEffects::default();
         self.catalog_seed_pending = true;
         self.catalog_seed_defer_reason = Some("low-memory");
@@ -236,7 +244,10 @@ impl ScreenshotMediaUpdateSession {
             active: true,
             reason: "low-memory",
         });
-        effects.push(ScreenshotMediaUpdateEffect::DropWorker);
+        self.low_memory_paused = true;
+        if !retain_worker_for_benchmark {
+            effects.push(ScreenshotMediaUpdateEffect::DropWorker);
+        }
         effects
     }
 
@@ -270,7 +281,10 @@ impl ScreenshotMediaUpdateSession {
                 if display_changed {
                     self.progress_clear_at = None;
                 }
-                if event.system != "all" && self.progress_display.has_visible_rows() {
+                if !self.low_memory_paused
+                    && event.system != "all"
+                    && self.progress_display.has_visible_rows()
+                {
                     let standalone_visible =
                         !catalog_scan_visible && self.progress_display.has_visible_rows();
                     effects.event(
@@ -285,7 +299,7 @@ impl ScreenshotMediaUpdateSession {
                 if display_changed && self.progress_display.all_requested_terminal() {
                     self.progress_clear_at = Some(now + MEDIA_PROGRESS_DONE_HOLD);
                 }
-                if display_changed {
+                if display_changed && !self.low_memory_paused {
                     effects.ui(intent);
                 }
             }
@@ -573,13 +587,13 @@ mod tests {
         let now = Instant::now();
         let mut session = ScreenshotMediaUpdateSession::default();
 
-        let startup = session.current_gate(false, true, true, now);
+        let startup = session.current_gate(false, true, true, false, now);
         assert!(startup.active);
         assert_eq!(startup.reason, "startup");
 
         assert!(effect_names(session.sync_gate(startup)).is_empty());
 
-        let launch = session.current_gate(true, true, true, now);
+        let launch = session.current_gate(true, true, true, false, now);
         assert!(launch.active);
         assert_eq!(launch.reason, "launch-handoff");
         assert_eq!(
@@ -587,7 +601,7 @@ mod tests {
             vec!["event", "set-interaction"]
         );
 
-        let benchmark = session.current_gate(true, false, true, now);
+        let benchmark = session.current_gate(true, false, true, false, now);
         assert!(benchmark.active);
         assert_eq!(benchmark.reason, "benchmark");
 
@@ -598,13 +612,17 @@ mod tests {
         after_nav.screen = Screen::Arcade;
         let after = LauncherBridgeKey::from_nav(&after_nav);
         session.note_nav_change(&before, &after, now);
-        let scroll = session.current_gate(true, false, false, now);
+        let scroll = session.current_gate(true, false, false, false, now);
         assert!(scroll.active);
         assert_eq!(scroll.reason, "arcade-scroll");
 
-        let idle = session.current_gate(true, false, false, now + MEDIA_INTERACTION_SETTLE);
+        let idle = session.current_gate(true, false, false, false, now + MEDIA_INTERACTION_SETTLE);
         assert!(!idle.active);
         assert_eq!(idle.reason, "idle");
+
+        let contention = session.current_gate(true, false, false, true, now);
+        assert!(!contention.active);
+        assert_eq!(contention.reason, "idle");
     }
 
     #[test]
@@ -624,6 +642,45 @@ mod tests {
         assert!(effect_names(session.clear_progress_if_due(now)).is_empty());
         assert!(
             effect_names(session.clear_progress_if_due(now + MEDIA_PROGRESS_DONE_HOLD)).is_empty()
+        );
+    }
+
+    #[test]
+    fn low_memory_pause_retains_worker_drains_progress_and_accepts_done() {
+        let now = Instant::now();
+        let mut session = ScreenshotMediaUpdateSession::default();
+
+        assert_eq!(
+            effect_names(session.pause_for_low_memory(true)),
+            vec!["event", "ui", "set-interaction"]
+        );
+        assert_eq!(
+            effect_names(session.handle_worker_message(
+                MediaWorkerMessage::Progress(media_progress_event("arcade", "download", 1)),
+                false,
+                now,
+            )),
+            vec!["event"]
+        );
+        assert_eq!(
+            effect_names(session.handle_worker_message(
+                MediaWorkerMessage::Done {
+                    detail: "packs=1 current=0 missing=1 stale=0 downloaded=1 failed=0".to_string(),
+                },
+                false,
+                now,
+            )),
+            vec!["event", "drop-worker"]
+        );
+    }
+
+    #[test]
+    fn production_low_memory_pause_still_drops_worker() {
+        let mut session = ScreenshotMediaUpdateSession::default();
+
+        assert_eq!(
+            effect_names(session.pause_for_low_memory(false)),
+            vec!["event", "ui", "set-interaction", "drop-worker"]
         );
     }
 }

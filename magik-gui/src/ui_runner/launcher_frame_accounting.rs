@@ -2006,6 +2006,8 @@ mod tests {
             frames: frame,
             selected: 0,
             visual_index: 0.0,
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+            home_trace: LauncherHomeFrameTrace::default(),
             search_index_state: "building",
             startup_start: loop_start,
             startup_monotonic_us: 1_000_000,
@@ -2109,6 +2111,8 @@ mod tests {
                 frames: frame.frames,
                 selected: frame.selected,
                 visual_index: frame.visual_index,
+                #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+                home_trace: frame.home_trace,
                 search_index_state: frame.search_index_state,
             },
             timing: LauncherFrameTiming {

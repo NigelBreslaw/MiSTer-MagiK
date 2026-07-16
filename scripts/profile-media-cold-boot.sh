@@ -25,6 +25,7 @@ label=""
 deploy="skip"
 replace_label=0
 timeout_secs=900
+timeout_explicit=0
 manifest_url="${MISTER_MEDIA_MANIFEST_URL:-$DEFAULT_MANIFEST_URL}"
 image_size="${MISTER_MEDIA_SIZE:-320x320}"
 asset_dir=""
@@ -39,10 +40,11 @@ contention_min_overlap_frames=300
 contention_min_download_frames=180
 contention_min_publish_frames=60
 contention_min_selected_applies=10
+contention_correctness_only=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-media-cold-boot.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--asset-dir PATH] [--keep-assets] [--keep-catalog] [--manifest-url URL] [--image-size SIZE] [--thread-sample] [--arcade-trace-secs N] [--self-test]
+Usage: scripts/profile-media-cold-boot.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--asset-dir PATH] [--keep-assets] [--keep-catalog] [--manifest-url URL] [--image-size SIZE] [--thread-sample] [--arcade-trace-secs N] [--contention-correctness-only] [--self-test]
 
 Runs the supervised launcher after a reboot with a cold catalog and screenshot
 media asset directory, then emits AI-readable rows showing whether arcade,
@@ -66,7 +68,7 @@ while [[ $# -gt 0 ]]; do
     --deploy-device) deploy="device"; shift ;;
     --skip-build) deploy="skip"; shift ;;
     --replace-label) replace_label=1; shift ;;
-    --timeout) timeout_secs="${2:?}"; shift 2 ;;
+    --timeout) timeout_secs="${2:?}"; timeout_explicit=1; shift 2 ;;
     --asset-dir) asset_dir="${2:?}"; cleanup_assets=0; shift 2 ;;
     --keep-assets) cleanup_assets=0; shift ;;
     --keep-catalog) reset_catalog=0; shift ;;
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --systems) systems_csv="${2:?}"; shift 2 ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --arcade-trace-secs) arcade_trace_secs="${2:?}"; shift 2 ;;
+    --contention-correctness-only) contention_correctness_only=1; shift ;;
     --self-test) self_test=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -115,6 +118,17 @@ if [[ "$arcade_trace_secs" -gt 0 ]]; then
     exit 2
   fi
   thread_sample_enabled="1"
+  if [[ "$timeout_explicit" -eq 0 ]]; then
+    timeout_secs=420
+  fi
+  if [[ "$timeout_secs" -gt 600 ]]; then
+    echo "media contention --timeout is capped at 600 seconds" >&2
+    exit 2
+  fi
+fi
+if [[ "$contention_correctness_only" -eq 1 && "$arcade_trace_secs" -eq 0 ]]; then
+  echo "--contention-correctness-only requires --arcade-trace-secs" >&2
+  exit 2
 fi
 if [[ -z "$asset_dir" ]]; then
   asset_dir="/media/fat/mister-magik-dev/media-cold-boot-${label}-assets"
@@ -414,47 +428,105 @@ summarize_media_log() {
   ' "$log_path"
 }
 
-media_targets_terminal() {
-  local log_path="$1"
-  awk -F '\t' -v systems_csv="$systems_csv" '
-    BEGIN {
-      count = split(systems_csv, list, ",")
-      for (i = 1; i <= count; i++) {
-        wanted[list[i]] = 1
-      }
-    }
-    function kv(detail, key,   n, parts, i, item, value) {
-      n = split(detail, parts, " ")
-      for (i = 1; i <= n; i++) {
-        item = parts[i]
-        if (index(item, key "=") == 1) {
-          value = item
-          sub("^[^=]*=", "", value)
-          return value
-        }
-      }
-      return ""
-    }
-    $1 == "startup_timing" && $2 == "screenshot_media_progress" {
-      detail = $4
-      for (i = 5; i <= NF; i++) {
-        detail = detail " " $i
-      }
-      sys = kv(detail, "system")
-      phase = kv(detail, "phase")
-      if ((sys in wanted) && (phase == "done" || phase == "failed" || phase == "skipped-current" || phase == "check-only")) {
-        terminal[sys] = phase
-      }
-    }
-    END {
-      for (sys in wanted) {
-        if (!(sys in terminal)) {
-          exit 1
-        }
-      }
-      exit 0
-    }
-  ' "$log_path"
+media_completion_report() {
+  local log_path="$1" report_label="$2"
+  python3 - "$log_path" "$report_label" "$systems_csv" <<'PY'
+import collections
+import sys
+
+log_path, label, systems_csv = sys.argv[1:4]
+required_systems = {item for item in systems_csv.split(",") if item}
+queued = collections.Counter()
+terminals = collections.Counter()
+terminal_phase = {}
+worker_done = []
+worker_failed = 0
+pack_failed = 0
+
+def detail_fields(fields):
+    result = {}
+    for item in " ".join(fields).split():
+        if "=" in item:
+            key, value = item.split("=", 1)
+            result[key] = value
+    return result
+
+with open(log_path, encoding="utf-8", errors="replace") as source:
+    for line in source:
+        fields = line.rstrip("\n").split("\t")
+        if len(fields) < 4 or fields[0] != "startup_timing":
+            continue
+        event = fields[1]
+        detail = detail_fields(fields[3:])
+        system = detail.get("system", "")
+        if event == "screenshot_media_system_queued":
+            queued[(system, detail.get("pack_index", ""))] += 1
+        elif event == "screenshot_media_progress":
+            phase = detail.get("phase", "")
+            if phase in {"done", "failed", "skipped-current", "check-only"}:
+                key = (system, detail.get("pack_index", ""))
+                terminals[key] += 1
+                terminal_phase[key] = phase
+        elif event == "screenshot_media_pack_status" and detail.get("status") == "failed":
+            pack_failed += 1
+        elif event == "screenshot_media_update_failed":
+            worker_failed += 1
+        elif event == "screenshot_media_update_done":
+            worker_done.append(detail)
+
+done_detail = worker_done[0] if len(worker_done) == 1 else {}
+try:
+    done_packs = int(done_detail.get("packs", "-1"))
+    done_failed = int(done_detail.get("failed", "-1"))
+except ValueError:
+    done_packs = -1
+    done_failed = -1
+
+successful = {"done", "skipped-current", "check-only"}
+queued_set = {key for key, count in queued.items() if count}
+terminal_set = {key for key, count in terminals.items() if count}
+queued_systems = {system for system, _pack_index in queued_set}
+requested_packs = len(queued_set)
+valid = (
+    bool(queued_set)
+    and required_systems.issubset(queued_systems)
+    and len(worker_done) == 1
+    and worker_failed == 0
+    and pack_failed == 0
+    and terminal_set == queued_set
+    and all(count == 1 for count in queued.values())
+    and all(terminals[key] == 1 for key in queued_set)
+    and all(terminal_phase.get(key) in successful for key in queued_set)
+    and done_packs == requested_packs
+    and done_failed == 0
+)
+reasons = []
+if not queued_set: reasons.append("no-queued-packs")
+if not required_systems.issubset(queued_systems): reasons.append("required-systems")
+if len(worker_done) != 1: reasons.append("worker-done-count")
+if worker_failed: reasons.append("worker-failed")
+if pack_failed: reasons.append("pack-failed")
+if terminal_set != queued_set: reasons.append("terminal-set")
+if any(count != 1 for count in queued.values()): reasons.append("queued-count")
+if any(terminals[key] != 1 for key in queued_set): reasons.append("terminal-count")
+if any(terminal_phase.get(key) not in successful for key in queued_set): reasons.append("terminal-phase")
+if done_packs != requested_packs: reasons.append("done-packs")
+if done_failed != 0: reasons.append("done-failed")
+phase_detail = ",".join(
+    f"{system}#{pack_index}:{terminal_phase.get((system, pack_index), 'missing')}"
+    for system, pack_index in sorted(queued_set)
+)
+print(
+    f"media_completion_tsv\tlabel={label}\tvalid={1 if valid else 0}"
+    f"\tinvalid_reason={'ok' if valid else ','.join(reasons)}"
+    f"\trequested_packs={requested_packs}\tqueued_packs={sum(queued.values())}"
+    f"\tterminal_packs={sum(terminals.values())}\tworker_done_count={len(worker_done)}"
+    f"\tdone_packs={done_packs}\tdone_failed={done_failed}"
+    f"\tworker_failed_count={worker_failed}\tpack_failed_count={pack_failed}"
+    f"\tterminals={phase_detail}"
+)
+raise SystemExit(0 if valid else 9)
+PY
 }
 
 arcade_trace_complete() {
@@ -548,13 +620,31 @@ with open(trace_path, newline="", encoding="utf-8") as source:
         except ValueError:
             continue
         trace_rows.append(row)
-        frames.append((timestamp_us, monotonic_us, row.get("cache_state", "")))
+        frames.append((
+            timestamp_us,
+            monotonic_us,
+            row.get("cache_state", ""),
+            row.get("main_present_backend", ""),
+            row.get("main_present_status", ""),
+        ))
 
-if "startup_elapsed_us" not in trace_columns or "monotonic_us" not in trace_columns:
-    print(f"media_arcade_overlap_tsv\tlabel={label}\tvalid=0\tinvalid_reason=missing-monotonic-clock-columns\toperations={len(intervals)}\tframes={len(frames)}")
+required_trace_columns = {
+    "startup_elapsed_us",
+    "monotonic_us",
+    "main_present_backend",
+    "main_present_status",
+}
+missing_trace_columns = sorted(required_trace_columns.difference(trace_columns))
+if missing_trace_columns:
+    print(
+        f"media_arcade_overlap_tsv\tlabel={label}\tvalid=0"
+        f"\tinvalid_reason=missing-required-trace-columns"
+        f"\tmissing_columns={','.join(missing_trace_columns)}"
+        f"\toperations={len(intervals)}\tframes={len(frames)}"
+    )
     raise SystemExit(9)
 
-origins = [monotonic_us - startup_us for startup_us, monotonic_us, _state in frames]
+origins = [monotonic_us - startup_us for startup_us, monotonic_us, *_rest in frames]
 startup_origin_us = origins[0] if origins else 0
 clock_consistent = bool(origins) and max(origins) - min(origins) <= 1000
 
@@ -566,7 +656,7 @@ class_frame_indexes = collections.defaultdict(set)
 overlapping_operations = 0
 for operation_index, (start_us, end_us, system, pack_index, phase, kind) in enumerate(intervals, 1):
     indexes = {
-        index for index, (timestamp_us, _monotonic_us, _state) in enumerate(frames)
+        index for index, (timestamp_us, _monotonic_us, *_rest) in enumerate(frames)
         if start_us <= timestamp_us < end_us
     }
     overlap_frame_indexes.update(indexes)
@@ -608,6 +698,21 @@ print(
 )
 
 overlap_states = collections.Counter(frames[index][2] for index in overlap_frame_indexes)
+overlap_backends = collections.Counter(frames[index][3] for index in overlap_frame_indexes)
+overlap_present_statuses = collections.Counter(frames[index][4] for index in overlap_frame_indexes)
+presentation_valid = bool(
+    overlap_frame_indexes
+    and overlap_backends == collections.Counter({"fpga-vblank-latch-hidden": overlap_count})
+    and overlap_present_statuses == collections.Counter({"ok": overlap_count})
+)
+print(
+    f"media_arcade_presentation_tsv\tlabel={label}\tvalid={1 if presentation_valid else 0}"
+    f"\tinvalid_reason={'ok' if presentation_valid else 'unstable-backend-or-status'}"
+    f"\toverlap_frames={overlap_count}"
+    f"\tbackend_fpga_vblank_latch_hidden={overlap_backends.get('fpga-vblank-latch-hidden', 0)}"
+    f"\tstatus_ok={overlap_present_statuses.get('ok', 0)}"
+    f"\tbackend_variants={len(overlap_backends)}\tstatus_variants={len(overlap_present_statuses)}"
+)
 invalid_states = sum(
     count for state, count in overlap_states.items() if state not in {"exact", "empty"}
 )
@@ -695,7 +800,7 @@ print(
     f"\tinvalid_reason={'ok' if thread_valid else 'missing-required-thread-evidence'}"
 )
 
-valid = overlap_valid and preview_valid and thread_valid
+valid = overlap_valid and presentation_valid and preview_valid and thread_valid
 print(
     f"media_arcade_contention_gate_tsv\tlabel={label}\tvalid={1 if valid else 0}"
     f"\tinvalid_reason={'ok' if valid else 'contention-evidence-incomplete'}"
@@ -706,6 +811,11 @@ PY
 
 run_self_test() {
   local tmp log out trace thread_trace
+  if "$0" timeout-cap-selftest --skip-build --keep-catalog \
+    --arcade-trace-secs 1 --timeout 601 >/dev/null 2>&1; then
+    echo "media contention self-test accepted timeout above the 600-second cap" >&2
+    return 1
+  fi
   tmp="$(mktemp -d)"
   log="$tmp/media.log"
   out="$tmp/out.tsv"
@@ -741,17 +851,34 @@ startup_timing	screenshot_media_ui_visibility	21ms	system=saturn row_seen=1 row_
 startup_timing	screenshot_media_progress	22ms	system=saturn image_size=320x320 variant=identity phase=done bytes_done=100 bytes_total=100 percent=100 pack_index=3 pack_count=3 download_mbps= detail=
 startup_timing	screenshot_media_update_done	23ms	packs=3 current=0 missing=3 stale=0 downloaded=3 failed=0
 EOF
-  media_targets_terminal "$log"
+  media_completion_report "$log" selftest >"$tmp/completion.tsv"
+  grep -q $'media_completion_tsv\tlabel=selftest\tvalid=1' "$tmp/completion.tsv"
+  sed '/screenshot_media_update_done/d' "$log" >"$tmp/missing-done.log"
+  if media_completion_report "$tmp/missing-done.log" selftest >/dev/null 2>&1; then
+    echo "media completion self-test accepted missing worker Done" >&2
+    return 1
+  fi
+  sed '/system=saturn.*phase=done/d' "$log" >"$tmp/missing-terminal.log"
+  if media_completion_report "$tmp/missing-terminal.log" selftest >/dev/null 2>&1; then
+    echo "media completion self-test accepted a requested pack without a terminal" >&2
+    return 1
+  fi
+  cp "$log" "$tmp/duplicate-terminal.log"
+  sed -n '/system=saturn.*phase=done/p' "$log" >>"$tmp/duplicate-terminal.log"
+  if media_completion_report "$tmp/duplicate-terminal.log" selftest >/dev/null 2>&1; then
+    echo "media completion self-test accepted a duplicate pack terminal" >&2
+    return 1
+  fi
   summarize_media_log "$log" selftest abc123 "arcade,neogeo,saturn" >"$out"
   grep -q $'media_cold_boot_tsv\tlabel=selftest\tsystem=arcade\t.*progress_download_seen=1\tui_row_seen=1\tui_rendered_seen=1\tterminal=done' "$out"
   grep -q $'media_cold_boot_tsv\tlabel=selftest\tsystem=neogeo\t.*progress_download_seen=1\tui_row_seen=0\tui_rendered_seen=0\tterminal=done' "$out"
   grep -q $'media_cold_boot_tsv\tlabel=selftest\tsystem=saturn\t.*progress_download_seen=1\tui_row_seen=1\tui_rendered_seen=0\tterminal=done' "$out"
   cat >"$trace" <<'EOF'
-frame	elapsed_us	cache_state	startup_elapsed_us	monotonic_us
-1	1000	exact	7000	1007000
-2	2000	exact	10000	1010000
-3	3000	exact	15000	1015000
-4	1500000	exact	1500000	2500000
+frame	elapsed_us	cache_state	startup_elapsed_us	monotonic_us	main_present_backend	main_present_status
+1	1000	exact	7000	1007000	fpga-vblank-latch-hidden	ok
+2	2000	exact	10000	1010000	fpga-vblank-latch-hidden	ok
+3	3000	exact	15000	1015000	fpga-vblank-latch-hidden	ok
+4	1500000	exact	1500000	2500000	fpga-vblank-latch-hidden	ok
 EOF
   thread_trace="$tmp/thread.tsv"
   cat >"$thread_trace" <<'EOF'
@@ -808,6 +935,16 @@ EOF
     echo "media/Arcade contention self-test accepted stale cache-state frames" >&2
     return 1
   fi
+  sed '2s/fpga-vblank-latch-hidden/fb0-dirty/' "$trace" >"$tmp/unstable-backend.tsv"
+  if media_arcade_contention_report "$log" "$tmp/unstable-backend.tsv" "$thread_trace" selftest "$tmp/subset-backend.tsv" 2 1 1 1 >/dev/null 2>&1; then
+    echo "media/Arcade contention self-test accepted an unstable presentation backend" >&2
+    return 1
+  fi
+  sed '2s/\tok$/\ttimeout/' "$trace" >"$tmp/unstable-status.tsv"
+  if media_arcade_contention_report "$log" "$tmp/unstable-status.tsv" "$thread_trace" selftest "$tmp/subset-status.tsv" 2 1 1 1 >/dev/null 2>&1; then
+    echo "media/Arcade contention self-test accepted a non-ok presentation status" >&2
+    return 1
+  fi
   cat >"$tmp/gap.log" <<'EOF'
 startup_timing	screenshot_media_progress	0ms	system=arcade phase=download_start pack_index=1
 startup_timing	screenshot_media_progress	10ms	system=arcade phase=done pack_index=1
@@ -816,9 +953,9 @@ startup_timing	screenshot_media_progress	30ms	system=neogeo phase=download_start
 startup_timing	screenshot_media_progress	40ms	system=neogeo phase=done pack_index=2
 EOF
   cat >"$tmp/gap.tsv" <<'EOF'
-frame	elapsed_us	cache_state	startup_elapsed_us	monotonic_us
-1	1000	exact	20000	1020000
-2	1500000	exact	20000	1020000
+frame	elapsed_us	cache_state	startup_elapsed_us	monotonic_us	main_present_backend	main_present_status
+1	1000	exact	20000	1020000	fpga-vblank-latch-hidden	ok
+2	1500000	exact	20000	1020000	fpga-vblank-latch-hidden	ok
 EOF
   if media_arcade_contention_report "$tmp/gap.log" "$tmp/gap.tsv" "$thread_trace" selftest "$tmp/subset-gap.tsv" 1 1 0 1 >/dev/null 2>&1; then
     echo "media/Arcade contention self-test accepted a frame only inside the coarse media hull" >&2
@@ -872,6 +1009,7 @@ local_status_json="$OUT_DIR/${label}.status.json"
 remote_arcade_trace="/tmp/${label}-media-arcade.tsv"
 local_arcade_trace="$OUT_DIR/${label}.arcade.tsv"
 contention_report="$OUT_DIR/${label}.media-arcade-contention.tsv"
+completion_report="$OUT_DIR/${label}.media-completion.tsv"
 contention_subset_trace="$OUT_DIR/${label}.media-arcade-overlap.tsv"
 frame_pacing_report="$OUT_DIR/${label}.arcade-frame-pacing.tsv"
 latch_drop_report="$OUT_DIR/${label}.arcade-latch-drops.tsv"
@@ -983,10 +1121,6 @@ while (( SECONDS < deadline )); do
     completion_reason="worker_failed"
     break
   fi
-  if media_targets_terminal "$local_log" 2>/dev/null; then
-    run_done=1
-    completion_reason="targets_terminal"
-  fi
   if [[ "$run_done" -eq 1 && "$arcade_done" -eq 1 ]]; then
     break
   fi
@@ -1007,8 +1141,14 @@ if [[ "$snapshot_taken" -eq 0 ]]; then
 fi
 
 contention_status=0
+completion_status=0
 frame_pacing_status=0
 latch_drop_status=0
+correctness_contention_status=0
+set +e
+media_completion_report "$local_log" "$label" >"$completion_report"
+completion_status=$?
+set -e
 if [[ "$arcade_trace_secs" -gt 0 ]]; then
   set +e
   media_arcade_contention_report \
@@ -1023,6 +1163,12 @@ if [[ "$arcade_trace_secs" -gt 0 ]]; then
     --fpga-latch-report-before "$local_latch_before" --fpga-latch-report-after "$local_latch_after" >"$latch_drop_report"
   latch_drop_status=$?
   set -e
+  if [[ "$contention_correctness_only" -eq 1 ]]; then
+    if ! grep -q $'^media_arcade_overlap_tsv\t.*\tvalid=1\tinvalid_reason=ok' "$contention_report" ||
+       ! grep -q $'^media_arcade_presentation_tsv\t.*\tvalid=1\tinvalid_reason=ok' "$contention_report"; then
+      correctness_contention_status=9
+    fi
+  fi
 fi
 
 cleanup_status=0
@@ -1052,6 +1198,8 @@ fi
   emit_artifact_row "status-json" "$local_status_json" "scripts/mister status --json"
   emit_artifact_row "snapshot-status" "$snapshot_dir/status.json" "scripts/mister status --json"
   emit_artifact_row "snapshot-png" "$snapshot_dir/fb0.png" "agent framebuffer_capture"
+  emit_artifact_row "media-completion" "$completion_report"
+  cat "$completion_report"
   if [[ "$arcade_trace_secs" -gt 0 ]]; then
     emit_artifact_row "media-arcade-trace" "$local_arcade_trace" "$remote_arcade_trace"
     emit_artifact_row "media-arcade-contention" "$contention_report"
@@ -1070,7 +1218,9 @@ fi
   fi
   summarize_media_log "$local_log" "$label" "$commit" "$systems_csv"
   cat "$cleanup_row"
-  if [[ "$run_done" -eq 1 && "$arcade_done" -eq 1 && "$contention_status" -eq 0 && "$frame_pacing_status" -eq 0 && "$latch_drop_status" -eq 0 && "$cleanup_status" -eq 0 ]]; then
+  if [[ "$run_done" -eq 1 && "$arcade_done" -eq 1 && "$completion_status" -eq 0 && "$cleanup_status" -eq 0 &&
+        ( "$contention_correctness_only" -eq 1 && "$correctness_contention_status" -eq 0 ||
+          "$contention_correctness_only" -eq 0 && "$contention_status" -eq 0 && "$frame_pacing_status" -eq 0 && "$latch_drop_status" -eq 0 ) ]]; then
     emit_validity_row "1" "ok" "completion=$completion_reason log=$local_log status=$local_status snapshot=$snapshot_dir asset_dir=$asset_dir reset_catalog=$reset_catalog"
   elif [[ "$cleanup_status" -ne 0 ]]; then
     if [[ "$interrupted_status" -ne 0 ]]; then
@@ -1081,7 +1231,7 @@ fi
   elif [[ "$run_failed" -eq 1 ]]; then
     emit_validity_row "0" "media_worker_failed" "completion=$completion_reason log=$local_log status=$local_status snapshot=$snapshot_dir asset_dir=$asset_dir reset_catalog=$reset_catalog"
   elif [[ "$run_done" -eq 1 && "$arcade_done" -eq 1 ]]; then
-    emit_validity_row "0" "contention_gate_failed" "contention_status=$contention_status frame_pacing_status=$frame_pacing_status latch_drop_status=$latch_drop_status"
+    emit_validity_row "0" "contention_gate_failed" "completion_status=$completion_status contention_status=$contention_status correctness_contention_status=$correctness_contention_status frame_pacing_status=$frame_pacing_status latch_drop_status=$latch_drop_status correctness_only=$contention_correctness_only"
   else
     emit_validity_row "0" "timeout" "completion=$completion_reason timeout_secs=$timeout_secs log=$local_log status=$local_status snapshot=$snapshot_dir asset_dir=$asset_dir reset_catalog=$reset_catalog"
   fi
@@ -1093,7 +1243,9 @@ echo "appended to $TSV"
 if [[ "$interrupted_status" -ne 0 ]]; then
   exit "$interrupted_status"
 fi
-if [[ "$run_done" -ne 1 || "$arcade_done" -ne 1 || "$contention_status" -ne 0 || "$frame_pacing_status" -ne 0 || "$latch_drop_status" -ne 0 || "$cleanup_status" -ne 0 ]]; then
+if [[ "$run_done" -ne 1 || "$arcade_done" -ne 1 || "$completion_status" -ne 0 || "$cleanup_status" -ne 0 ||
+      ( "$contention_correctness_only" -eq 1 && "$correctness_contention_status" -ne 0 ) ||
+      ( "$contention_correctness_only" -eq 0 && ( "$contention_status" -ne 0 || "$frame_pacing_status" -ne 0 || "$latch_drop_status" -ne 0 ) ) ]]; then
   echo "media cold boot/Arcade contention run did not complete or pass; latest log follows" >&2
   tail -100 "$local_log" >&2 || true
   exit 1
