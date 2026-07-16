@@ -17,9 +17,9 @@ REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
 DEFAULT_MANIFEST_URL="https://assets.mistermagik.com/mister-magik/v1/manifest.json"
 ORIGINAL_ARGS=("$@")
-source "$HERE/scripts/thread-sampler-lib.sh"
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/thread-sampler-lib.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 label=""
 deploy="skip"
@@ -1156,9 +1156,9 @@ if [[ "$arcade_trace_secs" -gt 0 ]]; then
     "$contention_min_overlap_frames" "$contention_min_download_frames" \
     "$contention_min_publish_frames" "$contention_min_selected_applies" >"$contention_report"
   contention_status=$?
-  "$HERE/scripts/check-frame-pacing-trace.py" "$label-media-arcade-overlap" "$contention_subset_trace" 14500 16000 16667 "$arcade_scenario" vsync-integrity >"$frame_pacing_report"
+  "$HERE/scripts/checks/check-frame-pacing-trace.py" "$label-media-arcade-overlap" "$contention_subset_trace" 14500 16000 16667 "$arcade_scenario" vsync-integrity >"$frame_pacing_report"
   frame_pacing_status=$?
-  "$HERE/scripts/analyze-max-scroll-drops.py" "$local_arcade_trace" --label "$label-media-arcade" \
+  "$HERE/scripts/bench/analyze/analyze-max-scroll-drops.py" "$local_arcade_trace" --label "$label-media-arcade" \
     --status-json "$local_status_json" --ignore-elapsed-zero --expect-backend fpga-vblank-latch-hidden \
     --fpga-latch-report-before "$local_latch_before" --fpga-latch-report-after "$local_latch_after" >"$latch_drop_report"
   latch_drop_status=$?

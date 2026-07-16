@@ -14,9 +14,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
-source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
 REMOTE="$MISTER_MAGIK_BIN"
 SCENE="${1:-launcher}"
 SECS="${2:-0}"

@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 REMOTE="$MISTER_MAGIK_BIN"
 REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
@@ -20,8 +20,8 @@ REPLACE_LABEL=0
 SQLITE_PATH="$MISTER_MAGIK_APP_DIR/library-io-bench.sqlite3"
 SQLITE_BUILD_DIR=""
 SAMPLE_LIMIT=180
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 library_io_pid_identity_valid() {
   local executable="$1" command_line="$2"

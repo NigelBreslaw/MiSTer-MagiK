@@ -84,7 +84,7 @@ jobs:
 
       - name: Compute cache identities
         id: cache-id
-        run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+        run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         env:
@@ -124,22 +124,22 @@ jobs:
           mkdir -p build/published
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/published/releases.json
 
-          if ! platform_tag="$(python3 scripts/select-published-release.py platform --releases build/published/releases.json)"; then
+          if ! platform_tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/published/releases.json)"; then
             echo "::error::No published numbered platform release exists. Run Promote MiSTer MagiK Platform Bundle."
             exit 1
           fi
-          platform_version="$(python3 scripts/select-published-release.py platform --field version --releases build/published/releases.json)"
+          platform_version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/published/releases.json)"
           mkdir -p build/qualified
           gh release download "$platform_tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
             --pattern 'mister-magik-platform-v0.*.zip' --pattern platform-bundle-v0.1.json
           archive="$(find build/qualified -name 'mister-magik-platform-v0.*.zip' -print -quit)"
           test -n "$archive"
-          python3 scripts/platform-bundle.py verify "$archive" \
+          python3 scripts/release/platform/platform-bundle.py verify "$archive" \
             --manifest build/qualified/platform-bundle-v0.1.json \
             --release-version "$platform_version" >/dev/null
           unzip -q -o "$archive" -d build/qualified
 
-          if ! databases_tag="$(python3 scripts/select-published-release.py game-databases --releases build/published/releases.json)"; then
+          if ! databases_tag="$(python3 scripts/release/databases/select-published-release.py game-databases --releases build/published/releases.json)"; then
             echo "::error::No published numbered game-database release exists. Run Promote MiSTer MagiK Game Databases."
             exit 1
           fi
@@ -149,7 +149,7 @@ jobs:
             --pattern "mister-magik-game-databases-v${databases_version}.zip" \
             --pattern game-databases-manifest.json --pattern SHA256SUMS
           databases_archive="build/game-databases/mister-magik-game-databases-v${databases_version}.zip"
-          python3 scripts/game-databases-bundle.py verify "$databases_archive" \
+          python3 scripts/release/databases/game-databases-bundle.py verify "$databases_archive" \
             --manifest build/game-databases/game-databases-manifest.json \
             --checksums build/game-databases/SHA256SUMS >/dev/null
 
@@ -207,7 +207,7 @@ jobs:
         run: magik-gui/scripts/check-arm-shared-libs.sh magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb
 
       - name: Generate matching third-party notices
-        run: python3 scripts/generate-third-party-licenses.py
+        run: python3 scripts/release/packaging/generate-third-party-licenses.py
 
       - name: Cache Main_MiSTer build outputs
         id: main-build-cache
@@ -254,7 +254,7 @@ jobs:
           module="$(find build/qualified/scanout -name mister_magik_scanout_slots.ko -print -quit)"
           module_meta="$(find build/qualified/scanout -name provenance.txt -print -quit)"
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
-          scripts/platform-manifest.py generate \
+          scripts/release/platform/platform-manifest.py generate \
             --output build/platform-v2.manifest \
             --main Main_MiSTer/bin/MiSTer \
             --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
@@ -278,14 +278,14 @@ jobs:
             --build-number "$RELEASE_BUILD_NUMBER" \
             --name "mister-magik-$RELEASE_VERSION" \
             --release-assets-dir dist/release-assets
-          python3 scripts/generate-downloader-db.py \
+          python3 scripts/release/databases/generate-downloader-db.py \
             --receipt dist/release-assets/release-assets.json \
             --output dist/release-assets \
             --channel "$RELEASE_CHANNEL" \
             --tag "$RELEASE_TAG" \
             --timestamp "${{ needs.release-metadata.outputs.timestamp }}"
           if [ "$RELEASE_CHANNEL" = release ]; then
-            python3 scripts/generate-downloader-db.py \
+            python3 scripts/release/databases/generate-downloader-db.py \
               --receipt dist/release-assets/release-assets.json \
               --output dist/release-assets \
               --channel beta \

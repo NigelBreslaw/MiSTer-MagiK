@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
-source "$ROOT/scripts/library-sql-output-lib.sh"
+source "$ROOT/scripts/lib/library-sql-output-lib.sh"
 REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"

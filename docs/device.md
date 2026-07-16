@@ -123,7 +123,7 @@ scripts/mister-shutdown-trace.sh remove
 To isolate user shutdown hooks, use the separate reversible
 `scripts/mister-shutdown-trace.sh bypass-s99user-install` and
 `bypass-s99user-remove` experiment. Summarize collected rows and pulled logs
-with `scripts/reboot-shutdown-summary.py`.
+with `scripts/device/diagnostics/reboot-shutdown-summary.py`.
 
 To return from an active game core without a Linux reboot, send Main's generic
 core command instead of the MagiK supervisor restart command:

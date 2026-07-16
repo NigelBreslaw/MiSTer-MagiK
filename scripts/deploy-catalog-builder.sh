@@ -5,8 +5,8 @@
 # Build and atomically deploy only the catalog builder. The launcher is not restarted.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/scripts/bench-context-lib.sh"
-source "$ROOT/scripts/magik-layout.sh"
+source "$ROOT/scripts/lib/bench-context-lib.sh"
+source "$ROOT/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 PROFILE=release-device
 SKIP_BUILD=0

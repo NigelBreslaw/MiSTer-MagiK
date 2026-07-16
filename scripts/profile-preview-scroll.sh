@@ -7,16 +7,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 OUT_DIR="$HERE/build/preview-scroll-profiles"
-PRESENT_TRACE="$HERE/scripts/launcher-present-trace.py"
+PRESENT_TRACE="$HERE/scripts/bench/analyze/launcher-present-trace.py"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 ORIGINAL_ARGS=("$@")
-source "$HERE/scripts/thread-sampler-lib.sh"
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/thread-sampler-lib.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -435,8 +435,8 @@ run_case() {
     echo "$name composition recovery occurred; see $local_status_json" >&2
     exit 13
   fi
-  "$HERE/scripts/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label $name $scenario"
-  "$HERE/scripts/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label $name $scenario"
+  "$HERE/scripts/bench/reports/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label $name $scenario"
+  "$HERE/scripts/bench/reports/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label $name $scenario"
   emit_artifact_row "${name}-chart" "$local_chart" ""
   emit_artifact_row "${name}-report" "$local_report" ""
   if [[ "$cpu_profile" == "1" ]]; then

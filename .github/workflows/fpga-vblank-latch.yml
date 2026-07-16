@@ -70,7 +70,7 @@ jobs:
 
       - name: Compute platform component identity
         id: component-id
-        run: python3 scripts/platform-component-id.py component fpga --github-output "$GITHUB_OUTPUT"
+        run: python3 scripts/release/platform/platform-component-id.py component fpga --github-output "$GITHUB_OUTPUT"
 
       - name: Derive component build date
         id: component-date
@@ -218,7 +218,7 @@ jobs:
           while IFS= read -r -d '' report; do args+=(--patched "$report"); done < <(
             find build/fpga-signoff/patched -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0
           )
-          scripts/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
+          scripts/checks/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' "$delta_sha" \

@@ -108,7 +108,7 @@ trap cleanup EXIT
 
 sleep 1
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
 mister_suspend_launcher
 trap 'cleanup; mister_restart_launcher >/dev/null 2>&1 || true' EXIT
 set +e

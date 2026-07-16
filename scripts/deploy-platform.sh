@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/scripts/magik-layout.sh"
+source "$ROOT/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 GUI_DIR="$ROOT/magik-gui"
 MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../Main_MiSTer}"
@@ -60,7 +60,7 @@ for artifact in "$MODULE" "$MODULE_META" "$RBF" "$RBF_META"; do
     exit 1
   fi
 done
-"$ROOT/scripts/verify-fpga-rbf-manifest.py" "$RBF_META" >/dev/null
+"$ROOT/scripts/checks/verify-fpga-rbf-manifest.py" "$RBF_META" >/dev/null
 
 "$ROOT/scripts/fetch-game-databases-release.sh" "$DATABASE_STAGE"
 MAME_DATABASE="$DATABASE_STAGE/mame.sqlite3"
@@ -76,7 +76,7 @@ if [[ "$CLEAN_MAIN" == 1 ]]; then "$MAIN_DIR/build-container.sh" clean; fi
 
 MAIN_REVISION="$(git -C "$MAIN_DIR" rev-parse HEAD)"
 MAGIK_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
-"$ROOT/scripts/platform-manifest.py" generate \
+"$ROOT/scripts/release/platform/platform-manifest.py" generate \
   --output "$MANIFEST" \
   --main "$MAIN_BIN" \
   --gui "$GUI_BIN" \

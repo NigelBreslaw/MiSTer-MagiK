@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
 RUST_DIR="$HERE/magik-gui"
 OUT_DIR="$HERE/build/cpu-flamegraphs"
 

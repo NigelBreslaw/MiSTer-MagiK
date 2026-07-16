@@ -6,6 +6,6 @@ fpga/menu-vblank-latch
 kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
 scripts/install-quartus-lite-docker.sh
-scripts/check-fpga-quartus-delta.py
-scripts/verify-fpga-rbf-manifest.py
+scripts/checks/check-fpga-quartus-delta.py
+scripts/checks/verify-fpga-rbf-manifest.py
 .github/workflows/fpga-vblank-latch.yml

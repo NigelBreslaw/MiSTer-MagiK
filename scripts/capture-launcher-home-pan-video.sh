@@ -11,7 +11,7 @@ MISTER="$HERE/scripts/mister"
 REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_LOG="/tmp/mister-magik-home-pan-capture.log"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
-source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
 
 label="launcher-home-pan-$(date -u +%Y%m%dT%H%M%SZ)"
 secs=30

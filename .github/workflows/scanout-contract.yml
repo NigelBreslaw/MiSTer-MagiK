@@ -33,4 +33,4 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Check cross-language scanout contract
-        run: scripts/check-scanout-slots-contract.sh
+        run: scripts/checks/check-scanout-slots-contract.sh

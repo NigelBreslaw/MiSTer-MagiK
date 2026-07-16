@@ -83,14 +83,14 @@ jobs:
         run: |
           set -euo pipefail
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > build/game-databases/releases.json
-          if tag="$(python3 scripts/select-published-release.py game-databases --releases build/game-databases/releases.json 2>/dev/null)"; then
+          if tag="$(python3 scripts/release/databases/select-published-release.py game-databases --releases build/game-databases/releases.json 2>/dev/null)"; then
             version="${tag#game-databases-v}"
             mkdir -p build/game-databases/current
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/game-databases/current \
               --pattern "mister-magik-game-databases-v${version}.zip" \
               --pattern game-databases-manifest.json --pattern SHA256SUMS
             archive="build/game-databases/current/mister-magik-game-databases-v${version}.zip"
-            python3 scripts/game-databases-bundle.py verify "$archive" \
+            python3 scripts/release/databases/game-databases-bundle.py verify "$archive" \
               --manifest build/game-databases/current/game-databases-manifest.json >/dev/null
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "manifest=build/game-databases/current/game-databases-manifest.json" >> "$GITHUB_OUTPUT"
@@ -114,7 +114,7 @@ jobs:
           if [ -n "$CURRENT_MANIFEST" ]; then
             args+=(--manifest "$CURRENT_MANIFEST")
           fi
-          python3 scripts/game-databases-bundle.py plan-update "${args[@]}" \
+          python3 scripts/release/databases/game-databases-bundle.py plan-update "${args[@]}" \
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
             --github-output "$GITHUB_OUTPUT"
@@ -251,7 +251,7 @@ jobs:
             --pattern "mister-magik-game-databases-v${CURRENT_VERSION}.zip" \
             --pattern game-databases-manifest.json
           archive="build/current/mister-magik-game-databases-v${CURRENT_VERSION}.zip"
-          python3 scripts/game-databases-bundle.py verify "$archive" \
+          python3 scripts/release/databases/game-databases-bundle.py verify "$archive" \
             --manifest build/current/game-databases-manifest.json >/dev/null
           unzip -q "$archive" mame.sqlite3 hbmame.sqlite3 -d build/current
 
@@ -295,7 +295,7 @@ jobs:
           if [ '${{ needs.inspect.outputs.hbmame-changed }}' != true ]; then
             hbmame_builder_sha="$(jq -r '.sources.hbmame.builder_sha' build/current/game-databases-manifest.json)"
           fi
-          python3 scripts/game-databases-bundle.py create \
+          python3 scripts/release/databases/game-databases-bundle.py create \
             --mame-sqlite build/mame.sqlite3 --hbmame-sqlite build/hbmame.sqlite3 \
             --release-version '${{ needs.inspect.outputs.next-version }}' \
             --mame-tag '${{ needs.inspect.outputs.mame-tag }}' \
@@ -342,7 +342,7 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           tag="game-databases-v$VERSION"
           archive="candidate/mister-magik-game-databases-v$VERSION.zip"
-          python3 scripts/game-databases-bundle.py verify "$archive" \
+          python3 scripts/release/databases/game-databases-bundle.py verify "$archive" \
             --manifest candidate/game-databases-manifest.json >/dev/null
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
             echo "Tag $tag already exists; numbered database releases are immutable." >&2

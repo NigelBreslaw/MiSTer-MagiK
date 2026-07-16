@@ -8,20 +8,20 @@ on:
     paths:
       - "kernel/scanout-slots/**"
       - "scripts/build-scanout-slots-module.sh"
-      - "scripts/check-scanout-slots-contract.sh"
-      - "scripts/test-scanout-platform-contract.py"
+      - "scripts/checks/check-scanout-slots-contract.sh"
+      - "scripts/tests/test-scanout-platform-contract.py"
       - "scripts/platform-component-inputs/kernel-v0.1.txt"
-      - "scripts/platform-component-id.py"
+      - "scripts/release/platform/platform-component-id.py"
       - ".github/workflows/kernel-scanout.yml"
   push:
     branches: [main]
     paths:
       - "kernel/scanout-slots/**"
       - "scripts/build-scanout-slots-module.sh"
-      - "scripts/check-scanout-slots-contract.sh"
-      - "scripts/test-scanout-platform-contract.py"
+      - "scripts/checks/check-scanout-slots-contract.sh"
+      - "scripts/tests/test-scanout-platform-contract.py"
       - "scripts/platform-component-inputs/kernel-v0.1.txt"
-      - "scripts/platform-component-id.py"
+      - "scripts/release/platform/platform-component-id.py"
       - ".github/workflows/kernel-scanout.yml"
   workflow_dispatch:
 
@@ -67,8 +67,8 @@ jobs:
 
       - name: Check one-job contract
         run: |
-          scripts/check-scanout-slots-contract.sh
-          python3 scripts/test-scanout-platform-contract.py
+          scripts/checks/check-scanout-slots-contract.sh
+          python3 scripts/tests/test-scanout-platform-contract.py
 
       - name: Build and attest module
         env:
@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/platform-component-id.py component kernel --github-output "$GITHUB_OUTPUT"
+          python3 scripts/release/platform/platform-component-id.py component kernel --github-output "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
       - name: Attest main platform component identity
@@ -131,7 +131,7 @@ jobs:
       - name: Audit module imports and metadata
         run: |
           set -eu
-          scripts/check-scanout-slots-contract.sh
+          scripts/checks/check-scanout-slots-contract.sh
           grep -q '^vermagic:[[:space:]]*5\.15\.1-MiSTer ' build/scanout-slots/modinfo.txt
           grep -q '^kernel_revision=f0fb626acadd07f0718934826b143b6e4c9ce81c$' build/scanout-slots/provenance.txt
           grep -q '^source_dirty=0$' build/scanout-slots/provenance.txt

@@ -6,16 +6,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
-source "$ROOT/scripts/magik-layout.sh"
+source "$ROOT/scripts/lib/magik-layout.sh"
 magik_layout_select dev
-source "$ROOT/scripts/bench-context-lib.sh"
+source "$ROOT/scripts/lib/bench-context-lib.sh"
 REMOTE_BIN="$MISTER_MAGIK_BIN"
 REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
 REMOTE_SUMMARY="$MISTER_MAGIK_APP_DIR/library.summary.json"
 REMOTE_NAVIGATION="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
 REMOTE_ASSETS="$MISTER_MAGIK_ASSET_DIR"
-CATALOG_FIXTURE_CONTRACT="$ROOT/scripts/catalog-fixture-contract.json"
-CATALOG_FIXTURE_TOOL="$ROOT/scripts/catalog-fixture-contract.py"
+CATALOG_FIXTURE_CONTRACT="$ROOT/scripts/lib/catalog-fixture-contract.json"
+CATALOG_FIXTURE_TOOL="$ROOT/scripts/lib/catalog-fixture-contract.py"
 SETTLE_SECS=5
 RACE_REFRESH=0
 LABEL=""

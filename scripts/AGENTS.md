@@ -10,6 +10,10 @@ Scripts provide the approved validation, build, deploy, device, packaging,
 profiling, and release interfaces. Prefer extending an existing entrypoint over
 creating a near-duplicate command.
 
+Stable public commands remain directly under `scripts/`. Shared implementation,
+checks, tests, analysis, media, and release helpers are organized according to
+`scripts/README.md`.
+
 Run `scripts/doctor --scope full-host` to inspect local prerequisites without
 contacting the MiSTer.
 

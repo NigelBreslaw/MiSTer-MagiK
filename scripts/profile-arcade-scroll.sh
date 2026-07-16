@@ -7,16 +7,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 OUT_DIR="$HERE/build/arcade-scroll-profiles"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_BIN="$MISTER_MAGIK_BIN"
 ORIGINAL_ARGS=("$@")
-source "$HERE/scripts/thread-sampler-lib.sh"
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/thread-sampler-lib.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -389,7 +389,7 @@ PY
 
 check_frame_pacing_gate() {
   local name="$1" trace="$2" p99_work_us="$3" p99_wall_us="$4" max_wall_us="$5" gate_scenario="${6:-}" policy="${7:-auto}"
-  "$HERE/scripts/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario" "$policy"
+  "$HERE/scripts/checks/check-frame-pacing-trace.py" "$name" "$trace" "$p99_work_us" "$p99_wall_us" "$max_wall_us" "$gate_scenario" "$policy"
 }
 
 check_search_index_overlap_gate() {
@@ -987,9 +987,9 @@ if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$local_st
   exit 13
 fi
 echo
-"$HERE/scripts/analyze-arcade-frame-trace.py" "$local_tsv" --status-json "$local_status_json"
+"$HERE/scripts/bench/analyze/analyze-arcade-frame-trace.py" "$local_tsv" --status-json "$local_status_json"
 echo
-"$HERE/scripts/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
+"$HERE/scripts/bench/analyze/launcher-present-trace.py" summarize "$local_tsv" --case arcade-scroll --present-width "$present_width" --ignore-frames-through 30
 echo
 analyze_args=(--label "$label" --status-json "$local_status_json" --ignore-elapsed-zero)
 analyze_args+=(--expect-backend "$present_backend")
@@ -998,7 +998,7 @@ if [[ "$latch_reports_enabled" == "1" ]]; then
   analyze_args+=(--fpga-latch-report-after "$local_latch_after")
 fi
 set +e
-"$HERE/scripts/analyze-max-scroll-drops.py" "$local_tsv" "${analyze_args[@]}" | tee "$local_latch_drop_report"
+"$HERE/scripts/bench/analyze/analyze-max-scroll-drops.py" "$local_tsv" "${analyze_args[@]}" | tee "$local_latch_drop_report"
 latch_drop_status=${PIPESTATUS[0]}
 set -e
 echo "wrote $local_latch_drop_report"

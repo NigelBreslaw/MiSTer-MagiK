@@ -12,7 +12,7 @@ if [[ "${2:-}" != "--skip-build" ]]; then
   "$ROOT/magik-gui/build-arm.sh" --device
 fi
 
-python3 "$ROOT/scripts/generate-third-party-licenses.py"
+python3 "$ROOT/scripts/release/packaging/generate-third-party-licenses.py"
 test -x "$BIN"
 if [[ "$(cat "$BIN.features" 2>/dev/null || true)" != "ui" ]]; then
   echo "error: $BIN is not the required video-capable UI release binary" >&2

@@ -227,7 +227,7 @@ Generate the alpha release's ARM `ui` Rust dependency inventory and the
 bundled FFmpeg/font notices after changing `Cargo.lock` or release features:
 
 ```bash
-python3 scripts/generate-third-party-licenses.py
+python3 scripts/release/packaging/generate-third-party-licenses.py
 ```
 
 The generator follows only normal runtime dependencies for
@@ -288,9 +288,9 @@ registry/git data, caches the minimal FFmpeg tree, records
 TSV as artifacts.
 
 Host, ARM, agent, distribution, and Main caches use the schema-v2 identities
-from `scripts/ci-cache-identity.py`. Binary caches are scoped by runner OS and
+from `scripts/checks/ci-cache-identity.py`. Binary caches are scoped by runner OS and
 architecture plus the Rust/cross ABI; `incremental/` directories are excluded
-from transfer. `scripts/test-ci-cache-contract.py` is the policy gate for every
+from transfer. `scripts/tests/test-ci-cache-contract.py` is the policy gate for every
 workflow cache key.
 
 The manual **Cross image** workflow is main-only and publishes each

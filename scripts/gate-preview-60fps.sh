@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="$ROOT/scripts/profile-preview-scroll.sh"
-PRESENT_TRACE="$ROOT/scripts/launcher-present-trace.py"
+PRESENT_TRACE="$ROOT/scripts/bench/analyze/launcher-present-trace.py"
 OUT_DIR="$ROOT/build/preview-scroll-profiles"
 
 secs=60

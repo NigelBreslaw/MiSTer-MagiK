@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 REMOTE_BIN="$MISTER_MAGIK_BIN"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
@@ -25,13 +25,13 @@ REPLACE_LABEL=0
 TIMEOUT_SECS=240
 SQLITE_BUILD_DIR=""
 NAMESPACE_BACKEND=""
-CATALOG_FIXTURE_CONTRACT="$HERE/scripts/catalog-fixture-contract.json"
-CATALOG_FIXTURE_TOOL="$HERE/scripts/catalog-fixture-contract.py"
+CATALOG_FIXTURE_CONTRACT="$HERE/scripts/lib/catalog-fixture-contract.json"
+CATALOG_FIXTURE_TOOL="$HERE/scripts/lib/catalog-fixture-contract.py"
 ENFORCE_PERFORMANCE_BUDGETS=0
-source "$HERE/scripts/thread-sampler-lib.sh"
-source "$HERE/scripts/mister-supervision-lib.sh"
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/thread-sampler-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'

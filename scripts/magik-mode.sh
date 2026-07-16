@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
-source "$ROOT/scripts/reboot-wait-lib.sh"
+source "$ROOT/scripts/lib/reboot-wait-lib.sh"
 
 usage() {
   echo "usage: scripts/magik-mode.sh <status|dev|public|stock>"

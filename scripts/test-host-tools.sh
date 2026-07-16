@@ -23,9 +23,9 @@ case "${1:-}" in
     ;;
 esac
 
-python3 "$ROOT/scripts/check-license-headers.py"
-python3 "$ROOT/scripts/check-agent-guidance.py"
-python3 "$ROOT/scripts/test-doctor.py"
+python3 "$ROOT/scripts/checks/check-license-headers.py"
+python3 "$ROOT/scripts/checks/check-agent-guidance.py"
+python3 "$ROOT/scripts/tests/test-doctor.py"
 
 if [ "$MODE" = full ]; then
 cat >"$TMP/MiSTer.ini" <<'EOF'
@@ -55,11 +55,11 @@ grep -q '^video_mode=8$' "$TMP/repaired.ini"
 fi
 
 for script in \
-  "$ROOT/scripts/check-no-main-kill.sh" \
-  "$ROOT/scripts/check-no-direct-arcade-scene.sh" \
-  "$ROOT/scripts/check-scanout-slots-contract.sh" \
-  "$ROOT/scripts/bench-context-lib.sh" \
-  "$ROOT/scripts/benchmark-cleanup-lib.sh" \
+  "$ROOT/scripts/checks/check-no-main-kill.sh" \
+  "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh" \
+  "$ROOT/scripts/checks/check-scanout-slots-contract.sh" \
+  "$ROOT/scripts/lib/bench-context-lib.sh" \
+  "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
@@ -71,15 +71,15 @@ for script in \
   "$ROOT/scripts/dev-rust" \
   "$ROOT/scripts/doctor" \
   "$ROOT/scripts/install-slint-boot.sh" \
-  "$ROOT/scripts/magik-layout.sh" \
+  "$ROOT/scripts/lib/magik-layout.sh" \
   "$ROOT/scripts/magik-mode.sh" \
-  "$ROOT/scripts/library-sql-output-lib.sh" \
+  "$ROOT/scripts/lib/library-sql-output-lib.sh" \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
-  "$ROOT/scripts/mister-fifo-lib.sh" \
+  "$ROOT/scripts/lib/mister-fifo-lib.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
-  "$ROOT/scripts/mister-supervision-lib.sh" \
+  "$ROOT/scripts/lib/mister-supervision-lib.sh" \
   "$ROOT/scripts/profile-first-scan.sh" \
   "$ROOT/scripts/profile-library-io.sh" \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
@@ -90,10 +90,10 @@ for script in \
   "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/profile-screenshot-download.sh" \
   "$ROOT/scripts/regression-arm-noop.sh" \
-  "$ROOT/scripts/reboot-wait-lib.sh" \
+  "$ROOT/scripts/lib/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/scripts/switch-ui.sh" \
-  "$ROOT/scripts/test-magik-mode.sh" \
+  "$ROOT/scripts/tests/test-magik-mode.sh" \
   "$ROOT/scripts/validate" \
   "$ROOT/magik-gui/build-arm.sh" \
   "$ROOT/magik-gui/build-arm64-apple-container.sh"; do
@@ -105,27 +105,27 @@ while IFS= read -r script; do
 done < <(find "$ROOT/scripts/experiments" -type f -name '*.sh' | sort)
 
 if [ "$MODE" = fast ]; then
-  "$ROOT/scripts/check-no-main-kill.sh"
-  "$ROOT/scripts/check-no-direct-arcade-scene.sh"
-  "$ROOT/scripts/check-scanout-slots-contract.sh"
-  python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"
-  python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
-  python3 "$ROOT/scripts/test-select-published-release.py"
-  python3 "$ROOT/scripts/test-game-databases-workflow.py"
-  python3 "$ROOT/scripts/test-distribution-workflow.py"
-  python3 "$ROOT/scripts/test-arm-build-contract.py"
-  python3 "$ROOT/scripts/test-ci-cache-identity.py"
-  python3 "$ROOT/scripts/test-ci-cache-contract.py"
-  "$ROOT/scripts/test-quartus-r2-cache.sh"
-  "$ROOT/scripts/test-validate.sh"
+  "$ROOT/scripts/checks/check-no-main-kill.sh"
+  "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh"
+  "$ROOT/scripts/checks/check-scanout-slots-contract.sh"
+  python3 "$ROOT/scripts/tests/test-kernel-scanout-workflows.py"
+  python3 "$ROOT/scripts/tests/test-platform-bundle-workflow.py"
+  python3 "$ROOT/scripts/tests/test-select-published-release.py"
+  python3 "$ROOT/scripts/tests/test-game-databases-workflow.py"
+  python3 "$ROOT/scripts/tests/test-distribution-workflow.py"
+  python3 "$ROOT/scripts/tests/test-arm-build-contract.py"
+  python3 "$ROOT/scripts/tests/test-ci-cache-identity.py"
+  python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
+  "$ROOT/scripts/tests/test-quartus-r2-cache.sh"
+  "$ROOT/scripts/tests/test-validate.sh"
   echo "fast host tool checks ok"
   exit 0
 fi
 
-python3 "$ROOT/scripts/test-ci-cache-identity.py"
-python3 "$ROOT/scripts/test-ci-cache-contract.py"
-"$ROOT/scripts/test-quartus-r2-cache.sh"
-"$ROOT/scripts/test-validate.sh"
+python3 "$ROOT/scripts/tests/test-ci-cache-identity.py"
+python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
+"$ROOT/scripts/tests/test-quartus-r2-cache.sh"
+"$ROOT/scripts/tests/test-validate.sh"
 
 switch_log="$TMP/switch-ui-calls.log"
 cat >"$TMP/fake-mister" <<'EOF'
@@ -141,17 +141,17 @@ if ! grep -qx 'reboot-wait' "$switch_log"; then
   exit 1
 fi
 
-"$ROOT/scripts/test-magik-mode.sh"
-"$ROOT/scripts/test-mister-magik-installer.sh"
-python3 "$ROOT/scripts/test-platform-component-id.py"
-python3 "$ROOT/scripts/test-kernel-scanout-workflows.py"
-python3 "$ROOT/scripts/test-platform-bundle.py"
-python3 "$ROOT/scripts/test-platform-bundle-workflow.py"
-python3 "$ROOT/scripts/test-embedded-catalog-release.py"
-python3 "$ROOT/scripts/test-game-databases-bundle.py"
-python3 "$ROOT/scripts/test-select-published-release.py"
-python3 "$ROOT/scripts/test-game-databases-workflow.py"
-python3 "$ROOT/scripts/test-arm-build-contract.py"
+"$ROOT/scripts/tests/test-magik-mode.sh"
+"$ROOT/scripts/tests/test-mister-magik-installer.sh"
+python3 "$ROOT/scripts/tests/test-platform-component-id.py"
+python3 "$ROOT/scripts/tests/test-kernel-scanout-workflows.py"
+python3 "$ROOT/scripts/tests/test-platform-bundle.py"
+python3 "$ROOT/scripts/tests/test-platform-bundle-workflow.py"
+python3 "$ROOT/scripts/tests/test-embedded-catalog-release.py"
+python3 "$ROOT/scripts/tests/test-game-databases-bundle.py"
+python3 "$ROOT/scripts/tests/test-select-published-release.py"
+python3 "$ROOT/scripts/tests/test-game-databases-workflow.py"
+python3 "$ROOT/scripts/tests/test-arm-build-contract.py"
 
 if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   package_tmp="$TMP/package-distribution"
@@ -160,7 +160,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
   chmod 755 "$package_tmp/mister-magik-fb"
   printf 'ui\n' >"$package_tmp/mister-magik-fb.features"
   MISTER_MAGIK_BUILD_NUMBER=42 MISTER_MAGIK_VERSION=0.2.42 \
-    bash -c 'source "$1/scripts/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui all' \
+    bash -c 'source "$1/scripts/lib/bench-context-lib.sh"; bench_context_write_build_receipt "$2" "$1" release-device ui all' \
     _ "$ROOT" "$package_tmp/mister-magik-fb"
   cp "$package_tmp/mister-magik-fb" "$package_tmp/MiSTer_MagiK"
   printf 'module fixture\n' >"$package_tmp/mister_magik_scanout_slots.ko"
@@ -176,7 +176,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
     "$fixture_contract" "$fixture_magik" "$fixture_menu" \
     "$(sha256sum "$package_tmp/menu-magik-vblank-latch.rbf" | awk '{print $1}')" \
     >"$package_tmp/latch.metadata.txt"
-  "$ROOT/scripts/platform-manifest.py" generate \
+  "$ROOT/scripts/release/platform/platform-manifest.py" generate \
     --output "$package_tmp/platform-v2.manifest" \
     --main "$package_tmp/MiSTer_MagiK" \
     --gui "$package_tmp/mister-magik-fb" \
@@ -232,7 +232,7 @@ INSERT INTO mame_machines VALUES('marpy', 'mappy', 'Marpy', 'self-test');
 CREATE TABLE package_padding(data BLOB NOT NULL);
 INSERT INTO package_padding VALUES(zeroblob(1048576));
 SQL
-  "$ROOT/scripts/game-databases-bundle.py" create \
+  "$ROOT/scripts/release/databases/game-databases-bundle.py" create \
     --mame-sqlite "$package_tmp/mame.sqlite3" \
     --hbmame-sqlite "$package_tmp/hbmame.sqlite3" \
     --release-version 1 --mame-tag mame0288 \
@@ -394,17 +394,17 @@ for needle in [
         sys.exit(1)
 PY
 
-"$ROOT/scripts/check-no-main-kill.sh"
-"$ROOT/scripts/check-no-direct-arcade-scene.sh"
-"$ROOT/scripts/check-scanout-slots-contract.sh"
-python3 "$ROOT/scripts/test-scanout-platform-contract.py"
+"$ROOT/scripts/checks/check-no-main-kill.sh"
+"$ROOT/scripts/checks/check-no-direct-arcade-scene.sh"
+"$ROOT/scripts/checks/check-scanout-slots-contract.sh"
+python3 "$ROOT/scripts/tests/test-scanout-platform-contract.py"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
   -g '*.rs' \
   -g '!fallible_log.rs' >/dev/null; then
   echo "standard Rust stdio macros panic on output errors; use ui_log*/ui_errln* instead" >&2
   exit 1
 fi
-source "$ROOT/scripts/bench-context-lib.sh"
+source "$ROOT/scripts/lib/bench-context-lib.sh"
 verified_context="$(bench_context_binary_fields release-device launcher ui "$ROOT/does-not-exist" production verified)"
 case "$verified_context" in
   *$'binary_scope=launcher-scope'*$'runtime_type=production'*$'deployment_state=verified'*$'production_restore_required=0'*) ;;
@@ -453,11 +453,11 @@ if rg -n 'sh -c "\$env \$remote library-refresh"' "$ROOT/scripts/profile-library
   echo "library I/O profiler still samples a sh -c wrapper" >&2
   exit 1
 fi
-bash "$ROOT/scripts/benchmark-cleanup-lib.sh" --self-test
+bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
-"$ROOT/scripts/library-sql-output-lib.sh"
-"$ROOT/scripts/reboot-wait-lib.sh"
-"$ROOT/scripts/mister-fifo-lib.sh"
+"$ROOT/scripts/lib/library-sql-output-lib.sh"
+"$ROOT/scripts/lib/reboot-wait-lib.sh"
+"$ROOT/scripts/lib/mister-fifo-lib.sh"
 "$ROOT/scripts/profile-first-scan.sh" --self-test
 "$ROOT/scripts/profile-library-io.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
@@ -466,9 +466,9 @@ bash "$ROOT/scripts/benchmark-cleanup-lib.sh" --self-test
 "$ROOT/scripts/device-catalog-acceptance.sh" --self-test
 "$ROOT/scripts/profile-preview-pack-decode.sh" --self-test
 "$ROOT/scripts/profile-preview-scroll.sh" --self-test
-python3 -m py_compile "$ROOT/scripts/reboot-shutdown-summary.py"
-python3 "$ROOT/scripts/test-generate-downloader-db.py"
-python3 "$ROOT/scripts/test-distribution-workflow.py"
+python3 -m py_compile "$ROOT/scripts/device/diagnostics/reboot-shutdown-summary.py"
+python3 "$ROOT/scripts/tests/test-generate-downloader-db.py"
+python3 "$ROOT/scripts/tests/test-distribution-workflow.py"
 env RUSTC_WRAPPER= cargo test --manifest-path "$ROOT/tools/mister/Cargo.toml" --quiet
 
 echo "host tool checks ok"

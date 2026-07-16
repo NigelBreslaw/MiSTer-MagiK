@@ -50,13 +50,13 @@ jobs:
           ref: ${{ steps.menu-source.outputs.commit }}
           path: build/Menu_MiSTer
       - name: Run warning-clean Icarus simulation
-        run: scripts/test-fpga-vblank-latch.sh
+        run: scripts/tests/test-fpga-vblank-latch.sh
       - name: Lint custom RTL
         run: >-
           verilator --lint-only --Wall --Wno-fatal
           fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
       - name: Verify pinned patch integration and opcode ownership
-        run: scripts/check-fpga-latch-integration.py build/Menu_MiSTer
+        run: scripts/checks/check-fpga-latch-integration.py build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage
         run: |
           set -euo pipefail
@@ -70,4 +70,4 @@ jobs:
             "$GITHUB_WORKSPACE/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
           (cd "$build_dir" && "$build_dir/obj/Vtb_mister_magik_vblank_latch")
           verilator_coverage --annotate-min 1 --annotate-all --annotate "$build_dir/annotated" "$build_dir/coverage.dat"
-          scripts/check-fpga-latch-coverage.py "$build_dir/annotated"
+          scripts/checks/check-fpga-latch-coverage.py "$build_dir/annotated"

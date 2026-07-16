@@ -12,7 +12,7 @@ SRC="$WORK/ffmpeg-$VERSION"
 DIST="$WORK/dist"
 FFMPEG_MODE="video-fast-noswscale"
 STAMP="$DIST/.mister-minimal-ffmpeg-$VERSION-h264-aac-s16le-swresample-$FFMPEG_MODE-cortex-a9-o3"
-DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$HERE/../scripts/ci-cache-identity.py" --value cross_image)}"
+DOCKER_IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$HERE/../scripts/checks/ci-cache-identity.py" --value cross_image)}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 BACKEND="${MISTER_FFMPEG_BUILD_BACKEND:-auto}"
 

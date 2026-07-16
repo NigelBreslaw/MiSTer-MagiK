@@ -108,7 +108,7 @@ INSERT INTO package_padding VALUES(zeroblob(1048576));
 hbmame.commit()
 hbmame.close()
 PY
-"$ROOT/scripts/game-databases-bundle.py" create \
+"$ROOT/scripts/release/databases/game-databases-bundle.py" create \
   --mame-sqlite "$MAME_SQLITE" --hbmame-sqlite "$HBMAME_SQLITE" \
   --release-version 1 --mame-tag mame0288 \
   --mame-sha 1111111111111111111111111111111111111111 \
@@ -124,8 +124,8 @@ package_args=(
   --game-databases-release-dir "$WORK/game-databases"
   --name release-check
   --out-dir "$WORK"
-  --version "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" version)"
-  --build-number "$(source "$ROOT/scripts/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" build_number)"
+  --version "$(source "$ROOT/scripts/lib/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" version)"
+  --build-number "$(source "$ROOT/scripts/lib/bench-context-lib.sh"; bench_context_build_receipt_field "$BIN" build_number)"
   --release-assets-dir "$WORK/release-assets"
 )
 if [ -f "$MAIN_BIN" ]; then
@@ -145,7 +145,7 @@ printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fi
 printf 'format=mister-magik-fpga-release-v1\nplatform_contract_sha256=%s\nmagik_commit=%s\nsource_commit=%s\nrbf_sha256=%s\n' \
   "$CONTRACT" "$MAGIK_REVISION" "$MENU_REVISION" \
   "$(sha256sum "$WORK/menu-magik-vblank-latch.rbf" | awk '{print $1}')" > "$WORK/latch.metadata.txt"
-"$ROOT/scripts/platform-manifest.py" generate \
+"$ROOT/scripts/release/platform/platform-manifest.py" generate \
   --layout public \
   --output "$WORK/platform-v2.manifest" --main "$MAIN_BIN" --gui "$BIN" \
   --scanout-module "$WORK/mister_magik_scanout_slots.ko" --scanout-metadata "$WORK/scanout.metadata.txt" \

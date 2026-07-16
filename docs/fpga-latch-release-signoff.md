@@ -85,7 +85,7 @@ review.
 Before installation, run:
 
 ```text
-scripts/verify-fpga-rbf-manifest.py build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
+scripts/checks/verify-fpga-rbf-manifest.py build/fpga-vblank-latch/menu-magik-vblank-latch.metadata.txt
 ```
 
 Deployment uploads the RBF and adjacent metadata to temporary names, verifies

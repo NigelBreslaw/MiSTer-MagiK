@@ -185,7 +185,7 @@ if [[ -z "$GAME_DATABASES_RELEASE_DIR" || ! -d "$GAME_DATABASES_RELEASE_DIR" ]];
 fi
 DATABASE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-game-databases.XXXXXX")"
 trap 'rm -rf "$DATABASE_TMP"' EXIT
-python3 "$ROOT/scripts/game-databases-bundle.py" extract-release \
+python3 "$ROOT/scripts/release/databases/game-databases-bundle.py" extract-release \
   "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
 MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
 HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
@@ -338,7 +338,7 @@ platform_bundle_id=$PLATFORM_BUNDLE_ID
 game_database_version=$GAME_DATABASE_VERSION
 EOF
 chmod 755 "$STAGE/MiSTer_MagiK"
-python3 "$ROOT/scripts/platform-manifest.py" verify \
+python3 "$ROOT/scripts/release/platform/platform-manifest.py" verify \
   "$STAGE/mister-magik/platform-v2.manifest" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
@@ -428,7 +428,7 @@ rm -f "$OUT"
 )
 
 if [[ -n "$RELEASE_ASSETS_DIR" ]]; then
-  python3 "$ROOT/scripts/package-release-assets.py" \
+  python3 "$ROOT/scripts/release/packaging/package-release-assets.py" \
     --stage "$STAGE" \
     --zip "$OUT" \
     --output "$RELEASE_ASSETS_DIR" \

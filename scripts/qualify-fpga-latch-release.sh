@@ -96,7 +96,7 @@ if [[ "$SELF_TEST" -eq 1 ]]; then
 fi
 
 case "$SOAK_SECS" in *[!0-9]*|'') echo "--soak-secs must be a non-negative integer" >&2; exit 2;; esac
-"$ROOT/scripts/verify-fpga-rbf-manifest.py" "$META"
+"$ROOT/scripts/checks/verify-fpga-rbf-manifest.py" "$META"
 EXPECTED_HASH="$(sed -n 's/^rbf_sha256=//p' "$META")"
 [[ -n "$EXPECTED_HASH" ]]
 if [[ -n "$HDMI_EVIDENCE" && ! -f "$HDMI_EVIDENCE" ]]; then

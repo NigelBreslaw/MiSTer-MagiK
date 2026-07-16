@@ -242,6 +242,6 @@ fi
 
 BIN="$PWD/target/armv7-unknown-linux-gnueabihf/$PROFILE/$BIN_NAME"
 printf '%s\n' "${FEATURE_LIST:-none}" >"$BIN.features"
-source "$PWD/../scripts/bench-context-lib.sh"
+source "$PWD/../scripts/lib/bench-context-lib.sh"
 bench_context_write_build_receipt "$BIN" "$PWD/.." "$PROFILE" "${FEATURE_LIST:-none}" "$UI_SCOPE"
 "$PWD/scripts/record-binary-size.sh" "$PROFILE" "${FEATURE_LIST:-none}" "$BIN"

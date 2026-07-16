@@ -8,8 +8,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/mister-fifo-lib.sh"
-source "$HERE/scripts/library-sql-output-lib.sh"
+source "$HERE/scripts/lib/mister-fifo-lib.sh"
+source "$HERE/scripts/lib/library-sql-output-lib.sh"
 
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_TEST_ENV="/tmp/mister-magik/prepared-launcher.env"

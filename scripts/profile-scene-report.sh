@@ -7,7 +7,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/mister-supervision-lib.sh"
+source "$HERE/scripts/lib/mister-supervision-lib.sh"
 OUT_DIR="$HERE/build/frame-profiles"
 
 usage() {
@@ -54,10 +54,10 @@ echo "==> Pull profile artifacts"
 "$MISTER" get "$remote_trace" "$local_trace"
 
 echo "==> Generate reports"
-"$HERE/scripts/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label"
-"$HERE/scripts/frame-profile-heatmap.py" "$local_tsv" "$local_heatmap" --title "$label dirty heatmap"
-"$HERE/scripts/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label" --trace "$local_trace"
-"$HERE/scripts/frame-profile-histogram.py" "$local_tsv" --phase wall_us --phase slint_render_us --phase fb_present_us
+"$HERE/scripts/bench/reports/frame-profile-chart.py" "$local_tsv" "$local_chart" --title "$label"
+"$HERE/scripts/bench/reports/frame-profile-heatmap.py" "$local_tsv" "$local_heatmap" --title "$label dirty heatmap"
+"$HERE/scripts/bench/reports/frame-profile-report.py" "$local_tsv" "$local_report" --title "$label" --trace "$local_trace"
+"$HERE/scripts/bench/reports/frame-profile-histogram.py" "$local_tsv" --phase wall_us --phase slint_render_us --phase fb_present_us
 
 echo "==> Wrote:"
 printf '  %s\n' "$local_tsv" "$local_trace" "$local_chart" "$local_heatmap" "$local_report"

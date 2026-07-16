@@ -8,9 +8,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
-source "$ROOT/scripts/magik-layout.sh"
-source "$ROOT/scripts/mister-supervision-lib.sh"
-source "$ROOT/scripts/thread-sampler-lib.sh"
+source "$ROOT/scripts/lib/magik-layout.sh"
+source "$ROOT/scripts/lib/mister-supervision-lib.sh"
+source "$ROOT/scripts/lib/thread-sampler-lib.sh"
 magik_layout_select dev
 
 LABEL=""

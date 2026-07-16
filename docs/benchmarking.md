@@ -88,7 +88,7 @@ Reference-MiSTer historical performance budgets are:
 The default command records these without failing on them. Pass
 `--enforce-performance-budgets` for an intentional performance gate. Catalog
 correctness instead uses the versioned, stamp-fingerprint-keyed
-`scripts/catalog-fixture-contract.json`, including separate `games`,
+`scripts/lib/catalog-fixture-contract.json`, including separate `games`,
 `game_rows`, launcher-visible, launcher-row, and system counts plus parity.
 
 During first database creation, the catalog builder owns the machine. The
@@ -374,7 +374,7 @@ Acceptance fields for Arcade preview pacing:
   `frame_pacing_gate_tsv`; the p99 work threshold can be overridden with
   `MISTER_ARCADE_SCROLL_P99_WORK_US` for diagnostic comparisons only.
 - For render-contract, framebuffer-format, route, or copy-helper changes, use
-  `scripts/launcher-present-trace.py compare BEFORE.tsv AFTER.tsv` and report
+  `scripts/bench/analyze/launcher-present-trace.py compare BEFORE.tsv AFTER.tsv` and report
   the `present_path_tsv` rows. `cached_present_us`, `arcade_list_present_us`,
   and `fb_present_us` p95/p99 must stay within +5%, and `rows` p95/p99 must not
   increase by more than one row.

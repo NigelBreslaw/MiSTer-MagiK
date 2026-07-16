@@ -319,7 +319,7 @@ MIRROR_BIN="$MIRROR_TARGET_DIR/$TARGET/$PROFILE/$BIN_NAME"
 mkdir -p "$(dirname "$MIRROR_BIN")"
 cp "$BIN" "$MIRROR_BIN"
 printf '%s\n' "$FEATURE_LIST" >"$MIRROR_BIN.features"
-source "$PWD/../scripts/bench-context-lib.sh"
+source "$PWD/../scripts/lib/bench-context-lib.sh"
 bench_context_write_build_receipt "$MIRROR_BIN" "$REPO_ROOT" "$PROFILE" "$FEATURE_LIST" "$UI_SCOPE"
 
 BYTES="$(stat -f%z "$BIN" 2>/dev/null || stat -c%s "$BIN")"

@@ -7,7 +7,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$HERE/scripts/apple-container-resources.sh"
 BIN="${1:-$HERE/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb}"
-IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$HERE/../scripts/ci-cache-identity.py" --value cross_image)}"
+IMAGE="${MISTER_CROSS_IMAGE:-$(python3 "$HERE/../scripts/checks/ci-cache-identity.py" --value cross_image)}"
 APPLE_IMAGE="${MISTER_APPLE_CONTAINER_IMAGE:-mister-magik-cross-armv7:ubuntu20-arm64}"
 
 if [ ! -f "$BIN" ]; then

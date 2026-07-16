@@ -18,8 +18,8 @@
 # Default installs the release-device (A3) binary.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$HERE/scripts/bench-context-lib.sh"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/bench-context-lib.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-fb"

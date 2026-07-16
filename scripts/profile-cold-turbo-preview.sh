@@ -7,13 +7,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/magik-layout.sh"
+source "$HERE/scripts/lib/magik-layout.sh"
 magik_layout_select dev
 OUT_DIR="$HERE/build/preview-turbo-profiles"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_NAV="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
-source "$HERE/scripts/preview-selection-lib.sh"
+source "$HERE/scripts/lib/preview-selection-lib.sh"
 
 label="cold-turbo-preview-$(date -u +%Y%m%dT%H%M%SZ)"
 secs="10"

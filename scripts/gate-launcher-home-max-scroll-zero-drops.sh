@@ -175,7 +175,7 @@ if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
 fi
 
 set +e
-"$HERE/scripts/analyze-max-scroll-drops.py" "$trace" \
+"$HERE/scripts/bench/analyze/analyze-max-scroll-drops.py" "$trace" \
   --label "$label" \
   --status-json "$status_json" \
   "${analyze_args[@]}" | tee "$drop_report"

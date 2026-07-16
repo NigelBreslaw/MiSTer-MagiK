@@ -239,7 +239,7 @@ history/toolchain-bench/results-agent.tsv
 
 For shutdown-side attribution, install `scripts/mister-shutdown-trace.sh
 install-deep` before running a reboot profile. It times each `rcK` service stop
-plus `swapoff` and `umount`. Use `scripts/reboot-shutdown-summary.py` after
+plus `swapoff` and `umount`. Use `scripts/device/diagnostics/reboot-shutdown-summary.py` after
 collecting logs to compare host timing, Main reboot breadcrumbs, shutdown trace
 rows, and agent network health.
 

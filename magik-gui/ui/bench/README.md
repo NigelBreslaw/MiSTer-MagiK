@@ -92,11 +92,11 @@ and file metadata. **wall** = whole iteration.
 Host-side profile reports (no MiSTer packages required):
 
 ```bash
-scripts/frame-profile-chart.py /tmp/frames.tsv /tmp/frames.svg
-scripts/frame-profile-histogram.py /tmp/frames.tsv
-scripts/frame-profile-slow-frames.py /tmp/frames.tsv --limit 12
-scripts/frame-profile-heatmap.py /tmp/frames.tsv /tmp/dirty-heatmap.svg
-scripts/frame-profile-report.py /tmp/frames.tsv /tmp/profile-report.html --trace /tmp/frames.json
+scripts/bench/reports/frame-profile-chart.py /tmp/frames.tsv /tmp/frames.svg
+scripts/bench/reports/frame-profile-histogram.py /tmp/frames.tsv
+scripts/bench/reports/frame-profile-slow-frames.py /tmp/frames.tsv --limit 12
+scripts/bench/reports/frame-profile-heatmap.py /tmp/frames.tsv /tmp/dirty-heatmap.svg
+scripts/bench/reports/frame-profile-report.py /tmp/frames.tsv /tmp/profile-report.html --trace /tmp/frames.json
 ```
 
 Use the frame TSV/reports first. Use the CPU flamegraph only when a phase is

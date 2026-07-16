@@ -17,7 +17,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/mister-fifo-lib.sh"
+source "$HERE/scripts/lib/mister-fifo-lib.sh"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 STALE_RETURN_STATE="/tmp/mister-magik/stale-launcher-return-state.json"

@@ -8,7 +8,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$HERE/build/preview-scroll-profiles"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/preview-selection-lib.sh"
+source "$HERE/scripts/lib/preview-selection-lib.sh"
 
 secs="8"
 label="first-preview-$(date -u +%Y%m%dT%H%M%SZ)"

@@ -17,8 +17,8 @@ validation column explicitly calls for ARM, GUI, or an attended device.
 | Desktop UI | `desktop/src/main.rs`, `desktop/ui/main.slint` | `desktop/AGENTS.md` | `cargo test --manifest-path desktop/Cargo.toml` | `scripts/validate paths desktop` | Slint MCP visual check for UI changes | `kernel/`, `fpga/`, device launcher internals |
 | Documentation | `documentation/src/content/docs/` | `documentation/src/content/docs/contributing/` | `corepack pnpm --dir documentation run build` | `scripts/validate paths documentation` | None | Rust targets, device |
 | Packaging/releases | `scripts/package-distribution.sh` | `docs/releases.md` | `scripts/test-host-tools.sh --full` | `scripts/validate paths scripts/package-distribution.sh` | Release workflow only after host checks | UI runtime internals |
-| Kernel scanout | `kernel/scanout-slots/` | `docs/kernel-scanout-plugin-assurance.md` | `scripts/check-scanout-slots-contract.sh` | `scripts/validate full-host` | Kernel build and attended device qualification | Catalog, desktop |
-| FPGA latch | `fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | `python3 scripts/check-fpga-latch-coverage.py --help` | `scripts/validate full-host` | Quartus/device signoff | Catalog, documentation |
+| Kernel scanout | `kernel/scanout-slots/` | `docs/kernel-scanout-plugin-assurance.md` | `scripts/checks/check-scanout-slots-contract.sh` | `scripts/validate full-host` | Kernel build and attended device qualification | Catalog, desktop |
+| FPGA latch | `fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | `python3 scripts/checks/check-fpga-latch-coverage.py --help` | `scripts/validate full-host` | Quartus/device signoff | Catalog, documentation |
 
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
 unknown work, run `scripts/validate paths PATH... --print-plan` before invoking

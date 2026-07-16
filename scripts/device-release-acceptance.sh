@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MISTER_MAGIK_LAYOUT=public
-source "$ROOT/scripts/magik-layout.sh"
+source "$ROOT/scripts/lib/magik-layout.sh"
 MISTER="$ROOT/scripts/mister"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$ROOT/build/device-release/$STAMP"
@@ -547,7 +547,7 @@ run_velocity_scroll_acceptance() {
       "int(data['runtime']['slint_status'].get('composition_recovery_count', 0)) == 0" \
       "'composition_state=' + str(data['runtime'].get('slint_status', {}).get('composition_state', '?')) + ' recovery_count=' + str(data['runtime'].get('slint_status', {}).get('composition_recovery_count', '?')) + ' invariant=' + str(data['runtime'].get('slint_status', {}).get('last_composition_invariant_kind', ''))"
     "$MISTER" get "$trace" "$OUT/velocity-${scenario}.tsv" >/dev/null 2>&1 || true
-    if "$ROOT/scripts/analyze-arcade-frame-trace.py" "$OUT/velocity-${scenario}.tsv" >"$OUT/velocity-${scenario}.analysis" 2>"$OUT/velocity-${scenario}.analysis.err"; then
+    if "$ROOT/scripts/bench/analyze/analyze-arcade-frame-trace.py" "$OUT/velocity-${scenario}.tsv" >"$OUT/velocity-${scenario}.analysis" 2>"$OUT/velocity-${scenario}.analysis.err"; then
       record_ok "velocity $scenario analysis"
     else
       record_fail "velocity $scenario analysis"

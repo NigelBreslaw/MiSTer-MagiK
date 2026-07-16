@@ -47,8 +47,8 @@ trap 'rm -rf "$work"' EXIT
 
 echo "==> Selecting latest published game-database release from $REPOSITORY"
 gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" > "$work/releases.json"
-tag="$(python3 "$ROOT/scripts/select-published-release.py" game-databases --releases "$work/releases.json")"
-version="$(python3 "$ROOT/scripts/select-published-release.py" game-databases --field version --releases "$work/releases.json")"
+tag="$(python3 "$ROOT/scripts/release/databases/select-published-release.py" game-databases --releases "$work/releases.json")"
+version="$(python3 "$ROOT/scripts/release/databases/select-published-release.py" game-databases --field version --releases "$work/releases.json")"
 
 release="$work/release"
 extracted="$work/extracted"
@@ -58,7 +58,7 @@ gh release download "$tag" --repo "$REPOSITORY" --dir "$release" \
   --pattern "mister-magik-game-databases-v${version}.zip" \
   --pattern game-databases-manifest.json \
   --pattern SHA256SUMS
-python3 "$ROOT/scripts/game-databases-bundle.py" extract-release \
+python3 "$ROOT/scripts/release/databases/game-databases-bundle.py" extract-release \
   "$release" --output "$extracted" >/dev/null
 
 mv "$extracted" "$OUTPUT_DIR"

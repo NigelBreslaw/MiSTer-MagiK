@@ -11,7 +11,7 @@ APIs, progress states, and benchmark expectations.
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
   Reference-MiSTer content acceptance is keyed by the versioned catalog stamp
-  fingerprint in `scripts/catalog-fixture-contract.json`. The contract names
+  fingerprint in `scripts/lib/catalog-fixture-contract.json`. The contract names
   the compatibility `games` view, physical `game_rows`, launcher-visible rows,
   and systems separately. Historical timing and database-size budgets are
   recorded by default and become gates only with an explicit performance flag.
