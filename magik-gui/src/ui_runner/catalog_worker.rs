@@ -19,6 +19,7 @@ fn send_ready_catalog(
     load_us: u64,
     source: CatalogSource,
     durable_save_pending: bool,
+    generation_fingerprint: Option<String>,
 ) {
     let (publication_tx, publication_rx) = mpsc::channel();
     let _ = tx.send(CatalogWorkerMessage::Ready {
@@ -27,6 +28,7 @@ fn send_ready_catalog(
         load_us,
         source,
         durable_save_pending,
+        generation_fingerprint,
         publication_ack: Some(publication_tx),
     });
     // The launcher session owns the next transition. For a fresh catalog it
@@ -104,6 +106,8 @@ pub(super) fn start_library_catalog_worker(
                             });
                             cache_state = CatalogCacheState::Ready;
                             startup_projection_catalog = Some(loaded.catalog.clone());
+                            let generation_fingerprint =
+                                loaded.stamp.as_ref().map(|stamp| stamp.fingerprint_hex());
                             send_ready_catalog(
                                 &tx,
                                 loaded.catalog,
@@ -111,6 +115,7 @@ pub(super) fn start_library_catalog_worker(
                                 loaded.us,
                                 CatalogSource::NavigationProjection,
                                 false,
+                                generation_fingerprint,
                             );
                             cached_catalog_published = true;
                         }
@@ -149,6 +154,8 @@ pub(super) fn start_library_catalog_worker(
                                 } else {
                                     cache_state = CatalogCacheState::Ready;
                                     let catalog_for_repair = loaded.catalog.clone();
+                                    let generation_fingerprint =
+                                        loaded.stamp.as_ref().map(|stamp| stamp.fingerprint_hex());
                                     send_ready_catalog(
                                         &tx,
                                         loaded.catalog,
@@ -156,6 +163,7 @@ pub(super) fn start_library_catalog_worker(
                                         loaded.us,
                                         CatalogSource::FullSqlite,
                                         false,
+                                        generation_fingerprint,
                                     );
                                     cached_catalog_published = true;
                                     if loaded.projection_repair_safe {
@@ -223,6 +231,8 @@ pub(super) fn start_library_catalog_worker(
                                             mismatches.join(" | ")
                                         ),
                                     });
+                                    let generation_fingerprint =
+                                        loaded.stamp.as_ref().map(|stamp| stamp.fingerprint_hex());
                                     send_ready_catalog(
                                         &tx,
                                         loaded.catalog.clone(),
@@ -230,6 +240,7 @@ pub(super) fn start_library_catalog_worker(
                                         loaded.us,
                                         CatalogSource::FullSqlite,
                                         false,
+                                        generation_fingerprint,
                                     );
                                 }
                                 if loaded.projection_repair_safe {
@@ -277,6 +288,8 @@ pub(super) fn start_library_catalog_worker(
                             } else {
                                 cache_state = CatalogCacheState::Ready;
                                 let catalog_for_repair = loaded.catalog.clone();
+                                let generation_fingerprint =
+                                    loaded.stamp.as_ref().map(|stamp| stamp.fingerprint_hex());
                                 send_ready_catalog(
                                     &tx,
                                     loaded.catalog,
@@ -284,6 +297,7 @@ pub(super) fn start_library_catalog_worker(
                                     loaded.us,
                                     CatalogSource::FullSqlite,
                                     false,
+                                    generation_fingerprint,
                                 );
                                 cached_catalog_published = true;
                                 if loaded.projection_repair_safe {
@@ -448,6 +462,7 @@ pub(super) fn start_library_catalog_worker(
                     let load_us = timing.catalog_us;
                     let catalog_len = catalog.len();
                     let projection_catalog = catalog.clone();
+                    let generation_fingerprint = ram_artifact.stamp().fingerprint_hex();
                     progress(
                         "Indexing library",
                         "Creating compressed navigation catalog…",
@@ -463,6 +478,7 @@ pub(super) fn start_library_catalog_worker(
                         load_us,
                         CatalogSource::FreshBuild,
                         true,
+                        Some(generation_fingerprint.clone()),
                     );
                     apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
                     let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -496,6 +512,7 @@ pub(super) fn start_library_catalog_worker(
                             let _ = tx.send(CatalogWorkerMessage::Persisted {
                                 summary: summary.clone(),
                                 completed_build_seconds: None,
+                                generation_fingerprint: Some(generation_fingerprint),
                             });
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_saved_catalog".to_string(),
@@ -541,6 +558,7 @@ pub(super) fn start_library_catalog_worker(
                     ),
                 });
                 let catalog_t = Instant::now();
+                let generation_fingerprint = artifact.stamp().fingerprint_hex();
                 let catalog = artifact.catalog(&root);
                 let load_us = catalog_t.elapsed().as_micros() as u64;
                 let catalog_len = catalog.len();
@@ -551,6 +569,7 @@ pub(super) fn start_library_catalog_worker(
                     load_us,
                     CatalogSource::FreshBuild,
                     true,
+                    Some(generation_fingerprint.clone()),
                 );
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_worker_ram_catalog".to_string(),
@@ -567,6 +586,7 @@ pub(super) fn start_library_catalog_worker(
                         let _ = tx.send(CatalogWorkerMessage::Persisted {
                             summary: summary.clone(),
                             completed_build_seconds: None,
+                            generation_fingerprint: Some(generation_fingerprint),
                         });
                         let _ = tx.send(CatalogWorkerMessage::Timing {
                             name: "catalog_worker_saved_catalog".to_string(),
@@ -779,6 +799,7 @@ fn handle_embedded_builder_event(
                     load_us,
                     CatalogSource::FreshBuild,
                     true,
+                    None,
                 );
             }
             Err(error) => {
@@ -787,9 +808,15 @@ fn handle_embedded_builder_event(
         },
         CatalogBuilderEvent::Persisted { summary, .. } => {
             let completed_build_seconds = summary.completed_build_seconds;
+            let generation_fingerprint =
+                library_db::read_sqlite_catalog_stamp(&library_db::default_sqlite_path())
+                    .ok()
+                    .flatten()
+                    .map(|stamp| stamp.fingerprint_hex());
             let _ = tx.send(CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(summary),
                 completed_build_seconds,
+                generation_fingerprint,
             });
         }
         CatalogBuilderEvent::Unchanged { summary, .. } => {
@@ -1017,11 +1044,13 @@ pub(super) enum CatalogWorkerMessage {
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
+        generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
     },
     Persisted {
         summary: library_db::LibraryRefreshSummary,
         completed_build_seconds: Option<u64>,
+        generation_fingerprint: Option<String>,
     },
     PersistenceFailed {
         error: String,
@@ -1440,6 +1469,7 @@ mod tests {
                 42,
                 CatalogSource::NavigationProjection,
                 false,
+                None,
             );
         });
 

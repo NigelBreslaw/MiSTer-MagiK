@@ -23,6 +23,7 @@ pub mod launcher_taxonomy;
 pub mod licenses;
 pub mod media_update;
 pub mod raw565;
+pub mod return_catalog_capsule;
 pub mod runtime_status;
 pub mod settings;
 pub mod setup_nav;

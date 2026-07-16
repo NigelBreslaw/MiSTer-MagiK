@@ -1098,6 +1098,37 @@ fn read_catalog_summary_seed(
     }
 }
 
+#[derive(Default)]
+struct CatalogGenerationState {
+    current: Option<String>,
+    durable: Option<String>,
+}
+
+impl CatalogGenerationState {
+    fn publish(&mut self, fingerprint: Option<String>, durable: bool) {
+        self.current = fingerprint;
+        self.durable = durable.then(|| self.current.clone()).flatten();
+    }
+
+    fn mark_durable(&mut self, fingerprint: Option<String>) {
+        if fingerprint.is_some() && fingerprint == self.current {
+            self.durable = fingerprint;
+        }
+    }
+}
+
+fn catalog_hydration_execution_mode(request: CatalogWorkerRequest) -> CatalogExecutionMode {
+    if request == CatalogWorkerRequest::ForceBuild {
+        CatalogExecutionMode::ForegroundExclusive
+    } else {
+        CatalogExecutionMode::BackgroundInteractive
+    }
+}
+
+fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) -> bool {
+    !(catalog_ready && source == CatalogSource::NavigationProjection)
+}
+
 fn catalog_summary_seed_matches_sqlite(
     sqlite_path: &Path,
     summary: &catalog_summary::CatalogSummaryProjection,
@@ -1191,8 +1222,11 @@ pub(super) fn run_launcher_loop(
         && lock_screen.is_none();
     let mut pending_launch_return_state =
         launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
+    if !launch_return_restore_allowed || pending_launch_return_state.is_none() {
+        return_catalog_capsule::remove_return_catalog_capsule();
+    }
     let startup_return_requested = pending_launch_return_state.is_some();
-    let launch_return_restored = false;
+    let mut launch_return_restored = false;
     let arcade_catalog_required_at_start = start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade)
         || launcher_bench_after_input_script;
@@ -1323,8 +1357,17 @@ pub(super) fn run_launcher_loop(
         present_timing.delay_us(),
         pacer.fresh_hit_max_age_us()
     );
-    let mut catalog = empty_arcade_catalog(&arcade_root);
-    let mut catalog_ready = false;
+    let return_capsule_catalog = pending_launch_return_state.as_ref().and_then(|state| {
+        let collection_id = state.collection_id()?;
+        return_catalog_capsule::take_return_catalog_capsule(
+            Path::new(&arcade_root),
+            collection_id,
+            state.game_path(),
+        )
+    });
+    let mut catalog = return_capsule_catalog.unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
+    let mut catalog_ready = !catalog.is_empty();
+    let mut return_capsule_active = catalog_ready;
     let catalog_refresh_policy = catalog_refresh_policy();
     let catalog_refresh = catalog_refresh_policy.force_requested();
     let catalog_worker_enabled = catalog_refresh_policy.worker_enabled();
@@ -1345,9 +1388,43 @@ pub(super) fn run_launcher_loop(
     let mut catalog_recovery_prev = PadState::default();
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
-    let summary_seed = read_catalog_summary_seed(&sqlite_path, &summary_path, start);
+    let capsule_seed_ready = catalog_ready;
+    let summary_seed = (!capsule_seed_ready)
+        .then(|| read_catalog_summary_seed(&sqlite_path, &summary_path, start))
+        .flatten();
+    let initial_catalog_fingerprint = summary_seed
+        .as_ref()
+        .map(|summary| summary.catalog_stamp_fingerprint.clone());
+    let mut catalog_generation = CatalogGenerationState {
+        current: initial_catalog_fingerprint.clone(),
+        durable: initial_catalog_fingerprint,
+    };
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
-    if let Some(summary) = summary_seed.as_ref() {
+    if capsule_seed_ready {
+        startup_ready_catalog_source = CatalogSource::ReturnCapsule;
+        catalog_session.note_summary_seed_ready();
+        media_session.request_catalog_seed();
+        catalog_version = catalog_version.wrapping_add(1);
+        let request = summary_seed_catalog_worker_request(
+            catalog_refresh_policy,
+            deferred_library_rebuild,
+            true,
+        )
+        .unwrap_or(CatalogWorkerRequest::LoadOnly);
+        let initial_cache = summary_seed_catalog_worker_initial_cache(request, true);
+        print_startup_event(
+            start,
+            "return_catalog_capsule_ready",
+            format!(
+                "root={} games={} request={}",
+                arcade_root,
+                catalog.len(),
+                request.label()
+            ),
+        );
+        let execution_mode = catalog_hydration_execution_mode(request);
+        scheduler.start_catalog_worker(arcade_root.clone(), request, initial_cache, execution_mode);
+    } else if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
         startup_ready_catalog_source = CatalogSource::SummaryProjection;
@@ -1367,11 +1444,7 @@ pub(super) fn run_launcher_loop(
                 request,
                 return_catalog_hydration_needed,
             ) {
-                let execution_mode = if request == CatalogWorkerRequest::ForceBuild {
-                    CatalogExecutionMode::ForegroundExclusive
-                } else {
-                    CatalogExecutionMode::BackgroundInteractive
-                };
+                let execution_mode = catalog_hydration_execution_mode(request);
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
                 scheduler.start_catalog_worker(
                     arcade_root.clone(),
@@ -1453,6 +1526,21 @@ pub(super) fn run_launcher_loop(
         }
     }
     nav.sync_launcher_taxonomy(&catalog);
+    if capsule_seed_ready {
+        launch_return_restored = pending_launch_return_state
+            .as_ref()
+            .cloned()
+            .is_some_and(|state| launcher::apply_launch_return_state(&mut nav, &catalog, state));
+        if !launch_return_restored {
+            crate::ui_errln!("return catalog capsule could not restore saved destination");
+            catalog = empty_arcade_catalog(&arcade_root);
+            catalog_ready = false;
+            return_capsule_active = false;
+            startup_ready_catalog_source = CatalogSource::FreshBuild;
+            nav.sync_launcher_taxonomy(&catalog);
+        }
+    }
+    nav.set_arcade_exit_locked(return_capsule_active);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     apply_home_selected_from_env(&mut nav, &catalog, start);
     let root_arcade_focused = nav.screen == Screen::Home
@@ -1760,7 +1848,7 @@ pub(super) fn run_launcher_loop(
             catalog_session.refresh_done(),
             scheduler.catalog_messages_running(),
         ) {
-            scheduler.poll_catalog(&mut catalog_events);
+            let catalog_disconnected = scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
 
             let mut catalog_messages_processed = 0usize;
@@ -1795,16 +1883,14 @@ pub(super) fn run_launcher_loop(
                         media_benchmark_contention,
                         loop_start,
                         &app,
-                        &pad,
                         &mut nav,
-                        &setup,
-                        &loading_title,
                         &mut catalog,
                         &mut catalog_ready,
                         &mut catalog_version,
+                        &mut return_capsule_active,
+                        &mut catalog_generation,
                         &mut pending_launch_return_state,
                         &mut preview,
-                        &mut bridge_models,
                         &mut media_session,
                         &mut scheduler,
                         &mut catalog_session,
@@ -1812,7 +1898,6 @@ pub(super) fn run_launcher_loop(
                         &mut lifecycle_effects,
                         &mut full_bridge_dirty,
                         start,
-                        ui.render_w(),
                     );
                     catalog_messages_processed = catalog_messages_processed.saturating_add(1);
                 }
@@ -1856,16 +1941,14 @@ pub(super) fn run_launcher_loop(
                     media_benchmark_contention,
                     loop_start,
                     &app,
-                    &pad,
                     &mut nav,
-                    &setup,
-                    &loading_title,
                     &mut catalog,
                     &mut catalog_ready,
                     &mut catalog_version,
+                    &mut return_capsule_active,
+                    &mut catalog_generation,
                     &mut pending_launch_return_state,
                     &mut preview,
-                    &mut bridge_models,
                     &mut media_session,
                     &mut scheduler,
                     &mut catalog_session,
@@ -1873,9 +1956,44 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
                     start,
-                    ui.render_w(),
                 );
                 catalog_messages_processed = catalog_messages_processed.saturating_add(1);
+            }
+            let authoritative_ready_queued = pending_catalog_ready
+                .as_ref()
+                .is_some_and(|message| matches!(message, CatalogWorkerMessage::Ready { .. }))
+                || deferred_catalog_events
+                    .iter()
+                    .any(|message| matches!(message, CatalogWorkerMessage::Ready { .. }));
+            if catalog_disconnected && return_capsule_active && !authoritative_ready_queued {
+                process_catalog_worker_message(
+                    CatalogWorkerMessage::LoadFailed {
+                        error: "catalog worker disconnected before authoritative hydration"
+                            .to_string(),
+                    },
+                    &mut prepare_trace,
+                    frame_accounting.first_visible_copy_done(),
+                    launching,
+                    benchmark_media_interaction_active,
+                    media_benchmark_contention,
+                    loop_start,
+                    &app,
+                    &mut nav,
+                    &mut catalog,
+                    &mut catalog_ready,
+                    &mut catalog_version,
+                    &mut return_capsule_active,
+                    &mut catalog_generation,
+                    &mut pending_launch_return_state,
+                    &mut preview,
+                    &mut media_session,
+                    &mut scheduler,
+                    &mut catalog_session,
+                    &mut lifecycle,
+                    &mut lifecycle_effects,
+                    &mut full_bridge_dirty,
+                    start,
+                );
             }
             prepare_trace.catalog_backlog = deferred_catalog_events
                 .len()
@@ -2402,16 +2520,14 @@ pub(super) fn run_launcher_loop(
                                 apply_catalog_session_effects(
                                     effects,
                                     &app,
-                                    &pad,
                                     &mut nav,
-                                    &setup,
-                                    &loading_title,
                                     &mut catalog,
                                     &mut catalog_ready,
                                     &mut catalog_version,
+                                    &mut return_capsule_active,
+                                    &mut catalog_generation,
                                     &mut pending_launch_return_state,
                                     &mut preview,
-                                    &mut bridge_models,
                                     &mut media_session,
                                     &mut scheduler,
                                     &mut lifecycle,
@@ -2419,7 +2535,6 @@ pub(super) fn run_launcher_loop(
                                     &mut full_bridge_dirty,
                                     loop_start,
                                     start,
-                                    ui.render_w(),
                                 );
                                 request_launcher_redraw!();
                                 continue;
@@ -2429,16 +2544,14 @@ pub(super) fn run_launcher_loop(
                                 apply_catalog_session_effects(
                                     effects,
                                     &app,
-                                    &pad,
                                     &mut nav,
-                                    &setup,
-                                    &loading_title,
                                     &mut catalog,
                                     &mut catalog_ready,
                                     &mut catalog_version,
+                                    &mut return_capsule_active,
+                                    &mut catalog_generation,
                                     &mut pending_launch_return_state,
                                     &mut preview,
-                                    &mut bridge_models,
                                     &mut media_session,
                                     &mut scheduler,
                                     &mut lifecycle,
@@ -2446,7 +2559,6 @@ pub(super) fn run_launcher_loop(
                                     &mut full_bridge_dirty,
                                     loop_start,
                                     start,
-                                    ui.render_w(),
                                 );
                                 request_launcher_redraw!();
                                 continue;
@@ -2474,7 +2586,13 @@ pub(super) fn run_launcher_loop(
                             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                             continue;
                         }
-                        if !scheduler.begin_launch(&nav, &catalog, &mra, Instant::now()) {
+                        if !scheduler.begin_launch(
+                            &nav,
+                            &catalog,
+                            catalog_generation.durable.as_deref(),
+                            &mra,
+                            Instant::now(),
+                        ) {
                             lifecycle.handle(
                                 LauncherLifecycleInput::LaunchFailed {
                                     message: "launch scheduler rejected request".to_string(),
@@ -3521,16 +3639,14 @@ fn process_catalog_worker_message(
     media_benchmark_contention: bool,
     loop_start: Instant,
     app: &slint_ui::launcher::Launcher,
-    pad: &PadPool,
     nav: &mut LauncherNav,
-    setup: &SetupNav,
-    loading_title: &str,
     catalog: &mut ArcadeCatalog,
     catalog_ready: &mut bool,
     catalog_version: &mut usize,
+    return_capsule_active: &mut bool,
+    catalog_generation: &mut CatalogGenerationState,
     pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
     preview: &mut PreviewState,
-    bridge_models: &mut LauncherBridgeModels,
     media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
     catalog_session: &mut LauncherCatalogSession,
@@ -3538,7 +3654,6 @@ fn process_catalog_worker_message(
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
     start: Instant,
-    render_w: usize,
 ) {
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
     let media_gate = if matches!(&message, CatalogWorkerMessage::SystemDiscovered { .. }) {
@@ -3565,6 +3680,7 @@ fn process_catalog_worker_message(
     let effects = catalog_session.handle_worker_message(
         CatalogWorkerMessageContext {
             catalog_ready: *catalog_ready,
+            catalog_partial: *return_capsule_active,
             screen: nav.screen,
             media_gate,
         },
@@ -3574,16 +3690,14 @@ fn process_catalog_worker_message(
     apply_catalog_session_effects(
         effects,
         app,
-        pad,
         nav,
-        setup,
-        loading_title,
         catalog,
         catalog_ready,
         catalog_version,
+        return_capsule_active,
+        catalog_generation,
         pending_launch_return_state,
         preview,
-        bridge_models,
         media_session,
         scheduler,
         lifecycle,
@@ -3591,7 +3705,6 @@ fn process_catalog_worker_message(
         full_bridge_dirty,
         loop_start,
         start,
-        render_w,
     );
 }
 
@@ -3841,16 +3954,14 @@ fn apply_lifecycle_effects(
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
     app: &slint_ui::launcher::Launcher,
-    pad: &PadPool,
     nav: &mut LauncherNav,
-    setup: &SetupNav,
-    loading_title: &str,
     catalog: &mut ArcadeCatalog,
     catalog_ready: &mut bool,
     catalog_version: &mut usize,
+    return_capsule_active: &mut bool,
+    catalog_generation: &mut CatalogGenerationState,
     pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
     preview: &mut PreviewState,
-    bridge_models: &mut LauncherBridgeModels,
     media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
     lifecycle: &mut LauncherLifecycle,
@@ -3858,7 +3969,6 @@ fn apply_catalog_session_effects(
     full_bridge_dirty: &mut bool,
     now: Instant,
     start: Instant,
-    render_w: usize,
 ) {
     for effect in effects.into_effects() {
         match effect {
@@ -3869,15 +3979,23 @@ fn apply_catalog_session_effects(
                 catalog: ready_catalog,
                 load_us: _,
                 source,
+                durable,
+                generation_fingerprint,
                 publication_ack,
             } => {
+                let taxonomy_sync_required = catalog_taxonomy_sync_required(*catalog_ready, source);
                 *catalog = ready_catalog;
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
+                *return_capsule_active = false;
+                nav.set_arcade_exit_locked(false);
+                catalog_generation.publish(generation_fingerprint, durable);
                 if let Some(publication_ack) = publication_ack {
                     let _ = publication_ack.send(());
                 }
-                nav.sync_launcher_taxonomy(catalog);
+                if taxonomy_sync_required {
+                    nav.sync_launcher_taxonomy(catalog);
+                }
                 apply_forced_arcade_selected(nav, catalog);
                 let return_restored =
                     apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
@@ -3902,6 +4020,24 @@ fn apply_catalog_session_effects(
                     lifecycle_effects,
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+            }
+            CatalogSessionEffect::MarkCatalogDurable {
+                generation_fingerprint,
+            } => {
+                catalog_generation.mark_durable(generation_fingerprint);
+            }
+            CatalogSessionEffect::DiscardPartialCatalog => {
+                let root = catalog.root.to_string_lossy().into_owned();
+                *catalog = empty_arcade_catalog(&root);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                *catalog_ready = false;
+                *return_capsule_active = false;
+                *catalog_generation = CatalogGenerationState::default();
+                nav.set_arcade_exit_locked(false);
+                nav.sync_launcher_taxonomy(catalog);
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                preview.clear(&bridge);
+                *full_bridge_dirty = true;
             }
             CatalogSessionEffect::StartSearchIndex { job, games, source } => {
                 print_startup_event(
@@ -3959,32 +4095,7 @@ fn apply_catalog_session_effects(
                 }
             }
             CatalogSessionEffect::SyncCatalogBridge => {
-                let bridge_sync_t = Instant::now();
-                let loading_title = scheduler.visible_loading_title(loading_title);
-                sync_bridge_launcher(
-                    app,
-                    pad,
-                    nav,
-                    lifecycle,
-                    setup,
-                    loading_title,
-                    "",
-                    Some(catalog),
-                    preview,
-                    bridge_models,
-                    *catalog_version,
-                    false,
-                    render_w,
-                );
-                print_startup_event(
-                    start,
-                    "catalog_bridge_sync_update",
-                    format!(
-                        "games={} elapsed_us={}",
-                        catalog.len(),
-                        bridge_sync_t.elapsed().as_micros()
-                    ),
-                );
+                *full_bridge_dirty = true;
             }
             CatalogSessionEffect::Ui(intent) => {
                 apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
@@ -4719,6 +4830,7 @@ mod tests {
             load_us: 42,
             source: CatalogSource::FullSqlite,
             durable_save_pending: false,
+            generation_fingerprint: None,
             publication_ack: None,
         }
     }
@@ -4775,6 +4887,7 @@ mod tests {
             load_us: 42,
             source: CatalogSource::NavigationProjection,
             durable_save_pending: false,
+            generation_fingerprint: None,
             publication_ack: None,
         };
 
@@ -5941,5 +6054,49 @@ mod tests {
             let mut gate = CatalogBackgroundIdleGate::new(Duration::from_secs(2));
             assert!(!gate.allow(active, now + Duration::from_secs(3)));
         }
+    }
+
+    #[test]
+    fn forced_capsule_hydration_keeps_foreground_catalog_priority() {
+        assert_eq!(
+            catalog_hydration_execution_mode(CatalogWorkerRequest::ForceBuild),
+            CatalogExecutionMode::ForegroundExclusive
+        );
+        assert_eq!(
+            catalog_hydration_execution_mode(CatalogWorkerRequest::LoadOnly),
+            CatalogExecutionMode::BackgroundInteractive
+        );
+    }
+
+    #[test]
+    fn catalog_generation_becomes_capsule_eligible_only_after_matching_persistence() {
+        let mut generation = CatalogGenerationState::default();
+        generation.publish(Some("new".to_string()), false);
+        assert!(generation.durable.is_none());
+
+        generation.mark_durable(Some("old".to_string()));
+        assert!(generation.durable.is_none());
+
+        generation.mark_durable(Some("new".to_string()));
+        assert_eq!(generation.durable.as_deref(), Some("new"));
+
+        generation.publish(Some("next".to_string()), false);
+        assert!(generation.durable.is_none());
+    }
+
+    #[test]
+    fn warm_navigation_projection_reuses_seeded_taxonomy() {
+        assert!(!catalog_taxonomy_sync_required(
+            true,
+            CatalogSource::NavigationProjection
+        ));
+        assert!(catalog_taxonomy_sync_required(
+            false,
+            CatalogSource::NavigationProjection
+        ));
+        assert!(catalog_taxonomy_sync_required(
+            true,
+            CatalogSource::FreshBuild
+        ));
     }
 }

@@ -619,6 +619,7 @@ pub struct LauncherNav {
     menu_path: Vec<String>,
     menu_memory: HashMap<String, MenuViewportMemory>,
     active_collection_id: Option<String>,
+    arcade_exit_locked: bool,
     repeat: RepeatNav,
     home_scroll: HomeScrollState,
     home_scroll_animation: SpringAnimation,
@@ -840,6 +841,7 @@ impl LauncherNav {
             menu_path: vec![ROOT_MENU_ID.to_string()],
             menu_memory: HashMap::new(),
             active_collection_id: None,
+            arcade_exit_locked: false,
             repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
             home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
@@ -1233,6 +1235,9 @@ impl LauncherNav {
     }
 
     fn leave_arcade(&mut self, to_root: bool, collection_id: &str) {
+        if self.arcade_exit_locked {
+            return;
+        }
         if !collection_id.is_empty() {
             self.save_game_list_state(collection_id);
             self.collection_filters
@@ -1250,6 +1255,10 @@ impl LauncherNav {
             self.settings_focused = false;
             self.restore_current_menu_view();
         }
+    }
+
+    pub fn set_arcade_exit_locked(&mut self, locked: bool) {
+        self.arcade_exit_locked = locked;
     }
 
     /// Returns an event when a launch or system action was requested.
@@ -2600,6 +2609,16 @@ pub struct LaunchReturnState {
     game_index: usize,
     filter_kind: Option<String>,
     filter_value: Option<String>,
+}
+
+impl LaunchReturnState {
+    pub fn collection_id(&self) -> Option<&str> {
+        self.collection_id.as_deref()
+    }
+
+    pub fn game_path(&self) -> &str {
+        &self.game_path
+    }
 }
 
 pub fn capture_launch_return_state(
@@ -6745,5 +6764,20 @@ mod tests {
         assert_eq!(io.start_calls, 0);
         assert!(io.commands.is_empty());
         assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn partial_catalog_lock_keeps_navigation_in_the_restored_collection() {
+        let catalog = multi_game_catalog();
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "arcade"));
+        nav.set_arcade_exit_locked(true);
+
+        nav.leave_arcade(false, "arcade");
+        assert_eq!(nav.screen, Screen::Arcade);
+
+        nav.set_arcade_exit_locked(false);
+        nav.leave_arcade(false, "arcade");
+        assert_eq!(nav.screen, Screen::Home);
     }
 }
