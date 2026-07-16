@@ -94,6 +94,14 @@ pub(super) fn start_library_catalog_worker(
                                 "catalog_worker_navigation_load",
                                 &loaded,
                             );
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_projection_ready".to_string(),
+                                detail: format!(
+                                    "status=ready source=navigation_projection games={} load_us={}",
+                                    loaded.catalog.games.len(),
+                                    loaded.us
+                                ),
+                            });
                             cache_state = CatalogCacheState::Ready;
                             startup_projection_catalog = Some(loaded.catalog.clone());
                             send_ready_catalog(
@@ -114,12 +122,20 @@ pub(super) fn start_library_catalog_worker(
                                     library_db::catalog_load_counter_detail()
                                 ),
                             });
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_projection_fallback".to_string(),
+                                detail: "status=missing_or_stale".to_string(),
+                            });
                         }
                         Err(e) => {
                             crate::ui_errln!("library navigation projection load failed: {e}");
                             let _ = tx.send(CatalogWorkerMessage::Timing {
                                 name: "catalog_worker_navigation_load_failed".to_string(),
                                 detail: format!("{e} {}", library_db::catalog_load_counter_detail()),
+                            });
+                            let _ = tx.send(CatalogWorkerMessage::Timing {
+                                name: "catalog_projection_fallback".to_string(),
+                                detail: format!("status=load_failed error={e}"),
                             });
                         }
                     }
@@ -169,14 +185,35 @@ pub(super) fn start_library_catalog_worker(
                         }
                     } else if let Some(projected) = startup_projection_catalog.as_ref() {
                         library_db::record_catalog_worker_cache_load();
+                        let materialized_parity_started = std::time::Instant::now();
+                        let _ = tx.send(CatalogWorkerMessage::Timing {
+                            name: "catalog_materialized_parity_started".to_string(),
+                            detail: format!("projection_games={}", projected.games.len()),
+                        });
                         match library_db::load_arcade_catalog_from_materialized_sqlite(&root) {
                             Ok(loaded) if !loaded.catalog.games.is_empty() => {
+                                let parity_elapsed_us =
+                                    materialized_parity_started.elapsed().as_micros();
                                 send_catalog_load_timing(
                                     &tx,
                                     "catalog_worker_materialized_parity_load",
                                     &loaded,
                                 );
                                 let mismatches = loaded.catalog.filter_option_mismatches(projected);
+                                let parity_status = if mismatches.is_empty() {
+                                    "match"
+                                } else {
+                                    "mismatch"
+                                };
+                                let _ = tx.send(CatalogWorkerMessage::Timing {
+                                    name: "catalog_materialized_parity_finished".to_string(),
+                                    detail: format!(
+                                        "status={parity_status} elapsed_us={parity_elapsed_us} load_us={} games={} mismatches={}",
+                                        loaded.us,
+                                        loaded.catalog.games.len(),
+                                        mismatches.len()
+                                    ),
+                                });
                                 if !mismatches.is_empty() {
                                     let _ = tx.send(CatalogWorkerMessage::Timing {
                                         name: "catalog_filter_parity_tsv".to_string(),
@@ -204,8 +241,23 @@ pub(super) fn start_library_catalog_worker(
                                     projection_repair_allowed = false;
                                 }
                             }
-                            Ok(_) => {}
+                            Ok(_) => {
+                                let _ = tx.send(CatalogWorkerMessage::Timing {
+                                    name: "catalog_materialized_parity_finished".to_string(),
+                                    detail: format!(
+                                        "status=empty elapsed_us={}",
+                                        materialized_parity_started.elapsed().as_micros()
+                                    ),
+                                });
+                            }
                             Err(e) => {
+                                let _ = tx.send(CatalogWorkerMessage::Timing {
+                                    name: "catalog_materialized_parity_finished".to_string(),
+                                    detail: format!(
+                                        "status=load_failed elapsed_us={} error={e}",
+                                        materialized_parity_started.elapsed().as_micros()
+                                    ),
+                                });
                                 let _ = tx.send(CatalogWorkerMessage::Timing {
                                     name: "catalog_worker_materialized_parity_load_failed"
                                         .to_string(),
@@ -302,6 +354,10 @@ pub(super) fn start_library_catalog_worker(
                 ),
             });
             if cached_catalog_published && plan == CatalogWorkerPlan::CheckStamp {
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_hydration_handoff".to_string(),
+                    detail: "status=validation_deferred request=check_stamp".to_string(),
+                });
                 let _ = tx.send(CatalogWorkerMessage::HydrationDoneNeedsValidation {
                     root,
                 });
