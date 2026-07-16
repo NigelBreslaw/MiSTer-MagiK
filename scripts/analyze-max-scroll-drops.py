@@ -249,6 +249,113 @@ def flip_counter_sample_failures(rows: list[dict[str, str]]) -> tuple[int, int, 
     return observed, samples, failures
 
 
+def home_motion_report(
+    rows: list[dict[str, str]], contract: str | None
+) -> tuple[bool, str, str]:
+    if contract is None:
+        return True, "not-requested", ""
+
+    required = {
+        "home_screen",
+        "home_menu_token",
+        "home_selected_token",
+        "home_selected_index",
+        "home_scroll_x",
+        "home_scroll_max",
+        "home_pan_present_active",
+        "home_horizontal_input_held",
+        "rows",
+        "present_bytes",
+    }
+    missing = sorted(required.difference(rows[0]))
+    if missing:
+        return False, "missing_home_motion_fields", f"home_motion_missing={','.join(missing)}"
+
+    screens = {row.get("home_screen", "") for row in rows}
+    menu_tokens = {row.get("home_menu_token", "") for row in rows}
+    selected_tokens = {row.get("home_selected_token", "") for row in rows}
+    selected_indexes = {int_field(row, "home_selected_index") for row in rows}
+    scroll_values = [int_field(row, "home_scroll_x") for row in rows]
+    scroll_max_values = [int_field(row, "home_scroll_max") for row in rows]
+    pan_frames = sum(int_field(row, "home_pan_present_active") > 0 for row in rows)
+    held_frames = sum(int_field(row, "home_horizontal_input_held") > 0 for row in rows)
+    repaint_frames = sum(
+        int_field(row, "rows") > 0 or int_field(row, "present_bytes") > 0
+        for row in rows
+    )
+    focus_change_repaint_frames = sum(
+        (
+            row.get("home_selected_token") != previous.get("home_selected_token")
+            or int_field(row, "home_selected_index")
+            != int_field(previous, "home_selected_index")
+        )
+        and (int_field(row, "rows") > 0 or int_field(row, "present_bytes") > 0)
+        for previous, row in zip(rows, rows[1:])
+    )
+    scroll_change_pan_frames = sum(
+        int_field(row, "home_scroll_x") != int_field(previous, "home_scroll_x")
+        and int_field(row, "home_pan_present_active") > 0
+        and (int_field(row, "rows") > 0 or int_field(row, "present_bytes") > 0)
+        for previous, row in zip(rows, rows[1:])
+    )
+    scroll_deltas = [
+        int_field(row, "home_scroll_x") - int_field(previous, "home_scroll_x")
+        for previous, row in zip(rows, rows[1:])
+    ]
+    scroll_directions = [1 if delta > 0 else -1 for delta in scroll_deltas if delta]
+    direction_reversals = sum(
+        current != previous
+        for previous, current in zip(scroll_directions, scroll_directions[1:])
+    )
+    extent_max = max(scroll_max_values, default=0)
+    reached_start = min(scroll_values, default=0) <= 1
+    reached_end = max(scroll_values, default=0) >= max(0, extent_max - 1)
+    common_valid = (
+        screens == {"home"}
+        and len(menu_tokens) == 1
+        and not menu_tokens.intersection({"", "0"})
+        and len(selected_tokens) >= 2
+        and not selected_tokens.intersection({"", "0"})
+        and len(selected_indexes) >= 2
+        and focus_change_repaint_frames > 0
+    )
+    if contract == "root-focus":
+        valid = common_valid
+        reason = "ok" if valid else "root_focus_or_repaint_absent"
+    else:
+        valid = (
+            common_valid
+            and max(scroll_max_values, default=0) > 0
+            and max(scroll_values, default=0) > min(scroll_values, default=0)
+            and pan_frames > 0
+            and held_frames > 0
+            and scroll_change_pan_frames > 0
+            and reached_start
+            and reached_end
+            and direction_reversals > 0
+        )
+        reason = "ok" if valid else "nested_horizontal_pan_absent"
+    detail = (
+        f"home_motion_contract={contract} "
+        f"home_screens={','.join(sorted(screens))} "
+        f"home_menu_token_count={len(menu_tokens)} "
+        f"home_selected_token_count={len(selected_tokens)} "
+        f"home_selected_index_count={len(selected_indexes)} "
+        f"home_scroll_min={min(scroll_values, default=0)} "
+        f"home_scroll_max_observed={max(scroll_values, default=0)} "
+        f"home_scroll_extent_max={max(scroll_max_values, default=0)} "
+        f"home_reached_start={1 if reached_start else 0} "
+        f"home_reached_end={1 if reached_end else 0} "
+        f"home_direction_reversals={direction_reversals} "
+        f"home_pan_active_frames={pan_frames} "
+        f"home_input_held_frames={held_frames} "
+        f"home_repaint_frames={repaint_frames} "
+        f"home_focus_change_repaint_frames={focus_change_repaint_frames} "
+        f"home_scroll_change_pan_frames={scroll_change_pan_frames}"
+    )
+    return valid, reason, detail
+
+
 def print_summary(
     label: str,
     rows: list[dict[str, str]],
@@ -257,6 +364,7 @@ def print_summary(
     expect_backend: str | None,
     fpga_before: FpgaLatchReport | None = None,
     fpga_after: FpgaLatchReport | None = None,
+    home_motion_contract: str | None = None,
 ) -> int:
     if not rows:
         print(
@@ -351,6 +459,9 @@ def print_summary(
         for row in rows
         if int_field(row, "wall_us") > FRAME_BUDGET_US and work_us(row) <= FRAME_BUDGET_US
     )
+    home_motion_valid, home_motion_reason, home_motion_detail = home_motion_report(
+        rows, home_motion_contract
+    )
     detail = (
         f"frames={len(rows)} near_ge_16000={len(near)} drops_gt_16667={len(over)} "
         f"loop_drops_gt_16667={len(loop_over)} "
@@ -399,7 +510,9 @@ def print_summary(
         f"frame_tail_slack_min={min(frame_tail_slack) if frame_tail_slack else 0} "
         f"latch_miss_frame_finish_p50={percentile(latch_miss_frame_finish, 50)} "
         f"latch_miss_post_finish_tail_p50={percentile(latch_miss_post_finish_tail, 50)} "
-        f"dominant_over_budget={dict(phase_counts.most_common())}"
+        f"dominant_over_budget={dict(phase_counts.most_common())} "
+        f"home_motion_valid={1 if home_motion_valid else 0} "
+        f"home_motion_reason={home_motion_reason} {home_motion_detail}"
     )
     if expect_backend == LATCH_BACKEND or latch_rows:
         valid = latch_valid
@@ -418,6 +531,9 @@ def print_summary(
     else:
         valid = len(cadence_misses) == 0 and backend_valid
         invalid_reason = "ok" if valid else "over_budget_frames"
+    if valid and not home_motion_valid:
+        valid = False
+        invalid_reason = home_motion_reason
     print(
         f"max_scroll_gate_tsv\tlabel={label}\tvalid={1 if valid else 0}"
         f"\tinvalid_reason={invalid_reason}\t{detail}"
@@ -432,6 +548,13 @@ def print_summary(
             "elapsed_us": row.get("elapsed_us", ""),
             "selected": row.get("selected", ""),
             "visual_index": row.get("visual_index", ""),
+            "home_screen": row.get("home_screen", ""),
+            "home_menu_token": row.get("home_menu_token", ""),
+            "home_selected_token": row.get("home_selected_token", ""),
+            "home_selected_index": row.get("home_selected_index", ""),
+            "home_scroll_x": row.get("home_scroll_x", ""),
+            "home_scroll_max": row.get("home_scroll_max", ""),
+            "home_pan_present_active": row.get("home_pan_present_active", ""),
             "wall_us": int_field(row, "wall_us"),
             "loop_delta_us": int_field(row, "loop_delta_us"),
             "work_us": work_us(row),
@@ -507,11 +630,23 @@ def run_self_test() -> int:
         "main_present_wait_us": "10",
         "main_present_buffer": "1",
         "main_present_route_us": "100",
+        "home_screen": "home",
+        "home_menu_token": "101",
+        "home_selected_token": "201",
+        "home_selected_index": "0",
+        "home_scroll_x": "0",
+        "home_scroll_max": "0",
+        "home_pan_present_active": "0",
+        "home_horizontal_input_held": "1",
+        "rows": "32",
+        "present_bytes": "61440",
     }
     next_frame = dict(base)
     next_frame["frame"] = "32"
     next_frame["main_present_buffer"] = "2"
     next_frame["main_present_route_us"] = "101"
+    next_frame["home_selected_token"] = "202"
+    next_frame["home_selected_index"] = "1"
     report_before = FpgaLatchReport(True, 100, 100, 0)
     report_after = FpgaLatchReport(True, 102, 102, 0)
     missed = dict(base)
@@ -539,6 +674,49 @@ def run_self_test() -> int:
         return 1
     if print_summary("self-latch-pass", [base, next_frame], [], 1, LATCH_BACKEND, report_before, report_after) != 0:
         print("self-test expected latch pass", file=sys.stderr)
+        return 1
+    if print_summary(
+        "self-home-root-pass",
+        [base, next_frame],
+        [],
+        1,
+        LATCH_BACKEND,
+        report_before,
+        report_after,
+        "root-focus",
+    ) != 0:
+        print("self-test expected Home root focus/repaint pass", file=sys.stderr)
+        return 1
+    idle_next = dict(next_frame)
+    idle_next["home_selected_token"] = base["home_selected_token"]
+    idle_next["home_selected_index"] = base["home_selected_index"]
+    idle_next["rows"] = "0"
+    idle_next["present_bytes"] = "0"
+    if print_summary(
+        "self-home-idle-fail",
+        [base | {"rows": "0", "present_bytes": "0"}, idle_next],
+        [],
+        1,
+        LATCH_BACKEND,
+        report_before,
+        report_after,
+        "root-focus",
+    ) == 0:
+        print("self-test expected idle Home trace failure", file=sys.stderr)
+        return 1
+    nested_rows = []
+    for index, scroll_x in enumerate((0, 320, 640, 320)):
+        nested_row = dict(base if index % 2 == 0 else next_frame)
+        nested_row["frame"] = str(31 + index)
+        nested_row["home_selected_token"] = str(201 + index)
+        nested_row["home_selected_index"] = str(index)
+        nested_row["home_scroll_x"] = str(scroll_x)
+        nested_row["home_scroll_max"] = "640"
+        nested_row["home_pan_present_active"] = str(int(index > 0))
+        nested_rows.append(nested_row)
+    nested_valid, _, _ = home_motion_report(nested_rows, "nested-pan")
+    if not nested_valid:
+        print("self-test expected nested Home horizontal-pan pass", file=sys.stderr)
         return 1
     fallback = dict(base)
     fallback["main_present_backend"] = "fb0-dirty"
@@ -584,6 +762,11 @@ def main() -> int:
     parser.add_argument("--ignore-elapsed-zero", action="store_true")
     parser.add_argument("--worst", type=int, default=12)
     parser.add_argument("--expect-backend", choices=[LATCH_BACKEND, "fb0-dirty"])
+    parser.add_argument(
+        "--home-motion-contract",
+        choices=["root-focus", "nested-pan"],
+        help="require truthful Home focus/repaint or horizontal-pan evidence",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -601,6 +784,7 @@ def main() -> int:
         args.expect_backend,
         fpga_latch_report(args.fpga_latch_report_before),
         fpga_latch_report(args.fpga_latch_report_after),
+        args.home_motion_contract,
     )
 
 

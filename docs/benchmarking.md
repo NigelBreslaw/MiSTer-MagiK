@@ -156,7 +156,8 @@ and copy-path conclusions into one broad run.
   `scripts/gate-launcher-home-max-scroll-zero-drops.sh LABEL --secs N`.
   Report latch-visible metrics from the generated `*-launcher-home-scroll-drops.tsv`:
   latch deadline misses, visual latch misses, FPGA `drop_count`, latch margin,
-  and the specific Home timing under test.
+  and the specific Home timing under test. The root gate proves focus movement
+  plus repaint; a named submenu gate additionally proves real horizontal pan.
 - Hidden-copy claims use the Home latch gate and its `latch_copy_p50/p95/p99`
   measurements. The old plugin mapping microbench is retired.
   Report `latch_copy_p50/p95/p99` or the microbench copy timing, not Arcade
@@ -237,10 +238,18 @@ the posted buffers. Combined with zero latch deadline misses, alternating
 buffers, and consistent sampled flip-counter deltas, it is the latch visual
 smoothness signal. Use passive `fpga-latch-report` for before/after FPGA counters;
 `fpga-latch-post-report` posts a diagnostic latch request and can change the
-counters it reports. The shared trace schema predates the menu-row gate, so the
-`selected` and `visual_index` columns still describe the Arcade list, not the
-launcher menu index; use the log/status
-`bench_scenario=home-repeat-hold` fields to confirm the Home benchmark path. The
+counters it reports. The shared `selected` and `visual_index` columns continue
+to describe the Arcade list. Home acceptance uses the dedicated `home_screen`,
+`home_menu_token`, `home_selected_token`, `home_selected_index`,
+`home_scroll_x`, `home_scroll_max`, and `home_pan_present_active` columns.
+Identity tokens are stable FNV-1a values, avoiding per-frame taxonomy string
+allocations. The root contract requires focus identity/index changes and
+repainted frames. Named submenu contracts additionally require a non-zero
+scroll extent, changing scroll position, held input, and active pan frames. An
+accepted submenu trace must reach both ends and reverse direction. An idle trace
+therefore fails rather than being accepted as smooth motion. Use the
+log/status `bench_scenario=home-repeat-hold` fields to confirm the Home
+benchmark path. The
 default `MISTER_CATALOG_REFRESH=off` isolates Home-row pacing from catalog
 refresh noise; pass `--catalog-refresh default` when deliberately measuring the
 normal startup mix.

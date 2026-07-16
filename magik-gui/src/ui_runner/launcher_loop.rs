@@ -3271,6 +3271,8 @@ pub(super) fn run_launcher_loop(
                 frames,
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
+                #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+                home_trace: LauncherHomeFrameTrace::from_nav(&nav),
                 search_index_state: if catalog.text_indexes_ready() {
                     "ready"
                 } else {

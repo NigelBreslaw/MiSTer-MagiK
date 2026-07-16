@@ -35,6 +35,9 @@ Use this gate for Home render/pan latch claims and for normal launcher hidden
 copy-path claims. Report the generated latch/drop row fields that match the
 claim, such as latch_copy_p50/p95/p99, latch margin, latch deadline misses,
 visual latch misses, passive FPGA drop_count, and frame_finish/post-tail timing.
+The root menu requires selected-focus changes and repainted frames. Named
+submenus additionally require non-zero horizontal extent, changing scroll
+position, held input, active pan frames, both endpoints, and a reversal.
 Use Arcade turbo/human-turbo instead for Arcade list or preview claims.
 
 The default backend is fpga-vblank-latch-hidden. For /dev/fb0 the gate fails if
@@ -158,6 +161,11 @@ echo "wrote $log"
 echo "wrote $status_json"
 
 analyze_args=()
+if [[ "$menu" == "root" ]]; then
+  analyze_args+=(--home-motion-contract root-focus)
+else
+  analyze_args+=(--home-motion-contract nested-pan)
+fi
 if [[ -n "$present_backend" ]]; then
   analyze_args+=(--expect-backend "$present_backend")
 fi
