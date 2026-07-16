@@ -1653,7 +1653,7 @@ pub(super) fn run_launcher_loop(
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                     preview.clear(&bridge);
                     apply_screenshot_media_update_effects(
-                        media_session.pause_for_low_memory(),
+                        media_session.pause_for_low_memory(media_benchmark_contention),
                         &app,
                         &catalog,
                         &mut scheduler,
@@ -1792,6 +1792,7 @@ pub(super) fn run_launcher_loop(
                         frame_accounting.first_visible_copy_done(),
                         launching,
                         benchmark_media_interaction_active,
+                        media_benchmark_contention,
                         loop_start,
                         &app,
                         &pad,
@@ -1852,6 +1853,7 @@ pub(super) fn run_launcher_loop(
                     frame_accounting.first_visible_copy_done(),
                     launching,
                     benchmark_media_interaction_active,
+                    media_benchmark_contention,
                     loop_start,
                     &app,
                     &pad,
@@ -2636,6 +2638,7 @@ pub(super) fn run_launcher_loop(
                 frame_accounting.first_visible_copy_done(),
                 scheduler.has_pending_launch() || launching,
                 benchmark_media_interaction_active,
+                media_benchmark_contention,
                 loop_start,
             );
             let media_gate = if memory_guard.active() {
@@ -3515,6 +3518,7 @@ fn process_catalog_worker_message(
     first_visible_copy_done: bool,
     launching: bool,
     benchmark_media_interaction_active: bool,
+    media_benchmark_contention: bool,
     loop_start: Instant,
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
@@ -3542,6 +3546,7 @@ fn process_catalog_worker_message(
             first_visible_copy_done,
             scheduler.has_pending_launch() || launching,
             benchmark_media_interaction_active,
+            media_benchmark_contention,
             loop_start,
         );
         apply_screenshot_media_update_effects(

@@ -599,7 +599,11 @@ scripts/profile-media-arcade-contention.sh MEDIA-ARCADE-YYYYMMDD --deploy-device
 
 It keeps the installed catalog, starts one real media-download worker and one
 `human-turbo-hold` Arcade trace in the same launcher, and automatically records
-per-thread `/proc` evidence. The label-scoped directory under
+per-thread `/proc` evidence. Benchmark contention suppresses both the generic
+benchmark interaction pause and the Arcade-scroll settling pause; startup,
+launch-handoff, low-memory, and all production interaction gates remain active.
+The wrapper has an explicit 420-second default timeout and rejects values above
+600 seconds. The label-scoped directory under
 `build/media-cold-boot/` contains the launcher log, Arcade frame trace, status
 snapshots, FPGA latch reports, thread samples, frame-pacing and latch-drop
 reports, and `<LABEL>.media-arcade-contention.tsv`. The contention TSV compares
@@ -611,6 +615,17 @@ At 60Hz these floors prove roughly five seconds of total contention, three
 seconds of network/hash work, and one second of exFAT copy/sync/rename work,
 rather than a coincidental frame at a phase boundary. Frame pacing is gated on
 the generated `<LABEL>.media-arcade-overlap.tsv` subset, not the full run.
+The same subset must report `fpga-vblank-latch-hidden` with `ok` status on every
+overlapped frame. Completion requires exactly one successful terminal event for
+each requested pack, no unexpected or duplicate terminals, no failed pack, and
+one worker `Done` event whose pack count exactly matches the request count.
+
+Use `--correctness-only` when validating deterministic all-pack orchestration
+independently of the pacing optimization. It still requires successful pack and
+worker terminals, operation/frame overlap, one stable supported presentation
+backend, bounded completion, and clean teardown. It records preview, thread,
+frame-pacing, and latch diagnostics without using those item-9 performance
+results to fail the item-5 correctness contract.
 
 The same gate requires at least 10 selected-preview applies during those media
 operations, selected-preview apply p99 no greater than 250ms, only

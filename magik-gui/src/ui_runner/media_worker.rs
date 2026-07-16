@@ -149,6 +149,7 @@ fn run_screenshot_media_worker(
     let mut interaction_active = false;
     let mut interaction_reason = "idle".to_string();
     let mut defer_logged = false;
+    let mut benchmark_quiescent_since = None;
     loop {
         if interaction_active {
             if !defer_logged && !queue.pending.is_empty() {
@@ -176,11 +177,32 @@ fn run_screenshot_media_worker(
             );
         }
         poll_active_downloads(&mut active, &mut counts, &tx);
+        if config.benchmark_auto_finish
+            && queue.requested_count > 0
+            && active.is_empty()
+            && queue.pending.is_empty()
+        {
+            let quiescent_since = benchmark_quiescent_since.get_or_insert_with(Instant::now);
+            if quiescent_since.elapsed() >= Duration::from_millis(500) {
+                let _ = tx.send(MediaWorkerMessage::Timing {
+                    name: "screenshot_media_benchmark_auto_finish".to_string(),
+                    detail: format!(
+                        "requested={} quiescent_ms={}",
+                        queue.requested_count,
+                        quiescent_since.elapsed().as_millis()
+                    ),
+                });
+                finish_requested = true;
+            }
+        } else {
+            benchmark_quiescent_since = None;
+        }
         if finish_requested && active.is_empty() && queue.pending.is_empty() {
             break;
         }
         match command_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(MediaWorkerCommand::EnsureSystem { system_id }) => {
+                benchmark_quiescent_since = None;
                 match queue.enqueue(&system_id, &packs_by_system) {
                     MediaEnqueueResult::Queued { pack_index } => {
                         let _ = tx.send(MediaWorkerMessage::Timing {
@@ -1535,6 +1557,7 @@ struct MediaWorkerConfig {
     image_size: String,
     asset_dir: PathBuf,
     max_concurrent_downloads: usize,
+    benchmark_auto_finish: bool,
 }
 
 impl MediaWorkerConfig {
@@ -1556,8 +1579,22 @@ impl MediaWorkerConfig {
                     .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
             ),
             max_concurrent_downloads: media_download_concurrency_from_env(),
+            benchmark_auto_finish: media_benchmark_auto_finish_enabled(),
         })
     }
+}
+
+#[cfg(feature = "bench-tools")]
+fn media_benchmark_auto_finish_enabled() -> bool {
+    matches!(
+        std::env::var("MISTER_MEDIA_BENCH_CONTENTION").as_deref(),
+        Ok("1" | "true" | "yes" | "on")
+    )
+}
+
+#[cfg(not(feature = "bench-tools"))]
+fn media_benchmark_auto_finish_enabled() -> bool {
+    false
 }
 
 fn media_download_concurrency_from_env() -> usize {
@@ -2304,4 +2341,9 @@ mod tests {
         );
         let _ = fs::remove_dir_all(dir);
     }
+}
+#[cfg(not(feature = "bench-tools"))]
+#[test]
+fn production_build_cannot_enable_media_benchmark_auto_finish() {
+    assert!(!media_benchmark_auto_finish_enabled());
 }
