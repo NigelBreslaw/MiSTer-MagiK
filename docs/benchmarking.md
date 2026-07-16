@@ -832,18 +832,18 @@ pre-scan candidate count for determinate discovery progress. Use
 
 ## Warm Catalog Startup
 
-Use the warm catalog startup script to measure summary-projection startup and
-full SQLite hydration separately:
+Use the warm catalog startup script to measure navigation-projection readiness,
+materialized parity hydration, the validation handoff, and stamp validation as
+separate phases:
 
 ```bash
 scripts/profile-warm-catalog-start.sh LABEL --replace-label --iterations 5
 ```
 
-Rows are appended to `history/toolchain-bench/results-warm-catalog.tsv` with:
-
-```text
-label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	result
-```
+Rows are appended to `history/toolchain-bench/results-warm-catalog.tsv`. In
+addition to the existing load and stamp fields, each row records projection
+ready/fallback status, materialized parity start/finish/status/duration, and the
+hydration-to-validation handoff.
 
 For warm-start claims, report first interactive Home/system-list time,
 `catalog_summary_load_us`, whether `catalog_cache_load_sync` stayed off the
@@ -852,7 +852,12 @@ The harness also waits, with a bounded timeout, for production `CheckStamp` to
 emit `catalog_stamp_check` and the terminal `library_db_unchanged`. It records
 the component timings and fails unless `unchanged=true` and `check_us <=
 2000000`. The event timestamp includes intentional hydration/idle deferral and
-is not the validation-duration gate.
+is not the validation-duration gate. A timeout after projection readiness and
+parity start is reported as `materialized_parity_blocked`, rather than the
+misleading generic `missing_stamp_check`. Completed parity without the
+validation handoff is reported as `missing_hydration_handoff`.
+A completed handoff with no subsequent stamp marker is reported as
+`missing_validation_start`.
 
 ## Launch Handoff
 

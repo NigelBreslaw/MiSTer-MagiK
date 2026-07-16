@@ -13,7 +13,7 @@ REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 BENCH_DIR="$HERE/history/toolchain-bench"
 TSV="$BENCH_DIR/results-warm-catalog.tsv"
-TSV_HEADER="label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	catalog_load_open_us	catalog_load_schema_check_us	catalog_load_query_us	catalog_load_query_prepare_us	catalog_load_query_first_row_us	catalog_load_query_row_read_us	catalog_load_query_row_hydrate_us	catalog_load_launch_plans_us	catalog_load_systems_us	catalog_load_catalog_us	catalog_stamp_check_ms	catalog_stamp_unchanged	catalog_stamp_check_us	catalog_stamp_compute_us	catalog_stamp_open_us	catalog_stamp_read_us	catalog_stamp_checkpoint_read_us	catalog_stamp_compare_us	catalog_stamp_checkpoint_compare_us	library_db_unchanged_ms	result"
+TSV_HEADER="label	iteration	first_frame_ms	first_frame_catalog_ready	catalog_cache_load_sync_ms	catalog_cache_load_sync_total_us	catalog_summary_load_ms	catalog_summary_load_us	catalog_bridge_systems_us	catalog_bridge_sync_us	full_catalog_ready_ms	full_catalog_ready_load_us	catalog_load_open_us	catalog_load_schema_check_us	catalog_load_query_us	catalog_load_query_prepare_us	catalog_load_query_first_row_us	catalog_load_query_row_read_us	catalog_load_query_row_hydrate_us	catalog_load_launch_plans_us	catalog_load_systems_us	catalog_load_catalog_us	catalog_projection_ready_ms	catalog_projection_status	catalog_projection_fallback_ms	catalog_projection_fallback_status	materialized_parity_started_ms	materialized_parity_finished_ms	materialized_parity_status	materialized_parity_elapsed_us	hydration_handoff_ms	hydration_handoff_status	catalog_stamp_check_ms	catalog_stamp_unchanged	catalog_stamp_check_us	catalog_stamp_compute_us	catalog_stamp_open_us	catalog_stamp_read_us	catalog_stamp_checkpoint_read_us	catalog_stamp_compare_us	catalog_stamp_checkpoint_compare_us	library_db_unchanged_ms	result"
 WARM_VALIDATION_GATE_US=2000000
 VALIDATION_TIMEOUT_SECS=30
 
@@ -85,6 +85,17 @@ warm_catalog_parse_log() {
       load_launch_plans = field(load_detail, "launch_plans_us")
       load_systems = field(load_detail, "systems_us")
       load_catalog = field(load_detail, "catalog_us")
+      projection_ready_ms = ms_for("catalog_projection_ready")
+      projection_status = field(detail_for("catalog_projection_ready"), "status")
+      projection_fallback_ms = ms_for("catalog_projection_fallback")
+      projection_fallback_status = field(detail_for("catalog_projection_fallback"), "status")
+      parity_started_ms = ms_for("catalog_materialized_parity_started")
+      parity_finished_ms = ms_for("catalog_materialized_parity_finished")
+      parity_finished_detail = detail_for("catalog_materialized_parity_finished")
+      parity_status = field(parity_finished_detail, "status")
+      parity_elapsed_us = field(parity_finished_detail, "elapsed_us")
+      hydration_handoff_ms = ms_for("catalog_hydration_handoff")
+      hydration_handoff_status = field(detail_for("catalog_hydration_handoff"), "status")
       stamp_ms = ms_for("catalog_stamp_check")
       stamp_detail = detail_for("catalog_stamp_check")
       stamp_unchanged = field(stamp_detail, "unchanged")
@@ -97,13 +108,16 @@ warm_catalog_parse_log() {
       stamp_checkpoint_compare_us = field(stamp_detail, "checkpoint_compare_us")
       unchanged_ms = ms_for("library_db_unchanged")
       if (first < 0) result = "missing_first_frame"
+      else if (projection_ready_ms >= 0 && parity_started_ms >= 0 && parity_finished_ms < 0) result = "materialized_parity_blocked"
+      else if (parity_finished_ms >= 0 && hydration_handoff_ms < 0) result = "missing_hydration_handoff"
+      else if (hydration_handoff_ms >= 0 && stamp_ms < 0) result = "missing_validation_start"
       else if (stamp_ms < 0) result = "missing_stamp_check"
       else if (stamp_check_us !~ /^[0-9]+$/) result = "invalid_stamp_check"
       else if (stamp_unchanged != "true") result = "catalog_changed"
       else if (unchanged_ms < stamp_ms) result = "missing_unchanged_terminal"
       else if ((stamp_check_us + 0) > validation_gate_us) result = "stamp_check_over_budget"
       else result = "ok"
-      print label, iteration, first, first_ready, sync_ms, sync_total, summary_ms, summary_us, bridge_systems, bridge_sync, ready_ms, ready_load_us, load_open, load_schema, load_query, load_prepare, load_first_row, load_row_read, load_row_hydrate, load_launch_plans, load_systems, load_catalog, stamp_ms, stamp_unchanged, stamp_check_us, stamp_compute_us, stamp_open_us, stamp_read_us, stamp_checkpoint_read_us, stamp_compare_us, stamp_checkpoint_compare_us, unchanged_ms, result
+      print label, iteration, first, first_ready, sync_ms, sync_total, summary_ms, summary_us, bridge_systems, bridge_sync, ready_ms, ready_load_us, load_open, load_schema, load_query, load_prepare, load_first_row, load_row_read, load_row_hydrate, load_launch_plans, load_systems, load_catalog, projection_ready_ms, projection_status, projection_fallback_ms, projection_fallback_status, parity_started_ms, parity_finished_ms, parity_status, parity_elapsed_us, hydration_handoff_ms, hydration_handoff_status, stamp_ms, stamp_unchanged, stamp_check_us, stamp_compute_us, stamp_open_us, stamp_read_us, stamp_checkpoint_read_us, stamp_compare_us, stamp_checkpoint_compare_us, unchanged_ms, result
     }
   ' "$log"
 }
@@ -114,6 +128,10 @@ warm_catalog_self_test() {
   log="$tmp/warm.log"
   printf '%s\n' \
     $'startup_timing\tfirst_frame\t100ms\tcatalog_ready=true' \
+    $'startup_timing\tcatalog_projection_ready\t110ms\tstatus=ready games=10 load_us=1000' \
+    $'startup_timing\tcatalog_materialized_parity_started\t120ms\tprojection_games=10' \
+    $'startup_timing\tcatalog_materialized_parity_finished\t130ms\tstatus=match elapsed_us=10000 games=10 mismatches=0' \
+    $'startup_timing\tcatalog_hydration_handoff\t131ms\tstatus=validation_deferred request=check_stamp' \
     $'startup_timing\tcatalog_stamp_check\t9000ms\tunchanged=true check_us=2000000 compute_us=1 open_us=2 read_us=3 checkpoint_read_us=4 compare_us=5 checkpoint_compare_us=6' \
     $'startup_timing\tlibrary_db_unchanged\t9001ms\tscan_us=2000000' >"$log"
   row="$(warm_catalog_parse_log selftest 1 "$log")"
@@ -121,7 +139,7 @@ warm_catalog_self_test() {
   sed 's/check_us=2000000/check_us=2000001/' "$log" >"$tmp/over.log"
   row="$(warm_catalog_parse_log selftest 2 "$tmp/over.log")"
   [[ "${row##*$'\t'}" == "stamp_check_over_budget" ]]
-  head -2 "$log" >"$tmp/missing-terminal.log"
+  head -6 "$log" >"$tmp/missing-terminal.log"
   row="$(warm_catalog_parse_log selftest 3 "$tmp/missing-terminal.log")"
   [[ "${row##*$'\t'}" == "missing_unchanged_terminal" ]]
   head -1 "$log" >"$tmp/missing-check.log"
@@ -129,6 +147,23 @@ warm_catalog_self_test() {
   [[ "${row##*$'\t'}" == "missing_stamp_check" ]]
   sed 's/unchanged=true/unchanged=false/' "$log" >"$tmp/changed.log"
   row="$(warm_catalog_parse_log selftest 5 "$tmp/changed.log")"
+  [[ "${row##*$'\t'}" == "catalog_changed" ]]
+  head -3 "$log" >"$tmp/parity-blocked.log"
+  row="$(warm_catalog_parse_log selftest 6 "$tmp/parity-blocked.log")"
+  [[ "${row##*$'\t'}" == "materialized_parity_blocked" ]]
+  grep -v $'catalog_hydration_handoff\t' "$log" >"$tmp/missing-handoff.log"
+  row="$(warm_catalog_parse_log selftest 7 "$tmp/missing-handoff.log")"
+  [[ "${row##*$'\t'}" == "missing_hydration_handoff" ]]
+  head -5 "$log" >"$tmp/missing-validation-start.log"
+  row="$(warm_catalog_parse_log selftest 8 "$tmp/missing-validation-start.log")"
+  [[ "${row##*$'\t'}" == "missing_validation_start" ]]
+  printf '%s\n' \
+    $'startup_timing\tfirst_frame\t100ms\tcatalog_ready=false' \
+    $'startup_timing\tcatalog_projection_fallback\t110ms\tstatus=missing_or_stale' \
+    $'startup_timing\tcatalog_stamp_check\t9000ms\tunchanged=false check_us=10' \
+    >"$tmp/fallback.log"
+  row="$(warm_catalog_parse_log selftest 9 "$tmp/fallback.log")"
+  [[ "$(printf '%s\n' "$row" | cut -f26)" == "missing_or_stale" ]]
   [[ "${row##*$'\t'}" == "catalog_changed" ]]
   rm -rf "$tmp"
   echo "profile-warm-catalog-start self-test ok"
