@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Keep routine source searches focused on maintained code. These paths remain
+# searchable explicitly with `rg --no-ignore`.
+/history/
+/reference/
+/desktop/vendor/
+/documentation/node_modules/
+/documentation/dist/
+/build/
+/dist/
+/outputs/
+/target/
+/**/target/

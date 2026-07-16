@@ -93,6 +93,10 @@ default. Override with `MISTER_MAIN_DIR`.
 
 ## Workflow Rules
 
+- Routine `rg` searches intentionally skip tracked history, reference clones,
+  vendored submodules, dependency trees, and generated/build outputs through
+  the root `.ignore`. Search those paths explicitly with `rg --no-ignore` when
+  historical or third-party evidence is part of the task.
 - Never use the Codex GitHub plugin for repository, issue, pull-request, or
   Actions operations. Always use the `gh` CLI for GitHub reads and writes.
 - Use `scripts/mister` for all device comms. Do not use raw ssh or raw scp.
