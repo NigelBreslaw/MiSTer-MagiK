@@ -13,7 +13,8 @@ pub(crate) struct ArcadeGameFixture {
     system_id: String,
     year: Option<u16>,
     manufacturer: String,
-    category: String,
+    players: Option<u8>,
+    control: String,
     is_new: bool,
 }
 
@@ -45,8 +46,13 @@ impl ArcadeGameFixture {
         self
     }
 
-    pub(crate) fn category(mut self, category: impl Into<String>) -> Self {
-        self.category = category.into();
+    pub(crate) fn players(mut self, players: u8) -> Self {
+        self.players = Some(players);
+        self
+    }
+
+    pub(crate) fn control(mut self, control: impl Into<String>) -> Self {
+        self.control = control.into();
         self
     }
 
@@ -62,7 +68,8 @@ impl ArcadeGameFixture {
             system_id: self.system_id.into(),
             year: self.year,
             manufacturer: self.manufacturer.into(),
-            category: self.category.into(),
+            players: self.players,
+            control: self.control.into(),
             is_new: self.is_new,
         }
     }
@@ -79,7 +86,8 @@ pub(crate) fn arcade_game(title: impl Into<String>) -> ArcadeGameFixture {
         system_id: "arcade".to_string(),
         year: None,
         manufacturer: String::new(),
-        category: String::new(),
+        players: None,
+        control: String::new(),
         is_new: false,
     }
 }

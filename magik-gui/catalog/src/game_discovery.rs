@@ -227,7 +227,7 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index(
                 core_id,
                 hardware_id,
                 manufacturer: mra.manufacturer,
-                genre: mra.category.or(mra.catver),
+                genre: None,
                 year: mra.year.and_then(|s| s.parse::<u16>().ok()),
                 setname: mra.setname,
                 parent: mra.parent,

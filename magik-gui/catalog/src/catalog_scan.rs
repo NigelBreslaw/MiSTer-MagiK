@@ -2647,7 +2647,6 @@ mod tests {
         assert_eq!(plan.mount_kind.as_ref(), "load-file");
         assert_eq!(plan.mount_index, 1);
         assert_eq!(plan.payload_path.as_ref(), primary.display().to_string());
-        assert_eq!(game.category.as_ref(), "OneLoad64");
         let _ = std::fs::remove_dir_all(root);
     }
 

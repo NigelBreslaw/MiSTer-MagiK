@@ -46,7 +46,8 @@ use crate::prepared_collections::PreparedCollectionId;
 use crate::preview_worker;
 use crate::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use crate::software_identity::{
-    console_preview_asset, load_arcade_machine_metadata_for_setnames, load_mame_software_metadata,
+    console_preview_asset, load_arcade_machine_metadata_for_setnames,
+    load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
     write_simple_mame_metadata_db, ArcadeMachineMetadata, MachineMetadataRows,
     MameSoftwareMetadata, PreviewArchivePaths, SoftwareHashCache,
@@ -889,22 +890,37 @@ pub(crate) fn write_hbmame_metadata_from_library(
             ))
         })
         .map_err(|e| format!("query hbmame metadata rows: {e}"))?;
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read hbmame metadata rows: {e}"))?;
+    let setnames = rows
+        .iter()
+        .flat_map(|(setname, parent, ..)| [normalize_id(setname), normalize_id(parent)])
+        .filter(|setname| !setname.is_empty())
+        .collect::<HashSet<_>>();
+    let mame_metadata = load_mame_machine_metadata_for_setnames(
+        &hbmame_path.with_file_name("mame.sqlite3"),
+        &setnames,
+    );
     let mut machines: MachineMetadataRows = BTreeMap::new();
     for row in rows {
-        let (setname, parent, title, year, manufacturer) =
-            row.map_err(|e| format!("read hbmame metadata row: {e}"))?;
+        let (setname, parent, title, year, manufacturer) = row;
         let identity_id = normalize_id(&setname);
         let family_id = normalize_id(&parent);
         if identity_id.is_empty() || family_id.is_empty() || identity_id == family_id {
             continue;
         }
+        let controls = mame_metadata
+            .get(&identity_id)
+            .or_else(|| mame_metadata.get(&family_id));
         machines.entry(identity_id).or_insert_with(|| {
             (
                 family_id,
                 title,
                 year.map(|value| value.to_string()),
                 manufacturer,
-                None,
+                controls.and_then(|metadata| metadata.players),
+                controls.and_then(|metadata| metadata.control.clone()),
             )
         });
     }
@@ -1601,7 +1617,8 @@ impl CatalogProjectionBuildContext<'_> {
                 ArcadeGameMetadataKey {
                     year: discovery.year,
                     manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                    category: launcher_category_for_discovery(discovery),
+                    players: None,
+                    control: String::new(),
                 },
             )
         };
@@ -1653,14 +1670,6 @@ fn amigavision_preview_asset(
                 .into_string(),
         ),
     ))
-}
-
-fn launcher_category_for_discovery(discovery: &GameDiscovery) -> String {
-    match discovery.genre.as_deref() {
-        Some("AmigaVision") if discovery.platform_id == "amiga" => "Games".to_string(),
-        Some("AmigaVision demos") if discovery.platform_id == "amiga" => "Demos".to_string(),
-        _ => discovery.genre.clone().unwrap_or_default(),
-    }
 }
 
 #[cfg(test)]
@@ -1796,7 +1805,7 @@ fn catalog_arcade_projection_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String, ArcadeGameMetadataKey) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, year, manufacturer, category, _) = mame_identity_projection(
+        let (family_id, _, year, manufacturer, players, control, _) = mame_identity_projection(
             &identity_id,
             arcade_metadata,
             discovery.parent.as_deref(),
@@ -1819,7 +1828,8 @@ fn catalog_arcade_projection_fields_for_discovery(
             ArcadeGameMetadataKey {
                 year: optional_year_from_metadata(year),
                 manufacturer: manufacturer.unwrap_or_default().to_string(),
-                category: category.unwrap_or_default().to_string(),
+                players,
+                control: control.unwrap_or_default().to_string(),
             },
         );
     }
@@ -1830,7 +1840,8 @@ fn catalog_arcade_projection_fields_for_discovery(
         ArcadeGameMetadataKey {
             year: discovery.year,
             manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-            category: discovery.genre.clone().unwrap_or_default(),
+            players: None,
+            control: String::new(),
         },
     )
 }
@@ -1864,7 +1875,8 @@ fn build_arcade_catalog_from_scan_with_metadata(
             crate::arcade_catalog::ArcadeGameMetadataKey {
                 year: discovery.year,
                 manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                category: discovery.genre.clone().unwrap_or_default(),
+                players: None,
+                control: String::new(),
             },
             false,
             CatalogProjectionSource {
@@ -1886,7 +1898,7 @@ fn catalog_family_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, _, _, _, _) = mame_identity_projection(
+        let (family_id, _, _, _, _, _, _) = mame_identity_projection(
             &identity_id,
             arcade_metadata,
             discovery.parent.as_deref(),
@@ -2057,7 +2069,8 @@ mod tests {
         system_id: String,
         year: Option<u16>,
         manufacturer: String,
-        category: String,
+        players: Option<u8>,
+        control: String,
         is_new: bool,
     }
 
@@ -2074,7 +2087,8 @@ mod tests {
                 system_id: game.system_id.to_string(),
                 year: game.year,
                 manufacturer: game.manufacturer.to_string(),
-                category: game.category.to_string(),
+                players: game.players,
+                control: game.control.to_string(),
                 is_new: game.is_new,
             })
             .collect()
@@ -2857,26 +2871,6 @@ mod tests {
             .games
             .iter()
             .any(|game| game.mra_path.starts_with("magik-amigavision:")));
-        assert_eq!(
-            ram_catalog
-                .games
-                .iter()
-                .find(|game| game.title.as_ref() == "Alien Breed")
-                .expect("AmigaVision game")
-                .category
-                .as_ref(),
-            "Games"
-        );
-        assert_eq!(
-            ram_catalog
-                .games
-                .iter()
-                .find(|game| game.title.as_ref() == "State of the Art")
-                .expect("AmigaVision demo")
-                .category
-                .as_ref(),
-            "Demos"
-        );
         let virtual_ref = ram_catalog
             .games
             .iter()

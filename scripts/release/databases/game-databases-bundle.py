@@ -70,6 +70,34 @@ def validate_database(path: Path, kind: str, mame_tag: str | None = None) -> Non
             minimum = 50_000 if kind == "MAME" else 5_000
             if rows < minimum:
                 raise BundleError(f"{kind} database has too few machine rows: {rows}")
+            columns = {
+                str(row[1])
+                for row in database.execute("PRAGMA table_info(mame_machines)")
+            }
+            required_columns = {"players", "control_type"}
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                raise BundleError(
+                    f"{kind} database is missing machine metadata columns: "
+                    f"{', '.join(missing_columns)}"
+                )
+            player_rows = int(
+                database.execute(
+                    "SELECT count(*) FROM mame_machines WHERE players IS NOT NULL"
+                ).fetchone()[0]
+            )
+            control_rows = int(
+                database.execute(
+                    "SELECT count(*) FROM mame_machines "
+                    "WHERE length(trim(COALESCE(control_type, ''))) > 0"
+                ).fetchone()[0]
+            )
+            metadata_minimum = 1_000 if kind == "MAME" else 100
+            if player_rows < metadata_minimum or control_rows < metadata_minimum:
+                raise BundleError(
+                    f"{kind} database has insufficient player/control metadata: "
+                    f"players={player_rows} controls={control_rows}"
+                )
             if kind == "MAME":
                 if not mame_tag:
                     raise BundleError("MAME tag is required for validation")

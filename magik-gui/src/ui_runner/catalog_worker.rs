@@ -1476,7 +1476,8 @@ mod tests {
                 system_id: Arc::from("arcade"),
                 year: Some(1991),
                 manufacturer: Arc::from("Capcom"),
-                category: Arc::from("Fighter"),
+                players: Some(2),
+                control: Arc::from("joy"),
                 is_new: false,
             }],
             vec![GameSystemEntry {

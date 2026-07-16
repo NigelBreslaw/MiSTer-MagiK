@@ -19,8 +19,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 8;
-const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB8\0";
+pub const CATALOG_NAVIGATION_SCHEMA_VERSION: u32 = 9;
+const CATALOG_NAVIGATION_BINARY_MAGIC: &[u8; 8] = b"MMNAVB9\0";
 const NAV_REF_FULL: u8 = 0;
 const NAV_REF_PAYLOAD: u8 = 1;
 const NAV_REF_ARCHIVE: u8 = 2;
@@ -77,7 +77,8 @@ pub struct NavigationGame {
     pub system_id: Arc<str>,
     pub year: Option<u16>,
     pub manufacturer: Arc<str>,
-    pub category: Arc<str>,
+    pub players: Option<u8>,
+    pub control: Arc<str>,
     pub is_new: bool,
 }
 
@@ -344,7 +345,8 @@ impl From<&ArcadeGameEntry> for NavigationGame {
             system_id: game.system_id.clone(),
             year: game.year,
             manufacturer: game.manufacturer.clone(),
-            category: game.category.clone(),
+            players: game.players,
+            control: game.control.clone(),
             is_new: game.is_new,
         }
     }
@@ -361,7 +363,8 @@ impl From<NavigationGame> for ArcadeGameEntry {
             system_id: game.system_id,
             year: game.year,
             manufacturer: game.manufacturer,
-            category: game.category,
+            players: game.players,
+            control: game.control,
             is_new: game.is_new,
         }
     }
@@ -435,7 +438,8 @@ struct CompactNavigationGame<'a> {
     system_id: &'a str,
     year: Option<u16>,
     manufacturer: &'a str,
-    category: &'a str,
+    players: Option<u8>,
+    control: &'a str,
     is_new: bool,
 }
 
@@ -478,7 +482,8 @@ struct CompactDecodedGame {
     system_id: Arc<str>,
     year: Option<u16>,
     manufacturer: Arc<str>,
-    category: Arc<str>,
+    players: Option<u8>,
+    control: Arc<str>,
     is_new: bool,
 }
 
@@ -561,7 +566,8 @@ impl<'a> CompactNavigationProjection<'a> {
                 system_id: game.system_id.as_ref(),
                 year: game.year,
                 manufacturer: game.manufacturer.as_ref(),
-                category: game.category.as_ref(),
+                players: game.players,
+                control: game.control.as_ref(),
                 is_new: game.is_new,
             });
         }
@@ -692,7 +698,14 @@ fn encode_navigation_projection(
             None => write_bool(&mut out, false),
         }
         write_string(&mut out, game.manufacturer)?;
-        write_string(&mut out, game.category)?;
+        match game.players {
+            Some(players) => {
+                write_bool(&mut out, true);
+                out.push(players);
+            }
+            None => write_bool(&mut out, false),
+        }
+        write_string(&mut out, game.control)?;
         write_bool(&mut out, game.is_new);
     }
     write_len(&mut out, compact.launch_plans.len())?;
@@ -798,7 +811,12 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             None
         };
         let manufacturer = reader.read_arc_string()?;
-        let category = reader.read_arc_string()?;
+        let players = if reader.read_bool()? {
+            Some(reader.read_u8()?)
+        } else {
+            None
+        };
+        let control = reader.read_arc_string()?;
         let is_new = reader.read_bool()?;
         game_rows.push(CompactDecodedGame {
             title,
@@ -809,7 +827,8 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             system_id,
             year,
             manufacturer,
-            category,
+            players,
+            control,
             is_new,
         });
     }
@@ -892,7 +911,8 @@ fn decode_navigation_projection(bytes: &[u8]) -> Result<CatalogNavigationProject
             system_id: game.system_id,
             year: game.year,
             manufacturer: game.manufacturer,
-            category: game.category,
+            players: game.players,
+            control: game.control,
             is_new: game.is_new,
         });
     }
@@ -1135,7 +1155,8 @@ mod tests {
             .system_id(system_id)
             .year(1984)
             .manufacturer("Capcom")
-            .category("Shooter")
+            .players(2)
+            .control("joy")
             .build()
     }
 
@@ -1271,7 +1292,8 @@ mod tests {
             hydrated.games[2].preview_archive_path.as_ref(),
             "/media/fat/mister-magik/assets/custom-neogeo-pack.mmlz4b"
         );
-        assert_eq!(hydrated.games[0].category.as_ref(), "Shooter");
+        assert_eq!(hydrated.games[0].players, Some(2));
+        assert_eq!(hydrated.games[0].control.as_ref(), "joy");
         assert_eq!(hydrated.games.len(), catalog.games.len());
         assert_eq!(hydrated.systems, catalog.systems);
         assert_eq!(loaded.systems[0].platform_kind, PlatformKind::Arcade);
@@ -1279,7 +1301,8 @@ mod tests {
         assert_eq!(hydrated.platform_kind("neogeo"), PlatformKind::Arcade);
         assert_eq!(hydrated.decade_option_count("arcade"), 1);
         assert_eq!(hydrated.manufacturer_option_count("arcade"), 1);
-        assert_eq!(hydrated.category_option_count("arcade"), 1);
+        assert_eq!(hydrated.player_option_count("arcade"), 1);
+        assert_eq!(hydrated.control_option_count("arcade"), 1);
         assert!(matches!(
             hydrated.launch_target_for_ref("magik-plan:payload:/media/fat/games/Saturn/Nights.chd"),
             LaunchTarget::Structured(_)

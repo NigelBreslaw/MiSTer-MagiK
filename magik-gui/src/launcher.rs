@@ -656,7 +656,8 @@ pub enum ArcadeFilterLevel {
     Top,
     Decades,
     Manufacturers,
-    Categories,
+    Players,
+    Controls,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -665,7 +666,8 @@ enum ArcadeFilterGroup {
     Search,
     Decades,
     Manufacturers,
-    Categories,
+    Players,
+    Controls,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -764,7 +766,8 @@ impl ArcadeFilterState {
             ArcadeFilterLevel::Top => "Filters",
             ArcadeFilterLevel::Decades => "Decades",
             ArcadeFilterLevel::Manufacturers => "Manufacturers",
-            ArcadeFilterLevel::Categories => "Categories",
+            ArcadeFilterLevel::Players => "Players",
+            ArcadeFilterLevel::Controls => "Controls",
         }
     }
 
@@ -774,7 +777,8 @@ impl ArcadeFilterState {
             ArcadeFilter::Search => "Search".to_string(),
             ArcadeFilter::Decade(decade) => format!("{decade}'s"),
             ArcadeFilter::Manufacturer(manufacturer) => manufacturer.clone(),
-            ArcadeFilter::Category(category) => category.clone(),
+            ArcadeFilter::Players(players) => player_count_label(*players),
+            ArcadeFilter::Control(control) => control.clone(),
         }
     }
 
@@ -788,7 +792,8 @@ impl ArcadeFilterState {
             ArcadeFilter::Search => ArcadeFilterGroup::Search,
             ArcadeFilter::Decade(_) => ArcadeFilterGroup::Decades,
             ArcadeFilter::Manufacturer(_) => ArcadeFilterGroup::Manufacturers,
-            ArcadeFilter::Category(_) => ArcadeFilterGroup::Categories,
+            ArcadeFilter::Players(_) => ArcadeFilterGroup::Players,
+            ArcadeFilter::Control(_) => ArcadeFilterGroup::Controls,
         }
     }
 
@@ -797,7 +802,8 @@ impl ArcadeFilterState {
             ArcadeFilter::All | ArcadeFilter::Search => ArcadeFilterLevel::Top,
             ArcadeFilter::Decade(_) => ArcadeFilterLevel::Decades,
             ArcadeFilter::Manufacturer(_) => ArcadeFilterLevel::Manufacturers,
-            ArcadeFilter::Category(_) => ArcadeFilterLevel::Categories,
+            ArcadeFilter::Players(_) => ArcadeFilterLevel::Players,
+            ArcadeFilter::Control(_) => ArcadeFilterLevel::Controls,
         }
     }
 }
@@ -1946,9 +1952,14 @@ impl LauncherNav {
                 |label| Some(ArcadeFilter::Manufacturer(label.to_string())),
                 &self.arcade_filter.active,
             ),
-            ArcadeFilterLevel::Categories => filter_option_items(
-                catalog.category_options(system_id),
-                |label| Some(ArcadeFilter::Category(label.to_string())),
+            ArcadeFilterLevel::Players => filter_option_items(
+                catalog.player_options(system_id),
+                |label| player_count_from_label(label).map(ArcadeFilter::Players),
+                &self.arcade_filter.active,
+            ),
+            ArcadeFilterLevel::Controls => filter_option_items(
+                catalog.control_options(system_id),
+                |label| Some(ArcadeFilter::Control(label.to_string())),
                 &self.arcade_filter.active,
             ),
         }
@@ -2008,13 +2019,23 @@ impl LauncherNav {
                 },
             });
         }
-        if catalog.category_option_count(system_id) > 1 {
+        if catalog.player_option_count(system_id) > 1 {
             items.push(ArcadeTopDrawerItem {
-                group: ArcadeFilterGroup::Categories,
+                group: ArcadeFilterGroup::Players,
                 item: ArcadeDrawerItem {
-                    label: "Categories".to_string(),
-                    count: catalog.category_option_count(system_id),
-                    active: matches!(self.arcade_filter.active, ArcadeFilter::Category(_)),
+                    label: "Players".to_string(),
+                    count: catalog.player_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Players(_)),
+                },
+            });
+        }
+        if catalog.control_option_count(system_id) > 1 {
+            items.push(ArcadeTopDrawerItem {
+                group: ArcadeFilterGroup::Controls,
+                item: ArcadeDrawerItem {
+                    label: "Controls".to_string(),
+                    count: catalog.control_option_count(system_id),
+                    active: matches!(self.arcade_filter.active, ArcadeFilter::Control(_)),
                 },
             });
         }
@@ -2046,7 +2067,8 @@ impl LauncherNav {
             ArcadeFilter::All | ArcadeFilter::Search => true,
             ArcadeFilter::Decade(_) => catalog.decade_option_count(system_id) > 1,
             ArcadeFilter::Manufacturer(_) => catalog.manufacturer_option_count(system_id) > 1,
-            ArcadeFilter::Category(_) => catalog.category_option_count(system_id) > 1,
+            ArcadeFilter::Players(_) => catalog.player_option_count(system_id) > 1,
+            ArcadeFilter::Control(_) => catalog.control_option_count(system_id) > 1,
         };
         if group_is_visible {
             resolved
@@ -2168,11 +2190,12 @@ impl LauncherNav {
                     system_id,
                     ArcadeFilterLevel::Manufacturers,
                 ),
-                Some(ArcadeFilterGroup::Categories) => self.enter_arcade_filter_level(
-                    catalog,
-                    system_id,
-                    ArcadeFilterLevel::Categories,
-                ),
+                Some(ArcadeFilterGroup::Players) => {
+                    self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Players)
+                }
+                Some(ArcadeFilterGroup::Controls) => {
+                    self.enter_arcade_filter_level(catalog, system_id, ArcadeFilterLevel::Controls)
+                }
                 _ => {}
             },
             ArcadeFilterLevel::Decades => {
@@ -2187,11 +2210,18 @@ impl LauncherNav {
                     ArcadeFilter::Manufacturer(items[self.arcade_filter.selected].label.clone()),
                 );
             }
-            ArcadeFilterLevel::Categories => {
+            ArcadeFilterLevel::Players => {
+                if let Some(players) =
+                    player_count_from_label(&items[self.arcade_filter.selected].label)
+                {
+                    self.apply_arcade_filter(catalog, system_id, ArcadeFilter::Players(players));
+                }
+            }
+            ArcadeFilterLevel::Controls => {
                 self.apply_arcade_filter(
                     catalog,
                     system_id,
-                    ArcadeFilter::Category(items[self.arcade_filter.selected].label.clone()),
+                    ArcadeFilter::Control(items[self.arcade_filter.selected].label.clone()),
                 );
             }
         }
@@ -2546,13 +2576,32 @@ fn decade_from_label(label: &str) -> Option<u16> {
     label.strip_suffix("'s")?.parse::<u16>().ok()
 }
 
+fn player_count_label(players: u8) -> String {
+    if players == 0 {
+        "Unkown".to_string()
+    } else if players == 1 {
+        "1 Player".to_string()
+    } else {
+        format!("{players} Players")
+    }
+}
+
+fn player_count_from_label(label: &str) -> Option<u8> {
+    if label == "Unkown" {
+        Some(0)
+    } else {
+        label.split_whitespace().next()?.parse().ok()
+    }
+}
+
 fn filter_memory_key(filter: &ArcadeFilter) -> String {
     match filter {
         ArcadeFilter::All => "all".to_string(),
         ArcadeFilter::Search => "search".to_string(),
         ArcadeFilter::Decade(decade) => format!("decade:{decade}"),
         ArcadeFilter::Manufacturer(manufacturer) => format!("manufacturer:{manufacturer}"),
-        ArcadeFilter::Category(category) => format!("category:{category}"),
+        ArcadeFilter::Players(players) => format!("players:{players}"),
+        ArcadeFilter::Control(control) => format!("control:{control}"),
     }
 }
 
@@ -2560,13 +2609,8 @@ fn collection_filter_memory_key(collection_id: &str, filter: &ArcadeFilter) -> S
     format!("{collection_id}\0{}", filter_memory_key(filter))
 }
 
-fn default_filter_for_system(catalog: &ArcadeCatalog, system_id: &str) -> ArcadeFilter {
-    let games = ArcadeFilter::Category("Games".to_string());
-    if system_id == "amiga" && catalog.filtered_game_count(system_id, &games) > 0 {
-        games
-    } else {
-        ArcadeFilter::All
-    }
+fn default_filter_for_system(_catalog: &ArcadeCatalog, _system_id: &str) -> ArcadeFilter {
+    ArcadeFilter::All
 }
 
 fn search_row_len(row: usize) -> usize {
@@ -2821,7 +2865,8 @@ fn serialize_arcade_filter(filter: &ArcadeFilter) -> (String, Option<String>) {
         ArcadeFilter::Manufacturer(manufacturer) => {
             ("manufacturer".to_string(), Some(manufacturer.clone()))
         }
-        ArcadeFilter::Category(category) => ("category".to_string(), Some(category.clone())),
+        ArcadeFilter::Players(players) => ("players".to_string(), Some(players.to_string())),
+        ArcadeFilter::Control(control) => ("control".to_string(), Some(control.clone())),
     }
 }
 
@@ -2833,7 +2878,10 @@ fn deserialize_arcade_filter(kind: &str, value: Option<&str>) -> Option<ArcadeFi
             .and_then(|value| value.parse::<u16>().ok())
             .map(ArcadeFilter::Decade),
         "manufacturer" => value.map(|value| ArcadeFilter::Manufacturer(value.to_string())),
-        "category" => value.map(|value| ArcadeFilter::Category(value.to_string())),
+        "players" => value
+            .and_then(|value| value.parse::<u8>().ok())
+            .map(ArcadeFilter::Players),
+        "control" => value.map(|value| ArcadeFilter::Control(value.to_string())),
         _ => None,
     }
 }
@@ -3876,17 +3924,14 @@ mod tests {
                 arcade_game("Agony")
                     .path("magik-amigavision:games:Agony")
                     .system_id("amiga")
-                    .category("Games")
                     .build(),
                 arcade_game("Alien Breed")
                     .path("magik-amigavision:games:Alien%20Breed")
                     .system_id("amiga")
-                    .category("Games")
                     .build(),
                 arcade_game("State of the Art")
                     .path("magik-amigavision:demos:State%20of%20the%20Art")
                     .system_id("amiga")
-                    .category("Demos")
                     .build(),
             ],
             vec![arcade_system("amiga", 3)],
@@ -3990,19 +4035,22 @@ mod tests {
                 .path("/media/fat/_Arcade/astro-1978.mra")
                 .year(1978)
                 .manufacturer("Atari")
-                .category("Shooter / Gallery")
+                .players(1)
+                .control("lightgun")
                 .build(),
             arcade_game("Battle 1981")
                 .path("/media/fat/_Arcade/battle-1981.mra")
                 .year(1981)
                 .manufacturer("Capcom")
-                .category("Shooter / Vertical")
+                .players(2)
+                .control("joy")
                 .build(),
             arcade_game("Brawl 1988")
                 .path("/media/fat/_Arcade/brawl-1988.mra")
                 .year(1988)
                 .manufacturer("Capcom")
-                .category("Fighter / 2D")
+                .players(4)
+                .control("only_buttons")
                 .build(),
         ];
         arcade_catalog(games, vec![arcade_system("arcade", 3)])
@@ -4031,13 +4079,13 @@ mod tests {
                     .path("/media/fat/_Arcade/sf2.mra")
                     .year(1991)
                     .manufacturer("Capcom")
-                    .category("Fighter / 2D")
+                    .control("doublejoy")
                     .build(),
                 arcade_game("Pac-Man")
                     .path("/media/fat/_Arcade/pacman.mra")
                     .year(1980)
                     .manufacturer("Namco")
-                    .category("Maze")
+                    .control("trackball")
                     .build(),
             ],
             vec![arcade_system("arcade", 2)],
@@ -4052,7 +4100,7 @@ mod tests {
                     .path(format!("/media/fat/_Arcade/maker-game-{idx}.mra"))
                     .year(1980 + idx as u16)
                     .manufacturer(format!("Maker {idx:02}"))
-                    .category("Test")
+                    .control("Test")
                     .build()
             })
             .collect();
@@ -4546,13 +4594,13 @@ mod tests {
                     .path("/media/fat/_Arcade/sf2.mra")
                     .year(1991)
                     .manufacturer("Capcom")
-                    .category("Fighter / 2D")
+                    .control("doublejoy")
                     .build(),
                 arcade_game("Street Hoop")
                     .path("/media/fat/_Arcade/strhoop.mra")
                     .year(1994)
                     .manufacturer("Data East")
-                    .category("Sports")
+                    .control("only_buttons")
                     .build(),
             ],
             vec![arcade_system("arcade", 2)],
@@ -4737,19 +4785,21 @@ mod tests {
                 .system_id("arcade")
                 .year(1984)
                 .manufacturer("Capcom")
-                .category("Shooter")
+                .control("Shooter")
                 .build()],
             vec![arcade_system("arcade", 1)],
         );
-        let two_categories = arcade_catalog(
+        let two_metadata_filters = arcade_catalog(
             vec![
                 arcade_game("Shooter")
                     .system_id("arcade")
-                    .category("Shooter")
+                    .players(1)
+                    .control("Shooter")
                     .build(),
                 arcade_game("Maze")
                     .system_id("arcade")
-                    .category("Maze")
+                    .players(2)
+                    .control("Maze")
                     .build(),
             ],
             vec![arcade_system("arcade", 2)],
@@ -4766,79 +4816,97 @@ mod tests {
             );
         }
         assert_eq!(
-            nav.arcade_filter_top_items(&two_categories, "arcade")
+            nav.arcade_filter_top_items(&two_metadata_filters, "arcade")
                 .into_iter()
                 .map(|item| item.label)
                 .collect::<Vec<_>>(),
-            vec!["Games A-Z", "Search", "Categories"]
+            vec!["Games A-Z", "Search", "Players", "Controls"]
         );
+    }
+
+    #[test]
+    fn unknown_player_label_round_trips_to_zero() {
+        assert_eq!(player_count_label(0), "Unkown");
+        assert_eq!(player_count_from_label("Unkown"), Some(0));
     }
 
     #[test]
     fn arcade_filter_top_visibility_covers_every_dimension_count_combination() {
         for decades in 0..=2 {
             for manufacturers in 0..=2 {
-                for categories in 0..=2 {
-                    let mut first = arcade_game("First").system_id("arcade").build();
-                    let mut second = arcade_game("Second").system_id("arcade").build();
-                    if decades > 0 {
-                        first.year = Some(1984);
-                        second.year = Some(if decades == 1 { 1984 } else { 1994 });
-                    }
-                    if manufacturers > 0 {
-                        first.manufacturer = "Capcom".into();
-                        second.manufacturer = if manufacturers == 1 {
-                            "Capcom".into()
-                        } else {
-                            "Sega".into()
-                        };
-                    }
-                    if categories > 0 {
-                        first.category = "Shooter".into();
-                        second.category = if categories == 1 {
-                            "Shooter".into()
-                        } else {
-                            "Maze".into()
-                        };
-                    }
-                    let catalog =
-                        arcade_catalog(vec![first, second], vec![arcade_system("arcade", 2)]);
-                    let nav = LauncherNav::new();
-                    let rows = nav.arcade_filter_top_group_items(&catalog, "arcade");
-                    let labels = rows
-                        .iter()
-                        .map(|row| row.item.label.clone())
-                        .collect::<Vec<_>>();
+                for players in 0..=2 {
+                    for controls in 0..=2 {
+                        let mut first = arcade_game("First").system_id("arcade").build();
+                        let mut second = arcade_game("Second").system_id("arcade").build();
+                        if decades > 0 {
+                            first.year = Some(1984);
+                            second.year = Some(if decades == 1 { 1984 } else { 1994 });
+                        }
+                        if manufacturers > 0 {
+                            first.manufacturer = "Capcom".into();
+                            second.manufacturer = if manufacturers == 1 {
+                                "Capcom".into()
+                            } else {
+                                "Sega".into()
+                            };
+                        }
+                        if players > 0 {
+                            first.players = Some(1);
+                            second.players = Some(if players == 1 { 1 } else { 2 });
+                        }
+                        if controls > 0 {
+                            first.control = "Shooter".into();
+                            second.control = if controls == 1 {
+                                "Shooter".into()
+                            } else {
+                                "Maze".into()
+                            };
+                        }
+                        let catalog =
+                            arcade_catalog(vec![first, second], vec![arcade_system("arcade", 2)]);
+                        let nav = LauncherNav::new();
+                        let rows = nav.arcade_filter_top_group_items(&catalog, "arcade");
+                        let labels = rows
+                            .iter()
+                            .map(|row| row.item.label.clone())
+                            .collect::<Vec<_>>();
 
-                    assert_eq!(labels.contains(&"Decades".to_string()), decades == 2);
-                    assert_eq!(
-                        labels.contains(&"Manufacturer".to_string()),
-                        manufacturers == 2
-                    );
-                    assert_eq!(labels.contains(&"Categories".to_string()), categories == 2);
-                    assert_eq!(rows[0].item.count, 2);
-                    assert_eq!(rows[1].item.count, 2);
-                    assert!(rows
-                        .iter()
-                        .skip(2)
-                        .all(|row| row.item.count == 2 && !row.item.active));
+                        assert_eq!(labels.contains(&"Decades".to_string()), decades == 2);
+                        assert_eq!(
+                            labels.contains(&"Manufacturer".to_string()),
+                            manufacturers == 2
+                        );
+                        assert_eq!(labels.contains(&"Players".to_string()), players == 2);
+                        assert_eq!(labels.contains(&"Controls".to_string()), controls == 2);
+                        assert_eq!(rows[0].item.count, 2);
+                        assert_eq!(rows[1].item.count, 2);
+                        assert!(rows
+                            .iter()
+                            .skip(2)
+                            .all(|row| row.item.count == 2 && !row.item.active));
 
-                    for (selected, row) in rows.iter().enumerate().skip(2) {
-                        let mut activated = LauncherNav::new();
-                        activated.screen = Screen::Arcade;
-                        activated.arcade_filter.drawer_open = true;
-                        activated.arcade_filter.level = ArcadeFilterLevel::Top;
-                        activated.arcade_filter.selected = selected;
-                        let items = activated.arcade_filter_items(&catalog, "arcade");
-                        activated.activate_arcade_filter_selection(&catalog, "arcade", &items);
-                        let expected_level = match row.group {
-                            ArcadeFilterGroup::Decades => ArcadeFilterLevel::Decades,
-                            ArcadeFilterGroup::Manufacturers => ArcadeFilterLevel::Manufacturers,
-                            ArcadeFilterGroup::Categories => ArcadeFilterLevel::Categories,
-                            ArcadeFilterGroup::Games | ArcadeFilterGroup::Search => unreachable!(),
-                        };
-                        assert_eq!(activated.arcade_filter.level, expected_level);
-                        assert_eq!(activated.arcade_filter.selected, 0);
+                        for (selected, row) in rows.iter().enumerate().skip(2) {
+                            let mut activated = LauncherNav::new();
+                            activated.screen = Screen::Arcade;
+                            activated.arcade_filter.drawer_open = true;
+                            activated.arcade_filter.level = ArcadeFilterLevel::Top;
+                            activated.arcade_filter.selected = selected;
+                            let items = activated.arcade_filter_items(&catalog, "arcade");
+                            activated.activate_arcade_filter_selection(&catalog, "arcade", &items);
+                            let expected_level = match row.group {
+                                ArcadeFilterGroup::Decades => ArcadeFilterLevel::Decades,
+                                ArcadeFilterGroup::Manufacturers => {
+                                    ArcadeFilterLevel::Manufacturers
+                                }
+                                ArcadeFilterGroup::Players => ArcadeFilterLevel::Players,
+                                ArcadeFilterGroup::Controls => ArcadeFilterLevel::Controls,
+                                ArcadeFilterGroup::Games | ArcadeFilterGroup::Search => {
+                                    unreachable!()
+                                }
+                            };
+                            assert_eq!(activated.arcade_filter.level, expected_level);
+                            assert_eq!(activated.arcade_filter.selected, 0);
+                        }
                     }
                 }
             }
@@ -4851,11 +4919,11 @@ mod tests {
             vec![
                 arcade_game("Shooter")
                     .system_id("arcade")
-                    .category("Shooter")
+                    .control("Shooter")
                     .build(),
                 arcade_game("Maze")
                     .system_id("arcade")
-                    .category("Maze")
+                    .control("Maze")
                     .build(),
             ],
             vec![arcade_system("arcade", 2)],
@@ -4869,7 +4937,7 @@ mod tests {
 
         nav.activate_arcade_filter_selection(&catalog, "arcade", &items);
 
-        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Categories);
+        assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Controls);
     }
 
     #[test]
@@ -4877,13 +4945,13 @@ mod tests {
         let catalog = arcade_catalog(
             vec![arcade_game("Only Shooter")
                 .system_id("arcade")
-                .category("Shooter")
+                .control("Shooter")
                 .build()],
             vec![arcade_system("arcade", 1)],
         );
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
-        nav.arcade_filter.active = ArcadeFilter::Category("Shooter".to_string());
+        nav.arcade_filter.active = ArcadeFilter::Control("Shooter".to_string());
 
         nav.open_arcade_filter(&catalog, "arcade");
 
@@ -4945,10 +5013,11 @@ mod tests {
                 3usize,
                 ArcadeFilter::Manufacturer("Atari".to_string()),
             ),
+            (ArcadeFilterLevel::Players, 4usize, ArcadeFilter::Players(1)),
             (
-                ArcadeFilterLevel::Categories,
-                4usize,
-                ArcadeFilter::Category("Fighter / 2D".to_string()),
+                ArcadeFilterLevel::Controls,
+                5usize,
+                ArcadeFilter::Control("Buttons Only".to_string()),
             ),
         ];
         let press_a = pad_with(|pad| pad.btn_a = true);
@@ -4977,7 +5046,11 @@ mod tests {
             assert_eq!(nav.arcade.selected, 0);
 
             tap(&mut nav, &catalog, t0, &mut ms, &press_left);
-            assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Alphabet);
+            assert_eq!(
+                nav.arcade_filter.level,
+                ArcadeFilterLevel::Alphabet,
+                "filter {expected_filter:?}"
+            );
             tap(&mut nav, &catalog, t0, &mut ms, &press_left);
             assert_eq!(nav.arcade_filter.level, level);
             tap(&mut nav, &catalog, t0, &mut ms, &press_left);
@@ -5017,10 +5090,16 @@ mod tests {
                 3,
             ),
             (
-                ArcadeFilter::Category("Shooter / Vertical".to_string()),
-                ArcadeFilterLevel::Categories,
-                "Shooter / Vertical",
+                ArcadeFilter::Players(1),
+                ArcadeFilterLevel::Players,
+                "1 Player",
                 4,
+            ),
+            (
+                ArcadeFilter::Control("Joystick".to_string()),
+                ArcadeFilterLevel::Controls,
+                "Joystick",
+                5,
             ),
         ];
         let press_b = pad_with(|pad| pad.btn_b = true);
@@ -5627,20 +5706,16 @@ mod tests {
     }
 
     #[test]
-    fn amiga_opens_with_games_category_instead_of_games_and_demos() {
+    fn amiga_opens_without_an_implicit_genre_filter() {
         let catalog = amiga_games_and_demos_catalog();
         let mut nav = LauncherNav::new();
 
         assert!(nav.open_system(&catalog, "amiga"));
 
         assert_eq!(nav.screen, Screen::Arcade);
-        assert_eq!(
-            nav.arcade_filter.active,
-            ArcadeFilter::Category("Games".to_string())
-        );
+        assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
         let visible = nav.active_arcade_game_view(&catalog, "amiga");
-        assert_eq!(visible.len(), 2);
-        assert!(visible.iter().all(|game| game.category.as_ref() == "Games"));
+        assert_eq!(visible.len(), 3);
     }
 
     #[test]

@@ -4596,7 +4596,8 @@ fn arcade_filter_cache_token(filter: &arcade_catalog::ArcadeFilter) -> String {
         arcade_catalog::ArcadeFilter::Manufacturer(manufacturer) => {
             format!("manufacturer:{manufacturer}")
         }
-        arcade_catalog::ArcadeFilter::Category(category) => format!("category:{category}"),
+        arcade_catalog::ArcadeFilter::Players(players) => format!("players:{players}"),
+        arcade_catalog::ArcadeFilter::Control(control) => format!("control:{control}"),
     }
 }
 
@@ -5259,13 +5260,13 @@ mod tests {
                     .path("/media/fat/_Arcade/alpha.mra")
                     .year(1986)
                     .manufacturer("Capcom")
-                    .category("Shooter")
+                    .control("Shooter")
                     .build(),
                 arcade_game("Beta")
                     .path("/media/fat/_Arcade/beta.mra")
                     .year(1991)
                     .manufacturer("Namco")
-                    .category("Maze")
+                    .control("Maze")
                     .build(),
             ],
             vec![arcade_system("arcade", 2)],

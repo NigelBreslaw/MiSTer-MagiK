@@ -38,7 +38,8 @@ pub struct ArcadeGameEntry {
     pub system_id: Arc<str>,
     pub year: Option<u16>,
     pub manufacturer: Arc<str>,
-    pub category: Arc<str>,
+    pub players: Option<u8>,
+    pub control: Arc<str>,
     pub is_new: bool,
 }
 
@@ -47,7 +48,8 @@ impl ArcadeGameEntry {
         ArcadeGameMetadataKey {
             year: self.year,
             manufacturer: self.manufacturer.to_string(),
-            category: self.category.to_string(),
+            players: self.players,
+            control: self.control.to_string(),
         }
     }
 }
@@ -56,7 +58,8 @@ impl ArcadeGameEntry {
 pub struct ArcadeGameMetadataKey {
     pub year: Option<u16>,
     pub manufacturer: String,
-    pub category: String,
+    pub players: Option<u8>,
+    pub control: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,7 +75,8 @@ pub enum ArcadeFilter {
     Search,
     Decade(u16),
     Manufacturer(String),
-    Category(String),
+    Players(u8),
+    Control(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,7 +225,8 @@ impl<'a> Iterator for ArcadeGameViewIter<'a> {
 struct ArcadeSystemFilterOptions {
     decades: Vec<ArcadeFilterOption>,
     manufacturers: Vec<ArcadeFilterOption>,
-    categories: Vec<ArcadeFilterOption>,
+    players: Vec<ArcadeFilterOption>,
+    controls: Vec<ArcadeFilterOption>,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -234,7 +239,8 @@ struct ArcadeFilterKey {
 enum ArcadeFilterKindKey {
     Decade(u16),
     Manufacturer(Arc<str>),
-    Category(Arc<str>),
+    Players(u8),
+    Control(Arc<str>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -706,12 +712,20 @@ impl ArcadeCatalog {
         self.filter_options(system_id).manufacturers.len()
     }
 
-    pub fn category_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
-        self.filter_options(system_id).categories.clone()
+    pub fn player_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
+        self.filter_options(system_id).players.clone()
     }
 
-    pub fn category_option_count(&self, system_id: &str) -> usize {
-        self.filter_options(system_id).categories.len()
+    pub fn player_option_count(&self, system_id: &str) -> usize {
+        self.filter_options(system_id).players.len()
+    }
+
+    pub fn control_options(&self, system_id: &str) -> Vec<ArcadeFilterOption> {
+        self.filter_options(system_id).controls.clone()
+    }
+
+    pub fn control_option_count(&self, system_id: &str) -> usize {
+        self.filter_options(system_id).controls.len()
     }
 
     pub fn resolve_filter(&self, system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilter> {
@@ -728,24 +742,30 @@ impl ArcadeCatalog {
                 .iter()
                 .find(|option| option.label == manufacturer.trim())
                 .map(|option| ArcadeFilter::Manufacturer(option.label.clone())),
-            ArcadeFilter::Category(category) => {
-                let category = canonical_category_label(category);
-                self.category_options(system_id)
+            ArcadeFilter::Players(players) => self
+                .player_options(system_id)
+                .iter()
+                .any(|option| option.label == player_count_label(*players))
+                .then_some(ArcadeFilter::Players(*players)),
+            ArcadeFilter::Control(control) => {
+                let control = canonical_control_label(control);
+                self.control_options(system_id)
                     .iter()
-                    .find(|option| option.label == category)
-                    .map(|option| ArcadeFilter::Category(option.label.clone()))
+                    .find(|option| option.label == control)
+                    .map(|option| ArcadeFilter::Control(option.label.clone()))
             }
         }
     }
 
     pub fn filter_option_count_detail(&self, system_id: &str) -> String {
         format!(
-            "collection={} games={} decades={} manufacturers={} categories={}",
+            "collection={} games={} decades={} manufacturers={} players={} controls={}",
             system_id,
             self.system_game_count(system_id),
             self.decade_option_count(system_id),
             self.manufacturer_option_count(system_id),
-            self.category_option_count(system_id)
+            self.player_option_count(system_id),
+            self.control_option_count(system_id)
         )
     }
 
@@ -763,7 +783,8 @@ impl ArcadeCatalog {
                 self.system_game_count(system_id) != other.system_game_count(system_id)
                     || self.decade_options(system_id) != other.decade_options(system_id)
                     || self.manufacturer_options(system_id) != other.manufacturer_options(system_id)
-                    || self.category_options(system_id) != other.category_options(system_id)
+                    || self.player_options(system_id) != other.player_options(system_id)
+                    || self.control_options(system_id) != other.control_options(system_id)
             })
             .map(|system_id| {
                 format!(
@@ -866,13 +887,14 @@ struct ArcadeSearchKey {
     title: String,
     path: String,
     manufacturer: String,
-    category: String,
+    players: String,
+    control: String,
     year: String,
     decade: String,
     compact_title: String,
     compact_path: String,
     compact_manufacturer: String,
-    compact_category: String,
+    compact_control: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -946,17 +968,28 @@ fn build_arcade_catalog_indexes(
                     .or_default() += 1;
             }
 
-            let category = canonical_category_label(&game.category);
-            if !category.is_empty() {
-                let category: Arc<str> = Arc::from(category);
+            if let Some(players) = game.players {
                 games_by_filter
                     .entry(ArcadeFilterKey {
-                        system_id: system_id_arc,
-                        kind: ArcadeFilterKindKey::Category(category.clone()),
+                        system_id: system_id_arc.clone(),
+                        kind: ArcadeFilterKindKey::Players(players),
                     })
                     .or_default()
                     .push(idx);
-                *counts.categories.entry(category.to_string()).or_default() += 1;
+                *counts.players.entry(players).or_default() += 1;
+            }
+
+            let control = canonical_control_label(&game.control);
+            if !control.is_empty() {
+                let control: Arc<str> = Arc::from(control);
+                games_by_filter
+                    .entry(ArcadeFilterKey {
+                        system_id: system_id_arc,
+                        kind: ArcadeFilterKindKey::Control(control.clone()),
+                    })
+                    .or_default()
+                    .push(idx);
+                *counts.controls.entry(control.to_string()).or_default() += 1;
             }
 
             if has_preview_image(game) {
@@ -995,7 +1028,15 @@ fn build_arcade_catalog_indexes(
                         })
                         .collect(),
                     manufacturers: string_filter_options_from_counts(counts.manufacturers),
-                    categories: string_filter_options_from_counts(counts.categories),
+                    players: counts
+                        .players
+                        .into_iter()
+                        .map(|(players, count)| ArcadeFilterOption {
+                            label: player_count_label(players),
+                            count,
+                        })
+                        .collect(),
+                    controls: string_filter_options_from_counts(counts.controls),
                 },
             )
         })
@@ -1113,7 +1154,12 @@ impl ArcadeSearchKey {
         let title = search_match_key(&game.title);
         let path = search_match_key(mra_basename(&game.mra_path));
         let manufacturer = search_match_key(&game.manufacturer);
-        let category = search_match_key(&game.category);
+        let players = game
+            .players
+            .map(player_count_label)
+            .map(|label| search_match_key(&label))
+            .unwrap_or_default();
+        let control = search_match_key(&canonical_control_label(&game.control));
         let year = game.year.map(|year| year.to_string()).unwrap_or_default();
         let decade = game
             .year
@@ -1123,11 +1169,12 @@ impl ArcadeSearchKey {
             compact_title: title.replace(' ', ""),
             compact_path: path.replace(' ', ""),
             compact_manufacturer: manufacturer.replace(' ', ""),
-            compact_category: category.replace(' ', ""),
+            compact_control: control.replace(' ', ""),
             title,
             path,
             manufacturer,
-            category,
+            players,
+            control,
             year,
             decade,
         }
@@ -1150,7 +1197,7 @@ impl ArcadeSearchKey {
                 74,
             ));
             score = score.max(search_field_score(
-                &self.compact_category,
+                &self.compact_control,
                 compact_needle,
                 64,
             ));
@@ -1162,7 +1209,8 @@ impl ArcadeSearchKey {
     fn score_token(&self, token: &str) -> u16 {
         search_field_score(&self.title, token, 100)
             .max(search_field_score(&self.manufacturer, token, 80))
-            .max(search_field_score(&self.category, token, 70))
+            .max(search_field_score(&self.control, token, 70))
+            .max(search_field_score(&self.players, token, 68))
             .max(search_field_score(&self.year, token, 65))
             .max(search_field_score(&self.decade, token, 60))
             .max(search_field_score(&self.path, token, 40))
@@ -1252,7 +1300,18 @@ impl ArcadeAutocompleteIndex {
     fn add_game_for_system(&mut self, system_id: &str, game: &ArcadeGameEntry) {
         self.add_words(system_id, &game.title, AutocompleteSource::Title);
         self.add_words(system_id, &game.manufacturer, AutocompleteSource::Metadata);
-        self.add_words(system_id, &game.category, AutocompleteSource::Metadata);
+        self.add_words(
+            system_id,
+            &canonical_control_label(&game.control),
+            AutocompleteSource::Metadata,
+        );
+        if let Some(players) = game.players {
+            self.add_word(
+                system_id,
+                &player_count_label(players),
+                AutocompleteSource::Metadata,
+            );
+        }
         self.add_words(
             system_id,
             mra_basename(&game.mra_path),
@@ -1340,63 +1399,61 @@ fn filter_key(system_id: &str, filter: &ArcadeFilter) -> Option<ArcadeFilterKey>
             system_id: Arc::from(system_id),
             kind: ArcadeFilterKindKey::Manufacturer(Arc::from(manufacturer.as_str())),
         }),
-        ArcadeFilter::Category(category) => Some(ArcadeFilterKey {
+        ArcadeFilter::Players(players) => Some(ArcadeFilterKey {
             system_id: Arc::from(system_id),
-            kind: ArcadeFilterKindKey::Category(Arc::from(canonical_category_label(category))),
+            kind: ArcadeFilterKindKey::Players(*players),
+        }),
+        ArcadeFilter::Control(control) => Some(ArcadeFilterKey {
+            system_id: Arc::from(system_id),
+            kind: ArcadeFilterKindKey::Control(Arc::from(canonical_control_label(control))),
         }),
     }
 }
 
-fn canonical_category_label(category: &str) -> String {
-    let collapsed = category
-        .replace(['\u{2018}', '\u{2019}'], "'")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let alias_key = collapsed
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect::<String>();
-    match alias_key.as_str() {
-        "beatemup" => "Beat 'em up".to_string(),
-        "shootemup" | "shmup" => "Shoot 'em up".to_string(),
-        "platformer" => "Platform".to_string(),
-        _ => canonical_category_case(&collapsed),
+fn player_count_label(players: u8) -> String {
+    if players == 0 {
+        "Unkown".to_string()
+    } else if players == 1 {
+        "1 Player".to_string()
+    } else {
+        format!("{players} Players")
     }
 }
 
-fn canonical_category_case(category: &str) -> String {
-    let mut out = String::with_capacity(category.len());
-    let mut run = String::new();
-    let mut after_apostrophe = false;
-    let flush_run = |out: &mut String, run: &mut String, after_apostrophe: bool| {
-        if run.is_empty() {
-            return;
-        }
-        let lower = run.to_ascii_lowercase();
-        if after_apostrophe && matches!(lower.as_str(), "s" | "em" | "n" | "t") {
-            out.push_str(&lower);
-        } else {
-            let mut chars = lower.chars();
-            if let Some(first) = chars.next() {
-                out.push(first.to_ascii_uppercase());
-                out.push_str(chars.as_str());
-            }
-        }
-        run.clear();
-    };
-    for ch in category.chars() {
-        if ch.is_ascii_alphabetic() {
-            run.push(ch);
-            continue;
-        }
-        flush_run(&mut out, &mut run, after_apostrophe);
-        out.push(ch);
-        after_apostrophe = ch == '\'';
+fn canonical_control_label(control: &str) -> String {
+    let control = control.trim();
+    match control.to_ascii_lowercase().as_str() {
+        "" => String::new(),
+        "joy" | "joystick" => "Joystick".to_string(),
+        "doublejoy" | "dual joystick" => "Dual Joystick".to_string(),
+        "triplejoy" | "triple joystick" => "Triple Joystick".to_string(),
+        "only_buttons" | "buttons only" => "Buttons Only".to_string(),
+        "paddle" => "Paddle".to_string(),
+        "dial" => "Dial".to_string(),
+        "trackball" => "Trackball".to_string(),
+        "lightgun" | "light gun" => "Light Gun".to_string(),
+        "positional" => "Positional".to_string(),
+        "stick" => "Stick".to_string(),
+        "keyboard" => "Keyboard".to_string(),
+        "keypad" => "Keypad".to_string(),
+        "mouse" => "Mouse".to_string(),
+        "pedal" => "Pedal".to_string(),
+        "mahjong" | "mahjong panel" => "Mahjong Panel".to_string(),
+        "hanafuda" | "hanafuda panel" => "Hanafuda Panel".to_string(),
+        "gambling" | "gambling controls" => "Gambling Controls".to_string(),
+        other => other
+            .split(['_', '-'])
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                chars
+                    .next()
+                    .map(|first| format!("{}{}", first.to_ascii_uppercase(), chars.as_str()))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
     }
-    flush_run(&mut out, &mut run, after_apostrophe);
-    out
 }
 
 fn mra_basename(path: &str) -> &str {
@@ -1480,7 +1537,8 @@ fn is_noisy_autocomplete_word(word: &str) -> bool {
 struct FilterOptionCounts {
     decades: BTreeMap<u16, usize>,
     manufacturers: BTreeMap<String, usize>,
-    categories: BTreeMap<String, usize>,
+    players: BTreeMap<u8, usize>,
+    controls: BTreeMap<String, usize>,
 }
 
 fn string_filter_options_from_counts(counts: BTreeMap<String, usize>) -> Vec<ArcadeFilterOption> {
@@ -1726,7 +1784,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -1739,7 +1798,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -1751,7 +1811,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -1764,7 +1825,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             },
             ArcadeGameEntry {
@@ -1777,7 +1839,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             },
         ];
@@ -1814,7 +1877,8 @@ mod tests {
             system_id: "amiga".into(),
             year: None,
             manufacturer: "".into(),
-            category: "".into(),
+            players: None,
+            control: "".into(),
             is_new: false,
         }];
         let catalog = ArcadeCatalog::new(root, games, systems);
@@ -1944,7 +2008,8 @@ mod tests {
                 system_id: "arcade".into(),
                 year: None,
                 manufacturer: "".into(),
-                category: "".into(),
+                players: None,
+                control: "".into(),
                 is_new: false,
             }],
             vec![GameSystemEntry {
@@ -1970,15 +2035,18 @@ mod tests {
         let mut first = game("1942", "/games/1942.mra", "", "arcade");
         first.year = Some(1984);
         first.manufacturer = "Capcom".into();
-        first.category = "Shooter".into();
+        first.players = Some(2);
+        first.control = "joy".into();
         let mut second = game("1943", "/games/1943.mra", "", "arcade");
         second.year = Some(1987);
         second.manufacturer = "Capcom".into();
-        second.category = "Shooter".into();
+        second.players = Some(2);
+        second.control = "joy".into();
         let mut third = game("Out Run", "/games/outrun.mra", "", "arcade");
         third.year = Some(1986);
         third.manufacturer = "Sega".into();
-        third.category = "Driving".into();
+        third.players = Some(1);
+        third.control = "dial".into();
         let mut other_system = game("Agony", "/games/agony.mgl", "", "amiga");
         other_system.manufacturer = "Psygnosis".into();
 
@@ -2011,98 +2079,92 @@ mod tests {
         );
         assert_eq!(catalog.manufacturer_option_count("arcade"), 2);
         assert_eq!(
-            catalog.category_options("arcade"),
+            catalog.player_options("arcade"),
             vec![
                 ArcadeFilterOption {
-                    label: "Driving".into(),
+                    label: "1 Player".into(),
                     count: 1
                 },
                 ArcadeFilterOption {
-                    label: "Shooter".into(),
+                    label: "2 Players".into(),
                     count: 2
                 },
             ]
         );
-        assert_eq!(catalog.category_option_count("arcade"), 2);
+        assert_eq!(catalog.player_option_count("arcade"), 2);
+        assert_eq!(
+            catalog.control_options("arcade"),
+            vec![
+                ArcadeFilterOption {
+                    label: "Dial".into(),
+                    count: 1
+                },
+                ArcadeFilterOption {
+                    label: "Joystick".into(),
+                    count: 2
+                },
+            ]
+        );
+        assert_eq!(catalog.control_option_count("arcade"), 2);
         assert_eq!(catalog.manufacturer_option_count("amiga"), 1);
         assert!(catalog.decade_options("missing").is_empty());
-        assert_eq!(catalog.category_option_count("missing"), 0);
+        assert_eq!(catalog.player_option_count("missing"), 0);
+        assert_eq!(catalog.control_option_count("missing"), 0);
     }
 
     #[test]
-    fn category_filters_merge_presentation_aliases_but_preserve_subgenres() {
-        let categories = [
-            "Beat'em Up",
-            "Beat 'em up",
-            "Shoot'em up",
-            "Shmup",
-            "platformer",
-            "Platform",
-            "shooter",
-            "Shooter - Vertical",
-            "SHOOTER - VERTICAL",
-            "Shooter - Gallery",
-            "puzzle/maze",
-            "PUZZLE/MAZE",
-        ];
-        let games = categories
+    fn player_and_control_filters_use_mame_metadata_values() {
+        let controls = ["joy", "JOY", "dial", "only_buttons", "doublejoy"];
+        let games = controls
             .iter()
             .enumerate()
-            .map(|(index, category)| {
+            .map(|(index, control)| {
                 let mut entry = game(
                     &format!("Game {index}"),
                     &format!("/games/{index}.mra"),
                     "",
                     "arcade",
                 );
-                entry.category = (*category).into();
+                entry.players = Some((index % 2 + 1) as u8);
+                entry.control = (*control).into();
                 entry
             })
             .collect();
         let catalog = ArcadeCatalog::new(PathBuf::from("/games"), games, Vec::new());
 
         assert_eq!(
-            catalog.category_options("arcade"),
+            catalog.control_options("arcade"),
             vec![
                 ArcadeFilterOption {
-                    label: "Beat 'em up".into(),
-                    count: 2,
-                },
-                ArcadeFilterOption {
-                    label: "Platform".into(),
-                    count: 2,
-                },
-                ArcadeFilterOption {
-                    label: "Puzzle/Maze".into(),
-                    count: 2,
-                },
-                ArcadeFilterOption {
-                    label: "Shoot 'em up".into(),
-                    count: 2,
-                },
-                ArcadeFilterOption {
-                    label: "Shooter".into(),
+                    label: "Buttons Only".into(),
                     count: 1,
                 },
                 ArcadeFilterOption {
-                    label: "Shooter - Gallery".into(),
+                    label: "Dial".into(),
                     count: 1,
                 },
                 ArcadeFilterOption {
-                    label: "Shooter - Vertical".into(),
+                    label: "Dual Joystick".into(),
+                    count: 1,
+                },
+                ArcadeFilterOption {
+                    label: "Joystick".into(),
                     count: 2,
                 },
             ]
         );
         assert_eq!(
-            catalog.filtered_game_count("arcade", &ArcadeFilter::Category("SHMUP".to_string())),
-            2
+            catalog.filtered_game_count("arcade", &ArcadeFilter::Players(1)),
+            3
         );
         assert_eq!(
-            catalog.resolve_filter("arcade", &ArcadeFilter::Category("SHMUP".to_string())),
-            Some(ArcadeFilter::Category("Shoot 'em up".to_string()))
+            catalog.resolve_filter("arcade", &ArcadeFilter::Control("joy".to_string())),
+            Some(ArcadeFilter::Control("Joystick".to_string()))
         );
-        assert_eq!(catalog.games[0].category.as_ref(), "Beat'em Up");
+        assert_eq!(
+            catalog.resolve_filter("arcade", &ArcadeFilter::Control("Buttons Only".to_string())),
+            Some(ArcadeFilter::Control("Buttons Only".to_string()))
+        );
     }
 
     #[test]
@@ -2110,14 +2172,14 @@ mod tests {
         let mut capcom_shooter = game("1942", "/games/1942.mra", "", "arcade");
         capcom_shooter.year = Some(1984);
         capcom_shooter.manufacturer = "Capcom".into();
-        capcom_shooter.category = "Shooter / Vertical".into();
+        capcom_shooter.control = "lightgun".into();
         let mut capcom_fighter = game("Final Fight", "/games/ffight.mra", "", "arcade");
         capcom_fighter.year = Some(1989);
         capcom_fighter.manufacturer = "Capcom".into();
-        capcom_fighter.category = "Fighter / 2D".into();
+        capcom_fighter.control = "doublejoy".into();
         let mut title_match = game("Capcom Sports Club", "/games/csclub.mra", "", "arcade");
         title_match.manufacturer = "Mitchell".into();
-        title_match.category = "Sports".into();
+        title_match.control = "only_buttons".into();
         let mut other_system = game("Capcom Quiz", "/games/capquiz.mgl", "", "amiga");
         other_system.manufacturer = "Capcom".into();
 
@@ -2130,10 +2192,10 @@ mod tests {
         let capcom = catalog.search_game_indexes("arcade", "capcom");
         assert_eq!(capcom, vec![2, 0, 1]);
 
-        let capcom_fighters = catalog.search_game_indexes("arcade", "capcom fighter");
+        let capcom_fighters = catalog.search_game_indexes("arcade", "capcom dual");
         assert_eq!(capcom_fighters, vec![1]);
 
-        let vertical = catalog.search_game_indexes("arcade", "shooter vertical");
+        let vertical = catalog.search_game_indexes("arcade", "light gun");
         assert_eq!(vertical, vec![0]);
 
         let year = catalog.search_game_indexes("arcade", "1984");
@@ -2145,14 +2207,14 @@ mod tests {
         let mut capcom_shooter = game("1942", "/games/1942.mra", "", "arcade");
         capcom_shooter.year = Some(1984);
         capcom_shooter.manufacturer = "Capcom".into();
-        capcom_shooter.category = "Shooter / Vertical".into();
+        capcom_shooter.control = "lightgun".into();
         let mut capcom_fighter = game("Final Fight", "/games/ffight.mra", "", "arcade");
         capcom_fighter.year = Some(1989);
         capcom_fighter.manufacturer = "Capcom".into();
-        capcom_fighter.category = "Fighter / 2D".into();
+        capcom_fighter.control = "doublejoy".into();
         let mut title_match = game("Capcom Sports Club", "/games/csclub.mra", "", "arcade");
         title_match.manufacturer = "Mitchell".into();
-        title_match.category = "Sports".into();
+        title_match.control = "only_buttons".into();
         let mut other_system = game("Capcom Quiz", "/games/capquiz.mgl", "", "amiga");
         other_system.manufacturer = "Capcom".into();
         let games = vec![capcom_shooter, capcom_fighter, title_match, other_system];
@@ -2183,8 +2245,8 @@ mod tests {
         assert!(deferred.lazy_text_indexes.get().is_none());
         for query in [
             "capcom",
-            "capcom fighter",
-            "shooter vertical",
+            "capcom dual",
+            "light gun",
             "1984",
             "csclub",
             "missing",
@@ -2202,14 +2264,14 @@ mod tests {
     fn navigation_projection_catalog_defers_text_indexes_without_changing_autocomplete() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
-        street.category = "Fighter / 2D".into();
+        street.control = "doublejoy".into();
         let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
         pac.manufacturer = "Namco".into();
-        pac.category = "Maze / Pac-Man".into();
+        pac.control = "trackball".into();
         let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
         shooter.year = Some(1984);
         shooter.manufacturer = "Capcom".into();
-        shooter.category = "Shooter / Vertical".into();
+        shooter.control = "lightgun".into();
         let mut other_system = game("Street Racer", "/games/street-racer.mgl", "", "amiga");
         other_system.manufacturer = "Psygnosis".into();
         let games = vec![street, pac, shooter, other_system];
@@ -2238,7 +2300,7 @@ mod tests {
 
         assert!(deferred.search_keys.is_empty());
         assert!(deferred.lazy_text_indexes.get().is_none());
-        for query in ["str", "fig", "pac", "cap", "sho", "194", "psy", "x"] {
+        for query in ["str", "fig", "pac", "cap", "lig", "194", "psy", "x"] {
             assert_eq!(
                 deferred.autocomplete_search_word("arcade", query),
                 eager.autocomplete_search_word("arcade", query),
@@ -2252,14 +2314,14 @@ mod tests {
     fn deferred_text_constructor_keeps_search_and_autocomplete_equivalent() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
-        street.category = "Fighter / 2D".into();
+        street.control = "doublejoy".into();
         let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
         pac.manufacturer = "Namco".into();
-        pac.category = "Maze / Pac-Man".into();
+        pac.control = "trackball".into();
         let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
         shooter.year = Some(1984);
         shooter.manufacturer = "Capcom".into();
-        shooter.category = "Shooter / Vertical".into();
+        shooter.control = "lightgun".into();
         let games = vec![street, pac, shooter];
         let systems = vec![GameSystemEntry {
             id: "arcade".into(),
@@ -2287,7 +2349,7 @@ mod tests {
                 "query {query}"
             );
         }
-        for query in ["str", "fig", "pac", "cap", "sho", "194", "x"] {
+        for query in ["str", "fig", "pac", "cap", "lig", "194", "x"] {
             assert_eq!(
                 deferred.autocomplete_search_word("arcade", query),
                 eager.autocomplete_search_word("arcade", query),
@@ -2301,7 +2363,7 @@ mod tests {
     fn deferred_text_indexes_build_once_on_first_text_access() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
-        street.category = "Fighter / 2D".into();
+        street.control = "doublejoy".into();
         let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
         shooter.year = Some(1984);
         let games = vec![street, shooter];
@@ -2378,14 +2440,14 @@ mod tests {
     fn arcade_search_autocomplete_prefers_current_system_metadata_and_titles() {
         let mut street = game("Street Fighter II", "/games/sf2.mra", "", "arcade");
         street.manufacturer = "Capcom".into();
-        street.category = "Fighter / 2D".into();
+        street.control = "doublejoy".into();
         let mut pac = game("Pac-Man", "/games/pacman.mra", "", "arcade");
         pac.manufacturer = "Namco".into();
-        pac.category = "Maze / Pac-Man".into();
+        pac.control = "trackball".into();
         let mut shooter = game("1942", "/games/1942.mra", "", "arcade");
         shooter.year = Some(1984);
         shooter.manufacturer = "Capcom".into();
-        shooter.category = "Shooter / Vertical".into();
+        shooter.control = "lightgun".into();
         let mut other_system = game("Street Racer", "/games/street-racer.mgl", "", "amiga");
         other_system.manufacturer = "Psygnosis".into();
 
@@ -2399,7 +2461,7 @@ mod tests {
         assert_eq!(catalog.autocomplete_search_word("arcade", "fig"), "fighter");
         assert_eq!(catalog.autocomplete_search_word("arcade", "pac"), "pac");
         assert_eq!(catalog.autocomplete_search_word("arcade", "cap"), "capcom");
-        assert_eq!(catalog.autocomplete_search_word("arcade", "sho"), "shooter");
+        assert_eq!(catalog.autocomplete_search_word("arcade", "lig"), "light");
         assert_eq!(catalog.autocomplete_search_word("arcade", "194"), "1942");
         assert_eq!(catalog.autocomplete_search_word("arcade", "x"), "");
     }
@@ -2436,7 +2498,6 @@ mod tests {
         };
 
         assert!(catalog.search_game_indexes("arcade", "capcom").len() >= 50);
-        assert!(catalog.search_game_indexes("arcade", "maze").len() >= 10);
         assert!(!catalog
             .search_game_indexes("arcade", "street fighter")
             .is_empty());
@@ -2449,8 +2510,6 @@ mod tests {
         assert_eq!(catalog.autocomplete_search_word("arcade", "str"), "street");
         assert_eq!(catalog.autocomplete_search_word("arcade", "fig"), "fighter");
         assert_eq!(catalog.autocomplete_search_word("arcade", "pac"), "pac");
-        assert_eq!(catalog.autocomplete_search_word("arcade", "maz"), "maze");
-        assert_eq!(catalog.autocomplete_search_word("arcade", "sho"), "shooter");
     }
 
     #[cfg(test)]
@@ -2469,13 +2528,19 @@ mod tests {
                 continue;
             }
             let year = columns[3].trim().parse::<u16>().ok();
+            let players = columns
+                .get(5)
+                .and_then(|value| value.trim().parse::<u8>().ok())
+                .filter(|players| *players > 0);
+            let control = columns.get(6).copied().unwrap_or_default();
             games.push(ArcadeGameEntry {
                 system_id: columns[0].into(),
                 title: columns[1].into(),
                 mra_path: columns[2].into(),
                 year,
                 manufacturer: columns[4].into(),
-                category: columns[5].into(),
+                players,
+                control: control.into(),
                 preview_archive_path: "".into(),
                 preview_asset_key: "".into(),
                 has_preview: false,
@@ -2677,7 +2742,7 @@ mod tests {
             "arcade",
         );
         snk_arcade.manufacturer = "SNK (Rock-Ola license)".into();
-        snk_arcade.category = "Run and Gun".into();
+        snk_arcade.control = "Run and Gun".into();
         snk_arcade.year = Some(1996);
 
         let mut capcom_arcade = game(
@@ -2687,12 +2752,12 @@ mod tests {
             "cps2",
         );
         capcom_arcade.manufacturer = "Capcom".into();
-        capcom_arcade.category = "Fighter".into();
+        capcom_arcade.control = "Fighter".into();
         capcom_arcade.year = Some(1995);
 
         let mut snk_cps = game("P.O.W.", "/media/fat/_Arcade/P.O.W..mra", "pow", "cps1");
         snk_cps.manufacturer = "SNK".into();
-        snk_cps.category = "Beat 'em up".into();
+        snk_cps.control = "Beat 'em up".into();
         snk_cps.year = Some(1988);
 
         let mut neogeo = game(
@@ -2702,7 +2767,7 @@ mod tests {
             "neogeo",
         );
         neogeo.manufacturer = "SNK".into();
-        neogeo.category = "Run and Gun".into();
+        neogeo.control = "Run and Gun".into();
         neogeo.year = Some(1996);
 
         let mut saturn = game(
@@ -2712,7 +2777,7 @@ mod tests {
             "saturn",
         );
         saturn.manufacturer = "Sega".into();
-        saturn.category = "Fighter".into();
+        saturn.control = "Fighter".into();
         saturn.year = Some(1996);
 
         let sms = game(

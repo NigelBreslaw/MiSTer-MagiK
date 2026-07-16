@@ -251,8 +251,6 @@ pub(crate) struct MraMetadata {
     pub(crate) rbf: Option<String>,
     pub(crate) platform: Option<String>,
     pub(crate) manufacturer: Option<String>,
-    pub(crate) category: Option<String>,
-    pub(crate) catver: Option<String>,
     pub(crate) year: Option<String>,
     pub(crate) setname: Option<String>,
     pub(crate) parent: Option<String>,
@@ -600,8 +598,6 @@ fn mra_metadata_field(name: &[u8]) -> Option<&'static str> {
         b"rbf" => Some("rbf"),
         b"platform" => Some("platform"),
         b"manufacturer" => Some("manufacturer"),
-        b"category" => Some("category"),
-        b"catver" => Some("catver"),
         b"year" => Some("year"),
         b"setname" => Some("setname"),
         b"parent" => Some("parent"),
@@ -615,8 +611,6 @@ fn set_mra_metadata_field(metadata: &mut MraMetadata, field: &str, value: &str) 
         "rbf" => set_optional_trimmed(&mut metadata.rbf, value),
         "platform" => set_optional_trimmed(&mut metadata.platform, value),
         "manufacturer" => set_optional_trimmed(&mut metadata.manufacturer, value),
-        "category" => set_optional_trimmed(&mut metadata.category, value),
-        "catver" => set_optional_trimmed(&mut metadata.catver, value),
         "year" => set_optional_trimmed(&mut metadata.year, value),
         "setname" => set_optional_trimmed(&mut metadata.setname, value),
         "parent" => set_optional_trimmed(&mut metadata.parent, value),
@@ -971,8 +965,6 @@ mod tests {
                 <rbf version="1">JTCPS2</rbf>
                 <platform>Capcom Play System II</platform>
                 <manufacturer>Capcom &quot;Co&quot;</manufacturer>
-                <category>Driving</category>
-                <catver>Racing / Chase</catver>
                 <year>1997</year>
                 <setname>batcir</setname>
                 <parent>batcirj</parent>
@@ -987,8 +979,6 @@ mod tests {
         assert_eq!(metadata.rbf.as_deref(), Some("JTCPS2"));
         assert_eq!(metadata.platform.as_deref(), Some("Capcom Play System II"));
         assert_eq!(metadata.manufacturer.as_deref(), Some("Capcom \"Co\""));
-        assert_eq!(metadata.category.as_deref(), Some("Driving"));
-        assert_eq!(metadata.catver.as_deref(), Some("Racing / Chase"));
         assert_eq!(metadata.year.as_deref(), Some("1997"));
         assert_eq!(metadata.setname.as_deref(), Some("batcir"));
         assert_eq!(metadata.parent.as_deref(), Some("batcirj"));

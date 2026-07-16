@@ -205,7 +205,8 @@ pub(crate) fn launcher_entry(
         system_id: system_id.into().into(),
         year: metadata.year,
         manufacturer: metadata.manufacturer.into(),
-        category: metadata.category.into(),
+        players: metadata.players,
+        control: metadata.control.into(),
         is_new,
     }
 }
@@ -396,7 +397,8 @@ pub(crate) fn materialize_arcade_ui_projections(
                 g.system_id AS system_id,
                 COALESCE(i.year, g.year) AS year,
                 COALESCE(i.manufacturer, g.manufacturer) AS manufacturer,
-                COALESCE(i.category, g.genre) AS category,
+                i.players AS players,
+                i.control AS control,
                 g.discovered_at_unix AS discovered_at_unix,
                 lt.setname AS setname,
                 i.identity_id AS identity_id,

@@ -7,7 +7,6 @@ use quick_xml::Reader;
 use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use ssh2::Session;
-use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -389,7 +388,7 @@ fn run_cli() -> Result<()> {
 
 fn usage() {
     println!(
-        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>] [--category-ini <ini>|--catver-ini <ini>]...\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
+        "usage: scripts/mister <run|put|deploy-magik-bin|get|db|library-db|wait|connection-profile|media-check|media-download|media-bench-download|media-cloudflare-check|launcher-restart|boot-net-profile|boot-tcp-profile|agent|watch-reboot|reboot|reboot-wait|status|doctor|boot-capture|display-read|ini-repair-boot|ini-select-main|inittab-ensure-stock|ini-restore-stock|ini-zaparoo-boot|ini-edit-local|profile-summary|mame-metadata-build|recover> ...\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS]; agent <ping|status|logs|timeline|diagnostics|framebuffer-capture|deploy-magik-bin|magik|reboot-wait|boot-profile>; reboot/reboot-wait default to supervised MagiK visual-lockdown reboot; pass --raw for detached Linux reboot recovery; pass --direct-reset for fast quiescent dev reboots; --direct-reset-no-sync is experimental"
     );
 }
 
@@ -525,7 +524,6 @@ struct MameMachine {
     driver_status: Option<String>,
     emulation_status: Option<String>,
     savestate: Option<String>,
-    category: Option<String>,
     source_version: String,
 }
 
@@ -558,7 +556,7 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
     let out = option_value(args, "--out")
         .or_else(|| option_value(args, "-o"))
         .ok_or("mame-metadata-build needs --out <sqlite>")?;
-    let mut machines = if let Some(machine_sqlite) = option_value(args, "--machine-sqlite") {
+    let machines = if let Some(machine_sqlite) = option_value(args, "--machine-sqlite") {
         load_mame_machines_from_db(Path::new(&machine_sqlite))?
     } else {
         let xml = if let Some(listxml) = option_value(args, "--listxml") {
@@ -580,12 +578,6 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
         };
         parse_mame_listxml(&xml)?
     };
-    let categories = load_mame_category_ini_files(args)?;
-    if !categories.is_empty() {
-        for machine in &mut machines {
-            machine.category = categories.get(&machine.setname).cloned();
-        }
-    }
     let (software_items, software_hashes) = load_mame_software_list_xmls(args)?;
     write_mame_metadata_db(
         Path::new(&out),
@@ -594,10 +586,9 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
         &software_hashes,
     )?;
     println!(
-        "mame_metadata_build out={} machines={} categories={} software_items={} software_hashes={} source_version={}",
+        "mame_metadata_build out={} machines={} software_items={} software_hashes={} source_version={}",
         out,
         machines.len(),
-        categories.len(),
         software_items.len(),
         software_hashes.len(),
         machines
@@ -606,46 +597,6 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
             .unwrap_or("unknown")
     );
     Ok(())
-}
-
-fn load_mame_category_ini_files(args: &[String]) -> Result<HashMap<String, String>> {
-    let mut out = HashMap::<String, String>::new();
-    let paths = option_values(args, "--category-ini")
-        .into_iter()
-        .chain(option_values(args, "--catver-ini"))
-        .collect::<Vec<_>>();
-    for path in paths {
-        let text = fs::read_to_string(&path)?;
-        out.extend(parse_mame_category_ini(&text));
-    }
-    Ok(out)
-}
-
-fn parse_mame_category_ini(text: &str) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    let mut in_category = false;
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_category = line[1..line.len() - 1].eq_ignore_ascii_case("Category");
-            continue;
-        }
-        if !in_category {
-            continue;
-        }
-        let Some((setname, category)) = line.split_once('=') else {
-            continue;
-        };
-        let setname = setname.trim();
-        let category = category.trim();
-        if !setname.is_empty() && !category.is_empty() {
-            out.insert(setname.to_string(), category.to_string());
-        }
-    }
-    out
 }
 
 fn load_mame_software_list_xmls(
@@ -883,19 +834,13 @@ fn parse_mame_software_list_xml(
 
 fn load_mame_machines_from_db(path: &Path) -> Result<Vec<MameMachine>> {
     let conn = Connection::open(path)?;
-    let category_expr = if sqlite_column_exists(&conn, "mame_machines", "category")? {
-        "category"
-    } else {
-        "NULL"
-    };
-    let sql = format!(
+    let sql =
         "SELECT setname,parent_setname,title,year,manufacturer,sourcefile,rotate,display_type,
                 display_width,display_height,refresh_hz,players,coins,control_type,control_ways,
-                buttons,driver_status,emulation_status,savestate,source_version,{category_expr}
+                buttons,driver_status,emulation_status,savestate,source_version
          FROM mame_machines
-         ORDER BY setname"
-    );
-    let mut stmt = conn.prepare(&sql)?;
+         ORDER BY setname";
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], |row| {
         Ok(MameMachine {
             setname: row.get(0)?,
@@ -918,21 +863,9 @@ fn load_mame_machines_from_db(path: &Path) -> Result<Vec<MameMachine>> {
             emulation_status: row.get(17)?,
             savestate: row.get(18)?,
             source_version: row.get(19)?,
-            category: row.get(20)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-}
-
-fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-        if row? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn region_from_text(text: &str) -> Option<&'static str> {
@@ -1079,7 +1012,6 @@ fn write_mame_metadata_db(
             driver_status TEXT,
             emulation_status TEXT,
             savestate TEXT,
-            category TEXT,
             source_version TEXT NOT NULL
         ) WITHOUT ROWID;
         CREATE TABLE mame_software_items (
@@ -1116,8 +1048,8 @@ fn write_mame_metadata_db(
             "INSERT INTO mame_machines(
                 setname,parent_setname,title,year,manufacturer,sourcefile,rotate,display_type,
                 display_width,display_height,refresh_hz,players,coins,control_type,control_ways,
-                buttons,driver_status,emulation_status,savestate,category,source_version
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+                buttons,driver_status,emulation_status,savestate,source_version
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
         )?;
         for machine in machines {
             stmt.execute(params![
@@ -1140,7 +1072,6 @@ fn write_mame_metadata_db(
                 machine.driver_status,
                 machine.emulation_status,
                 machine.savestate,
-                machine.category,
                 machine.source_version
             ])?;
         }
@@ -5945,20 +5876,25 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn writes_mame_metadata_sqlite() {
-        let mut machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
-        for machine in &mut machines {
-            if machine.setname == "1942a" {
-                machine.category = Some("Shooter / Vertical".to_string());
-            }
-        }
+        let machines = parse_mame_listxml(MAME_1942_FIXTURE).unwrap();
         let path = temp_path("mame.sqlite3");
         write_mame_metadata_db(&path, &machines, &[], &[]).unwrap();
         let conn = Connection::open(&path).unwrap();
-        let row: (String, String, i64, i64, String) = conn
+        let row: (String, String, i64, i64, i64, String) = conn
             .query_row(
-                "SELECT parent_setname, manufacturer, rotate, buttons, category FROM mame_machines WHERE setname='1942a'",
+                "SELECT parent_setname, manufacturer, rotate, buttons, players, control_type
+                 FROM mame_machines WHERE setname='1942a'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .unwrap();
         let _ = fs::remove_file(&path);
@@ -5970,36 +5906,9 @@ H: Handlers=event3 js0"#
                 "Capcom".to_string(),
                 270,
                 2,
-                "Shooter / Vertical".to_string()
+                2,
+                "joy".to_string()
             )
-        );
-    }
-
-    #[test]
-    fn parses_mame_category_ini_category_section_only() {
-        let categories = parse_mame_category_ini(
-            r#"
-            ; comments are ignored
-            [Filenames]
-            1942=wrong
-            [Category]
-              1942 = Shooter / Vertical
-            empty =
-            # also ignored
-            1942a=Shooter / Vertical
-            [VerAdded]
-            1943=wrong
-            "#,
-        );
-
-        assert_eq!(categories.len(), 2);
-        assert_eq!(
-            categories.get("1942").map(String::as_str),
-            Some("Shooter / Vertical")
-        );
-        assert_eq!(
-            categories.get("1942a").map(String::as_str),
-            Some("Shooter / Vertical")
         );
     }
 

@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const RETURN_CATALOG_CAPSULE_PATH: &str = "/tmp/mister-magik/launcher-return-catalog.json";
-const RETURN_CATALOG_CAPSULE_MAGIC: &[u8; 8] = b"MMRCAP01";
-const RETURN_CATALOG_CAPSULE_SCHEMA: u32 = 1;
+const RETURN_CATALOG_CAPSULE_MAGIC: &[u8; 8] = b"MMRCAP02";
+const RETURN_CATALOG_CAPSULE_SCHEMA: u32 = 2;
 const RETURN_CATALOG_CAPSULE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const RETURN_CATALOG_CAPSULE_MAX_ROWS: usize = 10_000;
 const RETURN_CATALOG_CAPSULE_MAX_SYSTEMS: usize = 4_096;
@@ -136,7 +136,8 @@ struct CapsuleGame {
     system_id: String,
     year: Option<u16>,
     manufacturer: String,
-    category: String,
+    players: Option<u8>,
+    control: String,
     is_new: bool,
 }
 
@@ -302,7 +303,11 @@ impl PreparedReturnCatalogCapsule {
                 writer.write_u16(year)?;
             }
             writer.write_string(&game.manufacturer)?;
-            writer.write_string(&game.category)?;
+            writer.write_bool(game.players.is_some())?;
+            if let Some(players) = game.players {
+                writer.write_u8(players)?;
+            }
+            writer.write_string(&game.control)?;
             writer.write_bool(game.is_new)?;
         }
 
@@ -541,7 +546,8 @@ fn decode_games(reader: &mut CapsuleBinaryReader<'_>) -> Result<Vec<CapsuleGame>
         let system_id = reader.read_string("game system id")?;
         let year = reader.read_bool()?.then(|| reader.read_u16()).transpose()?;
         let manufacturer = reader.read_string("manufacturer")?;
-        let category = reader.read_string("category")?;
+        let players = reader.read_bool()?.then(|| reader.read_u8()).transpose()?;
+        let control = reader.read_string("control")?;
         let is_new = reader.read_bool()?;
         games.push(CapsuleGame {
             title,
@@ -552,7 +558,8 @@ fn decode_games(reader: &mut CapsuleBinaryReader<'_>) -> Result<Vec<CapsuleGame>
             system_id,
             year,
             manufacturer,
-            category,
+            players,
+            control,
             is_new,
         });
     }
@@ -656,7 +663,8 @@ impl CapsuleGame {
             system_id: Arc::from(self.system_id),
             year: self.year,
             manufacturer: Arc::from(self.manufacturer),
-            category: Arc::from(self.category),
+            players: self.players,
+            control: Arc::from(self.control),
             is_new: self.is_new,
         }
     }
@@ -937,7 +945,7 @@ fn validate_game(game: &ArcadeGameEntry) -> Result<(), String> {
         ("preview asset key", game.preview_asset_key.as_ref()),
         ("game system id", game.system_id.as_ref()),
         ("manufacturer", game.manufacturer.as_ref()),
-        ("category", game.category.as_ref()),
+        ("control", game.control.as_ref()),
     ] {
         validate_string(label, value)?;
     }

@@ -31,10 +31,8 @@ Library identities use:
 software-list metadata into the same `mame.sqlite3`. The command can read MAME
 machine XML from `mame -listxml` or `--listxml`; it reads console software-list
 XML only from explicit `--software-list` paths or the target files inside a
-`--software-dir` MAME hash directory. Arcade categories are optional offline
-inputs from CatVer/category INI files passed as `--category-ini <path>` or
-`--catver-ini <path>`; the `[Category]` values are stored verbatim after
-trimming.
+`--software-dir` MAME hash directory. Arcade player counts and control types
+come directly from each machine's `input` and `control` elements in `-listxml`.
 
 Important tables:
 
@@ -47,7 +45,6 @@ Build with a local MAME hash directory:
 ```bash
 scripts/mister mame-metadata-build \
   --mame mame \
-  --category-ini /path/to/catver.ini \
   --software-dir /path/to/mame/hash \
   --out build/mame.sqlite3
 ```

@@ -17,7 +17,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 3;
+pub const CATALOG_SUMMARY_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogSummaryProjection {
@@ -51,7 +51,8 @@ pub struct CatalogSummaryGame {
     pub system_id: String,
     pub year: Option<u16>,
     pub manufacturer: String,
-    pub category: String,
+    pub players: Option<u8>,
+    pub control: String,
     pub is_new: bool,
 }
 
@@ -149,7 +150,8 @@ impl From<&ArcadeGameEntry> for CatalogSummaryGame {
             system_id: game.system_id.to_string(),
             year: game.year,
             manufacturer: game.manufacturer.to_string(),
-            category: game.category.to_string(),
+            players: game.players,
+            control: game.control.to_string(),
             is_new: game.is_new,
         }
     }
@@ -174,7 +176,8 @@ impl From<&CatalogSummaryGame> for ArcadeGameEntry {
             system_id,
             year: game.year,
             manufacturer: Arc::from(game.manufacturer.as_str()),
-            category: Arc::from(game.category.as_str()),
+            players: game.players,
+            control: Arc::from(game.control.as_str()),
             is_new: game.is_new,
         }
     }

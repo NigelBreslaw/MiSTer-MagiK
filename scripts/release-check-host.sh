@@ -88,9 +88,9 @@ import sys
 
 mame = sqlite3.connect(sys.argv[1])
 mame.executescript("""
-CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,source_version TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,players INTEGER,control_type TEXT,source_version TEXT NOT NULL) WITHOUT ROWID;
 WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
-INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,'0.288 (mame0288)' FROM seq;
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy','0.288 (mame0288)' FROM seq;
 CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
 INSERT INTO mame_software_items VALUES('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
 """)
@@ -98,10 +98,10 @@ mame.commit()
 mame.close()
 hbmame = sqlite3.connect(sys.argv[2])
 hbmame.executescript("""
-CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE mame_machines(setname TEXT PRIMARY KEY,parent_setname TEXT,title TEXT NOT NULL,players INTEGER,control_type TEXT) WITHOUT ROWID;
 WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<5000)
-INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i FROM seq;
-INSERT INTO mame_machines VALUES('marpy','mappy','Marpy');
+INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy' FROM seq;
+INSERT INTO mame_machines VALUES('marpy','mappy','Marpy',2,'joy');
 CREATE TABLE package_padding(data BLOB NOT NULL);
 INSERT INTO package_padding VALUES(zeroblob(1048576));
 """)

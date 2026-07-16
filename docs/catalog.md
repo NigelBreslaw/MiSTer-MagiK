@@ -72,7 +72,7 @@ must reach the visible library-load failure flow rather than silently becoming
 visible through the explicit `Unknown` classification and is placed under
 Consoles / Other with an audit diagnostic until its taxonomy row is added.
 
-Schema 65 persists `systems.platform_kind` and
+Schema 66 persists `systems.platform_kind` and
 `systems.classification_source`, with a constrained set of normalized platform
 kind values. RAM construction, SQLite hydration, summary projection,
 navigation projection, and launcher hierarchy all consume that resolved value;
@@ -125,7 +125,8 @@ SQLite hot path. The background catalog worker builds normalized search keys
 and a small autocomplete word index before delivering the full catalog, so the
 first non-empty query performs no one-time construction on the UI thread. The
 index uses each
-game's title, launch path basename, manufacturer, category, year, and decade.
+game's title, launch path basename, manufacturer, control type, player count,
+year, and decade.
 Typing on the virtual keyboard scans only the active system's in-memory rows and
 updates the Rust-painted result list plus the Slint suggestion strip in the next
 UI sync.
@@ -141,7 +142,7 @@ Real-library search expectations can be checked with a local, ignored fixture:
 
 ```bash
 mkdir -p private/test-fixtures
-scripts/mister db "SELECT system_id,title,launch_ref,COALESCE(year,''),COALESCE(manufacturer,''),COALESCE(category,'') FROM launcher_catalog ORDER BY system_id,title" > private/test-fixtures/autocomplete-launcher-catalog.tsv
+scripts/mister db "SELECT system_id,title,launch_ref,COALESCE(year,''),COALESCE(manufacturer,''),COALESCE(players,''),COALESCE(control,'') FROM launcher_catalog ORDER BY system_id,title" > private/test-fixtures/autocomplete-launcher-catalog.tsv
 cargo test --manifest-path magik-gui/catalog/Cargo.toml arcade_search
 ```
 
@@ -190,7 +191,7 @@ the adjacent warm-start projections
 finalized catalog. If publication is interrupted between those steps, the
 embedded projection is the exact recovery source for recreating the pair.
 
-Schema 65 temporarily retains populated `ui_arcade_*`,
+Schema 66 temporarily retains populated `ui_arcade_*`,
 `launcher_catalog_rows`, and related materialized compatibility tables. Release
 acceptance, diagnostics, and benchmark selectors still query them while they
 are migrated to the canonical navigation contract. These tables are not the
@@ -815,18 +816,23 @@ These APIs reject old-schema databases. Callers should treat a schema mismatch
 as "cache unusable" and let the worker rebuild.
 
 Runtime Arcade filters use metadata already hydrated into `ArcadeCatalog` rows:
-year, manufacturer, and category. Category comes from the offline MAME/HBMAME
-metadata DB when present, not from runtime XML or hot-path database queries.
-Filter indexes preserve the raw stored/searchable category while normalizing
-presentation-only spelling variants. The launcher always offers `Games A-Z`
-and `Search`; Decades, Manufacturer, and Categories are offered only when the
-active system or virtual collection has at least two distinct choices.
+year, manufacturer, player count, and control type. Player and control metadata
+come from the offline MAME/HBMAME database, not runtime XML or hot-path database
+queries. Control values are normalized for presentation (`joy` becomes
+`Joystick`, `only_buttons` becomes `Buttons Only`). The launcher always offers
+`Games A-Z` and `Search`; Decades, Manufacturer, Players, and Controls are
+offered only when the active system or virtual collection has at least two
+distinct choices.
+
+The identity-only HBMAME fallback generated from library MRA parent rows
+inherits player and control metadata from the matching MAME set or parent when
+available. Published HBMAME metadata bundles carry their own fields.
 
 `mister-magik-fb catalog-inspect filter-options [COLLECTION]` loads the same
 navigation projection used at startup, compares its filter options with full
 SQLite hydration, and prints `catalog_filter_*_tsv` rows. Device acceptance
 uses `menu:arcade` to prevent a current-schema but incomplete navigation cache
-from silently collapsing the Arcade category list.
+from silently collapsing player or control options.
 
 Catalog rebuild failures must leave the launcher in an explicit failure state,
 not an indefinite progress state. If persistence or post-save catalog loading

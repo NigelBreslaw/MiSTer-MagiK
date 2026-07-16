@@ -18,6 +18,7 @@ pub(crate) type MachineMetadataRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<u8>,
     Option<String>,
 );
 pub(crate) type MachineMetadataRows = BTreeMap<String, MachineMetadataRow>;
@@ -91,7 +92,8 @@ pub(crate) struct MameMachineMetadata {
     pub(crate) title: String,
     pub(crate) year: Option<String>,
     pub(crate) manufacturer: Option<String>,
-    pub(crate) category: Option<String>,
+    pub(crate) players: Option<u8>,
+    pub(crate) control: Option<String>,
 }
 
 #[derive(Default)]
@@ -135,14 +137,17 @@ pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMac
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
-    let has_category =
-        library_db::sqlite_column_exists(&conn, "mame_machines", "category").unwrap_or(false);
-    let sql = if has_category {
-        "SELECT setname,parent_setname,title,year,manufacturer,category FROM mame_machines"
-    } else {
-        "SELECT setname,parent_setname,title,year,manufacturer,NULL FROM mame_machines"
-    };
-    let Ok(mut stmt) = conn.prepare(sql) else {
+    let has_players =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "players").unwrap_or(false);
+    let has_control =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "control_type").unwrap_or(false);
+    let players_expr = if has_players { "players" } else { "NULL" };
+    let control_expr = if has_control { "control_type" } else { "NULL" };
+    let sql = format!(
+        "SELECT setname,parent_setname,title,year,manufacturer,{players_expr},{control_expr}
+         FROM mame_machines"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
         return HashMap::new();
     };
     let Ok(rows) = stmt.query_map([], |row| {
@@ -153,7 +158,8 @@ pub(crate) fn load_mame_machine_metadata(path: &Path) -> HashMap<String, MameMac
                 title: row.get(2)?,
                 year: row.get(3)?,
                 manufacturer: row.get(4)?,
-                category: row.get(5)?,
+                players: row.get::<_, Option<i64>>(5)?.and_then(valid_player_count),
+                control: row.get(6)?,
             },
         ))
     }) else {
@@ -172,17 +178,20 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
     let Ok(conn) = library_db::open_sqlite_read_only(path) else {
         return HashMap::new();
     };
-    let has_category =
-        library_db::sqlite_column_exists(&conn, "mame_machines", "category").unwrap_or(false);
+    let has_players =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "players").unwrap_or(false);
+    let has_control =
+        library_db::sqlite_column_exists(&conn, "mame_machines", "control_type").unwrap_or(false);
     let mut out = HashMap::with_capacity(setnames.len());
     let setnames = setnames.iter().map(String::as_str).collect::<Vec<_>>();
     for chunk in setnames.chunks(400) {
         let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
-        let category_expr = if has_category { "category" } else { "NULL" };
+        let players_expr = if has_players { "players" } else { "NULL" };
+        let control_expr = if has_control { "control_type" } else { "NULL" };
         let sql = format!(
-            "SELECT setname,parent_setname,title,year,manufacturer,{category_expr}
+            "SELECT setname,parent_setname,title,year,manufacturer,{players_expr},{control_expr}
              FROM mame_machines
              WHERE setname IN ({placeholders})"
         );
@@ -197,7 +206,8 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
                     title: row.get(2)?,
                     year: row.get(3)?,
                     manufacturer: row.get(4)?,
-                    category: row.get(5)?,
+                    players: row.get::<_, Option<i64>>(5)?.and_then(valid_player_count),
+                    control: row.get(6)?,
                 },
             ))
         }) else {
@@ -208,6 +218,10 @@ pub(crate) fn load_mame_machine_metadata_for_setnames(
         }
     }
     out
+}
+
+fn valid_player_count(value: i64) -> Option<u8> {
+    u8::try_from(value).ok()
 }
 
 pub(crate) fn load_mame_software_metadata(path: &Path) -> MameSoftwareMetadata {
@@ -363,7 +377,8 @@ pub(crate) fn write_simple_mame_metadata_db(
             title TEXT NOT NULL,
             year TEXT,
             manufacturer TEXT,
-            category TEXT
+            players INTEGER,
+            control_type TEXT
         ) WITHOUT ROWID;
         "#,
     )
@@ -374,18 +389,19 @@ pub(crate) fn write_simple_mame_metadata_db(
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,players,control_type)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )
             .map_err(|e| format!("prepare metadata insert: {e}"))?;
-        for (setname, (parent, title, year, manufacturer, category)) in rows {
+        for (setname, (parent, title, year, manufacturer, players, control)) in rows {
             stmt.execute(params![
                 setname.as_str(),
                 parent.as_str(),
                 title.as_str(),
                 year.as_deref(),
                 manufacturer.as_deref(),
-                category.as_deref()
+                players,
+                control.as_deref()
             ])
             .map_err(|e| format!("insert metadata row {setname}: {e}"))?;
         }
@@ -729,6 +745,7 @@ type MameIdentityProjection<'a> = (
     Option<&'a str>,
     Option<&'a str>,
     Option<&'a str>,
+    Option<u8>,
     Option<&'a str>,
     &'static str,
 );
@@ -751,7 +768,8 @@ pub(crate) fn mame_identity_projection<'a>(
             Some(machine.title.as_str()),
             machine.year.as_deref(),
             machine.manufacturer.as_deref(),
-            machine.category.as_deref(),
+            machine.players,
+            machine.control.as_deref(),
             "mame",
         )
     } else if let Some(machine) = metadata.hbmame.get(identity_id) {
@@ -766,14 +784,16 @@ pub(crate) fn mame_identity_projection<'a>(
             Some(machine.title.as_str()),
             machine.year.as_deref(),
             machine.manufacturer.as_deref(),
-            machine.category.as_deref(),
+            machine.players,
+            machine.control.as_deref(),
             "hbmame",
         )
     } else if let Some(family_id) = normalized_parent_family(mra_parent, identity_id) {
-        (family_id, None, None, None, None, "mra-parent")
+        (family_id, None, None, None, None, None, "mra-parent")
     } else if let Some(parent) = arcade_parent_override(identity_id) {
         (
             parent.to_string(),
+            None,
             None,
             None,
             None,
@@ -783,9 +803,17 @@ pub(crate) fn mame_identity_projection<'a>(
     } else if let Some(family_id) =
         unique_metadata_family_for_canonical_title(metadata, display_title)
     {
-        (family_id, None, None, None, None, "canonical-title")
+        (family_id, None, None, None, None, None, "canonical-title")
     } else {
-        (identity_id.to_string(), None, None, None, None, "setname")
+        (
+            identity_id.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "setname",
+        )
     }
 }
 
@@ -1013,6 +1041,39 @@ mod tests {
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata["needed"].title, "Needed Game");
         assert!(!metadata.contains_key("other"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mame_machine_metadata_preserves_zero_players_as_unknown() {
+        let root = unique_temp_dir("mame-machine-zero-players");
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let db = root.join("mame.sqlite3");
+        let conn = Connection::open(&db).expect("open MAME fixture");
+        conn.execute_batch(
+            "CREATE TABLE mame_machines (
+                setname TEXT PRIMARY KEY,
+                parent_setname TEXT,
+                title TEXT NOT NULL,
+                year TEXT,
+                manufacturer TEXT,
+                players INTEGER,
+                control_type TEXT
+            ) WITHOUT ROWID;
+            INSERT INTO mame_machines
+                (setname,parent_setname,title,year,manufacturer,players,control_type)
+            VALUES
+                ('unknown',NULL,'Unknown Players','1980','Example',0,'joy'),
+                ('known',NULL,'Known Players','1981','Example',2,'doublejoy');",
+        )
+        .expect("write MAME fixture");
+        drop(conn);
+
+        let metadata = load_mame_machine_metadata(&db);
+
+        assert_eq!(metadata["unknown"].players, Some(0));
+        assert_eq!(metadata["known"].players, Some(2));
+        assert_eq!(metadata["known"].control.as_deref(), Some("doublejoy"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1931,6 +1992,7 @@ mod tests {
     fn hbmame_metadata_from_library_uses_mra_parent_rows() {
         let root = unique_temp_dir("hbmame-from-library");
         let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
         let hbmame_db = root.join("hbmame.sqlite3");
         let mut parent = mra_discovery(1, "Bomb Jack");
         parent.setname = Some("bombjack".to_string());
@@ -1944,6 +2006,18 @@ mod tests {
             &sqlite_scan_with_discoveries(vec![parent, hbmame_clone]),
         )
         .expect("save sqlite");
+        let mame_rows = BTreeMap::from([(
+            "bombjack".to_string(),
+            (
+                String::new(),
+                "Bomb Jack".to_string(),
+                Some("1984".to_string()),
+                Some("Tehkan".to_string()),
+                Some(2),
+                Some("joy".to_string()),
+            ),
+        )]);
+        write_simple_mame_metadata_db(&mame_db, &mame_rows).expect("write MAME metadata");
         let summary =
             write_hbmame_metadata_from_library(&db, &hbmame_db).expect("write hbmame metadata");
         assert_eq!(summary.rows, 1);
@@ -1951,13 +2025,23 @@ mod tests {
         let conn = Connection::open(&hbmame_db).expect("open hbmame db");
         let row = conn
             .query_row(
-                "SELECT parent_setname,title FROM mame_machines WHERE setname='bombjckb'",
+                "SELECT parent_setname,title,players,control_type
+                 FROM mame_machines WHERE setname='bombjckb'",
                 [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
             )
             .expect("query hbmame row");
         assert_eq!(row.0, "bombjack");
         assert_eq!(row.1, "Bomb Jack");
+        assert_eq!(row.2, 2);
+        assert_eq!(row.3, "joy");
         let _ = std::fs::remove_dir_all(root);
     }
 

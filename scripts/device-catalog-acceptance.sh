@@ -34,7 +34,7 @@ Checks the deployed MiSTer catalog state through scripts/mister:
   - current generic catalog facts contain games and discoveries
   - current summary and navigation projections are present
   - production navigation filter options match full SQLite hydration
-  - aggregate Arcade exposes more than two normalized categories
+  - aggregate Arcade exposes multiple player and control options
   - screenshot packs remain runtime-only and are not indexed into asset tables
   - optional duplicate refresh race proves one refresh skips via single-flight
 USAGE
@@ -389,15 +389,23 @@ filter_parity_status="$(
     }
   '
 )"
-navigation_category_count="$(
+navigation_player_count="$(
   printf '%s\n' "$filter_report" | awk '
     /^catalog_filter_summary_tsv[[:space:]]/ && /source=navigation/ {
-      for (i = 1; i <= NF; i++) if ($i ~ /^categories=/) { sub(/^categories=/, "", $i); print $i; exit }
+      for (i = 1; i <= NF; i++) if ($i ~ /^players=/) { sub(/^players=/, "", $i); print $i; exit }
+    }
+  '
+)"
+navigation_control_count="$(
+  printf '%s\n' "$filter_report" | awk '
+    /^catalog_filter_summary_tsv[[:space:]]/ && /source=navigation/ {
+      for (i = 1; i <= NF; i++) if ($i ~ /^controls=/) { sub(/^controls=/, "", $i); print $i; exit }
     }
   '
 )"
 assert_eq "catalog filter projection parity" "ok" "$filter_parity_status"
-assert_gt "Arcade normalized category count" "2" "$navigation_category_count"
+assert_gt "Arcade player count options" "1" "$navigation_player_count"
+assert_gt "Arcade control options" "1" "$navigation_control_count"
 
 console_pack_count="$(
   remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number

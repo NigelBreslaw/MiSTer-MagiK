@@ -1053,6 +1053,7 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "mark-durable",
                 "ui",
                 "ui"
             ]
@@ -1136,6 +1137,7 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "mark-durable",
                 "ui",
                 "ui"
             ]
@@ -1177,6 +1179,7 @@ mod tests {
                 "finish-media-if-no-seed",
                 "catalog-validation-finished",
                 "event",
+                "mark-durable",
                 "ui",
                 "event",
                 "ui"

@@ -28,13 +28,16 @@ def build_mame(path: Path, tag: str = "mame0288") -> None:
               setname TEXT PRIMARY KEY,
               parent_setname TEXT,
               title TEXT NOT NULL,
+              players INTEGER,
+              control_type TEXT,
               source_version TEXT NOT NULL
             ) WITHOUT ROWID;
             WITH RECURSIVE seq(i) AS (
               VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 50000
             )
             INSERT INTO mame_machines
-            SELECT 'machine' || i, '', 'Machine ' || i, '0.288 ({tag})' FROM seq;
+            SELECT 'machine' || i, '', 'Machine ' || i, 1 + (i % 4), 'joy',
+                   '0.288 ({tag})' FROM seq;
             CREATE TABLE mame_software_items(list_name TEXT NOT NULL, item_name TEXT NOT NULL);
             INSERT INTO mame_software_items VALUES
               ('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
@@ -49,13 +52,16 @@ def build_hbmame(path: Path) -> None:
             CREATE TABLE mame_machines(
               setname TEXT PRIMARY KEY,
               parent_setname TEXT,
-              title TEXT NOT NULL
+              title TEXT NOT NULL,
+              players INTEGER,
+              control_type TEXT
             ) WITHOUT ROWID;
             WITH RECURSIVE seq(i) AS (
               VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 5000
             )
-            INSERT INTO mame_machines SELECT 'machine' || i, '', 'Machine ' || i FROM seq;
-            INSERT INTO mame_machines VALUES('marpy','mappy','Marpy');
+            INSERT INTO mame_machines
+            SELECT 'machine' || i, '', 'Machine ' || i, 1 + (i % 4), 'joy' FROM seq;
+            INSERT INTO mame_machines VALUES('marpy','mappy','Marpy',2,'joy');
             """
         )
 
@@ -163,6 +169,27 @@ class GameDatabaseBundleTests(unittest.TestCase):
         corrupt.write_bytes(b"not sqlite")
         with self.assertRaisesRegex(ValueError, "invalid HBMAME SQLite database"):
             bundle.validate_database(corrupt, "HBMAME")
+
+    def test_machine_metadata_columns_are_required(self) -> None:
+        missing = self.root / "missing-metadata.sqlite3"
+        with closing(sqlite3.connect(missing)) as database, database:
+            database.executescript(
+                """
+                CREATE TABLE mame_machines(
+                  setname TEXT PRIMARY KEY,
+                  parent_setname TEXT,
+                  title TEXT NOT NULL
+                ) WITHOUT ROWID;
+                WITH RECURSIVE seq(i) AS (
+                  VALUES(1) UNION ALL SELECT i + 1 FROM seq WHERE i < 5000
+                )
+                INSERT INTO mame_machines
+                SELECT 'machine' || i, '', 'Machine ' || i FROM seq;
+                INSERT INTO mame_machines VALUES('marpy','mappy','Marpy');
+                """
+            )
+        with self.assertRaisesRegex(ValueError, "missing machine metadata columns"):
+            bundle.validate_database(missing, "HBMAME")
 
     def test_mame_source_mismatch_is_rejected(self) -> None:
         mismatched = self.root / "mismatched.sqlite3"

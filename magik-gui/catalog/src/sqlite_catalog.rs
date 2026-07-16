@@ -887,7 +887,7 @@ struct CatalogSqlQueryResult {
     timing: CatalogSqlQueryTiming,
 }
 
-const CATALOG_GAME_ENTRY_COLUMNS: [&str; 9] = [
+const CATALOG_GAME_ENTRY_COLUMNS: [&str; 10] = [
     "title",
     "launch_ref",
     "preview_asset_key",
@@ -895,7 +895,8 @@ const CATALOG_GAME_ENTRY_COLUMNS: [&str; 9] = [
     "system_id",
     "year",
     "manufacturer",
-    "category",
+    "players",
+    "control",
     "discovered_at_unix",
 ];
 
@@ -906,8 +907,9 @@ const GAME_ENTRY_HAS_PREVIEW: usize = 3;
 const GAME_ENTRY_SYSTEM_ID: usize = 4;
 const GAME_ENTRY_YEAR: usize = 5;
 const GAME_ENTRY_MANUFACTURER: usize = 6;
-const GAME_ENTRY_CATEGORY: usize = 7;
-const GAME_ENTRY_DISCOVERED_AT_UNIX: usize = 8;
+const GAME_ENTRY_PLAYERS: usize = 7;
+const GAME_ENTRY_CONTROL: usize = 8;
+const GAME_ENTRY_DISCOVERED_AT_UNIX: usize = 9;
 
 fn catalog_game_entry_select_sql(source: &str, where_sql: &str, order_by: &str) -> String {
     format!(
@@ -1073,8 +1075,11 @@ fn game_entry_from_row(
             .get::<_, Option<String>>(GAME_ENTRY_MANUFACTURER)?
             .unwrap_or_default()
             .into(),
-        category: row
-            .get::<_, Option<String>>(GAME_ENTRY_CATEGORY)?
+        players: row
+            .get::<_, Option<i64>>(GAME_ENTRY_PLAYERS)?
+            .and_then(|value| u8::try_from(value).ok()),
+        control: row
+            .get::<_, Option<String>>(GAME_ENTRY_CONTROL)?
             .unwrap_or_default()
             .into(),
         is_new: is_new_discovery(discovered_at_unix, now_unix),
@@ -1289,7 +1294,8 @@ pub(crate) fn load_joined_launcher_catalog(
                     COALESCE(games.system_id,'unknown'),
                     games.year,
                     games.manufacturer,
-                    games.genre,
+                    NULL,
+                    NULL,
                     games.discovered_at_unix,
                     launch_plans.launch_kind,
                     COALESCE(launch_plans.setname,''),
@@ -1309,7 +1315,7 @@ pub(crate) fn load_joined_launcher_catalog(
         .map_err(|e| format!("prepare arcade catalog query: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
-            let discovered_at_unix = row.get::<_, Option<i64>>(9)?;
+            let discovered_at_unix = row.get::<_, Option<i64>>(10)?;
             let preview =
                 LauncherPreviewAsset::new(row.get::<_, String>(2)?, row.get::<_, String>(3)?);
             Ok(CatalogProjectionRow::new(
@@ -1320,13 +1326,16 @@ pub(crate) fn load_joined_launcher_catalog(
                 ArcadeGameMetadataKey {
                     year: optional_year_from_row(row, 6)?,
                     manufacturer: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                    category: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                    players: row
+                        .get::<_, Option<i64>>(8)?
+                        .and_then(|value| u8::try_from(value).ok()),
+                    control: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
                 },
                 is_new_discovery(discovered_at_unix, now),
                 CatalogProjectionSource {
-                    source_kind: row.get::<_, String>(10)?,
-                    setname: row.get::<_, String>(11)?,
-                    parent: row.get::<_, String>(12)?,
+                    source_kind: row.get::<_, String>(11)?,
+                    setname: row.get::<_, String>(12)?,
+                    parent: row.get::<_, String>(13)?,
                     family_key: None,
                     prepared: None,
                 },
@@ -2500,7 +2509,8 @@ fn write_sqlite_scan_with_sources_inner(
             metadata_title_string_id INTEGER,
             year_string_id INTEGER,
             manufacturer_string_id INTEGER,
-            category_string_id INTEGER,
+            players INTEGER,
+            control_string_id INTEGER,
             source_string_id INTEGER NOT NULL,
             PRIMARY KEY(game_key_id, namespace_string_id, identity_string_id)
         ) WITHOUT ROWID;
@@ -2513,7 +2523,8 @@ fn write_sqlite_scan_with_sources_inner(
                    metadata_title_values.value AS metadata_title,
                    year_values.value AS year,
                    manufacturer_values.value AS manufacturer,
-                   category_values.value AS category,
+                   launchable_identity_rows.players,
+                   control_values.value AS control,
                    source_values.value AS source
             FROM launchable_identity_rows
             JOIN games ON games.game_key_id = launchable_identity_rows.game_key_id
@@ -2529,8 +2540,8 @@ fn write_sqlite_scan_with_sources_inner(
                  ON year_values.string_id = launchable_identity_rows.year_string_id
             LEFT JOIN string_values manufacturer_values
                  ON manufacturer_values.string_id = launchable_identity_rows.manufacturer_string_id
-            LEFT JOIN string_values category_values
-                 ON category_values.string_id = launchable_identity_rows.category_string_id
+            LEFT JOIN string_values control_values
+                 ON control_values.string_id = launchable_identity_rows.control_string_id
             JOIN string_values source_values
                  ON source_values.string_id = launchable_identity_rows.source_string_id;
         CREATE TABLE ui_arcade_preferred (
@@ -2566,7 +2577,8 @@ fn write_sqlite_scan_with_sources_inner(
                    ui_arcade_preferred_text.system_id,
                    ui_arcade_preferred_text.year,
                    ui_arcade_preferred_text.manufacturer,
-                   ui_arcade_preferred_text.category,
+                   ui_arcade_preferred_text.players,
+                   ui_arcade_preferred_text.control,
                    ui_arcade_preferred_text.discovered_at_unix
             FROM ui_arcade_preferred_text
             UNION ALL
@@ -2579,11 +2591,8 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id,
                    game_detail_rows.year,
                    games.manufacturer,
-                   CASE
-                       WHEN games.system_id = 'amiga' AND games.genre = 'AmigaVision' THEN 'Games'
-                       WHEN games.system_id = 'amiga' AND games.genre = 'AmigaVision demos' THEN 'Demos'
-                       ELSE games.genre
-                   END AS category,
+                   NULL AS players,
+                   NULL AS control,
                    game_detail_rows.discovered_at_unix
             FROM launcher_catalog_rows
             JOIN launch_target_rows ON launch_target_rows.launch_id = launcher_catalog_rows.launch_id
@@ -2622,7 +2631,8 @@ fn write_sqlite_scan_with_sources_inner(
                    games.system_id,
                    COALESCE(i.year, game_detail_rows.year) AS year,
                    COALESCE(i.manufacturer, games.manufacturer) AS manufacturer,
-                   COALESCE(i.category, games.genre) AS category,
+                   i.players,
+                   i.control,
                    game_detail_rows.discovered_at_unix,
                    i.identity_id,
                    CASE
@@ -2658,7 +2668,8 @@ fn write_sqlite_scan_with_sources_inner(
                    ui_arcade_variants_text.system_id,
                    ui_arcade_variants_text.year,
                    ui_arcade_variants_text.manufacturer,
-                   ui_arcade_variants_text.category,
+                   ui_arcade_variants_text.players,
+                   ui_arcade_variants_text.control,
                    ui_arcade_variants_text.discovered_at_unix,
                    ui_arcade_variants_text.identity_id,
                    ui_arcade_variants_text.family_id,
@@ -2942,8 +2953,8 @@ fn write_sqlite_scan_with_sources_inner(
             .map_err(|e| format!("prepare prepared launch diagnostic insert: {e}"))?;
         let mut identity_stmt = tx
             .prepare(
-                "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,category_string_id,source_string_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO launchable_identity_rows(game_key_id,namespace_string_id,identity_string_id,family_string_id,metadata_title_string_id,year_string_id,manufacturer_string_id,players,control_string_id,source_string_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             )
             .map_err(|e| format!("prepare launchable identity insert: {e}"))?;
         let mut region_stmt = tx
@@ -3084,7 +3095,8 @@ fn write_sqlite_scan_with_sources_inner(
                         ArcadeGameMetadataKey {
                             year: discovery.year,
                             manufacturer: discovery.manufacturer.clone().unwrap_or_default(),
-                            category: discovery.genre.clone().unwrap_or_default(),
+                            players: None,
+                            control: String::new(),
                         },
                         false,
                         CatalogProjectionSource {
@@ -3170,7 +3182,7 @@ fn write_sqlite_scan_with_sources_inner(
             }
             let mut arcade_identity = None;
             if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-                let (family_id, title, year, manufacturer, category, source) =
+                let (family_id, title, year, manufacturer, players, control, source) =
                     mame_identity_projection(
                         &identity_id,
                         &arcade_metadata,
@@ -3186,7 +3198,8 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern_optional(title),
                         string_interner.intern_optional(year),
                         string_interner.intern_optional(manufacturer),
-                        string_interner.intern_optional(category),
+                        players.map(i64::from),
+                        string_interner.intern_optional(control),
                         string_interner.intern(source)
                     ])
                     .map_err(|e| format!("insert launchable identity: {e}"))?;
@@ -3203,6 +3216,7 @@ fn write_sqlite_scan_with_sources_inner(
                         string_interner.intern_optional(identity.metadata_title.as_deref()),
                         string_interner.intern_optional(identity.year.as_deref()),
                         string_interner.intern_optional(identity.manufacturer.as_deref()),
+                        Option::<i64>::None,
                         Option::<i64>::None,
                         string_interner.intern(identity.source)
                     ])
@@ -5016,7 +5030,8 @@ mod tests {
         system_id: String,
         year: Option<u16>,
         manufacturer: String,
-        category: String,
+        players: Option<u8>,
+        control: String,
         is_new: bool,
     }
 
@@ -5033,7 +5048,8 @@ mod tests {
                 system_id: game.system_id.to_string(),
                 year: game.year,
                 manufacturer: game.manufacturer.to_string(),
-                category: game.category.to_string(),
+                players: game.players,
+                control: game.control.to_string(),
                 is_new: game.is_new,
             })
             .collect()
@@ -5079,23 +5095,11 @@ mod tests {
         );
     }
 
-    fn category_options_as_set(catalog: &ArcadeCatalog, system_id: &str) -> BTreeSet<String> {
+    fn player_options_as_set(catalog: &ArcadeCatalog, system_id: &str) -> BTreeSet<String> {
         catalog
-            .category_options(system_id)
+            .player_options(system_id)
             .into_iter()
             .map(|option| option.label)
-            .collect()
-    }
-
-    fn distinct_categories_from_view(conn: &Connection, view: &str) -> BTreeSet<String> {
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT DISTINCT category FROM {view} WHERE system_id='arcade' ORDER BY category"
-            ))
-            .expect("prepare category query");
-        stmt.query_map([], |row| row.get::<_, String>(0))
-            .expect("query categories")
-            .map(|row| row.expect("category row"))
             .collect()
     }
 
@@ -5246,7 +5250,6 @@ mod tests {
             .preview("game00001")
             .year(1983)
             .manufacturer("Example")
-            .category("Maze")
             .build();
         let mut saturn_game = arcade_game("Nights into Dreams")
             .path(saturn_path)
@@ -5254,7 +5257,6 @@ mod tests {
             .system_id("saturn")
             .year(1996)
             .manufacturer("Sega")
-            .category("Action")
             .build();
         saturn_game.preview_archive_path =
             preview_worker::preview_archive_path_for_system("saturn").into();
@@ -5339,7 +5341,8 @@ mod tests {
         let compatibility_rows = conn
             .prepare(
                 "SELECT title,launch_ref,system_id,preview_asset_key,has_preview,
-                        COALESCE(year,-1),COALESCE(manufacturer,''),COALESCE(category,'')
+                        COALESCE(year,-1),COALESCE(manufacturer,''),COALESCE(players,-1),
+                        COALESCE(control,'')
                  FROM launcher_catalog_text ORDER BY ordinal",
             )
             .expect("prepare canonical compatibility row oracle")
@@ -5352,7 +5355,8 @@ mod tests {
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             })
             .expect("query canonical compatibility row oracle")
@@ -5370,7 +5374,8 @@ mod tests {
                     i64::from(game.has_preview),
                     game.year.map_or(-1, i64::from),
                     game.manufacturer.to_string(),
-                    game.category.to_string(),
+                    game.players.map_or(-1, i64::from),
+                    game.control.to_string(),
                 )
             })
             .collect::<Vec<_>>();
@@ -5438,12 +5443,10 @@ mod tests {
             arcade_game("Agony")
                 .path(shared_ref)
                 .system_id("amiga")
-                .category("Games")
                 .build(),
             arcade_game("Alien Breed")
                 .path(shared_ref)
                 .system_id("amiga")
-                .category("Games")
                 .build(),
         ];
         let expected = ArcadeCatalog::new_with_deferred_text_indexes(
@@ -5981,8 +5984,10 @@ mod tests {
         ]);
         let mut shooter = mra_discovery(1, "Repair Shooter");
         shooter.genre = Some("Shooter".to_string());
+        shooter.manufacturer = Some("Capcom".to_string());
         let mut maze = mra_discovery(2, "Repair Maze");
         maze.genre = Some("Maze".to_string());
+        maze.manufacturer = Some("Namco".to_string());
         save_sqlite_scan_with_progress_and_stamp_and_catalog(
             &db,
             &sqlite_scan_with_discoveries(vec![shooter, maze]),
@@ -5993,11 +5998,11 @@ mod tests {
         .expect("write catalog and projection");
         let loaded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load full sqlite catalog");
-        assert_eq!(loaded.catalog.category_option_count("arcade"), 2);
+        assert_eq!(loaded.catalog.manufacturer_option_count("arcade"), 2);
 
         let mut incomplete_games = loaded.catalog.games.as_ref().clone();
         for game in &mut incomplete_games {
-            game.category = "Arcade".into();
+            game.manufacturer = "Arcade".into();
         }
         let incomplete = ArcadeCatalog::new(
             PathBuf::from("/media/fat/_Arcade"),
@@ -6025,7 +6030,12 @@ mod tests {
             .expect("repair embedded-only mismatch");
         let repaired_embedded = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load repaired embedded recovery cache");
-        assert_eq!(repaired_embedded.catalog.category_option_count("arcade"), 2);
+        assert_eq!(
+            repaired_embedded
+                .catalog
+                .manufacturer_option_count("arcade"),
+            2
+        );
 
         let conn = Connection::open(&db).expect("reopen catalog projection table");
         conn.execute(
@@ -6044,10 +6054,13 @@ mod tests {
 
         let recovery_cache = load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db)
             .expect("load embedded recovery cache");
-        assert_eq!(recovery_cache.catalog.category_option_count("arcade"), 1);
+        assert_eq!(
+            recovery_cache.catalog.manufacturer_option_count("arcade"),
+            1
+        );
         let hydrated = load_arcade_catalog_from_materialized_sqlite_at("/media/fat/_Arcade", &db)
             .expect("hydrate retained materialized rows");
-        assert_eq!(hydrated.catalog.category_option_count("arcade"), 2);
+        assert_eq!(hydrated.catalog.manufacturer_option_count("arcade"), 2);
 
         repair_catalog_projections_for_catalog(&db, &hydrated.catalog, &stamp)
             .expect("repair filter mismatch");
@@ -6063,7 +6076,7 @@ mod tests {
             .catalog
             .filter_option_mismatches(&repaired)
             .is_empty());
-        assert_eq!(repaired.category_option_count("arcade"), 2);
+        assert_eq!(repaired.manufacturer_option_count("arcade"), 2);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6370,7 +6383,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_catalog_loads_runtime_filter_metadata_from_mame_identity() {
+    fn sqlite_catalog_loads_player_and_control_metadata_from_mame_identity() {
         let root = unique_temp_dir("sqlite-filter-metadata");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
@@ -6383,10 +6396,11 @@ mod tests {
                 title TEXT NOT NULL,
                 year TEXT,
                 manufacturer TEXT,
-                category TEXT
+                players INTEGER,
+                control_type TEXT
             ) WITHOUT ROWID;
-            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
-            VALUES ('filtergame',NULL,'Filter Game','1986','Capcom','Shooter / Vertical');
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,players,control_type)
+            VALUES ('filtergame',NULL,'Filter Game','1986','Capcom',2,'joy');
             "#,
         )
         .expect("write mame metadata");
@@ -6397,7 +6411,6 @@ mod tests {
         discovery.setname = Some("filtergame".to_string());
         discovery.year = Some(1979);
         discovery.manufacturer = Some("Fallback Maker".to_string());
-        discovery.genre = Some("Fallback Genre".to_string());
 
         write_sqlite_scan_with_mame(
             &db,
@@ -6411,21 +6424,25 @@ mod tests {
 
         assert_eq!(game.year, Some(1986));
         assert_eq!(game.manufacturer.as_ref(), "Capcom");
-        assert_eq!(game.category.as_ref(), "Shooter / Vertical");
+        assert_eq!(game.players, Some(2));
+        assert_eq!(game.control.as_ref(), "joy");
         assert_eq!(loaded.catalog.decade_options("arcade")[0].label, "1980's");
         assert_eq!(
-            loaded.catalog.filtered_game_count(
-                "arcade",
-                &crate::arcade_catalog::ArcadeFilter::Category("Shooter / Vertical".to_string())
-            ),
+            loaded
+                .catalog
+                .filtered_game_count("arcade", &crate::arcade_catalog::ArcadeFilter::Players(2)),
             1
+        );
+        assert_eq!(
+            loaded.catalog.control_options("arcade")[0].label,
+            "Joystick"
         );
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn arcade_category_metadata_survives_views_sqlite_load_and_navigation_projection() {
-        let root = unique_temp_dir("sqlite-many-filter-categories");
+    fn player_and_control_metadata_survives_sqlite_load_and_navigation_projection() {
+        let root = unique_temp_dir("sqlite-player-control-filters");
         let db = root.join("library.sqlite3");
         let mame_db = root.join("mame.sqlite3");
         let conn = Connection::open(&mame_db).expect("open mame db");
@@ -6437,26 +6454,25 @@ mod tests {
                 title TEXT NOT NULL,
                 year TEXT,
                 manufacturer TEXT,
-                category TEXT
+                players INTEGER,
+                control_type TEXT
             ) WITHOUT ROWID;
-            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,players,control_type)
             VALUES
-                ('catmaze',NULL,'Category Maze','1980','Namco','Maze'),
-                ('catshoot',NULL,'Category Shooter','1981','Capcom','Shooter / Vertical'),
-                ('catfight',NULL,'Category Fighter','1982','Irem','Fighter / 2D'),
-                ('catdrive',NULL,'Category Driver','1983','Sega','Driving / Race'),
-                ('catpuzzle',NULL,'Category Puzzle','1984','Taito','Puzzle / Drop');
+                ('game1',NULL,'Game One','1980','Namco',1,'joy'),
+                ('game2',NULL,'Game Two','1981','Capcom',2,'joy'),
+                ('game3',NULL,'Game Three','1982','Irem',3,'dial'),
+                ('game4',NULL,'Game Four','1983','Sega',4,'only_buttons');
             "#,
         )
         .expect("write mame metadata");
         drop(conn);
 
         let discoveries = [
-            ("catmaze", "Category Maze"),
-            ("catshoot", "Category Shooter"),
-            ("catfight", "Category Fighter"),
-            ("catdrive", "Category Driver"),
-            ("catpuzzle", "Category Puzzle"),
+            ("game1", "Game One"),
+            ("game2", "Game Two"),
+            ("game3", "Game Three"),
+            ("game4", "Game Four"),
         ]
         .into_iter()
         .enumerate()
@@ -6465,14 +6481,13 @@ mod tests {
             discovery.launch_ref = format!("/media/fat/_Arcade/{title}.mra");
             discovery.source_path = discovery.launch_ref.clone();
             discovery.setname = Some(setname.to_string());
-            discovery.genre = Some("Arcade".to_string());
             discovery
         })
         .collect::<Vec<_>>();
 
         let stamp = catalog_stamp::CatalogStamp::from_lines(vec![
             format!("schema\t{SCHEMA_VERSION}"),
-            "catalog-build\tmany-categories".to_string(),
+            "catalog-build\tplayer-control".to_string(),
             "root\t0\tfixture".to_string(),
         ]);
         write_sqlite_scan_with_sources(
@@ -6490,33 +6505,21 @@ mod tests {
             None,
         )
         .expect("write sqlite");
-        let expected = BTreeSet::from([
-            "Driving / Race".to_string(),
-            "Fighter / 2D".to_string(),
-            "Maze".to_string(),
-            "Puzzle / Drop".to_string(),
-            "Shooter / Vertical".to_string(),
+        let expected_players = BTreeSet::from([
+            "1 Player".to_string(),
+            "2 Players".to_string(),
+            "3 Players".to_string(),
+            "4 Players".to_string(),
         ]);
-        let conn = open_sqlite_read_only(&db).expect("open library sqlite");
-
-        assert_eq!(
-            distinct_categories_from_view(&conn, "ui_arcade_preferred_text"),
-            expected,
-            "preferred arcade view must preserve per-game metadata categories"
-        );
-        assert_eq!(
-            distinct_categories_from_view(&conn, "launcher_catalog_text"),
-            expected,
-            "launcher catalog view must preserve per-game metadata categories"
-        );
 
         let loaded =
             load_arcade_catalog_from_sqlite_at("/media/fat/_Arcade", &db).expect("load catalog");
         assert_eq!(
-            category_options_as_set(&loaded.catalog, "arcade"),
-            expected,
-            "SQLite runtime load must expose all category filter options"
+            player_options_as_set(&loaded.catalog, "arcade"),
+            expected_players,
+            "SQLite runtime load must expose all player filter options"
         );
+        assert_eq!(loaded.catalog.control_option_count("arcade"), 3);
 
         repair_catalog_projections_for_catalog(&db, &loaded.catalog, &stamp)
             .expect("repair navigation projection");
@@ -6528,10 +6531,11 @@ mod tests {
         let navigation_catalog =
             ArcadeCatalog::from_navigation_projection("/media/fat/_Arcade", navigation);
         assert_eq!(
-            category_options_as_set(&navigation_catalog, "arcade"),
-            expected,
-            "navigation projection must expose all category filter options"
+            player_options_as_set(&navigation_catalog, "arcade"),
+            expected_players,
+            "navigation projection must expose all player filter options"
         );
+        assert_eq!(navigation_catalog.control_option_count("arcade"), 3);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6549,10 +6553,11 @@ mod tests {
                 title TEXT NOT NULL,
                 year TEXT,
                 manufacturer TEXT,
-                category TEXT
+                players INTEGER,
+                control_type TEXT
             ) WITHOUT ROWID;
-            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,category)
-            VALUES ('badyear',NULL,'Bad Year','19??','Capcom','Shooter / Vertical');
+            INSERT INTO mame_machines(setname,parent_setname,title,year,manufacturer,players,control_type)
+            VALUES ('badyear',NULL,'Bad Year','19??','Capcom',2,'joy');
             "#,
         )
         .expect("write mame metadata");
@@ -6574,7 +6579,8 @@ mod tests {
 
         assert_eq!(game.year, None);
         assert_eq!(game.manufacturer.as_ref(), "Capcom");
-        assert_eq!(game.category.as_ref(), "Shooter / Vertical");
+        assert_eq!(game.players, Some(2));
+        assert_eq!(game.control.as_ref(), "joy");
         assert!(loaded.catalog.decade_options("arcade").is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
