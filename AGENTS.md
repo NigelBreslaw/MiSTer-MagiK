@@ -124,6 +124,7 @@ Use `scripts/validate paths PATH...` for explicit files or directories.
 
 ## Sources Of Truth
 
+- AI task routing: `docs/agents/task-map.md`
 - Current architecture: `docs/architecture.md`
 - Catalog lifecycle: `docs/catalog.md`
 - Device/recovery policy: `docs/device.md`
