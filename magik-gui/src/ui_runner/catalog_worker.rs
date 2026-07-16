@@ -368,6 +368,12 @@ pub(super) fn start_library_catalog_worker(
                 ),
             });
             if cached_catalog_published && plan == CatalogWorkerPlan::CheckStamp {
+                repair_navigation_projection_cache_after_ready(
+                    &root,
+                    projection_repair_catalog.as_ref(),
+                    projection_repair_allowed,
+                    &tx,
+                );
                 let _ = tx.send(CatalogWorkerMessage::Timing {
                     name: "catalog_hydration_handoff".to_string(),
                     detail: "status=validation_deferred request=check_stamp".to_string(),

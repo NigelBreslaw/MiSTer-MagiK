@@ -1,6 +1,34 @@
 {
   "schema": 1,
   "fixtures": {
+    "1192021b86ff26dc": {
+      "id": "reference-mister-2026-07-16-schema66",
+      "summary_schema": 4,
+      "catalog_schema_version": 66,
+      "catalog_build_version": 12,
+      "counts": {
+        "games": 53459,
+        "game_rows": 53459,
+        "launcher_visible": 51093,
+        "launcher_rows": 51093,
+        "systems": 71
+      },
+      "anchors": {
+        "arcade_visible": 903,
+        "astrocade_games": 23,
+        "astrocade_kind": "console",
+        "gamegear_games": 422,
+        "gamegear_kind": "handheld",
+        "pc88_game_rows": 3831,
+        "sms_games": 447,
+        "sms_kind": "console"
+      },
+      "performance_budgets": {
+        "library_ready_ms": 96592,
+        "library_db_saved_ms": 117766,
+        "db_bytes": 13151232
+      }
+    },
     "962a9ad37c3c49e7": {
       "id": "reference-mister-2026-07-16",
       "summary_schema": 3,
