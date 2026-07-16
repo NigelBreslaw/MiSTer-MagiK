@@ -131,7 +131,7 @@ PY
 }
 
 run_full_host() {
-  run_parallel_groups core catalog tools shared desktop docs
+  run_parallel_groups core catalog tools
 }
 
 run_group() {

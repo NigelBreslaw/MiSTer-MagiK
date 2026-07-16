@@ -54,10 +54,6 @@ def main() -> int:
     required_host_fragments = (
         "magik-gui/catalog/target/debug",
         "!magik-gui/catalog/target/debug/incremental",
-        "framebuffer-stream/target/debug",
-        "!framebuffer-stream/target/debug/incremental",
-        "desktop/target/debug",
-        "!desktop/target/debug/incremental",
         "steps.cache-id.outputs.cargo_host",
         "steps.cache-id.outputs.host_target",
     )
@@ -65,7 +61,16 @@ def main() -> int:
         if fragment not in rust:
             fail(f"host cache is missing {fragment}")
     if "libfontconfig1-dev" not in rust:
-        fail("host validation does not install the desktop fontconfig dependency")
+        fail("desktop validation does not install the fontconfig dependency")
+    for fragment in (
+        "name: desktop-docs",
+        "target-host-desktop-v2-",
+        "desktop/target/debug",
+        "!desktop/target/debug/incremental",
+        "scripts/validate paths desktop documentation",
+    ):
+        if fragment not in rust:
+            fail(f"desktop/docs validation is missing {fragment}")
     if rust.count("steps.cache-id.outputs.cross_abi") < 6:
         fail("ARM restore keys are not consistently scoped to the cross ABI")
 

@@ -28,6 +28,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Compute cache identities
+        id: cache-id
+        run: python3 scripts/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        working-directory: magik-gui
+        run: rustup show
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.cargo_host }}
+          restore-keys: |
+            cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+      - name: Cache host build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            magik-gui/target/debug
+            !magik-gui/target/debug/incremental
+            magik-gui/catalog/target/debug
+            !magik-gui/catalog/target/debug/incremental
+            tools/magik-agent/target/debug
+            !tools/magik-agent/target/debug/incremental
+            tools/mister/target/debug
+            !tools/mister/target/debug/incremental
+          key: target-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_target }}
+          restore-keys: |
+            target-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+
+      - name: Full host validation
+        run: scripts/validate full-host
+
+  desktop-docs:
+    name: desktop-docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Initialize public desktop submodules
         run: git submodule update --init desktop/vendor/github-app desktop/vendor/material-icon-theme
 
@@ -65,28 +110,18 @@ jobs:
           restore-keys: |
             cargo-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
-      - name: Cache host build outputs
+      - name: Cache desktop build outputs
         uses: actions/cache@v6
         with:
           path: |
-            magik-gui/target/debug
-            !magik-gui/target/debug/incremental
-            magik-gui/catalog/target/debug
-            !magik-gui/catalog/target/debug/incremental
-            framebuffer-stream/target/debug
-            !framebuffer-stream/target/debug/incremental
             desktop/target/debug
             !desktop/target/debug/incremental
-            tools/magik-agent/target/debug
-            !tools/magik-agent/target/debug/incremental
-            tools/mister/target/debug
-            !tools/mister/target/debug/incremental
-          key: target-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_target }}
+          key: target-host-desktop-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-${{ steps.cache-id.outputs.host_target }}
           restore-keys: |
-            target-host-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
+            target-host-desktop-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.cache-id.outputs.rust_abi }}-
 
-      - name: Full host validation
-        run: scripts/validate full-host
+      - name: Desktop and documentation validation
+        run: scripts/validate paths desktop documentation
 
   arm-build:
     name: release
