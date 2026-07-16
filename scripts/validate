@@ -8,6 +8,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+RUST_TOOLCHAIN="$(
+  sed -n 's/^channel = "\([^"]*\)"$/\1/p' magik-gui/rust-toolchain.toml
+)"
+[ -n "$RUST_TOOLCHAIN" ] || {
+  echo "could not read the pinned Rust toolchain from magik-gui/rust-toolchain.toml" >&2
+  exit 2
+}
+export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+
 usage() {
   cat <<'EOF'
 usage:
@@ -29,7 +38,7 @@ step() {
 }
 
 run_full_host() {
-  run_parallel_groups core catalog tools
+  run_parallel_groups core catalog tools shared desktop docs
 }
 
 run_group() {
@@ -48,7 +57,19 @@ run_group() {
     tools)
       CARGO_BUILD_JOBS=1 run_check host-tools
       CARGO_BUILD_JOBS=1 run_check mister-clippy
+      CARGO_BUILD_JOBS=1 run_check agent-tests
       CARGO_BUILD_JOBS=1 run_check agent-clippy
+      ;;
+    shared)
+      CARGO_BUILD_JOBS=1 run_check framebuffer-stream-tests
+      CARGO_BUILD_JOBS=1 run_check framebuffer-stream-clippy
+      ;;
+    desktop)
+      CARGO_BUILD_JOBS=1 run_check desktop-tests
+      CARGO_BUILD_JOBS=1 run_check desktop-compiled-check
+      ;;
+    docs)
+      run_check documentation-build
       ;;
     *)
       echo "unknown validation group: $group" >&2
@@ -104,7 +125,19 @@ run_selected_group() {
     tools)
       contains_check mister-tests "$@" && CARGO_BUILD_JOBS=1 run_check mister-tests
       contains_check mister-clippy "$@" && CARGO_BUILD_JOBS=1 run_check mister-clippy
+      contains_check agent-tests "$@" && CARGO_BUILD_JOBS=1 run_check agent-tests
       contains_check agent-clippy "$@" && CARGO_BUILD_JOBS=1 run_check agent-clippy
+      ;;
+    shared)
+      contains_check framebuffer-stream-tests "$@" && CARGO_BUILD_JOBS=1 run_check framebuffer-stream-tests
+      contains_check framebuffer-stream-clippy "$@" && CARGO_BUILD_JOBS=1 run_check framebuffer-stream-clippy
+      ;;
+    desktop)
+      contains_check desktop-tests "$@" && CARGO_BUILD_JOBS=1 run_check desktop-tests
+      contains_check desktop-compiled-check "$@" && CARGO_BUILD_JOBS=1 run_check desktop-compiled-check
+      ;;
+    docs)
+      contains_check documentation-build "$@" && run_check documentation-build
       ;;
     *)
       echo "unknown affected validation group: $group" >&2
@@ -150,16 +183,93 @@ run_affected_plan() {
   fi
   if contains_check mister-tests "${plan[@]}" ||
     contains_check mister-clippy "${plan[@]}" ||
+    contains_check agent-tests "${plan[@]}" ||
     contains_check agent-clippy "${plan[@]}"; then
     groups+=(tools)
   fi
+  if contains_check framebuffer-stream-tests "${plan[@]}" ||
+    contains_check framebuffer-stream-clippy "${plan[@]}"; then
+    groups+=(shared)
+  fi
+  if contains_check desktop-tests "${plan[@]}" ||
+    contains_check desktop-compiled-check "${plan[@]}"; then
+    groups+=(desktop)
+  fi
+  if contains_check documentation-build "${plan[@]}"; then
+    groups+=(docs)
+  fi
   run_affected_parallel_groups "${groups[@]}"
+}
+
+run_public_rust_format() {
+  local manifest
+  for manifest in \
+    magik-gui/Cargo.toml \
+    magik-gui/catalog/Cargo.toml \
+    magik-gui/ui-generated/Cargo.toml \
+    framebuffer-stream/Cargo.toml \
+    tools/mister/Cargo.toml \
+    tools/magik-agent/Cargo.toml \
+    desktop/Cargo.toml; do
+    cargo fmt --manifest-path "$manifest" --check
+  done
+}
+
+require_desktop_submodules() {
+  local path
+  for path in desktop/vendor/github-app desktop/vendor/material-icon-theme; do
+    [ -e "$path/.git" ] || {
+      echo "missing desktop submodule: $path" >&2
+      echo "run: git submodule update --init desktop/vendor/github-app desktop/vendor/material-icon-theme" >&2
+      return 1
+    }
+  done
+}
+
+require_documentation_dependencies() {
+  local node_version node_major pnpm_version
+  command -v node >/dev/null 2>&1 || {
+    echo "Node.js 22 or newer is required for documentation validation" >&2
+    echo "install Node.js 22+ with Corepack support" >&2
+    return 1
+  }
+  node_version="$(node --version 2>/dev/null || true)"
+  node_major="${node_version#v}"
+  node_major="${node_major%%.*}"
+  case "$node_major" in
+    ""|*[!0-9]*)
+      echo "could not determine Node.js version from: $node_version" >&2
+      return 1
+      ;;
+  esac
+  [ "$node_major" -ge 22 ] || {
+    echo "Node.js 22 or newer is required; found $node_version" >&2
+    echo "install Node.js 22+ with Corepack support" >&2
+    return 1
+  }
+  command -v corepack >/dev/null 2>&1 || {
+    echo "Corepack is required to run the pinned pnpm 11.10.0" >&2
+    echo "install Node.js with Corepack support, then run: corepack enable" >&2
+    return 1
+  }
+  pnpm_version="$(corepack pnpm --version 2>/dev/null || true)"
+  [ "$pnpm_version" = "11.10.0" ] || {
+    echo "pnpm 11.10.0 is required through Corepack; found ${pnpm_version:-unavailable}" >&2
+    echo "run: corepack prepare pnpm@11.10.0 --activate" >&2
+    return 1
+  }
+  local node_modules="${MISTER_DOCUMENTATION_NODE_MODULES:-documentation/node_modules}"
+  [ -d "$node_modules/.pnpm" ] && [ -x "$node_modules/.bin/astro" ] || {
+    echo "documentation dependencies are missing or incomplete" >&2
+    echo "run: pnpm --dir documentation install --frozen-lockfile" >&2
+    return 1
+  }
 }
 
 run_check() {
   local check="$1"
   case "$check" in
-    format) step "Format"; scripts/dev-rust fmt ;;
+    format) step "Format all public Rust crates"; run_public_rust_format ;;
     host-tools-fast) step "Fast host tools"; scripts/dev-rust host-tools-fast ;;
     host-tests) step "Host logic tests"; scripts/dev-rust test ;;
     magik-gui-clippy) step "Clippy magik-gui host logic"; (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings) ;;
@@ -169,9 +279,28 @@ run_check() {
     host-tools) step "Full host tools"; scripts/dev-rust host-tools ;;
     mister-tests) step "Test host tools"; cargo test --manifest-path tools/mister/Cargo.toml ;;
     mister-clippy) step "Clippy host tools"; cargo clippy --manifest-path tools/mister/Cargo.toml --all-targets -- -D warnings ;;
+    agent-tests) step "Test MagiK agent"; cargo test --manifest-path tools/magik-agent/Cargo.toml ;;
     agent-clippy) step "Clippy MagiK agent"; cargo clippy --manifest-path tools/magik-agent/Cargo.toml --all-targets -- -D warnings ;;
+    framebuffer-stream-tests) step "Test framebuffer stream"; cargo test --manifest-path framebuffer-stream/Cargo.toml ;;
+    framebuffer-stream-clippy) step "Clippy framebuffer stream"; cargo clippy --manifest-path framebuffer-stream/Cargo.toml --all-targets -- -D warnings ;;
+    desktop-tests) step "Test desktop"; require_desktop_submodules; cargo test --manifest-path desktop/Cargo.toml ;;
+    desktop-compiled-check)
+      step "Check compiled desktop UI"
+      require_desktop_submodules
+      cargo check --manifest-path desktop/Cargo.toml --no-default-features --features compiled-ui
+      ;;
+    documentation-build)
+      step "Build documentation"
+      require_documentation_dependencies
+      corepack pnpm --dir documentation run build
+      ;;
   esac
 }
+
+if [ "${MISTER_VALIDATE_SELF_TEST:-}" = "documentation-prerequisites" ]; then
+  require_documentation_dependencies
+  exit
+fi
 
 mode="${1:-}"
 case "$mode" in
@@ -299,17 +428,23 @@ need_catalog=0
 need_ui=0
 need_mister=0
 need_agent=0
+need_stream=0
+need_desktop=0
+need_docs=0
 
 for path in "${paths[@]}"; do
   case "$path" in
     magik-gui/catalog/*)
-      need_catalog=1; need_host=1; need_ui=1 ;;
+      need_catalog=1; need_host=1; need_ui=1; need_mister=1 ;;
     magik-gui/src/*)
       need_host=1; need_ui=1 ;;
     magik-gui/ui/*|magik-gui/ui-generated/*)
       need_ui=1 ;;
-    magik-gui/Cargo.toml|magik-gui/Cargo.lock|magik-gui/rust-toolchain.toml|magik-gui/build.rs|magik-gui/.cargo/*)
+    magik-gui/Cargo.toml|magik-gui/Cargo.lock|magik-gui/build.rs|magik-gui/.cargo/*)
       need_catalog=1; need_host=1; need_ui=1 ;;
+    magik-gui/rust-toolchain.toml)
+      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1
+      need_stream=1; need_desktop=1 ;;
     magik-gui/build-arm*.sh|magik-gui/Dockerfile*|magik-gui/Cross.toml|magik-gui/scripts/*)
       need_catalog=1; need_host=1; need_ui=1 ;;
     tools/mister/*)
@@ -317,9 +452,14 @@ for path in "${paths[@]}"; do
     tools/magik-agent/*)
       need_agent=1 ;;
     framebuffer-stream/*)
-      need_host=1; need_ui=1; need_agent=1 ;;
+      need_host=1; need_ui=1; need_agent=1; need_stream=1; need_desktop=1 ;;
+    desktop/*)
+      need_desktop=1 ;;
+    documentation/*)
+      need_docs=1 ;;
     Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*)
-      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1 ;;
+      need_catalog=1; need_host=1; need_ui=1; need_mister=1; need_agent=1
+      need_stream=1; need_desktop=1; need_docs=1 ;;
   esac
 done
 
@@ -327,8 +467,11 @@ plan=(format host-tools-fast)
 [ "$need_host" -eq 1 ] && plan+=(host-tests magik-gui-clippy)
 [ "$need_catalog" -eq 1 ] && plan+=(catalog-tests catalog-clippy)
 [ "$need_ui" -eq 1 ] && plan+=(production-ui-check)
+[ "$need_stream" -eq 1 ] && plan+=(framebuffer-stream-tests framebuffer-stream-clippy)
 [ "$need_mister" -eq 1 ] && plan+=(mister-tests mister-clippy)
-[ "$need_agent" -eq 1 ] && plan+=(agent-clippy)
+[ "$need_agent" -eq 1 ] && plan+=(agent-tests agent-clippy)
+[ "$need_desktop" -eq 1 ] && plan+=(desktop-tests desktop-compiled-check)
+[ "$need_docs" -eq 1 ] && plan+=(documentation-build)
 
 if [ "$print_plan" -eq 1 ]; then
   printf '%s\n' "${plan[@]}"

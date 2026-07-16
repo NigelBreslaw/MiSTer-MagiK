@@ -54,6 +54,10 @@ def main() -> int:
     required_host_fragments = (
         "magik-gui/catalog/target/debug",
         "!magik-gui/catalog/target/debug/incremental",
+        "framebuffer-stream/target/debug",
+        "!framebuffer-stream/target/debug/incremental",
+        "desktop/target/debug",
+        "!desktop/target/debug/incremental",
         "steps.cache-id.outputs.cargo_host",
         "steps.cache-id.outputs.host_target",
     )

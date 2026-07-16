@@ -34,10 +34,13 @@ EOF
 }
 
 need_component_hint() {
-  local component="$1"
+  local component="$1" toolchain
+  toolchain="$(
+    sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$RUST_DIR/rust-toolchain.toml"
+  )"
   echo "Hint: this repo declares Rust components in magik-gui/rust-toolchain.toml." >&2
   echo "      If rustup did not install $component automatically, run:" >&2
-  echo "      rustup component add $component --toolchain stable-aarch64-apple-darwin" >&2
+  echo "      rustup component add $component --toolchain ${toolchain:-<pinned-channel>}" >&2
 }
 
 cross_env() {
