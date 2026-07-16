@@ -1,0 +1,171 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use super::*;
+use std::path::Path;
+
+const READY_FAIL_OPEN: Duration = Duration::from_secs(20);
+const HOLD_FAIL_OPEN: Duration = Duration::from_secs(10);
+
+pub(super) struct CatalogPublicationTestDriver {
+    ready_gate: Option<String>,
+    first_frame_release_gate: Option<String>,
+    replay_catalog: Option<ArcadeCatalog>,
+    ready_sent: bool,
+    ready_deadline: Option<Instant>,
+    holding_first_frame: bool,
+    hold_deadline: Option<Instant>,
+}
+
+impl CatalogPublicationTestDriver {
+    pub(super) fn from_env(start: Instant) -> Self {
+        let ready_gate = volatile_test_path("MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE");
+        let first_frame_release_gate =
+            volatile_test_path("MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE");
+        let session = volatile_test_path("MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION");
+        let armed = ready_gate.is_some()
+            && first_frame_release_gate.is_some()
+            && session
+                .as_deref()
+                .is_some_and(|path| Path::new(path).exists());
+        if let Some(path) = session.as_deref().filter(|_| armed) {
+            let _ = std::fs::remove_file(path);
+        }
+        if armed {
+            print_startup_event(
+                start,
+                "catalog_publication_test_armed",
+                "scenario=fresh-ready",
+            );
+        }
+        Self {
+            ready_gate: armed.then_some(ready_gate).flatten(),
+            first_frame_release_gate: armed.then_some(first_frame_release_gate).flatten(),
+            replay_catalog: None,
+            ready_sent: false,
+            ready_deadline: armed.then_some(start + READY_FAIL_OPEN),
+            holding_first_frame: false,
+            hold_deadline: None,
+        }
+    }
+
+    pub(super) fn prepare_startup_catalog(
+        &mut self,
+        root: &str,
+        catalog: &mut ArcadeCatalog,
+        catalog_ready: &mut bool,
+        start: Instant,
+    ) -> bool {
+        if self.ready_gate.is_none() || !*catalog_ready {
+            return false;
+        }
+        self.replay_catalog = Some(catalog.clone());
+        *catalog = empty_arcade_catalog(root);
+        *catalog_ready = false;
+        print_startup_event(
+            start,
+            "catalog_publication_test_waiting",
+            "scenario=fresh-ready",
+        );
+        true
+    }
+
+    pub(super) fn catalog_worker_allowed(&self) -> bool {
+        self.ready_gate.is_none()
+    }
+
+    pub(super) fn tick(&mut self, now: Instant, start: Instant) -> Option<CatalogWorkerMessage> {
+        if self.ready_sent {
+            return None;
+        }
+        let gate_open = self
+            .ready_gate
+            .as_deref()
+            .is_some_and(|path| Path::new(path).exists());
+        let fail_open = self.ready_deadline.is_some_and(|deadline| now >= deadline);
+        if !gate_open && !fail_open {
+            return None;
+        }
+        if fail_open {
+            print_startup_event(
+                start,
+                "catalog_publication_test_fail_open",
+                "phase=ready-wait",
+            );
+        }
+        let catalog = self.replay_catalog.take()?;
+        self.ready_sent = true;
+        print_startup_event(
+            start,
+            "catalog_publication_test_ready",
+            format!("games={} systems={}", catalog.len(), catalog.systems.len()),
+        );
+        Some(CatalogWorkerMessage::Ready {
+            catalog,
+            summary: None,
+            load_us: 0,
+            source: CatalogSource::FreshBuild,
+            durable_save_pending: false,
+            generation_fingerprint: None,
+            publication_ack: None,
+        })
+    }
+
+    pub(super) fn hold_first_launcher_frame(&mut self, start: Instant) {
+        if self.first_frame_release_gate.is_some() && !self.holding_first_frame {
+            self.holding_first_frame = true;
+            self.hold_deadline = Some(Instant::now() + HOLD_FAIL_OPEN);
+            print_startup_event(
+                start,
+                "catalog_publication_test_first_frame_held",
+                "scenario=fresh-ready",
+            );
+        }
+    }
+
+    pub(super) fn wait_for_first_frame_release(&mut self, now: Instant, start: Instant) -> bool {
+        if !self.holding_first_frame {
+            return false;
+        }
+        let released = self
+            .first_frame_release_gate
+            .as_deref()
+            .is_some_and(|path| Path::new(path).exists());
+        let fail_open = self.hold_deadline.is_some_and(|deadline| now >= deadline);
+        if released || fail_open {
+            if fail_open {
+                print_startup_event(
+                    start,
+                    "catalog_publication_test_fail_open",
+                    "phase=first-frame-hold",
+                );
+            }
+            self.holding_first_frame = false;
+            self.hold_deadline = None;
+            return false;
+        }
+        true
+    }
+}
+
+fn volatile_test_path(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|path| is_volatile_test_path(path))
+}
+
+fn is_volatile_test_path(path: &str) -> bool {
+    path.starts_with("/tmp/") && path.len() > "/tmp/".len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publication_test_paths_must_be_volatile() {
+        assert!(is_volatile_test_path("/tmp/catalog-publication"));
+        assert!(!is_volatile_test_path("/tmp/"));
+        assert!(!is_volatile_test_path("/media/fat/persistent"));
+    }
+}

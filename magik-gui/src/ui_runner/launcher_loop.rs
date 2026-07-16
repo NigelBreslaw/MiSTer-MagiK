@@ -793,6 +793,30 @@ impl LauncherRenderIntent {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LauncherBridgeSyncPlan {
+    None,
+    Full,
+    Light,
+}
+
+fn launcher_bridge_sync_plan(
+    launching: bool,
+    _startup_input_enabled: bool,
+    full_bridge_dirty: bool,
+    light_bridge_dirty: bool,
+) -> LauncherBridgeSyncPlan {
+    if launching {
+        LauncherBridgeSyncPlan::None
+    } else if full_bridge_dirty {
+        LauncherBridgeSyncPlan::Full
+    } else if light_bridge_dirty {
+        LauncherBridgeSyncPlan::Light
+    } else {
+        LauncherBridgeSyncPlan::None
+    }
+}
+
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
 const CATALOG_BACKGROUND_IDLE_SETTLE: Duration = Duration::from_millis(2000);
 const HOME_LAYOUT_PADDING: usize = 18;
@@ -1382,6 +1406,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_session = LauncherCatalogSession::new(
         deferred_library_rebuild || catalog_refresh_policy.force_requested(),
     );
+    let mut catalog_publication_test = CatalogPublicationTestDriver::from_env(start);
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
@@ -1423,7 +1448,14 @@ pub(super) fn run_launcher_loop(
             ),
         );
         let execution_mode = catalog_hydration_execution_mode(request);
-        scheduler.start_catalog_worker(arcade_root.clone(), request, initial_cache, execution_mode);
+        if catalog_publication_test.catalog_worker_allowed() {
+            scheduler.start_catalog_worker(
+                arcade_root.clone(),
+                request,
+                initial_cache,
+                execution_mode,
+            );
+        }
     } else if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
         catalog_ready = true;
@@ -1443,7 +1475,8 @@ pub(super) fn run_launcher_loop(
             if summary_seed_catalog_worker_starts_immediately(
                 request,
                 return_catalog_hydration_needed,
-            ) {
+            ) && catalog_publication_test.catalog_worker_allowed()
+            {
                 let execution_mode = catalog_hydration_execution_mode(request);
                 print_startup_event(start, "catalog_worker_start", &arcade_root);
                 scheduler.start_catalog_worker(
@@ -1524,6 +1557,15 @@ pub(super) fn run_launcher_loop(
                 catalog_session.mark_refresh_done();
             }
         }
+    }
+    if catalog_publication_test.prepare_startup_catalog(
+        &arcade_root,
+        &mut catalog,
+        &mut catalog_ready,
+        start,
+    ) {
+        startup_ready_catalog_source = CatalogSource::FreshBuild;
+        catalog_version = catalog_version.wrapping_add(1);
     }
     nav.sync_launcher_taxonomy(&catalog);
     if capsule_seed_ready {
@@ -1698,6 +1740,7 @@ pub(super) fn run_launcher_loop(
     let mut preview_scroll_exit_at = preview_scroll_exit_after_trace_deadline(run_start);
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
+    let mut first_launcher_frame_logged = false;
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
@@ -1706,6 +1749,10 @@ pub(super) fn run_launcher_loop(
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
+            std::thread::sleep(Duration::from_millis(16));
+            continue;
+        }
         let loop_start = Instant::now();
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
@@ -1825,7 +1872,7 @@ pub(super) fn run_launcher_loop(
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
             frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
-            deferred_worker_policy.allowed,
+            deferred_worker_policy.allowed && catalog_publication_test.catalog_worker_allowed(),
             loop_start,
             deferred_worker_policy.delay,
             catalog_builder_lock_available,
@@ -1843,10 +1890,13 @@ pub(super) fn run_launcher_loop(
             );
         }
 
+        if let Some(message) = catalog_publication_test.tick(loop_start, start) {
+            deferred_catalog_events.push_back(message);
+        }
         if catalog_messages_need_polling(
             pending_catalog_ready.is_some(),
             catalog_session.refresh_done(),
-            scheduler.catalog_messages_running(),
+            scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
         ) {
             let catalog_disconnected = scheduler.poll_catalog(&mut catalog_events);
             deferred_catalog_events.extend(catalog_events.drain());
@@ -2677,50 +2727,6 @@ pub(super) fn run_launcher_loop(
             if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
                 nav.screen = screen;
             }
-
-            if full_bridge_dirty {
-                sync_bridge_launcher(
-                    &app,
-                    &pad,
-                    &nav,
-                    &lifecycle,
-                    &setup,
-                    scheduler.visible_loading_title(&loading_title),
-                    "",
-                    Some(&catalog),
-                    &mut preview,
-                    &mut bridge_models,
-                    catalog_version,
-                    defer_selected_preview,
-                    ui.render_w(),
-                );
-                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
-                request_launcher_redraw!();
-            } else if light_bridge_dirty {
-                let active_games = if nav.screen == Screen::Arcade {
-                    Some(active_system_game_view(&catalog, &nav))
-                } else {
-                    None
-                };
-                sync_bridge_launcher_light(
-                    &app,
-                    &nav,
-                    &lifecycle,
-                    &mut bridge_models,
-                    &setup,
-                    scheduler.visible_loading_title(&loading_title),
-                    "",
-                    &catalog,
-                    active_games,
-                    &mut preview,
-                    should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
-                    defer_selected_preview,
-                    ui.render_w(),
-                );
-                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
-                request_launcher_redraw!();
-            }
-            sync_startup_visibility(&app, &lifecycle);
         } else {
             let _ = pad.poll();
             if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
@@ -2749,6 +2755,59 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+
+        match launcher_bridge_sync_plan(
+            launching,
+            lifecycle.startup_input_enabled(),
+            full_bridge_dirty,
+            light_bridge_dirty,
+        ) {
+            LauncherBridgeSyncPlan::Full => {
+                sync_bridge_launcher(
+                    &app,
+                    &pad,
+                    &nav,
+                    &lifecycle,
+                    &setup,
+                    scheduler.visible_loading_title(&loading_title),
+                    "",
+                    Some(&catalog),
+                    &mut preview,
+                    &mut bridge_models,
+                    catalog_version,
+                    defer_selected_preview,
+                    ui.render_w(),
+                );
+                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
+                request_launcher_redraw!();
+            }
+            LauncherBridgeSyncPlan::Light => {
+                let active_games = if nav.screen == Screen::Arcade {
+                    Some(active_system_game_view(&catalog, &nav))
+                } else {
+                    None
+                };
+                sync_bridge_launcher_light(
+                    &app,
+                    &nav,
+                    &lifecycle,
+                    &mut bridge_models,
+                    &setup,
+                    scheduler.visible_loading_title(&loading_title),
+                    "",
+                    &catalog,
+                    active_games,
+                    &mut preview,
+                    should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
+                    defer_selected_preview,
+                    ui.render_w(),
+                );
+                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
+                request_launcher_redraw!();
+            }
+            LauncherBridgeSyncPlan::None => {}
+        }
+        sync_startup_visibility(&app, &lifecycle);
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         {
@@ -3373,6 +3432,27 @@ pub(super) fn run_launcher_loop(
             boot_analytics::event("first_vsync", format!("frame={frames}"));
         }
         if presentation.copied_rows > 0 {
+            if !first_launcher_frame_logged
+                && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
+            {
+                first_launcher_frame_logged = true;
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                let nav_menu_items = nav.current_menu_count();
+                let bridge_menu_items = bridge.get_menu_items().row_count();
+                print_startup_event(
+                    start,
+                    "launcher_first_frame_presented",
+                    format!(
+                        "screen={} systems={} nav_menu_items={} bridge_menu_items={} catalog_ready={}",
+                        screen_label(nav.screen),
+                        catalog.systems.len(),
+                        nav_menu_items,
+                        bridge_menu_items,
+                        u8::from(catalog_ready)
+                    ),
+                );
+                catalog_publication_test.hold_first_launcher_frame(start);
+            }
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         }
@@ -4678,6 +4758,50 @@ mod tests {
     #[test]
     fn production_build_cannot_enable_media_benchmark_contention() {
         assert!(!media_benchmark_contention_enabled());
+    }
+
+    #[test]
+    fn catalog_publication_syncs_before_startup_input_is_enabled() {
+        let mut session = LauncherCatalogSession::new(false);
+        let effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                catalog_partial: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: catalog_for_media_systems(&["arcade", "amiga"]),
+                summary: None,
+                load_us: 0,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: false,
+                generation_fingerprint: None,
+                publication_ack: None,
+            },
+            Instant::now(),
+        );
+        let mut use_catalog_seen = false;
+        let mut full_bridge_dirty = false;
+        for effect in effects.into_effects() {
+            match effect {
+                CatalogSessionEffect::UseCatalog { .. } => use_catalog_seen = true,
+                CatalogSessionEffect::SyncCatalogBridge => {
+                    assert!(
+                        use_catalog_seen,
+                        "bridge sync must follow catalog installation"
+                    );
+                    full_bridge_dirty = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(use_catalog_seen);
+        assert!(full_bridge_dirty);
+        assert_eq!(
+            launcher_bridge_sync_plan(false, false, full_bridge_dirty, false),
+            LauncherBridgeSyncPlan::Full
+        );
     }
 
     fn unique_temp_dir(label: &str) -> PathBuf {

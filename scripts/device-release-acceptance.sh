@@ -927,6 +927,11 @@ run_tier_catalog() {
   assert_status "$OUT/status-initial.json" "catalog is ready with games" \
     "data['runtime']['slint_status'].get('catalog_ready') is True and int(data['runtime']['slint_status'].get('catalog_games', 0)) > 0"
 
+  run_required_capture "launcher-catalog-publication" \
+    "$ROOT/scripts/device-launcher-catalog-publication-regression.sh" \
+    --layout public \
+    --label "$STAMP-release"
+
   refresh_count="$(remote "ps w | grep '[m]ister-magik-fb library-refresh' | wc -l" | last_number || true)"
   assert_eq "active library-refresh count" "0" "$refresh_count"
 
