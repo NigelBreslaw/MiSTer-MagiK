@@ -282,7 +282,20 @@ Use these entrypoints:
 scripts/profile-arcade-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-preview-scroll.sh LABEL --secs 30 --scenario turbo-hold
 scripts/profile-first-preview.sh LABEL --skip-build
+scripts/gate-cold-preview-systems.sh LABEL
 ```
+
+The cold-preview systems gate reports target-list readiness, candidate
+discovery, and selected request/decode/apply as separate phases. The 32ms
+request-to-apply budget applies only when the trace identifies a real candidate
+with an asset key. A system without an available preview candidate is an
+explicit `result=skip` with `skip_reason=no_preview_candidate`; it is not a
+latency pass. Missing or misordered phases fail the gate. The final
+`preview_state_aggregate_tsv` row counts requested, passed, skipped, and failed
+systems while retaining `pass=1` compatibility for a run containing only
+passes and legitimate skips. Use
+`scripts/profile-cold-preview-systems.sh --self-test` to validate the parser and
+gate contract without a device.
 
 `profile-arcade-scroll.sh` defaults to `fpga-vblank-latch-hidden`; pass
 `--present-backend fb0-dirty` for an explicit fallback comparison. Latch
