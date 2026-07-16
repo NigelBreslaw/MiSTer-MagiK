@@ -8,6 +8,9 @@ Scripts provide the approved validation, build, deploy, device, packaging,
 profiling, and release interfaces. Prefer extending an existing entrypoint over
 creating a near-duplicate command.
 
+Run `scripts/doctor --scope full-host` to inspect local prerequisites without
+contacting the MiSTer.
+
 ## Rules
 
 - Use Bash with `set -euo pipefail`; keep macOS Bash compatibility.

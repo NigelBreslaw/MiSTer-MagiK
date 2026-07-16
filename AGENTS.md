@@ -91,6 +91,7 @@ those trees are part of the task.
 ## Top-Level Commands
 
 ```bash
+scripts/doctor
 scripts/validate working-tree --print-plan
 scripts/validate working-tree
 scripts/validate full-host
