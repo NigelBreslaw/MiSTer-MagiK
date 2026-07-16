@@ -1408,17 +1408,24 @@ fn load_navigation_projection_cache(
 ) -> Result<Option<library_db::LibraryCatalogLoad>, String> {
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
-    let Some(summary) = catalog_summary::read_catalog_summary(&summary_path)? else {
+    let summary_stamp = catalog_summary::read_catalog_summary(&summary_path)?
+        .map(|summary| catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines));
+    let stored_stamp = library_db::read_sqlite_catalog_stamp(&sqlite_path)?;
+    let Some(stamp) = navigation_projection_stamp(summary_stamp, stored_stamp) else {
         return Ok(None);
     };
-    let stamp = catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines);
-    let Some(stored_stamp) = library_db::read_sqlite_catalog_stamp(&sqlite_path)? else {
-        return Ok(None);
-    };
-    if stored_stamp != stamp {
-        return Ok(None);
-    }
     library_db::load_arcade_catalog_from_navigation_projection(root, &sqlite_path, &stamp)
+}
+
+fn navigation_projection_stamp(
+    summary_stamp: Option<catalog_stamp::CatalogStamp>,
+    stored_stamp: Option<catalog_stamp::CatalogStamp>,
+) -> Option<catalog_stamp::CatalogStamp> {
+    let stored_stamp = stored_stamp?;
+    match summary_stamp {
+        Some(summary_stamp) if summary_stamp != stored_stamp => None,
+        _ => Some(stored_stamp),
+    }
 }
 
 pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::fmt::Display) {
@@ -1431,6 +1438,27 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_projection_uses_sqlite_stamp_when_summary_is_missing() {
+        let stored = catalog_stamp::CatalogStamp::from_lines(vec!["catalog-v1".into()]);
+
+        assert_eq!(
+            navigation_projection_stamp(None, Some(stored.clone())),
+            Some(stored)
+        );
+    }
+
+    #[test]
+    fn navigation_projection_rejects_summary_that_disagrees_with_sqlite() {
+        let summary = catalog_stamp::CatalogStamp::from_lines(vec!["catalog-old".into()]);
+        let stored = catalog_stamp::CatalogStamp::from_lines(vec!["catalog-current".into()]);
+
+        assert_eq!(
+            navigation_projection_stamp(Some(summary), Some(stored)),
+            None
+        );
+    }
 
     #[test]
     fn ready_catalog_defers_search_index_to_the_launcher_session() {
