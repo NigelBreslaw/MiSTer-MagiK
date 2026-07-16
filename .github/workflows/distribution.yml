@@ -413,7 +413,7 @@ jobs:
                   gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
                 fi
               done < <(gh release view beta --repo "$GH_REPO" --json assets \
-                --jq '.assets[] | [.id, .name] | @tsv')
+                --jq '.assets[] | [(.apiUrl | split("/")[-1]), .name] | @tsv')
             else
               gh release create beta "${assets[@]}" \
                 --repo "$GH_REPO" --target "$GITHUB_SHA" --title "$title" \
