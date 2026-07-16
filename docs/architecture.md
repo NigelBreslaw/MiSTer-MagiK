@@ -164,12 +164,13 @@ Latch-stream policy:
   delaying presentation. The desktop mirrors that policy with a one-slot
   decoded-image mailbox and at most one outstanding UI callback.
 - `MISTER_FRAMEBUFFER_STREAM_SCALE=off|full|half|adaptive` controls latch
-  publication. The current production default remains `off` until the real
-  device/desktop 55fps gate passes. The fixed Cortex-A9 build uses a 20-line C
-  scalar RGB565 helper behind a Rust-owned, validated call boundary. Its
-  pointer-walking loop is retained because both tested Rust scalar forms were
-  materially slower on the device; there is no runtime decimator selector or
-  retained NEON fallback.
+  publication. Normal launcher operation defaults to `adaptive`, but snapshot
+  work remains dormant until a subscriber connects. Set the variable to `off`
+  only for an explicit no-stream benchmark. The fixed Cortex-A9 build uses a
+  20-line C scalar RGB565 helper behind a Rust-owned, validated call boundary.
+  Its pointer-walking loop is retained because both tested Rust scalar forms
+  were materially slower on the device; there is no runtime decimator selector
+  or retained NEON fallback.
 - RGB565 preview fades use their measured scalar row blend. Stable Rust does
   not expose the ARM NEON cfg used by the former fade implementation, and a
   byte-exact C NEON probe was 26–29% slower on the Cortex-A9.

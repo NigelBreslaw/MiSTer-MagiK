@@ -10,11 +10,14 @@ OUT_DIR="$ROOT/build/arcade-scroll-profiles"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/gate-framebuffer-stream-55fps.sh [LABEL] [--secs N] [--deploy-device|--skip-build] [--self-test]
+Usage: scripts/gate-framebuffer-stream-55fps.sh [LABEL] [--secs N] [--deploy-device|--skip-build] [--smoke] [--self-test]
 
 Runs no-subscriber, adaptive drain, and adaptive Analytics-display Arcade
-turbo-hold profiles. Adaptive streaming remains opt-in; this gate does not
-change production defaults.
+turbo-hold profiles. Normal launcher operation uses adaptive streaming when a
+subscriber connects; explicit MISTER_FRAMEBUFFER_STREAM_SCALE=off disables it.
+
+--smoke checks the currently running launcher and fails unless a real producer
+image frame arrives through the agent within a bounded interval.
 EOF
 }
 
@@ -22,12 +25,14 @@ label="FRAMEBUFFER-STREAM-$(date -u +%Y%m%dT%H%M%SZ)"
 secs="30"
 deploy="--skip-build"
 self_test="0"
+smoke="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --secs) secs="${2:?--secs needs N}"; shift 2 ;;
     --deploy-device) deploy="--deploy-device"; shift ;;
     --skip-build) deploy="--skip-build"; shift ;;
+    --smoke) smoke="1"; shift ;;
     --self-test) self_test="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -126,6 +131,17 @@ run_self_test() {
 
 if [[ "$self_test" == "1" ]]; then
   run_self_test
+  exit 0
+fi
+
+if [[ "$smoke" == "1" ]]; then
+  desktop_bin="$ROOT/desktop/target/release/mister-magik-desktop"
+  if [[ ! -x "$desktop_bin" ]]; then
+    cargo build --manifest-path "$ROOT/desktop/Cargo.toml" --locked --release
+  fi
+  echo "==> Smoke producer stream from running launcher"
+  MISTER_IP="${MISTER_IP:-192.168.1.117}" \
+    "$desktop_bin" --framebuffer-stream-drain-bench-secs 3
   exit 0
 fi
 

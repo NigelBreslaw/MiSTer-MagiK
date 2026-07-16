@@ -321,7 +321,8 @@ fn parse_latch_stream_mode(value: Option<&str>) -> LatchStreamMode {
         Some("full" | "FULL") => LatchStreamMode::Full,
         Some("half" | "HALF") => LatchStreamMode::Half,
         Some("adaptive" | "ADAPTIVE") => LatchStreamMode::Adaptive,
-        _ => LatchStreamMode::Off,
+        Some("off" | "OFF") => LatchStreamMode::Off,
+        None | Some(_) => LatchStreamMode::Adaptive,
     }
 }
 
@@ -1023,8 +1024,17 @@ mod tests {
             latch_scale_for_mode(LatchStreamMode::Adaptive, false),
             Some(LatchStreamScale::Full)
         );
+        assert_eq!(
+            parse_latch_stream_mode(None),
+            LatchStreamMode::Adaptive,
+            "normal launcher operation must publish on demand without an environment override"
+        );
         assert_eq!(latch_scale_for_mode(LatchStreamMode::Off, true), None);
-        assert_eq!(parse_latch_stream_mode(Some("bogus")), LatchStreamMode::Off);
+        assert_eq!(parse_latch_stream_mode(Some("off")), LatchStreamMode::Off);
+        assert_eq!(
+            parse_latch_stream_mode(Some("bogus")),
+            LatchStreamMode::Adaptive
+        );
     }
 
     #[test]

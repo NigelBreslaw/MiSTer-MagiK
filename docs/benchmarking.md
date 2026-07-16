@@ -693,6 +693,14 @@ default:
 scripts/gate-framebuffer-stream-55fps.sh LABEL --secs 30 --deploy-device
 ```
 
+For a bounded smoke check against the currently running launcher, require at
+least one real producer frame rather than accepting the agent handshake and
+heartbeats alone:
+
+```bash
+scripts/gate-framebuffer-stream-55fps.sh --smoke
+```
+
 Measure sustained resolution capability separately from that cadence gate:
 
 ```bash
