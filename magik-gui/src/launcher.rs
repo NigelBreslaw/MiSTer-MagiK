@@ -976,6 +976,19 @@ impl LauncherNav {
         self.current_menu_items().len()
     }
 
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    pub fn current_menu_selected_item_id(&self) -> &str {
+        self.current_menu_items()
+            .get(self.selected)
+            .map(|item| item.id.as_str())
+            .unwrap_or("")
+    }
+
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    pub fn home_scroll_max(&self) -> i32 {
+        home_max_scroll(self.current_menu_count())
+    }
+
     pub fn current_menu_game_count(&self) -> usize {
         self.taxonomy
             .menu(self.current_menu_id())

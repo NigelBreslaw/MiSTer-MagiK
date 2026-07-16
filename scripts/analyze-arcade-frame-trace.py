@@ -24,6 +24,7 @@ FLOAT_COLUMNS = {"visual_index", "transition_progress"}
 STRING_COLUMNS = {
     "update",
     "arcade_update",
+    "home_screen",
     "cache_state",
     "transition_effect",
     "preview_fade_path",
@@ -321,6 +322,7 @@ def run_self_test() -> int:
         "elapsed_us",
         "selected",
         "visual_index",
+        "home_screen",
         "arcade_update",
         "rows",
         "prepare_us",
@@ -340,10 +342,10 @@ def run_self_test() -> int:
         "wall_us",
     ]
     rows = [
-        [1, 0, 0, 0, "none", 0, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12000, 16000],
-        [2, 16667, 1, 1, "scroll", 8, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14000, 17001],
-        [3, 33334, 2, 2, "scroll", 8, 2000, 1000, 1000, 2000, 2300, 1500, 800, 1500, 800, 0, 900, 1, 1, 16000, 21000],
-        [4, 50001, 3, 3, "scroll", 8, 18000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2000, 22000],
+        [1, 0, 0, 0, "arcade", "none", 0, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12000, 16000],
+        [2, 16667, 1, 1, "arcade", "scroll", 8, 1000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14000, 17001],
+        [3, 33334, 2, 2, "arcade", "scroll", 8, 2000, 1000, 1000, 2000, 2300, 1500, 800, 1500, 800, 0, 900, 1, 1, 16000, 21000],
+        [4, 50001, 3, 3, "arcade", "scroll", 8, 18000, 1000, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2000, 22000],
     ]
     parsed = [{key: parse_value(key, str(value)) for key, value in zip(header, row)} for row in rows]
     for row in parsed:
@@ -354,6 +356,7 @@ def run_self_test() -> int:
     assert sum(1 for row in parsed if work_us(row) > 16_667) == 1
     assert sum(1 for row in parsed if int(row["wall_us"]) > 16_667 and work_us(row) <= 16_667) == 2
     assert parsed[2]["hidden_compose_us"] == 2300
+    assert parsed[2]["home_screen"] == "arcade"
     assert parsed[2]["hidden_preview_compose_us"] + parsed[2]["hidden_arcade_compose_us"] == 2300
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "trace.tsv"
