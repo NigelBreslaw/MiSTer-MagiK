@@ -338,7 +338,9 @@ require_documentation_dependencies() {
     echo "install Node.js with Corepack support, then run: corepack enable" >&2
     return 1
   }
-  pnpm_version="$(corepack pnpm --version 2>/dev/null || true)"
+  pnpm_version="$(
+    COREPACK_ENABLE_NETWORK=0 corepack pnpm --version 2>/dev/null || true
+  )"
   [ "$pnpm_version" = "11.10.0" ] || {
     echo "pnpm 11.10.0 is required through Corepack; found ${pnpm_version:-unavailable}" >&2
     echo "run: corepack prepare pnpm@11.10.0 --activate" >&2
@@ -386,7 +388,7 @@ run_check() {
     documentation-build)
       step "Build documentation"
       require_documentation_dependencies
-      corepack pnpm --dir documentation run build
+      COREPACK_ENABLE_NETWORK=0 corepack pnpm --dir documentation run build
       ;;
   esac
 }

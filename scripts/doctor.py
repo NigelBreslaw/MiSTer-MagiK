@@ -92,7 +92,7 @@ def require_command(report: Report, name: str, remediation: str) -> bool:
     return path is not None
 
 
-def check_rust_toolchain(root: Path, report: Report) -> None:
+def check_rust_toolchain(root: Path, report: Report, *, require_arm: bool) -> None:
     toolchain_path = root / "magik-gui/rust-toolchain.toml"
     text = toolchain_path.read_text(encoding="utf-8") if toolchain_path.is_file() else ""
     match = re.search(r'^channel = "([^"]+)"$', text, re.MULTILINE)
@@ -112,6 +112,34 @@ def check_rust_toolchain(root: Path, report: Report) -> None:
         f"pinned channel {channel}",
         f"run: rustup toolchain install {channel} --component rustfmt --component clippy",
     )
+    components = command_output(
+        ["rustup", "component", "list", "--toolchain", channel]
+    ) or ""
+    for component in ("rustfmt", "clippy"):
+        installed_component = any(
+            line.startswith(f"{component}-") and line.endswith("(installed)")
+            for line in components.splitlines()
+        )
+        report.add(
+            f"rust-component-{component}",
+            installed_component,
+            f"{component} for {channel}",
+            f"run: rustup component add {component} --toolchain {channel}",
+        )
+    if require_arm:
+        targets = command_output(
+            ["rustup", "target", "list", "--toolchain", channel]
+        ) or ""
+        arm_target = "armv7-unknown-linux-gnueabihf"
+        report.add(
+            "rust-target-armv7",
+            any(
+                line.startswith(arm_target) and line.endswith("(installed)")
+                for line in targets.splitlines()
+            ),
+            f"{arm_target} for {channel}",
+            f"run: rustup target add {arm_target} --toolchain {channel}",
+        )
 
 
 def check_desktop(root: Path, report: Report) -> None:
@@ -137,7 +165,9 @@ def check_docs(root: Path, report: Report) -> None:
         node or "Node.js unavailable",
         "install Node.js 22 or newer with Corepack",
     )
-    pnpm = command_output(["corepack", "pnpm", "--version"])
+    pnpm = command_output(
+        ["env", "COREPACK_ENABLE_NETWORK=0", "corepack", "pnpm", "--version"]
+    )
     report.add(
         "pnpm-version",
         pnpm == "11.10.0",
@@ -155,6 +185,7 @@ def check_docs(root: Path, report: Report) -> None:
 
 
 def check_output(root: Path, report: Report) -> None:
+    outputs = ("build", "dist", "outputs", "target", "documentation/dist")
     build = root / "build"
     writable = os.access(build if build.exists() else root, os.W_OK)
     report.add(
@@ -163,6 +194,20 @@ def check_output(root: Path, report: Report) -> None:
         str(build),
         "make the repository build output writable",
     )
+    for output in outputs:
+        sentinel = f"{output}/.mister-magik-doctor"
+        ignored = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "-q", sentinel],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        report.add(
+            f"output-ignored-{output.replace('/', '-')}",
+            ignored,
+            sentinel,
+            f"add {output}/ to the repository ignore policy",
+        )
 
 
 def build_report(root: Path, scope: str) -> Report:
@@ -173,7 +218,7 @@ def build_report(root: Path, scope: str) -> Report:
     if scope in {"full-host", "desktop", "arm"}:
         require_command(report, "cargo", "install Rust through rustup")
         require_command(report, "rustup", "install rustup")
-        check_rust_toolchain(root, report)
+        check_rust_toolchain(root, report, require_arm=scope == "arm")
     if scope in {"full-host", "desktop"}:
         check_desktop(root, report)
     if scope in {"full-host", "docs"}:
@@ -196,12 +241,15 @@ def build_report(root: Path, scope: str) -> Report:
         )
         report.add(
             "device-network",
-            True,
+            False,
             "network probe intentionally not attempted",
             required=False,
             warning=True,
         )
-    for entrypoint in ("scripts/validate", "scripts/dev-rust"):
+    entrypoints = ["scripts/validate", "scripts/dev-rust"]
+    if scope == "full-host":
+        entrypoints.append("scripts/test-host-tools.sh")
+    for entrypoint in entrypoints:
         path = root / entrypoint
         report.add(
             f"entrypoint-{entrypoint.replace('/', '-')}",

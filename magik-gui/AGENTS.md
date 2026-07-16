@@ -29,6 +29,7 @@ scripts/dev-rust test
 scripts/validate paths magik-gui
 ```
 
-Use `scripts/dev-rust check-ui` for production Slint work and
-`check-ui-full` only for all-scene/experiment changes. ARM builds and device
-commands require escalation; ordinary host checks do not contact the MiSTer.
+Use the production UI check selected by `scripts/validate` for a host-local
+Slint compile. ARM checks use the direct escalated command
+`magik-gui/build-arm.sh --check --ui-scope launcher`; use `--ui-scope all
+--experiments` only for all-scene/experiment changes.
