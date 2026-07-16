@@ -3,7 +3,7 @@
 
 use super::*;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -100,6 +100,7 @@ pub(super) struct LauncherScheduler {
     catalog: CatalogJobState,
     search_index: SearchIndexJobState,
     search_index_generation: Arc<AtomicUsize>,
+    search_index_allowed: Arc<AtomicBool>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
@@ -110,6 +111,7 @@ impl LauncherScheduler {
             catalog: CatalogJobState::Idle,
             search_index: SearchIndexJobState::Idle,
             search_index_generation: Arc::new(AtomicUsize::new(0)),
+            search_index_allowed: Arc::new(AtomicBool::new(false)),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -124,9 +126,18 @@ impl LauncherScheduler {
             || matches!(self.search_index, SearchIndexJobState::Running(_))
     }
 
-    /// This is entered by the catalog session state chart only after its
-    /// durable-save transition. Starting a new generation cancels any stale
-    /// index job at its next cooperative checkpoint.
+    pub(super) fn search_index_running(&self) -> bool {
+        matches!(self.search_index, SearchIndexJobState::Running(_))
+    }
+
+    pub(super) fn set_search_index_allowed(&self, allowed: bool) {
+        self.search_index_allowed.store(allowed, Ordering::Release);
+    }
+
+    /// This is entered by the catalog session only after persistence (when
+    /// required) and the launcher's interaction-aware idle gate. Starting a
+    /// new generation cancels any stale index job at its next cooperative
+    /// checkpoint.
     pub(super) fn start_search_index(
         &mut self,
         job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
@@ -135,6 +146,7 @@ impl LauncherScheduler {
     ) {
         let generation = self.search_index_generation.fetch_add(1, Ordering::AcqRel) + 1;
         let active_generation = Arc::clone(&self.search_index_generation);
+        let search_index_allowed = Arc::clone(&self.search_index_allowed);
         let text_index_token = job.text_index_token();
         let (tx, rx) = mpsc::channel();
         self.search_index = SearchIndexJobState::Running(rx);
@@ -157,6 +169,12 @@ impl LauncherScheduler {
                 );
                 let Some(timing) = job.build_with_timing_while(|| {
                     lease.cooperate();
+                    while !search_index_allowed.load(Ordering::Acquire) {
+                        if active_generation.load(Ordering::Acquire) != generation {
+                            return false;
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
                     active_generation.load(Ordering::Acquire) == generation
                 }) else {
                     return;

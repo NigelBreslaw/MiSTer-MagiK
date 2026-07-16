@@ -73,6 +73,7 @@ struct PendingSearchIndex {
     job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
     games: usize,
     source: CatalogSource,
+    waiting_for_persistence: bool,
 }
 
 #[derive(Default)]
@@ -145,6 +146,33 @@ impl LauncherCatalogSession {
 
     pub(super) fn refresh_done(&self) -> bool {
         self.refresh_done
+    }
+
+    pub(super) fn maybe_start_search_index(
+        &mut self,
+        launcher_idle: bool,
+        search_index_running: bool,
+    ) -> CatalogSessionEffects {
+        let mut effects = CatalogSessionEffects::default();
+        if !launcher_idle || search_index_running {
+            return effects;
+        }
+        let Some(pending) = self.pending_search_index.as_ref() else {
+            return effects;
+        };
+        if pending.waiting_for_persistence {
+            return effects;
+        }
+        let pending = self
+            .pending_search_index
+            .take()
+            .expect("pending search index checked above");
+        effects.push(CatalogSessionEffect::StartSearchIndex {
+            job: pending.job,
+            games: pending.games,
+            source: pending.source,
+        });
+        effects
     }
 
     pub(super) fn deferred_worker_hydrates_navigation(&self) -> bool {
@@ -355,12 +383,8 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::MarkCatalogDurable {
                     generation_fingerprint,
                 });
-                if let Some(pending) = self.pending_search_index.take() {
-                    effects.push(CatalogSessionEffect::StartSearchIndex {
-                        job: pending.job,
-                        games: pending.games,
-                        source: pending.source,
-                    });
+                if let Some(pending) = self.pending_search_index.as_mut() {
+                    pending.waiting_for_persistence = false;
                 }
                 let seconds = completed_build_seconds.unwrap_or_else(|| {
                     mister_magik_catalog::catalog_build_record::rounded_seconds(
@@ -552,16 +576,9 @@ impl LauncherCatalogSession {
                     job,
                     games: catalog_len,
                     source,
+                    waiting_for_persistence: durable_save_pending,
                 };
-                if durable_save_pending {
-                    self.pending_search_index = Some(pending);
-                } else {
-                    effects.push(CatalogSessionEffect::StartSearchIndex {
-                        job: pending.job,
-                        games: pending.games,
-                        source: pending.source,
-                    });
-                }
+                self.pending_search_index = Some(pending);
             }
             effects.event(
                 "library_ready",
@@ -883,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_catalog_schedules_search_only_after_durable_persisted() {
+    fn fresh_catalog_schedules_search_only_after_persistence_and_idle() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
@@ -929,10 +946,51 @@ mod tests {
             },
             now,
         );
-        assert!(persisted_effects
+        assert!(!persisted_effects
             .into_effects()
             .into_iter()
             .any(|effect| { matches!(effect, CatalogSessionEffect::StartSearchIndex { .. }) }));
+        assert!(effect_names(session.maybe_start_search_index(false, false)).is_empty());
+        assert_eq!(
+            effect_names(session.maybe_start_search_index(true, false)),
+            vec!["start-search-index"]
+        );
+        assert!(effect_names(session.maybe_start_search_index(true, false)).is_empty());
+    }
+
+    #[test]
+    fn warm_catalog_search_waits_for_launcher_idle() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        let ready_effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                catalog_partial: false,
+                screen: Screen::Arcade,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Ready {
+                catalog: ArcadeCatalog::new_with_deferred_text_indexes(
+                    std::path::PathBuf::from("/media/fat/_Arcade"),
+                    vec![arcade_game("Street Fighter II").build()],
+                    vec![arcade_system("arcade", 1)],
+                    Vec::new(),
+                ),
+                summary: None,
+                load_us: 1,
+                source: CatalogSource::NavigationProjection,
+                durable_save_pending: false,
+                generation_fingerprint: None,
+                publication_ack: None,
+            },
+            now,
+        );
+        assert!(!effect_names(ready_effects).contains(&"start-search-index"));
+        assert!(effect_names(session.maybe_start_search_index(false, false)).is_empty());
+        assert_eq!(
+            effect_names(session.maybe_start_search_index(true, false)),
+            vec!["start-search-index"]
+        );
     }
 
     #[test]

@@ -1216,6 +1216,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut catalog_background_idle_gate =
         CatalogBackgroundIdleGate::new(CATALOG_BACKGROUND_IDLE_SETTLE);
+    let mut catalog_or_media_message_seen_last_loop = false;
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
     let mut preview_systems_entered = BTreeSet::new();
@@ -1853,14 +1854,37 @@ pub(super) fn run_launcher_loop(
                 pad_changed: pad_changed_for_background,
                 pad_active: pad_state_has_active_input(pad.state()),
                 catalog_messages_active: pending_catalog_ready.is_some()
-                    || !deferred_catalog_events.is_empty(),
-                media_message_seen: false,
+                    || !deferred_catalog_events.is_empty()
+                    || catalog_or_media_message_seen_last_loop,
+                media_message_seen: catalog_or_media_message_seen_last_loop,
                 nav_motion_active: catalog_background_nav_motion_active(&nav),
                 preview_critical: nav.screen == Screen::Arcade
                     && selected_arcade_game_has_preview(&nav, &catalog)
                     && !matches!(preview.trace_cache_state(), "exact" | "empty"),
             },
             loop_start,
+        );
+        scheduler.set_search_index_allowed(catalog_background_allowed);
+        let search_index_effects = catalog_session
+            .maybe_start_search_index(catalog_background_allowed, scheduler.search_index_running());
+        apply_catalog_session_effects(
+            search_index_effects,
+            &app,
+            &mut nav,
+            &mut catalog,
+            &mut catalog_ready,
+            &mut catalog_version,
+            &mut return_capsule_active,
+            &mut catalog_generation,
+            &mut pending_launch_return_state,
+            &mut preview,
+            &mut media_session,
+            &mut scheduler,
+            &mut lifecycle,
+            &mut lifecycle_effects,
+            &mut full_bridge_dirty,
+            loop_start,
+            start,
         );
         let deferred_worker_policy = deferred_catalog_worker_start_policy(
             catalog_ready,
@@ -2079,6 +2103,8 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = media_worker_trace_start {
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
         }
+        catalog_or_media_message_seen_last_loop =
+            prepare_trace.catalog_message_count > 0 || media_message_seen;
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
@@ -4124,7 +4150,7 @@ fn apply_catalog_session_effects(
                     start,
                     "arcade_search_index_scheduled",
                     format!(
-                        "games={games} source={} after=library_db_saved",
+                        "games={games} source={} after=launcher_idle",
                         source.label()
                     ),
                 );
