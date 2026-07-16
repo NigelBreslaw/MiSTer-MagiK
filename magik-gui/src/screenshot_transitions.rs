@@ -128,6 +128,9 @@ struct ActivePreviewTransition {
     transition_id: u64,
     effect: PreviewTransitionEffect,
     start_elapsed: Duration,
+    duration: Duration,
+    last_retarget_elapsed: Duration,
+    completed_presented: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -342,10 +345,24 @@ impl PreviewTransitionDemo {
         if frame.transition_id != self.last_transition_id {
             self.last_transition_id = frame.transition_id;
             self.active = if frame.previous.is_some() {
+                let (effect, start_elapsed, duration) = self
+                    .active
+                    .filter(|active| {
+                        elapsed.saturating_sub(active.last_retarget_elapsed) < active.duration
+                    })
+                    .map(|active| (active.effect, active.start_elapsed, active.duration))
+                    .unwrap_or((
+                        scheduled_effect,
+                        elapsed,
+                        transition_duration_for_frame(self.duration, frame.duration_divisor),
+                    ));
                 Some(ActivePreviewTransition {
                     transition_id: frame.transition_id,
-                    effect: scheduled_effect,
-                    start_elapsed: elapsed,
+                    effect,
+                    start_elapsed,
+                    duration,
+                    last_retarget_elapsed: elapsed,
+                    completed_presented: false,
                 })
             } else {
                 None
@@ -356,7 +373,7 @@ impl PreviewTransitionDemo {
             if active.transition_id == frame.transition_id {
                 let progress = transition_progress(
                     elapsed.saturating_sub(active.start_elapsed),
-                    transition_duration_for_frame(self.duration, frame.duration_divisor),
+                    active.duration,
                 );
                 if progress < 1.0 {
                     return PreviewTransitionTrace {
@@ -366,11 +383,14 @@ impl PreviewTransitionDemo {
                         fade: PreviewFadeTrace::default(),
                     };
                 }
-                self.active = None;
+                let needs_final_present = !active.completed_presented;
+                if let Some(active) = self.active.as_mut() {
+                    active.completed_presented = true;
+                }
                 return PreviewTransitionTrace {
                     effect: active.effect,
                     progress: 1.0,
-                    active: true,
+                    active: needs_final_present,
                     fade: PreviewFadeTrace::default(),
                 };
             }
@@ -414,6 +434,96 @@ fn transition_duration_for_frame(duration: Duration, divisor: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preview_state::{PreviewRawFrame, PreviewRawPixels};
+
+    fn transition_demo(duration: Duration) -> PreviewTransitionDemo {
+        PreviewTransitionDemo {
+            effects: vec![PreviewTransitionEffect::Fade],
+            picker_index: None,
+            segment: Duration::from_secs(5),
+            duration,
+            last_transition_id: u64::MAX,
+            active: None,
+            label_overlay: false,
+        }
+    }
+
+    fn transition_frame_with_divisor(
+        transition_id: u64,
+        duration_divisor: u32,
+    ) -> PreviewRawTransitionFrame<'static> {
+        let frame = || PreviewRawFrame {
+            pixels: PreviewRawPixels::Empty,
+            source_w: 1,
+            source_h: 1,
+            display_w: 1,
+            display_h: 1,
+        };
+        PreviewRawTransitionFrame {
+            previous: Some(frame()),
+            current: frame(),
+            transition_id,
+            duration_divisor,
+        }
+    }
+
+    fn transition_frame(transition_id: u64) -> PreviewRawTransitionFrame<'static> {
+        transition_frame_with_divisor(transition_id, 1)
+    }
+
+    #[test]
+    fn rapid_retargets_do_not_restart_visible_progress() {
+        let mut demo = transition_demo(Duration::from_millis(200));
+
+        assert_eq!(
+            demo.update(Some(&transition_frame(1)), Duration::ZERO)
+                .progress,
+            0.0
+        );
+        let halfway = demo.update(Some(&transition_frame(2)), Duration::from_millis(100));
+        assert!(halfway.active);
+        assert_eq!(halfway.progress, 0.5);
+        let complete = demo.update(Some(&transition_frame(3)), Duration::from_millis(200));
+        assert!(complete.active);
+        assert_eq!(complete.progress, 1.0);
+        let still_complete = demo.update(Some(&transition_frame(4)), Duration::from_millis(250));
+        assert!(still_complete.active);
+        assert_eq!(still_complete.progress, 1.0);
+
+        let after_quiet = demo.update(Some(&transition_frame(5)), Duration::from_millis(451));
+        assert!(after_quiet.active);
+        assert_eq!(after_quiet.progress, 0.0);
+    }
+
+    #[test]
+    fn completed_chain_requests_only_one_final_present() {
+        let mut demo = transition_demo(Duration::from_millis(200));
+
+        demo.update(Some(&transition_frame(1)), Duration::ZERO);
+        let complete = demo.update(Some(&transition_frame(1)), Duration::from_millis(200));
+        assert!(complete.active);
+        assert_eq!(complete.progress, 1.0);
+        let settled = demo.update(Some(&transition_frame(1)), Duration::from_millis(201));
+        assert!(!settled.active);
+        assert_eq!(settled.progress, 1.0);
+    }
+
+    #[test]
+    fn rapid_retargets_keep_the_initial_effective_duration() {
+        let mut demo = transition_demo(Duration::from_millis(200));
+
+        demo.update(Some(&transition_frame_with_divisor(1, 2)), Duration::ZERO);
+        let turbo = demo.update(
+            Some(&transition_frame_with_divisor(2, 2)),
+            Duration::from_millis(50),
+        );
+        assert_eq!(turbo.progress, 0.5);
+        let normal_retarget = demo.update(
+            Some(&transition_frame_with_divisor(3, 1)),
+            Duration::from_millis(75),
+        );
+        assert_eq!(normal_retarget.progress, 0.75);
+    }
 
     #[cfg(not(mister_experiments))]
     #[test]
