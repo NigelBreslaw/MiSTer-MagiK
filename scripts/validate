@@ -54,6 +54,7 @@ run_check_recorded() {
   log="$LOG_DIR/$check.log"
   result="$RESULT_DIR/$check.tsv"
   started="$(now_ms)"
+  printf 'VALIDATION start check=%s\n' "$check" >&2
   exit_code=0
   if run_check "$check" >"$log" 2>&1; then
     status=pass
@@ -65,6 +66,7 @@ run_check_recorded() {
   duration=$((finished - started))
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$check" "$status" "$duration" "$exit_code" "$log" >"$result"
+  printf 'VALIDATION %s check=%s duration_ms=%s\n' "$status" "$check" "$duration" >&2
   return "$exit_code"
 }
 
