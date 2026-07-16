@@ -689,6 +689,9 @@ fn load_arcade_catalog_from_connection(
                     launch_plans_us: 0,
                     systems_us: 0,
                     catalog_us,
+                    navigation_file_read_us: 0,
+                    navigation_decompress_us: 0,
+                    navigation_decode_us: 0,
                     rows,
                 });
             }
@@ -740,6 +743,9 @@ fn load_arcade_catalog_from_connection(
         launch_plans_us,
         systems_us,
         catalog_us,
+        navigation_file_read_us: 0,
+        navigation_decompress_us: 0,
+        navigation_decode_us: 0,
         rows,
     })
 }

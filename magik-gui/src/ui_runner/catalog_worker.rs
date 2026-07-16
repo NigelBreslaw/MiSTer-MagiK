@@ -1109,7 +1109,7 @@ fn send_catalog_progress(
 
 pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad) -> String {
     format!(
-        "games={} rows={} total_us={} open_us={} schema_check_us={} query_us={} query_prepare_us={} query_first_row_us={} query_row_read_us={} query_row_hydrate_us={} launch_plans_us={} systems_us={} catalog_us={} {}",
+        "games={} rows={} total_us={} open_us={} schema_check_us={} query_us={} query_prepare_us={} query_first_row_us={} query_row_read_us={} query_row_hydrate_us={} launch_plans_us={} systems_us={} catalog_us={} navigation_file_read_us={} navigation_decompress_us={} navigation_decode_us={} {}",
         loaded.catalog.len(),
         loaded.rows,
         loaded.us,
@@ -1123,6 +1123,9 @@ pub(super) fn catalog_load_timing_detail(loaded: &library_db::LibraryCatalogLoad
         loaded.launch_plans_us,
         loaded.systems_us,
         loaded.catalog_us,
+        loaded.navigation_file_read_us,
+        loaded.navigation_decompress_us,
+        loaded.navigation_decode_us,
         library_db::catalog_load_counter_detail()
     )
 }

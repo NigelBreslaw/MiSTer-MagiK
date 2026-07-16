@@ -15,7 +15,7 @@ use crate::catalog_stamp::CatalogStamp;
 use crate::sqlite_catalog;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,6 +50,13 @@ pub struct CatalogNavigationProjection {
     pub systems: Vec<NavigationSystem>,
     pub games: Vec<NavigationGame>,
     pub launch_plans: Vec<NavigationLaunchPlan>,
+}
+
+pub struct CatalogNavigationProjectionRead {
+    pub projection: CatalogNavigationProjection,
+    pub file_read_us: u64,
+    pub decompress_us: u64,
+    pub decode_us: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,40 +188,76 @@ pub fn read_catalog_navigation_projection(
     path: &Path,
     expected_stamp: &CatalogStamp,
 ) -> Result<Option<CatalogNavigationProjection>, String> {
+    read_catalog_navigation_projection_with_timing(path, expected_stamp)
+        .map(|loaded| loaded.map(|loaded| loaded.projection))
+}
+
+pub fn read_catalog_navigation_projection_with_timing(
+    path: &Path,
+    expected_stamp: &CatalogStamp,
+) -> Result<Option<CatalogNavigationProjectionRead>, String> {
     catalog_load_metrics::record_nav_projection_read();
-    let compressed_len = match std::fs::metadata(path) {
-        Ok(metadata) => metadata.len(),
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(format!(
-                "inspect catalog navigation {}: {e}",
-                path.display()
-            ))
-        }
+        Err(e) => return Err(format!("open catalog navigation {}: {e}", path.display())),
     };
+    let compressed_len = file
+        .metadata()
+        .map_err(|e| format!("inspect catalog navigation {}: {e}", path.display()))?
+        .len();
     if compressed_len > MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES {
         return Err(format!(
             "catalog navigation {} compressed size {compressed_len} exceeds max {MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES}",
             path.display()
         ));
     }
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("read catalog navigation {}: {e}", path.display())),
-    };
+    let read_started = std::time::Instant::now();
+    let bytes = read_bounded(
+        file,
+        MAX_CATALOG_NAVIGATION_COMPRESSED_BYTES,
+        &format!("catalog navigation {}", path.display()),
+    )?;
+    let file_read_us = read_started.elapsed().as_micros() as u64;
+    let decompress_started = std::time::Instant::now();
     let decoded = bounded_lz4::decompress_size_prepended(
         &bytes,
         MAX_CATALOG_NAVIGATION_BYTES,
         "catalog navigation",
     )
     .map_err(|e| format!("decompress catalog navigation {}: {e}", path.display()))?;
+    let decompress_us = decompress_started.elapsed().as_micros() as u64;
+    let decode_started = std::time::Instant::now();
     let projection = decode_navigation_projection(&decoded)
         .map_err(|e| format!("parse catalog navigation {}: {e}", path.display()))?;
+    let decode_us = decode_started.elapsed().as_micros() as u64;
     if !projection.matches(expected_stamp) {
         return Ok(None);
     }
-    Ok(Some(projection))
+    Ok(Some(CatalogNavigationProjectionRead {
+        projection,
+        file_read_us,
+        decompress_us,
+        decode_us,
+    }))
+}
+
+fn read_bounded(file: File, max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .map(|metadata| metadata.len().min(max_bytes) as usize)
+            .unwrap_or(0),
+    );
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("read {label}: {e}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} actual compressed size {} exceeds max {max_bytes}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 pub fn read_catalog_navigation_snapshot(
@@ -1297,6 +1340,28 @@ mod tests {
             .is_none());
         std::fs::write(&path, b"not-lz4").expect("write corrupt projection");
         assert!(read_catalog_navigation_projection(&path, &current_stamp).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bounded_navigation_read_rejects_bytes_beyond_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-navigation-bounded-read-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let path = root.join("navigation.bin");
+        std::fs::write(&path, b"123456").expect("write fixture");
+
+        let error = read_bounded(File::open(&path).expect("open fixture"), 5, "fixture")
+            .expect_err("oversized fixture must fail");
+        assert!(error.contains("actual compressed size 6 exceeds max 5"));
+        assert_eq!(
+            read_bounded(File::open(&path).expect("reopen fixture"), 6, "fixture")
+                .expect("exact bound"),
+            b"123456"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
