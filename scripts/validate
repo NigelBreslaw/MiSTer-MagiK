@@ -20,10 +20,10 @@ export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
 usage() {
   cat <<'EOF'
 usage:
-  scripts/validate affected [--paths-file FILE] [--print-plan]
-  scripts/validate working-tree [--print-plan]
-  scripts/validate paths PATH... [--print-plan]
-  scripts/validate full-host
+  scripts/validate affected [--paths-file FILE] [--print-plan] [--verbose|--json]
+  scripts/validate working-tree [--print-plan] [--verbose|--json]
+  scripts/validate paths PATH... [--print-plan] [--verbose|--json]
+  scripts/validate full-host [--verbose|--json]
 
 Without --paths-file, affected mode reads added, copied, modified, renamed,
 and deleted paths from the staged Git index. --print-plan performs no checks.
@@ -37,6 +37,97 @@ step() {
   echo "==> $*"
 }
 
+now_ms() {
+  python3 -c 'import time; print(time.time_ns() // 1_000_000)'
+}
+
+init_reporting() {
+  local run_id
+  run_id="$(date +%Y%m%d-%H%M%S)-$$"
+  LOG_DIR="$ROOT/build/validation/$run_id"
+  RESULT_DIR="$LOG_DIR/.results"
+  mkdir -p "$RESULT_DIR"
+}
+
+run_check_recorded() {
+  local check="$1" started finished duration status exit_code log result
+  log="$LOG_DIR/$check.log"
+  result="$RESULT_DIR/$check.tsv"
+  started="$(now_ms)"
+  exit_code=0
+  if run_check "$check" >"$log" 2>&1; then
+    status=pass
+  else
+    exit_code=$?
+    status=fail
+  fi
+  finished="$(now_ms)"
+  duration=$((finished - started))
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$check" "$status" "$duration" "$exit_code" "$log" >"$result"
+  return "$exit_code"
+}
+
+emit_results() {
+  local mode="$1"
+  shift
+  local names=("$@") name result status duration exit_code log overall=pass
+  if [ "$json_output" -eq 1 ]; then
+    python3 - "$mode" "$RESULT_DIR" "$LOG_DIR" "${names[@]}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+mode, result_dir, log_dir, *names = sys.argv[1:]
+checks = []
+overall = "pass"
+for name in names:
+    path = Path(result_dir) / f"{name}.tsv"
+    if path.is_file():
+        _, status, duration, exit_code, log_path = path.read_text().rstrip("\n").split("\t", 4)
+    else:
+        status, duration, exit_code = "skip", "0", "0"
+        log_path = str(Path(log_dir) / f"{name}.log")
+    if status == "fail":
+        overall = "fail"
+    checks.append({
+        "name": name,
+        "status": status,
+        "duration_ms": int(duration),
+        "exit_code": int(exit_code),
+        "log_path": str(Path(log_path).resolve()),
+    })
+print(json.dumps({
+    "schema": "mister-magik-validation-v1",
+    "mode": mode,
+    "status": overall,
+    "checks": checks,
+}, sort_keys=True))
+PY
+    return
+  fi
+  for name in "${names[@]}"; do
+    result="$RESULT_DIR/$name.tsv"
+    if [ -f "$result" ]; then
+      IFS=$'\t' read -r _ status duration exit_code log <"$result"
+    else
+      status=skip
+      duration=0
+      exit_code=0
+      log="$LOG_DIR/$name.log"
+    fi
+    printf '%-4s %-30s %7sms\n' "$(printf '%s' "$status" | tr '[:lower:]' '[:upper:]')" "$name" "$duration"
+    if [ "$verbose" -eq 1 ] && [ -f "$log" ]; then
+      cat "$log"
+    elif [ "$status" = fail ]; then
+      tail -40 "$log" >&2
+      echo "LOG  $log" >&2
+    fi
+    [ "$status" != fail ] || overall=fail
+  done
+  echo "validation: $overall ($mode)"
+}
+
 run_full_host() {
   run_parallel_groups core catalog tools shared desktop docs
 }
@@ -45,31 +136,31 @@ run_group() {
   local group="$1"
   case "$group" in
     core)
-      CARGO_BUILD_JOBS=2 run_check format
-      CARGO_BUILD_JOBS=2 run_check host-tests
-      CARGO_BUILD_JOBS=2 run_check magik-gui-clippy
-      CARGO_BUILD_JOBS=2 run_check production-ui-check
+      CARGO_BUILD_JOBS=2 run_check_recorded format || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded host-tests || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded magik-gui-clippy || return 1
+      CARGO_BUILD_JOBS=2 run_check_recorded production-ui-check || return 1
       ;;
     catalog)
-      CARGO_BUILD_JOBS=1 run_check catalog-tests
-      CARGO_BUILD_JOBS=1 run_check catalog-clippy
+      CARGO_BUILD_JOBS=1 run_check_recorded catalog-tests || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded catalog-clippy || return 1
       ;;
     tools)
-      CARGO_BUILD_JOBS=1 run_check host-tools
-      CARGO_BUILD_JOBS=1 run_check mister-clippy
-      CARGO_BUILD_JOBS=1 run_check agent-tests
-      CARGO_BUILD_JOBS=1 run_check agent-clippy
+      CARGO_BUILD_JOBS=1 run_check_recorded host-tools || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded mister-clippy || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded agent-tests || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded agent-clippy || return 1
       ;;
     shared)
-      CARGO_BUILD_JOBS=1 run_check framebuffer-stream-tests
-      CARGO_BUILD_JOBS=1 run_check framebuffer-stream-clippy
+      CARGO_BUILD_JOBS=1 run_check_recorded framebuffer-stream-tests || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded framebuffer-stream-clippy || return 1
       ;;
     desktop)
-      CARGO_BUILD_JOBS=1 run_check desktop-tests
-      CARGO_BUILD_JOBS=1 run_check desktop-compiled-check
+      CARGO_BUILD_JOBS=1 run_check_recorded desktop-tests || return 1
+      CARGO_BUILD_JOBS=1 run_check_recorded desktop-compiled-check || return 1
       ;;
     docs)
-      run_check documentation-build
+      run_check_recorded documentation-build || return 1
       ;;
     *)
       echo "unknown validation group: $group" >&2
@@ -79,13 +170,12 @@ run_group() {
 }
 
 run_parallel_groups() {
-  local tmp status group pid i
+  local status group pid i
   local groups=("$@")
   local pids=()
-  tmp="$(mktemp -d)"
   status=0
   for group in "${groups[@]}"; do
-    (run_group "$group") >"$tmp/$group.log" 2>&1 &
+    run_group "$group" &
     pids+=("$!")
   done
   for ((i = 0; i < ${#groups[@]}; i++)); do
@@ -93,9 +183,7 @@ run_parallel_groups() {
     if ! wait "$pid"; then
       status=1
     fi
-    cat "$tmp/${groups[$i]}.log"
   done
-  rm -rf "$tmp"
   return "$status"
 }
 
@@ -114,30 +202,30 @@ run_selected_group() {
   shift
   case "$group" in
     core)
-      contains_check host-tests "$@" && CARGO_BUILD_JOBS=2 run_check host-tests
-      contains_check magik-gui-clippy "$@" && CARGO_BUILD_JOBS=2 run_check magik-gui-clippy
-      contains_check production-ui-check "$@" && CARGO_BUILD_JOBS=2 run_check production-ui-check
+      if contains_check host-tests "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded host-tests || return 1; fi
+      if contains_check magik-gui-clippy "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded magik-gui-clippy || return 1; fi
+      if contains_check production-ui-check "$@"; then CARGO_BUILD_JOBS=2 run_check_recorded production-ui-check || return 1; fi
       ;;
     catalog)
-      contains_check catalog-tests "$@" && CARGO_BUILD_JOBS=1 run_check catalog-tests
-      contains_check catalog-clippy "$@" && CARGO_BUILD_JOBS=1 run_check catalog-clippy
+      if contains_check catalog-tests "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded catalog-tests || return 1; fi
+      if contains_check catalog-clippy "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded catalog-clippy || return 1; fi
       ;;
     tools)
-      contains_check mister-tests "$@" && CARGO_BUILD_JOBS=1 run_check mister-tests
-      contains_check mister-clippy "$@" && CARGO_BUILD_JOBS=1 run_check mister-clippy
-      contains_check agent-tests "$@" && CARGO_BUILD_JOBS=1 run_check agent-tests
-      contains_check agent-clippy "$@" && CARGO_BUILD_JOBS=1 run_check agent-clippy
+      if contains_check mister-tests "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded mister-tests || return 1; fi
+      if contains_check mister-clippy "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded mister-clippy || return 1; fi
+      if contains_check agent-tests "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded agent-tests || return 1; fi
+      if contains_check agent-clippy "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded agent-clippy || return 1; fi
       ;;
     shared)
-      contains_check framebuffer-stream-tests "$@" && CARGO_BUILD_JOBS=1 run_check framebuffer-stream-tests
-      contains_check framebuffer-stream-clippy "$@" && CARGO_BUILD_JOBS=1 run_check framebuffer-stream-clippy
+      if contains_check framebuffer-stream-tests "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded framebuffer-stream-tests || return 1; fi
+      if contains_check framebuffer-stream-clippy "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded framebuffer-stream-clippy || return 1; fi
       ;;
     desktop)
-      contains_check desktop-tests "$@" && CARGO_BUILD_JOBS=1 run_check desktop-tests
-      contains_check desktop-compiled-check "$@" && CARGO_BUILD_JOBS=1 run_check desktop-compiled-check
+      if contains_check desktop-tests "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded desktop-tests || return 1; fi
+      if contains_check desktop-compiled-check "$@"; then CARGO_BUILD_JOBS=1 run_check_recorded desktop-compiled-check || return 1; fi
       ;;
     docs)
-      contains_check documentation-build "$@" && run_check documentation-build
+      if contains_check documentation-build "$@"; then run_check_recorded documentation-build || return 1; fi
       ;;
     *)
       echo "unknown affected validation group: $group" >&2
@@ -147,14 +235,13 @@ run_selected_group() {
 }
 
 run_affected_parallel_groups() {
-  local tmp status group pid i
+  local status group pid i
   local groups=("$@")
   local pids=()
   [ "${#groups[@]}" -gt 0 ] || return 0
-  tmp="$(mktemp -d)"
   status=0
   for group in "${groups[@]}"; do
-    (run_selected_group "$group" "${plan[@]}") >"$tmp/$group.log" 2>&1 &
+    run_selected_group "$group" "${plan[@]}" &
     pids+=("$!")
   done
   for ((i = 0; i < ${#groups[@]}; i++)); do
@@ -162,16 +249,14 @@ run_affected_parallel_groups() {
     if ! wait "$pid"; then
       status=1
     fi
-    cat "$tmp/${groups[$i]}.log"
   done
-  rm -rf "$tmp"
   return "$status"
 }
 
 run_affected_plan() {
-  local groups=()
-  run_check format
-  run_check host-tools-fast
+  local groups=() status=0
+  run_check_recorded format || status=1
+  run_check_recorded host-tools-fast || status=1
   if contains_check host-tests "${plan[@]}" ||
     contains_check magik-gui-clippy "${plan[@]}" ||
     contains_check production-ui-check "${plan[@]}"; then
@@ -198,7 +283,8 @@ run_affected_plan() {
   if contains_check documentation-build "${plan[@]}"; then
     groups+=(docs)
   fi
-  run_affected_parallel_groups "${groups[@]}"
+  run_affected_parallel_groups "${groups[@]}" || status=1
+  return "$status"
 }
 
 run_public_rust_format() {
@@ -268,6 +354,14 @@ require_documentation_dependencies() {
 
 run_check() {
   local check="$1"
+  if [ -n "${MISTER_VALIDATE_FAKE_CHECK_DIR:-}" ]; then
+    if [ -x "$MISTER_VALIDATE_FAKE_CHECK_DIR/$check" ]; then
+      "$MISTER_VALIDATE_FAKE_CHECK_DIR/$check"
+    else
+      echo "fake check passed: $check"
+    fi
+    return
+  fi
   case "$check" in
     format) step "Format all public Rust crates"; run_public_rust_format ;;
     host-tools-fast) step "Fast host tools"; scripts/dev-rust host-tools-fast ;;
@@ -304,18 +398,15 @@ fi
 
 mode="${1:-}"
 case "$mode" in
-  full-host)
-    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
-    run_full_host
-    exit 0
-    ;;
-  affected|working-tree|paths) shift ;;
+  full-host|affected|working-tree|paths) shift ;;
   -h|--help|"") usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
 
 paths_file=""
 print_plan=0
+verbose=0
+json_output=0
 explicit_paths=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -328,6 +419,8 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --print-plan) print_plan=1; shift ;;
+    --verbose) verbose=1; shift ;;
+    --json) json_output=1; shift ;;
     --*) usage >&2; exit 2 ;;
     *)
       [ "$mode" = paths ] || { usage >&2; exit 2; }
@@ -336,6 +429,29 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+[ "$verbose" -eq 0 ] || [ "$json_output" -eq 0 ] || {
+  echo "--verbose and --json cannot be combined" >&2
+  exit 2
+}
+
+if [ "$mode" = full-host ]; then
+  [ -z "$paths_file" ] && [ "${#explicit_paths[@]}" -eq 0 ] && [ "$print_plan" -eq 0 ] || {
+    usage >&2
+    exit 2
+  }
+  report_order=(
+    format host-tests magik-gui-clippy production-ui-check
+    catalog-tests catalog-clippy host-tools mister-clippy agent-tests agent-clippy
+    framebuffer-stream-tests framebuffer-stream-clippy
+    desktop-tests desktop-compiled-check documentation-build
+  )
+  init_reporting
+  status=0
+  run_full_host || status=$?
+  emit_results "$mode" "${report_order[@]}"
+  exit "$status"
+fi
 
 paths=()
 
@@ -478,4 +594,8 @@ if [ "$print_plan" -eq 1 ]; then
   exit 0
 fi
 
-run_affected_plan
+init_reporting
+status=0
+run_affected_plan || status=$?
+emit_results "$mode" "${plan[@]}"
+exit "$status"
