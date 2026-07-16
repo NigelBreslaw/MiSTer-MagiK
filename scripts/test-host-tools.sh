@@ -24,6 +24,7 @@ case "${1:-}" in
 esac
 
 python3 "$ROOT/scripts/check-license-headers.py"
+python3 "$ROOT/scripts/test-doctor.py"
 
 if [ "$MODE" = full ]; then
 cat >"$TMP/MiSTer.ini" <<'EOF'
@@ -67,6 +68,7 @@ for script in \
   "$ROOT/scripts/device-launch-return-smoke.sh" \
   "$ROOT/scripts/device-release-acceptance.sh" \
   "$ROOT/scripts/dev-rust" \
+  "$ROOT/scripts/doctor" \
   "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/magik-layout.sh" \
   "$ROOT/scripts/magik-mode.sh" \
