@@ -29,6 +29,31 @@ RETURN_START_MS="/tmp/mister-magik/launcher-return-start-ms"
 GAME_SETTLE_SECS="${GAME_SETTLE_SECS:-8}"
 MAX_TOTAL_RETURN_MS="${MAX_TOTAL_RETURN_MS:-3000}"
 MAX_BLACK_MS="${MAX_BLACK_MS:-2000}"
+
+extract_return_metrics() {
+  local input="$1" line match="" count=0
+  local pattern=$'^[0-9]+\t[0-9]+\t[0-9]+\t[0-9]+$'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $pattern ]]; then
+      match="$line"
+      count=$((count + 1))
+    fi
+  done <<<"$input"
+  if [[ "$count" -ne 1 ]]; then
+    return 1
+  fi
+  printf '%s\n' "$match"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  [[ "$(extract_return_metrics $'return_wait_heartbeat\n123\t456\t78\t9')" == $'123\t456\t78\t9' ]]
+  ! extract_return_metrics "return_wait_heartbeat" >/dev/null
+  ! extract_return_metrics $'1\t2\t3\t4\n5\t6\t7\t8' >/dev/null
+  ! extract_return_metrics $'return_wait_heartbeat\t\t\t' >/dev/null
+  echo "device-launch-return-smoke self-test ok"
+  exit 0
+fi
+
 if [ "$#" -eq 0 ]; then
   GAME_ROWS=(17 42)
 elif [ "$#" -eq 2 ]; then
@@ -142,8 +167,14 @@ EOF
     exit 1
   fi
 
-  metrics="$(remote "elapsed=0; while [ \"\$elapsed\" -lt 900 ]; do expected=\$(sed -n 's/.*\"game_path\": \"\(.*\)\",/\1/p' '$STALE_RETURN_STATE'); black_start_ms=\$(sed -n '/\"event\":\"launcher_spawn_black_route_start\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); reveal_boot_ms=\$(sed -n '/\"event\":\"launcher_revealed\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); input_boot_ms=\$(sed -n '/\"event\":\"launcher_input_enabled\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); if test -n \"\$expected\" && test -n \"\$black_start_ms\" && test -n \"\$reveal_boot_ms\" && test -n \"\$input_boot_ms\" && grep -q '\"startup_mode\":\"return_from_game\"' '$STATUS' 2>/dev/null && grep -q '\"screen\":\"arcade\"' '$STATUS' 2>/dev/null && grep -q '\"arcade_selected\":$selected' '$STATUS' 2>/dev/null && grep -q '\"input_enabled\":true' '$STATUS' 2>/dev/null && grep -Fq \"system_id=arcade filter=all game_path=\$expected game_index=$selected\" '$REMOTE_LOG' 2>/dev/null && test ! -e '$RETURN_STATE'; then start_ms=\$(cat '$RETURN_START_MS'); printf '%s\\t%s\\t%s\\t%s\\n' \"\$((input_boot_ms - start_ms))\" \"\$((reveal_boot_ms - black_start_ms))\" \"\$((black_start_ms - start_ms))\" \"\$((input_boot_ms - reveal_boot_ms))\"; exit 0; fi; if [ \"\$((elapsed % 50))\" -eq 0 ]; then echo return_wait_heartbeat >&2; fi; sleep 0.1; elapsed=\$((elapsed + 1)); done; exit 1")" || {
+  metrics_raw="$(remote "elapsed=0; while [ \"\$elapsed\" -lt 900 ]; do expected=\$(sed -n 's/.*\"game_path\": \"\(.*\)\",/\1/p' '$STALE_RETURN_STATE'); black_start_ms=\$(sed -n '/\"event\":\"launcher_spawn_black_route_start\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); reveal_boot_ms=\$(sed -n '/\"event\":\"launcher_revealed\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); input_boot_ms=\$(sed -n '/\"event\":\"launcher_input_enabled\"/s/.*\"ts_boot_ms\":\([0-9][0-9]*\).*/\1/p' '$REMOTE_EVENTS' | tail -1); if test -n \"\$expected\" && test -n \"\$black_start_ms\" && test -n \"\$reveal_boot_ms\" && test -n \"\$input_boot_ms\" && grep -q '\"startup_mode\":\"return_from_game\"' '$STATUS' 2>/dev/null && grep -q '\"screen\":\"arcade\"' '$STATUS' 2>/dev/null && grep -q '\"arcade_selected\":$selected' '$STATUS' 2>/dev/null && grep -q '\"input_enabled\":true' '$STATUS' 2>/dev/null && grep -Fq \"system_id=arcade filter=all game_path=\$expected game_index=$selected\" '$REMOTE_LOG' 2>/dev/null && test ! -e '$RETURN_STATE'; then start_ms=\$(cat '$RETURN_START_MS'); printf '%s\\t%s\\t%s\\t%s\\n' \"\$((input_boot_ms - start_ms))\" \"\$((reveal_boot_ms - black_start_ms))\" \"\$((black_start_ms - start_ms))\" \"\$((input_boot_ms - reveal_boot_ms))\"; exit 0; fi; if [ \"\$((elapsed % 50))\" -eq 0 ]; then echo return_wait_heartbeat >&2; fi; sleep 0.1; elapsed=\$((elapsed + 1)); done; exit 1")" || {
     echo "FAIL: game $iteration did not restore an interactive Arcade context" >&2
+    dump_failure_artifacts
+    exit 1
+  }
+  metrics="$(extract_return_metrics "$metrics_raw")" || {
+    echo "FAIL: game $iteration returned invalid timing output" >&2
+    printf '%s\n' "$metrics_raw" >&2
     dump_failure_artifacts
     exit 1
   }
