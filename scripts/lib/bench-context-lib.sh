@@ -230,6 +230,9 @@ bench_context_binary_fields() {
   elif [[ "$runtime_type" == "profile" ]]; then
     scope="profile-${ui_scope}-scope"
     restore_required="1"
+  elif [[ "$profile" == "release" ]]; then
+    scope="fast-${ui_scope}-scope"
+    restore_required="1"
   elif [[ "$ui_scope" == "all" ]]; then
     scope="prod-all"
   else

@@ -5,6 +5,7 @@
 """Static contract for reproducible ARM build wrappers and check mode."""
 
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 apple = (ROOT / "magik-gui/build-arm64-apple-container.sh").read_text()
@@ -18,6 +19,27 @@ for name, text in (("Apple", apple), ("cross", cross)):
     assert "git -C" in text and "--date='format:%-d.%-m.%Y %H:%M'" in text
     assert "date +" not in text, f"{name} wrapper uses volatile wall-clock metadata"
     assert "STAGED_LICENSE" not in text, f"{name} wrapper mutates package inputs"
+    assert '--fast) PROFILE=release' in text, f"{name} wrapper has no fast release profile"
+
+for wrapper in ("magik-gui/build-arm.sh", "magik-gui/build-arm64-apple-container.sh"):
+    help_text = subprocess.run(
+        [str(ROOT / wrapper), "--help"],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert "--fast" in help_text, f"{wrapper} help omits --fast"
+
+deploy = (ROOT / "scripts/deploy-rust.sh").read_text()
+bench = (ROOT / "scripts/bench-debug-build.sh").read_text()
+assert '--fast) PROFILE=release; BUILD_FLAG=(--fast)' in deploy
+assert 'build-ui-fast) echo "magik-gui/build-arm.sh --fast"' in bench
+assert 'build-ui-fast) profile="release"' in bench
+
+arcade_profile = (ROOT / "scripts/profile-arcade-scroll.sh").read_text()
+assert '--fast) build_profile="release"' in arcade_profile
+assert '"$HERE/scripts/deploy-rust.sh" --fast --ui-scope launcher --bench-tools' in arcade_profile
 
 assert 'include_str!("../../LICENSE")' in licenses
 assert 'include_str!("../LICENSE")' not in licenses

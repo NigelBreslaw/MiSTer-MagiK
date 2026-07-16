@@ -7,6 +7,7 @@
 # Profiles (see magik-gui/BUILD.md):
 #   ./build-arm.sh              → release-device (fat LTO + Cortex-A9, ship to MiSTer)
 #   ./build-arm.sh --device     → release-device (fat LTO + Cortex-A9, ship to MiSTer)
+#   ./build-arm.sh --fast       → release (thin LTO + Cortex-A9, optimized daily deploy)
 #   ./build-arm.sh --all-scenes → release-device with bench scenes + experiments
 #   ./build-arm.sh --experiments → release-device with experimental effect scenes
 #   ./build-arm.sh --diagnostics → release-device with diagnostics commands
@@ -64,6 +65,8 @@ BIN_TARGET=""
 BIN_NAME="mister-magik-fb"
 MANIFEST_PATH=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
+UI_SCOPE_EXPLICIT=0
+[ -n "$UI_SCOPE" ] && UI_SCOPE_EXPLICIT=1
 CLEAN=0
 add_feature() {
   local feature="$1"
@@ -80,6 +83,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
+    --fast) PROFILE=release ;;
     --check) COMMAND=check ;;
     --lib-only) LIB_ONLY=1 ;;
     --profile)
@@ -94,11 +98,12 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BIN_NAME="mister-magik-catalog-builder"
       MANIFEST_PATH="catalog/Cargo.toml"
       UI_SCOPE=all
+      UI_SCOPE_EXPLICIT=1
       ;;
     --clean) CLEAN=1 ;;
-    --all-scenes) UI_SCOPE=all; add_feature experiments ;;
-    --experiments) UI_SCOPE=all; add_feature experiments ;;
-    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
+    --all-scenes) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; add_feature experiments ;;
+    --experiments) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; add_feature experiments ;;
+    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}"; UI_SCOPE_EXPLICIT=1 ;;
     --ui-scope)
       i=$((i + 1))
       if [ "$i" -ge "${#ARGS[@]}" ]; then
@@ -106,9 +111,11 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
         exit 2
       fi
       UI_SCOPE="${ARGS[$i]}"
+      UI_SCOPE_EXPLICIT=1
       ;;
     -h|--help)
       sed -n '4,9p' ./build-arm.sh | sed 's/^# \{0,1\}//'
+      echo "  ./build-arm.sh --fast        → optimized thin-LTO daily deploy"
       echo "  ./build-arm.sh --diagnostics → include diagnostics commands"
       echo "  ./build-arm.sh --bench-tools → include device benchmark commands"
       echo "  ./build-arm.sh --catalog-builder → build only the Slint-free catalog builder"
@@ -138,7 +145,9 @@ export DOCKER_DEFAULT_PLATFORM=linux/amd64
 export SLINT_FONT_SIZES="${SLINT_FONT_SIZES:-8,16,24,32}"
 export RUSTC_WRAPPER=""
 
-if [ -z "$UI_SCOPE" ]; then
+if [ "$PROFILE" = release ] && [ "$UI_SCOPE_EXPLICIT" -eq 0 ]; then
+  UI_SCOPE=launcher
+elif [ -z "$UI_SCOPE" ]; then
   UI_SCOPE=all
 fi
 case "$UI_SCOPE" in
@@ -181,6 +190,8 @@ if [ "$PROFILE" = release-device-profile ]; then
   echo "==> cross build profile=release-device-profile ui_scope=$UI_SCOPE (symbols + pprof + Cortex-A9 target, warnings denied)"
 elif [ "$PROFILE" = release-device ]; then
   echo "==> cross build profile=release-device ui_scope=$UI_SCOPE (fat LTO + Cortex-A9 target, warnings denied)"
+elif [ "$PROFILE" = release ]; then
+  echo "==> cross build profile=release ui_scope=$UI_SCOPE (thin LTO + Cortex-A9 target, warnings denied)"
 fi
 
 BUILD_LOG="$(mktemp)"

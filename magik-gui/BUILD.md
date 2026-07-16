@@ -4,7 +4,8 @@
 
 | Profile | Command | LTO | CGUs | ARM flags | Clean build (~) | Binary (~) | Use |
 |---------|---------|-----|------|-----------|-----------------|------------|-----|
-| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 + neon | ~4 min | ~5.6 MB | SD card / bench / production |
+| **`release-device`** | `build-arm.sh` or `--device` | fat | 1 | cortex-a9 + neon | ~4 min | ~9.5 MiB current UI | SD card / bench / production |
+| **`release`** | `build-arm.sh --fast` | thin | 16 (Cargo default) | cortex-a9 + neon | ~2 min | ~11.3 MB current UI | Optimized daily deploy |
 | **`release-device-profile`** | `build-arm.sh --profile` | fat + debug | 1 | cortex-a9 + neon + frame pointers | ~5 min | ~4 MB | Profiling only (`MISTER_PROFILE`, `MISTER_PPROF`) |
 
 Historical benchmark labels: **A0** ≈ old thin-LTO `release`, **A3** ≈ `release-device` (see [`history/toolchain-bench/`](../history/toolchain-bench/)).
@@ -153,6 +154,12 @@ magik-gui/build-arm.sh --experiments
 # Explicit spelling for the same release-device build.
 magik-gui/build-arm.sh --device
 # → target/.../release-device/mister-magik-fb
+
+# Fully optimized daily build (thin LTO + parallel codegen).
+magik-gui/build-arm.sh --fast
+# → target/.../release/mister-magik-fb
+# Defaults to launcher UI scope; pass --ui-scope or --all-scenes explicitly
+# when a broader generated-UI surface is required.
 
 # Profiling build (symbols, pprof feature — do not ship)
 magik-gui/build-arm.sh --profile
@@ -399,7 +406,9 @@ Useful knobs:
   when the image is missing or `Dockerfile.cross-armv7` changes.
 
 The Apple builder VM must be restarted with the full CPU/memory allocation before
-the build script can use it.
+the build script can use it. Builds inspect the running builder allocation and
+warn with the exact restart commands when it is below the detected host CPU
+count or 8 GiB; they never restart the shared builder automatically.
 
 ## cross-rs
 

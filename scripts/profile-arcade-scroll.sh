@@ -20,7 +20,7 @@ source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--fast] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -35,6 +35,8 @@ the change, plus passive latch evidence from the generated
 *-arcade-latch-drops.tsv and *-fpga-latch-before/after.log artifacts. Use the
 Home latch gate instead for Home render/pan or normal launcher copy-path claims.
 Requires a deployed bench-tools MagiK binary; --deploy-device builds one.
+Pass --fast to build or verify the optimized thin-LTO release artifact instead
+of the production fat-LTO release-device artifact.
 --cpu-profile builds/deploys the profiling binary, runs the same boot-entry
 Arcade scenario with MISTER_PPROF=1, exits after the trace window, and pulls a
 non-empty CPU SVG artifact.
@@ -67,6 +69,7 @@ entry_before_a_wait_frames="${MISTER_ARCADE_ENTRY_BEFORE_A_WAIT_FRAMES:-12}"
 repair_projections="${MISTER_ARCADE_SCROLL_REPAIR_PROJECTIONS:-0}"
 catalog_refresh="${MISTER_CATALOG_REFRESH:-default}"
 deploy="skip"
+build_profile="release-device"
 selection_invert=""
 ui_fb_size="${MISTER_UI_FB_SIZE:-auto}"
 present_delay_us="${MISTER_FB_PRESENT_DELAY_US:-0}"
@@ -92,6 +95,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) deploy="skip"; shift ;;
     --deploy-device) deploy="device"; shift ;;
+    --fast) build_profile="release"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --present-backend)
@@ -866,7 +870,13 @@ fi
 benchmark_cleanup_install profile_arcade_scroll_cleanup
 
 case "$deploy" in
-  device) "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools ;;
+  device)
+    if [[ "$build_profile" == "release" ]]; then
+      "$HERE/scripts/deploy-rust.sh" --fast --ui-scope launcher --bench-tools
+    else
+      "$HERE/scripts/deploy-rust.sh" --device --ui-scope launcher --bench-tools
+    fi
+    ;;
   skip) : ;;
 esac
 
@@ -881,7 +891,7 @@ if [[ "$cpu_profile" == "1" && "$self_test" != "1" ]]; then
   fi
 fi
 
-profile="release-device"
+profile="$build_profile"
 features="ui,bench-tools"
 runtime_type="bench-tools"
 deployment_state="verified"

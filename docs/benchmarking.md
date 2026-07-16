@@ -45,6 +45,9 @@ for the run:
   benchmarks.
 - `binary_scope=launcher-scope`: production `release-device` build with
   `ui_scope=launcher`, suitable for launcher/Arcade production scroll evidence.
+- `binary_scope=fast-launcher-scope`: optimized thin-LTO `release` build with
+  `ui_scope=launcher`. It is daily-deploy evidence rather than production
+  release evidence and records `production_restore_required=1`.
 - `binary_scope=profile-launcher-scope`: profiling `release-device-profile`
   build with `ui_scope=launcher` and `features=ui,profile`, suitable only for
   CPU profile artifacts.
@@ -311,6 +314,9 @@ do not use that shortcut as evidence for the user-visible boot-to-Arcade flow.
 `human-turbo-hold` uses the same Main-supervised Arcade entry path and requires
 a bench-tools MagiK binary, so use `--deploy-device` when collecting pacing
 regression evidence from a fresh commit.
+Pass `--fast` with either `--deploy-device` or `--skip-build` to build or verify
+the optimized thin-LTO `release` artifact; without it the runner retains the
+production `release-device` contract.
 It also gates deferred search indexing: catalog publication must precede index
 construction, selection must progress while the index is building, and the
 index must finish within the 30-second trace. This makes its frame-pacing and

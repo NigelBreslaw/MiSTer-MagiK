@@ -12,6 +12,7 @@
 #   MISTER_IP=... scripts/deploy-rust.sh --experiments    # lab/bench build
 #   MISTER_IP=... scripts/deploy-rust.sh --bench-tools    # benchmark command build
 #   MISTER_IP=... scripts/deploy-rust.sh --diagnostics    # diagnostics command build
+#   MISTER_IP=... scripts/deploy-rust.sh --fast           # optimized thin-LTO daily build
 #   MISTER_IP=... scripts/deploy-rust.sh --ui-scope launcher
 #   MISTER_DEPLOY_TRANSPORT=ssh scripts/deploy-rust.sh  # explicit fallback only
 #
@@ -32,20 +33,23 @@ DEPLOY_TRANSPORT="${MISTER_DEPLOY_TRANSPORT:-agent}"
 PROFILE=release-device
 BUILD_FLAG=(--device)
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-all}"
+UI_SCOPE_EXPLICIT=0
+[ -n "${MISTER_UI_BUILD_SCOPE:-}" ] && UI_SCOPE_EXPLICIT=1
 ARGS=("$@")
 for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device) PROFILE=release-device; BUILD_FLAG=(--device) ;;
+    --fast) PROFILE=release; BUILD_FLAG=(--fast) ;;
     --video|--mame-metadata|--hbmame-metadata|--asset-packs)
       echo "ERROR: $arg was removed from scripts/deploy-rust.sh; deploy runtime here and use catalog/media build tools explicitly" >&2
       exit 2
       ;;
-    --all-scenes) UI_SCOPE=all; BUILD_FLAG+=(--all-scenes) ;;
-    --experiments) UI_SCOPE=all; BUILD_FLAG+=(--experiments) ;;
+    --all-scenes) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; BUILD_FLAG+=(--all-scenes) ;;
+    --experiments) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; BUILD_FLAG+=(--experiments) ;;
     --bench-tools) BUILD_FLAG+=(--bench-tools) ;;
     --diagnostics) BUILD_FLAG+=(--diagnostics) ;;
-    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}"; BUILD_FLAG+=("$arg") ;;
+    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}"; UI_SCOPE_EXPLICIT=1; BUILD_FLAG+=("$arg") ;;
     --ui-scope)
       i=$((i + 1))
       if [ "$i" -ge "${#ARGS[@]}" ]; then
@@ -53,6 +57,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
         exit 2
       fi
       UI_SCOPE="${ARGS[$i]}"
+      UI_SCOPE_EXPLICIT=1
       BUILD_FLAG+=(--ui-scope "${ARGS[$i]}")
       ;;
     -h|--help)
@@ -65,6 +70,10 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       ;;
   esac
 done
+
+if [ "$PROFILE" = release ] && [ "$UI_SCOPE_EXPLICIT" -eq 0 ]; then
+  UI_SCOPE=launcher
+fi
 
 BIN="$HERE/magik-gui/target/armv7-unknown-linux-gnueabihf/$PROFILE/mister-magik-fb"
 

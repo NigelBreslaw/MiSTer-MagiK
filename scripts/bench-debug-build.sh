@@ -28,7 +28,7 @@ Options:
   --scenario NAME   all | arm-check-lib | arm-check-launcher | arm-check-arcade |
                     arm-check-full | arm-build-launcher | arm-build-arcade |
                     arm-build-full |
-                    build-ui-device
+                    build-ui-fast | build-ui-device
   --state NAME      noop-warm | touch-rust-bin | touch-rust-lib |
                     touch-rust-catalog | touch-rust-core |
                     touch-rust-platform | touch-slint-launcher |
@@ -127,6 +127,7 @@ command_spec() {
     arm-build-arcade) echo "scripts/dev-rust build-arm-arcade-debug" ;;
     arm-build-full) echo "scripts/dev-rust build-arm-debug-full" ;;
     build-ui-device) echo "magik-gui/build-arm.sh --device" ;;
+    build-ui-fast) echo "magik-gui/build-arm.sh --fast" ;;
     *) return 1 ;;
   esac
 }
@@ -140,11 +141,12 @@ scenario_commands() {
         arm-check-arcade \
         arm-check-full \
         arm-build-launcher \
+        build-ui-fast \
         build-ui-device
       ;;
     arm-check-lib|arm-check-launcher|arm-check-arcade|arm-check-full|\
     arm-build-launcher|arm-build-arcade|arm-build-full|\
-    build-ui-device)
+    build-ui-fast|build-ui-device)
       printf '%s\n' "$scenario"
       ;;
     *)
@@ -296,6 +298,7 @@ binary_size_for_command() {
   local cmd="$1"
   local profile=""
   case "$cmd" in
+    build-ui-fast) profile="release" ;;
     build-ui-device) profile="release-device" ;;
     *) profile="debug" ;;
   esac

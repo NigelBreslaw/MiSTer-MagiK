@@ -117,6 +117,7 @@ if [ "$MODE" = fast ]; then
   python3 "$ROOT/scripts/tests/test-ci-cache-identity.py"
   python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
   "$ROOT/scripts/tests/test-quartus-r2-cache.sh"
+  "$ROOT/scripts/tests/test-apple-container-resources.sh"
   "$ROOT/scripts/tests/test-validate.sh"
   echo "fast host tool checks ok"
   exit 0
@@ -125,6 +126,7 @@ fi
 python3 "$ROOT/scripts/tests/test-ci-cache-identity.py"
 python3 "$ROOT/scripts/tests/test-ci-cache-contract.py"
 "$ROOT/scripts/tests/test-quartus-r2-cache.sh"
+"$ROOT/scripts/tests/test-apple-container-resources.sh"
 "$ROOT/scripts/tests/test-validate.sh"
 
 switch_log="$TMP/switch-ui-calls.log"
@@ -421,6 +423,11 @@ profile_context="$(bench_context_binary_fields release-device-profile launcher u
 case "$profile_context" in
   *$'binary_scope=profile-launcher-scope'*$'runtime_type=profile'*$'deployment_state=verified'*$'production_restore_required=1'*) ;;
   *) echo "unexpected profile benchmark context: $profile_context" >&2; exit 1 ;;
+esac
+fast_context="$(bench_context_binary_fields release launcher ui,bench-tools "$ROOT/does-not-exist" bench-tools verified)"
+case "$fast_context" in
+  *$'binary_scope=fast-launcher-scope'*$'runtime_type=bench-tools'*$'deployment_state=verified'*$'production_restore_required=1'*) ;;
+  *) echo "unexpected fast benchmark context: $fast_context" >&2; exit 1 ;;
 esac
 printf 'benchmark identity self-test\n' >"$TMP/identity.bin"
 printf 'ui\n' >"$TMP/identity.bin.features"

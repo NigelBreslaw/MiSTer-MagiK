@@ -27,6 +27,8 @@ LIB_ONLY=0
 FEATURES=(ui)
 FEATURE_LIST=""
 UI_SCOPE="${MISTER_UI_BUILD_SCOPE:-}"
+UI_SCOPE_EXPLICIT=0
+[ -n "$UI_SCOPE" ] && UI_SCOPE_EXPLICIT=1
 LOCKED=1
 VERBOSE=0
 CLEAN=0
@@ -53,6 +55,7 @@ usage() {
 Native Apple-container ARMv7 build:
   ./build-arm64-apple-container.sh              → release-device
   ./build-arm64-apple-container.sh --device     → release-device
+  ./build-arm64-apple-container.sh --fast       → release (thin LTO, optimized daily deploy)
   ./build-arm64-apple-container.sh --all-scenes → compile bench scenes + experiments
   ./build-arm64-apple-container.sh --experiments → compile experimental effect scenes
   ./build-arm64-apple-container.sh --diagnostics → include diagnostics commands
@@ -81,6 +84,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
   arg="${ARGS[$i]}"
   case "$arg" in
     --device|--release-device) PROFILE=release-device ;;
+    --fast) PROFILE=release ;;
     --check) COMMAND=check ;;
     --lib-only) LIB_ONLY=1 ;;
     --profile)
@@ -95,10 +99,11 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
       BIN_NAME="mister-magik-catalog-builder"
       MANIFEST_PATH="catalog/Cargo.toml"
       UI_SCOPE=all
+      UI_SCOPE_EXPLICIT=1
       ;;
-    --all-scenes) UI_SCOPE=all; add_feature experiments ;;
-    --experiments) UI_SCOPE=all; add_feature experiments ;;
-    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}" ;;
+    --all-scenes) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; add_feature experiments ;;
+    --experiments) UI_SCOPE=all; UI_SCOPE_EXPLICIT=1; add_feature experiments ;;
+    --ui-scope=*) UI_SCOPE="${arg#--ui-scope=}"; UI_SCOPE_EXPLICIT=1 ;;
     --ui-scope)
       i=$((i + 1))
       if [ "$i" -ge "${#ARGS[@]}" ]; then
@@ -106,6 +111,7 @@ for ((i = 0; i < ${#ARGS[@]}; i++)); do
         exit 2
       fi
       UI_SCOPE="${ARGS[$i]}"
+      UI_SCOPE_EXPLICIT=1
       ;;
     --clean) CLEAN=1 ;;
     --rebuild-image) REBUILD_IMAGE=1 ;;
@@ -132,7 +138,9 @@ if [ "$LIB_ONLY" -eq 1 ]; then
   BIN_NAME=""
 fi
 
-if [ -z "$UI_SCOPE" ]; then
+if [ "$PROFILE" = release ] && [ "$UI_SCOPE_EXPLICIT" -eq 0 ]; then
+  UI_SCOPE=launcher
+elif [ -z "$UI_SCOPE" ]; then
   UI_SCOPE=all
 fi
 case "$UI_SCOPE" in
@@ -162,6 +170,7 @@ if ! command -v container >/dev/null 2>&1; then
   echo "ERROR: Apple container is not installed or not on PATH." >&2
   exit 1
 fi
+apple_container_warn_builder_resources "$(container builder status 2>/dev/null || true)" "$CONTAINER_CPUS"
 if [ ! -x "$RUST_TOOLCHAIN/bin/cargo" ]; then
   echo "ERROR: missing linux/aarch64 Rust toolchain at $RUST_TOOLCHAIN" >&2
   echo "Install it with:" >&2
