@@ -261,4 +261,83 @@ if PATH="$prereq_bin:/usr/bin:/bin" \
   exit 1
 fi
 
+fake_checks="$TMP/fake-checks"
+mkdir -p "$fake_checks"
+cat >"$fake_checks/format" <<'EOF'
+#!/usr/bin/env bash
+echo format-marker
+EOF
+cat >"$fake_checks/host-tools-fast" <<'EOF'
+#!/usr/bin/env bash
+echo host-marker
+EOF
+chmod +x "$fake_checks/format" "$fake_checks/host-tools-fast"
+
+output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md)"
+grep -q '^PASS format' <<<"$output"
+grep -q '^PASS host-tools-fast' <<<"$output"
+if grep -q 'format-marker' <<<"$output"; then
+  echo "default validation output leaked full logs" >&2
+  exit 1
+fi
+
+verbose_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md --verbose)"
+grep -q 'format-marker' <<<"$verbose_output"
+
+json_output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md --json)"
+python3 - "$json_output" <<'PY'
+import json
+import sys
+value = json.loads(sys.argv[1])
+assert value["schema"] == "mister-magik-validation-v1"
+assert value["status"] == "pass"
+assert [check["status"] for check in value["checks"]] == ["pass", "pass"]
+PY
+
+cat >"$fake_checks/host-tools-fast" <<'EOF'
+#!/usr/bin/env bash
+echo failure-marker
+exit 7
+EOF
+chmod +x "$fake_checks/host-tools-fast"
+set +e
+failure_output="$(
+  MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" \
+    "$ROOT/scripts/validate" paths docs/catalog.md 2>&1
+)"
+failure_status=$?
+set -e
+[ "$failure_status" -eq 1 ]
+grep -q '^FAIL host-tools-fast' <<<"$failure_output"
+grep -q 'failure-marker' <<<"$failure_output"
+grep -q '^LOG  ' <<<"$failure_output"
+
+cat >"$fake_checks/host-tools-fast" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$fake_checks/host-tests" <<'EOF'
+#!/usr/bin/env bash
+exit 9
+EOF
+chmod +x "$fake_checks/host-tools-fast" "$fake_checks/host-tests"
+set +e
+parallel_json="$(
+  MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" \
+    "$ROOT/scripts/validate" paths magik-gui/src/launcher.rs tools/magik-agent/src/main.rs --json
+)"
+parallel_status=$?
+set -e
+[ "$parallel_status" -eq 1 ]
+python3 - "$parallel_json" <<'PY'
+import json
+import sys
+value = json.loads(sys.argv[1])
+statuses = {check["name"]: check["status"] for check in value["checks"]}
+assert statuses["host-tests"] == "fail"
+assert statuses["magik-gui-clippy"] == "skip"
+assert statuses["agent-tests"] == "pass"
+assert value["status"] == "fail"
+PY
+
 echo "validate routing tests ok"
