@@ -42,6 +42,7 @@ use crate::preview_state::{
     PreviewRawFrameStatus, PreviewRawPixels, PreviewRawTransitionFrame, PreviewState,
     ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
 };
+use crate::return_catalog_capsule;
 use crate::runtime_status::{self, LauncherStatus};
 use crate::screenshot_transitions::{
     PreviewFadePath, PreviewFadeTrace, PreviewTransitionDemo, PreviewTransitionEffect,

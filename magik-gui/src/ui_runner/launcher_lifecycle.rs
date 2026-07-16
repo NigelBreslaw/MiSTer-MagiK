@@ -5,6 +5,7 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogSource {
+    ReturnCapsule,
     SummaryProjection,
     NavigationProjection,
     FullSqlite,
@@ -14,6 +15,7 @@ pub(super) enum CatalogSource {
 impl CatalogSource {
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::ReturnCapsule => "return-capsule",
             Self::SummaryProjection => "summary-projection",
             Self::NavigationProjection => "navigation-projection",
             Self::FullSqlite => "full-sqlite",

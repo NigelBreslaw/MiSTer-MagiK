@@ -189,7 +189,7 @@ impl LauncherScheduler {
         ));
     }
 
-    pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) {
+    pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) -> bool {
         out.clear();
         let mut disconnected = false;
         if let CatalogJobState::Running(rx) = &self.catalog {
@@ -223,6 +223,7 @@ impl LauncherScheduler {
         if search_disconnected {
             self.search_index = SearchIndexJobState::Idle;
         }
+        disconnected
     }
 
     pub(super) fn media_worker_running(&self) -> bool {
@@ -327,11 +328,12 @@ impl LauncherScheduler {
         &mut self,
         nav: &LauncherNav,
         catalog: &ArcadeCatalog,
+        durable_catalog_fingerprint: Option<&str>,
         launch_ref: &str,
         now: Instant,
     ) -> bool {
         self.launch_handoff
-            .begin_launch(nav, catalog, launch_ref, now)
+            .begin_launch(nav, catalog, durable_catalog_fingerprint, launch_ref, now)
     }
 
     pub(super) fn complete_loading_frame(&mut self, loading_presented: Instant) {

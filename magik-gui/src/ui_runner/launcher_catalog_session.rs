@@ -34,8 +34,14 @@ pub(super) enum CatalogSessionEffect {
         catalog: ArcadeCatalog,
         load_us: u64,
         source: CatalogSource,
+        durable: bool,
+        generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
     },
+    MarkCatalogDurable {
+        generation_fingerprint: Option<String>,
+    },
+    DiscardPartialCatalog,
     StartSearchIndex {
         job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
         games: usize,
@@ -97,6 +103,7 @@ impl CatalogSessionEffects {
 
 pub(super) struct CatalogWorkerMessageContext {
     pub(super) catalog_ready: bool,
+    pub(super) catalog_partial: bool,
     pub(super) screen: Screen,
     pub(super) media_gate: Option<MediaInteractionGate>,
 }
@@ -241,10 +248,13 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_load_failed", error.clone());
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
+                if context.catalog_partial {
+                    effects.push(CatalogSessionEffect::DiscardPartialCatalog);
+                }
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogLoadFailed {
                         error,
-                        has_stale_catalog: context.catalog_ready,
+                        has_stale_catalog: context.catalog_ready && !context.catalog_partial,
                     },
                 ));
             }
@@ -315,6 +325,7 @@ impl LauncherCatalogSession {
                 load_us,
                 source,
                 durable_save_pending,
+                generation_fingerprint,
                 publication_ack,
             } => {
                 self.handle_ready(
@@ -324,6 +335,7 @@ impl LauncherCatalogSession {
                     load_us,
                     source,
                     durable_save_pending,
+                    generation_fingerprint,
                     publication_ack,
                     &mut effects,
                 );
@@ -331,6 +343,7 @@ impl LauncherCatalogSession {
             CatalogWorkerMessage::Persisted {
                 summary,
                 completed_build_seconds,
+                generation_fingerprint,
             } => {
                 self.persisted_summary_seen = true;
                 self.refresh_done = true;
@@ -339,6 +352,9 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
+                effects.push(CatalogSessionEffect::MarkCatalogDurable {
+                    generation_fingerprint,
+                });
                 if let Some(pending) = self.pending_search_index.take() {
                     effects.push(CatalogSessionEffect::StartSearchIndex {
                         job: pending.job,
@@ -508,6 +524,7 @@ impl LauncherCatalogSession {
         load_us: u64,
         source: CatalogSource,
         durable_save_pending: bool,
+        generation_fingerprint: Option<String>,
         publication_ack: Option<mpsc::Sender<()>>,
         effects: &mut CatalogSessionEffects,
     ) {
@@ -526,6 +543,8 @@ impl LauncherCatalogSession {
                 catalog: ready_catalog,
                 load_us,
                 source,
+                durable: !durable_save_pending,
+                generation_fingerprint,
                 publication_ack: publication_ack.clone(),
             });
             if let Some(job) = text_index_job {
@@ -723,6 +742,8 @@ mod tests {
             .map(|effect| match effect {
                 CatalogSessionEffect::StartupEvent(_) => "event",
                 CatalogSessionEffect::UseCatalog { .. } => "catalog",
+                CatalogSessionEffect::MarkCatalogDurable { .. } => "mark-durable",
+                CatalogSessionEffect::DiscardPartialCatalog => "discard-partial",
                 CatalogSessionEffect::StartSearchIndex { .. } => "start-search-index",
                 CatalogSessionEffect::SearchIndexesReady { .. } => "search-indexes-ready",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
@@ -751,6 +772,10 @@ mod tests {
             match effect {
                 CatalogSessionEffect::StartupEvent(_) => effect_names.push("event"),
                 CatalogSessionEffect::UseCatalog { .. } => effect_names.push("catalog"),
+                CatalogSessionEffect::MarkCatalogDurable { .. } => {
+                    effect_names.push("mark-durable")
+                }
+                CatalogSessionEffect::DiscardPartialCatalog => effect_names.push("discard-partial"),
                 CatalogSessionEffect::StartSearchIndex { .. } => {
                     effect_names.push("start-search-index")
                 }
@@ -842,12 +867,14 @@ mod tests {
         let values = database_build_values(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
                 completed_build_seconds: Some(119),
+                generation_fingerprint: None,
             },
             now,
         ));
@@ -868,6 +895,7 @@ mod tests {
         let ready_effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -877,6 +905,7 @@ mod tests {
                 load_us: 1,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -889,12 +918,14 @@ mod tests {
         let persisted_effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
                 completed_build_seconds: None,
+                generation_fingerprint: None,
             },
             now,
         );
@@ -911,6 +942,7 @@ mod tests {
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -920,6 +952,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -939,6 +972,7 @@ mod tests {
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Arcade,
                 media_gate: None,
             },
@@ -975,6 +1009,7 @@ mod tests {
         let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -984,6 +1019,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -999,12 +1035,14 @@ mod tests {
         let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
                 completed_build_seconds: Some(119),
+                generation_fingerprint: None,
             },
             now,
         ));
@@ -1035,6 +1073,7 @@ mod tests {
         let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1044,6 +1083,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1060,6 +1100,7 @@ mod tests {
         let (_, progress_ui) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1077,12 +1118,14 @@ mod tests {
         let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
             CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(),
                 completed_build_seconds: Some(119),
+                generation_fingerprint: None,
             },
             now,
         ));
@@ -1116,12 +1159,14 @@ mod tests {
         let effects = effect_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
             CatalogWorkerMessage::Persisted {
                 summary,
                 completed_build_seconds: Some(119),
+                generation_fingerprint: None,
             },
             now,
         ));
@@ -1149,6 +1194,7 @@ mod tests {
         let effects = effect_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1158,6 +1204,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: false,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1187,6 +1234,7 @@ mod tests {
         let _ = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Arcade,
                 media_gate: None,
             },
@@ -1200,6 +1248,7 @@ mod tests {
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Arcade,
                 media_gate: None,
             },
@@ -1209,6 +1258,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1230,6 +1280,7 @@ mod tests {
         let _ = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1244,6 +1295,7 @@ mod tests {
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1253,6 +1305,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1271,6 +1324,7 @@ mod tests {
         let _ = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1285,6 +1339,7 @@ mod tests {
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1294,6 +1349,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FullSqlite,
                 durable_save_pending: false,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1310,6 +1366,7 @@ mod tests {
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1336,6 +1393,7 @@ mod tests {
         let ready_effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: false,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1345,6 +1403,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1359,6 +1418,7 @@ mod tests {
         let statuses = catalog_scan_statuses(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1387,6 +1447,7 @@ mod tests {
         let _ = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1396,6 +1457,7 @@ mod tests {
                 load_us: 42,
                 source: CatalogSource::FreshBuild,
                 durable_save_pending: true,
+                generation_fingerprint: None,
                 publication_ack: None,
             },
             now,
@@ -1405,6 +1467,7 @@ mod tests {
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1430,6 +1493,7 @@ mod tests {
         let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
+                catalog_partial: false,
                 screen: Screen::Home,
                 media_gate: None,
             },
@@ -1718,5 +1782,37 @@ mod tests {
         assert!(duplicate_cached_catalog_ready(true, true));
         assert!(!duplicate_cached_catalog_ready(false, true));
         assert!(!duplicate_cached_catalog_ready(true, false));
+    }
+
+    #[test]
+    fn partial_catalog_load_failure_is_not_offered_as_stale_catalog() {
+        let mut session = LauncherCatalogSession::new(true);
+        let effects = session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                catalog_partial: true,
+                screen: Screen::Arcade,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::LoadFailed {
+                error: "disconnected".to_string(),
+            },
+            Instant::now(),
+        );
+
+        let mut discarded = false;
+        let mut stale = None;
+        for effect in effects.into_effects() {
+            match effect {
+                CatalogSessionEffect::DiscardPartialCatalog => discarded = true,
+                CatalogSessionEffect::Lifecycle(LauncherLifecycleInput::CatalogLoadFailed {
+                    has_stale_catalog,
+                    ..
+                }) => stale = Some(has_stale_catalog),
+                _ => {}
+            }
+        }
+        assert!(discarded);
+        assert_eq!(stale, Some(false));
     }
 }

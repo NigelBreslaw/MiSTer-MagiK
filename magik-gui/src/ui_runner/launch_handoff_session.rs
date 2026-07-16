@@ -47,6 +47,7 @@ struct StagedLaunch {
     launch_target: LaunchTarget,
     action_start: Instant,
     return_state: Option<launcher::LaunchReturnState>,
+    return_catalog: Option<return_catalog_capsule::PreparedReturnCatalogCapsule>,
     bench_iteration: Option<usize>,
 }
 
@@ -256,6 +257,7 @@ impl LaunchHandoffSession {
         &mut self,
         nav: &LauncherNav,
         catalog: &ArcadeCatalog,
+        durable_catalog_fingerprint: Option<&str>,
         launch_ref: &str,
         now: Instant,
     ) -> bool {
@@ -271,11 +273,28 @@ impl LaunchHandoffSession {
         } else {
             launcher::capture_launch_return_state(nav, catalog, launch_ref)
         };
+        let return_catalog = return_state.as_ref().and_then(|state| {
+            let durable_catalog_fingerprint = durable_catalog_fingerprint?;
+            let collection_id = state.collection_id()?;
+            match return_catalog_capsule::prepare_return_catalog_capsule(
+                catalog,
+                collection_id,
+                state.game_path(),
+                durable_catalog_fingerprint,
+            ) {
+                Ok(capsule) => Some(capsule),
+                Err(e) => {
+                    crate::ui_errln!("return catalog capsule unavailable: {e}");
+                    None
+                }
+            }
+        });
         self.staged = Some(StagedLaunch {
             launch_ref: launch_ref.to_string(),
             launch_target,
             action_start: now,
             return_state,
+            return_catalog,
             bench_iteration,
         });
         true
@@ -285,10 +304,24 @@ impl LaunchHandoffSession {
         let Some(staged) = self.staged.take() else {
             return;
         };
-        if let Some(state) = staged.return_state {
+        let return_state_saved = staged.return_state.is_some_and(|state| {
             if let Err(e) = launcher::save_launch_return_state(&state) {
                 crate::ui_errln!("failed to save launch return state: {e}");
+                false
+            } else {
+                true
             }
+        });
+        if return_state_saved {
+            if let Some(capsule) = staged.return_catalog {
+                if let Err(e) = return_catalog_capsule::save_return_catalog_capsule(&capsule) {
+                    crate::ui_errln!("failed to save return catalog capsule: {e}");
+                }
+            } else {
+                return_catalog_capsule::remove_return_catalog_capsule();
+            }
+        } else {
+            return_catalog_capsule::remove_return_catalog_capsule();
         }
         let rx = (self.spawn_worker)(LaunchWorkerRequest {
             launch_ref: staged.launch_ref,
@@ -347,6 +380,7 @@ impl LaunchHandoffSession {
                 self.launch_started = result_received;
                 if worker_result.bench.is_none() {
                     launcher::remove_launch_return_state();
+                    return_catalog_capsule::remove_return_catalog_capsule();
                 }
                 self.spawned_mister |= error.spawned_mister();
                 self.loading_title.clear();
@@ -574,6 +608,7 @@ mod tests {
         assert!(session.begin_launch(
             &nav,
             &catalog,
+            None,
             "/media/fat/_Arcade/1942.mra",
             Instant::now(),
         ));
@@ -594,6 +629,7 @@ mod tests {
         assert!(session.begin_launch(
             &nav,
             &catalog,
+            None,
             "/media/fat/_Arcade/1942.mra",
             Instant::now(),
         ));
@@ -620,6 +656,7 @@ mod tests {
         assert!(session.begin_launch(
             &nav,
             &catalog,
+            None,
             "/media/fat/_Arcade/1942.mra",
             Instant::now(),
         ));
@@ -651,6 +688,7 @@ mod tests {
         assert!(session.begin_launch(
             &nav,
             &catalog,
+            None,
             "/media/fat/_Arcade/1942.mra",
             Instant::now(),
         ));
@@ -697,7 +735,7 @@ mod tests {
         let catalog = one_game_catalog();
         let start = Instant::now();
 
-        assert!(session.begin_launch(&nav, &catalog, target_path.to_str().unwrap(), start));
+        assert!(session.begin_launch(&nav, &catalog, None, target_path.to_str().unwrap(), start));
         session.complete_loading_frame(start + Duration::from_millis(1));
         assert!(matches!(
             session.poll_completion(start + Duration::from_millis(2)),
@@ -754,7 +792,7 @@ mod tests {
         let catalog = one_game_catalog();
         let start = Instant::now();
 
-        assert!(session.begin_launch(&nav, &catalog, target_path.to_str().unwrap(), start));
+        assert!(session.begin_launch(&nav, &catalog, None, target_path.to_str().unwrap(), start));
         session.complete_loading_frame(start + Duration::from_millis(1));
         assert!(matches!(
             session.poll_completion(start + Duration::from_millis(2)),
@@ -800,7 +838,13 @@ mod tests {
         let catalog = one_game_catalog();
         let start = Instant::now();
 
-        assert!(idle_session.begin_launch(&nav, &catalog, "/media/fat/_Arcade/1942.mra", start,));
+        assert!(idle_session.begin_launch(
+            &nav,
+            &catalog,
+            None,
+            "/media/fat/_Arcade/1942.mra",
+            start,
+        ));
         idle_session.complete_loading_frame(start);
         assert!(matches!(
             idle_session.poll_completion(start),
@@ -822,7 +866,13 @@ mod tests {
             arcade_core_running,
             false,
         );
-        assert!(core_session.begin_launch(&nav, &catalog, "/media/fat/_Arcade/1942.mra", start,));
+        assert!(core_session.begin_launch(
+            &nav,
+            &catalog,
+            None,
+            "/media/fat/_Arcade/1942.mra",
+            start,
+        ));
         core_session.complete_loading_frame(start);
         assert!(matches!(
             core_session.poll_completion(start),

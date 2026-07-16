@@ -97,6 +97,7 @@ mod mr_audio;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 mod preview_pack_bench;
 mod preview_state;
+mod return_catalog_capsule;
 mod runtime_status;
 mod screenshot_transitions;
 mod settings;
