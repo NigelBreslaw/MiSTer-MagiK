@@ -14,14 +14,8 @@ REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
 REMOTE_SUMMARY="$MISTER_MAGIK_APP_DIR/library.summary.json"
 REMOTE_NAVIGATION="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
 REMOTE_ASSETS="$MISTER_MAGIK_ASSET_DIR"
-EXPECTED_DURABLE_GAMES=69646
-EXPECTED_VISIBLE_GAMES=67288
-EXPECTED_SYSTEMS=71
-EXPECTED_PC88_GAMES=3831
-EXPECTED_ARCADE_GAMES=909
-EXPECTED_SMS_GAMES=447
-EXPECTED_GAMEGEAR_GAMES=422
-EXPECTED_ASTROCADE_GAMES=23
+CATALOG_FIXTURE_CONTRACT="$ROOT/scripts/catalog-fixture-contract.json"
+CATALOG_FIXTURE_TOOL="$ROOT/scripts/catalog-fixture-contract.py"
 SETTLE_SECS=5
 RACE_REFRESH=0
 LABEL=""
@@ -146,13 +140,7 @@ acceptance_reporting_self_test() {
   grep -q '"passed": 1' "$summary"
   grep -q '"failed": 1' "$summary"
   grep -q $'selftest\ttwo\tfail\t>0\t0\tbad' "$RESULTS_TSV"
-  [[ "$EXPECTED_DURABLE_GAMES" == "69646" ]]
-  [[ "$EXPECTED_VISIBLE_GAMES" == "67288" ]]
-  [[ "$EXPECTED_SYSTEMS" == "71" ]]
-  [[ "$EXPECTED_ARCADE_GAMES" == "909" ]]
-  [[ "$EXPECTED_SMS_GAMES" == "447" ]]
-  [[ "$EXPECTED_GAMEGEAR_GAMES" == "422" ]]
-  [[ "$EXPECTED_ASTROCADE_GAMES" == "23" ]]
+  python3 "$CATALOG_FIXTURE_TOOL" self-test
   binary="$tmp/mister-magik-fb"
   printf 'binary\n' >"$binary"
   printf 'ui\n' >"$binary.features"
@@ -351,27 +339,42 @@ printf 'runtime_binary_tsv\tlabel=%s\tpid=%s\trunning_sha256=%s\tdeployed_sha256
 
 assert_remote_nonempty "$REMOTE_DB"
 
-assert_eq "durable game row count" "$EXPECTED_DURABLE_GAMES" "$(db_scalar "SELECT count(*) FROM game_rows;")"
-assert_eq "PC-8801 game row count" "$EXPECTED_PC88_GAMES" "$(db_scalar "SELECT count(*) FROM game_rows g JOIN string_values s ON s.string_id=g.system_string_id WHERE s.value='pc88';")"
+catalog_games="$(db_scalar "SELECT count(*) FROM games;")"
+catalog_game_rows="$(db_scalar "SELECT count(*) FROM game_rows;")"
+catalog_launcher_rows="$(db_scalar "SELECT (SELECT count(*) FROM ui_arcade_preferred)+(SELECT count(*) FROM launcher_catalog_rows);")"
+catalog_systems="$(db_scalar "SELECT count(*) FROM systems;")"
+catalog_discoveries="$(db_scalar "SELECT CAST(value AS INTEGER) FROM meta WHERE key='discoveries';")"
+catalog_pc88_rows="$(db_scalar "SELECT count(*) FROM game_rows g JOIN string_values s ON s.string_id=g.system_string_id WHERE s.value='pc88';")"
+catalog_db_bytes="$(remote "wc -c < '$REMOTE_DB'" | last_number)"
 assert_eq "PC-8801 boot ROM game row count" "0" "$(db_scalar "SELECT count(*) FROM game_rows g JOIN string_values s ON s.string_id=g.system_string_id WHERE s.value='pc88' AND lower(g.title)='boot';")"
-assert_gt_zero "durable discovery count" "$(db_scalar "SELECT CAST(value AS INTEGER) FROM meta WHERE key='discoveries';")"
+assert_gt_zero "durable discovery count" "$catalog_discoveries"
 assert_remote_nonempty "$REMOTE_SUMMARY"
 "$MISTER" get "$REMOTE_SUMMARY" "$SUMMARY_COPY" >/dev/null
-read -r visible_games visible_systems < <(
-  python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data["total_game_count"], len(data["systems"]))' "$SUMMARY_COPY"
+read -r visible_games visible_systems arcade_games sms_games sms_kind gamegear_games gamegear_kind astrocade_games astrocade_kind < <(
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s={x["id"]:x for x in d["systems"]}; print(d["total_game_count"],len(d["systems"]),len(d["hot_games"]),s["sms"]["count"],s["sms"]["platform_kind"],s["gamegear"]["count"],s["gamegear"]["platform_kind"],s["astrocade"]["count"],s["astrocade"]["platform_kind"])' "$SUMMARY_COPY"
 )
-assert_eq "launcher-visible game count" "$EXPECTED_VISIBLE_GAMES" "$visible_games"
-assert_eq "launcher system count" "$EXPECTED_SYSTEMS" "$visible_systems"
-read -r arcade_games sms_games sms_kind gamegear_games gamegear_kind astrocade_games astrocade_kind < <(
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s={x["id"]:x for x in d["systems"]}; print(len(d["hot_games"]),s["sms"]["count"],s["sms"]["platform_kind"],s["gamegear"]["count"],s["gamegear"]["platform_kind"],s["astrocade"]["count"],s["astrocade"]["platform_kind"])' "$SUMMARY_COPY"
-)
-assert_eq "Arcade visible parent count" "$EXPECTED_ARCADE_GAMES" "$arcade_games"
-assert_eq "SMS game count" "$EXPECTED_SMS_GAMES" "$sms_games"
-assert_eq "SMS platform kind" "console" "$sms_kind"
-assert_eq "Game Gear game count" "$EXPECTED_GAMEGEAR_GAMES" "$gamegear_games"
-assert_eq "Game Gear platform kind" "handheld" "$gamegear_kind"
-assert_eq "Astrocade game count" "$EXPECTED_ASTROCADE_GAMES" "$astrocade_games"
-assert_eq "Astrocade platform kind" "console" "$astrocade_kind"
+catalog_facts="$OUT/catalog-facts.json"
+catalog_contract_report="$OUT/catalog-contract.tsv"
+python3 "$CATALOG_FIXTURE_TOOL" write-facts \
+  --summary "$SUMMARY_COPY" --output "$catalog_facts" \
+  --games "$catalog_games" --game-rows "$catalog_game_rows" \
+  --launcher-rows "$catalog_launcher_rows" --systems "$catalog_systems" \
+  --discoveries "$catalog_discoveries" --db-bytes "$catalog_db_bytes" \
+  --anchor "pc88_game_rows=$catalog_pc88_rows" \
+  --anchor "arcade_visible=$arcade_games" \
+  --anchor "sms_games=$sms_games" --anchor "sms_kind=$sms_kind" \
+  --anchor "gamegear_games=$gamegear_games" --anchor "gamegear_kind=$gamegear_kind" \
+  --anchor "astrocade_games=$astrocade_games" --anchor "astrocade_kind=$astrocade_kind"
+if python3 "$CATALOG_FIXTURE_TOOL" validate \
+    --contract "$CATALOG_FIXTURE_CONTRACT" --facts "$catalog_facts" | tee "$catalog_contract_report"; then
+  record_result "catalog fixture contract" pass "known corpus and exact counts" "matched" "performance budgets recorded only"
+else
+  record_result "catalog fixture contract" fail "known corpus and exact counts" "mismatch" "see $catalog_contract_report"
+  exit 1
+fi
+assert_eq "games view/game_rows parity" "$catalog_game_rows" "$catalog_games"
+assert_eq "summary/navigation launcher-row parity" "$catalog_launcher_rows" "$visible_games"
+assert_eq "summary/database system parity" "$catalog_systems" "$visible_systems"
 assert_eq "non-core-location classification diagnostics" "0" "$(db_scalar "SELECT count(*) FROM system_classification_diagnostics WHERE rejected_source != 'core-location';")"
 for expected_mismatch in sms gamegear astrocade; do
   assert_eq "$expected_mismatch core-location mismatch diagnostic" "1" "$(db_scalar "SELECT count(*) FROM system_classification_diagnostics WHERE system_id='$expected_mismatch' AND rejected_source='core-location' AND rejected_kind='arcade';")"

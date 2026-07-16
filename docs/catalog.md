@@ -10,10 +10,11 @@ APIs, progress states, and benchmark expectations.
 - Warm unchanged validation should be a root stamp check: under 500ms is the
   soft target, under 2s is the hard gate.
 - Fresh catalog creation and explicit refresh both use the same full builder.
-  Reference-MiSTer cold first-scan regression checks are RAM catalog usable
-  within 96592ms, durable SQLite save complete within 117766ms, exactly 53457
-  persisted games and 71 systems, and a database no larger than 13151232 bytes.
-  They detect benchmark regressions and are not beta shipping blockers.
+  Reference-MiSTer content acceptance is keyed by the versioned catalog stamp
+  fingerprint in `scripts/catalog-fixture-contract.json`. The contract names
+  the compatibility `games` view, physical `game_rows`, launcher-visible rows,
+  and systems separately. Historical timing and database-size budgets are
+  recorded by default and become gates only with an explicit performance flag.
 - First database creation is a foreground bootstrap job. The catalog worker and
   library walker must run at full priority with unrestricted CPU affinity until
   the RAM catalog is usable. It is acceptable for the scan/build screen to
