@@ -7,4 +7,15 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+
+expected_name="Nigel Breslaw"
+expected_email="nigel.breslaw@gmail.com"
+actual_name="$(git config --get user.name || true)"
+actual_email="$(git config --get user.email || true)"
+if [ "$actual_name" != "$expected_name" ] || [ "$actual_email" != "$expected_email" ]; then
+  printf 'error: this repository requires Git identity %s <%s>; got %s <%s>\n' \
+    "$expected_name" "$expected_email" "$actual_name" "$actual_email" >&2
+  exit 1
+fi
+
 exec "$ROOT/scripts/validate" affected
