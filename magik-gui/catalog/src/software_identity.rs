@@ -737,6 +737,7 @@ pub(crate) fn mame_identity_projection<'a>(
     identity_id: &str,
     metadata: &'a ArcadeMachineMetadata,
     mra_parent: Option<&str>,
+    display_title: &str,
 ) -> MameIdentityProjection<'a> {
     if let Some(machine) = metadata.mame.get(identity_id) {
         let family_id = machine
@@ -779,9 +780,47 @@ pub(crate) fn mame_identity_projection<'a>(
             None,
             "arcade-parent-override",
         )
+    } else if let Some(family_id) =
+        unique_metadata_family_for_canonical_title(metadata, display_title)
+    {
+        (family_id, None, None, None, None, "canonical-title")
     } else {
         (identity_id.to_string(), None, None, None, None, "setname")
     }
+}
+
+fn unique_metadata_family_for_canonical_title(
+    metadata: &ArcadeMachineMetadata,
+    display_title: &str,
+) -> Option<String> {
+    let title_key = library_db::canonical_variant_title(display_title);
+    if title_key.is_empty() {
+        return None;
+    }
+    let mut matched_family = None::<String>;
+    for machines in [&metadata.mame, &metadata.hbmame] {
+        for (setname, machine) in machines {
+            if library_db::canonical_variant_title(&machine.title) != title_key {
+                continue;
+            }
+            let family_id = library_db::normalize_id(
+                machine
+                    .parent_setname
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(setname),
+            );
+            if family_id.is_empty() {
+                continue;
+            }
+            match matched_family.as_deref() {
+                Some(existing) if existing != family_id => return None,
+                Some(_) => {}
+                None => matched_family = Some(family_id),
+            }
+        }
+    }
+    matched_family
 }
 
 pub(crate) fn normalized_parent_family(parent: Option<&str>, identity_id: &str) -> Option<String> {
@@ -1706,6 +1745,106 @@ mod tests {
         assert!(row.3.is_none());
         assert!(row.4.is_none());
         assert_eq!(row.5, "setname");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unknown_arcade_set_collapses_into_unique_metadata_family_with_same_canonical_title() {
+        let root = unique_temp_dir("arcade-title-family-fallback");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[(
+                "cybots",
+                None,
+                "Cyberbots: Fullmetal Madness (Europe 950424)",
+                Some("1995"),
+                Some("Capcom"),
+            )],
+        );
+        let mut parent = mra_discovery(1, "Cyberbots: Fullmetal Madness (Europe 950424)");
+        parent.setname = Some("cybots".to_string());
+        let mut access_mod =
+            mra_discovery(2, "Cyberbots: Fullmetal Madness (Euro 950424 Access Mod)");
+        access_mod.setname = Some("cybotsam".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![parent, access_mod]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
+        let access_identity = conn
+            .query_row(
+                "SELECT family_id,source
+                 FROM launchable_identities
+                 WHERE identity_id='cybotsam'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("query access mod identity");
+        let preferred_count: i64 = conn
+            .query_row("SELECT count(*) FROM ui_arcade_preferred", [], |row| {
+                row.get(0)
+            })
+            .expect("query preferred count");
+        let variant_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM ui_arcade_variants WHERE family_id='cybots'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query variant count");
+
+        assert_eq!(access_identity.0, "cybots");
+        assert_eq!(access_identity.1, "canonical-title");
+        assert_eq!(preferred_count, 1);
+        assert_eq!(variant_count, 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unknown_arcade_set_does_not_collapse_when_canonical_title_is_ambiguous() {
+        let root = unique_temp_dir("arcade-title-family-ambiguous");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_fixture_db(
+            &mame_db,
+            &[
+                ("examplea", None, "Example Game (Set A)", None, None),
+                ("exampleb", None, "Example Game (Set B)", None, None),
+            ],
+        );
+        let mut first = mra_discovery(1, "Example Game (Set A)");
+        first.setname = Some("examplea".to_string());
+        let mut second = mra_discovery(2, "Example Game (Set B)");
+        second.setname = Some("exampleb".to_string());
+        let mut unknown = mra_discovery(3, "Example Game (Unknown Mod)");
+        unknown.setname = Some("examplemod".to_string());
+
+        write_sqlite_scan_with_mame(
+            &db,
+            &sqlite_scan_with_discoveries(vec![first, second, unknown]),
+            &mame_db,
+        )
+        .expect("save sqlite");
+
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
+        let unknown_identity = conn
+            .query_row(
+                "SELECT family_id,source
+                 FROM launchable_identities
+                 WHERE identity_id='examplemod'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("query unknown identity");
+
+        assert_eq!(unknown_identity.0, "examplemod");
+        assert_eq!(unknown_identity.1, "setname");
         let _ = std::fs::remove_dir_all(root);
     }
 

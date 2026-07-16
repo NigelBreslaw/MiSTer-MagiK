@@ -1796,8 +1796,12 @@ fn catalog_arcade_projection_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String, ArcadeGameMetadataKey) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, year, manufacturer, category, _) =
-            mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
+        let (family_id, _, year, manufacturer, category, _) = mame_identity_projection(
+            &identity_id,
+            arcade_metadata,
+            discovery.parent.as_deref(),
+            &discovery.title,
+        );
         let parent = if family_id == identity_id {
             String::new()
         } else {
@@ -1882,8 +1886,12 @@ fn catalog_family_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String) {
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
-        let (family_id, _, _, _, _, _) =
-            mame_identity_projection(&identity_id, arcade_metadata, discovery.parent.as_deref());
+        let (family_id, _, _, _, _, _) = mame_identity_projection(
+            &identity_id,
+            arcade_metadata,
+            discovery.parent.as_deref(),
+            &discovery.title,
+        );
         let parent = if family_id == identity_id {
             String::new()
         } else {

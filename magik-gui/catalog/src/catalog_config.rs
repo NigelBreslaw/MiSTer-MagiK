@@ -23,7 +23,7 @@ pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sql
 pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 
 pub const SCHEMA_VERSION: u32 = 65;
-pub const CATALOG_BUILD_VERSION: u32 = 10;
+pub const CATALOG_BUILD_VERSION: u32 = 11;
 
 pub fn default_sqlite_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_SQLITE")

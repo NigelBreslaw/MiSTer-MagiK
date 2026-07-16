@@ -3175,6 +3175,7 @@ fn write_sqlite_scan_with_sources_inner(
                         &identity_id,
                         &arcade_metadata,
                         discovery.parent.as_deref(),
+                        &discovery.title,
                     );
                 identity_stmt
                     .execute(params![

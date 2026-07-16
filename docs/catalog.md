@@ -85,6 +85,12 @@ clones, Neo Geo, SMS, Game Gear, Astrocade, and every console/handheld/computer
 system are excluded from that number. There is no fallback to raw system sums
 or broader physical `_Arcade` membership.
 
+Arcade identity prefers MAME/HBMAME parent metadata, then an explicit MRA
+parent. When an installed MRA has neither, its canonical title may attach it to
+an installed metadata-backed family only when that title resolves to exactly
+one family. Ambiguous titles remain separate. The launchable row is retained as
+a family variant even when it is hidden from the preferred game projection.
+
 ## Read-Only Inspection
 
 Use `scripts/mister catalog` for routine counts and launch lookups. Use
