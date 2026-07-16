@@ -41,6 +41,9 @@ jobs:
           corepack enable
           corepack prepare pnpm@11.10.0 --activate
 
+      - name: Install desktop build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
+
       - name: Install documentation dependencies
         run: pnpm --dir documentation install --frozen-lockfile
 

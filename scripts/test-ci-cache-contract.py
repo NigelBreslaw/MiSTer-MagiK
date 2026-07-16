@@ -64,6 +64,8 @@ def main() -> int:
     for fragment in required_host_fragments:
         if fragment not in rust:
             fail(f"host cache is missing {fragment}")
+    if "libfontconfig1-dev" not in rust:
+        fail("host validation does not install the desktop fontconfig dependency")
     if rust.count("steps.cache-id.outputs.cross_abi") < 6:
         fail("ARM restore keys are not consistently scoped to the cross ABI")
 
