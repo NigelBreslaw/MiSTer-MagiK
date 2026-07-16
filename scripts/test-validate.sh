@@ -273,7 +273,11 @@ echo host-marker
 EOF
 chmod +x "$fake_checks/format" "$fake_checks/host-tools-fast"
 
-output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md)"
+output="$(MISTER_VALIDATE_FAKE_CHECK_DIR="$fake_checks" "$ROOT/scripts/validate" paths docs/catalog.md 2>&1)"
+grep -q '^VALIDATION start check=format$' <<<"$output"
+grep -q '^VALIDATION pass check=format duration_ms=' <<<"$output"
+grep -q '^VALIDATION start check=host-tools-fast$' <<<"$output"
+grep -q '^VALIDATION pass check=host-tools-fast duration_ms=' <<<"$output"
 grep -q '^PASS format' <<<"$output"
 grep -q '^PASS host-tools-fast' <<<"$output"
 if grep -q 'format-marker' <<<"$output"; then
