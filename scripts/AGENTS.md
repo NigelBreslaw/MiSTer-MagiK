@@ -1,6 +1,8 @@
 # AGENTS.md - scripts
 
 Root `AGENTS.md` applies.
+File authority and regeneration commands are indexed in
+`docs/agents/file-authority.md`.
 
 ## Ownership
 

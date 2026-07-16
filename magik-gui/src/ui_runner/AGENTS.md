@@ -1,6 +1,7 @@
 # AGENTS.md - launcher runtime
 
 Root and `magik-gui/AGENTS.md` apply.
+File authority is documented in `docs/agents/file-authority.md`.
 
 ## Ownership
 
