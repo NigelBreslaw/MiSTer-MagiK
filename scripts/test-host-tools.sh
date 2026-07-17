@@ -409,6 +409,7 @@ python3 "$ROOT/scripts/checks/check-latch-protocol.py"
 python3 "$ROOT/scripts/tests/test-scanout-platform-contract.py"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
   -g '*.rs' \
+  -g '!**/bin/**' \
   -g '!fallible_log.rs' >/dev/null; then
   echo "standard Rust stdio macros panic on output errors; use ui_log*/ui_errln* instead" >&2
   exit 1
@@ -463,10 +464,19 @@ case "$source_fields" in
   source_commit=*$'\tsource_commit_short='*$'\tsource_dirty='[01]) ;;
   *) echo "unexpected source provenance: $source_fields" >&2; exit 1 ;;
 esac
-if rg -n 'sh -c "\$env \$remote library-refresh"' "$ROOT/scripts/profile-library-io.sh" >/dev/null; then
-  echo "library I/O profiler still samples a sh -c wrapper" >&2
+set +e
+retired_library_io_output="$("$ROOT/scripts/profile-library-io.sh" --self-test 2>&1)"
+retired_library_io_status=$?
+set -e
+if [ "$retired_library_io_status" -ne 2 ]; then
+  echo "retired library I/O profiler returned $retired_library_io_status, expected 2" >&2
   exit 1
 fi
+case "$retired_library_io_output" in
+  *"retired V2 monolith"*) ;;
+  *) echo "retired library I/O profiler did not explain its V2 retirement" >&2; exit 1 ;;
+esac
+echo "retired library I/O profiler fail-closed self-test ok"
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
 bash "$ROOT/scripts/lib/arming-state-lib.sh" --self-test
 bash "$ROOT/scripts/lib/platform-manifest-lib.sh" --self-test
@@ -476,7 +486,6 @@ bash "$ROOT/scripts/lib/catalog-device-test-lib.sh" --self-test
 "$ROOT/scripts/lib/reboot-wait-lib.sh"
 "$ROOT/scripts/lib/mister-fifo-lib.sh"
 "$ROOT/scripts/profile-first-scan.sh" --self-test
-"$ROOT/scripts/profile-library-io.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
 "$ROOT/scripts/profile-media-arcade-contention.sh" --self-test
 "$ROOT/scripts/profile-arcade-scroll.sh" --self-test

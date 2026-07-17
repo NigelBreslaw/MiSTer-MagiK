@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Install host validation tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Compute cache identities
         id: cache-id
         run: python3 scripts/checks/ci-cache-identity.py --github-output "$GITHUB_OUTPUT"

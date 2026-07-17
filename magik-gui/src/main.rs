@@ -366,7 +366,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
 
 fn run_catalog_v3_inspect() {
     match mister_magik_catalog::catalog_acceptance::inspect_production_catalog() {
-        Ok(report) => print!("{report}"),
+        Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);

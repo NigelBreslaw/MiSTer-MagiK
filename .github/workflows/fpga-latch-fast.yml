@@ -66,6 +66,7 @@ jobs:
           verilator --cc --exe --build --timing --coverage-line \
             --top-module tb_mister_magik_vblank_latch \
             --Mdir "$build_dir/obj" \
+            -Ifpga/menu-vblank-latch \
             fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
             fpga/menu-vblank-latch/tb_mister_magik_vblank_latch.sv \
             "$GITHUB_WORKSPACE/fpga/menu-vblank-latch/verilator_coverage_main.cpp"
