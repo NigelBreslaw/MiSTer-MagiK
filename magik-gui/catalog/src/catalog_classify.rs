@@ -280,8 +280,35 @@ pub fn system_title(system_id: &str) -> String {
         .unwrap_or_else(|| fallback_title(system_id))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct SystemId(String);
+
+impl SystemId {
+    pub fn new(value: &str) -> Self {
+        Self(value.trim().to_ascii_lowercase().replace('_', "-"))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Display for SystemId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 pub fn normalize_system_id(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace('_', "-")
+    SystemId::new(value).into_string()
 }
 
 fn fallback_title(id: &str) -> String {
@@ -311,6 +338,15 @@ mod tests {
             .map(|system| &system.id)
             .collect::<HashSet<_>>();
         assert_eq!(ids.len(), systems.len());
+    }
+
+    #[test]
+    fn system_id_normalizes_case_whitespace_and_separator() {
+        assert_eq!(SystemId::new(" SNK_NeoGeo ").as_str(), "snk-neogeo");
+        assert_eq!(
+            SystemId::new("snk_neogeo"),
+            SystemId::new("snk-neogeo")
+        );
     }
 
     #[test]

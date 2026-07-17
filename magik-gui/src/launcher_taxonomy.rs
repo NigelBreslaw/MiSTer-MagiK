@@ -6,7 +6,9 @@
 use crate::arcade_catalog::{ArcadeCatalog, GameSystemEntry, PlatformKind, MENU_ARCADE_SYSTEM_ID};
 #[cfg(test)]
 use mister_magik_catalog::catalog_classify::system_definitions;
-use mister_magik_catalog::catalog_classify::{system_definition, LauncherSection};
+use mister_magik_catalog::catalog_classify::{
+    normalize_system_id, system_definition, LauncherSection,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -206,10 +208,6 @@ fn resolve_menu_alias(id: &str) -> &str {
     } else {
         trimmed
     }
-}
-
-fn normalize_system_id(id: &str) -> String {
-    id.trim().to_ascii_lowercase()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -923,6 +921,16 @@ mod tests {
                 .expect("Amiga CD32 destination")
                 .menu_path,
             vec![ROOT_MENU_ID, COMPUTERS_MENU_ID, COMPUTERS_COMMODORE_MENU_ID]
+        );
+    }
+
+    #[test]
+    fn separator_variants_share_one_system_destination() {
+        let taxonomy =
+            LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("snk_neogeo", 2)]));
+        assert_eq!(
+            taxonomy.primary_destination_for_system("snk_neogeo"),
+            taxonomy.primary_destination_for_system("snk-neogeo")
         );
     }
 
