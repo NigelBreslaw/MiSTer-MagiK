@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
+source "$ROOT/scripts/lib/arming-state-lib.sh"
 REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_DIR="/media/fat/mister-magik-dev"
 REMOTE_ENV="$REMOTE_DIR/launcher.env"
@@ -347,7 +348,8 @@ stop_active_trigger() {
 
 cleanup_on_exit() {
   stop_active_trigger
-  remote_quick "rm -f $(sq "$REMOTE_ENV") $(sq "$PUBLIC_ENV") $(sq "$REMOTE_FAULT_ENV") $(sq "$REMOTE_MARKER") $(sq "$REMOTE_SESSION") $(sq "$REMOTE_REBUILD_MARKER") $(sq "$PUBLIC_REBUILD_MARKER")" >/dev/null 2>&1 || true
+  arming_state_clear "$MISTER" >/dev/null 2>&1 || true
+  arming_state_assert_clean "$MISTER" >/dev/null 2>&1 || true
 }
 
 trap cleanup_on_exit EXIT INT TERM

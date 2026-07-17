@@ -59,6 +59,7 @@ for script in \
   "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh" \
   "$ROOT/scripts/checks/check-scanout-slots-contract.sh" \
   "$ROOT/scripts/lib/bench-context-lib.sh" \
+  "$ROOT/scripts/lib/arming-state-lib.sh" \
   "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
@@ -387,11 +388,8 @@ if not match:
     sys.exit(1)
 body = match.group("body")
 for needle in [
-    "REMOTE_ENV",
-    "REMOTE_FAULT_ENV",
-    "REMOTE_MARKER",
-    "REMOTE_SESSION",
-    "REMOTE_REBUILD_MARKER",
+    "arming_state_clear",
+    "arming_state_assert_clean",
 ]:
     if needle not in body:
         print(f"fs-fault cleanup_on_exit missing {needle}", file=sys.stderr)
@@ -463,6 +461,7 @@ if rg -n 'sh -c "\$env \$remote library-refresh"' "$ROOT/scripts/profile-library
   exit 1
 fi
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
+bash "$ROOT/scripts/lib/arming-state-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/lib/library-sql-output-lib.sh"
 "$ROOT/scripts/lib/reboot-wait-lib.sh"

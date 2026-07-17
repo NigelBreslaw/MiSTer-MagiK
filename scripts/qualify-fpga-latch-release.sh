@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
+source "$ROOT/scripts/lib/arming-state-lib.sh"
 RBF_DIR="${MISTER_FPGA_RELEASE_DIR:-$ROOT/build/fpga-vblank-latch}"
 RBF="$RBF_DIR/menu-magik-vblank-latch.rbf"
 META="$RBF_DIR/menu-magik-vblank-latch.metadata.txt"
@@ -106,7 +107,9 @@ fi
 
 cleanup() {
   set +e
-  "$MISTER" run "rm -f /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fpga-latch-qualification.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik-dev/rebuild-on-next-boot; ls -l /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik-dev/rebuild-on-next-boot 2>/dev/null || true" >/dev/null 2>&1
+  "$MISTER" run "rm -f /tmp/mister-magik/fpga-latch-qualification.env" >/dev/null 2>&1
+  arming_state_clear "$MISTER" >/dev/null 2>&1
+  arming_state_assert_clean "$MISTER" >/dev/null 2>&1
   set -e
 }
 trap cleanup EXIT INT TERM

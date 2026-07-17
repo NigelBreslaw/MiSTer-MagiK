@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/reboot-wait-lib.sh"
+source "$ROOT/scripts/lib/arming-state-lib.sh"
 
 usage() {
   echo "usage: scripts/magik-mode.sh <status|dev|public|stock>"
@@ -50,14 +51,8 @@ echo '$layout platform valid'
 }
 
 clear_arming_state() {
-  "$MISTER" run "rm -f \
-    /media/fat/mister-magik/launcher.env \
-    /media/fat/mister-magik-dev/launcher.env \
-    /media/fat/mister-magik/rebuild-on-next-boot \
-    /media/fat/mister-magik-dev/rebuild-on-next-boot \
-    /tmp/mister-magik/fs-fault-launcher.env \
-    /tmp/mister-magik/fs-fault-session \
-    /tmp/mister-magik/fs-fault.json; sync"
+  arming_state_clear "$MISTER"
+  arming_state_assert_clean "$MISTER"
 }
 
 status() {
