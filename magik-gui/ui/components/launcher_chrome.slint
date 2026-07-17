@@ -4,11 +4,12 @@
 import { MisterUi } from "../mister_window.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
-component ScanningSubtitle inherits HorizontalLayout {
+component ScanningSubtitle inherits VerticalLayout {
     in property <string> detail;
     property <bool> dot-visible: true;
 
     alignment: center;
+    spacing: 2px;
 
     Timer {
         interval: 500ms;
@@ -16,25 +17,40 @@ component ScanningSubtitle inherits HorizontalLayout {
         triggered => { root.dot-visible = !root.dot-visible; }
     }
 
-    Text {
-        text: "Scanning";
-        color: #8ca4b5;
-        font-size: 8px;
-        horizontal-alignment: center;
+    HorizontalLayout {
+        alignment: center;
+
+        Text {
+            text: "Scanning";
+            color: #8ca4b5;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: ".";
+            color: root.detail == "" && root.dot-visible ? #8ca4b5 : transparent;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
     }
 
-    Text {
-        text: ".";
-        color: root.dot-visible ? #8ca4b5 : transparent;
-        font-size: 8px;
-        horizontal-alignment: center;
-    }
+    if detail != "" : HorizontalLayout {
+        alignment: center;
 
-    if detail != "" : Text {
-        text: " · " + detail;
-        color: #8ca4b5;
-        font-size: 8px;
-        horizontal-alignment: center;
+        Text {
+            text: root.detail;
+            color: #8ca4b5;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: ".";
+            color: root.dot-visible ? #8ca4b5 : transparent;
+            font-size: 8px;
+            horizontal-alignment: center;
+        }
     }
 }
 
