@@ -11,8 +11,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
+
+from frame_profile_schema import int_field, read_rows
 
 
 PHASES = [
@@ -35,20 +36,6 @@ PHASES = [
     "audio_resample_us",
     "audio_write_us",
 ]
-
-
-def int_field(row: dict[str, str], key: str) -> int:
-    if key == "arcade_list_present_us" and key not in row:
-        key = "overlay_present_us"
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
 
 
 def rect_label(row: dict[str, str]) -> str:

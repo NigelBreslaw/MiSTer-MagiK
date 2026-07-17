@@ -11,8 +11,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
+
+from frame_profile_schema import int_field, phase_stats, read_rows
 
 
 PHASES = [
@@ -33,38 +34,8 @@ PHASES = [
 ]
 
 
-def int_field(row: dict[str, str], key: str) -> int:
-    if key == "arcade_list_present_us" and key not in row:
-        key = "overlay_present_us"
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
-
-
-def percentile(values: list[int], pct: float) -> int:
-    if not values:
-        return 0
-    sorted_values = sorted(values)
-    idx = round((len(sorted_values) - 1) * pct / 100.0)
-    return sorted_values[min(len(sorted_values) - 1, idx)]
-
-
 def stats(rows: list[dict[str, str]], key: str) -> dict[str, int]:
-    values = [int_field(row, key) for row in rows]
-    if not values:
-        return {"avg": 0, "p50": 0, "p95": 0, "max": 0}
-    return {
-        "avg": sum(values) // len(values),
-        "p50": percentile(values, 50),
-        "p95": percentile(values, 95),
-        "max": max(values),
-    }
+    return phase_stats(rows, key)
 
 
 def fmt_delta(delta: int) -> str:

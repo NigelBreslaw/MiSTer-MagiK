@@ -14,9 +14,10 @@ No third-party packages are required.
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 from pathlib import Path
+
+from frame_profile_schema import int_field, read_rows
 
 
 PHASES = [
@@ -61,24 +62,6 @@ DETAIL_PHASES = [
     ("arcade_list_present_us", "arcade-list-present", "#ef4444"),
     ("fb_present_other_us", "present-other", "#94a3b8"),
 ]
-
-
-def int_field(row: dict[str, str], key: str) -> int:
-    if key == "arcade_list_present_us" and key not in row:
-        key = "overlay_present_us"
-    value = row.get(key, "")
-    if value == "":
-        return 0
-    try:
-        return int(float(value))
-    except ValueError:
-        return 0
-
-
-def read_rows(path: Path, max_frames: int) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
-    return rows[:max_frames]
 
 
 def has_detail_phases(rows: list[dict[str, str]]) -> bool:
@@ -206,7 +189,7 @@ def main() -> int:
     parser.add_argument("--title", default=None)
     args = parser.parse_args()
 
-    rows = read_rows(args.input, args.max_frames)
+    rows = read_rows(args.input, max_rows=args.max_frames)
     title = args.title or args.input.name
     args.output.write_text(render_svg(rows, title, args.width, args.height), encoding="utf-8")
     print(f"wrote {args.output} ({len(rows)} frames)")

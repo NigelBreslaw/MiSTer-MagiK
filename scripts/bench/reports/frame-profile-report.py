@@ -7,61 +7,16 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-
-PHASES = [
-    "wall_us",
-    "prepare_us",
-    "anim_us",
-    "slint_render_us",
-    "custom_draw_us",
-    "vsync_us",
-    "fb_present_us",
-    "cached_present_us",
-    "hidden_compose_us",
-    "hidden_preview_compose_us",
-    "hidden_arcade_compose_us",
-    "direct_preview_present_us",
-    "arcade_list_present_us",
-    "video_decode_us",
-    "video_scale_us",
-    "video_recv_us",
-    "video_image_us",
-    "video_blit_us",
-    "audio_decode_us",
-    "audio_resample_us",
-    "audio_write_us",
-    "present_pixels",
-    "present_bytes",
-]
+from frame_profile_schema import CANONICAL_PHASES, int_field, percentile, read_rows
 
 
-def int_field(row: dict[str, str], key: str) -> int:
-    if key == "arcade_list_present_us" and key not in row:
-        key = "overlay_present_us"
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-
-def percentile(values: list[int], pct: float) -> int:
-    if not values:
-        return 0
-    values = sorted(values)
-    idx = round((len(values) - 1) * pct / 100.0)
-    return values[min(len(values) - 1, idx)]
-
-
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
+PHASES = CANONICAL_PHASES
 
 
 def command_output(args: list[str]) -> str:

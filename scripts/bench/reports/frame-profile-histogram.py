@@ -11,8 +11,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
+
+from frame_profile_schema import int_field, percentile, read_rows
 
 
 DEFAULT_PHASES = [
@@ -47,27 +48,6 @@ BUCKETS_US = [
     (17_000, 30_000, "[17,30ms)"),
     (30_000, 1_000_000_000, "[30ms,+)"),
 ]
-
-
-def int_field(row: dict[str, str], key: str) -> int:
-    if key == "arcade_list_present_us" and key not in row:
-        key = "overlay_present_us"
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-
-def percentile(sorted_values: list[int], pct: float) -> int:
-    if not sorted_values:
-        return 0
-    idx = round((len(sorted_values) - 1) * pct / 100.0)
-    return sorted_values[min(len(sorted_values) - 1, idx)]
-
-
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
 
 
 def histogram(values: list[int]) -> list[tuple[str, int]]:

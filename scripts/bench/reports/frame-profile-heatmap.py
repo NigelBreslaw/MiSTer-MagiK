@@ -11,21 +11,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 from pathlib import Path
 
-
-def int_field(row: dict[str, str], key: str) -> int:
-    try:
-        return int(float(row.get(key, "") or 0))
-    except ValueError:
-        return 0
-
-
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
+from frame_profile_schema import int_field, read_rows
 
 
 def add_rect(grid: list[list[int]], x0: int, y0: int, x1: int, y1: int, surface_w: int, surface_h: int) -> None:
