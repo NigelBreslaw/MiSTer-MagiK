@@ -212,9 +212,11 @@ fn scan_library_with_progress_and_events(
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
 ) -> LibraryScan {
+    crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
     let plan_t = Instant::now();
     let plan = launch_profiles::CatalogScanPlan::for_roots(&cfg.roots);
+    crate::cooperative_work::checkpoint();
     library_db::report_library_scan_timing(
         "catalog_scan_plan",
         plan_t.elapsed().as_micros() as u64,
@@ -227,6 +229,7 @@ fn scan_library_with_progress_and_events(
     );
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
+    crate::cooperative_work::checkpoint();
     library_db::report_library_scan_timing(
         "prepared_payload_index",
         prepared_payload_t.elapsed().as_micros() as u64,
@@ -264,6 +267,7 @@ fn scan_library_with_progress_and_events(
     let mut first_discovery_reported = false;
     let mut discovered_systems = BTreeSet::new();
     while let Ok(event) = rx.recv() {
+        crate::cooperative_work::checkpoint();
         let files = match event {
             DiscoveryEvent::File(file) => vec![file],
             DiscoveryEvent::GameDirFacts(facts) => {
@@ -295,6 +299,9 @@ fn scan_library_with_progress_and_events(
             }
         };
         for f in files {
+            if idx.is_multiple_of(16) {
+                crate::cooperative_work::checkpoint();
+            }
             // Runtime directories are buffered before their profile is resolved.
             // Static walker events already satisfy this predicate, so applying it
             // here keeps the original candidate/progress accounting intact.
@@ -342,6 +349,7 @@ fn scan_library_with_progress_and_events(
                     let mut has_archive_entries = false;
                     if !profile.archive_entry_rules.is_empty() {
                         if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
+                            crate::cooperative_work::checkpoint();
                             let archive_t = Instant::now();
                             let scan = catalog_scan::scan_archive_toc(&f, format, profile);
                             timing.archive_toc_us += archive_t.elapsed().as_micros() as u64;
@@ -394,6 +402,7 @@ fn scan_library_with_progress_and_events(
                     ignored_files += 1;
                 }
                 Some((profile, ProfilePathClass::Collection { rule })) => {
+                    crate::cooperative_work::checkpoint();
                     if let Some(format) = ArchiveFormat::from_ext(&f.ext) {
                         containers.push(catalog_scan::scan_container_header(&f, format));
                     }

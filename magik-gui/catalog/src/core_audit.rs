@@ -89,7 +89,10 @@ fn audit_installed_cores(
     profiles: &[LaunchProfile],
     rows: &mut BTreeMap<String, CatalogAuditRow>,
 ) {
-    for core in installed_cores {
+    for (index, core) in installed_cores.iter().enumerate() {
+        if index.is_multiple_of(16) {
+            crate::cooperative_work::checkpoint();
+        }
         let core_id = core.core_id.clone();
         let game_dir = main_default_game_dir_for_core(&core_id);
         let profile = profile_for_core_or_dir(profiles, &core_id, &game_dir);
@@ -129,7 +132,10 @@ fn audit_game_directories(
     .into_iter()
     .map(|plan| (plan.game_dir_name.to_ascii_lowercase(), plan.decision))
     .collect::<BTreeMap<_, _>>();
-    for fact in game_dirs {
+    for (index, fact) in game_dirs.iter().enumerate() {
+        if index.is_multiple_of(16) {
+            crate::cooperative_work::checkpoint();
+        }
         let name = fact.name.as_str();
         let key = name.to_ascii_lowercase();
         if cataloged_dirs.contains(&key) {

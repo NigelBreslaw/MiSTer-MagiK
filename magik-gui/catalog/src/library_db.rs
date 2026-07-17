@@ -534,12 +534,14 @@ impl LibraryRamScanArtifact {
 fn coverage_audit_and_stamp(
     scan: &LibraryScan,
 ) -> (Vec<CatalogAuditRow>, catalog_stamp::CatalogStamp, u64, u64) {
+    crate::cooperative_work::checkpoint();
     let audit_t = std::time::Instant::now();
     let audit_rows = core_audit::audit_catalog_coverage_from_facts(
         &scan.profiles,
         &scan.installed_cores,
         &scan.game_dir_facts,
     );
+    crate::cooperative_work::checkpoint();
     let audit_us = audit_t.elapsed().as_micros() as u64;
     let stamp_t = std::time::Instant::now();
     let stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(&scan.roots, &audit_rows);
@@ -1686,10 +1688,14 @@ fn with_catalog_progress_heartbeat<T: Send>(
     work: impl FnOnce() -> T + Send,
 ) -> T {
     let started = std::time::Instant::now();
+    let background = crate::cooperative_work::in_background_scope();
     progress("Indexing library", detail);
     std::thread::scope(|scope| {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
         scope.spawn(move || {
+            let _background_scope =
+                background.then(crate::cooperative_work::BackgroundScope::enter);
+            crate::cooperative_work::checkpoint();
             let _ = result_tx.send(work());
         });
         loop {

@@ -13,7 +13,6 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,21 +23,18 @@ pub enum BuilderOperation {
     FreshBuild,
 }
 
-static BACKGROUND_HEAVY_WORK_ALLOWED: AtomicBool = AtomicBool::new(true);
-
 /// Let the interactive launcher suspend projection and persistence work while
 /// input, navigation motion, or a latency-sensitive preview is active.
 pub fn set_background_heavy_work_allowed(allowed: bool) {
-    BACKGROUND_HEAVY_WORK_ALLOWED.store(allowed, Ordering::Release);
+    crate::cooperative_work::set_background_allowed(allowed);
 }
 
 fn wait_for_background_heavy_work_enabled(enabled: bool) {
     if !enabled {
         return;
     }
-    while !BACKGROUND_HEAVY_WORK_ALLOWED.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(4));
-    }
+    let _scope = crate::cooperative_work::BackgroundScope::enter();
+    crate::cooperative_work::checkpoint();
 }
 
 impl BuilderOperation {
@@ -250,6 +246,7 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
     let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
+    let _background_scope = background_build.then(crate::cooperative_work::BackgroundScope::enter);
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -805,10 +802,14 @@ fn with_builder_progress_heartbeat<T: Send>(
     work: impl FnOnce() -> T + Send,
 ) -> T {
     let started = Instant::now();
+    let background = crate::cooperative_work::in_background_scope();
     progress("Indexing library", detail);
     std::thread::scope(|scope| {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
         scope.spawn(move || {
+            let _background_scope =
+                background.then(crate::cooperative_work::BackgroundScope::enter);
+            crate::cooperative_work::checkpoint();
             let _ = result_tx.send(work());
         });
         loop {

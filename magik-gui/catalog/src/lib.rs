@@ -27,6 +27,7 @@ pub mod catalog_store;
 pub mod catalog_summary;
 #[cfg(feature = "builder")]
 pub mod catalog_vertical_slice;
+mod cooperative_work;
 mod core_audit;
 pub mod device_layout;
 mod fallible_log;

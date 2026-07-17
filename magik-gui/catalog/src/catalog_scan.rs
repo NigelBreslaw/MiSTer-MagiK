@@ -177,6 +177,8 @@ pub(crate) fn discover_files_pipelined_with_plan(
         .name("library-walker".to_string())
         .spawn(move || {
             apply_runtime_thread_policy(role);
+            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
+                .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
             let dirs = walk_index_candidates_with_plan(&roots, &plan, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
@@ -198,6 +200,8 @@ fn discover_files_pipelined_with_role(
         .name("library-walker".to_string())
         .spawn(move || {
             apply_runtime_thread_policy(role);
+            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
+                .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
             let dirs = discover_files_streaming(&roots, profiles, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
@@ -1347,6 +1351,42 @@ mod tests {
     use crate::test_support::*;
     use std::collections::BTreeSet;
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn background_scanner_pauses_and_resumes_without_losing_discoveries() {
+        let _test_lock = crate::cooperative_work::TEST_LOCK.lock().unwrap();
+        let root = unique_temp_dir("background-scan-gate");
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).unwrap();
+        for index in 0..40 {
+            std::fs::write(
+                arcade.join(format!("Game {index}.mra")),
+                format!("<misterromdescription><name>Game {index}</name><setname>game-{index}</setname></misterromdescription>"),
+            )
+            .unwrap();
+        }
+        crate::cooperative_work::set_background_allowed(false);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_root = root.clone();
+        let worker = std::thread::spawn(move || {
+            let _scope = crate::cooperative_work::BackgroundScope::enter();
+            started_tx.send(()).unwrap();
+            let cfg = BenchConfig {
+                roots: vec![worker_root.display().to_string()],
+                sqlite_path: worker_root.join("library.sqlite3"),
+            };
+            done_tx.send(scan_library(&cfg).discoveries.len()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        crate::cooperative_work::set_background_allowed(true);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(3)).unwrap(), 40);
+        worker.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn profile_ignored_support_files_do_not_become_payloads() {

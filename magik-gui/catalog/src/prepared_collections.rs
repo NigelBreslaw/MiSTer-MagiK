@@ -123,7 +123,14 @@ impl PreparedPayloadIndex {
         }
         let mut complete = true;
         let mut ascii_entries = HashMap::<String, PathBuf>::new();
-        for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        for (entry_index, entry) in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .enumerate()
+        {
+            if entry_index.is_multiple_of(16) {
+                crate::cooperative_work::checkpoint();
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => {
@@ -280,6 +287,41 @@ fn storage_root_for_library_root(root: &Path) -> PathBuf {
         prefix.push(component.as_os_str());
     }
     root.to_path_buf()
+}
+
+#[cfg(test)]
+mod cooperative_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn prepared_payload_walk_respects_background_gate() {
+        let _test_lock = crate::cooperative_work::TEST_LOCK.lock().unwrap();
+        let root = crate::test_support::unique_temp_dir("prepared-payload-gate");
+        let payload_root = root.join("_DOS Games");
+        std::fs::create_dir_all(&payload_root).unwrap();
+        for index in 0..40 {
+            std::fs::write(payload_root.join(format!("game-{index}.vhd")), b"x").unwrap();
+        }
+        crate::cooperative_work::set_background_allowed(false);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker_root = root.clone();
+        let worker = std::thread::spawn(move || {
+            let _scope = crate::cooperative_work::BackgroundScope::enter();
+            started_tx.send(()).unwrap();
+            let index =
+                PreparedPayloadIndex::from_library_roots(&[worker_root.display().to_string()]);
+            done_tx.send(index.file_count()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+        crate::cooperative_work::set_background_allowed(true);
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 40);
+        worker.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -258,6 +258,9 @@ fn visit_walkdir(
         .filter_entry(|entry| !ignore(entry.path()))
         .filter_map(Result::ok)
     {
+        if visited_entries.is_multiple_of(16) {
+            crate::cooperative_work::checkpoint();
+        }
         let path = entry.path();
         if path == target {
             if signature_capture.target() {
@@ -558,6 +561,7 @@ mod linux {
             .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
         buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
         loop {
+            crate::cooperative_work::checkpoint();
             let read = unsafe {
                 libc::syscall(
                     libc::SYS_getdents64,
@@ -581,6 +585,9 @@ mod linux {
             stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
             let mut offset = 0usize;
             while offset < read {
+                if entries.len().is_multiple_of(16) {
+                    crate::cooperative_work::checkpoint();
+                }
                 if read - offset < DIRENT64_HEADER_BYTES {
                     return Err(format!(
                         "truncated getdents64 record in {}",
