@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::time::Instant;
 
 const BINDING_SCHEMA_VERSION: u32 = 1;
 const PROJECTION_CONTRACT: &str = "rich-game-v1";
@@ -51,6 +52,7 @@ pub fn publish_production_projection(
     catalog: &ArcadeCatalog,
     limits: RegistryLimits,
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
+    let projection_started = Instant::now();
     let current_manifest = match read_latest_manifest_lazy(storage_root, limits) {
         Ok(manifest) => Some(manifest),
         Err(error) if manifest_slots_present(storage_root) => {
@@ -95,6 +97,7 @@ pub fn publish_production_projection(
         .unwrap_or_default();
     let mut materializer = CatalogMaterializer::new(catalog);
     let mut planned_systems = Vec::new();
+    let planning_started = Instant::now();
     for system_id in &systems {
         let candidate = materializer.project(system_id)?;
         let published = current_manifest.as_ref().and_then(|manifest| {
@@ -125,6 +128,7 @@ pub fn publish_production_projection(
         reasons: vec![ReconcileReason::RemovedSystem],
     }));
     let changed = !planned_systems.is_empty();
+    let planning_us = planning_started.elapsed().as_micros();
     let intended_generation = if changed {
         current_generation
             .unwrap_or(0)
@@ -141,7 +145,15 @@ pub fn publish_production_projection(
         global_rebuild: false,
         manifest_only: false,
     };
-    match execute_reconciliation(storage_root, &plan, limits, &mut materializer)? {
+    let reconciliation_started = Instant::now();
+    let result = execute_reconciliation(storage_root, &plan, limits, &mut materializer)?;
+    crate::catalog_logln!(
+        "catalog_v3_projection_phases_tsv\tplanning_us={}\treconciliation_us={}\ttotal_us={}",
+        planning_us,
+        reconciliation_started.elapsed().as_micros(),
+        projection_started.elapsed().as_micros(),
+    );
+    match result {
         ReconciliationOutcome::Published {
             generation,
             rebuilt,

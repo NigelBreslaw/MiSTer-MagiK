@@ -7,17 +7,36 @@ use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::shard_registry::{
     garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-    publish_system_artifacts, read_latest_manifest, CatalogManifest, ManifestSystem,
-    RegistryLimits,
+    publish_system_artifacts_with_durability, read_latest_manifest, sync_artifact_batch,
+    CatalogManifest, ManifestSystem, RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystemAction, ReconcilePlan};
-use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
+use crate::system_shard::{
+    write_system_shard_with_durability, ShardDurability, SystemGame, SystemShardData,
+};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_ARTIFACT_BARRIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn run_artifact_barrier(storage_root: &Path) -> Result<(), ReconciliationError> {
+    #[cfg(test)]
+    if FAIL_ARTIFACT_BARRIER.with(|fail| fail.replace(false)) {
+        return Err(ReconciliationError::new(
+            "artifact-barrier",
+            "injected artifact barrier failure",
+        ));
+    }
+    sync_artifact_batch(storage_root)
+        .map_err(|error| ReconciliationError::new("artifact-barrier", error.to_string()))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterializedSystem {
@@ -131,6 +150,10 @@ pub fn execute_reconciliation(
         .map_or_else(Vec::new, |manifest| manifest.systems.clone());
     let mut rebuilt = Vec::new();
     let mut removed = Vec::new();
+    let mut materialize_time = Duration::ZERO;
+    let mut shard_write_time = Duration::ZERO;
+    let mut artifact_publish_time = Duration::ZERO;
+    let mut slowest_shard = (String::new(), Duration::ZERO);
     for planned in &plan.systems {
         match planned.action {
             PlannedSystemAction::Remove => {
@@ -138,8 +161,11 @@ pub fn execute_reconciliation(
                 removed.push(planned.system_id.clone());
             }
             PlannedSystemAction::Rebuild => {
+                let shard_started = Instant::now();
+                let phase_started = Instant::now();
                 let materialized =
                     materializer.materialize(&planned.system_id, expected_generation)?;
+                materialize_time += phase_started.elapsed();
                 validate_materialized(&planned.system_id, &materialized)?;
                 let staging = storage_root.join("staging").join(format!(
                     "reconcile-{}-{expected_generation}-{nonce}-{}",
@@ -151,7 +177,8 @@ pub fn execute_reconciliation(
                 let sqlite = staging.join("system.sqlite3");
                 let navigation = staging.join("system.nav.lz4b");
                 let game_count = materialized.games.len() as u64;
-                if let Err(error) = write_system_shard(
+                let phase_started = Instant::now();
+                if let Err(error) = write_system_shard_with_durability(
                     &sqlite,
                     &navigation,
                     &SystemShardData {
@@ -160,11 +187,14 @@ pub fn execute_reconciliation(
                         games: materialized.games,
                     },
                     limits.shard,
+                    ShardDurability::Deferred,
                 ) {
                     let _ = fs::remove_dir_all(&staging);
                     return Err(ReconciliationError::new("write", error.to_string()));
                 }
-                let active = publish_system_artifacts(
+                shard_write_time += phase_started.elapsed();
+                let phase_started = Instant::now();
+                let active = publish_system_artifacts_with_durability(
                     storage_root,
                     &sqlite,
                     &navigation,
@@ -172,6 +202,7 @@ pub fn execute_reconciliation(
                     expected_generation,
                     game_count,
                     limits,
+                    false,
                 );
                 let active = match active {
                     Ok(active) => active,
@@ -183,6 +214,7 @@ pub fn execute_reconciliation(
                         ));
                     }
                 };
+                artifact_publish_time += phase_started.elapsed();
                 let previous = systems
                     .iter()
                     .find(|system| system.system_id == planned.system_id)
@@ -200,11 +232,19 @@ pub fn execute_reconciliation(
                 });
                 let _ = fs::remove_dir(staging);
                 rebuilt.push(planned.system_id.clone());
+                let shard_elapsed = shard_started.elapsed();
+                if shard_elapsed > slowest_shard.1 {
+                    slowest_shard = (planned.system_id.as_str().to_string(), shard_elapsed);
+                }
             }
         }
     }
     materializer.refresh_manifest(&mut systems)?;
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+    let barrier_started = Instant::now();
+    run_artifact_barrier(storage_root)?;
+    let barrier_time = barrier_started.elapsed();
+    let manifest_started = Instant::now();
     publish_manifest(
         storage_root,
         &CatalogManifest {
@@ -214,7 +254,20 @@ pub fn execute_reconciliation(
         limits,
     )
     .map_err(|error| ReconciliationError::new("publish-manifest", error.to_string()))?;
+    let manifest_time = manifest_started.elapsed();
     materializer.commit_facts()?;
+    crate::catalog_logln!(
+        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_write_us={}\tartifact_publish_us={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
+        expected_generation,
+        rebuilt.len(),
+        materialize_time.as_micros(),
+        shard_write_time.as_micros(),
+        artifact_publish_time.as_micros(),
+        barrier_time.as_micros(),
+        manifest_time.as_micros(),
+        slowest_shard.0,
+        slowest_shard.1.as_micros(),
+    );
     Ok(ReconciliationOutcome::Published {
         generation: expected_generation,
         rebuilt,
@@ -416,6 +469,36 @@ mod tests {
         .unwrap();
         assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 2);
         assert_eq!(materializer.commits, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_batch_barrier_keeps_previous_manifest_authoritative() {
+        let root = temporary_root("barrier-failure");
+        let mut materializer = FixtureMaterializer::new();
+        execute_reconciliation(
+            &root,
+            &plan(None, 1, &["c64"]),
+            limits(),
+            &mut materializer,
+        )
+        .unwrap();
+        let before = read_latest_manifest(&root, limits()).unwrap();
+
+        materializer.games.insert("c64", vec![game("Two")]);
+        FAIL_ARTIFACT_BARRIER.with(|fail| fail.set(true));
+        let error = execute_reconciliation(
+            &root,
+            &plan(Some(1), 2, &["c64"]),
+            limits(),
+            &mut materializer,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.stage(), "artifact-barrier");
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap(), before);
+        assert_eq!(materializer.commits, 1);
+        assert!(root.join("systems/c64/2.sqlite3").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

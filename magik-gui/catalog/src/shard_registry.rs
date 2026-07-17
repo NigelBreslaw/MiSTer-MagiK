@@ -115,6 +115,30 @@ pub fn publish_system_artifacts(
     games: u64,
     limits: RegistryLimits,
 ) -> Result<PublishedGeneration, RegistryError> {
+    publish_system_artifacts_with_durability(
+        storage_root,
+        staged_sqlite,
+        staged_navigation,
+        system_id,
+        generation,
+        games,
+        limits,
+        true,
+    )
+}
+
+#[cfg(feature = "builder")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_system_artifacts_with_durability(
+    storage_root: &Path,
+    staged_sqlite: &Path,
+    staged_navigation: &Path,
+    system_id: &SystemId,
+    generation: u64,
+    games: u64,
+    limits: RegistryLimits,
+    sync_target_directory: bool,
+) -> Result<PublishedGeneration, RegistryError> {
     ensure_staging_path(storage_root, staged_sqlite)?;
     ensure_staging_path(storage_root, staged_navigation)?;
     open_system_shard(
@@ -152,7 +176,9 @@ pub fn publish_system_artifacts(
         .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
     fs::rename(staged_navigation, &target_navigation)
         .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
-    sync_directory(target_directory)?;
+    if sync_target_directory {
+        sync_directory(target_directory)?;
+    }
     Ok(PublishedGeneration {
         generation,
         sqlite_path,
@@ -163,6 +189,47 @@ pub fn publish_system_artifacts(
         navigation_hash,
         games,
     })
+}
+
+#[cfg(all(feature = "builder", target_os = "linux"))]
+pub(crate) fn sync_artifact_batch(storage_root: &Path) -> Result<(), RegistryError> {
+    use std::os::fd::AsRawFd;
+    let directory = File::open(storage_root)
+        .map_err(|error| RegistryError::with("open artifact filesystem", error))?;
+    let result = unsafe { libc::syncfs(directory.as_raw_fd()) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(RegistryError::with(
+            "sync artifact filesystem",
+            std::io::Error::last_os_error(),
+        ))
+    }
+}
+
+#[cfg(all(feature = "builder", not(target_os = "linux")))]
+pub(crate) fn sync_artifact_batch(storage_root: &Path) -> Result<(), RegistryError> {
+    fn sync_tree(path: &Path) -> Result<(), RegistryError> {
+        for entry in fs::read_dir(path)
+            .map_err(|error| RegistryError::with("read artifact directory", error))?
+        {
+            let entry = entry.map_err(|error| RegistryError::with("read artifact entry", error))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| RegistryError::with("inspect artifact entry", error))?;
+            if file_type.is_dir() {
+                sync_tree(&entry.path())?;
+                sync_directory(&entry.path())?;
+            } else if file_type.is_file() {
+                File::open(entry.path())
+                    .and_then(|file| file.sync_all())
+                    .map_err(|error| RegistryError::with("sync artifact file", error))?;
+            }
+        }
+        Ok(())
+    }
+    sync_tree(storage_root)?;
+    sync_directory(storage_root)
 }
 
 #[cfg(feature = "builder")]

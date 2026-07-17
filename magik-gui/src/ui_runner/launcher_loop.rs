@@ -3080,6 +3080,7 @@ pub(super) fn run_launcher_loop(
             } else {
                 media_gate
             };
+            let media_gate = catalog_build_media_gate(catalog_session.refresh_done(), media_gate);
             apply_screenshot_media_update_effects(
                 media_session.sync_gate(media_gate),
                 &app,
@@ -3961,6 +3962,20 @@ fn media_benchmark_contention_enabled() -> bool {
     false
 }
 
+fn catalog_build_media_gate(
+    catalog_refresh_done: bool,
+    base: MediaInteractionGate,
+) -> MediaInteractionGate {
+    if catalog_refresh_done {
+        base
+    } else {
+        MediaInteractionGate {
+            active: true,
+            reason: "catalog-build",
+        }
+    }
+}
+
 fn benchmark_media_interaction_gate_active(
     benchmark_active: bool,
     media_benchmark_contention: bool,
@@ -4003,6 +4018,7 @@ fn process_catalog_worker_message(
             media_benchmark_contention,
             loop_start,
         );
+        let media_gate = catalog_build_media_gate(catalog_session.refresh_done(), media_gate);
         apply_screenshot_media_update_effects(
             media_session.sync_gate(media_gate),
             app,
@@ -5035,6 +5051,66 @@ mod tests {
         assert!(benchmark_media_interaction_gate_active(true, false));
         assert!(!benchmark_media_interaction_gate_active(true, true));
         assert!(!benchmark_media_interaction_gate_active(false, false));
+    }
+
+    #[test]
+    fn media_stays_gated_through_ready_and_opens_after_persistence() {
+        let now = Instant::now();
+        let mut session = LauncherCatalogSession::new(false);
+        let idle = MediaInteractionGate {
+            active: false,
+            reason: "idle",
+        };
+        let ready = CatalogWorkerMessage::Ready {
+            catalog: catalog_for_media_systems(&["arcade"]),
+            summary: None,
+            load_us: 0,
+            source: CatalogSource::FreshBuild,
+            durable_save_pending: true,
+            generation_fingerprint: None,
+            publication_ack: None,
+        };
+        session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: false,
+                catalog_partial: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            ready,
+            now,
+        );
+        let gated = catalog_build_media_gate(session.refresh_done(), idle);
+        assert!(gated.active);
+        assert_eq!(gated.reason, "catalog-build");
+
+        session.handle_worker_message(
+            CatalogWorkerMessageContext {
+                catalog_ready: true,
+                catalog_partial: false,
+                screen: Screen::Home,
+                media_gate: None,
+            },
+            CatalogWorkerMessage::Persisted {
+                summary: library_db::LibraryRefreshSummary {
+                    skipped: false,
+                    scan_us: 1,
+                    discover_us: 1,
+                    classify_us: 1,
+                    import_us: 1,
+                    bytes: 1,
+                    normal_files: 1,
+                    containers: 0,
+                    entries: 0,
+                    audit_rows: 0,
+                    discoveries: 1,
+                },
+                completed_build_seconds: Some(120),
+                generation_fingerprint: None,
+            },
+            now,
+        );
+        assert_eq!(catalog_build_media_gate(session.refresh_done(), idle), idle);
     }
 
     #[cfg(not(feature = "bench-tools"))]

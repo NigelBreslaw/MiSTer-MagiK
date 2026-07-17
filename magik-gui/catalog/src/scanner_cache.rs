@@ -129,6 +129,10 @@ pub(crate) fn write(path: &Path, state: &ScannerCacheState) -> Result<(), String
         conn.execute_batch(
             "PRAGMA journal_mode=OFF;
              PRAGMA synchronous=OFF;
+             PRAGMA page_size=16384;
+             PRAGMA cache_size=-32768;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE scanner_cache_meta(key TEXT PRIMARY KEY,value INTEGER NOT NULL) WITHOUT ROWID;
              CREATE TABLE games(game_id TEXT PRIMARY KEY,discovered_at_unix INTEGER) WITHOUT ROWID;
              CREATE TABLE software_hash_cache(

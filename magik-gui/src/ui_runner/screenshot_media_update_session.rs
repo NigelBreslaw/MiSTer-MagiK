@@ -7,7 +7,7 @@ use super::*;
 const MEDIA_PROGRESS_DONE_HOLD: Duration = Duration::from_secs(2);
 const MEDIA_INTERACTION_SETTLE: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct MediaInteractionGate {
     pub(super) active: bool,
     pub(super) reason: &'static str,

@@ -64,6 +64,13 @@ pub struct LoadedSystemShard {
     pub games: Vec<SystemGame>,
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShardDurability {
+    Immediate,
+    Deferred,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredNavigation {
     schema_version: u32,
@@ -78,6 +85,23 @@ pub fn write_system_shard(
     navigation_path: &Path,
     data: &SystemShardData,
     limits: SystemShardLimits,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    write_system_shard_with_durability(
+        sqlite_path,
+        navigation_path,
+        data,
+        limits,
+        ShardDurability::Immediate,
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn write_system_shard_with_durability(
+    sqlite_path: &Path,
+    navigation_path: &Path,
+    data: &SystemShardData,
+    limits: SystemShardLimits,
+    durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
     let stored = StoredNavigation {
@@ -99,10 +123,19 @@ pub fn write_system_shard(
 
     let mut connection = Connection::open(sqlite_path)
         .map_err(|error| SystemShardError::with("open staging SQLite", error))?;
+    let durability_pragmas = match durability {
+        ShardDurability::Immediate => "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
+        ShardDurability::Deferred => "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;",
+    };
+    connection
+        .execute_batch(durability_pragmas)
+        .map_err(|error| SystemShardError::with("configure shard durability", error))?;
     connection
         .execute_batch(
-            "PRAGMA journal_mode=DELETE;
-             PRAGMA synchronous=FULL;
+            "PRAGMA page_size=16384;
+             PRAGMA cache_size=-32768;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE shard_meta (
                  key TEXT PRIMARY KEY,
                  value TEXT NOT NULL
@@ -161,7 +194,14 @@ pub fn write_system_shard(
                  ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             )
             .map_err(|error| SystemShardError::with("prepare shard games", error))?;
-        for (ordinal, game) in data.games.iter().enumerate() {
+        let mut insertion_order = (0..data.games.len()).collect::<Vec<_>>();
+        insertion_order.sort_unstable_by(|left, right| {
+            data.games[*left]
+                .stable_key
+                .cmp(&data.games[*right].stable_key)
+        });
+        for ordinal in insertion_order {
+            let game = &data.games[ordinal];
             statement
                 .execute(rusqlite::params![
                     game.stable_key,
@@ -197,18 +237,17 @@ pub fn write_system_shard(
     transaction
         .commit()
         .map_err(|error| SystemShardError::with("commit shard", error))?;
-    connection
-        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-        .map_err(|error| SystemShardError::with("checkpoint shard", error))?;
     drop(connection);
     fs::write(navigation_path, &navigation)
         .map_err(|error| SystemShardError::with("write adjacent navigation", error))?;
-    fs::File::open(sqlite_path)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| SystemShardError::with("sync shard SQLite", error))?;
-    fs::File::open(navigation_path)
-        .and_then(|file| file.sync_all())
-        .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
+    if durability == ShardDurability::Immediate {
+        fs::File::open(sqlite_path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| SystemShardError::with("sync shard SQLite", error))?;
+        fs::File::open(navigation_path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
+    }
     open_system_shard(
         sqlite_path,
         navigation_path,

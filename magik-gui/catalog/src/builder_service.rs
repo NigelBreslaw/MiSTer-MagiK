@@ -766,6 +766,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let scan_stats = prepared.artifact.stats().clone();
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
+        let projection_started = Instant::now();
         let outcome = crate::production_sharded_projection::publish_bound_production_projection(
             &crate::catalog_config::default_sharded_catalog_path(),
             &prepared.catalog,
@@ -773,13 +774,18 @@ impl BuilderBackend for SystemBuilderBackend {
             crate::production_sharded_projection::production_registry_limits(),
         )
         .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
+        let projection_us = projection_started.elapsed().as_micros();
+        let scanner_cache_started = Instant::now();
         crate::scanner_cache::write(
             &crate::scanner_cache::default_path(),
             &prepared.scanner_cache,
         )?;
+        let scanner_cache_us = scanner_cache_started.elapsed().as_micros();
         // Catalog state is the acceptance marker. Publishing it last ensures
         // an interrupted shard/cache write is detected and rebuilt.
+        let catalog_state_started = Instant::now();
         crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
+        let catalog_state_us = catalog_state_started.elapsed().as_micros();
         let import_us = v3_started.elapsed().as_micros() as u64;
         crate::catalog_logln!(
             "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
@@ -790,7 +796,15 @@ impl BuilderBackend for SystemBuilderBackend {
             outcome.removed_systems,
             import_us
         );
+        let summary_started = Instant::now();
         let mut summary = crate::library_db::default_sharded_cached_summary(scan_stats.scan_us)?;
+        crate::catalog_logln!(
+            "catalog_v3_persist_phases_tsv\tprojection_us={}\tscanner_cache_us={}\tcatalog_state_us={}\tsummary_us={}",
+            projection_us,
+            scanner_cache_us,
+            catalog_state_us,
+            summary_started.elapsed().as_micros(),
+        );
         summary.skipped = false;
         summary.discover_us = scan_stats.discover_us;
         summary.classify_us = scan_stats.classify_us;
