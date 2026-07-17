@@ -62,10 +62,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("input", CommandKind::Fpga),
     CommandSpec::new("library-refresh", CommandKind::PreFpga),
-    CommandSpec::new("repair-catalog-projections", CommandKind::PreFpga),
     CommandSpec::new("request-library-rebuild", CommandKind::PreFpga),
     CommandSpec::new("toggle-simple-joystick-setting", CommandKind::PreFpga),
-    CommandSpec::new("reset-delete-database", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
@@ -75,8 +73,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("preview-pack-bench", CommandKind::PreFpga),
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
-    CommandSpec::new("library-sql", CommandKind::PreFpga),
-    CommandSpec::new("catalog-inspect", CommandKind::PreFpga),
     CommandSpec::new("catalog-v3-inspect", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
@@ -150,10 +146,8 @@ pub fn requires_process_exclusive(command: &str) -> bool {
             | "ui"
             | "effect-bench"
             | "library-refresh"
-            | "repair-catalog-projections"
             | "request-library-rebuild"
             | "toggle-simple-joystick-setting"
-            | "reset-delete-database"
             | "reset-delete-screenshot-packs"
             | "media-bench-download"
             | "media-bench-save"
@@ -192,7 +186,6 @@ mod tests {
     #[test]
     fn recognizes_explicit_commands() {
         assert_command_kind("library-refresh", CommandKind::PreFpga);
-        assert_command_kind("reset-delete-database", CommandKind::PreFpga);
         assert_command_kind("reset-delete-screenshot-packs", CommandKind::PreFpga);
         assert_command_kind("ui", CommandKind::Fpga);
         for command in command_names() {
@@ -221,7 +214,7 @@ mod tests {
         assert!(requires_display_owner("early-black"));
         assert!(requires_display_owner("effect-bench"));
         assert!(!requires_display_owner("library-refresh"));
-        assert!(!requires_display_owner("library-sql"));
+        assert!(!requires_display_owner("catalog-v3-inspect"));
         assert!(!requires_display_owner("read"));
     }
 
@@ -230,9 +223,7 @@ mod tests {
         assert!(requires_process_exclusive("ui"));
         assert!(requires_process_exclusive("early-black"));
         assert!(requires_process_exclusive("library-refresh"));
-        assert!(requires_process_exclusive("repair-catalog-projections"));
-        assert!(requires_process_exclusive("reset-delete-database"));
-        assert!(!requires_process_exclusive("library-sql"));
+        assert!(!requires_process_exclusive("catalog-v3-inspect"));
         assert!(!requires_process_exclusive("read"));
         assert!(!requires_process_exclusive("vsync-probe"));
         assert!(!requires_process_exclusive("cpu-profile-smoke"));
@@ -241,7 +232,7 @@ mod tests {
     #[test]
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
-        assert!(is_known_command("library-sql"));
+        assert!(is_known_command("catalog-v3-inspect"));
         assert!(is_known_command("read"));
         assert!(is_known_command("fpga-latch-report"));
         assert_command_kind("fpga-latch-report", CommandKind::Fpga);
@@ -281,7 +272,7 @@ mod tests {
             "fpga-latch-post-report",
             "fpga-latch-pattern",
             "input",
-            "library-sql",
+            "catalog-v3-inspect",
             "hbmame-metadata-from-library",
             "library-scan-bench",
             "preview-pack-bench",

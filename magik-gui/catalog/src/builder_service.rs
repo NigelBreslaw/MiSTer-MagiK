@@ -443,29 +443,36 @@ fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
     "rebuild-required".to_string()
 }
 
+/// Remove the complete production catalog so the next launch performs a clean
+/// V3 build. Legacy files are removed as hygiene, but are never read or
+/// republished.
+pub fn remove_default_production_catalog_artifacts() -> Result<usize, String> {
+    let storage = crate::catalog_config::default_sharded_catalog_path();
+    if storage.file_name().and_then(|name| name.to_str()) != Some("catalog-v3") {
+        return Err(format!(
+            "refusing to remove unexpected V3 catalog path {}",
+            storage.display()
+        ));
+    }
+    let mut removed = library_db::remove_default_catalog_artifacts()?;
+    if storage.exists() {
+        let entries = walkdir::WalkDir::new(&storage)
+            .into_iter()
+            .filter_map(Result::ok)
+            .count();
+        std::fs::remove_dir_all(&storage)
+            .map_err(|error| format!("remove V3 catalog {}: {error}", storage.display()))?;
+        removed = removed.saturating_add(entries);
+    }
+    Ok(removed)
+}
+
 impl BuilderBackend for SystemBuilderBackend {
     type Scan = library_db::LibraryRamScanArtifact;
     type Prepared = PreparedBuild;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
-        let storage = crate::catalog_config::default_sharded_catalog_path();
-        if storage.file_name().is_none() {
-            return Err(format!(
-                "refusing to remove unbounded V3 catalog path {}",
-                storage.display()
-            ));
-        }
-        let mut removed = library_db::remove_default_catalog_artifacts()?;
-        if storage.exists() {
-            let entries = walkdir::WalkDir::new(&storage)
-                .into_iter()
-                .filter_map(Result::ok)
-                .count();
-            std::fs::remove_dir_all(&storage)
-                .map_err(|error| format!("remove V3 catalog {}: {error}", storage.display()))?;
-            removed = removed.saturating_add(entries);
-        }
-        Ok(removed)
+        remove_default_production_catalog_artifacts()
     }
 
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {

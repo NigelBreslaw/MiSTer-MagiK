@@ -14,6 +14,7 @@ use crate::launcher_taxonomy::{
     LauncherCollection, LauncherMenuItem, LauncherMenuItemKind, LauncherTaxonomy,
     LauncherTaxonomyToken, ROOT_MENU_ID,
 };
+#[cfg(test)]
 use crate::library_db;
 use crate::settings::MagikSettings;
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
@@ -3737,8 +3738,8 @@ pub fn reset_launch() {
     LAUNCH_STATE.store(LAUNCH_IDLE, Ordering::Release);
 }
 
-pub fn reset_database_and_reboot() -> Result<(), String> {
-    library_db::remove_default_sqlite_database()?;
+pub fn reset_catalog_and_reboot() -> Result<(), String> {
+    mister_magik_catalog::builder_service::remove_default_production_catalog_artifacts()?;
     delete_screenshot_packs()?;
     reboot_mister()
 }

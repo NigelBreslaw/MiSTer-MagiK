@@ -12,8 +12,6 @@
 //!                        write rebuild-on-next-boot marker for fault tests
 //!     toggle-simple-joystick-setting
 //!                        toggle settings.json simple joystick flag for fault tests
-//!     reset-delete-database
-//!                        delete catalog DB/projections for fault tests
 //!     reset-delete-screenshot-packs
 //!                        delete screenshot media artifacts for fault tests
 //!   Diagnostics:
@@ -28,7 +26,7 @@
 //!                        fill one scanout slot and post it through FPGA latch
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
-//!     library-sql        inspect the SQLite library cache without sqlite3(1)
+//!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Bench tools (`--features bench-tools`):
@@ -158,7 +156,7 @@ fn main() {
 
     let cmd = command_args::resolve_command(&args);
 
-    if cmd != "library-sql" && cmd != "catalog-inspect" && cmd != "catalog-v3-inspect" {
+    if cmd != "catalog-v3-inspect" {
         crate::ui_logln!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
@@ -326,10 +324,8 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
         "library-refresh" => run_library_refresh(),
-        "repair-catalog-projections" => run_repair_catalog_projections(),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
-        "reset-delete-database" => run_reset_delete_database(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -339,8 +335,6 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "preview-pack-bench" => preview_pack_bench::run(),
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
-        "library-sql" => run_library_sql(),
-        "catalog-inspect" => run_catalog_inspect(),
         "catalog-v3-inspect" => run_catalog_v3_inspect(),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
@@ -451,28 +445,6 @@ fn run_library_refresh() {
     }
 }
 
-fn run_repair_catalog_projections() {
-    let started = std::time::Instant::now();
-    match library_db::rewrite_default_catalog_projections(arcade_catalog::DEFAULT_ARCADE_ROOT) {
-        Ok(summary) => crate::ui_logln!(
-            "catalog_projection_repair_tsv\tstatus=ok\telapsed_us={}\tload_us={}\trepair_us={}\tgames={}\tsummary_bytes={}\tnavigation_bytes={}",
-            started.elapsed().as_micros(),
-            summary.load_us,
-            summary.repair_us,
-            summary.games,
-            summary.summary_bytes,
-            summary.navigation_bytes
-        ),
-        Err(e) => {
-            crate::ui_errln!(
-                "catalog_projection_repair_tsv\tstatus=failed\telapsed_us={}\terror={e}",
-                started.elapsed().as_micros()
-            );
-            std::process::exit(1);
-        }
-    }
-}
-
 fn run_request_library_rebuild() {
     match launcher::request_library_rebuild_on_next_boot() {
         Ok(()) => crate::ui_logln!("request_library_rebuild\tdone"),
@@ -493,23 +465,6 @@ fn run_toggle_simple_joystick_setting() {
         ),
         Err(e) => {
             crate::ui_errln!("toggle_simple_joystick_setting\tfailed\t{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn run_reset_delete_database(args: &[String]) {
-    if args
-        .get(2)
-        .is_some_and(|arg| arg == "-h" || arg == "--help")
-    {
-        crate::ui_logln!("usage: mister-magik-fb reset-delete-database");
-        return;
-    }
-    match library_db::remove_default_sqlite_database() {
-        Ok(()) => crate::ui_logln!("reset_delete_database\tdone"),
-        Err(e) => {
-            crate::ui_errln!("reset_delete_database\tfailed\t{e}");
             std::process::exit(1);
         }
     }

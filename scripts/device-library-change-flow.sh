@@ -5,6 +5,9 @@
 # Exercise the deferred Library changed Continue/Rebuild flow on a real MiSTer.
 set -euo pipefail
 
+echo "ERROR: device-library-change-flow was retired with Catalog V2; use device-catalog-acceptance.sh and bench-catalog-rebuild.sh" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/library-sql-output-lib.sh"

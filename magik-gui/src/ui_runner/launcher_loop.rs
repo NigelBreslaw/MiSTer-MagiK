@@ -2767,7 +2767,7 @@ pub(super) fn run_launcher_loop(
                                     ui.render_h(),
                                 );
                                 std::thread::sleep(Duration::from_millis(250));
-                                match launcher::reset_database_and_reboot() {
+                                match launcher::reset_catalog_and_reboot() {
                                     Ok(()) => continue,
                                     Err(e) => {
                                         crate::ui_errln!("reset database failed: {e}");

@@ -100,6 +100,7 @@ pub(crate) fn exec_failure_message(context: &str, output: &ExecOutput) -> Option
     Some(format!("{context} failed with rc={}: {detail}", output.rc))
 }
 
+#[cfg(test)]
 pub(crate) fn library_sql_command_unavailable(output: &ExecOutput) -> bool {
     output.rc != 0
         && output

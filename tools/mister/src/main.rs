@@ -1,10 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_catalog::sqlite_inspect::{sqlite_query_hash, sqlite_query_to_tsv};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use ssh2::Session;
 use std::env;
@@ -25,9 +24,9 @@ use agent_client::{
 };
 use remote::{
     connect, connect_timed, create_dir_command, exec, exec_failure_message, get, host,
-    host_wait_diagnostics, launcher_restart_command, library_sql_command_unavailable, port_open,
-    put, put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
-    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port, ExecOutput,
+    host_wait_diagnostics, launcher_restart_command, port_open, put, put_bytes, put_dir,
+    remote_subcommand, remove_files_command, sftp_write_profile, shell_quote as sh, stream_command,
+    tcp_probe_label, tcp_probe_label_port, ExecOutput,
 };
 
 #[cfg(test)]
@@ -43,6 +42,7 @@ const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo r
 const SUPERVISED_REBOOT_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_reboot\\n' > /dev/MiSTer_cmd; echo supervised; else echo 'supervised reboot unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
+#[cfg(test)]
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
@@ -183,10 +183,7 @@ fn run_cli() -> Result<()> {
             println!("get {} -> {}", args[0], args[1]);
         }
         "db" | "library-db" => {
-            let connect_t = Instant::now();
-            let sess = connect(10)?;
-            let connect_us = connect_t.elapsed().as_micros();
-            run_library_db_query(&sess, &args, connect_us)?;
+            return Err("scripts/mister db was retired with Catalog V2; use scripts/mister catalog to validate Catalog V3".into());
         }
         "catalog" => {
             let sess = connect(10)?;
@@ -3386,72 +3383,15 @@ fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
     })
 }
 
-fn run_library_db_query(sess: &Session, args: &[String], connect_us: u128) -> Result<()> {
-    let total_t = Instant::now();
-    let query_args = library_db_query_args(args);
-    let binary = configured_remote_path(
-        "MISTER_MAGIK_BIN",
-        "/media/fat/mister-magik/mister-magik-fb",
-    );
-    let command = remote_subcommand(&binary, "library-sql", &query_args);
-    let exec_t = Instant::now();
-    let out = exec(sess, &command, true)?;
-    let exec_us = exec_t.elapsed().as_micros();
-    if library_sql_command_unavailable(&out) {
-        eprintln!(
-            "scripts/mister db: remote library-sql unavailable; using SFTP local-query fallback"
-        );
-        let output = run_library_db_query_via_sftp(sess, &query_args)?;
-        print!("{output}");
-        if !output.ends_with('\n') {
-            println!();
-        }
-        if query_args
-            .iter()
-            .filter(|arg| arg.as_str() == "--query")
-            .count()
-            > 1
-        {
-            println!(
-                "library_sql_transport_tsv\t{connect_us}\t{exec_us}\t{}\tfallback",
-                total_t.elapsed().as_micros()
-            );
-        }
-        return Ok(());
-    }
-    print!("{}", out.stdout);
-    if !out.stderr.trim().is_empty() {
-        eprint!("[stderr] {}", out.stderr);
-    }
-    if let Some(error) = exec_failure_message("library-sql", &out) {
-        return Err(error.into());
-    }
-    if query_args
-        .iter()
-        .filter(|arg| arg.as_str() == "--query")
-        .count()
-        > 1
-    {
-        println!(
-            "library_sql_transport_tsv\t{connect_us}\t{exec_us}\t{}\tremote",
-            total_t.elapsed().as_micros()
-        );
-    }
-    Ok(())
-}
-
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        return Err(
-            "usage: scripts/mister catalog <counts|find-launch-ref|launch-plan|prepared> ..."
-                .into(),
-        );
+    if !args.is_empty() {
+        return Err("usage: scripts/mister catalog (Catalog V3 validates the registry and every system shard)".into());
     }
     let binary = configured_remote_path(
         "MISTER_MAGIK_BIN",
         "/media/fat/mister-magik/mister-magik-fb",
     );
-    let command = remote_subcommand(&binary, "catalog-inspect", args);
+    let command = remote_subcommand(&binary, "catalog-v3-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
@@ -3463,35 +3403,7 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn library_db_query_args(args: &[String]) -> Vec<String> {
-    if args.is_empty() {
-        vec![
-            "SELECT".to_string(),
-            "type,name,tbl_name".to_string(),
-            "FROM".to_string(),
-            "sqlite_schema".to_string(),
-            "WHERE".to_string(),
-            "type".to_string(),
-            "IN".to_string(),
-            "('table','view')".to_string(),
-            "ORDER".to_string(),
-            "BY".to_string(),
-            "type,name".to_string(),
-        ]
-    } else {
-        args.to_vec()
-    }
-}
-
-fn run_library_db_query_via_sftp(sess: &Session, args: &[String]) -> Result<String> {
-    let (remote_path, queries) = parse_library_db_queries(args)?;
-    let local_path = temporary_library_db_path();
-    get(sess, &remote_path, &local_path)?;
-    let result = run_local_read_only_sqlite_queries(&local_path, &queries);
-    let _ = fs::remove_file(&local_path);
-    result
-}
-
+#[cfg(test)]
 fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
     let mut remote_path =
         configured_remote_path("MISTER_MAGIK_LIBRARY_DB", DEFAULT_REMOTE_LIBRARY_DB);
@@ -3532,61 +3444,6 @@ fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
         );
     }
     Ok((remote_path, queries))
-}
-
-fn temporary_library_db_path() -> PathBuf {
-    let mut path = env::temp_dir();
-    path.push(format!(
-        "mister-library-db-{}-{}.sqlite3",
-        unix_ms_now(),
-        std::process::id()
-    ));
-    path
-}
-
-fn run_local_read_only_sqlite_queries(path: &Path, queries: &[String]) -> Result<String> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.is_file() {
-        return Err(format!("{} is not a file", path.display()).into());
-    }
-    if metadata.len() == 0 {
-        return Err(format!("{} is empty", path.display()).into());
-    }
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    let _ = conn.execute_batch("PRAGMA query_only=ON;");
-    let mut out = String::new();
-    for (index, query) in queries.iter().enumerate() {
-        let hash = sqlite_query_hash(query);
-        if queries.len() > 1 {
-            out.push_str(&format!(
-                "library_sql_result_tsv\t{}\tbegin\t{hash:016x}\n",
-                index + 1
-            ));
-        }
-        let query_out = sqlite_query_to_tsv(&conn, query).map_err(|error| {
-            if matches!(error, rusqlite::Error::InvalidQuery) {
-                Box::<dyn std::error::Error>::from(
-                    "scripts/mister db accepts exactly one SQLite read-only statement",
-                )
-            } else {
-                Box::<dyn std::error::Error>::from(error)
-            }
-        })?;
-        out.push_str(&query_out);
-        if queries.len() > 1 {
-            out.push_str(&format!(
-                "library_sql_result_tsv\t{}\tend\t{hash:016x}\n",
-                index + 1
-            ));
-        }
-    }
-    if queries.len() > 1 {
-        out.push_str(&format!("library_sql_batch_tsv\t{}\t0\t0\n", queries.len()));
-    }
-    Ok(out)
 }
 
 fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
