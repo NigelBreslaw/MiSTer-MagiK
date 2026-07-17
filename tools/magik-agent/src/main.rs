@@ -2520,7 +2520,13 @@ mod linux {
             .open(SCANOUT_SLOTS_DEVICE)
             .map_err(|err| format!("open {SCANOUT_SLOTS_DEVICE}: {err}"))?;
         let mut layout = ScanoutSlotsLayout::default();
-        let result = unsafe { ioctl(device.as_raw_fd(), SCANOUT_SLOTS_GET_LAYOUT, &mut layout) };
+        let result = unsafe {
+            ioctl(
+                device.as_raw_fd(),
+                SCANOUT_SLOTS_GET_LAYOUT as c_ulong,
+                &mut layout,
+            )
+        };
         if result != 0 {
             return Err(format!(
                 "get scanout slots layout: {}",

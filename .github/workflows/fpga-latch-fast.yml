@@ -54,6 +54,7 @@ jobs:
       - name: Lint custom RTL
         run: >-
           verilator --lint-only --Wall --Wno-fatal
+          -Ifpga/menu-vblank-latch
           fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
       - name: Verify pinned patch integration and opcode ownership
         run: scripts/checks/check-fpga-latch-integration.py build/Menu_MiSTer
