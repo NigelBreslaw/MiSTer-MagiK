@@ -96,8 +96,9 @@ human_bytes() {
 verify_dev_platform_manifest() {
   local mode="$1"
   local candidate_gui_sha="${2:-}"
+  local candidate_magik_revision="${3:-}"
   platform_manifest_verify "$HERE/scripts/mister" dev \
-    "$MISTER_MAGIK_MANIFEST" "" "$mode" "$candidate_gui_sha"
+    "$MISTER_MAGIK_MANIFEST" "" "$mode" "$candidate_gui_sha" "$candidate_magik_revision"
 }
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"
@@ -108,7 +109,7 @@ LOCAL_SHA256="$(bench_context_sha256_file "$BIN")"
 echo "==> Local binary size: $LOCAL_BYTES bytes ($(human_bytes "$LOCAL_BYTES"))"
 
 echo "==> Preflighting development platform manifest"
-verify_dev_platform_manifest verify
+verify_dev_platform_manifest verify-platform
 
 echo "==> Deploying $BIN -> $REMOTE via $DEPLOY_TRANSPORT"
 DEPLOY_OUTPUT=""
@@ -153,7 +154,10 @@ if ! bench_context_require_binary_contract "$BIN" "$REMOTE_SHA256" "$BUILT_FEATU
 fi
 
 echo "==> Rebinding development platform manifest to deployed GUI"
-verify_dev_platform_manifest rebind "$LOCAL_SHA256"
+MAGIK_REVISION="$(git -C "$HERE" rev-parse HEAD)"
+verify_dev_platform_manifest rebind "$LOCAL_SHA256" "$MAGIK_REVISION"
+echo "==> Verifying rebound development platform manifest"
+verify_dev_platform_manifest verify
 SOURCE_FIELDS="$(bench_context_source_fields "$HERE")"
 printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=1\t%s\n' \
   "$PROFILE" "$BUILT_FEATURES" "$BIN" "$REMOTE" "$LOCAL_SHA256" "$REMOTE_SHA256" "$SOURCE_FIELDS"

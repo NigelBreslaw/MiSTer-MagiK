@@ -7,7 +7,7 @@
 
 platform_manifest_verify() {
   local mister="$1" layout="$2" manifest="$3" artifact_suffix="${4:-}"
-  local mode="${5:-verify}" candidate_gui_sha="${6:-}" app main
+  local mode="${5:-verify}" candidate_gui_sha="${6:-}" candidate_magik_revision="${7:-}" app main
   case "$layout" in
     dev) app=/media/fat/mister-magik-dev; main=/media/fat/MiSTer_MagiKDev ;;
     public) app=/media/fat/mister-magik; main=/media/fat/MiSTer_MagiK ;;
@@ -19,6 +19,7 @@ manifest='$manifest'
 suffix='$artifact_suffix'
 mode='$mode'
 candidate_gui_sha='$candidate_gui_sha'
+candidate_magik_revision='$candidate_magik_revision'
 tmp=\"\$manifest.runtime-upload\"
 trap 'rm -f \"\$tmp\"' EXIT
 get() { value=\$(sed -n \"s/^\$1=//p\" \"\$manifest\"); test -n \"\$value\"; test \"\$(grep -c \"^\$1=\" \"\$manifest\")\" -eq 1; printf '%s' \"\$value\"; }
@@ -53,11 +54,19 @@ grep -qx \"rbf_sha256=\$rbf_hash\" '$app/fpga/menu-magik-vblank-latch.metadata.t
 grep -qx \"source_commit=\$menu_revision\" '$app/fpga/menu-magik-vblank-latch.metadata.txt'\"\$suffix\"
 case \"\$mode\" in
   verify) check '$app/mister-magik-fb' gui_sha256 ;;
+  verify-platform) : ;;
   rebind)
     test -z \"\$suffix\"
     is_hex \"\$candidate_gui_sha\" 64
+    is_hex \"\$candidate_magik_revision\" 40
     test \"\$(sha256sum '$app/mister-magik-fb' | awk '{print \$1}')\" = \"\$candidate_gui_sha\"
-    awk -v hash=\"\$candidate_gui_sha\" 'BEGIN { seen = 0 } /^gui_sha256=/ { print \"gui_sha256=\" hash; seen++; next } { print } END { if (seen != 1) exit 1 }' \"\$manifest\" >\"\$tmp\"
+    awk -v hash=\"\$candidate_gui_sha\" -v revision=\"\$candidate_magik_revision\" '
+      BEGIN { hash_seen = 0; revision_seen = 0 }
+      /^gui_sha256=/ { print \"gui_sha256=\" hash; hash_seen++; next }
+      /^magik_revision=/ { print \"magik_revision=\" revision; revision_seen++; next }
+      { print }
+      END { if (hash_seen != 1 || revision_seen != 1) exit 1 }
+    ' \"\$manifest\" >\"\$tmp\"
     test \"\$(awk 'NF && \$0 !~ /^#/ { count++ } END { print count + 0 }' \"\$tmp\")\" -eq 17
     sync
     mv \"\$tmp\" \"\$manifest\"
@@ -80,6 +89,9 @@ platform_manifest_self_test() {
   grep -q 'source_commit=.*menu_revision' "$log"
   grep -q 'mister_magik_scanout_slots.metadata.txt' "$log"
   grep -q 'suffix=.upload' "$log"
+  grep -q 'candidate_magik_revision=' "$log"
+  grep -q 'revision_seen != 1' "$log"
+  grep -q 'verify-platform) : ' "$log"
   rm -rf "$tmp"
   echo "platform manifest library self-test ok"
 }
