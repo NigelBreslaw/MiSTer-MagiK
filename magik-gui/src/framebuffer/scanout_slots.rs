@@ -13,36 +13,18 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
 
-pub const SCANOUT_SLOTS_DEVICE: &str = "/dev/mister-magik-scanout-slots";
-pub const SCANOUT_SLOTS_ABI_VERSION: u32 = 1;
-pub const SCANOUT_SLOTS_SLOT_COUNT: usize = 2;
-pub const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize = 1024 * 1024;
-pub const SCANOUT_SLOT_FRAME_BYTES: usize = 960 * 540 * 2;
-pub const SCANOUT_SLOT_MAP_BYTES: usize = 1_040_384;
-pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 = 1;
-const SCANOUT_SLOTS_GET_LAYOUT: libc::c_ulong = 0x8040_4d01;
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ScanoutSlotLayout {
-    pub physical_address: u32,
-    pub mmap_offset_bytes: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ScanoutSlotsLayout {
-    pub abi_version: u32,
-    pub slot_count: u32,
-    pub width: u32,
-    pub height: u32,
-    pub stride_bytes: u32,
-    pub frame_bytes: u32,
-    pub map_bytes: u32,
-    pub flags: u32,
-    pub slots: [ScanoutSlotLayout; SCANOUT_SLOTS_SLOT_COUNT],
-    pub reserved: [u32; 4],
-}
+pub use mister_magik_scanout_contract::{ScanoutSlotLayout, ScanoutSlotsLayout};
+pub const SCANOUT_SLOTS_DEVICE: &str = mister_magik_scanout_contract::DEVICE;
+pub const SCANOUT_SLOTS_ABI_VERSION: u32 = mister_magik_scanout_contract::ABI_VERSION;
+pub const SCANOUT_SLOTS_SLOT_COUNT: usize = mister_magik_scanout_contract::SLOT_COUNT;
+pub const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize =
+    mister_magik_scanout_contract::REGION_OFFSET_BYTES;
+pub const SCANOUT_SLOT_FRAME_BYTES: usize = mister_magik_scanout_contract::FRAME_BYTES;
+pub const SCANOUT_SLOT_MAP_BYTES: usize = mister_magik_scanout_contract::MAP_BYTES;
+pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 =
+    mister_magik_scanout_contract::LAYOUT_WRITE_COMBINE;
+const SCANOUT_SLOTS_GET_LAYOUT: libc::c_ulong =
+    mister_magik_scanout_contract::GET_LAYOUT as libc::c_ulong;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HiddenRgb565BufferIndex(u8);
@@ -408,27 +390,7 @@ impl Drop for ScanoutSlotsRgb565Framebuffer {
 }
 
 pub fn validate_scanout_slots_layout(layout: &ScanoutSlotsLayout) -> Result<(), ScanoutSlotsError> {
-    let expected = ScanoutSlotsLayout {
-        abi_version: SCANOUT_SLOTS_ABI_VERSION,
-        slot_count: SCANOUT_SLOTS_SLOT_COUNT as u32,
-        width: 960,
-        height: 540,
-        stride_bytes: 1920,
-        frame_bytes: SCANOUT_SLOT_FRAME_BYTES as u32,
-        map_bytes: SCANOUT_SLOT_MAP_BYTES as u32,
-        flags: SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
-        slots: [
-            ScanoutSlotLayout {
-                physical_address: 0x227e_9000,
-                mmap_offset_bytes: 0,
-            },
-            ScanoutSlotLayout {
-                physical_address: 0x22fd_2000,
-                mmap_offset_bytes: SCANOUT_SLOTS_REGION_OFFSET_BYTES as u32,
-            },
-        ],
-        reserved: [0; 4],
-    };
+    let expected = mister_magik_scanout_contract::EXPECTED_LAYOUT;
     if *layout != expected {
         return Err(ScanoutSlotsError::InvalidLayout(format!(
             "expected {expected:?}, got {layout:?}"

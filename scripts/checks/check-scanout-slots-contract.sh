@@ -11,6 +11,7 @@ PLATFORM="$ROOT/kernel/scanout-slots/mister_magik_scanout_platform.h"
 POLICY="$ROOT/kernel/scanout-slots/mister_magik_scanout_policy.h"
 RUST="$ROOT/magik-gui/src/framebuffer/scanout_slots.rs"
 AGENT="$ROOT/tools/magik-agent/src/scanout_slots_contract.rs"
+RUST_CONTRACT="$ROOT/scanout-contract/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/scripts/deploy-platform.sh"
@@ -25,7 +26,7 @@ require_text() {
   fi
 }
 
-for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$DOC"; do
+for file in "$SOURCE" "$UAPI" "$PLATFORM" "$POLICY" "$RUST" "$AGENT" "$RUST_CONTRACT" "$DOC"; do
   test -f "$file"
 done
 for text in \
@@ -45,14 +46,15 @@ for text in \
   require_text "$UAPI" "$text"
 done
 for text in 0x227e_9000 0x22fd_2000 1_040_384; do
-  require_text "$RUST" "$text"
-  require_text "$AGENT" "$text"
+  require_text "$RUST_CONTRACT" "$text"
 done
-if [[ "$(sha256sum "$UAPI" | awk '{print $1}')" != \
-      "51b6f4a53efb76abbe1f5f1f1c7c248007aeb443f3a337ba86981940748c8fd6" ]]; then
+uapi_sha256="$(sha256sum "$UAPI" | awk '{print $1}')"
+if ! grep -Fq "UAPI_SHA256: &str = \"$uapi_sha256\"" "$RUST_CONTRACT"; then
   echo "scanout UAPI changed without updating the qualified contract" >&2
   exit 1
 fi
+require_text "$RUST" mister_magik_scanout_contract
+require_text "$AGENT" mister_magik_scanout_contract
 source_sha256="$(cd "$ROOT/kernel/scanout-slots" && sha256sum mister_magik_scanout_slots.c mister_magik_scanout_slots_uapi.h mister_magik_scanout_platform.h mister_magik_scanout_policy.h Makefile | sha256sum | awk '{print $1}')"
 [[ "$source_sha256" =~ ^[0-9a-f]{64}$ ]]
 policy_test="$(mktemp "${TMPDIR:-/tmp}/mister-magik-scanout-policy.XXXXXX")"
