@@ -1091,7 +1091,6 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
     if let Err(error) =
         mister_magik_catalog::production_sharded_projection::validate_production_binding(
             &storage,
-            &library_db::default_sqlite_path(),
             registry.generation(),
         )
     {

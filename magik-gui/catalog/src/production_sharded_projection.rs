@@ -19,7 +19,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 const BINDING_SCHEMA_VERSION: u32 = 1;
 const PROJECTION_CONTRACT: &str = "rich-game-v1";
@@ -32,8 +31,6 @@ struct CatalogBinding {
     projection_contract: String,
     manifest_generation: u64,
     catalog_fingerprint: String,
-    sqlite_len: u64,
-    sqlite_modified_ns: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -203,11 +200,9 @@ fn published_system_matches(
 pub fn publish_bound_production_projection(
     storage_root: &Path,
     catalog: &ArcadeCatalog,
-    sqlite_path: &Path,
     catalog_fingerprint: &str,
     limits: RegistryLimits,
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
-    let sqlite = sqlite_identity(sqlite_path)?;
     let outcome = publish_production_projection(storage_root, catalog, limits)?;
     write_binding(
         storage_root,
@@ -216,56 +211,26 @@ pub fn publish_bound_production_projection(
             projection_contract: PROJECTION_CONTRACT.to_string(),
             manifest_generation: outcome.generation,
             catalog_fingerprint: catalog_fingerprint.to_string(),
-            sqlite_len: sqlite.0,
-            sqlite_modified_ns: sqlite.1,
         },
     )?;
     Ok(outcome)
 }
 
-pub fn rebind_production_projection_if_fingerprint_matches(
-    storage_root: &Path,
-    sqlite_path: &Path,
-    manifest_generation: u64,
-    catalog_fingerprint: &str,
-) -> Result<bool, ReconciliationError> {
-    let Ok(binding) = read_binding(storage_root) else {
-        return Ok(false);
-    };
-    if binding.schema_version != BINDING_SCHEMA_VERSION
-        || binding.projection_contract != PROJECTION_CONTRACT
-        || binding.manifest_generation != manifest_generation
-        || binding.catalog_fingerprint != catalog_fingerprint
-    {
-        return Ok(false);
-    }
-    let sqlite = sqlite_identity(sqlite_path)?;
-    write_binding(
-        storage_root,
-        &CatalogBinding {
-            sqlite_len: sqlite.0,
-            sqlite_modified_ns: sqlite.1,
-            ..binding
-        },
-    )?;
-    Ok(true)
-}
-
 pub fn validate_production_binding(
     storage_root: &Path,
-    sqlite_path: &Path,
     manifest_generation: u64,
 ) -> Result<(), ReconciliationError> {
     let binding = read_binding(storage_root)?;
-    let sqlite = sqlite_identity(sqlite_path)?;
+    let state = crate::catalog_state::read(&crate::catalog_state::path_for_root(storage_root))
+        .map_err(|error| ReconciliationError::new("binding", error))?;
     if binding.schema_version != BINDING_SCHEMA_VERSION
         || binding.projection_contract != PROJECTION_CONTRACT
         || binding.manifest_generation != manifest_generation
-        || (binding.sqlite_len, binding.sqlite_modified_ns) != sqlite
+        || binding.catalog_fingerprint != state.stamp.fingerprint_hex()
     {
         return Err(ReconciliationError::new(
             "binding",
-            "catalog binding does not match the active manifest and SQLite",
+            "catalog binding does not match the active manifest and V3 state",
         ));
     }
     Ok(())
@@ -285,22 +250,6 @@ fn read_binding(storage_root: &Path) -> Result<CatalogBinding, ReconciliationErr
         &fs::read(&path).map_err(|error| ReconciliationError::new("binding", error.to_string()))?,
     )
     .map_err(|error| ReconciliationError::new("binding", error.to_string()))
-}
-
-fn sqlite_identity(path: &Path) -> Result<(u64, u64), ReconciliationError> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
-    let modified_ns = metadata
-        .modified()
-        .map_err(|error| ReconciliationError::new("binding", error.to_string()))?
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ReconciliationError::new("binding", "SQLite mtime predates Unix epoch"))?
-        .as_nanos();
-    Ok((
-        metadata.len(),
-        u64::try_from(modified_ns)
-            .map_err(|_| ReconciliationError::new("binding", "SQLite mtime exceeds u64"))?,
-    ))
 }
 
 fn write_binding(storage_root: &Path, binding: &CatalogBinding) -> Result<(), ReconciliationError> {
@@ -603,16 +552,21 @@ mod tests {
     }
 
     #[test]
-    fn binding_rejects_unknown_v2_database_and_rebinds_matching_catalog() {
+    fn binding_is_owned_by_v3_state_without_a_v2_database() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-production-projection-binding-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let sqlite = root.join("library.sqlite3");
-        fs::write(&sqlite, b"v2 generation one").unwrap();
         let storage = root.join("catalog-v3");
+        let state = crate::catalog_state::CatalogState {
+            stamp: crate::catalog_stamp::CatalogStamp::from_lines(vec!["fixture".to_string()]),
+            checkpoint: crate::catalog_checkpoint::CatalogDiscoveryCheckpoint::from_lines(vec![
+                "fixture".to_string(),
+            ]),
+        };
+        let fingerprint = state.stamp.fingerprint_hex();
         let catalog = ArcadeCatalog::new(
             PathBuf::from("/fixture"),
             vec![game("Super Game", "/games/SNES/Super.sfc", "snes")],
@@ -622,34 +576,24 @@ mod tests {
                 count: 1,
             }],
         );
-        let outcome = publish_bound_production_projection(
-            &storage,
-            &catalog,
-            &sqlite,
-            "fixture-fingerprint",
-            limits(),
+        let outcome =
+            publish_bound_production_projection(&storage, &catalog, &fingerprint, limits())
+                .unwrap();
+        assert!(validate_production_binding(&storage, outcome.generation).is_err());
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&storage), &state)
+            .unwrap();
+        validate_production_binding(&storage, outcome.generation).unwrap();
+        let different_state = crate::catalog_state::CatalogState {
+            stamp: crate::catalog_stamp::CatalogStamp::from_lines(vec!["different".to_string()]),
+            checkpoint: state.checkpoint,
+        };
+        crate::catalog_state::write(
+            &crate::catalog_state::path_for_root(&storage),
+            &different_state,
         )
         .unwrap();
-        validate_production_binding(&storage, &sqlite, outcome.generation).unwrap();
-        fs::write(&sqlite, b"different v2 generation with another size").unwrap();
-        assert!(validate_production_binding(&storage, &sqlite, outcome.generation).is_err());
-        assert!(!rebind_production_projection_if_fingerprint_matches(
-            &storage,
-            &sqlite,
-            outcome.generation,
-            "different-fingerprint",
-        )
-        .unwrap());
-        assert!(rebind_production_projection_if_fingerprint_matches(
-            &storage,
-            &sqlite,
-            outcome.generation,
-            "fixture-fingerprint",
-        )
-        .unwrap());
-        validate_production_binding(&storage, &sqlite, outcome.generation).unwrap();
-        fs::remove_file(&sqlite).unwrap();
-        assert!(validate_production_binding(&storage, &sqlite, outcome.generation).is_err());
+        assert!(validate_production_binding(&storage, outcome.generation).is_err());
+        assert!(!root.join("library.sqlite3").exists());
         let _ = fs::remove_dir_all(root);
     }
 

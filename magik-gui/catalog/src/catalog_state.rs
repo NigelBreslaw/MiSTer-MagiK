@@ -23,9 +23,11 @@ pub struct CatalogState {
 }
 
 pub fn default_path() -> PathBuf {
-    crate::catalog_config::default_sharded_catalog_path()
-        .join("state")
-        .join(STATE_FILE_NAME)
+    path_for_root(&crate::catalog_config::default_sharded_catalog_path())
+}
+
+pub fn path_for_root(storage_root: &Path) -> PathBuf {
+    storage_root.join("state").join(STATE_FILE_NAME)
 }
 
 pub fn read(path: &Path) -> Result<CatalogState, String> {

@@ -426,89 +426,23 @@ struct SystemBuilderBackend {
 fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
     let started = Instant::now();
     let storage = crate::catalog_config::default_sharded_catalog_path();
-    let sqlite = crate::catalog_config::default_sqlite_path();
     let limits = crate::production_sharded_projection::production_registry_limits();
     let generation = crate::shard_registry::read_latest_manifest_lazy(&storage, limits)
         .ok()
         .map(|manifest| manifest.generation);
     if let Some(generation) = generation {
-        if crate::production_sharded_projection::validate_production_binding(
-            &storage, &sqlite, generation,
-        )
-        .is_ok()
+        if crate::production_sharded_projection::validate_production_binding(&storage, generation)
+            .is_ok()
         {
             return "current".to_string();
         }
-        match crate::production_sharded_projection::rebind_production_projection_if_fingerprint_matches(
-            &storage,
-            &sqlite,
-            generation,
-            catalog_fingerprint,
-        ) {
-            Ok(true) => {
-                crate::catalog_logln!(
-                    "catalog_v3_repair_tsv\tstatus=rebound\tgeneration={generation}\telapsed_us={}",
-                    started.elapsed().as_micros()
-                );
-                return "rebound".to_string();
-            }
-            Ok(false) => {}
-            Err(error) => crate::catalog_errln!(
-                "catalog_v3_repair_tsv\tstatus=rebind-failed\tgeneration={generation}\terror={error}"
-            ),
-        }
     }
-
-    let loaded = match library_db::load_arcade_catalog_from_materialized_sqlite(
-        crate::arcade_catalog::DEFAULT_ARCADE_ROOT,
-    ) {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            crate::catalog_errln!(
-                "catalog_v3_repair_tsv\tstatus=load-failed\telapsed_us={}\terror={error}",
-                started.elapsed().as_micros()
-            );
-            return "load-failed".to_string();
-        }
-    };
-    let loaded_fingerprint = loaded
-        .stamp
-        .as_ref()
-        .map(crate::catalog_stamp::CatalogStamp::fingerprint_hex);
-    if loaded_fingerprint.as_deref() != Some(catalog_fingerprint) {
-        crate::catalog_errln!(
-            "catalog_v3_repair_tsv\tstatus=fingerprint-changed\telapsed_us={}",
-            started.elapsed().as_micros()
-        );
-        return "fingerprint-changed".to_string();
-    }
-    match crate::production_sharded_projection::publish_bound_production_projection(
-        &storage,
-        &loaded.catalog,
-        &sqlite,
+    crate::catalog_errln!(
+        "catalog_v3_repair_tsv\tstatus=rebuild-required\tfingerprint={}\telapsed_us={}",
         catalog_fingerprint,
-        limits,
-    ) {
-        Ok(outcome) => {
-            crate::catalog_logln!(
-                "catalog_v3_repair_tsv\tstatus=republished\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
-                outcome.generation,
-                outcome.systems,
-                outcome.games,
-                outcome.rebuilt_systems,
-                outcome.removed_systems,
-                started.elapsed().as_micros()
-            );
-            "republished".to_string()
-        }
-        Err(error) => {
-            crate::catalog_errln!(
-                "catalog_v3_repair_tsv\tstatus=publish-failed\telapsed_us={}\terror={error}",
-                started.elapsed().as_micros()
-            );
-            "publish-failed".to_string()
-        }
-    }
+        started.elapsed().as_micros()
+    );
+    "rebuild-required".to_string()
 }
 
 impl BuilderBackend for SystemBuilderBackend {
@@ -552,10 +486,17 @@ impl BuilderBackend for SystemBuilderBackend {
             v3_repair,
         );
         let decision = if check.unchanged {
-            CheckDecision::Unchanged(BuilderSummary::from(
-                library_db::default_sqlite_cached_summary(check.check_us)
-                    .map_err(|error| StageFailure::new("summary", error))?,
-            ))
+            if v3_repair == "current" {
+                CheckDecision::Unchanged(BuilderSummary::from(
+                    library_db::default_sqlite_cached_summary(check.check_us)
+                        .map_err(|error| StageFailure::new("summary", error))?,
+                ))
+            } else {
+                CheckDecision::Changed(
+                    "Catalog sources are unchanged, but the V3 generation is incomplete; rebuild required."
+                        .to_string(),
+                )
+            }
         } else {
             CheckDecision::Changed(format!(
                 "Catalog inputs changed; rebuild required. {}",
@@ -803,7 +744,6 @@ impl BuilderBackend for SystemBuilderBackend {
         match crate::production_sharded_projection::publish_bound_production_projection(
             &crate::catalog_config::default_sharded_catalog_path(),
             &prepared.catalog,
-            &crate::catalog_config::default_sqlite_path(),
             &catalog_fingerprint,
             crate::production_sharded_projection::production_registry_limits(),
         ) {

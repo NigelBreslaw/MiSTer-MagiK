@@ -24,13 +24,13 @@ state file is absent; once present, corrupt or unsupported V3 state fails closed
 and never falls back to V2. This migration bridge is temporary and must be
 removed with the final V2 deletion.
 
-The schema-one binding records the canonical catalog fingerprint as well as the
-V2 SQLite file identity. If an interrupted deployment or build replaces V2
-after V3 was published, an unchanged stamp check rebinds the existing V3
-generation without rewriting its shards. Missing, legacy-binding, or genuinely
-different V3 artifacts are reconstructed once from durable V2 in the background.
-This closes the interruption window between V2 persistence and V3 publication;
-the launcher remains usable from V2 while repair runs.
+The schema-one binding joins the active manifest generation to the canonical
+fingerprint in V3 catalog state. Launcher validation therefore has no V2 file
+identity dependency. A missing, corrupt, or mismatched manifest/binding is no
+longer reconstructed from V2: unchanged source facts are conservatively treated
+as rebuild-required. Publication writes the manifest and binding before V3
+state, so interruption can cause an unnecessary rebuild but cannot bless an
+incomplete generation.
 
 Production V3 publication now compares each rich per-system projection with
 the active shard and rebuilds only systems whose metadata or game rows changed.
