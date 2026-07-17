@@ -2986,103 +2986,25 @@ fn boot_net_profile(args: &[String]) -> Result<()> {
             thread::sleep(Duration::from_millis(100));
         }
 
-        let mut tcp22_ms = None;
-        let mut ssh_ready_ms = None;
-        let mut resolve_ms = None;
-        let mut tcp_ms = None;
-        let mut handshake_ms = None;
-        let mut auth_ms = None;
-        let mut exec_ms = None;
-        let mut uptime = String::new();
-        let mut launcher_state = String::new();
-        let mut slint_frames = String::new();
-        let mut main_status_ms = None;
-        let mut slint_status_ms = None;
-        let mut note = reboot_note;
-
-        while start.elapsed().as_secs_f64() < timeout_secs {
-            if tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
-                tcp22_ms = Some(start.elapsed().as_millis());
-            }
-            match connect_timed(2) {
-                Ok(timed) => {
-                    let exec_t = Instant::now();
-                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                    let this_exec_ms = exec_t.elapsed().as_millis();
-                    if out.rc == 0 {
-                        ssh_ready_ms = Some(start.elapsed().as_millis());
-                        resolve_ms = Some(timed.resolve_ms);
-                        tcp_ms = Some(timed.tcp_ms);
-                        handshake_ms = Some(timed.handshake_ms);
-                        auth_ms = Some(timed.auth_ms);
-                        exec_ms = Some(this_exec_ms);
-                        uptime = out
-                            .stdout
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string();
-
-                        let status_deadline = Instant::now() + Duration::from_secs(20);
-                        while Instant::now() < status_deadline {
-                            if main_status_ms.is_none() {
-                                if let Some(text) =
-                                    remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
-                                {
-                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                        main_status_ms = Some(start.elapsed().as_millis());
-                                        launcher_state = value
-                                            .get("launcher_state")
-                                            .and_then(Value::as_str)
-                                            .unwrap_or("")
-                                            .to_string();
-                                    }
-                                }
-                            }
-                            if slint_status_ms.is_none() {
-                                if let Some(text) =
-                                    remote_read(&timed.sess, "/tmp/mister-magik/status.json")
-                                {
-                                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                        slint_status_ms = Some(start.elapsed().as_millis());
-                                        slint_frames = value
-                                            .get("frames")
-                                            .and_then(Value::as_u64)
-                                            .map(|n| n.to_string())
-                                            .unwrap_or_default();
-                                    }
-                                }
-                            }
-                            if main_status_ms.is_some() && slint_status_ms.is_some() {
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(250));
-                        }
-                        break;
-                    }
-                    note = format!("exec rc {}", out.rc);
-                }
-                Err(err) => {
-                    note = err.to_string();
-                }
-            }
-            thread::sleep(Duration::from_millis(250));
-        }
+        let recovery = measure_reboot_recovery(start, timeout_secs, reboot_note)?;
 
         let row = format!(
-            "boot-net\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{launcher_state}\t{slint_frames}\t{}",
+            "boot-net\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             host(),
             opt_ms(down_ms),
-            opt_ms(tcp22_ms),
-            opt_ms(ssh_ready_ms),
-            opt_ms(resolve_ms),
-            opt_ms(tcp_ms),
-            opt_ms(handshake_ms),
-            opt_ms(auth_ms),
-            opt_ms(exec_ms),
-            opt_ms(main_status_ms),
-            opt_ms(slint_status_ms),
-            note.replace('\t', " ")
+            opt_ms(recovery.tcp22_ms),
+            opt_ms(recovery.ssh_ready_ms),
+            opt_ms(recovery.resolve_ms),
+            opt_ms(recovery.tcp_ms),
+            opt_ms(recovery.handshake_ms),
+            opt_ms(recovery.auth_ms),
+            opt_ms(recovery.exec_ms),
+            opt_ms(recovery.main_status_ms),
+            opt_ms(recovery.slint_status_ms),
+            recovery.uptime,
+            recovery.launcher_state,
+            recovery.slint_frames,
+            recovery.note.replace('\t', " ")
         );
         println!("{row}");
         append_profile_row(out_path, header, &row)?;
@@ -3090,6 +3012,120 @@ fn boot_net_profile(args: &[String]) -> Result<()> {
     }
     eprintln!("boot-net-profile: appended {samples} row(s) to {out_path}");
     Ok(())
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RebootRecoveryMeasurement {
+    tcp22_ms: Option<u128>,
+    ssh_ready_ms: Option<u128>,
+    resolve_ms: Option<u128>,
+    tcp_ms: Option<u128>,
+    handshake_ms: Option<u128>,
+    auth_ms: Option<u128>,
+    exec_ms: Option<u128>,
+    main_status_ms: Option<u128>,
+    slint_status_ms: Option<u128>,
+    uptime: String,
+    launcher_state: String,
+    slint_frames: String,
+    note: String,
+}
+
+fn measure_reboot_recovery(
+    start: Instant,
+    timeout_secs: f64,
+    initial_note: String,
+) -> Result<RebootRecoveryMeasurement> {
+    let mut measurement = RebootRecoveryMeasurement {
+        note: initial_note,
+        ..Default::default()
+    };
+    while start.elapsed().as_secs_f64() < timeout_secs {
+        if measurement.tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
+            measurement.tcp22_ms = Some(start.elapsed().as_millis());
+        }
+        match connect_timed(2) {
+            Ok(timed) => {
+                let exec_t = Instant::now();
+                let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                if out.rc != 0 {
+                    measurement.note = format!("exec rc {}", out.rc);
+                    thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+                measurement.ssh_ready_ms = Some(start.elapsed().as_millis());
+                measurement.resolve_ms = Some(timed.resolve_ms);
+                measurement.tcp_ms = Some(timed.tcp_ms);
+                measurement.handshake_ms = Some(timed.handshake_ms);
+                measurement.auth_ms = Some(timed.auth_ms);
+                measurement.exec_ms = Some(exec_t.elapsed().as_millis());
+                measurement.uptime = out
+                    .stdout
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let status_deadline = Instant::now() + Duration::from_secs(20);
+                while Instant::now() < status_deadline {
+                    update_reboot_status(&mut measurement, &timed.sess, start);
+                    if measurement.main_status_ms.is_some() && measurement.slint_status_ms.is_some()
+                    {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(250));
+                }
+                break;
+            }
+            Err(error) => measurement.note = error.to_string(),
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Ok(measurement)
+}
+
+fn update_reboot_status(
+    measurement: &mut RebootRecoveryMeasurement,
+    sess: &Session,
+    start: Instant,
+) {
+    let main = remote_read(sess, MAIN_STATUS_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    let slint = remote_read(sess, SLINT_STATUS_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    apply_reboot_status(
+        measurement,
+        main.as_ref(),
+        slint.as_ref(),
+        start.elapsed().as_millis(),
+    );
+}
+
+fn apply_reboot_status(
+    measurement: &mut RebootRecoveryMeasurement,
+    main: Option<&Value>,
+    slint: Option<&Value>,
+    elapsed_ms: u128,
+) {
+    if measurement.main_status_ms.is_none() {
+        if let Some(value) = main {
+            measurement.main_status_ms = Some(elapsed_ms);
+            measurement.launcher_state = value
+                .get("launcher_state")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+        }
+    }
+    if measurement.slint_status_ms.is_none() {
+        if let Some(value) = slint {
+            measurement.slint_status_ms = Some(elapsed_ms);
+            measurement.slint_frames = value
+                .get("frames")
+                .and_then(Value::as_u64)
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -3295,106 +3331,28 @@ fn watch_external_reboot(args: &[String]) -> Result<()> {
     let start = Instant::now();
     eprintln!("watch-reboot: device went down; timing reconnect...");
 
-    let mut tcp22_ms = None;
-    let mut ssh_ready_ms = None;
-    let mut resolve_ms = None;
-    let mut tcp_ms = None;
-    let mut handshake_ms = None;
-    let mut auth_ms = None;
-    let mut exec_ms = None;
-    let mut uptime = String::new();
-    let mut launcher_state = String::new();
-    let mut slint_frames = String::new();
-    let mut main_status_ms = None;
-    let mut slint_status_ms = None;
-    let mut note = String::from("external");
-
-    while start.elapsed().as_secs_f64() < timeout_secs {
-        if tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
-            tcp22_ms = Some(start.elapsed().as_millis());
-        }
-        match connect_timed(2) {
-            Ok(timed) => {
-                let exec_t = Instant::now();
-                let out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                let this_exec_ms = exec_t.elapsed().as_millis();
-                if out.rc == 0 {
-                    ssh_ready_ms = Some(start.elapsed().as_millis());
-                    resolve_ms = Some(timed.resolve_ms);
-                    tcp_ms = Some(timed.tcp_ms);
-                    handshake_ms = Some(timed.handshake_ms);
-                    auth_ms = Some(timed.auth_ms);
-                    exec_ms = Some(this_exec_ms);
-                    uptime = out
-                        .stdout
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .to_string();
-
-                    let status_deadline = Instant::now() + Duration::from_secs(20);
-                    while Instant::now() < status_deadline {
-                        if main_status_ms.is_none() {
-                            if let Some(text) =
-                                remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
-                            {
-                                if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                    main_status_ms = Some(start.elapsed().as_millis());
-                                    launcher_state = value
-                                        .get("launcher_state")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_string();
-                                }
-                            }
-                        }
-                        if slint_status_ms.is_none() {
-                            if let Some(text) =
-                                remote_read(&timed.sess, "/tmp/mister-magik/status.json")
-                            {
-                                if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                    slint_status_ms = Some(start.elapsed().as_millis());
-                                    slint_frames = value
-                                        .get("frames")
-                                        .and_then(Value::as_u64)
-                                        .map(|n| n.to_string())
-                                        .unwrap_or_default();
-                                }
-                            }
-                        }
-                        if main_status_ms.is_some() && slint_status_ms.is_some() {
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(250));
-                    }
-                    break;
-                }
-                note = format!("exec rc {}", out.rc);
-            }
-            Err(err) => {
-                note = err.to_string();
-            }
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
+    let recovery = measure_reboot_recovery(start, timeout_secs, String::from("external"))?;
 
     let row = format!(
-        "boot-net\t{ts}\t1\texternal\t{}\t\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{launcher_state}\t{slint_frames}\t{}",
+        "boot-net\t{ts}\t1\texternal\t{}\t\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         host(),
-        opt_ms(tcp22_ms),
-        opt_ms(ssh_ready_ms),
-        opt_ms(resolve_ms),
-        opt_ms(tcp_ms),
-        opt_ms(handshake_ms),
-        opt_ms(auth_ms),
-        opt_ms(exec_ms),
-        opt_ms(main_status_ms),
-        opt_ms(slint_status_ms),
-        note.replace('\t', " ")
+        opt_ms(recovery.tcp22_ms),
+        opt_ms(recovery.ssh_ready_ms),
+        opt_ms(recovery.resolve_ms),
+        opt_ms(recovery.tcp_ms),
+        opt_ms(recovery.handshake_ms),
+        opt_ms(recovery.auth_ms),
+        opt_ms(recovery.exec_ms),
+        opt_ms(recovery.main_status_ms),
+        opt_ms(recovery.slint_status_ms),
+        recovery.uptime,
+        recovery.launcher_state,
+        recovery.slint_frames,
+        recovery.note.replace('\t', " ")
     );
     println!("{row}");
     append_profile_row(out_path, header, &row)?;
-    if ssh_ready_ms.is_some() {
+    if recovery.ssh_ready_ms.is_some() {
         Ok(())
     } else {
         Err(format!("device not ready after {timeout_secs:.0}s").into())
@@ -5425,6 +5383,31 @@ video_mode=14
             reboot_mode_from_args(&["--direct-reset-no-sync".to_string()]).unwrap(),
             RebootMode::DirectResetNoSync
         );
+    }
+
+    #[test]
+    fn reboot_recovery_status_accepts_scripted_readiness_transitions_once() {
+        let mut measurement = RebootRecoveryMeasurement::default();
+        apply_reboot_status(&mut measurement, None, None, 10);
+        assert_eq!(measurement, RebootRecoveryMeasurement::default());
+
+        apply_reboot_status(
+            &mut measurement,
+            Some(&json!({"launcher_state": "LauncherStarting"})),
+            None,
+            25,
+        );
+        apply_reboot_status(
+            &mut measurement,
+            Some(&json!({"launcher_state": "LauncherActive"})),
+            Some(&json!({"frames": 3})),
+            40,
+        );
+
+        assert_eq!(measurement.main_status_ms, Some(25));
+        assert_eq!(measurement.slint_status_ms, Some(40));
+        assert_eq!(measurement.launcher_state, "LauncherStarting");
+        assert_eq!(measurement.slint_frames, "3");
     }
 
     #[test]
