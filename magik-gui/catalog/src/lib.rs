@@ -49,6 +49,7 @@ pub mod sharded_catalog;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
+pub mod system_shard;
 #[cfg(feature = "builder")]
 pub mod synthetic_fixture;
 #[cfg(test)]
