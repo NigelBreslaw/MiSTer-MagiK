@@ -98,6 +98,7 @@ fn read_from_connection(conn: &Connection) -> Result<CatalogState, String> {
     })
 }
 
+#[cfg(test)]
 pub fn read_legacy(path: &Path) -> Result<CatalogState, String> {
     let conn = sqlite_catalog::open_sqlite_read_only(path)
         .map_err(|error| format!("open legacy catalog state {}: {error}", path.display()))?;
@@ -119,6 +120,7 @@ pub fn read_legacy(path: &Path) -> Result<CatalogState, String> {
     })
 }
 
+#[cfg(test)]
 fn read_legacy_stat(conn: &Connection, key: &str) -> Result<usize, String> {
     let value = conn
         .query_row("SELECT value FROM meta WHERE key=?1", [key], |row| {

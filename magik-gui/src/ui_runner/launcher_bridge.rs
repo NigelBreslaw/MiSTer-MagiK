@@ -113,7 +113,7 @@ fn kernel_version() -> String {
 
 fn last_database_build() -> String {
     mister_magik_catalog::catalog_build_record::read_completed_build_duration(
-        &mister_magik_catalog::catalog_config::default_sqlite_path(),
+        &mister_magik_catalog::catalog_state::default_path(),
     )
     .ok()
     .flatten()

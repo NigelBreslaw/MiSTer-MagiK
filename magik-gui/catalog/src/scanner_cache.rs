@@ -3,7 +3,7 @@
 
 //! Lossless scanner accelerators owned by Catalog V3.
 
-use crate::library_db::{self, LibraryScan};
+use crate::library_db::LibraryScan;
 use crate::software_identity::{SoftwareHashCache, SoftwareHashCacheKey};
 use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
@@ -37,34 +37,16 @@ pub(crate) fn default_path() -> PathBuf {
         .with_file_name(FILE_NAME)
 }
 
-pub(crate) fn load_or_migrate_default() -> ScannerCacheState {
+pub(crate) fn load_default() -> ScannerCacheState {
     let path = default_path();
     match read(&path) {
-        Ok(state) => return state,
+        Ok(state) => state,
         Err(error) if path.exists() => {
             crate::catalog_errln!("scanner_cache_tsv\tstatus=read-failed\terror={error}");
-            return ScannerCacheState::default();
+            ScannerCacheState::default()
         }
-        Err(_) => {}
+        Err(_) => ScannerCacheState::default(),
     }
-    let legacy_path = crate::catalog_config::default_sqlite_path();
-    let Ok(state) = read_legacy(&legacy_path) else {
-        return ScannerCacheState::default();
-    };
-    match write(&path, &state) {
-        Ok(()) => crate::catalog_logln!(
-            "scanner_cache_tsv\tstatus=migrated\tdiscoveries={}\tsoftware_hashes={}",
-            state
-                .discovery_history
-                .as_ref()
-                .map_or(0, |history| history.by_game_id.len()),
-            state.software_hash_cache.entries.len()
-        ),
-        Err(error) => {
-            crate::catalog_errln!("scanner_cache_tsv\tstatus=migration-write-failed\terror={error}")
-        }
-    }
-    state
 }
 
 pub(crate) fn read(path: &Path) -> Result<ScannerCacheState, String> {
@@ -85,12 +67,6 @@ pub(crate) fn read(path: &Path) -> Result<ScannerCacheState, String> {
             "scanner cache schema {version} is unsupported; expected {SCHEMA_VERSION}"
         ));
     }
-    read_rows(&conn)
-}
-
-pub(crate) fn read_legacy(path: &Path) -> Result<ScannerCacheState, String> {
-    let conn = library_db::open_sqlite_read_only(path)
-        .map_err(|error| format!("open legacy scanner cache {}: {error}", path.display()))?;
     read_rows(&conn)
 }
 
@@ -139,6 +115,7 @@ fn read_rows(conn: &Connection) -> Result<ScannerCacheState, String> {
     })
 }
 
+#[cfg_attr(not(feature = "builder"), allow(dead_code))]
 pub(crate) fn write(path: &Path, state: &ScannerCacheState) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)

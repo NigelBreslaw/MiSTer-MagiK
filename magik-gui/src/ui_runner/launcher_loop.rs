@@ -1602,8 +1602,7 @@ pub(super) fn run_launcher_loop(
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
     let mut catalog_recovery_prev = PadState::default();
-    let sqlite_path = library_db::default_sqlite_path();
-    let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
+    let sqlite_path = mister_magik_catalog::catalog_state::default_path();
     let capsule_seed_ready = catalog_ready;
     let sharded_seed = (!capsule_seed_ready)
         .then(|| read_sharded_registry_seed(&arcade_root, start))
@@ -1612,9 +1611,7 @@ pub(super) fn run_launcher_loop(
     let sharded_catalog_fingerprint = sharded_seed
         .as_ref()
         .map(|seed| seed.catalog_fingerprint.clone());
-    let summary_seed = legacy_summary_seed_needed(capsule_seed_ready, sharded_seed_ready)
-        .then(|| read_catalog_summary_seed(&sqlite_path, &summary_path, start))
-        .flatten();
+    let summary_seed: Option<catalog_summary::CatalogSummaryProjection> = None;
     if let Some(seed) = sharded_seed {
         catalog = seed.catalog;
         catalog_ready = true;
@@ -4739,31 +4736,14 @@ enum CatalogStartupWithoutSummaryPlan {
 fn catalog_startup_without_summary_plan(
     sqlite_state: CatalogStartupSqliteState,
     catalog_worker_enabled: bool,
-    refresh_policy: CatalogRefreshPolicy,
-    deferred_library_rebuild: bool,
+    _refresh_policy: CatalogRefreshPolicy,
+    _deferred_library_rebuild: bool,
 ) -> CatalogStartupWithoutSummaryPlan {
-    let force_build = deferred_library_rebuild || refresh_policy.force_requested();
     match sqlite_state {
         CatalogStartupSqliteState::HeaderValid => {
-            let request = if force_build {
-                CatalogWorkerRequest::ForceBuild
-            } else {
-                ready_catalog_worker_request(refresh_policy)
-            };
             return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request,
-                initial_cache: if request == CatalogWorkerRequest::ForceBuild {
-                    CatalogWorkerInitialCache::AlreadyProbedMissing
-                } else {
-                    CatalogWorkerInitialCache::ProbeNavigationThenSqlite
-                },
-                execution_mode: CatalogExecutionMode::ForegroundExclusive,
-            };
-        }
-        CatalogStartupSqliteState::ExistingUnusable if !force_build => {
-            return CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::StrictLoad,
-                initial_cache: CatalogWorkerInitialCache::ProbeSqlite,
+                request: CatalogWorkerRequest::ForceBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             };
         }

@@ -7,7 +7,6 @@ use crate::arcade_catalog::{
     ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, LaunchTarget, PlatformKind,
     StructuredLaunchPlan,
 };
-use crate::library_db;
 use mister_magik_catalog::catalog_config::{self, CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use mister_magik_catalog::device_layout::DeviceLayout;
 use std::collections::{HashMap, HashSet};
@@ -49,9 +48,10 @@ struct CapsuleBinding {
 
 impl CapsuleBinding {
     fn current(catalog_root: &Path) -> Result<Self, String> {
-        let stamp = library_db::read_sqlite_catalog_stamp(&library_db::default_sqlite_path())?
-            .ok_or_else(|| "catalog database has no stamp".to_string())?;
-        Self::for_current_generation(catalog_root, &stamp.fingerprint_hex())
+        let state = mister_magik_catalog::catalog_state::read(
+            &mister_magik_catalog::catalog_state::default_path(),
+        )?;
+        Self::for_current_generation(catalog_root, &state.stamp.fingerprint_hex())
     }
 
     fn for_current_generation(

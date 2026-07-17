@@ -1062,19 +1062,7 @@ pub(crate) fn write_hbmame_metadata_from_library(
 pub fn default_sqlite_catalog_stamp_check() -> Result<CatalogStampCheckSummary, String> {
     let cfg = BenchConfig::production();
     let state_path = crate::catalog_state::default_path();
-    if state_path.exists() {
-        return sqlite_catalog::catalog_state_stamp_check(&cfg, &state_path);
-    }
-    let summary = sqlite_catalog_stamp_check(&cfg)?;
-    if summary.unchanged {
-        let state = crate::catalog_state::read_legacy(&cfg.sqlite_path)?;
-        crate::catalog_state::write(&state_path, &state)?;
-        crate::catalog_logln!(
-            "catalog_state_tsv\tstatus=migrated\tpath={}",
-            state_path.display()
-        );
-    }
-    Ok(summary)
+    sqlite_catalog::catalog_state_stamp_check(&cfg, &state_path)
 }
 
 pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSummary, String> {
@@ -1409,7 +1397,7 @@ fn build_catalog_from_scan_with_preferred_and_progress(
     let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
-    let scanner_cache = crate::scanner_cache::load_or_migrate_default();
+    let scanner_cache = crate::scanner_cache::load_default();
     build_catalog_from_scan_with_sources_and_preferred_and_progress(
         root,
         scan,

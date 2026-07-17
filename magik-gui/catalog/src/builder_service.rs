@@ -88,7 +88,7 @@ impl BuilderConfig {
                     PathBuf::from(crate::builder_protocol::DEFAULT_CATALOG_BUILDER_LOCK_PATH)
                 }),
             snapshot_path: snapshot_path(),
-            sqlite_path: crate::catalog_config::default_sqlite_path(),
+            sqlite_path: crate::catalog_state::default_path(),
             run_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -451,7 +451,24 @@ impl BuilderBackend for SystemBuilderBackend {
     type Prepared = PreparedBuild;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
-        library_db::remove_default_catalog_artifacts()
+        let storage = crate::catalog_config::default_sharded_catalog_path();
+        if storage.file_name().is_none() {
+            return Err(format!(
+                "refusing to remove unbounded V3 catalog path {}",
+                storage.display()
+            ));
+        }
+        let mut removed = library_db::remove_default_catalog_artifacts()?;
+        if storage.exists() {
+            let entries = walkdir::WalkDir::new(&storage)
+                .into_iter()
+                .filter_map(Result::ok)
+                .count();
+            std::fs::remove_dir_all(&storage)
+                .map_err(|error| format!("remove V3 catalog {}: {error}", storage.display()))?;
+            removed = removed.saturating_add(entries);
+        }
+        Ok(removed)
     }
 
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {

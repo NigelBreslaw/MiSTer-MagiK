@@ -838,11 +838,11 @@ fn handle_embedded_builder_event(
         },
         CatalogBuilderEvent::Persisted { summary, .. } => {
             let completed_build_seconds = summary.completed_build_seconds;
-            let generation_fingerprint =
-                library_db::read_sqlite_catalog_stamp(&library_db::default_sqlite_path())
-                    .ok()
-                    .flatten()
-                    .map(|stamp| stamp.fingerprint_hex());
+            let generation_fingerprint = mister_magik_catalog::catalog_state::read(
+                &mister_magik_catalog::catalog_state::default_path(),
+            )
+            .ok()
+            .map(|state| state.stamp.fingerprint_hex());
             let _ = tx.send(CatalogWorkerMessage::Persisted {
                 summary: refresh_summary(summary),
                 completed_build_seconds,
