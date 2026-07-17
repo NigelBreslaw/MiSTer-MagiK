@@ -7,7 +7,6 @@ use crate::catalog_classify::SystemId;
 use crate::sharded_catalog::{NAVIGATION_SCHEMA_VERSION, SHARD_SCHEMA_VERSION};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "builder")]
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -308,6 +307,44 @@ pub fn open_system_shard(
     })
 }
 
+/// Open the compact adjacent navigation without touching SQLite. This is the
+/// launcher hot reader; full shard parity remains a builder/recovery concern.
+pub fn open_system_navigation(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    limits: SystemShardLimits,
+) -> Result<LoadedSystemShard, SystemShardError> {
+    let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
+    let navigation_hash = checksum_hex(&navigation);
+    let stored = decode_navigation(&navigation, limits)?;
+    if stored.schema_version != NAVIGATION_SCHEMA_VERSION
+        || stored.system_id != expected_system_id.as_str()
+        || stored.generation != expected_generation
+    {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation identity or generation does not match registry",
+        ));
+    }
+    let games = stored
+        .games
+        .into_iter()
+        .map(|game| SystemGame {
+            stable_key: game.stable_key,
+            title: game.title,
+            launch_ref: game.launch_ref,
+        })
+        .collect::<Vec<_>>();
+    validate_loaded_games(&games, limits.max_games)?;
+    Ok(LoadedSystemShard {
+        system_id: expected_system_id.clone(),
+        generation: expected_generation,
+        navigation_hash,
+        games,
+    })
+}
+
 #[cfg(feature = "builder")]
 fn validate_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemShardError> {
     if games.len() > max_games {
@@ -328,6 +365,28 @@ fn validate_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemSh
                 "games need non-empty unique keys, titles, and launch references",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_loaded_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemShardError> {
+    if games.len() > max_games {
+        return Err(SystemShardError::new(
+            "read",
+            "system game count exceeds configured limit",
+        ));
+    }
+    let mut keys = BTreeSet::new();
+    if games.iter().any(|game| {
+        game.stable_key.is_empty()
+            || game.title.is_empty()
+            || game.launch_ref.is_empty()
+            || !keys.insert(&game.stable_key)
+    }) {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation contains invalid or duplicate game rows",
+        ));
     }
     Ok(())
 }

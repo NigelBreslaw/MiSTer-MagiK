@@ -158,8 +158,8 @@ pub fn publish_manifest(
     manifest: &CatalogManifest,
     limits: RegistryLimits,
 ) -> Result<PathBuf, RegistryError> {
-    validate_manifest(storage_root, manifest, limits, true)?;
-    let current = read_manifest_slots(storage_root, limits)?;
+    validate_manifest(storage_root, manifest, limits, true, true)?;
+    let current = read_manifest_slots(storage_root, limits, true)?;
     if current
         .iter()
         .any(|(_, existing)| existing.generation >= manifest.generation)
@@ -227,7 +227,20 @@ pub fn read_latest_manifest(
     storage_root: &Path,
     limits: RegistryLimits,
 ) -> Result<CatalogManifest, RegistryError> {
-    read_manifest_slots(storage_root, limits)?
+    read_manifest_slots(storage_root, limits, true)?
+        .into_iter()
+        .max_by_key(|(_, manifest)| manifest.generation)
+        .map(|(_, manifest)| manifest)
+        .ok_or_else(|| RegistryError::new("read-manifest", "no valid manifest slot"))
+}
+
+/// Read only the bounded registry metadata. System artifacts are deliberately
+/// untouched so launcher shell startup does not scale with installed systems.
+pub fn read_latest_manifest_lazy(
+    storage_root: &Path,
+    limits: RegistryLimits,
+) -> Result<CatalogManifest, RegistryError> {
+    read_manifest_slots(storage_root, limits, false)?
         .into_iter()
         .max_by_key(|(_, manifest)| manifest.generation)
         .map(|(_, manifest)| manifest)
@@ -243,6 +256,7 @@ pub fn manifest_slots_present(storage_root: &Path) -> bool {
 fn read_manifest_slots(
     storage_root: &Path,
     limits: RegistryLimits,
+    validate_artifacts: bool,
 ) -> Result<Vec<(PathBuf, CatalogManifest)>, RegistryError> {
     let mut manifests = Vec::new();
     for relative in [PathBuf::from(MANIFEST_A), PathBuf::from(MANIFEST_B)] {
@@ -255,7 +269,7 @@ fn read_manifest_slots(
             let stored: StoredManifest = serde_json::from_slice(&bytes)
                 .map_err(|error| RegistryError::with("parse manifest", error))?;
             let manifest = from_stored(stored)?;
-            validate_manifest(storage_root, &manifest, limits, false)?;
+            validate_manifest(storage_root, &manifest, limits, validate_artifacts, false)?;
             Ok(manifest)
         })();
         if let Ok(manifest) = result {
@@ -269,6 +283,7 @@ fn validate_manifest(
     storage_root: &Path,
     manifest: &CatalogManifest,
     limits: RegistryLimits,
+    validate_artifacts: bool,
     verify_hashes: bool,
 ) -> Result<(), RegistryError> {
     if manifest.systems.len() > limits.max_systems {
@@ -308,6 +323,7 @@ fn validate_manifest(
             &system.system_id,
             &system.active,
             limits,
+            validate_artifacts,
             verify_hashes,
         )?;
         if let Some(previous) = &system.previous {
@@ -322,6 +338,7 @@ fn validate_manifest(
                 &system.system_id,
                 previous,
                 limits,
+                validate_artifacts,
                 verify_hashes,
             )?;
         }
@@ -334,6 +351,7 @@ fn validate_generation(
     system_id: &SystemId,
     generation: &PublishedGeneration,
     limits: RegistryLimits,
+    validate_artifacts: bool,
     verify_hashes: bool,
 ) -> Result<(), RegistryError> {
     let expected_directory = PathBuf::from("systems").join(system_id.as_str());
@@ -360,6 +378,9 @@ fn validate_generation(
             "validate-manifest",
             "manifest generation metadata exceeds limits",
         ));
+    }
+    if !validate_artifacts {
+        return Ok(());
     }
     let sqlite = storage_root.join(&generation.sqlite_path);
     let navigation = storage_root.join(&generation.navigation_path);
@@ -782,7 +803,7 @@ mod tests {
         let manifest = from_stored(stored).unwrap();
         let root = temporary_root("traversal");
         assert_eq!(
-            validate_manifest(&root, &manifest, limits(), false)
+            validate_manifest(&root, &manifest, limits(), false, false)
                 .unwrap_err()
                 .message(),
             "manifest artifact path is not canonical"

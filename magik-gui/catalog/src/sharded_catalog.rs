@@ -226,6 +226,13 @@ pub struct CatalogRegistry {
 }
 
 impl CatalogRegistry {
+    pub(crate) fn new(generation: u64, systems: Vec<SystemSummary>) -> Self {
+        Self {
+            generation,
+            systems,
+        }
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -238,12 +245,28 @@ impl CatalogRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemCatalog {
     summary: SystemSummary,
+    games: Vec<CatalogGame>,
 }
 
 impl SystemCatalog {
+    pub(crate) fn new(summary: SystemSummary, games: Vec<CatalogGame>) -> Self {
+        Self { summary, games }
+    }
+
     pub fn summary(&self) -> &SystemSummary {
         &self.summary
     }
+
+    pub fn games(&self) -> &[CatalogGame] {
+        &self.games
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogGame {
+    pub stable_key: String,
+    pub title: String,
+    pub launch_ref: String,
 }
 
 pub trait CatalogEngine {

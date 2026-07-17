@@ -1,0 +1,284 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Manifest-first reader which opens system navigation only on demand.
+
+use crate::catalog_classify::SystemId;
+use crate::shard_registry::{read_latest_manifest_lazy, CatalogManifest, RegistryLimits};
+use crate::sharded_catalog::{
+    CatalogError, CatalogGame, CatalogReader, CatalogRegistry, SystemCatalog, SystemSummary,
+};
+use crate::system_shard::open_system_navigation;
+use std::path::{Path, PathBuf};
+
+pub struct LazyShardedCatalogReader {
+    storage_root: PathBuf,
+    limits: RegistryLimits,
+    manifest: CatalogManifest,
+}
+
+impl LazyShardedCatalogReader {
+    pub fn open(storage_root: &Path, limits: RegistryLimits) -> Result<Self, CatalogError> {
+        let manifest = read_latest_manifest_lazy(storage_root, limits)
+            .map_err(|error| CatalogError::new("read-manifest", error.to_string()))?;
+        Ok(Self {
+            storage_root: storage_root.to_path_buf(),
+            limits,
+            manifest,
+        })
+    }
+}
+
+impl CatalogReader for LazyShardedCatalogReader {
+    fn open_registry(&self) -> Result<CatalogRegistry, CatalogError> {
+        Ok(CatalogRegistry::new(
+            self.manifest.generation,
+            self.manifest
+                .systems
+                .iter()
+                .map(|system| SystemSummary {
+                    system_id: system.system_id.clone(),
+                    generation: system.active.generation,
+                    games: system.active.games,
+                })
+                .collect(),
+        ))
+    }
+
+    fn open_system(&self, system_id: &SystemId) -> Result<SystemCatalog, CatalogError> {
+        let system = self
+            .manifest
+            .systems
+            .iter()
+            .find(|system| &system.system_id == system_id)
+            .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
+        let open = |generation: &crate::shard_registry::PublishedGeneration| {
+            let loaded = open_system_navigation(
+                &self.storage_root.join(&generation.navigation_path),
+                system_id,
+                generation.generation,
+                self.limits.shard,
+            )
+            .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
+            if loaded.navigation_hash != generation.navigation_hash {
+                return Err(CatalogError::new(
+                    "open-system",
+                    "navigation checksum does not match manifest",
+                ));
+            }
+            Ok(loaded)
+        };
+        let loaded = match open(&system.active) {
+            Ok(loaded) => loaded,
+            Err(active_error) => match system.previous.as_ref() {
+                Some(previous) => open(previous).map_err(|previous_error| {
+                    CatalogError::new(
+                        "open-system",
+                        format!(
+                            "active shard failed: {active_error}; previous shard failed: {previous_error}"
+                        ),
+                    )
+                })?,
+                None => {
+                    return Err(CatalogError::new("open-system", active_error.to_string()));
+                }
+            },
+        };
+        Ok(SystemCatalog::new(
+            SystemSummary {
+                system_id: loaded.system_id,
+                generation: loaded.generation,
+                games: loaded.games.len() as u64,
+            },
+            loaded
+                .games
+                .into_iter()
+                .map(|game| CatalogGame {
+                    stable_key: game.stable_key,
+                    title: game.title,
+                    launch_ref: game.launch_ref,
+                })
+                .collect(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog_domain::ScanUnitId;
+    use crate::shard_registry::{
+        publish_manifest, publish_system_artifacts, CatalogManifest, ManifestSystem,
+    };
+    use crate::system_shard::{write_system_shard, SystemGame, SystemShardData, SystemShardLimits};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn registry_open_succeeds_when_every_system_artifact_is_absent() {
+        let root = temporary_root("registry-only");
+        seed(&root);
+        fs::remove_dir_all(root.join("systems")).unwrap();
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let registry = reader.open_registry().unwrap();
+        assert_eq!(registry.generation(), 1);
+        assert_eq!(registry.systems().len(), 2);
+        assert!(reader.open_system(&system("snes")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_one_system_does_not_touch_a_corrupt_unrelated_shard() {
+        let root = temporary_root("one-system");
+        seed(&root);
+        fs::write(
+            root.join("systems/c64/1.nav.lz4b"),
+            b"corrupt unrelated shard",
+        )
+        .unwrap();
+        fs::remove_file(root.join("systems/snes/1.sqlite3")).unwrap();
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let snes = reader.open_system(&system("snes")).unwrap();
+        assert_eq!(snes.summary().system_id.as_str(), "snes");
+        assert_eq!(snes.games().len(), 1);
+        assert!(reader.open_system(&system("c64")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_active_system_falls_back_to_its_previous_generation() {
+        let root = temporary_root("system-fallback");
+        seed(&root);
+        let current = crate::shard_registry::read_latest_manifest(&root, limits()).unwrap();
+        let snes_id = system("snes");
+        let staging = root.join("staging/snes-generation-2");
+        fs::create_dir_all(&staging).unwrap();
+        let sqlite = staging.join("system.sqlite3");
+        let navigation = staging.join("system.nav.lz4b");
+        write_system_shard(
+            &sqlite,
+            &navigation,
+            &SystemShardData {
+                system_id: snes_id.clone(),
+                generation: 2,
+                games: vec![SystemGame {
+                    stable_key: "new".to_string(),
+                    title: "New SNES Game".to_string(),
+                    launch_ref: "/games/SNES/New SNES Game".to_string(),
+                }],
+            },
+            limits().shard,
+        )
+        .unwrap();
+        let active =
+            publish_system_artifacts(&root, &sqlite, &navigation, &snes_id, 2, 1, limits())
+                .unwrap();
+        let mut systems = current.systems;
+        let snes = systems
+            .iter_mut()
+            .find(|system| system.system_id == snes_id)
+            .unwrap();
+        snes.previous = Some(snes.active.clone());
+        snes.active = active;
+        publish_manifest(
+            &root,
+            &CatalogManifest {
+                generation: 2,
+                systems,
+            },
+            limits(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("systems/snes/2.nav.lz4b"),
+            b"corrupt active shard",
+        )
+        .unwrap();
+
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let snes = reader.open_system(&snes_id).unwrap();
+        assert_eq!(snes.summary().generation, 1);
+        assert_eq!(snes.games()[0].title, "SNES Game");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn seed(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        let mut systems = Vec::new();
+        for (id, title) in [("c64", "C64 Game"), ("snes", "SNES Game")] {
+            let system_id = system(id);
+            let staging = root.join("staging").join(id);
+            fs::create_dir_all(&staging).unwrap();
+            let sqlite = staging.join("system.sqlite3");
+            let navigation = staging.join("system.nav.lz4b");
+            write_system_shard(
+                &sqlite,
+                &navigation,
+                &SystemShardData {
+                    system_id: system_id.clone(),
+                    generation: 1,
+                    games: vec![SystemGame {
+                        stable_key: title.to_ascii_lowercase(),
+                        title: title.to_string(),
+                        launch_ref: format!("/games/{id}/{title}"),
+                    }],
+                },
+                limits().shard,
+            )
+            .unwrap();
+            let active =
+                publish_system_artifacts(root, &sqlite, &navigation, &system_id, 1, 1, limits())
+                    .unwrap();
+            systems.push(ManifestSystem {
+                system_id,
+                display_title: id.to_ascii_uppercase(),
+                section: "Fixture".to_string(),
+                family: "Fixture".to_string(),
+                order: 0,
+                producers: vec![ScanUnitId::parse(&format!("{id}-root")).unwrap()],
+                active,
+                previous: None,
+            });
+        }
+        systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
+        publish_manifest(
+            root,
+            &CatalogManifest {
+                generation: 1,
+                systems,
+            },
+            limits(),
+        )
+        .unwrap();
+    }
+
+    fn system(value: &str) -> SystemId {
+        SystemId::parse(value).unwrap()
+    }
+
+    fn limits() -> RegistryLimits {
+        RegistryLimits {
+            max_manifest_bytes: 1024 * 1024,
+            max_systems: 100,
+            shard: SystemShardLimits {
+                max_sqlite_bytes: 4 * 1024 * 1024,
+                max_navigation_compressed_bytes: 1024 * 1024,
+                max_navigation_decoded_bytes: 1024 * 1024,
+                max_games: 10_000,
+            },
+        }
+    }
+
+    fn temporary_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-lazy-reader-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        root
+    }
+}

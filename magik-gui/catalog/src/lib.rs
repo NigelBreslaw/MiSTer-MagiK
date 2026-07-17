@@ -34,6 +34,7 @@ mod game_discovery;
 #[cfg(feature = "builder")]
 pub mod incremental_inputs;
 pub mod launch_profiles;
+pub mod lazy_sharded_reader;
 pub mod library_bench;
 mod library_cli;
 pub mod library_db;
