@@ -151,6 +151,13 @@ impl ScanUnitInventory {
         &self.claims
     }
 
+    pub fn all_systems(&self) -> BTreeSet<SystemId> {
+        self.produced_systems
+            .values()
+            .flat_map(|systems| systems.iter().cloned())
+            .collect()
+    }
+
     pub fn affected_systems(&self, dirty_units: &BTreeSet<ScanUnitId>) -> BTreeSet<SystemId> {
         let mut affected = dirty_units
             .iter()

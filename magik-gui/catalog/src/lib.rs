@@ -42,6 +42,8 @@ mod namespace_walk;
 pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
+#[cfg(feature = "builder")]
+pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod sharded_catalog;
 mod software_identity;

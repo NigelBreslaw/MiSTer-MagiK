@@ -4,6 +4,7 @@
 //! Typed Interface for the production-inactive sharded catalog architecture.
 
 use crate::catalog_classify::SystemId;
+use crate::catalog_domain::{InputId, ScanUnitId};
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -93,23 +94,54 @@ pub enum CatalogCommand {
 pub struct ReconcilePlan {
     pub current_generation: Option<u64>,
     pub intended_generation: u64,
+    pub scan_units: Vec<PlannedScanUnit>,
     pub systems: Vec<PlannedSystem>,
     pub global_rebuild: bool,
+    pub manifest_only: bool,
 }
 
 impl ReconcilePlan {
     pub fn is_unchanged(&self) -> bool {
-        !self.global_rebuild && self.systems.is_empty()
+        !self.global_rebuild
+            && !self.manifest_only
+            && self.scan_units.is_empty()
+            && self.systems.is_empty()
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedScanUnit {
+    pub scan_unit_id: ScanUnitId,
+    pub inputs: Vec<PlannedInput>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedInput {
+    pub input_id: InputId,
+    pub change: PlannedInputChange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlannedInputChange {
+    Added,
+    Modified,
+    Removed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedSystem {
     pub system_id: SystemId,
+    pub action: PlannedSystemAction,
     pub reasons: Vec<ReconcileReason>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlannedSystemAction {
+    Rebuild,
+    Remove,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ReconcileReason {
     MissingCatalog,
     SourceChanged,
@@ -117,6 +149,7 @@ pub enum ReconcileReason {
     MetadataChanged,
     SemanticVersionChanged,
     ExplicitRequest,
+    RemovedSystem,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -308,8 +341,10 @@ mod tests {
         assert!(ReconcilePlan {
             current_generation: Some(4),
             intended_generation: 4,
+            scan_units: Vec::new(),
             systems: Vec::new(),
             global_rebuild: false,
+            manifest_only: false,
         }
         .is_unchanged());
     }
