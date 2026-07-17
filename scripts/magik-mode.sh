@@ -9,45 +9,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/reboot-wait-lib.sh"
 source "$ROOT/scripts/lib/arming-state-lib.sh"
+source "$ROOT/scripts/lib/platform-manifest-lib.sh"
 
 usage() {
   echo "usage: scripts/magik-mode.sh <status|dev|public|stock>"
 }
 
 verify_layout() {
-  local layout="$1" app main
+  local layout="$1" app
   case "$layout" in
-    dev) app=/media/fat/mister-magik-dev; main=/media/fat/MiSTer_MagiKDev ;;
-    public) app=/media/fat/mister-magik; main=/media/fat/MiSTer_MagiK ;;
+    dev) app=/media/fat/mister-magik-dev ;;
+    public) app=/media/fat/mister-magik ;;
     *) return 2 ;;
   esac
-  "$MISTER" run "
-set -e
-manifest='$app/platform-v2.manifest'
-get() { value=\$(sed -n \"s/^\$1=//p\" \"\$manifest\"); test -n \"\$value\"; test \"\$(grep -c \"^\$1=\" \"\$manifest\")\" -eq 1; printf '%s' \"\$value\"; }
-test \"\$(get format)\" = mister-magik-platform-v2
-test \"\$(get main_path)\" = '$main'
-test \"\$(get gui_path)\" = '$app/mister-magik-fb'
-test \"\$(get scanout_module_path)\" = '$app/mister_magik_scanout_slots.ko'
-test \"\$(get scanout_metadata_path)\" = '$app/mister_magik_scanout_slots.metadata.txt'
-test \"\$(get latch_rbf_path)\" = '$app/fpga/menu-magik-vblank-latch.rbf'
-test \"\$(get latch_metadata_path)\" = '$app/fpga/menu-magik-vblank-latch.metadata.txt'
-check() { path=\$1; key=\$2; test -r \"\$path\"; test \"\$(sha256sum \"\$path\" | awk '{print \$1}')\" = \"\$(get \"\$key\")\"; }
-check '$main' main_sha256
-check '$app/mister-magik-fb' gui_sha256
-check '$app/mister_magik_scanout_slots.ko' scanout_module_sha256
-check '$app/mister_magik_scanout_slots.metadata.txt' scanout_metadata_sha256
-check '$app/fpga/menu-magik-vblank-latch.rbf' latch_rbf_sha256
-check '$app/fpga/menu-magik-vblank-latch.metadata.txt' latch_metadata_sha256
-contract=\$(get platform_contract_sha256)
-module_hash=\$(get scanout_module_sha256)
-rbf_hash=\$(get latch_rbf_sha256)
-grep -qx "platform_contract_sha256=\$contract" '$app/mister_magik_scanout_slots.metadata.txt'
-grep -qx "platform_contract_sha256=\$contract" '$app/fpga/menu-magik-vblank-latch.metadata.txt'
-grep -qx "module_sha256=\$module_hash" '$app/mister_magik_scanout_slots.metadata.txt'
-grep -qx "rbf_sha256=\$rbf_hash" '$app/fpga/menu-magik-vblank-latch.metadata.txt'
-echo '$layout platform valid'
-"
+  platform_manifest_verify "$MISTER" "$layout" "$app/platform-v2.manifest"
+  echo "$layout platform valid"
 }
 
 clear_arming_state() {

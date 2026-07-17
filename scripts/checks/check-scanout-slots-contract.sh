@@ -15,6 +15,7 @@ DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
 DEPLOY="$ROOT/scripts/deploy-platform.sh"
 INSTALL="$ROOT/scripts/magik-mode.sh"
+PLATFORM_VERIFY="$ROOT/scripts/lib/platform-manifest-lib.sh"
 
 require_text() {
   local file="$1" text="$2"
@@ -60,9 +61,10 @@ ${CC:-cc} -std=c11 -Wall -Wextra -Werror \
   "$ROOT/kernel/scanout-slots/mister_magik_scanout_policy_test.c" -o "$policy_test"
 "$policy_test"
 for text in platform-v2.manifest platform_contract_sha256 scanout_module_sha256 latch_rbf_sha256; do
-  require_text "$DEPLOY" "$text"
-  require_text "$INSTALL" "$text"
+  require_text "$PLATFORM_VERIFY" "$text"
 done
+require_text "$DEPLOY" platform_manifest_verify
+require_text "$INSTALL" platform_manifest_verify
 for text in /dev/mister-magik-scanout-slots 960x540 RGB565 /dev/fb0 QEMU; do
   require_text "$DOC" "$text"
 done

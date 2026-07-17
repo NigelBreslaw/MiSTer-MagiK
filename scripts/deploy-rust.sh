@@ -21,6 +21,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/scripts/lib/bench-context-lib.sh"
 source "$HERE/scripts/lib/magik-layout.sh"
+source "$HERE/scripts/lib/platform-manifest-lib.sh"
 magik_layout_select dev
 REMOTE_DIR="$MISTER_MAGIK_APP_DIR"
 REMOTE="$REMOTE_DIR/mister-magik-fb"
@@ -95,65 +96,8 @@ human_bytes() {
 verify_dev_platform_manifest() {
   local mode="$1"
   local candidate_gui_sha="${2:-}"
-  "$HERE/scripts/mister" run "
-set -e
-manifest='$MISTER_MAGIK_MANIFEST'
-mode='$mode'
-candidate_gui_sha='$candidate_gui_sha'
-tmp=\"\$manifest.runtime-upload\"
-trap 'rm -f \"\$tmp\"' EXIT
-get() { value=\$(sed -n \"s/^\$1=//p\" \"\$manifest\"); test -n \"\$value\"; test \"\$(grep -c \"^\$1=\" \"\$manifest\")\" -eq 1; printf '%s' \"\$value\"; }
-expected_fields='format main_path gui_path scanout_module_path scanout_metadata_path latch_rbf_path latch_metadata_path main_sha256 gui_sha256 scanout_module_sha256 scanout_metadata_sha256 latch_rbf_sha256 latch_metadata_sha256 platform_contract_sha256 main_revision magik_revision menu_revision'
-records=\$(awk 'NF && \$0 !~ /^#/ { count++ } END { print count + 0 }' \"\$manifest\")
-test \"\$records\" -eq 17
-for field in \$expected_fields; do get \"\$field\" >/dev/null; done
-test \"\$(get format)\" = mister-magik-platform-v2
-test \"\$(get main_path)\" = '$MISTER_MAGIK_MAIN'
-test \"\$(get gui_path)\" = '$REMOTE'
-test \"\$(get scanout_module_path)\" = '$REMOTE_SCANOUT_MODULE'
-test \"\$(get scanout_metadata_path)\" = '$REMOTE_SCANOUT_METADATA'
-test \"\$(get latch_rbf_path)\" = '$REMOTE_LATCH_RBF'
-test \"\$(get latch_metadata_path)\" = '$REMOTE_LATCH_METADATA'
-is_hex() { value=\$1; width=\$2; test \"\${#value}\" -eq \"\$width\"; echo \"\$value\" | grep -Eq '^[0-9a-f]+\$'; }
-for field in main_sha256 gui_sha256 scanout_module_sha256 scanout_metadata_sha256 latch_rbf_sha256 latch_metadata_sha256 platform_contract_sha256; do is_hex \"\$(get \"\$field\")\" 64; done
-for field in main_revision magik_revision menu_revision; do is_hex \"\$(get \"\$field\")\" 40; done
-check() { path=\$1; key=\$2; test -r \"\$path\"; test \"\$(sha256sum \"\$path\" | awk '{print \$1}')\" = \"\$(get \"\$key\")\"; }
-check '$MISTER_MAGIK_MAIN' main_sha256
-check '$REMOTE_SCANOUT_MODULE' scanout_module_sha256
-check '$REMOTE_SCANOUT_METADATA' scanout_metadata_sha256
-check '$REMOTE_LATCH_RBF' latch_rbf_sha256
-check '$REMOTE_LATCH_METADATA' latch_metadata_sha256
-contract=\$(get platform_contract_sha256)
-module_hash=\$(get scanout_module_sha256)
-rbf_hash=\$(get latch_rbf_sha256)
-menu_revision=\$(get menu_revision)
-grep -qx \"platform_contract_sha256=\$contract\" '$REMOTE_SCANOUT_METADATA'
-grep -qx \"platform_contract_sha256=\$contract\" '$REMOTE_LATCH_METADATA'
-grep -qx \"module_sha256=\$module_hash\" '$REMOTE_SCANOUT_METADATA'
-grep -qx \"rbf_sha256=\$rbf_hash\" '$REMOTE_LATCH_METADATA'
-grep -qx \"source_commit=\$menu_revision\" '$REMOTE_LATCH_METADATA'
-case \"\$mode\" in
-  verify)
-    check '$REMOTE' gui_sha256
-    ;;
-  rebind)
-    is_hex \"\$candidate_gui_sha\" 64
-    test \"\$(sha256sum '$REMOTE' | awk '{print \$1}')\" = \"\$candidate_gui_sha\"
-    awk -v hash=\"\$candidate_gui_sha\" '
-      BEGIN { seen = 0 }
-      /^gui_sha256=/ { print \"gui_sha256=\" hash; seen++; next }
-      { print }
-      END { if (seen != 1) exit 1 }
-    ' \"\$manifest\" > \"\$tmp\"
-    test \"\$(awk 'NF && \$0 !~ /^#/ { count++ } END { print count + 0 }' \"\$tmp\")\" -eq 17
-    test \"\$(grep -c \"^gui_sha256=\$candidate_gui_sha\$\" \"\$tmp\")\" -eq 1
-    sync
-    mv \"\$tmp\" \"\$manifest\"
-    sync
-    ;;
-  *) exit 2 ;;
-esac
-"
+  platform_manifest_verify "$HERE/scripts/mister" dev \
+    "$MISTER_MAGIK_MANIFEST" "" "$mode" "$candidate_gui_sha"
 }
 
 echo "==> Cross-building (armv7 profile=$PROFILE)"

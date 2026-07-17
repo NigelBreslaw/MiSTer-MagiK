@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/magik-layout.sh"
+source "$ROOT/scripts/lib/platform-manifest-lib.sh"
 magik_layout_select dev
 GUI_DIR="$ROOT/magik-gui"
 MAIN_DIR="${MISTER_MAIN_DIR:-$ROOT/../Main_MiSTer}"
@@ -128,33 +129,11 @@ for index in "${!LOCAL[@]}"; do
 done
 
 echo "==> Verifying inactive bundle and activating manifest last"
+platform_manifest_verify "$ROOT/scripts/mister" dev \
+  /media/fat/mister-magik-dev/platform-v2.manifest.upload .upload verify
 "$ROOT/scripts/mister" run '
 set -e
 manifest=/media/fat/mister-magik-dev/platform-v2.manifest.upload
-get() { sed -n "s/^$1=//p" "$manifest"; }
-test "$(get format)" = mister-magik-platform-v2
-test "$(get main_path)" = /media/fat/MiSTer_MagiKDev
-test "$(get gui_path)" = /media/fat/mister-magik-dev/mister-magik-fb
-test "$(get scanout_module_path)" = /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko
-test "$(get scanout_metadata_path)" = /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt
-test "$(get latch_rbf_path)" = /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf
-test "$(get latch_metadata_path)" = /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt
-check() { test "$(sha256sum "$1.upload" | awk "{print \$1}")" = "$(get "$2")"; }
-check /media/fat/MiSTer_MagiKDev main_sha256
-check /media/fat/mister-magik-dev/mister-magik-fb gui_sha256
-check /media/fat/mister-magik-dev/mister_magik_scanout_slots.ko scanout_module_sha256
-check /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt scanout_metadata_sha256
-check /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf latch_rbf_sha256
-check /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt latch_metadata_sha256
-contract=$(get platform_contract_sha256)
-menu_revision=$(get menu_revision)
-module_hash=$(get scanout_module_sha256)
-rbf_hash=$(get latch_rbf_sha256)
-grep -qx "platform_contract_sha256=$contract" /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt.upload
-grep -qx "platform_contract_sha256=$contract" /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload
-grep -qx "module_sha256=$module_hash" /media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt.upload
-grep -qx "rbf_sha256=$rbf_hash" /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload
-grep -qx "source_commit=$menu_revision" /media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt.upload
 while read -r expected name; do
   test -n "$expected" && test -n "$name"
   actual=$(sha256sum "/media/fat/mister-magik-dev/$name.upload" | awk "{print \$1}")

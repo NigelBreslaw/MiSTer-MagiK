@@ -73,6 +73,7 @@ for script in \
   "$ROOT/scripts/doctor" \
   "$ROOT/scripts/install-slint-boot.sh" \
   "$ROOT/scripts/lib/magik-layout.sh" \
+  "$ROOT/scripts/lib/platform-manifest-lib.sh" \
   "$ROOT/scripts/magik-mode.sh" \
   "$ROOT/scripts/lib/library-sql-output-lib.sh" \
   "$ROOT/scripts/mister" \
@@ -462,6 +463,7 @@ if rg -n 'sh -c "\$env \$remote library-refresh"' "$ROOT/scripts/profile-library
 fi
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
 bash "$ROOT/scripts/lib/arming-state-lib.sh" --self-test
+bash "$ROOT/scripts/lib/platform-manifest-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/lib/library-sql-output-lib.sh"
 "$ROOT/scripts/lib/reboot-wait-lib.sh"
