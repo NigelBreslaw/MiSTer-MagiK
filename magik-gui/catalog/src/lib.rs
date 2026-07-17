@@ -29,6 +29,8 @@ pub mod device_layout;
 mod fallible_log;
 pub mod fs_fault;
 mod game_discovery;
+#[cfg(feature = "builder")]
+pub mod incremental_inputs;
 pub mod launch_profiles;
 pub mod library_bench;
 mod library_cli;
