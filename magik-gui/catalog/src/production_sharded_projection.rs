@@ -31,6 +31,7 @@ struct CatalogBinding {
     schema_version: u32,
     projection_contract: String,
     manifest_generation: u64,
+    catalog_fingerprint: String,
     sqlite_len: u64,
     sqlite_modified_ns: u64,
 }
@@ -203,6 +204,7 @@ pub fn publish_bound_production_projection(
     storage_root: &Path,
     catalog: &ArcadeCatalog,
     sqlite_path: &Path,
+    catalog_fingerprint: &str,
     limits: RegistryLimits,
 ) -> Result<ProductionProjectionOutcome, ReconciliationError> {
     let sqlite = sqlite_identity(sqlite_path)?;
@@ -213,6 +215,7 @@ pub fn publish_bound_production_projection(
             schema_version: BINDING_SCHEMA_VERSION,
             projection_contract: PROJECTION_CONTRACT.to_string(),
             manifest_generation: outcome.generation,
+            catalog_fingerprint: catalog_fingerprint.to_string(),
             sqlite_len: sqlite.0,
             sqlite_modified_ns: sqlite.1,
         },
@@ -220,24 +223,40 @@ pub fn publish_bound_production_projection(
     Ok(outcome)
 }
 
+pub fn rebind_production_projection_if_fingerprint_matches(
+    storage_root: &Path,
+    sqlite_path: &Path,
+    manifest_generation: u64,
+    catalog_fingerprint: &str,
+) -> Result<bool, ReconciliationError> {
+    let Ok(binding) = read_binding(storage_root) else {
+        return Ok(false);
+    };
+    if binding.schema_version != BINDING_SCHEMA_VERSION
+        || binding.projection_contract != PROJECTION_CONTRACT
+        || binding.manifest_generation != manifest_generation
+        || binding.catalog_fingerprint != catalog_fingerprint
+    {
+        return Ok(false);
+    }
+    let sqlite = sqlite_identity(sqlite_path)?;
+    write_binding(
+        storage_root,
+        &CatalogBinding {
+            sqlite_len: sqlite.0,
+            sqlite_modified_ns: sqlite.1,
+            ..binding
+        },
+    )?;
+    Ok(true)
+}
+
 pub fn validate_production_binding(
     storage_root: &Path,
     sqlite_path: &Path,
     manifest_generation: u64,
 ) -> Result<(), ReconciliationError> {
-    let path = storage_root.join(BINDING_FILE);
-    let metadata = fs::metadata(&path)
-        .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
-    if metadata.len() > MAX_BINDING_BYTES {
-        return Err(ReconciliationError::new(
-            "binding",
-            "catalog binding exceeds size limit",
-        ));
-    }
-    let binding: CatalogBinding = serde_json::from_slice(
-        &fs::read(&path).map_err(|error| ReconciliationError::new("binding", error.to_string()))?,
-    )
-    .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
+    let binding = read_binding(storage_root)?;
     let sqlite = sqlite_identity(sqlite_path)?;
     if binding.schema_version != BINDING_SCHEMA_VERSION
         || binding.projection_contract != PROJECTION_CONTRACT
@@ -250,6 +269,22 @@ pub fn validate_production_binding(
         ));
     }
     Ok(())
+}
+
+fn read_binding(storage_root: &Path) -> Result<CatalogBinding, ReconciliationError> {
+    let path = storage_root.join(BINDING_FILE);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
+    if metadata.len() > MAX_BINDING_BYTES {
+        return Err(ReconciliationError::new(
+            "binding",
+            "catalog binding exceeds size limit",
+        ));
+    }
+    serde_json::from_slice(
+        &fs::read(&path).map_err(|error| ReconciliationError::new("binding", error.to_string()))?,
+    )
+    .map_err(|error| ReconciliationError::new("binding", error.to_string()))
 }
 
 fn sqlite_identity(path: &Path) -> Result<(u64, u64), ReconciliationError> {
@@ -568,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_rejects_replaced_or_missing_v2_database() {
+    fn binding_rejects_unknown_v2_database_and_rebinds_matching_catalog() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-production-projection-binding-{}",
             std::process::id()
@@ -587,11 +622,32 @@ mod tests {
                 count: 1,
             }],
         );
-        let outcome =
-            publish_bound_production_projection(&storage, &catalog, &sqlite, limits()).unwrap();
+        let outcome = publish_bound_production_projection(
+            &storage,
+            &catalog,
+            &sqlite,
+            "fixture-fingerprint",
+            limits(),
+        )
+        .unwrap();
         validate_production_binding(&storage, &sqlite, outcome.generation).unwrap();
         fs::write(&sqlite, b"different v2 generation with another size").unwrap();
         assert!(validate_production_binding(&storage, &sqlite, outcome.generation).is_err());
+        assert!(!rebind_production_projection_if_fingerprint_matches(
+            &storage,
+            &sqlite,
+            outcome.generation,
+            "different-fingerprint",
+        )
+        .unwrap());
+        assert!(rebind_production_projection_if_fingerprint_matches(
+            &storage,
+            &sqlite,
+            outcome.generation,
+            "fixture-fingerprint",
+        )
+        .unwrap());
+        validate_production_binding(&storage, &sqlite, outcome.generation).unwrap();
         fs::remove_file(&sqlite).unwrap();
         assert!(validate_production_binding(&storage, &sqlite, outcome.generation).is_err());
         let _ = fs::remove_dir_all(root);

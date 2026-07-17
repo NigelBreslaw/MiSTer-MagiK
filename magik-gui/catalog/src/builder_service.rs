@@ -423,6 +423,94 @@ struct SystemBuilderBackend {
     bootstrap_first_visible: bool,
 }
 
+fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
+    let started = Instant::now();
+    let storage = crate::catalog_config::default_sharded_catalog_path();
+    let sqlite = crate::catalog_config::default_sqlite_path();
+    let limits = crate::production_sharded_projection::production_registry_limits();
+    let generation = crate::shard_registry::read_latest_manifest_lazy(&storage, limits)
+        .ok()
+        .map(|manifest| manifest.generation);
+    if let Some(generation) = generation {
+        if crate::production_sharded_projection::validate_production_binding(
+            &storage, &sqlite, generation,
+        )
+        .is_ok()
+        {
+            return "current".to_string();
+        }
+        match crate::production_sharded_projection::rebind_production_projection_if_fingerprint_matches(
+            &storage,
+            &sqlite,
+            generation,
+            catalog_fingerprint,
+        ) {
+            Ok(true) => {
+                crate::catalog_logln!(
+                    "catalog_v3_repair_tsv\tstatus=rebound\tgeneration={generation}\telapsed_us={}",
+                    started.elapsed().as_micros()
+                );
+                return "rebound".to_string();
+            }
+            Ok(false) => {}
+            Err(error) => crate::catalog_errln!(
+                "catalog_v3_repair_tsv\tstatus=rebind-failed\tgeneration={generation}\terror={error}"
+            ),
+        }
+    }
+
+    let loaded = match library_db::load_arcade_catalog_from_materialized_sqlite(
+        crate::arcade_catalog::DEFAULT_ARCADE_ROOT,
+    ) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            crate::catalog_errln!(
+                "catalog_v3_repair_tsv\tstatus=load-failed\telapsed_us={}\terror={error}",
+                started.elapsed().as_micros()
+            );
+            return "load-failed".to_string();
+        }
+    };
+    let loaded_fingerprint = loaded
+        .stamp
+        .as_ref()
+        .map(crate::catalog_stamp::CatalogStamp::fingerprint_hex);
+    if loaded_fingerprint.as_deref() != Some(catalog_fingerprint) {
+        crate::catalog_errln!(
+            "catalog_v3_repair_tsv\tstatus=fingerprint-changed\telapsed_us={}",
+            started.elapsed().as_micros()
+        );
+        return "fingerprint-changed".to_string();
+    }
+    match crate::production_sharded_projection::publish_bound_production_projection(
+        &storage,
+        &loaded.catalog,
+        &sqlite,
+        catalog_fingerprint,
+        limits,
+    ) {
+        Ok(outcome) => {
+            crate::catalog_logln!(
+                "catalog_v3_repair_tsv\tstatus=republished\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
+                outcome.generation,
+                outcome.systems,
+                outcome.games,
+                outcome.rebuilt_systems,
+                outcome.removed_systems,
+                started.elapsed().as_micros()
+            );
+            "republished".to_string()
+        }
+        Err(error) => {
+            crate::catalog_errln!(
+                "catalog_v3_repair_tsv\tstatus=publish-failed\telapsed_us={}\terror={error}",
+                started.elapsed().as_micros()
+            );
+            "publish-failed".to_string()
+        }
+    }
+}
+
 impl BuilderBackend for SystemBuilderBackend {
     type Scan = library_db::LibraryRamScanArtifact;
     type Prepared = PreparedBuild;
@@ -434,8 +522,13 @@ impl BuilderBackend for SystemBuilderBackend {
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {
         let check = library_db::default_sqlite_catalog_stamp_check()
             .map_err(|error| StageFailure::new("check", error))?;
+        let v3_repair = if check.unchanged {
+            repair_v3_after_unchanged_check(&check.current_fingerprint)
+        } else {
+            "skipped-changed".to_string()
+        };
         let timing_detail = format!(
-            "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={}",
+            "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={} v3_repair={}",
             check.unchanged,
             check.check_us,
             check.compute_us,
@@ -456,6 +549,7 @@ impl BuilderBackend for SystemBuilderBackend {
             check.stored_checkpoint_lines,
             check.current_checkpoint_lines,
             check.drift.detail,
+            v3_repair,
         );
         let decision = if check.unchanged {
             CheckDecision::Unchanged(BuilderSummary::from(
@@ -698,6 +792,7 @@ impl BuilderBackend for SystemBuilderBackend {
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<BuilderSummary, String> {
+        let catalog_fingerprint = prepared.artifact.stamp().fingerprint_hex();
         let summary = prepared
             .artifact
             .save_default_sqlite_with_catalog_projection(&prepared.catalog, Some(progress))
@@ -708,6 +803,7 @@ impl BuilderBackend for SystemBuilderBackend {
             &crate::catalog_config::default_sharded_catalog_path(),
             &prepared.catalog,
             &crate::catalog_config::default_sqlite_path(),
+            &catalog_fingerprint,
             crate::production_sharded_projection::production_registry_limits(),
         ) {
             Ok(outcome) => crate::catalog_logln!(
