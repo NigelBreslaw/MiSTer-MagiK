@@ -246,7 +246,6 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
     let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
-    let _background_scope = background_build.then(crate::cooperative_work::BackgroundScope::enter);
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -279,6 +278,11 @@ fn run_with_backend<B: BuilderBackend>(
         });
         apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
     }
+    // First-visible serialization and publication are part of foreground
+    // bootstrap. Entering the cooperative scope before CatalogReady creates a
+    // circular wait: the catalog screen holds the idle latch closed while the
+    // builder waits for that latch before it can publish the UI that opens it.
+    let _background_scope = background_build.then(crate::cooperative_work::BackgroundScope::enter);
     let scanned = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut scan_progress = |title: &str, detail: &str| {
@@ -951,6 +955,7 @@ mod tests {
         check_unchanged: bool,
         bootstrap_first_visible: bool,
         calls: Vec<&'static str>,
+        snapshot_background_scopes: Vec<bool>,
     }
 
     impl FakeBackend {
@@ -1051,6 +1056,8 @@ mod tests {
             progress: &mut dyn FnMut(&str, &str),
         ) -> Result<Vec<(String, String)>, String> {
             self.calls.push("snapshot");
+            self.snapshot_background_scopes
+                .push(crate::cooperative_work::in_background_scope());
             progress(
                 "Indexing library",
                 "Creating compressed navigation catalog…",
@@ -1260,6 +1267,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(ready.len(), 2);
+        assert_eq!(
+            backend.snapshot_background_scopes,
+            [false, true],
+            "first-visible mini-nav must publish before background latch cooperation"
+        );
         let full_scan_timing = events
             .iter()
             .position(|event| {
