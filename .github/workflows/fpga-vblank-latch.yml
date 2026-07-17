@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload FPGA build evidence
         if: github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fpga-vblank-latch-signoff-v0.1-${{ steps.component-id.outputs.fpga_input_sha256 }}
           path: |
