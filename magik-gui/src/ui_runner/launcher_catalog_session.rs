@@ -41,6 +41,7 @@ pub(super) enum CatalogSessionEffect {
     MarkCatalogDurable {
         generation_fingerprint: Option<String>,
     },
+    ConfirmCatalogSeed,
     DiscardPartialCatalog,
     StartSearchIndex {
         job: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildJob,
@@ -419,6 +420,7 @@ impl LauncherCatalogSession {
                 self.refresh_done = true;
                 self.foreground_update = false;
                 self.refresh_failed = false;
+                effects.push(CatalogSessionEffect::ConfirmCatalogSeed);
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
                 effects.event(
@@ -767,6 +769,7 @@ mod tests {
                 CatalogSessionEffect::StartupEvent(_) => "event",
                 CatalogSessionEffect::UseCatalog { .. } => "catalog",
                 CatalogSessionEffect::MarkCatalogDurable { .. } => "mark-durable",
+                CatalogSessionEffect::ConfirmCatalogSeed => "confirm-seed",
                 CatalogSessionEffect::DiscardPartialCatalog => "discard-partial",
                 CatalogSessionEffect::StartSearchIndex { .. } => "start-search-index",
                 CatalogSessionEffect::SearchIndexesReady { .. } => "search-indexes-ready",
@@ -799,6 +802,7 @@ mod tests {
                 CatalogSessionEffect::MarkCatalogDurable { .. } => {
                     effect_names.push("mark-durable")
                 }
+                CatalogSessionEffect::ConfirmCatalogSeed => effect_names.push("confirm-seed"),
                 CatalogSessionEffect::DiscardPartialCatalog => effect_names.push("discard-partial"),
                 CatalogSessionEffect::StartSearchIndex { .. } => {
                     effect_names.push("start-search-index")
@@ -1299,10 +1303,10 @@ mod tests {
         let mut session = LauncherCatalogSession::new(false);
         session.note_summary_seed_ready();
 
-        let _ = session.handle_worker_message(
+        let effects = session.handle_worker_message(
             CatalogWorkerMessageContext {
                 catalog_ready: true,
-                catalog_partial: false,
+                catalog_partial: true,
                 screen: Screen::Arcade,
                 media_gate: None,
             },
@@ -1311,6 +1315,10 @@ mod tests {
             },
             now,
         );
+        assert!(effects
+            .into_effects()
+            .into_iter()
+            .any(|effect| matches!(effect, CatalogSessionEffect::ConfirmCatalogSeed)));
         assert!(session.refresh_done());
 
         let (effects, ui_effects) = effect_and_ui_names(session.handle_worker_message(

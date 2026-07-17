@@ -4361,6 +4361,10 @@ fn apply_catalog_session_effects(
             } => {
                 catalog_generation.mark_durable(generation_fingerprint);
             }
+            CatalogSessionEffect::ConfirmCatalogSeed => {
+                *return_capsule_active = false;
+                nav.set_arcade_exit_locked(false);
+            }
             CatalogSessionEffect::DiscardPartialCatalog => {
                 let root = catalog.root.to_string_lossy().into_owned();
                 *catalog = empty_arcade_catalog(&root);
