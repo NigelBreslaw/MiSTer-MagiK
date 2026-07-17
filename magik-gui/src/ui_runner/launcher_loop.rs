@@ -1121,41 +1121,7 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
     let (games, launch_plans) = arcade_id
         .as_ref()
         .and_then(|system_id| reader.open_system(system_id).ok())
-        .map(|system| {
-            let mut launch_plans = Vec::new();
-            let games = system
-                .games()
-                .iter()
-                .map(|game| {
-                    if let Some(plan) = &game.launch_plan {
-                        launch_plans.push(arcade_catalog::StructuredLaunchPlan {
-                            launch_ref: plan.launch_ref.as_str().into(),
-                            title: plan.title.as_str().into(),
-                            system_id: plan.system_id.as_str().into(),
-                            core_path: plan.core_path.as_str().into(),
-                            payload_path: plan.payload_path.as_str().into(),
-                            mount_kind: plan.mount_kind.as_str().into(),
-                            mount_index: plan.mount_index,
-                            delay_secs: plan.delay_secs,
-                        });
-                    }
-                    arcade_catalog::ArcadeGameEntry {
-                        title: game.title.as_str().into(),
-                        mra_path: game.launch_ref.as_str().into(),
-                        preview_archive_path: game.preview_archive_path.as_str().into(),
-                        preview_asset_key: game.preview_asset_key.as_str().into(),
-                        has_preview: game.has_preview,
-                        system_id: "arcade".into(),
-                        year: game.year,
-                        manufacturer: game.manufacturer.as_str().into(),
-                        players: game.players,
-                        control: game.control.as_str().into(),
-                        is_new: game.is_new,
-                    }
-                })
-                .collect();
-            (games, launch_plans)
-        })
+        .map(|system| arcade_rows_from_shard("arcade", system.games()))
         .unwrap_or_default();
     Some(ArcadeCatalog::new_with_deferred_text_indexes(
         PathBuf::from(root),
@@ -1163,6 +1129,47 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
         systems,
         launch_plans,
     ))
+}
+
+fn arcade_rows_from_shard(
+    system_id: &str,
+    games: &[mister_magik_catalog::sharded_catalog::CatalogGame],
+) -> (
+    Vec<arcade_catalog::ArcadeGameEntry>,
+    Vec<arcade_catalog::StructuredLaunchPlan>,
+) {
+    let mut launch_plans = Vec::new();
+    let games = games
+        .iter()
+        .map(|game| {
+            if let Some(plan) = &game.launch_plan {
+                launch_plans.push(arcade_catalog::StructuredLaunchPlan {
+                    launch_ref: plan.launch_ref.as_str().into(),
+                    title: plan.title.as_str().into(),
+                    system_id: plan.system_id.as_str().into(),
+                    core_path: plan.core_path.as_str().into(),
+                    payload_path: plan.payload_path.as_str().into(),
+                    mount_kind: plan.mount_kind.as_str().into(),
+                    mount_index: plan.mount_index,
+                    delay_secs: plan.delay_secs,
+                });
+            }
+            arcade_catalog::ArcadeGameEntry {
+                title: game.title.as_str().into(),
+                mra_path: game.launch_ref.as_str().into(),
+                preview_archive_path: game.preview_archive_path.as_str().into(),
+                preview_asset_key: game.preview_asset_key.as_str().into(),
+                has_preview: game.has_preview,
+                system_id: system_id.into(),
+                year: game.year,
+                manufacturer: game.manufacturer.as_str().into(),
+                players: game.players,
+                control: game.control.as_str().into(),
+                is_new: game.is_new,
+            }
+        })
+        .collect();
+    (games, launch_plans)
 }
 
 fn read_catalog_summary_seed(
@@ -1629,8 +1636,10 @@ pub(super) fn run_launcher_loop(
             return_catalog_hydration_needed,
         );
         if let Some(request) = request {
-            let initial_cache =
-                summary_seed_catalog_worker_initial_cache(request, return_catalog_hydration_needed);
+            // Rich V3 rows are now the hydration authority. Validation may
+            // inspect source facts, but it must not reopen the monolithic V2
+            // navigation before a selected system asks for its mini-nav.
+            let initial_cache = CatalogWorkerInitialCache::AlreadyLoadedReady;
             if summary_seed_catalog_worker_starts_immediately(
                 request,
                 return_catalog_hydration_needed,
@@ -2087,6 +2096,24 @@ pub(super) fn run_launcher_loop(
             catalog_background_allowed,
         );
         scheduler.set_search_index_allowed(catalog_background_allowed);
+        if catalog_ready && nav.screen == Screen::Arcade {
+            if let Some(system_id) = active_system(&catalog, &nav)
+                .map(|system| system.id.clone())
+                .filter(|system_id| {
+                    catalog.system_game_count(system_id) == 0
+                        && catalog
+                            .systems
+                            .iter()
+                            .any(|system| &system.id == system_id && system.count > 0)
+                })
+            {
+                if !scheduler.system_shard_loading(&system_id)
+                    && !scheduler.system_shard_attempted(&system_id)
+                {
+                    scheduler.start_system_shard_load(system_id);
+                }
+            }
+        }
         let search_index_effects = catalog_session
             .maybe_start_search_index(catalog_background_allowed, scheduler.search_index_running());
         apply_catalog_session_effects(
@@ -4474,6 +4501,18 @@ fn apply_catalog_session_effects(
                     Some(&mut *preview),
                     full_bridge_dirty,
                     start,
+                );
+            }
+            CatalogSessionEffect::ApplySystemShard { system_id, games } => {
+                let (replacement, launch_plans) = arcade_rows_from_shard(&system_id, &games);
+                *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
+                *full_bridge_dirty = true;
+                print_startup_event(
+                    start,
+                    "catalog_system_shard_ready",
+                    format!("system={system_id} games={}", games.len()),
                 );
             }
             CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => {

@@ -1054,6 +1054,14 @@ pub(super) enum CatalogWorkerMessage {
     SystemDiscovered {
         system_id: String,
     },
+    SystemShardReady {
+        system_id: String,
+        games: Vec<mister_magik_catalog::sharded_catalog::CatalogGame>,
+    },
+    SystemShardFailed {
+        system_id: String,
+        error: String,
+    },
     SearchIndexBuildStarted {
         text_index_token: usize,
         games: usize,

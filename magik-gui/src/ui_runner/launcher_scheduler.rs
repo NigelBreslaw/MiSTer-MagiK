@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use std::collections::BTreeSet;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
@@ -90,6 +91,14 @@ enum SearchIndexJobState {
     Running(mpsc::Receiver<CatalogWorkerMessage>),
 }
 
+enum SystemShardJobState {
+    Idle,
+    Running {
+        system_id: String,
+        receiver: mpsc::Receiver<CatalogWorkerMessage>,
+    },
+}
+
 enum MediaJobState {
     Idle,
     Running(MediaWorkerHandle),
@@ -101,6 +110,8 @@ pub(super) struct LauncherScheduler {
     search_index: SearchIndexJobState,
     search_index_generation: Arc<AtomicUsize>,
     search_index_allowed: Arc<AtomicBool>,
+    system_shard: SystemShardJobState,
+    system_shard_attempted: BTreeSet<String>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
@@ -112,6 +123,8 @@ impl LauncherScheduler {
             search_index: SearchIndexJobState::Idle,
             search_index_generation: Arc::new(AtomicUsize::new(0)),
             search_index_allowed: Arc::new(AtomicBool::new(false)),
+            system_shard: SystemShardJobState::Idle,
+            system_shard_attempted: BTreeSet::new(),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -124,10 +137,81 @@ impl LauncherScheduler {
     pub(super) fn catalog_messages_running(&self) -> bool {
         self.catalog_worker_running()
             || matches!(self.search_index, SearchIndexJobState::Running(_))
+            || matches!(self.system_shard, SystemShardJobState::Running { .. })
     }
 
     pub(super) fn search_index_running(&self) -> bool {
         matches!(self.search_index, SearchIndexJobState::Running(_))
+    }
+
+    pub(super) fn system_shard_loading(&self, system_id: &str) -> bool {
+        matches!(
+            &self.system_shard,
+            SystemShardJobState::Running {
+                system_id: active,
+                ..
+            } if active == system_id
+        )
+    }
+
+    pub(super) fn system_shard_attempted(&self, system_id: &str) -> bool {
+        self.system_shard_attempted.contains(system_id)
+    }
+
+    pub(super) fn start_system_shard_load(&mut self, system_id: String) {
+        if matches!(self.system_shard, SystemShardJobState::Running { .. }) {
+            return;
+        }
+        if !self.system_shard_attempted.insert(system_id.clone()) {
+            return;
+        }
+        let worker_system_id = system_id.clone();
+        let (tx, rx) = mpsc::channel();
+        self.system_shard = SystemShardJobState::Running {
+            system_id,
+            receiver: rx,
+        };
+        if std::thread::Builder::new()
+            .name("catalog-shard-load".to_string())
+            .spawn(move || {
+                use mister_magik_catalog::sharded_catalog::CatalogReader;
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
+                );
+                let storage =
+                    mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+                let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                    &storage,
+                    mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+                )
+                .and_then(|reader| {
+                    let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(
+                        &worker_system_id,
+                    )
+                    .map_err(|error| {
+                        mister_magik_catalog::sharded_catalog::CatalogError::new(
+                            "open-system",
+                            error.to_string(),
+                        )
+                    })?;
+                    reader.open_system(&parsed)
+                });
+                let message = match result {
+                    Ok(system) => CatalogWorkerMessage::SystemShardReady {
+                        system_id: worker_system_id,
+                        games: system.games().to_vec(),
+                    },
+                    Err(error) => CatalogWorkerMessage::SystemShardFailed {
+                        system_id: worker_system_id,
+                        error: error.to_string(),
+                    },
+                };
+                let _ = tx.send(message);
+            })
+            .is_err()
+        {
+            self.system_shard = SystemShardJobState::Idle;
+        }
     }
 
     pub(super) fn set_search_index_allowed(&self, allowed: bool) {
@@ -240,6 +324,22 @@ impl LauncherScheduler {
         }
         if search_disconnected {
             self.search_index = SearchIndexJobState::Idle;
+        }
+        let mut shard_disconnected = false;
+        if let SystemShardJobState::Running { receiver, .. } = &self.system_shard {
+            while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
+                match receiver.try_recv() {
+                    Ok(message) => out.push(message),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        shard_disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if shard_disconnected {
+            self.system_shard = SystemShardJobState::Idle;
         }
         disconnected
     }

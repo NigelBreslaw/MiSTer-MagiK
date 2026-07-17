@@ -15,6 +15,14 @@ instead of being mistaken for rich shards. V2 remains during the transition
 until lazy system hydration, production delta planning, and device parity are
 all proven; it is no longer retained because the shard row is lossy.
 
+When a rich V3 registry seeds Home, Arcade's mini-nav is opened with the
+registry and other systems remain unopened. Entering an unloaded collection
+schedules only that system navigation on the background catalog worker. Its
+rows and structured plans replace that system in the live catalog while all
+already-loaded systems remain intact. A failed shard is reported once and does
+not create a per-frame retry loop. V3-seeded validation does not preload the V2
+navigation.
+
 On a cold build, the builder scans the configured `_Arcade` collection first,
 writes a temporary rich navigation snapshot, and publishes it through the same
 acknowledged `CatalogReady` boundary as a complete catalog. The launcher can

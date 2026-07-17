@@ -497,6 +497,46 @@ impl ArcadeCatalog {
         self.system_game_view(system_id).iter().cloned().collect()
     }
 
+    pub fn replacing_system_games(
+        &self,
+        system_id: &str,
+        replacement: Vec<ArcadeGameEntry>,
+        replacement_plans: Vec<StructuredLaunchPlan>,
+    ) -> Self {
+        let mut games = self
+            .games
+            .iter()
+            .filter(|game| game.system_id.as_ref() != system_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        games.extend(replacement);
+        let mut systems = self.systems.clone();
+        if let Some(system) = systems.iter_mut().find(|system| system.id == system_id) {
+            system.count = games
+                .iter()
+                .filter(|game| game.system_id.as_ref() == system_id)
+                .count();
+        }
+        let retained_refs = games
+            .iter()
+            .map(|game| game.mra_path.clone())
+            .collect::<BTreeSet<_>>();
+        let mut launch_plans = self
+            .launch_plans_by_ref
+            .values()
+            .filter(|plan| retained_refs.contains(&plan.launch_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        launch_plans.extend(replacement_plans);
+        Self::new_with_deferred_text_indexes_and_platform_kinds(
+            self.root.clone(),
+            games,
+            systems,
+            launch_plans,
+            self.platform_kinds.as_ref().clone(),
+        )
+    }
+
     pub fn system_game_count(&self, system_id: &str) -> usize {
         self.system_game_indexes(system_id).len()
     }
@@ -1749,6 +1789,85 @@ pub fn system_title(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_one_system_keeps_other_rows_and_launch_plans() {
+        let old_plan = StructuredLaunchPlan {
+            launch_ref: "magik-plan:c64".into(),
+            title: "C64".into(),
+            system_id: "c64".into(),
+            core_path: "C64".into(),
+            payload_path: "/games/C64/old.d64".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+        let retained_plan = StructuredLaunchPlan {
+            launch_ref: "magik-plan:snes".into(),
+            title: "SNES".into(),
+            system_id: "snes".into(),
+            core_path: "SNES".into(),
+            payload_path: "/games/SNES/keep.sfc".into(),
+            mount_kind: "load-file".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+        let game = |title: &str, launch_ref: &str, system_id: &str| ArcadeGameEntry {
+            title: title.into(),
+            mra_path: launch_ref.into(),
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
+            system_id: system_id.into(),
+            year: None,
+            manufacturer: "".into(),
+            players: None,
+            control: "".into(),
+            is_new: false,
+        };
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/fixture"),
+            vec![
+                game("Old", "magik-plan:c64", "c64"),
+                game("Keep", "magik-plan:snes", "snes"),
+            ],
+            vec![
+                GameSystemEntry {
+                    id: "c64".into(),
+                    title: "C64".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "snes".into(),
+                    title: "SNES".into(),
+                    count: 1,
+                },
+            ],
+            vec![old_plan, retained_plan.clone()],
+        );
+        let replacement_plan = StructuredLaunchPlan {
+            launch_ref: "magik-plan:c64-new".into(),
+            payload_path: "/games/C64/new.d64".into(),
+            ..retained_plan.clone()
+        };
+
+        let replaced = catalog.replacing_system_games(
+            "c64",
+            vec![game("New", "magik-plan:c64-new", "c64")],
+            vec![replacement_plan],
+        );
+
+        assert_eq!(replaced.system_game_count("c64"), 1);
+        assert_eq!(replaced.system_game_count("snes"), 1);
+        assert!(matches!(
+            replaced.launch_target_for_ref("magik-plan:c64-new"),
+            LaunchTarget::Structured(_)
+        ));
+        assert!(matches!(
+            replaced.launch_target_for_ref("magik-plan:snes"),
+            LaunchTarget::Structured(_)
+        ));
+    }
     use crate::test_support::arcade_game;
 
     fn game(

@@ -63,6 +63,10 @@ pub(super) enum CatalogSessionEffect {
         system_id: String,
         media_gate: Option<MediaInteractionGate>,
     },
+    ApplySystemShard {
+        system_id: String,
+        games: Vec<mister_magik_catalog::sharded_catalog::CatalogGame>,
+    },
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
     Lifecycle(LauncherLifecycleInput),
@@ -307,6 +311,15 @@ impl LauncherCatalogSession {
                     system_id,
                     media_gate: context.media_gate,
                 });
+            }
+            CatalogWorkerMessage::SystemShardReady { system_id, games } => {
+                effects.push(CatalogSessionEffect::ApplySystemShard { system_id, games });
+            }
+            CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
+                effects.event(
+                    "catalog_system_shard_failed",
+                    format!("system={system_id} error={error}"),
+                );
             }
             CatalogWorkerMessage::SearchIndexBuildStarted {
                 text_index_token,
