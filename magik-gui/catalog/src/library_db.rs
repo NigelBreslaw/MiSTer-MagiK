@@ -271,6 +271,13 @@ impl LibraryScanArtifact {
                 &self.scan.installed_cores,
                 &self.scan.game_dir_facts,
             ),
+            stats: crate::catalog_state::CatalogStateStats {
+                normal_files: self.stats.normal_files,
+                containers: self.stats.containers,
+                entries: self.stats.entries,
+                audit_rows: self.stats.audit_rows,
+                discoveries: self.stats.discoveries,
+            },
         }
     }
 
@@ -1042,6 +1049,46 @@ pub fn default_sqlite_catalog_stamp_check() -> Result<CatalogStampCheckSummary, 
 
 pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSummary, String> {
     sqlite_cached_summary(&default_sqlite_path(), scan_us)
+}
+
+pub fn default_sharded_cached_summary(scan_us: u64) -> Result<LibraryRefreshSummary, String> {
+    let storage = crate::catalog_config::default_sharded_catalog_path();
+    sharded_cached_summary(&storage, scan_us)
+}
+
+pub(crate) fn sharded_cached_summary(
+    storage: &Path,
+    scan_us: u64,
+) -> Result<LibraryRefreshSummary, String> {
+    let state_path = crate::catalog_state::path_for_root(storage);
+    let state = crate::catalog_state::read(&state_path)?;
+    let manifest = crate::shard_registry::read_latest_manifest_lazy(
+        storage,
+        crate::shard_registry::production_registry_limits(),
+    )
+    .map_err(|error| format!("read cached V3 manifest: {error}"))?;
+    let shard_bytes = manifest.systems.iter().try_fold(0u64, |total, system| {
+        total
+            .checked_add(system.active.sqlite_bytes)
+            .and_then(|value| value.checked_add(system.active.navigation_bytes))
+            .ok_or_else(|| "cached V3 byte count overflow".to_string())
+    })?;
+    let state_bytes = std::fs::metadata(&state_path)
+        .map_err(|error| format!("stat cached V3 state: {error}"))?
+        .len();
+    Ok(LibraryRefreshSummary {
+        skipped: true,
+        scan_us,
+        discover_us: 0,
+        classify_us: 0,
+        import_us: 0,
+        bytes: shard_bytes.saturating_add(state_bytes),
+        normal_files: state.stats.normal_files,
+        containers: state.stats.containers,
+        entries: state.stats.entries,
+        audit_rows: state.stats.audit_rows,
+        discoveries: state.stats.discoveries,
+    })
 }
 
 pub(crate) fn rebuild_sqlite_database(

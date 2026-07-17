@@ -17,7 +17,9 @@ all proven; it is no longer retained because the shard row is lossy.
 
 Warm change detection is no longer owned by V2. The schema-one
 `catalog-v3/state/catalog-state.sqlite3` stores only the canonical catalog stamp
-and discovery checkpoint, with no games or UI projections. New publications
+and discovery checkpoint plus compact build counters, with no games or UI
+projections. Unchanged-build summaries derive their byte count from the active
+V3 manifest and therefore never open V2. New publications
 replace it atomically after the V3 manifest is durable. An existing installation
 may migrate those two validated records once from `library.sqlite3` when the V3
 state file is absent; once present, corrupt or unsupported V3 state fails closed

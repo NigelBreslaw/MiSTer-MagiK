@@ -31,6 +31,19 @@ pub struct RegistryLimits {
     pub shard: SystemShardLimits,
 }
 
+pub fn production_registry_limits() -> RegistryLimits {
+    RegistryLimits {
+        max_manifest_bytes: 8 * 1024 * 1024,
+        max_systems: 4096,
+        shard: SystemShardLimits {
+            max_sqlite_bytes: 8 * 1024 * 1024 * 1024,
+            max_navigation_compressed_bytes: 512 * 1024 * 1024,
+            max_navigation_decoded_bytes: 512 * 1024 * 1024,
+            max_games: 2_000_000,
+        },
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogManifest {
     pub generation: u64,

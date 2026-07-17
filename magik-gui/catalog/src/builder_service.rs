@@ -488,7 +488,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let decision = if check.unchanged {
             if v3_repair == "current" {
                 CheckDecision::Unchanged(BuilderSummary::from(
-                    library_db::default_sqlite_cached_summary(check.check_us)
+                    library_db::default_sharded_cached_summary(check.check_us)
                         .map_err(|error| StageFailure::new("summary", error))?,
                 ))
             } else {

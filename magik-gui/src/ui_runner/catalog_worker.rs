@@ -659,7 +659,7 @@ pub(super) fn start_library_catalog_worker(
                             ),
                         });
                         if check.unchanged {
-                            match library_db::default_sqlite_cached_summary(check.check_us) {
+                            match library_db::default_sharded_cached_summary(check.check_us) {
                                 Ok(summary) => {
                                     let _ = tx.send(CatalogWorkerMessage::Unchanged { summary });
                                     repair_navigation_projection_cache_after_ready(

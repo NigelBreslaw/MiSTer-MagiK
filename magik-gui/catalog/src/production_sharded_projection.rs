@@ -14,7 +14,7 @@ use crate::shard_registry::{
     manifest_slots_present, read_latest_manifest_lazy, ManifestSystem, RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
-use crate::system_shard::{open_system_shard, SystemGame, SystemLaunchPlan, SystemShardLimits};
+use crate::system_shard::{open_system_shard, SystemGame, SystemLaunchPlan};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -43,16 +43,7 @@ pub struct ProductionProjectionOutcome {
 }
 
 pub fn production_registry_limits() -> RegistryLimits {
-    RegistryLimits {
-        max_manifest_bytes: 8 * 1024 * 1024,
-        max_systems: 4096,
-        shard: SystemShardLimits {
-            max_sqlite_bytes: 8 * 1024 * 1024 * 1024,
-            max_navigation_compressed_bytes: 512 * 1024 * 1024,
-            max_navigation_decoded_bytes: 512 * 1024 * 1024,
-            max_games: 2_000_000,
-        },
-    }
+    crate::shard_registry::production_registry_limits()
 }
 
 pub fn publish_production_projection(
@@ -565,6 +556,11 @@ mod tests {
             checkpoint: crate::catalog_checkpoint::CatalogDiscoveryCheckpoint::from_lines(vec![
                 "fixture".to_string(),
             ]),
+            stats: crate::catalog_state::CatalogStateStats {
+                normal_files: 1,
+                discoveries: 1,
+                ..crate::catalog_state::CatalogStateStats::default()
+            },
         };
         let fingerprint = state.stamp.fingerprint_hex();
         let catalog = ArcadeCatalog::new(
@@ -583,9 +579,16 @@ mod tests {
         crate::catalog_state::write(&crate::catalog_state::path_for_root(&storage), &state)
             .unwrap();
         validate_production_binding(&storage, outcome.generation).unwrap();
+        let summary = crate::library_db::sharded_cached_summary(&storage, 123).unwrap();
+        assert!(summary.skipped);
+        assert_eq!(summary.scan_us, 123);
+        assert_eq!(summary.normal_files, 1);
+        assert_eq!(summary.discoveries, 1);
+        assert!(summary.bytes > 0);
         let different_state = crate::catalog_state::CatalogState {
             stamp: crate::catalog_stamp::CatalogStamp::from_lines(vec!["different".to_string()]),
             checkpoint: state.checkpoint,
+            stats: state.stats,
         };
         crate::catalog_state::write(
             &crate::catalog_state::path_for_root(&storage),

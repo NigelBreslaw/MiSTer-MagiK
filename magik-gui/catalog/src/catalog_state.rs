@@ -20,6 +20,16 @@ const STATE_FILE_NAME: &str = "catalog-state.sqlite3";
 pub struct CatalogState {
     pub stamp: CatalogStamp,
     pub checkpoint: CatalogDiscoveryCheckpoint,
+    pub stats: CatalogStateStats,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatalogStateStats {
+    pub normal_files: usize,
+    pub containers: usize,
+    pub entries: usize,
+    pub audit_rows: usize,
+    pub discoveries: usize,
 }
 
 pub fn default_path() -> PathBuf {
@@ -58,7 +68,34 @@ fn read_from_connection(conn: &Connection) -> Result<CatalogState, String> {
         .ok_or_else(|| "catalog state is missing its stamp".to_string())?;
     let checkpoint = catalog_store::read_catalog_discovery_checkpoint(conn)?
         .ok_or_else(|| "catalog state is missing its discovery checkpoint".to_string())?;
-    Ok(CatalogState { stamp, checkpoint })
+    let stored_stats = conn
+        .query_row(
+            "SELECT normal_files,containers,entries,audit_rows,discoveries
+             FROM catalog_state_stats WHERE id=0",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .map_err(|error| format!("read catalog state stats: {error}"))?;
+    let stats = CatalogStateStats {
+        normal_files: stored_stat(stored_stats.0, "normal_files")?,
+        containers: stored_stat(stored_stats.1, "containers")?,
+        entries: stored_stat(stored_stats.2, "entries")?,
+        audit_rows: stored_stat(stored_stats.3, "audit_rows")?,
+        discoveries: stored_stat(stored_stats.4, "discoveries")?,
+    };
+    Ok(CatalogState {
+        stamp,
+        checkpoint,
+        stats,
+    })
 }
 
 pub fn read_legacy(path: &Path) -> Result<CatalogState, String> {
@@ -68,7 +105,31 @@ pub fn read_legacy(path: &Path) -> Result<CatalogState, String> {
         .ok_or_else(|| "legacy catalog is missing its stamp".to_string())?;
     let checkpoint = catalog_store::read_catalog_discovery_checkpoint(&conn)?
         .ok_or_else(|| "legacy catalog is missing its discovery checkpoint".to_string())?;
-    Ok(CatalogState { stamp, checkpoint })
+    let stats = CatalogStateStats {
+        normal_files: read_legacy_stat(&conn, "normal_files")?,
+        containers: read_legacy_stat(&conn, "containers")?,
+        entries: read_legacy_stat(&conn, "entries")?,
+        audit_rows: read_legacy_stat(&conn, "audit_rows")?,
+        discoveries: read_legacy_stat(&conn, "discoveries")?,
+    };
+    Ok(CatalogState {
+        stamp,
+        checkpoint,
+        stats,
+    })
+}
+
+fn read_legacy_stat(conn: &Connection, key: &str) -> Result<usize, String> {
+    let value = conn
+        .query_row("SELECT value FROM meta WHERE key=?1", [key], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("read legacy catalog stat {key}: {error}"))?;
+    stored_stat(value, key)
+}
+
+fn stored_stat(value: i64, key: &str) -> Result<usize, String> {
+    usize::try_from(value).map_err(|_| format!("catalog stat {key} is out of range"))
 }
 
 pub fn write(path: &Path, state: &CatalogState) -> Result<(), String> {
@@ -77,6 +138,18 @@ pub fn write(path: &Path, state: &CatalogState) -> Result<(), String> {
             .map_err(|error| format!("create catalog state dir {}: {error}", parent.display()))?;
     }
     let temp_path = path.with_file_name(format!(".{STATE_FILE_NAME}.tmp"));
+    let stored_stats = [
+        ("normal_files", state.stats.normal_files),
+        ("containers", state.stats.containers),
+        ("entries", state.stats.entries),
+        ("audit_rows", state.stats.audit_rows),
+        ("discoveries", state.stats.discoveries),
+    ]
+    .map(|(name, value)| {
+        i64::try_from(value).map_err(|_| format!("catalog stat {name} exceeds SQLite integer"))
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
     let result = (|| {
         let _ = std::fs::remove_file(&temp_path);
         let conn = Connection::open(&temp_path)
@@ -87,6 +160,14 @@ pub fn write(path: &Path, state: &CatalogState) -> Result<(), String> {
              CREATE TABLE catalog_state_meta (
                  key TEXT PRIMARY KEY,
                  value INTEGER NOT NULL
+             ) WITHOUT ROWID;
+             CREATE TABLE catalog_state_stats (
+                 id INTEGER PRIMARY KEY CHECK (id=0),
+                 normal_files INTEGER NOT NULL,
+                 containers INTEGER NOT NULL,
+                 entries INTEGER NOT NULL,
+                 audit_rows INTEGER NOT NULL,
+                 discoveries INTEGER NOT NULL
              ) WITHOUT ROWID;",
         )
         .map_err(|error| format!("create catalog state schema: {error}"))?;
@@ -98,6 +179,19 @@ pub fn write(path: &Path, state: &CatalogState) -> Result<(), String> {
         .map_err(|error| format!("write catalog state schema: {error}"))?;
         catalog_store::write_catalog_stamp(&conn, &state.stamp)?;
         catalog_store::write_catalog_discovery_checkpoint(&conn, &state.checkpoint)?;
+        conn.execute(
+            "INSERT INTO catalog_state_stats(
+                 id,normal_files,containers,entries,audit_rows,discoveries
+             ) VALUES (0,?1,?2,?3,?4,?5)",
+            params![
+                stored_stats[0],
+                stored_stats[1],
+                stored_stats[2],
+                stored_stats[3],
+                stored_stats[4],
+            ],
+        )
+        .map_err(|error| format!("write catalog state stats: {error}"))?;
         conn.close()
             .map_err(|(_, error)| format!("close catalog state: {error}"))?;
         std::fs::File::open(&temp_path)
@@ -139,6 +233,10 @@ mod tests {
         CatalogState {
             stamp: CatalogStamp::from_lines(vec![format!("stamp-{line}")]),
             checkpoint: CatalogDiscoveryCheckpoint::from_lines(vec![format!("checkpoint-{line}")]),
+            stats: CatalogStateStats {
+                discoveries: 42,
+                ..CatalogStateStats::default()
+            },
         }
     }
 
