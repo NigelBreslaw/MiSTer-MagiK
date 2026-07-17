@@ -183,30 +183,36 @@ pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScan
         )
         .map_err(|error| format!("write scanner cache schema: {error}"))?;
         if let Some(history) = &state.discovery_history {
+            let mut statement = tx
+                .prepare("INSERT INTO games(game_id,discovered_at_unix) VALUES (?1,?2)")
+                .map_err(|error| format!("prepare discovery history insert: {error}"))?;
             for (game_id, discovered_at) in &history.by_game_id {
-                tx.execute(
-                    "INSERT INTO games(game_id,discovered_at_unix) VALUES (?1,?2)",
-                    params![game_id, discovered_at],
-                )
-                .map_err(|error| format!("write discovery history: {error}"))?;
+                statement
+                    .execute(params![game_id, discovered_at])
+                    .map_err(|error| format!("write discovery history: {error}"))?;
             }
         }
-        for (key, software_name) in &state.software_hash_cache.entries {
-            let size = i64::try_from(key.size)
-                .map_err(|_| "software hash cache size exceeds SQLite integer".to_string())?;
-            tx.execute(
+        {
+            let mut statement = tx
+                .prepare(
                 "INSERT INTO software_hash_cache(
                      list_name,file_path,size,mtime_secs,software_name
                  ) VALUES (?1,?2,?3,?4,?5)",
-                params![
-                    key.list_name,
-                    key.file_path,
-                    size,
-                    key.mtime_secs,
-                    software_name
-                ],
             )
-            .map_err(|error| format!("write software hash cache: {error}"))?;
+                .map_err(|error| format!("prepare software hash cache insert: {error}"))?;
+            for (key, software_name) in &state.software_hash_cache.entries {
+                let size = i64::try_from(key.size)
+                    .map_err(|_| "software hash cache size exceeds SQLite integer".to_string())?;
+                statement
+                    .execute(params![
+                        key.list_name,
+                        key.file_path,
+                        size,
+                        key.mtime_secs,
+                        software_name
+                    ])
+                    .map_err(|error| format!("write software hash cache: {error}"))?;
+            }
         }
         tx.commit()
             .map_err(|error| format!("commit scanner cache: {error}"))?;
