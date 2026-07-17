@@ -15,6 +15,15 @@ instead of being mistaken for rich shards. V2 remains during the transition
 until lazy system hydration, source-level delta scanning, and device parity are
 all proven; it is no longer retained because the shard row is lossy.
 
+Warm change detection is no longer owned by V2. The schema-one
+`catalog-v3/state/catalog-state.sqlite3` stores only the canonical catalog stamp
+and discovery checkpoint, with no games or UI projections. New publications
+replace it atomically after the V3 manifest is durable. An existing installation
+may migrate those two validated records once from `library.sqlite3` when the V3
+state file is absent; once present, corrupt or unsupported V3 state fails closed
+and never falls back to V2. This migration bridge is temporary and must be
+removed with the final V2 deletion.
+
 The schema-one binding records the canonical catalog fingerprint as well as the
 V2 SQLite file identity. If an interrupted deployment or build replaces V2
 after V3 was published, an unchanged stamp check rebinds the existing V3
@@ -81,6 +90,8 @@ publication still pauses heavy work until the launcher has applied it.
   resolver. It owns stable system IDs, display titles, platform kinds, launcher
   sections/families, aliases, and ordering.
 - `magik-gui/catalog/src/catalog_stamp.rs` owns the warm validation stamp.
+- `magik-gui/catalog/src/catalog_state.rs` owns schema-one V3 scan-state
+  persistence and one-time V2 migration reads.
 - `magik-gui/catalog/src/catalog_store.rs` owns stamp persistence helpers.
 - `magik-gui/catalog/src/catalog_build_record.rs` owns the completed-build
   duration sidecar used by the Info screen.

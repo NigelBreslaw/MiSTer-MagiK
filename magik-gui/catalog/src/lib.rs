@@ -22,6 +22,7 @@ mod catalog_progress;
 mod catalog_projection;
 mod catalog_scan;
 pub mod catalog_stamp;
+pub mod catalog_state;
 pub mod catalog_store;
 pub mod catalog_summary;
 #[cfg(feature = "builder")]

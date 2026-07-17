@@ -793,6 +793,7 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<BuilderSummary, String> {
         let catalog_fingerprint = prepared.artifact.stamp().fingerprint_hex();
+        let catalog_state = prepared.artifact.catalog_state();
         let summary = prepared
             .artifact
             .save_default_sqlite_with_catalog_projection(&prepared.catalog, Some(progress))
@@ -806,15 +807,18 @@ impl BuilderBackend for SystemBuilderBackend {
             &catalog_fingerprint,
             crate::production_sharded_projection::production_registry_limits(),
         ) {
-            Ok(outcome) => crate::catalog_logln!(
-                "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
-                outcome.generation,
-                outcome.systems,
-                outcome.games,
-                outcome.rebuilt_systems,
-                outcome.removed_systems,
-                v3_started.elapsed().as_micros()
-            ),
+            Ok(outcome) => {
+                crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
+                crate::catalog_logln!(
+                    "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
+                    outcome.generation,
+                    outcome.systems,
+                    outcome.games,
+                    outcome.rebuilt_systems,
+                    outcome.removed_systems,
+                    v3_started.elapsed().as_micros()
+                );
+            }
             Err(error) => crate::catalog_errln!(
                 "catalog_v3_projection_tsv\tstatus=failed\telapsed_us={}\terror={}",
                 v3_started.elapsed().as_micros(),

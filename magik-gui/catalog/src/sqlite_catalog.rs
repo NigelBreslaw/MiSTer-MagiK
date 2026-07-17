@@ -1353,11 +1353,29 @@ pub(crate) fn load_joined_launcher_catalog(
 pub(crate) fn sqlite_catalog_stamp_check(
     cfg: &BenchConfig,
 ) -> Result<CatalogStampCheckSummary, String> {
+    catalog_stamp_check_at(cfg, &cfg.sqlite_path, false)
+}
+
+pub(crate) fn catalog_state_stamp_check(
+    cfg: &BenchConfig,
+    state_path: &Path,
+) -> Result<CatalogStampCheckSummary, String> {
+    catalog_stamp_check_at(cfg, state_path, true)
+}
+
+fn catalog_stamp_check_at(
+    cfg: &BenchConfig,
+    state_path: &Path,
+    validate_state_schema: bool,
+) -> Result<CatalogStampCheckSummary, String> {
     let started = Instant::now();
     let open_t = Instant::now();
-    let conn = open_sqlite_read_only(&cfg.sqlite_path)
-        .map_err(|e| format!("open catalog stamp db {}: {e}", cfg.sqlite_path.display()))?;
+    let conn = open_sqlite_read_only(state_path)
+        .map_err(|e| format!("open catalog stamp db {}: {e}", state_path.display()))?;
     let open_us = open_t.elapsed().as_micros() as u64;
+    if validate_state_schema {
+        crate::catalog_state::validate_connection(&conn, state_path)?;
+    }
     let read_t = Instant::now();
     let stored = catalog_store::read_catalog_stamp(&conn)?;
     let read_us = read_t.elapsed().as_micros() as u64;
@@ -4533,6 +4551,31 @@ mod tests {
             changed.stored_fingerprint,
             Some(changed.current_fingerprint)
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_state_stamp_check_does_not_need_the_library_database() {
+        let root = unique_temp_dir("catalog-state-stamp-check");
+        let db = root.join("library.sqlite3");
+        let state_path = root.join("catalog-v3/state/catalog-state.sqlite3");
+        let games = root.join("games");
+        std::fs::create_dir_all(games.join("NES")).expect("create system dir");
+        let cfg = BenchConfig {
+            roots: vec![games.display().to_string()],
+            sqlite_path: db.clone(),
+        };
+        let artifact = scan_library_artifact(&cfg, None);
+        save_scan_artifact_to_sqlite(&cfg, artifact, None).expect("save artifact");
+        let state = crate::catalog_state::read_legacy(&db).expect("read migration state");
+        crate::catalog_state::write(&state_path, &state).expect("write catalog state");
+        std::fs::remove_file(&db).expect("remove legacy library database");
+
+        let unchanged = catalog_state_stamp_check(&cfg, &state_path)
+            .expect("check state without legacy database");
+
+        assert!(unchanged.unchanged);
+        assert!(!db.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
