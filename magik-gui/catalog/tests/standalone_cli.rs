@@ -125,3 +125,57 @@ fn catalog_lab_bootstraps_and_reopens_a_fixture_without_magik() {
         .contains("generation=1\tgames=2\tpublished=0"));
     std::fs::remove_dir_all(temp).unwrap();
 }
+
+#[cfg(feature = "builder")]
+#[test]
+fn production_builder_publishes_v3_without_creating_v2_artifacts() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "mister-magik-v3-only-builder-{}",
+        std::process::id()
+    ));
+    let source = temp.join("source");
+    let storage = temp.join("catalog-v3");
+    let legacy = temp.join("library.sqlite3");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir(&temp).unwrap();
+    let fixture = Command::new(env!("CARGO_BIN_EXE_catalog-lab"))
+        .args([
+            "fixture",
+            source.to_str().unwrap(),
+            "--arcade-games",
+            "1",
+            "--small-system-games",
+            "2",
+            "--large-system-games",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(fixture.status.success(), "{:?}", fixture);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mister-magik-catalog-builder"))
+        .arg("build")
+        .env("MISTER_CATALOG_BUILDER_LOCK", temp.join("builder.lock"))
+        .env("MISTER_CATALOG_READY_SNAPSHOT", temp.join("ready.nav.lz4b"))
+        .env("MISTER_LIBRARY_ROOTS", source.display().to_string())
+        .env("MISTER_SHARDED_CATALOG_DIR", &storage)
+        .env("MISTER_LIBRARY_SQLITE", &legacy)
+        .env("MISTER_MAME_SQLITE", temp.join("missing-mame.sqlite3"))
+        .env("MISTER_HBMAME_SQLITE", temp.join("missing-hbmame.sqlite3"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(storage.join("state/catalog-state.sqlite3").is_file());
+    assert!(storage.join("state/scanner-cache.sqlite3").is_file());
+    assert!(!legacy.exists());
+    assert!(!temp.join("library.summary.json").exists());
+    assert!(!temp.join("library.nav.lz4b").exists());
+    std::fs::remove_dir_all(temp).unwrap();
+}

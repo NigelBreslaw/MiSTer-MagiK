@@ -179,12 +179,6 @@ impl LauncherCatalogSession {
         effects
     }
 
-    pub(super) fn deferred_worker_hydrates_navigation(&self) -> bool {
-        self.deferred_worker.as_ref().is_some_and(|worker| {
-            worker.initial_cache == CatalogWorkerInitialCache::ProbeNavigationThenSqlite
-        })
-    }
-
     pub(super) fn mark_refresh_done(&mut self) {
         self.refresh_done = true;
     }

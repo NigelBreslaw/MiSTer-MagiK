@@ -82,12 +82,28 @@ pub(super) fn start_library_catalog_worker(
                 }
             };
             let mut cache_state = CatalogCacheState::Missing;
+            #[cfg(test)]
             let mut cached_catalog_published = false;
+            #[cfg(not(test))]
+            let cached_catalog_published = false;
+            #[cfg(test)]
             let mut projection_repair_allowed = true;
-            let mut projection_repair_catalog: Option<(ArcadeCatalog, catalog_stamp::CatalogStamp)> =
-                None;
+            #[cfg(not(test))]
+            let projection_repair_allowed = true;
+            #[cfg(test)]
+            let mut projection_repair_catalog: Option<(
+                ArcadeCatalog,
+                catalog_stamp::CatalogStamp,
+            )> = None;
+            #[cfg(not(test))]
+            let projection_repair_catalog: Option<(
+                ArcadeCatalog,
+                catalog_stamp::CatalogStamp,
+            )> = None;
+            #[cfg(test)]
             let mut startup_projection_catalog: Option<ArcadeCatalog> = None;
             match initial_cache {
+                #[cfg(test)]
                 CatalogWorkerInitialCache::ProbeNavigationThenSqlite => {
                     match load_navigation_projection_cache(&root) {
                         Ok(Some(loaded)) => {
@@ -294,6 +310,7 @@ pub(super) fn start_library_catalog_worker(
                         }
                     }
                 }
+                #[cfg(test)]
                 CatalogWorkerInitialCache::ProbeSqlite => {
                     library_db::record_catalog_worker_cache_load();
                     match library_db::load_arcade_catalog_from_materialized_sqlite(&root) {
@@ -363,6 +380,7 @@ pub(super) fn start_library_catalog_worker(
                         detail: "source=ui_probe state=missing".to_string(),
                     });
                 }
+                #[cfg(test)]
                 CatalogWorkerInitialCache::AlreadyProbedEmpty => {
                     cache_state = CatalogCacheState::Empty;
                     let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -410,12 +428,6 @@ pub(super) fn start_library_catalog_worker(
             match plan {
                 CatalogWorkerPlan::LoadOnly => {
                     let _ = tx.send(CatalogWorkerMessage::Done);
-                    repair_navigation_projection_cache_after_ready(
-                        &root,
-                        projection_repair_catalog.as_ref(),
-                        projection_repair_allowed,
-                        &tx,
-                    );
                     return;
                 }
                 CatalogWorkerPlan::CheckStamp => {}
@@ -953,10 +965,13 @@ impl CatalogExecutionMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CatalogWorkerInitialCache {
+    #[cfg(test)]
     ProbeNavigationThenSqlite,
+    #[cfg(test)]
     ProbeSqlite,
     AlreadyLoadedReady,
     AlreadyProbedMissing,
+    #[cfg(test)]
     AlreadyProbedEmpty,
 }
 

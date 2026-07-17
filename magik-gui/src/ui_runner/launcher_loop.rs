@@ -19,6 +19,7 @@ use super::*;
 use crate::input_state::PadState;
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
+#[cfg(test)]
 use mister_magik_catalog::catalog_summary;
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{Read, Write};
@@ -999,6 +1000,7 @@ fn catalog_background_nav_motion_active(nav: &LauncherNav) -> bool {
         || (nav.arcade_filter.drawer_open && nav.arcade_filter.is_scroll_active())
 }
 
+#[cfg(test)]
 fn catalog_from_summary(
     root: &str,
     summary: &catalog_summary::CatalogSummaryProjection,
@@ -1026,6 +1028,7 @@ fn catalog_from_summary(
     )
 }
 
+#[cfg(test)]
 fn catalog_from_sharded_registry_and_summary(
     root: &str,
     sharded: ArcadeCatalog,
@@ -1203,10 +1206,12 @@ fn arcade_rows_from_shard(
     (games, launch_plans)
 }
 
+#[cfg(test)]
 fn legacy_summary_seed_needed(capsule_ready: bool, sharded_ready: bool) -> bool {
     !capsule_ready && !sharded_ready
 }
 
+#[cfg(test)]
 fn read_catalog_summary_seed(
     sqlite_path: &Path,
     summary_path: &Path,
@@ -1342,6 +1347,7 @@ fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) ->
     !(catalog_ready && source == CatalogSource::NavigationProjection)
 }
 
+#[cfg(test)]
 fn catalog_summary_seed_matches_sqlite(
     sqlite_path: &Path,
     summary: &catalog_summary::CatalogSummaryProjection,
@@ -1611,16 +1617,11 @@ pub(super) fn run_launcher_loop(
     let sharded_catalog_fingerprint = sharded_seed
         .as_ref()
         .map(|seed| seed.catalog_fingerprint.clone());
-    let summary_seed: Option<catalog_summary::CatalogSummaryProjection> = None;
     if let Some(seed) = sharded_seed {
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = sharded_catalog_fingerprint.or_else(|| {
-        summary_seed
-            .as_ref()
-            .map(|summary| summary.catalog_stamp_fingerprint.clone())
-    });
+    let initial_catalog_fingerprint = sharded_catalog_fingerprint;
     let mut catalog_generation = CatalogGenerationState {
         current: initial_catalog_fingerprint.clone(),
         durable: initial_catalog_fingerprint,
@@ -1706,65 +1707,6 @@ pub(super) fn run_launcher_loop(
                 );
             }
         } else {
-            catalog_session.mark_refresh_done();
-        }
-    } else if let Some(summary) = summary_seed.as_ref() {
-        catalog = catalog_from_summary(&arcade_root, &summary);
-        catalog_ready = true;
-        startup_ready_catalog_source = CatalogSource::SummaryProjection;
-        catalog_session.note_summary_seed_ready();
-        media_session.request_catalog_seed();
-        catalog_version = catalog_version.wrapping_add(1);
-        let return_catalog_hydration_needed = startup_return_requested;
-        let request = summary_seed_catalog_worker_request(
-            catalog_refresh_policy,
-            deferred_library_rebuild,
-            return_catalog_hydration_needed,
-        );
-        if let Some(request) = request {
-            let initial_cache =
-                summary_seed_catalog_worker_initial_cache(request, return_catalog_hydration_needed);
-            if summary_seed_catalog_worker_starts_immediately(
-                request,
-                return_catalog_hydration_needed,
-            ) && catalog_publication_test.catalog_worker_allowed()
-            {
-                let execution_mode = catalog_hydration_execution_mode(request);
-                print_startup_event(start, "catalog_worker_start", &arcade_root);
-                scheduler.start_catalog_worker(
-                    arcade_root.clone(),
-                    request,
-                    initial_cache,
-                    execution_mode,
-                );
-            } else {
-                let delay = catalog_background_validation_delay();
-                print_startup_event(
-                    start,
-                    "catalog_worker_deferred",
-                    format!(
-                        "root={} request={} delay_ms={} reason=summary_hydration",
-                        arcade_root,
-                        request.label(),
-                        delay.as_millis()
-                    ),
-                );
-                catalog_session.defer_catalog_worker(
-                    arcade_root.clone(),
-                    request,
-                    initial_cache,
-                    CatalogExecutionMode::BackgroundInteractive,
-                );
-            }
-        } else {
-            print_startup_event(
-                start,
-                "catalog_refresh_decision",
-                format!(
-                    "cache_state=summary refresh_policy={} background_validation=false plan=load_only",
-                    catalog_refresh_policy.label()
-                ),
-            );
             catalog_session.mark_refresh_done();
         }
     } else {
@@ -2172,7 +2114,7 @@ pub(super) fn run_launcher_loop(
             catalog_ready,
             frame_accounting.first_visible_copy_done(),
             startup_return_waiting_for_catalog,
-            catalog_background_allowed || catalog_session.deferred_worker_hydrates_navigation(),
+            catalog_background_allowed,
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
         );
         if let Some(worker) = catalog_session.maybe_start_deferred_worker(
@@ -4325,8 +4267,8 @@ fn apply_lifecycle_effects(
                 print_startup_event(start, "catalog_retry_started", &root);
                 scheduler.start_catalog_worker(
                     root,
-                    CatalogWorkerRequest::StrictLoad,
-                    CatalogWorkerInitialCache::ProbeSqlite,
+                    CatalogWorkerRequest::ForceBuild,
+                    CatalogWorkerInitialCache::AlreadyProbedMissing,
                     CatalogExecutionMode::ForegroundExclusive,
                 );
             }
@@ -4969,19 +4911,10 @@ fn summary_seed_catalog_worker_starts_immediately(
 }
 
 fn summary_seed_catalog_worker_initial_cache(
-    request: CatalogWorkerRequest,
-    return_catalog_hydration_needed: bool,
+    _request: CatalogWorkerRequest,
+    _return_catalog_hydration_needed: bool,
 ) -> CatalogWorkerInitialCache {
-    if request == CatalogWorkerRequest::ForceBuild {
-        // The compact seed is already usable. Loading the old 50k+ row
-        // navigation and SQLite projections before replacing them delays the
-        // rebuild, duplicates memory, and competes with the launcher for I/O.
-        CatalogWorkerInitialCache::AlreadyLoadedReady
-    } else if return_catalog_hydration_needed || request != CatalogWorkerRequest::LoadOnly {
-        CatalogWorkerInitialCache::ProbeNavigationThenSqlite
-    } else {
-        CatalogWorkerInitialCache::AlreadyLoadedReady
-    }
+    CatalogWorkerInitialCache::AlreadyLoadedReady
 }
 
 fn launcher_bench_initial_preview_ready(
