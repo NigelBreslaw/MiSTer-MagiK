@@ -6,16 +6,10 @@ import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
     in property <string> detail;
-    property <bool> dot-visible: true;
+    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
 
     alignment: center;
     spacing: 2px;
-
-    Timer {
-        interval: 500ms;
-        running: true;
-        triggered => { root.dot-visible = !root.dot-visible; }
-    }
 
     HorizontalLayout {
         alignment: center;

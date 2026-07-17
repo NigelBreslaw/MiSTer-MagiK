@@ -146,13 +146,7 @@ export component StartupSplash inherits Rectangle {
 
 export component BackgroundScanBadge inherits Rectangle {
     property <int> s: MisterUi.scale;
-    property <bool> dot-visible: true;
-
-    Timer {
-        interval: 500ms;
-        running: true;
-        triggered => { root.dot-visible = !root.dot-visible; }
-    }
+    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
 
     width: t.width + 20px;
     height: 28px * s;
