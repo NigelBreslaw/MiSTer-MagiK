@@ -26,7 +26,7 @@ all = "deny"
 
 [dependencies]
 libc = "0.2"
-lz4_flex = "0.13.1"
+lz4_flex = "0.14.0"
 quick-xml = "0.41"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "functions", "modern_sqlite"] }
 serde = { version = "1", features = ["derive"] }
