@@ -4,20 +4,53 @@
 import { MisterUi } from "../mister_window.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
+component ScanningSubtitle inherits HorizontalLayout {
+    in property <string> detail;
+    property <bool> dot-visible: true;
+
+    alignment: center;
+
+    Timer {
+        interval: 500ms;
+        running: true;
+        triggered => { root.dot-visible = !root.dot-visible; }
+    }
+
+    Text {
+        text: "Scanning";
+        color: #8ca4b5;
+        font-size: 8px;
+        horizontal-alignment: center;
+    }
+
+    Text {
+        text: ".";
+        color: root.dot-visible ? #8ca4b5 : transparent;
+        font-size: 8px;
+        horizontal-alignment: center;
+    }
+
+    if detail != "" : Text {
+        text: " · " + detail;
+        color: #8ca4b5;
+        font-size: 8px;
+        horizontal-alignment: center;
+    }
+}
+
 export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
     in property <bool> focused;
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
-    property <bool> scan-pulse;
 
     border-width: 2px;
     border-color: status == MenuItemStatus.failed
         ? #a9445b
         : status == MenuItemStatus.partial ? #c58b3a
         : status == MenuItemStatus.scanning
-            ? (scan-pulse ? #7b91ad : #52647d)
+            ? #7b91ad
             : #5a4973;
     background: status == MenuItemStatus.failed
         ? #291820
@@ -25,13 +58,7 @@ export component LauncherTile inherits Rectangle {
         : status == MenuItemStatus.scanning ? #172131 : #181829;
 
     animate border-color {
-        duration: status == MenuItemStatus.scanning ? 700ms : 100ms;
-    }
-
-    Timer {
-        interval: 700ms;
-        running: root.status == MenuItemStatus.scanning;
-        triggered => { root.scan-pulse = !root.scan-pulse; }
+        duration: 100ms;
     }
 
     VerticalLayout {
@@ -56,7 +83,11 @@ export component LauncherTile inherits Rectangle {
             animate color { duration: 100ms; easing: Easing.ease-in-out; }
         }
 
-        if subtitle != "" : Text {
+        if status == MenuItemStatus.scanning : ScanningSubtitle {
+            detail: subtitle;
+        }
+
+        if subtitle != "" && status != MenuItemStatus.scanning : Text {
             text: subtitle;
             color: focused
                 ? #d8d4dd

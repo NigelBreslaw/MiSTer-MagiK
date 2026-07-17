@@ -1148,6 +1148,20 @@ impl LauncherNav {
         }
     }
 
+    pub fn menu_discovered_system_count(&self, menu_id: &str) -> usize {
+        self.taxonomy.menu(menu_id).map_or(0, |menu| {
+            menu.items
+                .iter()
+                .map(|item| match item.kind {
+                    LauncherMenuItemKind::Menu => self.menu_discovered_system_count(&item.id),
+                    LauncherMenuItemKind::Collection => {
+                        usize::from(self.catalog_build_systems.contains(&item.id))
+                    }
+                })
+                .sum()
+        })
+    }
+
     fn menu_contains_failed_descendant(&self, menu_id: &str) -> bool {
         self.taxonomy.menu(menu_id).is_some_and(|menu| {
             menu.items.iter().any(|item| match item.kind {
@@ -7051,6 +7065,7 @@ mod tests {
             nav.menu_item_catalog_presentation(&consoles),
             (true, false, true)
         );
+        assert_eq!(nav.menu_discovered_system_count(&consoles.id), 1);
         assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
         let snes = nav
             .current_menu_items()

@@ -693,7 +693,17 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
                 id: item.id.clone().into(),
                 label: item.title.clone().into(),
                 subtitle: if scanning {
-                    "Scanning…".into()
+                    match item.kind {
+                        crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
+                            let systems = nav.menu_discovered_system_count(&item.id);
+                            format!(
+                                "{systems} system{} found",
+                                if systems == 1 { "" } else { "s" }
+                            )
+                            .into()
+                        }
+                        crate::launcher_taxonomy::LauncherMenuItemKind::Collection => "".into(),
+                    }
                 } else if partial {
                     "Some items failed".into()
                 } else if failed {
@@ -738,7 +748,7 @@ pub(super) fn slint_sharded_menu_items(
         .map(|(index, tile)| {
             let (subtitle, status) = match &tile.state {
                 LauncherSystemState::Queued | LauncherSystemState::Scanning => (
-                    "Scanning…".to_string(),
+                    String::new(),
                     slint_ui::launcher::MenuItemStatus::Scanning,
                 ),
                 LauncherSystemState::Ready { games, .. } => (
@@ -1436,7 +1446,7 @@ mod tests {
         assert_eq!(ready.status, slint_ui::launcher::MenuItemStatus::Ready);
         assert!(ready.available);
         let scanning = rows.row_data(1).unwrap();
-        assert_eq!(scanning.subtitle.as_str(), "Scanning…");
+        assert_eq!(scanning.subtitle.as_str(), "");
         assert_eq!(
             scanning.status,
             slint_ui::launcher::MenuItemStatus::Scanning
