@@ -234,6 +234,12 @@ pub fn read_latest_manifest(
         .ok_or_else(|| RegistryError::new("read-manifest", "no valid manifest slot"))
 }
 
+pub fn manifest_slots_present(storage_root: &Path) -> bool {
+    [MANIFEST_A, MANIFEST_B]
+        .iter()
+        .any(|relative| fs::symlink_metadata(storage_root.join(relative)).is_ok())
+}
+
 fn read_manifest_slots(
     storage_root: &Path,
     limits: RegistryLimits,

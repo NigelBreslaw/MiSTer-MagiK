@@ -73,3 +73,55 @@ fn catalog_lab_creates_a_deterministic_synthetic_library() {
         .is_file());
     std::fs::remove_dir_all(temp).unwrap();
 }
+
+#[cfg(feature = "builder")]
+#[test]
+fn catalog_lab_bootstraps_and_reopens_a_fixture_without_magik() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "mister-magik-catalog-lab-bootstrap-cli-{}",
+        std::process::id()
+    ));
+    let source = temp.join("source");
+    let storage = temp.join("catalog");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir(&temp).unwrap();
+    let fixture = Command::new(env!("CARGO_BIN_EXE_catalog-lab"))
+        .args([
+            "fixture",
+            source.to_str().unwrap(),
+            "--arcade-games",
+            "0",
+            "--small-system-games",
+            "2",
+            "--large-system-games",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert!(fixture.status.success(), "{:?}", fixture);
+
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_catalog-lab"))
+            .args([
+                "bootstrap-fixture",
+                source.to_str().unwrap(),
+                storage.to_str().unwrap(),
+                "snes",
+            ])
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    assert!(first.status.success(), "{:?}", first);
+    assert!(String::from_utf8(first.stdout)
+        .unwrap()
+        .contains("generation=1\tgames=2\tpublished=1"));
+    let second = run();
+    assert!(second.status.success(), "{:?}", second);
+    assert!(String::from_utf8(second.stdout)
+        .unwrap()
+        .contains("generation=1\tgames=2\tpublished=0"));
+    std::fs::remove_dir_all(temp).unwrap();
+}

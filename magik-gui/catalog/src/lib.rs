@@ -11,6 +11,8 @@ pub mod builder_protocol;
 pub mod builder_service;
 pub mod catalog_build;
 pub mod catalog_build_record;
+#[cfg(feature = "builder")]
+pub mod catalog_vertical_slice;
 pub mod catalog_checkpoint;
 pub mod catalog_classify;
 pub mod catalog_config;

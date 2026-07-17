@@ -20,6 +20,9 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         return Ok(());
     }
     if command != "fixture" {
+        if command == "bootstrap-fixture" {
+            return bootstrap_fixture(args);
+        }
         return Err(format!("unknown command {command:?}\n{}", usage()));
     }
     let root = args
@@ -56,6 +59,59 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     Ok(())
 }
 
+fn bootstrap_fixture(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    use mister_magik_catalog::catalog_classify::SystemId;
+    use mister_magik_catalog::catalog_vertical_slice::bootstrap_fixture_system;
+    use mister_magik_catalog::shard_registry::RegistryLimits;
+    use mister_magik_catalog::sharded_catalog::CatalogConfig;
+    use mister_magik_catalog::system_shard::SystemShardLimits;
+
+    let source = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("bootstrap-fixture needs SOURCE\n{}", usage()))?;
+    let storage = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("bootstrap-fixture needs STORAGE\n{}", usage()))?;
+    let system = args
+        .next()
+        .ok_or_else(|| format!("bootstrap-fixture needs SYSTEM\n{}", usage()))?;
+    if args.next().is_some() {
+        return Err(format!(
+            "bootstrap-fixture has unexpected arguments\n{}",
+            usage()
+        ));
+    }
+    let system_id = SystemId::parse(&system).map_err(|error| error.to_string())?;
+    let config = CatalogConfig::new(storage, vec![source], 512 * 1024 * 1024)
+        .map_err(|error| error.to_string())?;
+    let outcome = bootstrap_fixture_system(
+        &config,
+        &system_id,
+        RegistryLimits {
+            max_manifest_bytes: 8 * 1024 * 1024,
+            max_systems: 1024,
+            shard: SystemShardLimits {
+                max_sqlite_bytes: 8 * 1024 * 1024 * 1024,
+                max_navigation_compressed_bytes: 512 * 1024 * 1024,
+                max_navigation_decoded_bytes: config.max_navigation_decoded_bytes(),
+                max_games: 2_000_000,
+            },
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    println!(
+        "catalog_lab_bootstrap_tsv\tsystem={}\tgeneration={}\tgames={}\tpublished={}\tchanged_inputs={}",
+        system_id,
+        outcome.generation,
+        outcome.games,
+        u8::from(outcome.published),
+        outcome.changed_inputs
+    );
+    Ok(())
+}
+
 fn usage() -> String {
-    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]".to_string()
+    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]\n       catalog-lab bootstrap-fixture SOURCE STORAGE snes|c64".to_string()
 }
