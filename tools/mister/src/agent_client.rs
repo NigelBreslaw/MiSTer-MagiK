@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use serde_json::{json, Value};
+use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
+use serde_json::Value;
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -11,9 +12,8 @@ use std::time::{Duration, Instant};
 use crate::remote::host;
 use crate::Result;
 
-pub(crate) const AGENT_PORT: u16 = 7498;
+pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
 const AGENT_TOKEN_LOCAL: &str = "build/mister-agent.token";
-const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct AgentResponse {
@@ -52,12 +52,7 @@ pub(crate) fn agent_request(cmd: &str, args: Value, timeout: Duration) -> Result
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
+    let request = agent_protocol::request(&token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -80,12 +75,7 @@ pub(crate) fn agent_binary_request_bounded(
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
+    let request = agent_protocol::request(&token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -126,12 +116,7 @@ pub(crate) fn agent_stream_request(
         .to_socket_addrs()?
         .next()
         .ok_or("could not resolve MiSTer agent host")?;
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
+    let request = agent_protocol::request(&token, 1, cmd, args);
     let start = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
@@ -158,37 +143,22 @@ fn write_agent_stream_payload<T: Read + Write>(
 }
 
 fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentResponse> {
-    if line.trim().is_empty() {
-        return Err("empty response from agent".into());
-    }
-    let response: Value = serde_json::from_str(line.trim())?;
-    if response.get("ok").and_then(Value::as_bool) == Some(true) {
-        Ok(AgentResponse {
-            response,
+    match agent_protocol::parse_response_line(&line)
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
+    {
+        ResponseEnvelope::Ok { full, .. } => Ok(AgentResponse {
+            response: full,
             elapsed_ms: start.elapsed().as_millis(),
-        })
-    } else {
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("agent command failed");
-        Err(error.to_string().into())
+        }),
+        ResponseEnvelope::Error(error) => Err(error.into()),
     }
 }
 
 fn agent_binary_payload_len(response: &Value) -> Result<usize> {
-    let payload_bytes = response
-        .pointer("/result/payload_bytes")
-        .or_else(|| response.pointer("/result/raw_bytes"))
-        .and_then(Value::as_u64)
-        .ok_or("agent binary response missing result payload byte count")?;
-    if payload_bytes > MAX_AGENT_BINARY_PAYLOAD_BYTES {
-        return Err(
-            format!("agent binary response payload too large: {payload_bytes} bytes").into(),
-        );
-    }
-    usize::try_from(payload_bytes).map_err(|_| {
-        format!("agent binary response payload size overflows usize: {payload_bytes}").into()
+    agent_protocol::binary_payload_len(response).map_err(|error| {
+        error
+            .replace("missing payload", "missing result payload")
+            .into()
     })
 }
 
@@ -220,6 +190,7 @@ pub(crate) fn verify_agent_deploy_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::io::{Cursor, Error, ErrorKind};
 
     struct RejectingStream {
@@ -303,7 +274,7 @@ mod tests {
             .contains("missing result payload byte count"));
         assert!(agent_binary_payload_len(&json!({
             "result": {
-                "payload_bytes": MAX_AGENT_BINARY_PAYLOAD_BYTES + 1,
+                "payload_bytes": agent_protocol::MAX_BINARY_PAYLOAD_BYTES + 1,
             }
         }))
         .expect_err("oversized payload len should fail")

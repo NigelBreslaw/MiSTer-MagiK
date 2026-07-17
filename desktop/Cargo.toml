@@ -17,6 +17,7 @@ all = "deny"
 [dependencies]
 lz4_flex = "0.13.1"
 mister-magik-framebuffer-stream = { path = "../framebuffer-stream" }
+mister-magik-agent-protocol = { path = "../agent-protocol" }
 png = "0.18.1"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 serde_json = "1"

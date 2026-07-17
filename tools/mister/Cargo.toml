@@ -22,6 +22,7 @@ flate2 = "1"
 lz4_flex = "0.13.1"
 mister-magik-catalog = { path = "../../magik-gui/catalog" }
 mister-magik-media-contract = { path = "../../media-contract" }
+mister-magik-agent-protocol = { path = "../../agent-protocol" }
 quick-xml = "0.41"
 rusqlite = { version = "0.40.0", default-features = false, features = ["bundled", "modern_sqlite"] }
 serde_json = "1"

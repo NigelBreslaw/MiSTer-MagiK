@@ -8,6 +8,7 @@ use crate::app_state::{
 use crate::sd_card::{
     item_name, SdDirectoryListing, SdEntry, SdEntryKind, SdItemDetail, SdMetadataRow,
 };
+use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
 use mister_magik_framebuffer_stream::{
     read_frame, FrameGeometry, FrameHeader, FrameKind, FrameRect, FLAG_LZ4_SIZE_PREPENDED,
     MAX_FRAME_SURFACE_BYTES,
@@ -22,10 +23,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const AGENT_PORT: u16 = 7498;
+const AGENT_PORT: u16 = agent_protocol::PORT;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const BINARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_AGENT_BINARY_PAYLOAD_BYTES: u64 = agent_protocol::MAX_BINARY_PAYLOAD_BYTES;
 const SD_DIRECTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 static SD_LIST_PROTOCOL: SdListProtocolCache = SdListProtocolCache::new();
 
@@ -718,12 +719,7 @@ fn write_request(
     cmd: &str,
     args: Value,
 ) -> Result<(), AgentError> {
-    let request = json!({
-        "token": token,
-        "id": 1,
-        "cmd": cmd,
-        "args": args,
-    });
+    let request = agent_protocol::request(token, 1, cmd, args);
     writeln!(writer, "{request}").map_err(|err| AgentError::Unreachable(err.to_string()))?;
     writer
         .flush()
@@ -749,23 +745,7 @@ fn read_binary_response(reader: &mut impl BufRead) -> Result<(Value, Vec<u8>), A
 }
 
 fn binary_payload_len(value: &Value) -> Result<usize, AgentError> {
-    let payload_bytes = value
-        .pointer("/payload_bytes")
-        .or_else(|| value.pointer("/raw_bytes"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            AgentError::Protocol("binary response missing payload byte count".to_string())
-        })?;
-    if payload_bytes > MAX_AGENT_BINARY_PAYLOAD_BYTES {
-        return Err(AgentError::Protocol(format!(
-            "binary response payload too large: {payload_bytes} bytes"
-        )));
-    }
-    usize::try_from(payload_bytes).map_err(|_| {
-        AgentError::Protocol(format!(
-            "binary response payload size overflows usize: {payload_bytes}"
-        ))
-    })
+    agent_protocol::binary_payload_len(value).map_err(AgentError::Protocol)
 }
 
 fn reserved_buffer(len: usize, context: &str) -> Result<Vec<u8>, AgentError> {
@@ -1160,25 +1140,10 @@ fn apply_rgb565_rect(
 }
 
 fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
-    if line.trim().is_empty() {
-        return Err(AgentError::Protocol(
-            "empty response from agent".to_string(),
-        ));
-    }
-    let response: Value = serde_json::from_str(line.trim())
-        .map_err(|err| AgentError::Protocol(format!("invalid JSON response: {err}")))?;
-    if response.get("ok").and_then(Value::as_bool) == Some(true) {
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
-    } else {
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("agent command failed");
-        if error == "unauthorized" {
-            Err(AgentError::Unauthorized)
-        } else {
-            Err(AgentError::Command(error.to_string()))
-        }
+    match agent_protocol::parse_response_line(line).map_err(AgentError::Protocol)? {
+        ResponseEnvelope::Ok { result, .. } => Ok(result),
+        ResponseEnvelope::Error(error) if error == "unauthorized" => Err(AgentError::Unauthorized),
+        ResponseEnvelope::Error(error) => Err(AgentError::Command(error)),
     }
 }
 

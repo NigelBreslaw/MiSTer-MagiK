@@ -2769,10 +2769,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "serde_json",
+]
+
+[[package]]
 name = "mister-magik-desktop"
 version = "0.1.0"
 dependencies = [
  "lz4_flex",
+ "mister-magik-agent-protocol",
  "mister-magik-framebuffer-stream",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",

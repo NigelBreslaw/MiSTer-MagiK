@@ -828,7 +828,7 @@ mod linux {
     const IP: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 117);
     const NETMASK: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 0);
     const GATEWAY: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 1);
-    const AGENT_PORT: u16 = 7498;
+    const AGENT_PORT: u16 = mister_magik_agent_protocol::PORT;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;

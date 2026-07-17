@@ -151,6 +151,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "serde_json",
+]
+
+[[package]]
 name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
@@ -176,6 +184,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "lz4_flex",
+ "mister-magik-agent-protocol",
  "mister-magik-catalog",
  "mister-magik-media-contract",
  "quick-xml",
