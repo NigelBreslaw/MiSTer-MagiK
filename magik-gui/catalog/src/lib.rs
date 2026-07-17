@@ -47,6 +47,8 @@ pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
 #[cfg(feature = "builder")]
+pub mod reconciliation_executor;
+#[cfg(feature = "builder")]
 pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod shard_registry;
