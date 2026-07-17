@@ -47,6 +47,8 @@ pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
 #[cfg(feature = "builder")]
+pub mod progressive_scheduler;
+#[cfg(feature = "builder")]
 pub mod reconciliation_executor;
 #[cfg(feature = "builder")]
 pub mod reconciliation_planner;
