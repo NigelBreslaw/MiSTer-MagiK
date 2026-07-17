@@ -116,6 +116,7 @@ impl ReconciliationMaterializer for BenchmarkMaterializer {
                 stable_key: format!("{index:08}"),
                 title: format!("Synthetic Game {index:08}"),
                 launch_ref: format!("/games/{}/{index:08}.rom", system_id.as_str()),
+                ..SystemGame::default()
             })
             .collect();
         Ok(MaterializedSystem {

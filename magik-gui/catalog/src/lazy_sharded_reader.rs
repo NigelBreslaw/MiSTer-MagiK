@@ -6,7 +6,8 @@
 use crate::catalog_classify::SystemId;
 use crate::shard_registry::{read_latest_manifest_lazy, CatalogManifest, RegistryLimits};
 use crate::sharded_catalog::{
-    CatalogError, CatalogGame, CatalogReader, CatalogRegistry, SystemCatalog, SystemSummary,
+    CatalogError, CatalogGame, CatalogLaunchPlan, CatalogReader, CatalogRegistry, SystemCatalog,
+    SystemSummary,
 };
 use crate::system_shard::open_system_navigation;
 use std::path::{Path, PathBuf};
@@ -105,6 +106,24 @@ impl CatalogReader for LazyShardedCatalogReader {
                     stable_key: game.stable_key,
                     title: game.title,
                     launch_ref: game.launch_ref,
+                    preview_archive_path: game.preview_archive_path,
+                    preview_asset_key: game.preview_asset_key,
+                    has_preview: game.has_preview,
+                    year: game.year,
+                    manufacturer: game.manufacturer,
+                    players: game.players,
+                    control: game.control,
+                    is_new: game.is_new,
+                    launch_plan: game.launch_plan.map(|plan| CatalogLaunchPlan {
+                        launch_ref: plan.launch_ref,
+                        title: plan.title,
+                        system_id: plan.system_id,
+                        core_path: plan.core_path,
+                        payload_path: plan.payload_path,
+                        mount_kind: plan.mount_kind,
+                        mount_index: plan.mount_index,
+                        delay_secs: plan.delay_secs,
+                    }),
                 })
                 .collect(),
         ))
@@ -173,6 +192,7 @@ mod tests {
                     stable_key: "new".to_string(),
                     title: "New SNES Game".to_string(),
                     launch_ref: "/games/SNES/New SNES Game".to_string(),
+                    ..SystemGame::default()
                 }],
             },
             limits().shard,
@@ -229,6 +249,7 @@ mod tests {
                         stable_key: title.to_ascii_lowercase(),
                         title: title.to_string(),
                         launch_ref: format!("/games/{id}/{title}"),
+                        ..SystemGame::default()
                     }],
                 },
                 limits().shard,

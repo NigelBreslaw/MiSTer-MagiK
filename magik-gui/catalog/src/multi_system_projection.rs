@@ -83,6 +83,7 @@ pub fn bootstrap_global_fixture(
                 stable_key,
                 title: game.title.to_string(),
                 launch_ref: game.launch_ref.to_string(),
+                ..SystemGame::default()
             });
     }
     for games in games_by_system.values_mut() {

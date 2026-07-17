@@ -12,8 +12,7 @@ use crate::reconciliation_executor::{
 };
 use crate::shard_registry::{read_latest_manifest, RegistryLimits};
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
-use crate::system_shard::SystemGame;
-use crate::system_shard::SystemShardLimits;
+use crate::system_shard::{SystemGame, SystemLaunchPlan, SystemShardLimits};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -21,12 +20,14 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 const BINDING_SCHEMA_VERSION: u32 = 1;
+const PROJECTION_CONTRACT: &str = "rich-game-v1";
 const BINDING_FILE: &str = "catalog.binding.json";
 const MAX_BINDING_BYTES: u64 = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CatalogBinding {
     schema_version: u32,
+    projection_contract: String,
     manifest_generation: u64,
     sqlite_len: u64,
     sqlite_modified_ns: u64,
@@ -139,6 +140,7 @@ pub fn publish_bound_production_projection(
         storage_root,
         &CatalogBinding {
             schema_version: BINDING_SCHEMA_VERSION,
+            projection_contract: PROJECTION_CONTRACT.to_string(),
             manifest_generation: outcome.generation,
             sqlite_len: sqlite.0,
             sqlite_modified_ns: sqlite.1,
@@ -167,6 +169,7 @@ pub fn validate_production_binding(
     .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
     let sqlite = sqlite_identity(sqlite_path)?;
     if binding.schema_version != BINDING_SCHEMA_VERSION
+        || binding.projection_contract != PROJECTION_CONTRACT
         || binding.manifest_generation != manifest_generation
         || (binding.sqlite_len, binding.sqlite_modified_ns) != sqlite
     {
@@ -258,6 +261,27 @@ impl ReconciliationMaterializer for CatalogMaterializer<'_> {
                 stable_key: format!("{}\u{1f}{}\u{1f}{}", system_id, game.title, game.mra_path),
                 title: game.title.to_string(),
                 launch_ref: game.mra_path.to_string(),
+                preview_archive_path: game.preview_archive_path.to_string(),
+                preview_asset_key: game.preview_asset_key.to_string(),
+                has_preview: game.has_preview,
+                year: game.year,
+                manufacturer: game.manufacturer.to_string(),
+                players: game.players,
+                control: game.control.to_string(),
+                is_new: game.is_new,
+                launch_plan: self
+                    .catalog
+                    .structured_launch_plan_for_ref(&game.mra_path)
+                    .map(|plan| SystemLaunchPlan {
+                        launch_ref: plan.launch_ref.to_string(),
+                        title: plan.title.to_string(),
+                        system_id: plan.system_id.to_string(),
+                        core_path: plan.core_path.to_string(),
+                        payload_path: plan.payload_path.to_string(),
+                        mount_kind: plan.mount_kind.to_string(),
+                        mount_index: plan.mount_index,
+                        delay_secs: plan.delay_secs,
+                    }),
             })
             .collect::<Vec<_>>();
         self.games = self.games.saturating_add(games.len());

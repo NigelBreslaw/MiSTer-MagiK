@@ -21,11 +21,32 @@ pub struct SystemShardLimits {
     pub max_games: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SystemGame {
     pub stable_key: String,
     pub title: String,
     pub launch_ref: String,
+    pub preview_archive_path: String,
+    pub preview_asset_key: String,
+    pub has_preview: bool,
+    pub year: Option<u16>,
+    pub manufacturer: String,
+    pub players: Option<u8>,
+    pub control: String,
+    pub is_new: bool,
+    pub launch_plan: Option<SystemLaunchPlan>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SystemLaunchPlan {
+    pub launch_ref: String,
+    pub title: String,
+    pub system_id: String,
+    pub core_path: String,
+    pub payload_path: String,
+    pub mount_kind: String,
+    pub mount_index: u8,
+    pub delay_secs: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,14 +69,7 @@ struct StoredNavigation {
     schema_version: u32,
     system_id: String,
     generation: u64,
-    games: Vec<StoredGame>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct StoredGame {
-    stable_key: String,
-    title: String,
-    launch_ref: String,
+    games: Vec<SystemGame>,
 }
 
 #[cfg(feature = "builder")]
@@ -70,15 +84,7 @@ pub fn write_system_shard(
         schema_version: NAVIGATION_SCHEMA_VERSION,
         system_id: data.system_id.as_str().to_string(),
         generation: data.generation,
-        games: data
-            .games
-            .iter()
-            .map(|game| StoredGame {
-                stable_key: game.stable_key.clone(),
-                title: game.title.clone(),
-                launch_ref: game.launch_ref.clone(),
-            })
-            .collect(),
+        games: data.games.to_vec(),
     };
     let navigation = encode_navigation(&stored, limits)?;
     let navigation_hash = checksum_hex(&navigation);
@@ -105,7 +111,16 @@ pub fn write_system_shard(
                  stable_key TEXT PRIMARY KEY,
                  ordinal INTEGER NOT NULL UNIQUE,
                  title TEXT NOT NULL,
-                 launch_ref TEXT NOT NULL
+                 launch_ref TEXT NOT NULL,
+                 preview_archive_path TEXT NOT NULL,
+                 preview_asset_key TEXT NOT NULL,
+                 has_preview INTEGER NOT NULL,
+                 year INTEGER,
+                 manufacturer TEXT NOT NULL,
+                 players INTEGER,
+                 control TEXT NOT NULL,
+                 is_new INTEGER NOT NULL,
+                 launch_plan_json TEXT
              ) WITHOUT ROWID;
              CREATE TABLE navigation_payload (
                  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -138,7 +153,13 @@ pub fn write_system_shard(
     }
     {
         let mut statement = transaction
-            .prepare("INSERT INTO games(stable_key,ordinal,title,launch_ref) VALUES (?1,?2,?3,?4)")
+            .prepare(
+                "INSERT INTO games(
+                    stable_key,ordinal,title,launch_ref,preview_archive_path,
+                    preview_asset_key,has_preview,year,manufacturer,players,
+                    control,is_new,launch_plan_json
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            )
             .map_err(|error| SystemShardError::with("prepare shard games", error))?;
         for (ordinal, game) in data.games.iter().enumerate() {
             statement
@@ -149,7 +170,20 @@ pub fn write_system_shard(
                         "game ordinal exceeds SQLite integer"
                     ))?,
                     game.title,
-                    game.launch_ref
+                    game.launch_ref,
+                    game.preview_archive_path,
+                    game.preview_asset_key,
+                    i64::from(game.has_preview),
+                    game.year.map(i64::from),
+                    game.manufacturer,
+                    game.players.map(i64::from),
+                    game.control,
+                    i64::from(game.is_new),
+                    game.launch_plan
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|error| SystemShardError::with("encode launch plan", error))?,
                 ])
                 .map_err(|error| SystemShardError::with("insert shard game", error))?;
         }
@@ -272,14 +306,39 @@ pub fn open_system_shard(
         ));
     }
     let mut statement = connection
-        .prepare("SELECT stable_key,title,launch_ref FROM games ORDER BY ordinal")
+        .prepare(
+            "SELECT stable_key,title,launch_ref,preview_archive_path,
+                    preview_asset_key,has_preview,year,manufacturer,players,
+                    control,is_new,launch_plan_json
+             FROM games ORDER BY ordinal",
+        )
         .map_err(|error| SystemShardError::with("prepare canonical shard games", error))?;
     let canonical = statement
         .query_map([], |row| {
-            Ok(StoredGame {
+            let launch_plan_json: Option<String> = row.get(11)?;
+            let launch_plan = launch_plan_json
+                .map(|encoded| serde_json::from_str(&encoded))
+                .transpose()
+                .map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        11,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+            Ok(SystemGame {
                 stable_key: row.get(0)?,
                 title: row.get(1)?,
                 launch_ref: row.get(2)?,
+                preview_archive_path: row.get(3)?,
+                preview_asset_key: row.get(4)?,
+                has_preview: row.get(5)?,
+                year: row.get(6)?,
+                manufacturer: row.get(7)?,
+                players: row.get(8)?,
+                control: row.get(9)?,
+                is_new: row.get(10)?,
+                launch_plan,
             })
         })
         .map_err(|error| SystemShardError::with("query canonical shard games", error))?
@@ -295,15 +354,7 @@ pub fn open_system_shard(
         system_id,
         generation,
         navigation_hash: stored_hash,
-        games: stored
-            .games
-            .into_iter()
-            .map(|game| SystemGame {
-                stable_key: game.stable_key,
-                title: game.title,
-                launch_ref: game.launch_ref,
-            })
-            .collect(),
+        games: stored.games,
     })
 }
 
@@ -327,15 +378,7 @@ pub fn open_system_navigation(
             "navigation identity or generation does not match registry",
         ));
     }
-    let games = stored
-        .games
-        .into_iter()
-        .map(|game| SystemGame {
-            stable_key: game.stable_key,
-            title: game.title,
-            launch_ref: game.launch_ref,
-        })
-        .collect::<Vec<_>>();
+    let games = stored.games;
     validate_loaded_games(&games, limits.max_games)?;
     Ok(LoadedSystemShard {
         system_id: expected_system_id.clone(),
@@ -634,11 +677,30 @@ mod tests {
                     stable_key: "one".to_string(),
                     title: "Synthetic One".to_string(),
                     launch_ref: "/games/SNES/One.sfc".to_string(),
+                    preview_archive_path: "/media/preview.zip".to_string(),
+                    preview_asset_key: "Synthetic One".to_string(),
+                    has_preview: true,
+                    year: Some(1992),
+                    manufacturer: "Fixture Corp".to_string(),
+                    players: Some(2),
+                    control: "Gamepad".to_string(),
+                    is_new: true,
+                    launch_plan: Some(SystemLaunchPlan {
+                        launch_ref: "magik-plan:one".to_string(),
+                        title: "Synthetic One".to_string(),
+                        system_id: "snes".to_string(),
+                        core_path: "SNES".to_string(),
+                        payload_path: "/games/SNES/One.sfc".to_string(),
+                        mount_kind: "load-file".to_string(),
+                        mount_index: 0,
+                        delay_secs: 1,
+                    }),
                 },
                 SystemGame {
                     stable_key: "two".to_string(),
                     title: "Synthetic Two".to_string(),
                     launch_ref: "/games/SNES/Two.sfc".to_string(),
+                    ..SystemGame::default()
                 },
             ],
         }

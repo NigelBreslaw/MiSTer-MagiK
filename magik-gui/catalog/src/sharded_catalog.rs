@@ -271,6 +271,27 @@ pub struct CatalogGame {
     pub stable_key: String,
     pub title: String,
     pub launch_ref: String,
+    pub preview_archive_path: String,
+    pub preview_asset_key: String,
+    pub has_preview: bool,
+    pub year: Option<u16>,
+    pub manufacturer: String,
+    pub players: Option<u8>,
+    pub control: String,
+    pub is_new: bool,
+    pub launch_plan: Option<CatalogLaunchPlan>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogLaunchPlan {
+    pub launch_ref: String,
+    pub title: String,
+    pub system_id: String,
+    pub core_path: String,
+    pub payload_path: String,
+    pub mount_kind: String,
+    pub mount_index: u8,
+    pub delay_secs: u8,
 }
 
 pub trait CatalogEngine {

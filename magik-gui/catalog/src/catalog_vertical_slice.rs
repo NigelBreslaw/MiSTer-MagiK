@@ -212,6 +212,7 @@ fn project_games(
                 stable_key: path_text(relative)?,
                 title: title.to_string(),
                 launch_ref: path_text(&launch_ref)?,
+                ..SystemGame::default()
             })
         })
         .collect::<Result<Vec<_>, VerticalSliceError>>()?;

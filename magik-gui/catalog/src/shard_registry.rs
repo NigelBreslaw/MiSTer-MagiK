@@ -828,6 +828,7 @@ mod tests {
                 stable_key: "one".to_string(),
                 title: "Synthetic One".to_string(),
                 launch_ref: "/games/SNES/One.sfc".to_string(),
+                ..SystemGame::default()
             }],
         };
         write_system_shard(&sqlite, &navigation, &data, limits().shard).unwrap();

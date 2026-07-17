@@ -7,11 +7,13 @@ APIs, progress states, and benchmark expectations.
 Catalog V3 is now dual-published by the production builder under
 `catalog-v3/`. Its schema-one manifest and per-system SQLite/navigation pairs
 are generation-safe and the launcher prefers the manifest-only registry for its
-warm shell after the return capsule. The current V3 game row intentionally
-contains only stable identity, title, and launch reference, so production game
-hydration still falls back to the richer V2 navigation/SQLite projection. Do
-not remove V2 until V3 also preserves metadata, preview identity, structured
-launch plans, filters, ordering, and device parity.
+warm shell after the return capsule. Schema one now preserves stable identity,
+title, launch reference, preview identity, filter metadata, newness, and the
+complete structured launch plan. The binding also names the `rich-game-v1`
+projection contract, so earlier schema-one development artifacts are rejected
+instead of being mistaken for rich shards. V2 remains during the transition
+until lazy system hydration, production delta planning, and device parity are
+all proven; it is no longer retained because the shard row is lossy.
 
 On a cold build, the builder scans the configured `_Arcade` collection first,
 writes a temporary rich navigation snapshot, and publishes it through the same

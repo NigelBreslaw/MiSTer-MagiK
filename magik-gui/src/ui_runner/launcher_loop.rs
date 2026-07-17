@@ -1019,11 +1019,15 @@ fn catalog_from_sharded_registry_and_summary(
     sharded: ArcadeCatalog,
     summary: &catalog_summary::CatalogSummaryProjection,
 ) -> ArcadeCatalog {
-    let hot_games = summary
-        .hot_games
-        .iter()
-        .map(arcade_catalog::ArcadeGameEntry::from)
-        .collect();
+    let hot_games = if sharded.games.is_empty() {
+        summary
+            .hot_games
+            .iter()
+            .map(arcade_catalog::ArcadeGameEntry::from)
+            .collect()
+    } else {
+        sharded.games.iter().cloned().collect()
+    };
     ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
         PathBuf::from(root),
         hot_games,
@@ -1110,7 +1114,55 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
             systems.len()
         ),
     );
-    Some(ArcadeCatalog::new(PathBuf::from(root), Vec::new(), systems))
+    let arcade_id = mister_magik_catalog::catalog_classify::SystemId::parse(
+        arcade_catalog::MENU_ARCADE_SYSTEM_ID.trim_start_matches("menu:"),
+    )
+    .ok();
+    let (games, launch_plans) = arcade_id
+        .as_ref()
+        .and_then(|system_id| reader.open_system(system_id).ok())
+        .map(|system| {
+            let mut launch_plans = Vec::new();
+            let games = system
+                .games()
+                .iter()
+                .map(|game| {
+                    if let Some(plan) = &game.launch_plan {
+                        launch_plans.push(arcade_catalog::StructuredLaunchPlan {
+                            launch_ref: plan.launch_ref.as_str().into(),
+                            title: plan.title.as_str().into(),
+                            system_id: plan.system_id.as_str().into(),
+                            core_path: plan.core_path.as_str().into(),
+                            payload_path: plan.payload_path.as_str().into(),
+                            mount_kind: plan.mount_kind.as_str().into(),
+                            mount_index: plan.mount_index,
+                            delay_secs: plan.delay_secs,
+                        });
+                    }
+                    arcade_catalog::ArcadeGameEntry {
+                        title: game.title.as_str().into(),
+                        mra_path: game.launch_ref.as_str().into(),
+                        preview_archive_path: game.preview_archive_path.as_str().into(),
+                        preview_asset_key: game.preview_asset_key.as_str().into(),
+                        has_preview: game.has_preview,
+                        system_id: "arcade".into(),
+                        year: game.year,
+                        manufacturer: game.manufacturer.as_str().into(),
+                        players: game.players,
+                        control: game.control.as_str().into(),
+                        is_new: game.is_new,
+                    }
+                })
+                .collect();
+            (games, launch_plans)
+        })
+        .unwrap_or_default();
+    Some(ArcadeCatalog::new_with_deferred_text_indexes(
+        PathBuf::from(root),
+        games,
+        systems,
+        launch_plans,
+    ))
 }
 
 fn read_catalog_summary_seed(

@@ -491,6 +491,7 @@ mod tests {
             stable_key: title.to_ascii_lowercase(),
             title: title.to_string(),
             launch_ref: format!("/fixture/{title}"),
+            ..SystemGame::default()
         }
     }
 
