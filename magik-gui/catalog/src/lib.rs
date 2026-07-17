@@ -40,6 +40,8 @@ pub mod library_db;
 mod library_indexer;
 pub mod media_identity;
 mod media_metadata;
+#[cfg(feature = "builder")]
+pub mod multi_system_projection;
 mod namespace_walk;
 pub mod prepared_collections;
 mod preview_archive;
