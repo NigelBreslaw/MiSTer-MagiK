@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 LABEL="${1:-startup-reveal-$(date -u +%Y%m%dT%H%M%SZ)}"
+MODE="${MISTER_STARTUP_REVEAL_MODE:-all}"
 REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
 REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
@@ -20,6 +21,18 @@ SELECTED="${MISTER_STARTUP_REVEAL_SELECTED_INDEX:-17}"
   echo "MISTER_STARTUP_REVEAL_SELECTED_INDEX must be a non-negative integer" >&2
   exit 2
 }
+case "$MODE" in
+  all|cold|warm|return) ;;
+  *) echo "MISTER_STARTUP_REVEAL_MODE must be all, cold, warm, or return" >&2; exit 2 ;;
+esac
+
+COLD_BACKUP_DB="/media/fat/mister-magik-dev/library.sqlite3.startup-reveal-$LABEL.bak"
+COLD_BACKUP_SUMMARY="/media/fat/mister-magik-dev/library.summary.startup-reveal-$LABEL.bak"
+
+cleanup() {
+  remote "rm -f '$REMOTE_ENV'; if [ -f '$COLD_BACKUP_DB' ]; then mv '$COLD_BACKUP_DB' '$REMOTE_DB'; fi; if [ -f '$COLD_BACKUP_SUMMARY' ]; then mv '$COLD_BACKUP_SUMMARY' '$REMOTE_SUMMARY'; fi; if [ -s '$RETURN_STATE' ] && [ -p /dev/MiSTer_cmd ]; then printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd; fi; sync" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 mkdir -p "$(dirname "$TSV")" "$OUT"
 if [ ! -f "$TSV" ]; then
@@ -126,9 +139,7 @@ collect_and_assert_common() {
 
 run_cold() {
   echo "== cold no-catalog reveal"
-  local backup_db="/media/fat/mister-magik-dev/library.sqlite3.startup-reveal-$LABEL.bak"
-  local backup_summary="/media/fat/mister-magik-dev/library.summary.startup-reveal-$LABEL.bak"
-  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$backup_db'; fi; if [ -f '$REMOTE_SUMMARY' ]; then cp '$REMOTE_SUMMARY' '$backup_summary'; fi; rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; sync"
+  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$COLD_BACKUP_DB'; fi; if [ -f '$REMOTE_SUMMARY' ]; then cp '$REMOTE_SUMMARY' '$COLD_BACKUP_SUMMARY'; fi; rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; sync"
   "$MISTER" reboot-wait --direct-reset
   wait_status cold-ready 300 "data['runtime']['slint_status'].get('input_enabled') is True and data['runtime']['slint_status'].get('catalog_ready') is True" ||
     fail "cold startup did not reach input_enabled"
@@ -146,7 +157,7 @@ run_cold() {
   [ "$splash_done" -ge 1900 ] || fail "cold splash too short: ${splash_done}ms"
   [ "$reveal" -ge "$ready" ] || fail "cold reveal $reveal before library_ready $ready"
   collect_and_assert_common cold_no_catalog 1 "$log"
-  remote "if [ -f '$backup_db' ]; then mv '$backup_db' '$REMOTE_DB'; fi; if [ -f '$backup_summary' ]; then mv '$backup_summary' '$REMOTE_SUMMARY'; fi; sync"
+  remote "if [ -f '$COLD_BACKUP_DB' ]; then mv '$COLD_BACKUP_DB' '$REMOTE_DB'; fi; if [ -f '$COLD_BACKUP_SUMMARY' ]; then mv '$COLD_BACKUP_SUMMARY' '$REMOTE_SUMMARY'; fi; sync"
   remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null || true
 }
 
@@ -209,8 +220,11 @@ run_return() {
   done
 }
 
-run_cold
-run_warm
-run_return
+case "$MODE" in
+  all) run_cold; run_warm; run_return ;;
+  cold) run_cold ;;
+  warm) run_warm ;;
+  return) run_return ;;
+esac
 
 echo "startup reveal acceptance passed; rows appended to $TSV"

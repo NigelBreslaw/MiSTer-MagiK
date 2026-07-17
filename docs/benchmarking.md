@@ -177,6 +177,10 @@ startup, preview readiness, or launch-return behavior:
 scripts/device-startup-reveal-acceptance.sh LABEL
 ```
 
+Set `MISTER_STARTUP_REVEAL_MODE=cold|warm|return` to run one lifecycle in
+isolation. The harness restores cold-test catalog backups and clears temporary
+launcher handoff state from its exit trap, including interrupted runs.
+
 For the broader hardware-in-the-loop (HIL) release policy, tier semantics, skip
 reporting, and artifact contract, see `docs/production-readiness.md`.
 
