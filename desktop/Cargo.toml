@@ -15,7 +15,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
-lz4_flex = "0.13.1"
+lz4_flex = "0.14.0"
 mister-magik-framebuffer-stream = { path = "../framebuffer-stream" }
 mister-magik-agent-protocol = { path = "../agent-protocol" }
 png = "0.18.1"
