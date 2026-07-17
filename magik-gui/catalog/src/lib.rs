@@ -14,6 +14,7 @@ pub mod catalog_build_record;
 pub mod catalog_checkpoint;
 pub mod catalog_classify;
 pub mod catalog_config;
+pub mod catalog_domain;
 mod catalog_discovery;
 mod catalog_load_metrics;
 pub mod catalog_navigation;

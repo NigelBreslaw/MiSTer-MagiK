@@ -296,7 +296,7 @@ mod tests {
             run_id: RunId::new("fixture-run").unwrap(),
             intended_generation: 7,
             kind: CatalogEventKind::SystemQueued {
-                system_id: SystemId::new("snes"),
+                system_id: SystemId::parse("snes").unwrap(),
             },
         };
         assert_eq!(event.run_id.as_str(), "fixture-run");

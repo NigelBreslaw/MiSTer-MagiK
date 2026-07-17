@@ -284,8 +284,10 @@ pub fn system_title(system_id: &str) -> String {
 pub struct SystemId(String);
 
 impl SystemId {
-    pub fn new(value: &str) -> Self {
-        Self(value.trim().to_ascii_lowercase().replace('_', "-"))
+    pub fn parse(value: &str) -> Result<Self, SystemIdError> {
+        let normalized = normalize_system_id_text(value);
+        validate_system_id(&normalized)?;
+        Ok(Self(normalized))
     }
 
     pub fn as_str(&self) -> &str {
@@ -301,6 +303,34 @@ impl SystemId {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemIdError {
+    value: String,
+    reason: &'static str,
+}
+
+impl SystemIdError {
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for SystemIdError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "invalid system ID {:?}: {}",
+            self.value, self.reason
+        )
+    }
+}
+
+impl std::error::Error for SystemIdError {}
+
 impl std::fmt::Display for SystemId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
@@ -308,7 +338,51 @@ impl std::fmt::Display for SystemId {
 }
 
 pub fn normalize_system_id(value: &str) -> String {
-    SystemId::new(value).into_string()
+    normalize_system_id_text(value)
+}
+
+fn normalize_system_id_text(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn validate_system_id(value: &str) -> Result<(), SystemIdError> {
+    let fail = |reason| {
+        Err(SystemIdError {
+            value: value.to_string(),
+            reason,
+        })
+    };
+    if value.is_empty() {
+        return fail("empty");
+    }
+    if value.len() > 64 {
+        return fail("longer than 64 bytes");
+    }
+    if value.starts_with('-') || value.ends_with('-') || value.contains("--") {
+        return fail("hyphens must separate non-empty words");
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return fail("only lowercase ASCII letters, digits, and hyphens are allowed");
+    }
+    if matches!(
+        value,
+        "manifest"
+            | "registry"
+            | "state"
+            | "systems"
+            | "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "lpt1"
+    ) {
+        return fail("reserved storage name");
+    }
+    Ok(())
 }
 
 fn fallback_title(id: &str) -> String {
@@ -342,11 +416,30 @@ mod tests {
 
     #[test]
     fn system_id_normalizes_case_whitespace_and_separator() {
-        assert_eq!(SystemId::new(" SNK_NeoGeo ").as_str(), "snk-neogeo");
         assert_eq!(
-            SystemId::new("snk_neogeo"),
-            SystemId::new("snk-neogeo")
+            SystemId::parse(" SNK_NeoGeo ").unwrap().as_str(),
+            "snk-neogeo"
         );
+        assert_eq!(
+            SystemId::parse("snk_neogeo").unwrap(),
+            SystemId::parse("snk-neogeo").unwrap()
+        );
+    }
+
+    #[test]
+    fn system_id_rejects_paths_controls_and_reserved_storage_names() {
+        for value in [
+            "../snes",
+            "snes/usa",
+            "snes\\usa",
+            "snes\nusa",
+            "-snes",
+            "snes--usa",
+            "manifest",
+            "CON",
+        ] {
+            assert!(SystemId::parse(value).is_err(), "accepted {value:?}");
+        }
     }
 
     #[test]
