@@ -40,6 +40,7 @@ pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
 pub mod runtime_thread;
+pub mod sharded_catalog;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;

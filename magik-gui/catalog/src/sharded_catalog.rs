@@ -1,0 +1,316 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Typed Interface for the production-inactive sharded catalog architecture.
+
+use crate::catalog_classify::SystemId;
+use std::error::Error;
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+pub const SHARD_SCHEMA_VERSION: u32 = 1;
+pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const NAVIGATION_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogConfig {
+    storage_root: PathBuf,
+    source_roots: Vec<PathBuf>,
+    mame_database: Option<PathBuf>,
+    hbmame_database: Option<PathBuf>,
+    max_navigation_decoded_bytes: usize,
+}
+
+impl CatalogConfig {
+    pub fn new(
+        storage_root: PathBuf,
+        source_roots: Vec<PathBuf>,
+        max_navigation_decoded_bytes: usize,
+    ) -> Result<Self, CatalogError> {
+        if storage_root.as_os_str().is_empty() {
+            return Err(CatalogError::configuration("storage root is empty"));
+        }
+        if source_roots.is_empty() {
+            return Err(CatalogError::configuration("source roots are empty"));
+        }
+        if source_roots.iter().any(|root| root.as_os_str().is_empty()) {
+            return Err(CatalogError::configuration("a source root is empty"));
+        }
+        if max_navigation_decoded_bytes == 0 {
+            return Err(CatalogError::configuration(
+                "navigation decoded-byte limit is zero",
+            ));
+        }
+        Ok(Self {
+            storage_root,
+            source_roots,
+            mame_database: None,
+            hbmame_database: None,
+            max_navigation_decoded_bytes,
+        })
+    }
+
+    pub fn with_mame_database(mut self, path: PathBuf) -> Self {
+        self.mame_database = Some(path);
+        self
+    }
+
+    pub fn with_hbmame_database(mut self, path: PathBuf) -> Self {
+        self.hbmame_database = Some(path);
+        self
+    }
+
+    pub fn storage_root(&self) -> &Path {
+        &self.storage_root
+    }
+
+    pub fn source_roots(&self) -> &[PathBuf] {
+        &self.source_roots
+    }
+
+    pub fn mame_database(&self) -> Option<&Path> {
+        self.mame_database.as_deref()
+    }
+
+    pub fn hbmame_database(&self) -> Option<&Path> {
+        self.hbmame_database.as_deref()
+    }
+
+    pub fn max_navigation_decoded_bytes(&self) -> usize {
+        self.max_navigation_decoded_bytes
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogCommand {
+    Bootstrap { first: SystemId },
+    Reconcile,
+    RebuildSystem { system_id: SystemId },
+    Check,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconcilePlan {
+    pub current_generation: Option<u64>,
+    pub intended_generation: u64,
+    pub systems: Vec<PlannedSystem>,
+    pub global_rebuild: bool,
+}
+
+impl ReconcilePlan {
+    pub fn is_unchanged(&self) -> bool {
+        !self.global_rebuild && self.systems.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedSystem {
+    pub system_id: SystemId,
+    pub reasons: Vec<ReconcileReason>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReconcileReason {
+    MissingCatalog,
+    SourceChanged,
+    SharedClaimChanged,
+    MetadataChanged,
+    SemanticVersionChanged,
+    ExplicitRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogEvent {
+    pub run_id: RunId,
+    pub intended_generation: u64,
+    pub kind: CatalogEventKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogEventKind {
+    PlanReady { systems: usize },
+    SystemQueued { system_id: SystemId },
+    SystemBuildStarted { system_id: SystemId },
+    SystemReady { summary: SystemSummary },
+    SystemPersisted { summary: SystemSummary },
+    SystemFailed { failure: SystemFailure },
+    ManifestPublished { generation: u64 },
+    Done { outcome: RunOutcome },
+    Failure { error: CatalogError },
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct RunId(String);
+
+impl RunId {
+    pub fn new(value: impl Into<String>) -> Result<Self, CatalogError> {
+        let value = value.into();
+        if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+            return Err(CatalogError::configuration("invalid run ID"));
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RunOutcome {
+    Unchanged {
+        generation: Option<u64>,
+    },
+    Complete {
+        generation: u64,
+        systems: usize,
+    },
+    Partial {
+        generation: u64,
+        systems: usize,
+        failures: Vec<SystemFailure>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SystemFailure {
+    pub system_id: SystemId,
+    pub stage: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SystemSummary {
+    pub system_id: SystemId,
+    pub generation: u64,
+    pub games: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogRegistry {
+    generation: u64,
+    systems: Vec<SystemSummary>,
+}
+
+impl CatalogRegistry {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn systems(&self) -> &[SystemSummary] {
+        &self.systems
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SystemCatalog {
+    summary: SystemSummary,
+}
+
+impl SystemCatalog {
+    pub fn summary(&self) -> &SystemSummary {
+        &self.summary
+    }
+}
+
+pub trait CatalogEngine {
+    fn plan(&mut self) -> Result<ReconcilePlan, CatalogError>;
+
+    fn execute(
+        &mut self,
+        command: CatalogCommand,
+        emit: &mut dyn FnMut(CatalogEvent),
+    ) -> Result<RunOutcome, CatalogError>;
+}
+
+pub trait CatalogReader {
+    fn open_registry(&self) -> Result<CatalogRegistry, CatalogError>;
+
+    fn open_system(&self, system_id: &SystemId) -> Result<SystemCatalog, CatalogError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogError {
+    stage: &'static str,
+    message: String,
+}
+
+impl CatalogError {
+    pub fn new(stage: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            message: message.into(),
+        }
+    }
+
+    pub fn configuration(message: impl Into<String>) -> Self {
+        Self::new("configuration", message)
+    }
+
+    pub fn stage(&self) -> &'static str {
+        self.stage
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for CatalogError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.stage, self.message)
+    }
+}
+
+impl Error for CatalogError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_configuration_needs_roots_and_bounds() {
+        assert_eq!(
+            CatalogConfig::new(PathBuf::from("catalog"), vec![], 1)
+                .unwrap_err()
+                .message(),
+            "source roots are empty"
+        );
+        assert_eq!(
+            CatalogConfig::new(PathBuf::from("catalog"), vec![PathBuf::from("games")], 0)
+                .unwrap_err()
+                .message(),
+            "navigation decoded-byte limit is zero"
+        );
+        let config =
+            CatalogConfig::new(PathBuf::from("catalog"), vec![PathBuf::from("games")], 1024)
+                .unwrap();
+        assert_eq!(config.storage_root(), Path::new("catalog"));
+        assert_eq!(config.source_roots(), &[PathBuf::from("games")]);
+        assert_eq!(config.max_navigation_decoded_bytes(), 1024);
+    }
+
+    #[test]
+    fn every_event_carries_run_and_generation_correlation() {
+        let event = CatalogEvent {
+            run_id: RunId::new("fixture-run").unwrap(),
+            intended_generation: 7,
+            kind: CatalogEventKind::SystemQueued {
+                system_id: SystemId::new("snes"),
+            },
+        };
+        assert_eq!(event.run_id.as_str(), "fixture-run");
+        assert_eq!(event.intended_generation, 7);
+    }
+
+    #[test]
+    fn unchanged_plan_has_no_system_work() {
+        assert!(ReconcilePlan {
+            current_generation: Some(4),
+            intended_generation: 4,
+            systems: Vec::new(),
+            global_rebuild: false,
+        }
+        .is_unchanged());
+    }
+}
