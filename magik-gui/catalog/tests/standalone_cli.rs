@@ -29,3 +29,47 @@ fn standalone_check_emits_json_handshake_and_terminal_failure() {
     assert_eq!(events.last().unwrap()["stage"], "check");
     let _ = std::fs::remove_dir_all(temp);
 }
+
+#[cfg(feature = "builder")]
+#[test]
+fn catalog_lab_creates_a_deterministic_synthetic_library() {
+    use std::process::Command;
+
+    let temp = std::env::temp_dir().join(format!(
+        "mister-magik-catalog-lab-cli-{}",
+        std::process::id()
+    ));
+    let fixture = temp.join("fixture");
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir(&temp).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_catalog-lab"))
+        .args([
+            "fixture",
+            fixture.to_str().unwrap(),
+            "--arcade-games",
+            "1",
+            "--small-system-games",
+            "2",
+            "--large-system-games",
+            "3",
+            "--large-system-depth",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output);
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains("files=9"));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("fixture.json")).unwrap()).unwrap();
+    assert_eq!(
+        manifest["format"],
+        "mister-magik-synthetic-catalog-fixture-v1"
+    );
+    assert_eq!(manifest["files"], 9);
+    assert!(fixture
+        .join("games/C64/level-00-00/level-01-00/bucket-00000000/Synthetic C64 00000002.d64")
+        .is_file());
+    std::fs::remove_dir_all(temp).unwrap();
+}

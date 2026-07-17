@@ -371,8 +371,12 @@ run_check() {
     host-tools-fast) step "Fast host tools"; scripts/dev-rust host-tools-fast ;;
     host-tests) step "Host logic tests"; scripts/dev-rust test ;;
     magik-gui-clippy) step "Clippy magik-gui host logic"; (cd magik-gui && cargo clippy --lib --no-default-features -- -D warnings) ;;
-    catalog-tests) step "Catalog crate tests"; cargo test --manifest-path magik-gui/catalog/Cargo.toml ;;
-    catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-targets -- -D warnings ;;
+    catalog-tests)
+      step "Catalog crate tests (all features)"
+      cargo test --manifest-path magik-gui/catalog/Cargo.toml --all-features
+      cargo check --manifest-path magik-gui/catalog/Cargo.toml --no-default-features --features reader
+      ;;
+    catalog-clippy) step "Clippy catalog crate"; cargo clippy --manifest-path magik-gui/catalog/Cargo.toml --all-features --all-targets -- -D warnings ;;
     production-ui-check) step "Check production magik-gui binary"; cargo check --manifest-path magik-gui/Cargo.toml --bin mister-magik-fb --no-default-features --features ui ;;
     host-tools) step "Full host tools"; scripts/dev-rust host-tools ;;
     mister-tests) step "Test host tools"; cargo test --manifest-path tools/mister/Cargo.toml ;;

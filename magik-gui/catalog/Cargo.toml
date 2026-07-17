@@ -13,6 +13,11 @@ name = "mister-magik-catalog-builder"
 path = "src/bin/catalog_builder.rs"
 required-features = ["builder"]
 
+[[bin]]
+name = "catalog-lab"
+path = "src/bin/catalog_lab.rs"
+required-features = ["builder"]
+
 [lints.rust]
 warnings = "deny"
 

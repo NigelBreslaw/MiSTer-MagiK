@@ -43,6 +43,8 @@ pub mod runtime_thread;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
+#[cfg(feature = "builder")]
+pub mod synthetic_fixture;
 #[cfg(test)]
 mod test_support;
 pub mod work_coordinator;
