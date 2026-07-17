@@ -17,7 +17,7 @@ REMOTE_CATALOG_STATE="$MISTER_MAGIK_CATALOG_STATE"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 BENCH_DIR="$HERE/history/toolchain-bench"
 OUT_DIR="$HERE/build/first-scan-profiles"
-TSV="$BENCH_DIR/results-first-scan.tsv"
+TSV="${MISTER_FIRST_SCAN_RESULTS_TSV:-$BENCH_DIR/results-first-scan.tsv}"
 LABEL=""
 DEPLOY="skip"
 REPLACE_LABEL=0
@@ -38,7 +38,8 @@ Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--rep
 
 Deletes the Catalog V3 generation, reboots the
 MiSTer, waits for the visible first-boot scan to complete, and appends timing
-rows to history/toolchain-bench/results-first-scan.tsv.
+rows to history/toolchain-bench/results-first-scan.tsv. Set
+MISTER_FIRST_SCAN_RESULTS_TSV to keep qualification output under build/.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second after reboot while the first scan completes.
 Historical timing and database-size budgets are recorded by default. Pass
