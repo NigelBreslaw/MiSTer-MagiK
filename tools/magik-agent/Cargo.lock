@@ -55,6 +55,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -76,7 +85,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "libc",
- "lz4_flex",
+ "lz4_flex 0.14.0",
  "mister-magik-agent-protocol",
  "mister-magik-framebuffer-stream",
  "mister-magik-latch-contract",
@@ -89,7 +98,7 @@ dependencies = [
 name = "mister-magik-agent-protocol"
 version = "0.1.0"
 dependencies = [
- "lz4_flex",
+ "lz4_flex 0.13.1",
  "serde_json",
 ]
 

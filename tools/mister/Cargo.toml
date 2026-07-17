@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 flate2 = "1"
-lz4_flex = "0.13.1"
+lz4_flex = "0.14.0"
 mister-magik-catalog = { path = "../../magik-gui/catalog" }
 mister-magik-media-contract = { path = "../../media-contract" }
 mister-magik-agent-protocol = { path = "../../agent-protocol" }

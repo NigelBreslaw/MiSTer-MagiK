@@ -21,7 +21,7 @@ path = "src/main.rs"
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 libc = "0.2"
-lz4_flex = "0.13.1"
+lz4_flex = "0.14.0"
 mister-magik-framebuffer-stream = { path = "../../framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../scanout-contract" }
 mister-magik-latch-contract = { path = "../../latch-contract" }

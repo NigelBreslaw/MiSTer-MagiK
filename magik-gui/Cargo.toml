@@ -27,7 +27,7 @@ required-features = ["ui"]
 [dependencies]
 bytemuck = "1"
 libc = "0.2"
-lz4_flex = "0.13.1"
+lz4_flex = "0.14.0"
 mister-magik-framebuffer-stream = { path = "../framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../scanout-contract" }
 mister-magik-media-contract = { path = "../media-contract" }

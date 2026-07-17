@@ -16,9 +16,9 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "cc"
-version = "1.2.65"
+version = "1.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
+checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -135,6 +135,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -154,7 +163,7 @@ dependencies = [
 name = "mister-magik-agent-protocol"
 version = "0.1.0"
 dependencies = [
- "lz4_flex",
+ "lz4_flex 0.13.1",
  "serde_json",
 ]
 
@@ -163,7 +172,7 @@ name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
  "libc",
- "lz4_flex",
+ "lz4_flex 0.13.1",
  "quick-xml",
  "rusqlite",
  "serde",
@@ -183,7 +192,7 @@ name = "mister-tool"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "lz4_flex",
+ "lz4_flex 0.14.0",
  "mister-magik-agent-protocol",
  "mister-magik-catalog",
  "mister-magik-media-contract",
