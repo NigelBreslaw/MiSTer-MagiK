@@ -38,10 +38,10 @@ pub const UIO_AUDVOL: u16 = 0x26;
 // Private Menu_MiSTer experiment commands. 0x43 is UIO_GET_F12_MOD in
 // hps_io.sv, and 0x53..0x56 are file-I/O commands, so keep this pair above
 // the stock command ranges used by the Menu core.
-pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = 0x57;
-pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
-pub const MAGIK_FBUF_LATCH_MAGIC: u16 = 0x4d47;
-pub const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
+pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = mister_magik_latch_contract::SET_FBUF_LATCH;
+pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;
+pub const MAGIK_FBUF_LATCH_MAGIC: u16 = mister_magik_latch_contract::LATCH_MAGIC;
+pub const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
 
 // user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
 pub const CONF_VGA_SCALER: u16 = 0x0004;

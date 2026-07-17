@@ -78,6 +78,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "mister-magik-framebuffer-stream",
+ "mister-magik-latch-contract",
  "mister-magik-scanout-contract",
  "quick-xml",
  "serde_json",
@@ -85,6 +86,10 @@ dependencies = [
 
 [[package]]
 name = "mister-magik-framebuffer-stream"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-latch-contract"
 version = "0.1.0"
 
 [[package]]

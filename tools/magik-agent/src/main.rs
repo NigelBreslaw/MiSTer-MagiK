@@ -831,8 +831,8 @@ mod linux {
     const AGENT_PORT: u16 = 7498;
     const FRAMEBUFFER_PRODUCER_PORT: u16 = 7499;
     const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
-    const MAGIK_UIO_GET_FBUF_LATCH: u16 = 0x58;
-    const MAGIK_FBUF_STATUS_MAGIC: u16 = 0x4d48;
+    const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;
+    const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
     const FPGA_MGR_LEN: usize = 0x1000;
     const FPGA_GPO_OFF: usize = 0x10;

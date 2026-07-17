@@ -31,6 +31,7 @@ lz4_flex = "0.13.1"
 mister-magik-framebuffer-stream = { path = "../framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../scanout-contract" }
 mister-magik-media-contract = { path = "../media-contract" }
+mister-magik-latch-contract = { path = "../latch-contract" }
 # No "std" feature on purpose: that pulls system font loading (fontconfig), which
 # we don't have/want on the MiSTer. Instead we embed a font for the software
 # renderer (see build.rs) and provide time/etc. ourselves via the Platform trait.

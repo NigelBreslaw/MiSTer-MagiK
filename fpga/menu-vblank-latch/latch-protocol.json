@@ -1,0 +1,10 @@
+{
+  "set_command": 87,
+  "get_command": 88,
+  "latch_magic": 19783,
+  "status_magic": 19784,
+  "status_words": [
+    "active_seq", "pending_seq", "flags", "flip_count", "post_count",
+    "drop_count", "base_low", "base_high", "width", "height", "stride"
+  ]
+}

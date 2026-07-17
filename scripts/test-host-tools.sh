@@ -401,6 +401,7 @@ PY
 "$ROOT/scripts/checks/check-no-main-kill.sh"
 "$ROOT/scripts/checks/check-no-direct-arcade-scene.sh"
 "$ROOT/scripts/checks/check-scanout-slots-contract.sh"
+python3 "$ROOT/scripts/checks/check-latch-protocol.py"
 python3 "$ROOT/scripts/tests/test-scanout-platform-contract.py"
 if rg -n '(^|[^[:alnum:]_])(println!|eprintln!|print!|eprint!)' "$ROOT/magik-gui/src" "$ROOT/magik-gui/catalog/src" \
   -g '*.rs' \

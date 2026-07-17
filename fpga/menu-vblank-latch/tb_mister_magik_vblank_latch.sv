@@ -5,8 +5,9 @@
 `default_nettype none
 
 module tb_mister_magik_vblank_latch;
-	localparam [7:0] SET_LATCH = 8'h57;
-	localparam [7:0] GET_LATCH = 8'h58;
+	`include "mister_magik_latch_protocol.svh"
+	localparam [7:0] SET_LATCH = MAGIK_UIO_SET_FBUF_LATCH;
+	localparam [7:0] GET_LATCH = MAGIK_UIO_GET_FBUF_LATCH;
 
 	reg clk_sys = 1'b0;
 	reg hdmi_vbl = 1'b0;

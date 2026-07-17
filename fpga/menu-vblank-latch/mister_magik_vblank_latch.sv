@@ -43,10 +43,7 @@ module mister_magik_vblank_latch (
 	output reg  [15:0] drop_count = 16'd0
 );
 
-	localparam [7:0]  MAGIK_UIO_SET_FBUF_LATCH = 8'h57;
-	localparam [7:0]  MAGIK_UIO_GET_FBUF_LATCH = 8'h58;
-	localparam [15:0] MAGIK_FBUF_LATCH_MAGIC = 16'h4D47;
-	localparam [15:0] MAGIK_FBUF_STATUS_MAGIC = 16'h4D48;
+	`include "mister_magik_latch_protocol.svh"
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg vbl_meta = 1'b0;

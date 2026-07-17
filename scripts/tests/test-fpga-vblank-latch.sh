@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-iverilog -g2012 -Wall -Wimplicit \
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 	-s tb_mister_magik_vblank_latch \
 	-o "$build_dir/tb_mister_magik_vblank_latch.vvp" \
 	"$rtl_dir/mister_magik_vblank_latch.sv" \
