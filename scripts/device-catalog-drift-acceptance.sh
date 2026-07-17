@@ -7,14 +7,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
-REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
-REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
-REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
+source "$ROOT/scripts/lib/magik-layout.sh"
+source "$ROOT/scripts/lib/library-sql-output-lib.sh"
+source "$ROOT/scripts/lib/catalog-device-test-lib.sh"
+magik_layout_select dev
+REMOTE_BIN="$MISTER_MAGIK_BIN"
+REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
+REMOTE_SUMMARY="$MISTER_MAGIK_LIBRARY_SUMMARY"
+REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_STATUS="/tmp/mister-magik/status.json"
-REMOTE_MARKER="/media/fat/mister-magik-dev/rebuild-on-next-boot"
+REMOTE_MARKER="$MISTER_MAGIK_REBUILD_MARKER"
 BENCH_DIR="$ROOT/history/toolchain-bench"
 TSV="$BENCH_DIR/results-catalog-drift-acceptance.tsv"
 LABEL=""
@@ -85,44 +89,31 @@ elif [ "$REPLACE_LABEL" -eq 1 ]; then
 fi
 
 remote() {
-  "$MISTER" run "$1"
+  catalog_device_remote "$1"
 }
 
 db() {
-  "$MISTER" db "$1"
+  catalog_device_db "$@"
 }
 
 last_line() {
-  awk 'NF { value=$0 } END { print value }' | tr -d '\r'
+  catalog_device_last_line
 }
 
 last_number() {
-  awk 'NF { value=$NF } END { gsub(/[^0-9]/, "", value); print value }'
-}
-
-first_result_number() {
-  awk '
-    /^library_sql_timing_tsv[[:space:]]/ { next }
-    NF && seen_header {
-      value=$1
-      gsub(/[^0-9]/, "", value)
-      print value
-      exit
-    }
-    NF { seen_header=1 }
-  '
+  catalog_device_last_number
 }
 
 db_scalar() {
-  db "$1" | first_result_number
+  db "$1" | library_sql_first_result_number
 }
 
 sq() {
-  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/'\\\\''/g")"
+  catalog_device_shell_quote "$1"
 }
 
 sql_string() {
-  printf "'%s'" "$(printf "%s" "$1" | sed "s/'/''/g")"
+  catalog_device_sql_string "$1"
 }
 
 fail() {
@@ -151,27 +142,11 @@ dump_failure_artifacts() {
 }
 
 wait_remote() {
-  local label="$1"
-  local timeout="$2"
-  local command="$3"
-  local deadline=$((SECONDS + timeout))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if remote "$command" >/dev/null 2>&1; then
-      echo "ok: $label"
-      return 0
-    fi
-    sleep 1
-  done
-  fail "timeout waiting for $label"
+  catalog_device_wait_remote "$@"
 }
 
 assert_remote() {
-  local label="$1"
-  local command="$2"
-  if ! remote "$command" >/dev/null 2>&1; then
-    fail "$label"
-  fi
-  echo "ok: $label"
+  catalog_device_assert_remote "$@"
 }
 
 assert_db_count() {
@@ -202,23 +177,15 @@ write_launcher_env() {
 }
 
 restart_launcher() {
-  local action="${1:-}"
-  write_launcher_env "$action"
-  remote "rm -f $(sq "$REMOTE_LOG") $(sq "$REMOTE_EVENTS") $(sq "$REMOTE_STATUS"); if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
-  wait_remote "launcher process" 25 "test \"\$(ps w | grep '[m]ister-magik-fb ui launcher' | wc -l)\" = 1"
+  catalog_device_restart_launcher "${1:-}"
 }
 
 force_refresh() {
-  local log="$1"
-  remote "$(sq "$REMOTE_BIN") library-refresh >$(sq "$log") 2>&1"
+  catalog_device_force_refresh "$1"
 }
 
 restore_launcher_env() {
-  if [ "$HAD_ENV" -eq 1 ] && [ -n "$ENV_BACKUP" ]; then
-    remote "mv $(sq "$ENV_BACKUP") $(sq "$REMOTE_ENV")" >/dev/null 2>&1 || true
-  else
-    remote "rm -f $(sq "$REMOTE_ENV")" >/dev/null 2>&1 || true
-  fi
+  catalog_device_restore_launcher_env
 }
 
 remove_temp_artifacts() {

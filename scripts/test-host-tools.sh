@@ -61,6 +61,7 @@ for script in \
   "$ROOT/scripts/lib/bench-context-lib.sh" \
   "$ROOT/scripts/lib/arming-state-lib.sh" \
   "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" \
+  "$ROOT/scripts/lib/catalog-device-test-lib.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
@@ -464,6 +465,7 @@ fi
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
 bash "$ROOT/scripts/lib/arming-state-lib.sh" --self-test
 bash "$ROOT/scripts/lib/platform-manifest-lib.sh" --self-test
+bash "$ROOT/scripts/lib/catalog-device-test-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/lib/library-sql-output-lib.sh"
 "$ROOT/scripts/lib/reboot-wait-lib.sh"
