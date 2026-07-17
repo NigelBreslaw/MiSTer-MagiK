@@ -9,6 +9,7 @@ use crate::shard_registry::{
     garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
     publish_prevalidated_system_artifacts_deferred, read_latest_manifest, sync_artifact_batch,
     CatalogManifest, ManifestSystem, RegistryLimits,
+    PublishedGeneration,
 };
 use crate::sharded_catalog::{PlannedSystemAction, ReconcilePlan};
 use crate::system_shard::{
@@ -19,6 +20,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
@@ -154,6 +156,7 @@ pub fn execute_reconciliation(
     let mut shard_write_time = Duration::ZERO;
     let mut artifact_publish_time = Duration::ZERO;
     let mut slowest_shard = (String::new(), Duration::ZERO);
+    let mut shard_jobs = Vec::new();
     for planned in &plan.systems {
         match planned.action {
             PlannedSystemAction::Remove => {
@@ -161,85 +164,78 @@ pub fn execute_reconciliation(
                 removed.push(planned.system_id.clone());
             }
             PlannedSystemAction::Rebuild => {
-                let shard_started = Instant::now();
                 let phase_started = Instant::now();
                 let materialized =
                     materializer.materialize(&planned.system_id, expected_generation)?;
                 materialize_time += phase_started.elapsed();
                 validate_materialized(&planned.system_id, &materialized)?;
-                let staging = storage_root.join("staging").join(format!(
-                    "reconcile-{}-{expected_generation}-{nonce}-{}",
-                    std::process::id(),
-                    planned.system_id.as_str()
-                ));
-                fs::create_dir_all(&staging)
-                    .map_err(|error| ReconciliationError::with("stage", error))?;
-                let sqlite = staging.join("system.sqlite3");
-                let navigation = staging.join("system.nav.lz4b");
-                let game_count = materialized.games.len() as u64;
-                let phase_started = Instant::now();
-                if let Err(error) = write_system_shard_with_durability(
-                    &sqlite,
-                    &navigation,
-                    &SystemShardData {
-                        system_id: planned.system_id.clone(),
-                        generation: expected_generation,
-                        games: materialized.games,
-                    },
-                    limits.shard,
-                    ShardDurability::Deferred,
-                ) {
-                    let _ = fs::remove_dir_all(&staging);
-                    return Err(ReconciliationError::new("write", error.to_string()));
-                }
-                shard_write_time += phase_started.elapsed();
-                let phase_started = Instant::now();
-                // The deferred writer has already reopened and fully validated
-                // both files. Avoid decoding every shard a second time here.
-                let active = publish_prevalidated_system_artifacts_deferred(
-                    storage_root,
-                    &sqlite,
-                    &navigation,
-                    &planned.system_id,
-                    expected_generation,
-                    game_count,
-                    limits,
-                );
-                let active = match active {
-                    Ok(active) => active,
-                    Err(error) => {
-                        let _ = fs::remove_dir_all(&staging);
-                        return Err(ReconciliationError::new(
-                            "publish-artifact",
-                            error.to_string(),
-                        ));
-                    }
-                };
-                artifact_publish_time += phase_started.elapsed();
                 let previous = systems
                     .iter()
                     .find(|system| system.system_id == planned.system_id)
                     .map(|system| system.active.clone());
-                systems.retain(|system| system.system_id != planned.system_id);
-                systems.push(ManifestSystem {
-                    system_id: materialized.system_id,
-                    display_title: materialized.display_title,
-                    section: materialized.section,
-                    family: materialized.family,
-                    order: materialized.order,
-                    producers: materialized.producers,
-                    active,
+                shard_jobs.push(ShardBuildJob {
+                    materialized,
                     previous,
                 });
-                let _ = fs::remove_dir(staging);
-                rebuilt.push(planned.system_id.clone());
-                let shard_elapsed = shard_started.elapsed();
-                if shard_elapsed > slowest_shard.1 {
-                    slowest_shard = (planned.system_id.as_str().to_string(), shard_elapsed);
-                }
             }
         }
     }
+    let shard_batch_started = Instant::now();
+    let worker_count = if actual_generation.is_none() {
+        3.min(shard_jobs.len().max(1))
+    } else {
+        1
+    };
+    let jobs = Arc::new(Mutex::new(shard_jobs.into_iter()));
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let first_error = Arc::new(Mutex::new(None));
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let jobs = Arc::clone(&jobs);
+            let completed = Arc::clone(&completed);
+            let first_error = Arc::clone(&first_error);
+            scope.spawn(move || loop {
+                if first_error.lock().expect("shard error lock").is_some() {
+                    break;
+                }
+                let Some(job) = jobs.lock().expect("shard job lock").next() else {
+                    break;
+                };
+                match build_shard_job(
+                    storage_root,
+                    expected_generation,
+                    nonce,
+                    limits,
+                    job,
+                ) {
+                    Ok(shard) => completed.lock().expect("completed shard lock").push(shard),
+                    Err(error) => {
+                        let mut first = first_error.lock().expect("shard error lock");
+                        if first.is_none() {
+                            *first = Some(error);
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    if let Some(error) = first_error.lock().expect("shard error lock").take() {
+        return Err(error);
+    }
+    let mut completed = completed.lock().expect("completed shard lock");
+    for shard in completed.drain(..) {
+        shard_write_time += shard.write_time;
+        artifact_publish_time += shard.publish_time;
+        if shard.elapsed > slowest_shard.1 {
+            slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
+        }
+        rebuilt.push(shard.system.system_id.clone());
+        systems.retain(|system| system.system_id != shard.system.system_id);
+        systems.push(shard.system);
+    }
+    rebuilt.sort();
+    let shard_batch_time = shard_batch_started.elapsed();
     materializer.refresh_manifest(&mut systems)?;
     systems.sort_by(|left, right| left.system_id.cmp(&right.system_id));
     let barrier_started = Instant::now();
@@ -258,10 +254,12 @@ pub fn execute_reconciliation(
     let manifest_time = manifest_started.elapsed();
     materializer.commit_facts()?;
     crate::catalog_logln!(
-        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_write_us={}\tartifact_publish_us={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
+        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_write_us={}\tartifact_publish_us={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
         expected_generation,
         rebuilt.len(),
         materialize_time.as_micros(),
+        worker_count,
+        shard_batch_time.as_micros(),
         shard_write_time.as_micros(),
         artifact_publish_time.as_micros(),
         barrier_time.as_micros(),
@@ -273,6 +271,90 @@ pub fn execute_reconciliation(
         generation: expected_generation,
         rebuilt,
         removed,
+    })
+}
+
+struct ShardBuildJob {
+    materialized: MaterializedSystem,
+    previous: Option<PublishedGeneration>,
+}
+
+struct CompletedShard {
+    system: ManifestSystem,
+    write_time: Duration,
+    publish_time: Duration,
+    elapsed: Duration,
+}
+
+fn build_shard_job(
+    storage_root: &Path,
+    generation: u64,
+    nonce: u128,
+    limits: RegistryLimits,
+    job: ShardBuildJob,
+) -> Result<CompletedShard, ReconciliationError> {
+    let started = Instant::now();
+    let system_id = job.materialized.system_id.clone();
+    let staging = storage_root.join("staging").join(format!(
+        "reconcile-{}-{generation}-{nonce}-{}",
+        std::process::id(),
+        system_id.as_str()
+    ));
+    fs::create_dir_all(&staging).map_err(|error| ReconciliationError::with("stage", error))?;
+    let sqlite = staging.join("system.sqlite3");
+    let navigation = staging.join("system.nav.lz4b");
+    let game_count = job.materialized.games.len() as u64;
+    let write_started = Instant::now();
+    if let Err(error) = write_system_shard_with_durability(
+        &sqlite,
+        &navigation,
+        &SystemShardData {
+            system_id: system_id.clone(),
+            generation,
+            games: job.materialized.games,
+        },
+        limits.shard,
+        ShardDurability::Deferred,
+    ) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(ReconciliationError::new("write", error.to_string()));
+    }
+    let write_time = write_started.elapsed();
+    let publish_started = Instant::now();
+    // The deferred writer has already reopened and fully validated both files.
+    let active = publish_prevalidated_system_artifacts_deferred(
+        storage_root,
+        &sqlite,
+        &navigation,
+        &system_id,
+        generation,
+        game_count,
+        limits,
+    )
+    .map_err(|error| ReconciliationError::new("publish-artifact", error.to_string()));
+    let active = match active {
+        Ok(active) => active,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+    let publish_time = publish_started.elapsed();
+    let _ = fs::remove_dir(staging);
+    Ok(CompletedShard {
+        system: ManifestSystem {
+            system_id: job.materialized.system_id,
+            display_title: job.materialized.display_title,
+            section: job.materialized.section,
+            family: job.materialized.family,
+            order: job.materialized.order,
+            producers: job.materialized.producers,
+            active,
+            previous: job.previous,
+        },
+        write_time,
+        publish_time,
+        elapsed: started.elapsed(),
     })
 }
 
@@ -434,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_multi_shard_run_keeps_old_manifest_and_retry_collects_orphans() {
+    fn failed_materialization_keeps_old_manifest_and_retry_succeeds() {
         let root = temporary_root("failure");
         let mut materializer = FixtureMaterializer::new();
         execute_reconciliation(
@@ -457,7 +539,7 @@ mod tests {
         assert_eq!(error.stage(), "fixture");
         assert_eq!(read_latest_manifest(&root, limits()).unwrap(), before);
         assert_eq!(materializer.commits, 1);
-        assert!(root.join("systems/c64/2.sqlite3").exists());
+        assert!(!root.join("systems/c64/2.sqlite3").exists());
 
         materializer.fail_on = None;
         materializer.calls.clear();
