@@ -5,6 +5,9 @@
 # Break production catalog startup state on a real MiSTer and prove recovery.
 set -euo pipefail
 
+echo "ERROR: device-catalog-destruction was retired with Catalog V2; use device-catalog-acceptance.sh and V3 immutable-generation fault tests" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/library-sql-output-lib.sh"

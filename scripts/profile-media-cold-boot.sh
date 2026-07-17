@@ -13,8 +13,7 @@ TSV="$BENCH_DIR/results-media-cold-boot.tsv"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_BIN="/media/fat/mister-magik-dev/mister-magik-fb"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
+REMOTE_CATALOG="/media/fat/mister-magik-dev/catalog-v3"
 DEFAULT_MANIFEST_URL="https://assets.mistermagik.com/mister-magik/v1/manifest.json"
 ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
@@ -1074,7 +1073,7 @@ echo "==> media cold boot label=$label commit=$commit asset_dir=$asset_dir reset
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
 reset_cmd="rm -rf $(shell_quote "$asset_dir"); rm -f $(shell_quote "$REMOTE_LOG") $(shell_quote "$remote_arcade_trace")"
 if [[ "$reset_catalog" -eq 1 ]]; then
-  reset_cmd+=" $(shell_quote "$REMOTE_DB") $(shell_quote "$REMOTE_SUMMARY")"
+  reset_cmd="rm -rf $(shell_quote "$REMOTE_CATALOG"); ${reset_cmd}"
 fi
 reset_cmd+="; sync"
 "$MISTER" run "$reset_cmd" >/dev/null

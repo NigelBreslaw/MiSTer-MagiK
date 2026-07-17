@@ -5,6 +5,9 @@
 # Destructively reset-fault MagiK filesystem writes on a real MiSTer.
 set -euo pipefail
 
+echo "ERROR: V2 database reset-fault scenarios are retired; do not arm them against Catalog V3" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/arming-state-lib.sh"

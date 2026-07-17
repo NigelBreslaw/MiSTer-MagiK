@@ -69,7 +69,8 @@ if test -n \"\$pids\"; then
   done
   test -z \"\$(pidof mister-magik-catalog-builder 2>/dev/null || true)\"
 fi
-rm -f '$MISTER_MAGIK_LIBRARY_DB' '$MISTER_MAGIK_APP_DIR/library.summary.json' '$MISTER_MAGIK_APP_DIR/library.nav.lz4b' '$REMOTE_LOG'
+rm -rf '$MISTER_MAGIK_CATALOG_V3'
+rm -f '$REMOTE_LOG'
 '$MISTER_MAGIK_CATALOG_BUILDER' fresh-build >'$REMOTE_LOG' 2>&1
 sync
 "

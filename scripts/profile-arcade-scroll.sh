@@ -66,7 +66,6 @@ human_turbo_idle_frames="${MISTER_HUMAN_TURBO_IDLE_FRAMES:-0}"
 human_turbo_normal_frames="${MISTER_HUMAN_TURBO_NORMAL_FRAMES:-30}"
 human_turbo_pause_frames="${MISTER_HUMAN_TURBO_PAUSE_FRAMES:-30}"
 entry_before_a_wait_frames="${MISTER_ARCADE_ENTRY_BEFORE_A_WAIT_FRAMES:-12}"
-repair_projections="${MISTER_ARCADE_SCROLL_REPAIR_PROJECTIONS:-0}"
 catalog_refresh="${MISTER_CATALOG_REFRESH:-default}"
 deploy="skip"
 build_profile="release-device"
@@ -702,10 +701,6 @@ EOF
 
 run_boot_prelude() {
   echo "==> Boot flow: Home -> Arcade -> ${scenario} scroll open_gate=${entry_open_gate_ms}ms interactive_gate=${entry_gate_ms}ms label=$label"
-  if [[ "$repair_projections" == "1" || "$repair_projections" == "true" || "$repair_projections" == "yes" ]]; then
-    echo "==> Refresh warm catalog projections before measured reboot"
-    "$MISTER" run "'$REMOTE_BIN' repair-catalog-projections" >/dev/null
-  fi
   local input_script="$entry_input_script"
   if [[ -z "$input_script" ]]; then
     input_script=""

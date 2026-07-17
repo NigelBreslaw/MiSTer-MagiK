@@ -77,6 +77,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new("library-sql", CommandKind::PreFpga),
     CommandSpec::new("catalog-inspect", CommandKind::PreFpga),
+    CommandSpec::new("catalog-v3-inspect", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]

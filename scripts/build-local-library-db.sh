@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+echo "ERROR: build-local-library-db was retired with Catalog V2; use catalog-lab and the V3 standalone builder" >&2
+exit 2
+
 usage() {
   cat >&2 <<'USAGE'
 usage: scripts/build-local-library-db.sh --mirror DIR --out DB [--target /media/fat]

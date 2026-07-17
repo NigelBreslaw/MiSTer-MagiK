@@ -9,8 +9,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 LABEL="${1:-startup-reveal-$(date -u +%Y%m%dT%H%M%SZ)}"
 MODE="${MISTER_STARTUP_REVEAL_MODE:-all}"
-REMOTE_DB="/media/fat/mister-magik-dev/library.sqlite3"
-REMOTE_SUMMARY="/media/fat/mister-magik-dev/library.summary.json"
+REMOTE_CATALOG="/media/fat/mister-magik-dev/catalog-v3"
+REMOTE_CATALOG_STATE="$REMOTE_CATALOG/state/catalog-state.sqlite3"
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
@@ -26,11 +26,10 @@ case "$MODE" in
   *) echo "MISTER_STARTUP_REVEAL_MODE must be all, cold, warm, or return" >&2; exit 2 ;;
 esac
 
-COLD_BACKUP_DB="/media/fat/mister-magik-dev/library.sqlite3.startup-reveal-$LABEL.bak"
-COLD_BACKUP_SUMMARY="/media/fat/mister-magik-dev/library.summary.startup-reveal-$LABEL.bak"
+COLD_BACKUP_CATALOG="/media/fat/mister-magik-dev/catalog-v3.startup-reveal-$LABEL.bak"
 
 cleanup() {
-  remote "rm -f '$REMOTE_ENV'; if [ -f '$COLD_BACKUP_DB' ]; then mv '$COLD_BACKUP_DB' '$REMOTE_DB'; fi; if [ -f '$COLD_BACKUP_SUMMARY' ]; then mv '$COLD_BACKUP_SUMMARY' '$REMOTE_SUMMARY'; fi; if [ -s '$RETURN_STATE' ] && [ -p /dev/MiSTer_cmd ]; then printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd; fi; sync" >/dev/null 2>&1 || true
+  remote "rm -f '$REMOTE_ENV'; if [ -d '$COLD_BACKUP_CATALOG' ]; then rm -rf '$REMOTE_CATALOG'; mv '$COLD_BACKUP_CATALOG' '$REMOTE_CATALOG'; fi; if [ -s '$RETURN_STATE' ] && [ -p /dev/MiSTer_cmd ]; then printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd; fi; sync" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -139,7 +138,7 @@ collect_and_assert_common() {
 
 run_cold() {
   echo "== cold no-catalog reveal"
-  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$COLD_BACKUP_DB'; fi; if [ -f '$REMOTE_SUMMARY' ]; then cp '$REMOTE_SUMMARY' '$COLD_BACKUP_SUMMARY'; fi; rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; sync"
+  remote "test ! -e '$COLD_BACKUP_CATALOG'; if [ -d '$REMOTE_CATALOG' ]; then mv '$REMOTE_CATALOG' '$COLD_BACKUP_CATALOG'; fi; rm -f '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; sync"
   "$MISTER" reboot-wait --direct-reset
   wait_status cold-ready 300 "data['runtime']['slint_status'].get('input_enabled') is True and data['runtime']['slint_status'].get('catalog_ready') is True" ||
     fail "cold startup did not reach input_enabled"
@@ -157,13 +156,13 @@ run_cold() {
   [ "$splash_done" -ge 1900 ] || fail "cold splash too short: ${splash_done}ms"
   [ "$reveal" -ge "$ready" ] || fail "cold reveal $reveal before library_ready $ready"
   collect_and_assert_common cold_no_catalog 1 "$log"
-  remote "if [ -f '$COLD_BACKUP_DB' ]; then mv '$COLD_BACKUP_DB' '$REMOTE_DB'; fi; if [ -f '$COLD_BACKUP_SUMMARY' ]; then mv '$COLD_BACKUP_SUMMARY' '$REMOTE_SUMMARY'; fi; sync"
+  remote "rm -rf '$REMOTE_CATALOG'; if [ -d '$COLD_BACKUP_CATALOG' ]; then mv '$COLD_BACKUP_CATALOG' '$REMOTE_CATALOG'; fi; sync"
   remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null || true
 }
 
 run_warm() {
   echo "== warm catalog reveal"
-  remote "test -s '$REMOTE_DB'" >/dev/null || fail "warm scenario needs an existing $REMOTE_DB"
+  remote "test -s '$REMOTE_CATALOG_STATE'" >/dev/null || fail "warm scenario needs an existing $REMOTE_CATALOG_STATE"
   local i log
   for i in 1 2 3 4 5; do
     reset_remote_logs

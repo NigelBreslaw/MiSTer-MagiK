@@ -5,6 +5,9 @@
 # Exercise catalog checkpoint drift detection on a real MiSTer.
 set -euo pipefail
 
+echo "ERROR: device-catalog-drift-acceptance was retired with Catalog V2; use the V3 rebuild benchmark and catalog acceptance" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="${MISTER:-$ROOT/scripts/mister}"
 source "$ROOT/scripts/lib/magik-layout.sh"

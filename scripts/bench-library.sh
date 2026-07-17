@@ -9,6 +9,9 @@
 # Appends production library-refresh timing rows to history/toolchain-bench/results-library.tsv.
 set -euo pipefail
 
+echo "ERROR: bench-library targeted the retired V2 monolith; use bench-catalog-rebuild.sh" >&2
+exit 2
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_DIR="$HERE/magik-gui"
 BUILD_PROFILE=release-device

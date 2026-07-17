@@ -174,6 +174,10 @@ fn production_builder_publishes_v3_without_creating_v2_artifacts() {
     );
     assert!(storage.join("state/catalog-state.sqlite3").is_file());
     assert!(storage.join("state/scanner-cache.sqlite3").is_file());
+    let report = mister_magik_catalog::catalog_acceptance::inspect_catalog(&storage).unwrap();
+    assert!(report.contains("catalog_v3_summary_tsv\tvalid=1\tschema=1"));
+    assert!(report.contains("\tsystems=2\ttotal_games=3\tarcade_resident_games=1"));
+    assert_eq!(report.matches("catalog_v3_system_tsv").count(), 2);
     assert!(!legacy.exists());
     assert!(!temp.join("library.summary.json").exists());
     assert!(!temp.join("library.nav.lz4b").exists());

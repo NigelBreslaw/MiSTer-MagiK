@@ -7,6 +7,9 @@
 # is allowed; the catalog artifacts must remain byte-for-byte unchanged.
 set -euo pipefail
 
+echo "ERROR: the missing V2 summary regression is retired; V3 registry startup has no summary sidecar" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 source "$ROOT/scripts/lib/magik-layout.sh"

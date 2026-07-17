@@ -158,7 +158,7 @@ fn main() {
 
     let cmd = command_args::resolve_command(&args);
 
-    if cmd != "library-sql" && cmd != "catalog-inspect" {
+    if cmd != "library-sql" && cmd != "catalog-inspect" && cmd != "catalog-v3-inspect" {
         crate::ui_logln!("mister-magik-fb [{cmd}] (arch={})", std::env::consts::ARCH);
     }
 
@@ -341,6 +341,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         "library-sql" => run_library_sql(),
         "catalog-inspect" => run_catalog_inspect(),
+        "catalog-v3-inspect" => run_catalog_v3_inspect(),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
@@ -366,6 +367,16 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(mister_experiments)]
         "transition-effects" => ui_runner::print_transition_effects(),
         other => unknown_command(other),
+    }
+}
+
+fn run_catalog_v3_inspect() {
+    match mister_magik_catalog::catalog_acceptance::inspect_production_catalog() {
+        Ok(report) => print!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            std::process::exit(1);
+        }
     }
 }
 

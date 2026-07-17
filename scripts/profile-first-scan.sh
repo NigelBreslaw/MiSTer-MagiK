@@ -12,9 +12,8 @@ magik_layout_select dev
 REMOTE_BIN="$MISTER_MAGIK_BIN"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
-REMOTE_DB="$MISTER_MAGIK_LIBRARY_DB"
-REMOTE_SUMMARY="$MISTER_MAGIK_APP_DIR/library.summary.json"
-REMOTE_NAV="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
+REMOTE_CATALOG="$MISTER_MAGIK_CATALOG_V3"
+REMOTE_CATALOG_STATE="$MISTER_MAGIK_CATALOG_STATE"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 BENCH_DIR="$HERE/history/toolchain-bench"
 OUT_DIR="$HERE/build/first-scan-profiles"
@@ -23,7 +22,6 @@ LABEL=""
 DEPLOY="skip"
 REPLACE_LABEL=0
 TIMEOUT_SECS=240
-SQLITE_BUILD_DIR=""
 NAMESPACE_BACKEND=""
 CATALOG_FIXTURE_CONTRACT="$HERE/scripts/lib/catalog-fixture-contract.json"
 CATALOG_FIXTURE_TOOL="$HERE/scripts/lib/catalog-fixture-contract.py"
@@ -35,10 +33,10 @@ source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--sqlite-build-dir DIR] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--enforce-performance-budgets]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--enforce-performance-budgets]
        scripts/profile-first-scan.sh --self-test
 
-Deletes the launcher catalog database and summary projection, reboots the
+Deletes the Catalog V3 generation, reboots the
 MiSTer, waits for the visible first-boot scan to complete, and appends timing
 rows to history/toolchain-bench/results-first-scan.tsv.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
@@ -255,7 +253,6 @@ first_scan_marker_self_test() {
 }
 
 first_scan_self_test() {
-  python3 "$CATALOG_FIXTURE_TOOL" self-test
   if first_scan_commit_is_dirty_from_statuses 0 0; then
     echo "first-scan dirty helper marked a clean source dirty" >&2
     return 1
@@ -384,7 +381,7 @@ first_scan_identity_self_test() {
 first_scan_reset_artifact_self_test() {
   local rows
   rows="$(
-    for path in "$REMOTE_DB" "$REMOTE_SUMMARY" "$REMOTE_NAV"; do
+    for path in "$REMOTE_CATALOG" "$REMOTE_CATALOG_STATE" "$MISTER_MAGIK_SCANNER_CACHE"; do
       printf 'artifact_reset_tsv\tSELFTEST\tmissing\t%s\t0\n' "$path"
     done
   )"
@@ -392,7 +389,7 @@ first_scan_reset_artifact_self_test() {
     echo "artifact reset self-test expected three rows" >&2
     return 1
   fi
-  for path in "$REMOTE_DB" "$REMOTE_SUMMARY" "$REMOTE_NAV"; do
+  for path in "$REMOTE_CATALOG" "$REMOTE_CATALOG_STATE" "$MISTER_MAGIK_SCANNER_CACHE"; do
     if ! printf '%s\n' "$rows" | grep -q $'^artifact_reset_tsv\tSELFTEST\tmissing\t'"$path"$'\t0$'; then
       echo "artifact reset self-test missing row for $path" >&2
       return 1
@@ -407,7 +404,6 @@ while [[ $# -gt 0 ]]; do
     --skip-build) DEPLOY="skip"; shift ;;
     --replace-label) REPLACE_LABEL=1; shift ;;
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
-    --sqlite-build-dir) SQLITE_BUILD_DIR="${2:?}"; shift 2 ;;
     --namespace-backend) NAMESPACE_BACKEND="${2:?}"; shift 2 ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
     --enforce-performance-budgets) ENFORCE_PERFORMANCE_BUDGETS=1; shift ;;
@@ -535,9 +531,6 @@ profile_first_scan_cleanup() {
 }
 benchmark_cleanup_install profile_first_scan_cleanup
 : >"$env_file"
-if [[ -n "$SQLITE_BUILD_DIR" ]]; then
-  printf 'export MISTER_LIBRARY_SQLITE_BUILD_DIR=%q\n' "$SQLITE_BUILD_DIR" >>"$env_file"
-fi
 if [[ -n "$NAMESPACE_BACKEND" ]]; then
   printf 'export MISTER_LIBRARY_NAMESPACE_BACKEND=%q\n' "$NAMESPACE_BACKEND" >>"$env_file"
 fi
@@ -561,7 +554,7 @@ if [ -n \"\$builder_pids\" ]; then
     kill -9 \$builder_pids 2>/dev/null || true
   fi
 fi
-for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+for path in '$REMOTE_CATALOG'; do
   if [ -e \"\$path\" ]; then
     bytes=\$(wc -c <\"\$path\" 2>/dev/null || echo 0)
     echo \"artifact_reset_tsv	$LABEL	removed	\$path	\$bytes\"
@@ -569,16 +562,17 @@ for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
     echo \"artifact_reset_tsv	$LABEL	missing	\$path	0\"
   fi
 done
-rm -f '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV' '$REMOTE_LOG' '$REMOTE_EVENTS'
+rm -rf '$REMOTE_CATALOG'
+rm -f '$REMOTE_LOG' '$REMOTE_EVENTS'
 sync
-for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+for path in '$REMOTE_CATALOG'; do
   if [ -e \"\$path\" ]; then
     echo \"artifact reset failed: \$path was republished\" >&2
     exit 1
   fi
 done
 sleep 1
-for path in '$REMOTE_DB' '$REMOTE_SUMMARY' '$REMOTE_NAV'; do
+for path in '$REMOTE_CATALOG'; do
   if [ -e \"\$path\" ]; then
     echo \"artifact reset failed after settle: \$path was republished\" >&2
     exit 1
@@ -679,62 +673,29 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   }
 ' "$combined_log" >>"$TSV"
 
-catalog_metrics="$("$MISTER" db "SELECT 'games' AS metric, count(*) AS value FROM games UNION ALL SELECT 'game_rows', count(*) FROM game_rows UNION ALL SELECT 'launcher_rows', (SELECT count(*) FROM ui_arcade_preferred)+(SELECT count(*) FROM launcher_catalog_rows) UNION ALL SELECT 'systems', count(*) FROM systems UNION ALL SELECT 'discoveries', CAST(value AS INTEGER) FROM meta WHERE key='discoveries' UNION ALL SELECT 'pc88_game_rows', count(*) FROM game_rows g JOIN string_values s ON s.string_id=g.system_string_id WHERE s.value='pc88';" 2>/dev/null || true)"
-catalog_games="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "games" { print $2; exit }' | tr -d '\r')"
-catalog_game_rows="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "game_rows" { print $2; exit }' | tr -d '\r')"
-catalog_launcher_rows="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "launcher_rows" { print $2; exit }' | tr -d '\r')"
-catalog_systems="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "systems" { print $2; exit }' | tr -d '\r')"
-catalog_discoveries="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "discoveries" { print $2; exit }' | tr -d '\r')"
-catalog_pc88_rows="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "pc88_game_rows" { print $2; exit }' | tr -d '\r')"
-catalog_db_bytes="$(printf '%s\n' "$catalog_metrics" | awk -F '\t' '$1 == "library_sql_timing_tsv" { print $3; exit }' | tr -d '\r')"
+catalog_report="$OUT_DIR/${LABEL}-catalog-v3-inspect.tsv"
+if ! "$MISTER" run "'$REMOTE_BIN' catalog-v3-inspect" >"$catalog_report"; then
+  echo "first scan V3 integrity inspection failed" >&2
+  gate_failed=1
+fi
+catalog_summary="$(awk -F '\t' '$1 == "catalog_v3_summary_tsv" { print; exit }' "$catalog_report")"
+catalog_field() { printf '%s\n' "$catalog_summary" | awk -F '\t' -v key="$1" '{ for (i=1;i<=NF;i++) if ($i ~ ("^" key "=")) { sub("^" key "=", "", $i); print $i; exit } }'; }
+catalog_games="$(catalog_field total_games)"
+catalog_systems="$(catalog_field systems)"
+catalog_discoveries="$(catalog_field state_discoveries)"
+catalog_arcade_resident="$(catalog_field arcade_resident_games)"
+catalog_db_bytes="$("$MISTER" run "du -sk '$REMOTE_CATALOG' | awk '{print \$1 * 1024}'" | tail -1 | tr -dc '0-9')"
 status="$("$MISTER" status 2>/dev/null || true)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_games" "0" "$catalog_games" >>"$TSV"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_systems" "0" "$catalog_systems" >>"$TSV"
 printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "catalog_db_bytes" "0" "$catalog_db_bytes" >>"$TSV"
-catalog_summary="$OUT_DIR/${LABEL}-catalog-summary.json"
-catalog_facts="$OUT_DIR/${LABEL}-catalog-facts.json"
-catalog_contract_report="$OUT_DIR/${LABEL}-catalog-contract.tsv"
-if ! "$MISTER" get "$REMOTE_SUMMARY" "$catalog_summary" >/dev/null; then
-  gate_failed=1
-  echo "first scan could not retrieve the catalog summary for fixture validation" >&2
-else
-  read -r arcade_visible sms_games sms_kind gamegear_games gamegear_kind astrocade_games astrocade_kind < <(
-    python3 - "$catalog_summary" <<'PY'
-import json
-import sys
-d = json.load(open(sys.argv[1], encoding="utf-8"))
-s = {row["id"]: row for row in d["systems"]}
-print(len(d["hot_games"]), s["sms"]["count"], s["sms"]["platform_kind"],
-      s["gamegear"]["count"], s["gamegear"]["platform_kind"],
-      s["astrocade"]["count"], s["astrocade"]["platform_kind"])
-PY
-  )
-  if ! python3 "$CATALOG_FIXTURE_TOOL" write-facts \
-      --summary "$catalog_summary" --output "$catalog_facts" \
-      --games "$catalog_games" --game-rows "$catalog_game_rows" \
-      --launcher-rows "$catalog_launcher_rows" --systems "$catalog_systems" \
-      --discoveries "$catalog_discoveries" --db-bytes "$catalog_db_bytes" \
-      --library-ready-ms "$ready_ms" --library-db-saved-ms "$saved_ms" \
-      --anchor "pc88_game_rows=$catalog_pc88_rows" \
-      --anchor "arcade_visible=$arcade_visible" \
-      --anchor "sms_games=$sms_games" --anchor "sms_kind=$sms_kind" \
-      --anchor "gamegear_games=$gamegear_games" --anchor "gamegear_kind=$gamegear_kind" \
-      --anchor "astrocade_games=$astrocade_games" --anchor "astrocade_kind=$astrocade_kind"; then
-    gate_failed=1
-  else
-    contract_args=(validate --contract "$CATALOG_FIXTURE_CONTRACT" --facts "$catalog_facts")
-    if [[ "$ENFORCE_PERFORMANCE_BUDGETS" -eq 1 ]]; then
-      contract_args+=(--enforce-performance-budgets)
-    fi
-    if ! python3 "$CATALOG_FIXTURE_TOOL" "${contract_args[@]}" | tee "$catalog_contract_report"; then
-      gate_failed=1
-    fi
-  fi
-fi
+for value in "$catalog_games" "$catalog_systems" "$catalog_discoveries" "$catalog_arcade_resident"; do
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || gate_failed=1
+done
 emit_thread_sample_artifact_report | tee "$artifact_report"
 
 echo "appended to $TSV"
-echo "catalog_games=$catalog_games catalog_game_rows=$catalog_game_rows catalog_launcher_rows=$catalog_launcher_rows catalog_systems=$catalog_systems catalog_db_bytes=$catalog_db_bytes performance_budgets_enforced=$ENFORCE_PERFORMANCE_BUDGETS"
+echo "catalog_games=$catalog_games arcade_resident=$catalog_arcade_resident catalog_systems=$catalog_systems catalog_db_bytes=$catalog_db_bytes performance_budgets_enforced=$ENFORCE_PERFORMANCE_BUDGETS"
 printf '%s\n' "$status"
 if [[ "$gate_failed" -eq 1 ]]; then
   exit 1

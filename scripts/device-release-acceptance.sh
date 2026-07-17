@@ -12,7 +12,8 @@ MISTER="$ROOT/scripts/mister"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$ROOT/build/device-release/$STAMP"
 REMOTE_BIN="/media/fat/mister-magik/mister-magik-fb"
-REMOTE_DB="/media/fat/mister-magik/library.sqlite3"
+REMOTE_CATALOG="/media/fat/mister-magik/catalog-v3"
+REMOTE_CATALOG_STATE="$REMOTE_CATALOG/state/catalog-state.sqlite3"
 REMOTE_ENV="/media/fat/mister-magik/launcher.env"
 REMOTE_ASSETS="/media/fat/mister-magik/assets"
 LAUNCH_REF="${MISTER_ACCEPTANCE_LAUNCH_REF:-/media/fat/_Arcade/Missile Command (rev 3).mra}"
@@ -23,6 +24,7 @@ TIER_SPEC=""
 TIERS_EXPLICIT=0
 PRESET="release"
 SELECTED_TIERS=""
+ACTIVE_CATALOG_BACKUP=""
 SKIPPED_TIERS=""
 SKIP_DISPLAY_MODES=0
 SKIP_INSTALL_RESTORE=0
@@ -45,7 +47,7 @@ Options:
                          Tiers: health, framebuffer-route, launcher-lifecycle,
                          catalog, handoff, display-modes, install-restore, soak.
   --allow-reset-catalog  Include destructive first-boot catalog recovery checks.
-                         The existing library.sqlite3 is backed up first.
+                         The existing Catalog V3 directory is backed up first.
   --fast                 Run quick non-destructive checks only.
   --soak                 Include the long soak. Default off.
   --skip-display-modes   Skip HDMI mode smoke checks.
@@ -327,23 +329,6 @@ last_number() {
   awk 'NF { value=$NF } END { gsub(/[^0-9]/, "", value); print value }'
 }
 
-first_result_number() {
-  awk '
-    /^library_sql_timing_tsv[[:space:]]/ { next }
-    NF && seen_header {
-      value=$1
-      gsub(/[^0-9]/, "", value)
-      print value
-      exit
-    }
-    NF { seen_header=1 }
-  '
-}
-
-db_scalar() {
-  "$MISTER" db "$1" | first_result_number
-}
-
 assert_eq() {
   local label="$1"
   local expected="$2"
@@ -579,8 +564,9 @@ run_first_boot_visible_scan() {
     record_skip "first-boot visible scan"
     return
   fi
-  local backup="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
-  remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$backup'; fi; rm -f '$REMOTE_DB' '$REMOTE_ENV' /media/fat/mister-magik/bench-boot /tmp/mister-magik/events.jsonl /tmp/mister-magik-slint.log; sync"
+  local backup="/media/fat/mister-magik/catalog-v3.acceptance-$STAMP.bak"
+  ACTIVE_CATALOG_BACKUP="$backup"
+  remote "test ! -e '$backup'; if [ -d '$REMOTE_CATALOG' ]; then mv '$REMOTE_CATALOG' '$backup'; fi; rm -f '$REMOTE_ENV' /media/fat/mister-magik/bench-boot /tmp/mister-magik/events.jsonl /tmp/mister-magik-slint.log; sync"
   run_capture "first-boot-reboot" "$MISTER" reboot-wait
   wait_remote_event "first-boot first frame event" "first_frame" 60
   wait_status_expr "first-boot scan screen visible" 60 \
@@ -589,33 +575,13 @@ run_first_boot_visible_scan() {
   wait_status_expr "first-boot catalog becomes ready" 300 \
     "data['runtime']['slint_status'].get('catalog_ready') is True and int(data['runtime']['slint_status'].get('catalog_games', 0)) > 0" \
     "'ready=' + str(data['runtime'].get('slint_status', {}).get('catalog_ready', '?')) + ' games=' + str(data['runtime'].get('slint_status', {}).get('catalog_games', '?')) + ' detail=' + str(data['runtime'].get('slint_status', {}).get('catalog_scan_detail', '?'))"
-  remote "if [ -f '$backup' ]; then mv '$backup' '$REMOTE_DB'; sync; fi"
+  remote "rm -rf '$REMOTE_CATALOG'; if [ -d '$backup' ]; then mv '$backup' '$REMOTE_CATALOG'; sync; fi"
+  ACTIVE_CATALOG_BACKUP=""
   restart_launcher
 }
 
 run_catalog_mutation_acceptance() {
-  local fixture_root="/tmp/mister-magik-acceptance-library"
-  local fixture="$fixture_root/_Arcade"
-  local sqlite="/tmp/mister-magik-acceptance-fixture.sqlite3"
-  local count_sql="SELECT count(*) FROM game_rows WHERE title IN ('Acceptance One','Acceptance Two');"
-  local dump_sql="SELECT g.title,magik_path(pv.chunk_id,pv.offset,pv.len,pc.uncompressed_len,pc.bytes) AS launch_ref,s.value AS system_id FROM game_rows g JOIN launch_target_rows lt ON lt.launch_id=g.game_key_id JOIN string_values s ON s.string_id=g.system_string_id JOIN path_values pv ON pv.path_id=lt.launch_path_id JOIN path_chunks pc ON pc.chunk_id=pv.chunk_id WHERE g.title IN ('Acceptance One','Acceptance Two') ORDER BY g.title;"
-  remote "rm -rf '$fixture_root' '$sqlite'; mkdir -p '$fixture'; printf '<misterromdescription><setname>acceptance_one</setname></misterromdescription>\n' > '$fixture/Acceptance One.mra'"
-  remote "MISTER_LIBRARY_ROOTS='$fixture_root' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-a.log 2>&1"
-  local first_count
-  first_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$count_sql\" 2>/dev/null || echo 0" | first_result_number || true)"
-  remote "printf '<misterromdescription><setname>acceptance_two</setname></misterromdescription>\n' > '$fixture/Acceptance Two.mra'; MISTER_LIBRARY_ROOTS='$fixture_root' MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-refresh >/tmp/mister-magik-catalog-mutation-b.log 2>&1"
-  local second_count
-  second_count="$(remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$count_sql\" 2>/dev/null || echo 0" | first_result_number || true)"
-  remote "MISTER_LIBRARY_SQLITE='$sqlite' '$REMOTE_BIN' library-sql \"$dump_sql\" >/tmp/mister-magik-catalog-mutation-games.tsv 2>&1 || true"
-  remote_get_optional "/tmp/mister-magik-catalog-mutation-a.log" "catalog-mutation-a.log"
-  remote_get_optional "/tmp/mister-magik-catalog-mutation-b.log" "catalog-mutation-b.log"
-  remote_get_optional "/tmp/mister-magik-catalog-mutation-games.tsv" "catalog-mutation-games.tsv"
-  if [ "${first_count:-0}" = "1" ] && [ "${second_count:-0}" = "2" ]; then
-    record_ok "catalog mutation fixture count $first_count -> $second_count"
-  else
-    record_fail "catalog mutation fixture count expected 1 -> 2 first=${first_count:-empty} second=${second_count:-empty}"
-  fi
-  remote "rm -rf '$fixture_root' '$sqlite' /tmp/mister-magik-catalog-mutation-a.log /tmp/mister-magik-catalog-mutation-b.log /tmp/mister-magik-catalog-mutation-games.tsv"
+  run_required_capture "catalog-v3-rebuild-benchmark" "$ROOT/scripts/bench-catalog-rebuild.sh" "release-$STAMP"
 }
 
 run_launch_matrix() {
@@ -927,54 +893,8 @@ run_tier_catalog() {
   assert_status "$OUT/status-initial.json" "catalog is ready with games" \
     "data['runtime']['slint_status'].get('catalog_ready') is True and int(data['runtime']['slint_status'].get('catalog_games', 0)) > 0"
 
-  run_required_capture "launcher-catalog-publication" \
-    "$ROOT/scripts/device-launcher-catalog-publication-regression.sh" \
-    --layout public \
-    --label "$STAMP-release"
-
-  refresh_count="$(remote "ps w | grep '[m]ister-magik-fb library-refresh' | wc -l" | last_number || true)"
-  assert_eq "active library-refresh count" "0" "$refresh_count"
-
-  if remote "test -s '$REMOTE_DB'"; then
-    record_ok "$REMOTE_DB is present and non-empty"
-  else
-    record_fail "$REMOTE_DB is missing or empty"
-  fi
-
-  launcher_catalog_tables="$(db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='launcher_catalog';" || true)"
-  assert_eq "launcher_catalog table count" "1" "$launcher_catalog_tables"
-
-  console_pack_count="$(remote "find '$REMOTE_ASSETS' -maxdepth 1 -type f \\( -name '*-screenshots.mmlz4b' -o -name '*-screenshots-320x320.mmlz4b' \\) 2>/dev/null | wc -l" | last_number || true)"
-  if [ "${console_pack_count:-0}" -gt 0 ]; then
-    asset_entry_tables="$(db_scalar "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asset_entries';" || true)"
-    assert_eq "runtime-only screenshot asset table count" "0" "$asset_entry_tables"
-  else
-    record_skip "runtime-only preview table check requires installed console screenshot packs"
-  fi
-
-  if remote "test -f '$REMOTE_ASSETS/arcade-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/arcade-screenshots.mmlz4b'"; then
-    count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM (SELECT v.has_preview,s.value AS system_id FROM ui_arcade_preferred p JOIN ui_arcade_variants v ON v.family_id=p.family_id AND v.variant_ordinal=p.variant_ordinal JOIN game_rows g ON g.game_key_id=v.launch_id JOIN string_values s ON s.string_id=g.system_string_id UNION ALL SELECT l.has_preview,s.value FROM launcher_catalog_rows l JOIN game_rows g ON g.game_key_id=l.launch_id JOIN string_values s ON s.string_id=g.system_string_id) WHERE system_id='arcade';" || true)"
-    assert_gt_zero "arcade has_preview count" "$count"
-  fi
-  for platform in neogeo saturn; do
-    if remote "test -f '$REMOTE_ASSETS/${platform}-screenshots-320x320.mmlz4b' || test -f '$REMOTE_ASSETS/${platform}-screenshots.mmlz4b'"; then
-      count="$(db_scalar "SELECT COALESCE(SUM(has_preview),0) FROM (SELECT v.has_preview,s.value AS system_id FROM ui_arcade_preferred p JOIN ui_arcade_variants v ON v.family_id=p.family_id AND v.variant_ordinal=p.variant_ordinal JOIN game_rows g ON g.game_key_id=v.launch_id JOIN string_values s ON s.string_id=g.system_string_id UNION ALL SELECT l.has_preview,s.value FROM launcher_catalog_rows l JOIN game_rows g ON g.game_key_id=l.launch_id JOIN string_values s ON s.string_id=g.system_string_id) WHERE system_id=$(sql_string "$platform");" || true)"
-      assert_gt_zero "$platform has_preview count" "$count"
-    fi
-  done
-
-  if remote "test -f '$REMOTE_ASSETS/.screenshot-media-state.json'"; then
-    size_state_count="$(remote "grep -c 'screenshots-320x320\\.mmlz4b' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
-    if [ "${size_state_count:-0}" -gt 0 ]; then
-      record_ok "media state size-qualified local_path count = $size_state_count"
-      cache_state_count="$(remote "grep -c 'cf_cache_status\\|content_length\\|effective_url' '$REMOTE_ASSETS/.screenshot-media-state.json' 2>/dev/null || true" | last_number || true)"
-      assert_gt_zero "media state cache metadata count" "$cache_state_count"
-    else
-      record_ok "media state present without size-qualified runtime downloads"
-    fi
-  else
-    record_ok "media state not present; runtime downloader has not published packs on this device"
-  fi
+  run_required_capture "catalog-v3-acceptance" \
+    "$ROOT/scripts/device-catalog-acceptance.sh" --layout public --label "$STAMP-release"
 
   if [ "$FAST" -eq 0 ]; then
     run_catalog_mutation_acceptance || true
@@ -982,8 +902,9 @@ run_tier_catalog() {
   fi
 
   if [ "$ALLOW_RESET_CATALOG" -eq 1 ]; then
-    BACKUP="/media/fat/mister-magik/library.sqlite3.acceptance-$STAMP.bak"
-    remote "if [ -f '$REMOTE_DB' ]; then cp '$REMOTE_DB' '$BACKUP'; fi; rm -f '$REMOTE_DB'; sync"
+    BACKUP="/media/fat/mister-magik/catalog-v3.acceptance-$STAMP.bak"
+    ACTIVE_CATALOG_BACKUP="$BACKUP"
+    remote "test ! -e '$BACKUP'; if [ -d '$REMOTE_CATALOG' ]; then mv '$REMOTE_CATALOG' '$BACKUP'; fi; sync"
     append_report ""
     append_report "catalog backup: $BACKUP"
     restart_launcher
@@ -991,7 +912,8 @@ run_tier_catalog() {
     status_json "catalog-reset" || record_fail "catalog reset status JSON"
     assert_status "$OUT/status-catalog-reset.json" "catalog reset shows launcher instead of black boot" \
       "data['runtime']['slint_status'].get('scene') == 'launcher'"
-    remote "if [ -f '$BACKUP' ]; then mv '$BACKUP' '$REMOTE_DB'; fi; sync"
+    remote "rm -rf '$REMOTE_CATALOG'; if [ -d '$BACKUP' ]; then mv '$BACKUP' '$REMOTE_CATALOG'; fi; sync"
+    ACTIVE_CATALOG_BACKUP=""
     restart_launcher
   else
     record_skip "destructive catalog reset requires --allow-reset-catalog"
@@ -1143,6 +1065,10 @@ collect_artifacts() {
 
 finish() {
   local rc=$?
+  if [ -n "$ACTIVE_CATALOG_BACKUP" ]; then
+    remote "rm -rf '$REMOTE_CATALOG'; if [ -d '$ACTIVE_CATALOG_BACKUP' ]; then mv '$ACTIVE_CATALOG_BACKUP' '$REMOTE_CATALOG'; fi; rm -f '$REMOTE_ENV'; sync" >/dev/null 2>&1 || true
+    ACTIVE_CATALOG_BACKUP=""
+  fi
   if [ "$FINISHED" -eq 0 ]; then
     collect_artifacts || true
     append_report ""

@@ -5,6 +5,9 @@
 # Profile CPU and storage activity during one library scan/import benchmark.
 set -euo pipefail
 
+echo "ERROR: profile-library-io targeted the retired V2 monolith; use V3 shard/rebuild profiles" >&2
+exit 2
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/magik-layout.sh"

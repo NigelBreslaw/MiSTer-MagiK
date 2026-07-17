@@ -6,6 +6,9 @@
 # bridge publication path. It never rebuilds or persists catalog state.
 set -euo pipefail
 
+echo "ERROR: launcher catalog publication regression was retired with the V2 monolith; use device-catalog-acceptance.sh" >&2
+exit 2
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MISTER="$ROOT/scripts/mister"
 source "$ROOT/scripts/lib/magik-layout.sh"

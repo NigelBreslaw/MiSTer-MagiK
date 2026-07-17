@@ -6,6 +6,9 @@
 # Main handoff, then return to MagiK without rebooting.
 set -euo pipefail
 
+echo "ERROR: this V2 SQL acceptance is retired; prepared launch rows are validated through V3 system shards" >&2
+exit 2
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/mister-fifo-lib.sh"

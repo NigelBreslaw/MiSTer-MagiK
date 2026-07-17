@@ -12,7 +12,6 @@ magik_layout_select dev
 OUT_DIR="$HERE/build/preview-turbo-profiles"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
-REMOTE_NAV="$MISTER_MAGIK_APP_DIR/library.nav.lz4b"
 source "$HERE/scripts/lib/preview-selection-lib.sh"
 
 label="cold-turbo-preview-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -74,28 +73,10 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-reset_navigation_projection_for_benchmark() {
-  local report
-  report="$("$MISTER" run "
-path='$REMOTE_NAV'
-if [ -f \"\$path\" ]; then
-  bytes=\$(wc -c < \"\$path\" 2>/dev/null || echo 0)
-  rm -f \"\$path\"
-  state=removed
-else
-  bytes=0
-  state=missing
-fi
-sync
-printf 'artifact_reset_tsv\t%s\t%s\t%s\t%s\n' '$label' \"\$state\" \"\$path\" \"\$bytes\"
-")"
-  printf '%s\n' "$report" | tee "$OUT_DIR/${label}-artifact-reset.tsv"
-}
-
 repair_navigation_projection_for_benchmark() {
   local report
-  report="$("$MISTER" run "'$MISTER_MAGIK_BIN' repair-catalog-projections")"
-  printf '%s\n' "$report" | tee "$OUT_DIR/${label}-projection-repair.tsv"
+  report="$("$MISTER" run "'$MISTER_MAGIK_BIN' catalog-v3-inspect")"
+  printf '%s\n' "$report" | tee "$OUT_DIR/${label}-catalog-v3-inspect.tsv"
 }
 
 write_env_for_system() {
@@ -205,7 +186,6 @@ summarize_log() {
 
 IFS=',' read -r -a systems <<<"$systems_csv"
 all_pass="1"
-reset_navigation_projection_for_benchmark
 repair_navigation_projection_for_benchmark
 for system in "${systems[@]}"; do
   local_log="$OUT_DIR/${label}-${system}.log"
