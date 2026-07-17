@@ -7,7 +7,7 @@ use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::shard_registry::{
     garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
-    publish_system_artifacts_with_durability, read_latest_manifest, sync_artifact_batch,
+    publish_prevalidated_system_artifacts_deferred, read_latest_manifest, sync_artifact_batch,
     CatalogManifest, ManifestSystem, RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystemAction, ReconcilePlan};
@@ -194,7 +194,9 @@ pub fn execute_reconciliation(
                 }
                 shard_write_time += phase_started.elapsed();
                 let phase_started = Instant::now();
-                let active = publish_system_artifacts_with_durability(
+                // The deferred writer has already reopened and fully validated
+                // both files. Avoid decoding every shard a second time here.
+                let active = publish_prevalidated_system_artifacts_deferred(
                     storage_root,
                     &sqlite,
                     &navigation,
@@ -202,7 +204,6 @@ pub fn execute_reconciliation(
                     expected_generation,
                     game_count,
                     limits,
-                    false,
                 );
                 let active = match active {
                     Ok(active) => active,

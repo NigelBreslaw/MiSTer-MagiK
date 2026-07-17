@@ -115,7 +115,7 @@ pub fn publish_system_artifacts(
     games: u64,
     limits: RegistryLimits,
 ) -> Result<PublishedGeneration, RegistryError> {
-    publish_system_artifacts_with_durability(
+    publish_system_artifacts_with_options(
         storage_root,
         staged_sqlite,
         staged_navigation,
@@ -124,12 +124,13 @@ pub fn publish_system_artifacts(
         games,
         limits,
         true,
+        true,
     )
 }
 
 #[cfg(feature = "builder")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn publish_system_artifacts_with_durability(
+fn publish_system_artifacts_with_options(
     storage_root: &Path,
     staged_sqlite: &Path,
     staged_navigation: &Path,
@@ -137,18 +138,21 @@ pub(crate) fn publish_system_artifacts_with_durability(
     generation: u64,
     games: u64,
     limits: RegistryLimits,
+    validate_staged: bool,
     sync_target_directory: bool,
 ) -> Result<PublishedGeneration, RegistryError> {
     ensure_staging_path(storage_root, staged_sqlite)?;
     ensure_staging_path(storage_root, staged_navigation)?;
-    open_system_shard(
-        staged_sqlite,
-        staged_navigation,
-        system_id,
-        generation,
-        limits.shard,
-    )
-    .map_err(|error| RegistryError::new("validate-staged", error.to_string()))?;
+    if validate_staged {
+        open_system_shard(
+            staged_sqlite,
+            staged_navigation,
+            system_id,
+            generation,
+            limits.shard,
+        )
+        .map_err(|error| RegistryError::new("validate-staged", error.to_string()))?;
+    }
     let relative_directory = PathBuf::from("systems").join(system_id.as_str());
     let sqlite_path = relative_directory.join(format!("{generation}.sqlite3"));
     let navigation_path = relative_directory.join(format!("{generation}.nav.lz4b"));
@@ -189,6 +193,29 @@ pub(crate) fn publish_system_artifacts_with_durability(
         navigation_hash,
         games,
     })
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn publish_prevalidated_system_artifacts_deferred(
+    storage_root: &Path,
+    staged_sqlite: &Path,
+    staged_navigation: &Path,
+    system_id: &SystemId,
+    generation: u64,
+    games: u64,
+    limits: RegistryLimits,
+) -> Result<PublishedGeneration, RegistryError> {
+    publish_system_artifacts_with_options(
+        storage_root,
+        staged_sqlite,
+        staged_navigation,
+        system_id,
+        generation,
+        games,
+        limits,
+        false,
+        false,
+    )
 }
 
 #[cfg(all(feature = "builder", target_os = "linux"))]
