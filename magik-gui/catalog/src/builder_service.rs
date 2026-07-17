@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,23 @@ pub enum BuilderOperation {
     Build,
     Rebuild,
     FreshBuild,
+}
+
+static BACKGROUND_HEAVY_WORK_ALLOWED: AtomicBool = AtomicBool::new(true);
+
+/// Let the interactive launcher suspend projection and persistence work while
+/// input, navigation motion, or a latency-sensitive preview is active.
+pub fn set_background_heavy_work_allowed(allowed: bool) {
+    BACKGROUND_HEAVY_WORK_ALLOWED.store(allowed, Ordering::Release);
+}
+
+fn wait_for_background_heavy_work(operation: BuilderOperation) {
+    if operation != BuilderOperation::Rebuild {
+        return;
+    }
+    while !BACKGROUND_HEAVY_WORK_ALLOWED.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(4));
+    }
 }
 
 impl BuilderOperation {
@@ -38,7 +56,9 @@ pub fn run(
     operation: BuilderOperation,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
-    let mut backend = SystemBuilderBackend;
+    let mut backend = SystemBuilderBackend {
+        background_rebuild: operation == BuilderOperation::Rebuild,
+    };
     run_with_backend(
         operation,
         BuilderConfig::production(),
@@ -188,10 +208,11 @@ fn run_with_backend<B: BuilderBackend>(
         emit(CatalogBuilderEvent::FreshCleanupCompleted { protocol, removed });
     }
 
-    // Both creation and explicit rebuild own the dedicated full-screen catalog
-    // UI. Keep the coordinator eligible for both CPUs until CatalogReady; only
-    // checks and post-ready persistence belong to the background policy.
-    apply_runtime_thread_policy(RuntimeThreadRole::CatalogForeground);
+    // First creation owns the dedicated full-screen catalog UI. A replacement
+    // rebuild leaves the published generation interactive, so every stage must
+    // remain on the background catalog policy.
+    let build_role = initial_build_role(operation);
+    apply_runtime_thread_policy(build_role);
     let scanned = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut scan_progress = |title: &str, detail: &str| {
@@ -210,9 +231,11 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
     emit_timings(protocol, scanned.timings, emit);
+    wait_for_background_heavy_work(operation);
     let prepared = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut prepare_progress = |title: &str, detail: &str| {
+            wait_for_background_heavy_work(operation);
             (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
                 protocol,
                 title: title.into(),
@@ -228,6 +251,7 @@ fn run_with_backend<B: BuilderBackend>(
     let load_us = backend.load_us(&prepared.value);
     let snapshot_path = config.snapshot_path;
     let mut snapshot_cleanup = SnapshotCleanup::new(snapshot_path.clone());
+    wait_for_background_heavy_work(operation);
     let snapshot_started = Instant::now();
     if let Some(parent) = snapshot_path.parent() {
         std::fs::create_dir_all(parent)
@@ -237,6 +261,7 @@ fn run_with_backend<B: BuilderBackend>(
     let snapshot_timings = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut snapshot_progress = |title: &str, detail: &str| {
+            wait_for_background_heavy_work(operation);
             (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
                 protocol,
                 title: title.into(),
@@ -270,12 +295,14 @@ fn run_with_backend<B: BuilderBackend>(
     });
     apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
     let mut progress = |title: &str, detail: &str| {
+        wait_for_background_heavy_work(operation);
         emit(CatalogBuilderEvent::Progress {
             protocol,
             title: title.into(),
             detail: detail.into(),
         });
     };
+    wait_for_background_heavy_work(operation);
     let summary = backend
         .persist(prepared.value, &mut progress)
         .map_err(|error| fail(protocol, "persist", error, emit))?;
@@ -301,6 +328,14 @@ fn run_with_backend<B: BuilderBackend>(
     Ok(())
 }
 
+fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
+    if operation == BuilderOperation::Rebuild {
+        RuntimeThreadRole::CatalogWorker
+    } else {
+        RuntimeThreadRole::CatalogForeground
+    }
+}
+
 fn emit_timings(
     protocol: u32,
     timings: Vec<(String, String)>,
@@ -321,7 +356,9 @@ struct PreparedBuild {
     load_us: u64,
 }
 
-struct SystemBuilderBackend;
+struct SystemBuilderBackend {
+    background_rebuild: bool,
+}
 
 impl BuilderBackend for SystemBuilderBackend {
     type Scan = library_db::LibraryRamScanArtifact;
@@ -384,10 +421,17 @@ impl BuilderBackend for SystemBuilderBackend {
                 system_discovered(system_id);
             }
         };
-        let scanned = library_db::scan_default_library_ram_foreground_with_events(
-            Some(progress),
-            Some(&mut scan_events),
-        )?;
+        let scanned = if self.background_rebuild {
+            library_db::scan_default_library_ram_background_with_events(
+                Some(progress),
+                Some(&mut scan_events),
+            )?
+        } else {
+            library_db::scan_default_library_ram_foreground_with_events(
+                Some(progress),
+                Some(&mut scan_events),
+            )?
+        };
         let stats = scanned.stats();
         let detail = format!(
             "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={}",
@@ -411,8 +455,11 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (artifact, catalog, timing) =
-            scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
+        let (artifact, catalog, timing) = if self.background_rebuild {
+            scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
+        } else {
+            scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
+        };
         let load_us = timing.catalog_us;
         let timings = vec![
             (
@@ -444,18 +491,16 @@ impl BuilderBackend for SystemBuilderBackend {
             (
                 "builder_catalog_prepare_overlap".into(),
                 format!(
-                    "wall_us={} audit_stamp_worker_us={} audit_us={} stamp_us={} catalog_us={} overlapped_us={} mode=scoped-dual-core worker_role={} worker_affinity={}",
+                    "wall_us={} audit_stamp_worker_us={} audit_us={} stamp_us={} catalog_us={} overlapped_us={} mode={} worker_role={} worker_affinity={}",
                     timing.wall_us,
                     timing.audit_stamp_worker_us,
                     timing.audit_us,
                     timing.stamp_us,
                     timing.catalog_us,
                     timing.overlapped_us,
-                    RuntimeThreadRole::CatalogForeground.label(),
-                    RuntimeThreadRole::CatalogForeground
-                        .default_policy()
-                        .affinity
-                        .label(),
+                    if self.background_rebuild { "sequential-background" } else { "scoped-dual-core" },
+                    if self.background_rebuild { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
+                    if self.background_rebuild { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
                 ),
             ),
         ];
@@ -532,10 +577,32 @@ impl BuilderBackend for SystemBuilderBackend {
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<BuilderSummary, String> {
-        prepared
+        let summary = prepared
             .artifact
             .save_default_sqlite_with_catalog_projection(&prepared.catalog, Some(progress))
-            .map(BuilderSummary::from)
+            .map(BuilderSummary::from)?;
+        progress("Indexing library", "Publishing system catalogs…");
+        let v3_started = Instant::now();
+        match crate::production_sharded_projection::publish_bound_production_projection(
+            &crate::catalog_config::default_sharded_catalog_path(),
+            &prepared.catalog,
+            &crate::catalog_config::default_sqlite_path(),
+            crate::production_sharded_projection::production_registry_limits(),
+        ) {
+            Ok(outcome) => crate::catalog_logln!(
+                "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\telapsed_us={}",
+                outcome.generation,
+                outcome.systems,
+                outcome.games,
+                v3_started.elapsed().as_micros()
+            ),
+            Err(error) => crate::catalog_errln!(
+                "catalog_v3_projection_tsv\tstatus=failed\telapsed_us={}\terror={}",
+                v3_started.elapsed().as_micros(),
+                error
+            ),
+        }
+        Ok(summary)
     }
 
     fn write_build_duration(
@@ -667,6 +734,22 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn replacement_rebuild_is_background_but_first_creation_is_foreground() {
+        assert_eq!(
+            initial_build_role(BuilderOperation::Rebuild),
+            RuntimeThreadRole::CatalogWorker
+        );
+        assert_eq!(
+            initial_build_role(BuilderOperation::Build),
+            RuntimeThreadRole::CatalogForeground
+        );
+        assert_eq!(
+            initial_build_role(BuilderOperation::FreshBuild),
+            RuntimeThreadRole::CatalogForeground
+        );
+    }
 
     #[derive(Default)]
     struct FakeBackend {

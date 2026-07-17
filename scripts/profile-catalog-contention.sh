@@ -48,11 +48,14 @@ done
   exit 2
 }
 
+MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS=1 \
 "$ROOT/scripts/profile-arcade-scroll.sh" "$LABEL" \
   --secs "$SECS" \
   --scenario human-turbo-hold \
   --catalog-refresh force \
   --thread-sample \
+  --skip-search-overlap-gate \
+  --skip-preview-exact-gate \
   "${PROFILE_ARGS[@]}"
 
 python3 "$ROOT/scripts/checks/check-catalog-contention.py" \

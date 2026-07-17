@@ -429,6 +429,55 @@ impl LibraryRamScanArtifact {
             },
         ))
     }
+
+    /// Prepare a replacement catalog while a usable generation remains live.
+    /// Work stays on the background catalog policy and runs sequentially so it
+    /// cannot occupy both Cortex-A9 cores during interactive UI rendering.
+    pub fn complete_coverage_audit_and_catalog_background_with_progress(
+        mut self,
+        root: impl AsRef<Path>,
+        progress: &mut dyn FnMut(&str, &str),
+    ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        let wall_t = std::time::Instant::now();
+        let audit_worker_t = std::time::Instant::now();
+        let (audit_rows, stamp, audit_us, stamp_us) = coverage_audit_and_stamp(&self.scan);
+        let audit_stamp_worker_us = audit_worker_t.elapsed().as_micros() as u64;
+        self.scan.audit_rows = audit_rows;
+        report_library_scan_timing(
+            "coverage_audit_deferred",
+            audit_us,
+            format!("rows={}", self.scan.audit_rows.len()),
+        );
+        self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
+        self.stats.audit_rows = self.scan.audit_rows.len();
+        let (catalog, timing) = build_catalog_from_scan_with_preferred_and_progress(
+            root.as_ref(),
+            &self.scan,
+            &self.preferred_discoveries,
+            progress,
+        );
+        let wall_us = wall_t.elapsed().as_micros() as u64;
+        Ok((
+            LibraryScanArtifact {
+                scan: self.scan,
+                stats: self.stats,
+                stamp,
+            },
+            catalog,
+            CatalogPrepareTiming {
+                audit_us,
+                stamp_us,
+                audit_stamp_worker_us,
+                catalog_us: timing.total_us,
+                metadata_us: timing.metadata_us,
+                projection_rows_us: timing.projection_rows_us,
+                indexes_us: timing.indexes_us,
+                wall_us,
+                overlapped_us: 0,
+            },
+        ))
+    }
 }
 
 fn coverage_audit_and_stamp(
@@ -848,6 +897,14 @@ pub fn scan_default_library_ram_foreground_with_events(
     let cfg = BenchConfig::production();
     Ok(CatalogRefreshPipeline::new(&cfg)
         .scan_ram_artifact_foreground_with_events(progress, scan_events))
+}
+
+pub fn scan_default_library_ram_background_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events(progress, scan_events))
 }
 
 pub fn bootstrap_default_library_progress(

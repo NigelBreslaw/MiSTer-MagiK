@@ -1,8 +1,17 @@
-# Catalog V2
+# Catalog V2 And V3 Transition
 
 This document is the current contract for the MiSTer MagiK catalog system. It is
 written for future UI and launcher work, so it focuses on lifecycle, public read
 APIs, progress states, and benchmark expectations.
+
+Catalog V3 is now dual-published by the production builder under
+`catalog-v3/`. Its schema-one manifest and per-system SQLite/navigation pairs
+are generation-safe and the launcher prefers the manifest-only registry for its
+warm shell after the return capsule. The current V3 game row intentionally
+contains only stable identity, title, and launch reference, so production game
+hydration still falls back to the richer V2 navigation/SQLite projection. Do
+not remove V2 until V3 also preserves metadata, preview identity, structured
+launch plans, filters, ordering, and device parity.
 
 ## Goals
 
@@ -36,6 +45,13 @@ APIs, progress states, and benchmark expectations.
 - `magik-gui/catalog/src/catalog_store.rs` owns stamp persistence helpers.
 - `magik-gui/catalog/src/catalog_build_record.rs` owns the completed-build
   duration sidecar used by the Info screen.
+- `magik-gui/catalog/src/production_sharded_projection.rs` owns production
+  dual-publication from the canonical RAM catalog into the V3 registry and
+  system shards. A V3 publication failure is logged and leaves the already
+  durable V2 catalog usable.
+- `magik-gui/catalog/src/shard_registry.rs`, `system_shard.rs`, and
+  `lazy_sharded_reader.rs` own the schema-one V3 write/read boundary. Schema,
+  manifest, and navigation versions are all 1.
 - `magik-gui/catalog/src/library_db.rs` remains the compatibility facade for
   scanning, classification, SQLite build/publish, and public read APIs while the
   catalog modules continue to split out.
@@ -225,8 +241,10 @@ files in the assets directory are left alone.
 
 Warm boot with a usable cache:
 
-1. Launcher may load `library.summary.json` as a `SummaryProjection` so Home and
-   system counts are usable immediately.
+1. After checking the return capsule, the launcher opens only the V3 manifest
+   registry. If it is valid, Home and system counts are usable without opening
+   a system navigation file. If it is absent or invalid, the launcher falls
+   back to `library.summary.json` as a `SummaryProjection`.
 2. A current stamped `library.nav.lz4b` is the preferred full navigation path.
    If it is absent or invalid, the worker opens SQLite and first attempts the
    embedded canonical navigation payload before retained materialized

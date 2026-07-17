@@ -150,9 +150,16 @@ drop a single UI frame. The extended contention gate runs the production
 scripts/profile-catalog-contention.sh LABEL --skip-build
 ```
 
-It retains the normal frame-pacing, latch-drop, search-overlap, and exact-preview
-gates from `profile-arcade-scroll.sh`, then correlates the frame trace with the
-per-thread sample. A pass requires at least ten CPU-active catalog sample
+It retains the normal frame-pacing and latch-drop gates from
+`profile-arcade-scroll.sh`, then correlates the frame trace with the
+per-thread sample. The harness first requires one exact selected preview, then
+freezes further selected-preview jobs so an independent image decode cannot be
+misattributed to catalog contention; Arcade list motion continues for the full
+run. The boot-entry gate proves that initial exact preview; the generic
+all-scroll preview-exact gate is intentionally skipped after previews freeze.
+It also skips the search-overlap gate because the rebuild's heavy stages are
+supposed to remain paused for the continuous-input window; search readiness is
+tested separately. A pass requires at least ten CPU-active catalog sample
 intervals and 600 overlapping frames. During those overlapping frames it
 requires zero over-budget work frames, zero two-frame wall stalls, only
 `vsync` sources, zero vsync miss streak, and successful Main presentation. A

@@ -20,7 +20,7 @@ source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--fast] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
+Usage: scripts/profile-arcade-scroll.sh [LABEL] [--secs N] [--scenario held-scroll|turbo-hold|human-turbo-hold|velocity-scroll] [--skip-build|--deploy-device] [--fast] [--present-backend fpga-vblank-latch-hidden|fb0-dirty] [--cpu-profile] [--thread-sample] [--skip-search-overlap-gate] [--skip-preview-exact-gate] [--skip-boot-prelude] [--entry-open-gate-ms N] [--entry-gate-ms N] [--selection-invert on|off] [--ui-fb-size auto|960x540|1280x720] [--present-delay-us N] [--catalog-refresh default|off|force] [--stream-consumer none|desktop-bench|desktop-display|null-drain] [--stream-secs N] [--stream-scale off|full|half|adaptive] [--frame-pacing-policy auto|strict|vsync-integrity] [--self-test]
 
 Legacy positional form is still accepted:
   scripts/profile-arcade-scroll.sh [SECS] [LABEL]
@@ -89,6 +89,8 @@ frame_pacing_p99_wall_us="${MISTER_ARCADE_SCROLL_P99_WALL_US:-16000}"
 frame_pacing_max_wall_us="${MISTER_ARCADE_SCROLL_MAX_WALL_US:-16667}"
 frame_pacing_policy="auto"
 self_test="0"
+skip_search_overlap_gate="0"
+skip_preview_exact_gate="0"
 positionals=()
 
 while [[ $# -gt 0 ]]; do
@@ -98,6 +100,8 @@ while [[ $# -gt 0 ]]; do
     --fast) build_profile="release"; shift ;;
     --cpu-profile) cpu_profile="1"; shift ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --skip-search-overlap-gate) skip_search_overlap_gate="1"; shift ;;
+    --skip-preview-exact-gate) skip_preview_exact_gate="1"; shift ;;
     --present-backend)
       if [[ $# -lt 2 || "${2:-}" == --* ]]; then echo "--present-backend needs fpga-vblank-latch-hidden or fb0-dirty" >&2; usage >&2; exit 2; fi
       present_backend="$2"
@@ -751,6 +755,9 @@ run_boot_prelude() {
     if [[ -n "${MISTER_PREVIEW_TURBO_LOOKAHEAD+x}" ]]; then
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
+    if [[ "${MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS:-0}" == "1" ]]; then
+      printf 'export MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS=1\n'
+    fi
   } >"$env_file"
   rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_cadence_tsv" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   "$MISTER" run "rm -f '$REMOTE_ENV' '$remote_entry_tsv' '$remote_tsv' '$REMOTE_LOG' '$cpu_profile_remote_svg'; sync" >/dev/null
@@ -945,6 +952,9 @@ else
     if [[ -n "${MISTER_PREVIEW_TURBO_LOOKAHEAD+x}" ]]; then
       printf 'export MISTER_PREVIEW_TURBO_LOOKAHEAD=%q\n' "$MISTER_PREVIEW_TURBO_LOOKAHEAD"
     fi
+    if [[ "${MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS:-0}" == "1" ]]; then
+      printf 'export MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS=1\n'
+    fi
   } >"$env_file"
   rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_cadence_tsv" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   capture_latch_report before "$local_latch_before"
@@ -1018,9 +1028,11 @@ if [[ "$latch_drop_status" -ne 0 ]]; then
 fi
 echo
 check_frame_pacing_gate "$label" "$local_tsv" "$frame_pacing_p99_work_us" "$frame_pacing_p99_wall_us" "$frame_pacing_max_wall_us" "$scenario" "$frame_pacing_policy"
-if [[ "$scenario" == "human-turbo-hold" ]]; then
+if [[ "$scenario" == "human-turbo-hold" && "$skip_search_overlap_gate" != "1" ]]; then
   echo
   check_search_index_overlap_gate "$label" "$local_tsv" "$local_log"
 fi
 echo
-check_preview_exact_gate "$label" "$local_tsv"
+if [[ "$skip_preview_exact_gate" != "1" ]]; then
+  check_preview_exact_gate "$label" "$local_tsv"
+fi

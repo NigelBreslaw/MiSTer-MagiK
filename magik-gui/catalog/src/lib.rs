@@ -11,13 +11,11 @@ pub mod builder_protocol;
 pub mod builder_service;
 pub mod catalog_build;
 pub mod catalog_build_record;
-#[cfg(feature = "builder")]
-pub mod catalog_vertical_slice;
 pub mod catalog_checkpoint;
 pub mod catalog_classify;
 pub mod catalog_config;
-pub mod catalog_domain;
 mod catalog_discovery;
+pub mod catalog_domain;
 mod catalog_load_metrics;
 pub mod catalog_navigation;
 mod catalog_progress;
@@ -26,6 +24,8 @@ mod catalog_scan;
 pub mod catalog_stamp;
 pub mod catalog_store;
 pub mod catalog_summary;
+#[cfg(feature = "builder")]
+pub mod catalog_vertical_slice;
 mod core_audit;
 pub mod device_layout;
 mod fallible_log;
@@ -34,8 +34,8 @@ mod game_discovery;
 #[cfg(feature = "builder")]
 pub mod incremental_inputs;
 pub mod launch_profiles;
-pub mod lazy_sharded_reader;
 pub mod launcher_catalog_session;
+pub mod lazy_sharded_reader;
 pub mod library_bench;
 mod library_cli;
 pub mod library_db;
@@ -49,6 +49,8 @@ pub mod prepared_collections;
 mod preview_archive;
 pub mod preview_worker;
 #[cfg(feature = "builder")]
+pub mod production_sharded_projection;
+#[cfg(feature = "builder")]
 pub mod progressive_scheduler;
 #[cfg(feature = "builder")]
 pub mod rebuild_benchmark;
@@ -58,14 +60,14 @@ pub mod reconciliation_executor;
 pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod shard_registry;
-pub mod sharded_catalog;
 pub mod sharded_builder_protocol;
+pub mod sharded_catalog;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
-pub mod system_shard;
 #[cfg(feature = "builder")]
 pub mod synthetic_fixture;
+pub mod system_shard;
 #[cfg(test)]
 mod test_support;
 pub mod work_coordinator;

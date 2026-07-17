@@ -95,9 +95,34 @@ impl<'a> CatalogRefreshPipeline<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
+        self.scan_ram_artifact_with_events_using(
+            LibraryIndexer::foreground(self.cfg),
+            progress,
+            scan_events,
+        )
+    }
+
+    pub(crate) fn scan_ram_artifact_with_events(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
+        self.scan_ram_artifact_with_events_using(
+            LibraryIndexer::new(self.cfg),
+            progress,
+            scan_events,
+        )
+    }
+
+    fn scan_ram_artifact_with_events_using(
+        &self,
+        indexer: LibraryIndexer<'_>,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
         let scan_t = Instant::now();
-        let scan = LibraryIndexer::foreground(self.cfg)
-            .scan_without_coverage_audit_with_progress_and_events(progress, scan_events);
+        let scan =
+            indexer.scan_without_coverage_audit_with_progress_and_events(progress, scan_events);
         let covered_payloads = covered_payload_paths(&scan.discoveries);
         let preferred_discoveries =
             preferred_playable_discovery_indices_by_key(&scan.discoveries, &covered_payloads);

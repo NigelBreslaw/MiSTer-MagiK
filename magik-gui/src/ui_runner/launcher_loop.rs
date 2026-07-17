@@ -439,7 +439,7 @@ fn should_defer_arcade_overlay_bridge(
         && !launching
         && nav.screen == Screen::Arcade
         && !nav.arcade_search.is_active(&nav.arcade_filter.active)
-        && !active_system_games_loading(catalog, nav)
+        && !active_system_game_view(catalog, nav).is_empty()
 }
 
 struct LauncherStatusTextSnapshot {
@@ -1014,6 +1014,105 @@ fn catalog_from_summary(
     )
 }
 
+fn catalog_from_sharded_registry_and_summary(
+    root: &str,
+    sharded: ArcadeCatalog,
+    summary: &catalog_summary::CatalogSummaryProjection,
+) -> ArcadeCatalog {
+    let hot_games = summary
+        .hot_games
+        .iter()
+        .map(arcade_catalog::ArcadeGameEntry::from)
+        .collect();
+    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+        PathBuf::from(root),
+        hot_games,
+        sharded.systems,
+        Vec::new(),
+        summary.platform_kinds(),
+    )
+}
+
+fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalog> {
+    use mister_magik_catalog::sharded_catalog::CatalogReader;
+
+    let load_started = Instant::now();
+    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+    let reader = match mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+        &storage,
+        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+    ) {
+        Ok(reader) => reader,
+        Err(error) => {
+            print_startup_event(
+                start,
+                "catalog_v3_registry_load",
+                format!(
+                    "status=unavailable elapsed_us={} path={} error={error}",
+                    load_started.elapsed().as_micros(),
+                    storage.display()
+                ),
+            );
+            return None;
+        }
+    };
+    let registry = match reader.open_registry() {
+        Ok(registry) if !registry.systems().is_empty() => registry,
+        Ok(_) => return None,
+        Err(error) => {
+            print_startup_event(
+                start,
+                "catalog_v3_registry_load",
+                format!(
+                    "status=failed elapsed_us={} path={} error={error}",
+                    load_started.elapsed().as_micros(),
+                    storage.display()
+                ),
+            );
+            return None;
+        }
+    };
+    if let Err(error) =
+        mister_magik_catalog::production_sharded_projection::validate_production_binding(
+            &storage,
+            &library_db::default_sqlite_path(),
+            registry.generation(),
+        )
+    {
+        print_startup_event(
+            start,
+            "catalog_v3_registry_load",
+            format!(
+                "status=stale elapsed_us={} path={} error={error}",
+                load_started.elapsed().as_micros(),
+                storage.display()
+            ),
+        );
+        return None;
+    }
+    let systems = registry
+        .systems()
+        .iter()
+        .map(|system| arcade_catalog::GameSystemEntry {
+            id: system.system_id.as_str().to_string(),
+            title: system.display_title.clone(),
+            count: usize::try_from(system.games).unwrap_or(usize::MAX),
+        })
+        .collect::<Vec<_>>();
+    print_startup_event(
+        start,
+        "catalog_v3_registry_load",
+        format!(
+            "status=ready elapsed_us={} path={} generation={} systems={}",
+            load_started.elapsed().as_micros(),
+            storage.display(),
+            registry.generation(),
+            systems.len()
+        ),
+    );
+    Some(ArcadeCatalog::new(PathBuf::from(root), Vec::new(), systems))
+}
+
 fn read_catalog_summary_seed(
     sqlite_path: &Path,
     summary_path: &Path,
@@ -1141,12 +1240,8 @@ impl CatalogGenerationState {
     }
 }
 
-fn catalog_hydration_execution_mode(request: CatalogWorkerRequest) -> CatalogExecutionMode {
-    if request == CatalogWorkerRequest::ForceBuild {
-        CatalogExecutionMode::ForegroundExclusive
-    } else {
-        CatalogExecutionMode::BackgroundInteractive
-    }
+fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogExecutionMode {
+    CatalogExecutionMode::BackgroundInteractive
 }
 
 fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) -> bool {
@@ -1404,9 +1499,10 @@ pub(super) fn run_launcher_loop(
     );
     lifecycle.set_catalog_root(arcade_root.clone());
     let deferred_library_rebuild = consume_library_rebuild_marker(catalog_worker_enabled, start);
-    let mut catalog_session = LauncherCatalogSession::new(
-        deferred_library_rebuild || catalog_refresh_policy.force_requested(),
-    );
+    // A forced replacement is not a foreground operation when a capsule,
+    // sharded registry, summary, or existing database can seed the launcher.
+    // First creation remains foreground through the !catalog_ready lifecycle.
+    let mut catalog_session = LauncherCatalogSession::new(false);
     let mut catalog_publication_test = CatalogPublicationTestDriver::from_env(start);
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
@@ -1415,9 +1511,21 @@ pub(super) fn run_launcher_loop(
     let sqlite_path = library_db::default_sqlite_path();
     let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
     let capsule_seed_ready = catalog_ready;
+    let sharded_seed = (!capsule_seed_ready)
+        .then(|| read_sharded_registry_seed(&arcade_root, start))
+        .flatten();
+    let sharded_seed_ready = sharded_seed.is_some();
     let summary_seed = (!capsule_seed_ready)
         .then(|| read_catalog_summary_seed(&sqlite_path, &summary_path, start))
         .flatten();
+    if let Some(seed) = sharded_seed {
+        catalog = if let Some(summary) = summary_seed.as_ref() {
+            catalog_from_sharded_registry_and_summary(&arcade_root, seed, summary)
+        } else {
+            seed
+        };
+        catalog_ready = true;
+    }
     let initial_catalog_fingerprint = summary_seed
         .as_ref()
         .map(|summary| summary.catalog_stamp_fingerprint.clone());
@@ -1456,6 +1564,55 @@ pub(super) fn run_launcher_loop(
                 initial_cache,
                 execution_mode,
             );
+        }
+    } else if sharded_seed_ready {
+        startup_ready_catalog_source = CatalogSource::ShardedRegistry;
+        catalog_session.note_summary_seed_ready();
+        media_session.request_catalog_seed();
+        catalog_version = catalog_version.wrapping_add(1);
+        let return_catalog_hydration_needed = startup_return_requested;
+        let request = summary_seed_catalog_worker_request(
+            catalog_refresh_policy,
+            deferred_library_rebuild,
+            return_catalog_hydration_needed,
+        );
+        if let Some(request) = request {
+            let initial_cache =
+                summary_seed_catalog_worker_initial_cache(request, return_catalog_hydration_needed);
+            if summary_seed_catalog_worker_starts_immediately(
+                request,
+                return_catalog_hydration_needed,
+            ) && catalog_publication_test.catalog_worker_allowed()
+            {
+                let execution_mode = catalog_hydration_execution_mode(request);
+                print_startup_event(start, "catalog_worker_start", &arcade_root);
+                scheduler.start_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    initial_cache,
+                    execution_mode,
+                );
+            } else {
+                let delay = catalog_background_validation_delay();
+                print_startup_event(
+                    start,
+                    "catalog_worker_deferred",
+                    format!(
+                        "root={} request={} delay_ms={} reason=sharded_registry_hydration",
+                        arcade_root,
+                        request.label(),
+                        delay.as_millis()
+                    ),
+                );
+                catalog_session.defer_catalog_worker(
+                    arcade_root.clone(),
+                    request,
+                    initial_cache,
+                    CatalogExecutionMode::BackgroundInteractive,
+                );
+            }
+        } else {
+            catalog_session.mark_refresh_done();
         }
     } else if let Some(summary) = summary_seed.as_ref() {
         catalog = catalog_from_summary(&arcade_root, &summary);
@@ -1745,6 +1902,12 @@ pub(super) fn run_launcher_loop(
     let mut frame_accounting = LauncherFrameAccounting::new(run_start);
     let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
+    let catalog_contention_quiet_previews = matches!(
+        std::env::var("MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS")
+            .ok()
+            .as_deref(),
+        Some("1") | Some("on") | Some("true") | Some("yes")
+    );
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
@@ -1811,7 +1974,11 @@ pub(super) fn run_launcher_loop(
             start,
         );
         let route_action = display_session.begin_frame(frames, launching, f);
-        let defer_selected_preview = false;
+        // The catalog contention harness first proves one exact preview, then
+        // freezes further selected-preview work so frame failures can be
+        // attributed to the catalog rather than an independent image decode.
+        let defer_selected_preview =
+            catalog_contention_quiet_previews && preview.trace_cache_state() == "exact";
         let mut preview_scheduled_this_loop = false;
         if last_clock_update.elapsed() >= Duration::from_secs(1) {
             let clock_text = launcher_clock_text();
@@ -1863,6 +2030,9 @@ pub(super) fn run_launcher_loop(
                     && !matches!(preview.trace_cache_state(), "exact" | "empty"),
             },
             loop_start,
+        );
+        mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
+            catalog_background_allowed,
         );
         scheduler.set_search_index_allowed(catalog_background_allowed);
         let search_index_effects = catalog_session
@@ -2912,9 +3082,7 @@ pub(super) fn run_launcher_loop(
         } else {
             ArcadeGameView::empty()
         };
-        let active_arcade_games_loading = !launching
-            && nav.screen == Screen::Arcade
-            && active_system_games_loading(&catalog, &nav);
+        let active_arcade_games_available = !active_arcade_games.is_empty();
         let arcade_search_active = nav.arcade_search.is_active(&nav.arcade_filter.active);
         if !launching && nav.screen == Screen::Arcade {
             if let Some(system) = active_system(&catalog, &nav) {
@@ -2927,8 +3095,7 @@ pub(super) fn run_launcher_loop(
                         nav.arcade.selected
                     );
                 }
-                if !active_arcade_games_loading
-                    && !active_arcade_games.is_empty()
+                if active_arcade_games_available
                     && preview_initial_lists_ready.insert(trace_system_id.clone())
                 {
                     arcade_entry_latency.record_rows_ready(
@@ -2965,7 +3132,7 @@ pub(super) fn run_launcher_loop(
             && !preview_scheduled_this_loop
             && !launching
             && nav.screen == Screen::Arcade
-            && !active_arcade_games_loading
+            && active_arcade_games_available
             && !arcade_search_active
             && !memory_guard.active()
         {
@@ -3037,7 +3204,7 @@ pub(super) fn run_launcher_loop(
             .should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
         let wants_arcade_list =
-            should_draw_arcade_overlay(&nav, launching, active_arcade_games_loading);
+            should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
         let wants_preview = !memory_guard.active() && preview.raw_transition_frame().is_some();
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
@@ -3045,7 +3212,7 @@ pub(super) fn run_launcher_loop(
             screen: nav.screen,
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
-            arcade_ready: !active_arcade_games_loading && active_arcade_games.len() > 0,
+            arcade_ready: active_arcade_games_available,
             route_ok: display_session.route_ok(),
             wants_arcade_list,
             wants_preview,
@@ -3685,6 +3852,11 @@ pub(super) fn run_launcher_loop(
         }
         frames += 1;
     }
+    // Do not leak the launcher's last interactive gate state into a later
+    // launcher run in the same process (notably host tests and diagnostic
+    // runners). Normal device execution exits here, but the global policy is
+    // deliberately restored to its permissive default for lifecycle safety.
+    mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
     let elapsed = run_start.elapsed().as_secs_f64();
     crate::ui_logln!(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
@@ -4569,9 +4741,9 @@ fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool
 fn should_draw_arcade_overlay(
     nav: &LauncherNav,
     launching: bool,
-    active_arcade_games_loading: bool,
+    active_arcade_games_available: bool,
 ) -> bool {
-    !launching && nav.screen == Screen::Arcade && !active_arcade_games_loading
+    !launching && nav.screen == Screen::Arcade && active_arcade_games_available
 }
 
 #[derive(Default)]
@@ -4690,10 +4862,12 @@ fn summary_seed_catalog_worker_initial_cache(
     request: CatalogWorkerRequest,
     return_catalog_hydration_needed: bool,
 ) -> CatalogWorkerInitialCache {
-    if request == CatalogWorkerRequest::ForceBuild
-        || return_catalog_hydration_needed
-        || request != CatalogWorkerRequest::LoadOnly
-    {
+    if request == CatalogWorkerRequest::ForceBuild {
+        // The compact seed is already usable. Loading the old 50k+ row
+        // navigation and SQLite projections before replacing them delays the
+        // rebuild, duplicates memory, and competes with the launcher for I/O.
+        CatalogWorkerInitialCache::AlreadyLoadedReady
+    } else if return_catalog_hydration_needed || request != CatalogWorkerRequest::LoadOnly {
         CatalogWorkerInitialCache::ProbeNavigationThenSqlite
     } else {
         CatalogWorkerInitialCache::AlreadyLoadedReady
@@ -5161,6 +5335,36 @@ mod tests {
     }
 
     #[test]
+    pub(super) fn sharded_registry_keeps_system_authority_and_summary_hot_rows() {
+        let full_catalog = catalog_for_media_systems(&["arcade", "cps1", "amiga"]);
+        let stamp = mister_magik_catalog::catalog_stamp::CatalogStamp::from_lines(vec![
+            "root\t/media/fat".to_string(),
+        ]);
+        let summary =
+            catalog_summary::CatalogSummaryProjection::from_catalog(&full_catalog, &stamp);
+        let sharded = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            Vec::new(),
+            vec![arcade_catalog::GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade from V3".into(),
+                count: 1234,
+            }],
+        );
+
+        let catalog =
+            catalog_from_sharded_registry_and_summary("/media/fat/_Arcade", sharded, &summary);
+
+        assert_eq!(catalog.systems.len(), 1);
+        assert_eq!(catalog.systems[0].title, "Arcade from V3");
+        assert_eq!(catalog.systems[0].count, 1234);
+        assert_eq!(
+            catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+            2
+        );
+    }
+
+    #[test]
     pub(super) fn full_catalog_is_ready_for_arcade_navigation() {
         let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
 
@@ -5187,7 +5391,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
 
-        assert!(should_draw_arcade_overlay(&nav, false, false));
+        assert!(should_draw_arcade_overlay(&nav, false, true));
     }
 
     #[test]
@@ -5196,16 +5400,17 @@ mod tests {
         nav.screen = Screen::Arcade;
         nav.arcade_filter.drawer_open = true;
 
-        assert!(should_draw_arcade_overlay(&nav, false, false));
+        assert!(should_draw_arcade_overlay(&nav, false, true));
     }
 
     #[test]
-    pub(super) fn arcade_overlay_stays_hidden_while_loading_or_launching() {
+    pub(super) fn arcade_overlay_stays_hidden_while_unavailable_or_launching() {
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Arcade;
 
         assert!(!should_draw_arcade_overlay(&nav, true, false));
-        assert!(!should_draw_arcade_overlay(&nav, false, true));
+        assert!(!should_draw_arcade_overlay(&nav, false, false));
+        assert!(should_draw_arcade_overlay(&nav, false, true));
     }
 
     #[test]
@@ -5958,7 +6163,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_warm_validation_hydrates_navigation_in_worker() {
+    pub(super) fn summary_warm_validation_hydrates_navigation_but_rebuild_skips_old_projection() {
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
             CatalogWorkerInitialCache::ProbeNavigationThenSqlite
@@ -5969,7 +6174,7 @@ mod tests {
         );
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
-            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+            CatalogWorkerInitialCache::AlreadyLoadedReady
         );
     }
 
@@ -6208,10 +6413,10 @@ mod tests {
     }
 
     #[test]
-    fn forced_capsule_hydration_keeps_foreground_catalog_priority() {
+    fn forced_hydration_with_a_usable_catalog_stays_background() {
         assert_eq!(
             catalog_hydration_execution_mode(CatalogWorkerRequest::ForceBuild),
-            CatalogExecutionMode::ForegroundExclusive
+            CatalogExecutionMode::BackgroundInteractive
         );
         assert_eq!(
             catalog_hydration_execution_mode(CatalogWorkerRequest::LoadOnly),
