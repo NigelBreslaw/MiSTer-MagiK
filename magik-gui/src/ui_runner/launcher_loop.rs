@@ -894,10 +894,17 @@ struct CatalogBackgroundIdleInput {
     media_message_seen: bool,
     nav_motion_active: bool,
     preview_critical: bool,
+    visual_animation_active: bool,
 }
 
 impl CatalogBackgroundIdleInput {
-    fn is_idle(self) -> bool {
+    /// Whether the user-facing launcher is quiet enough for heavy catalog work.
+    ///
+    /// This deliberately describes interaction, not rendering. A visual-only
+    /// Slint animation (for example the flashing catalog-build badge) may keep
+    /// frames rendering without resetting the catalog idle-settle window.
+    fn is_interaction_idle(self) -> bool {
+        let _visual_animation_does_not_block_catalog_work = self.visual_animation_active;
         (self.first_visible_copy_done || self.startup_return_waiting_for_catalog)
             && self.startup_input_enabled
             && !self.launching
@@ -928,7 +935,7 @@ impl CatalogBackgroundIdleGate {
     }
 
     fn allow(&mut self, input: CatalogBackgroundIdleInput, now: Instant) -> bool {
-        if !input.is_idle() {
+        if !input.is_interaction_idle() {
             self.idle_since = None;
             return false;
         }
@@ -956,10 +963,6 @@ fn pad_state_has_active_input(state: &PadState) -> bool {
         || state.btn_r3
         || state.btn_home
         || state.btn_capture
-        || state.left_x.abs() > 0.0
-        || state.left_y.abs() > 0.0
-        || state.right_x.abs() > 0.0
-        || state.right_y.abs() > 0.0
 }
 
 fn catalog_message_requires_publication_pause(message: &CatalogWorkerMessage) -> bool {
@@ -2043,6 +2046,7 @@ pub(super) fn run_launcher_loop(
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
+        let slint_animation_active = app.window().has_active_animations();
         let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
         let pad_changed_for_background = pad_changed_for_input.unwrap_or(false);
         let catalog_background_input = CatalogBackgroundIdleInput {
@@ -2064,6 +2068,7 @@ pub(super) fn run_launcher_loop(
             preview_critical: nav.screen == Screen::Arcade
                 && selected_arcade_game_has_preview(&nav, &catalog)
                 && !matches!(preview.trace_cache_state(), "exact" | "empty"),
+            visual_animation_active: slint_animation_active,
         };
         let catalog_background_allowed =
             catalog_background_idle_gate.allow(catalog_background_input, loop_start);
@@ -3292,7 +3297,6 @@ pub(super) fn run_launcher_loop(
         }
         let startup_status = lifecycle.startup_status();
         let composition_status = composition_decision.status();
-        let slint_animation_active = app.window().has_active_animations();
         let home_pan_present_active = update_home_pan_present_window(
             nav.screen,
             nav.scroll_x,
@@ -6451,6 +6455,40 @@ mod tests {
         assert!(!gate.allow(input, now));
         assert!(!gate.allow(input, now + Duration::from_millis(500)));
         assert!(gate.allow(input, now + Duration::from_millis(2000)));
+    }
+
+    #[test]
+    pub(super) fn catalog_interaction_idle_ignores_visual_only_slint_animation() {
+        let now = Instant::now();
+        let mut gate = CatalogBackgroundIdleGate::new(Duration::from_secs(2));
+        let input = CatalogBackgroundIdleInput {
+            visual_animation_active: true,
+            ..idle_catalog_background_input()
+        };
+
+        let render_intent = LauncherRenderIntent {
+            first_visible_copy_done: true,
+            startup_input_enabled: true,
+            wake_reasons: LauncherWakeReasons::SLINT_ANIMATION_ACTIVE,
+        };
+        assert!(!render_intent.can_sleep());
+        assert!(!gate.allow(input, now));
+        assert!(gate.allow(input, now + Duration::from_secs(2)));
+    }
+
+    #[test]
+    pub(super) fn catalog_interaction_idle_ignores_resting_stick_noise() {
+        let mut resting = PadState::default();
+        resting.left_x = 0.5;
+        resting.right_y = -1.0;
+        assert!(!pad_state_has_active_input(&resting));
+
+        resting.dpad_right = true;
+        assert!(pad_state_has_active_input(&resting));
+
+        resting.dpad_right = false;
+        resting.btn_a = true;
+        assert!(pad_state_has_active_input(&resting));
     }
 
     #[test]
