@@ -408,7 +408,7 @@ fn meta_u64(connection: &Connection, key: &str) -> Result<u64, SystemShardError>
         .map_err(|_| SystemShardError::new("read", "invalid numeric shard metadata"))
 }
 
-fn checksum_hex(bytes: &[u8]) -> String {
+pub(crate) fn checksum_hex(bytes: &[u8]) -> String {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);

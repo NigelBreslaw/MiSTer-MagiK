@@ -1,0 +1,864 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Dual-slot registry and immutable generation-qualified artifact publication.
+
+use crate::catalog_classify::SystemId;
+use crate::catalog_domain::ScanUnitId;
+use crate::sharded_catalog::MANIFEST_SCHEMA_VERSION;
+#[cfg(feature = "builder")]
+use crate::system_shard::open_system_shard;
+use crate::system_shard::SystemShardLimits;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt;
+#[cfg(feature = "builder")]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
+use std::io::Read;
+#[cfg(feature = "builder")]
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
+
+const MANIFEST_A: &str = "registry/manifest-a.json";
+const MANIFEST_B: &str = "registry/manifest-b.json";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryLimits {
+    pub max_manifest_bytes: usize,
+    pub max_systems: usize,
+    pub shard: SystemShardLimits,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogManifest {
+    pub generation: u64,
+    pub systems: Vec<ManifestSystem>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManifestSystem {
+    pub system_id: SystemId,
+    pub display_title: String,
+    pub section: String,
+    pub family: String,
+    pub order: u32,
+    pub producers: Vec<ScanUnitId>,
+    pub active: PublishedGeneration,
+    pub previous: Option<PublishedGeneration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedGeneration {
+    pub generation: u64,
+    pub sqlite_path: PathBuf,
+    pub navigation_path: PathBuf,
+    pub sqlite_bytes: u64,
+    pub navigation_bytes: u64,
+    pub sqlite_hash: String,
+    pub navigation_hash: String,
+    pub games: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredManifest {
+    schema_version: u32,
+    generation: u64,
+    systems: Vec<StoredSystem>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredSystem {
+    system_id: String,
+    display_title: String,
+    section: String,
+    family: String,
+    order: u32,
+    producers: Vec<String>,
+    active: StoredGeneration,
+    previous: Option<StoredGeneration>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredGeneration {
+    generation: u64,
+    sqlite_path: String,
+    navigation_path: String,
+    sqlite_bytes: u64,
+    navigation_bytes: u64,
+    sqlite_hash: String,
+    navigation_hash: String,
+    games: u64,
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_system_artifacts(
+    storage_root: &Path,
+    staged_sqlite: &Path,
+    staged_navigation: &Path,
+    system_id: &SystemId,
+    generation: u64,
+    games: u64,
+    limits: RegistryLimits,
+) -> Result<PublishedGeneration, RegistryError> {
+    ensure_staging_path(storage_root, staged_sqlite)?;
+    ensure_staging_path(storage_root, staged_navigation)?;
+    open_system_shard(
+        staged_sqlite,
+        staged_navigation,
+        system_id,
+        generation,
+        limits.shard,
+    )
+    .map_err(|error| RegistryError::new("validate-staged", error.to_string()))?;
+    let relative_directory = PathBuf::from("systems").join(system_id.as_str());
+    let sqlite_path = relative_directory.join(format!("{generation}.sqlite3"));
+    let navigation_path = relative_directory.join(format!("{generation}.nav.lz4b"));
+    let target_sqlite = storage_root.join(&sqlite_path);
+    let target_navigation = storage_root.join(&navigation_path);
+    if target_sqlite.exists() || target_navigation.exists() {
+        return Err(RegistryError::new(
+            "publish-artifact",
+            "immutable generation artifact already exists",
+        ));
+    }
+    let sqlite_bytes = regular_file_size(staged_sqlite, limits.shard.max_sqlite_bytes)?;
+    let navigation_bytes = regular_file_size(
+        staged_navigation,
+        limits.shard.max_navigation_compressed_bytes as u64,
+    )?;
+    let sqlite_hash = file_checksum(staged_sqlite)?;
+    let navigation_hash = file_checksum(staged_navigation)?;
+    let target_directory = target_sqlite
+        .parent()
+        .ok_or_else(|| RegistryError::new("publish-artifact", "target has no parent"))?;
+    fs::create_dir_all(target_directory)
+        .map_err(|error| RegistryError::with("create system generation directory", error))?;
+    fs::rename(staged_sqlite, &target_sqlite)
+        .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
+    fs::rename(staged_navigation, &target_navigation)
+        .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
+    sync_directory(target_directory)?;
+    Ok(PublishedGeneration {
+        generation,
+        sqlite_path,
+        navigation_path,
+        sqlite_bytes,
+        navigation_bytes,
+        sqlite_hash,
+        navigation_hash,
+        games,
+    })
+}
+
+#[cfg(feature = "builder")]
+pub fn publish_manifest(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+) -> Result<PathBuf, RegistryError> {
+    validate_manifest(storage_root, manifest, limits, true)?;
+    let current = read_manifest_slots(storage_root, limits)?;
+    if current
+        .iter()
+        .any(|(_, existing)| existing.generation >= manifest.generation)
+    {
+        return Err(RegistryError::new(
+            "publish-manifest",
+            "manifest generation is not newer than committed state",
+        ));
+    }
+    let target_relative = match current.as_slice() {
+        [] => PathBuf::from(MANIFEST_A),
+        [(path, _)] if path == Path::new(MANIFEST_A) => PathBuf::from(MANIFEST_B),
+        [(path, _)] if path == Path::new(MANIFEST_B) => PathBuf::from(MANIFEST_A),
+        [first, second] => {
+            if first.1.generation <= second.1.generation {
+                first.0.clone()
+            } else {
+                second.0.clone()
+            }
+        }
+        _ => return Err(RegistryError::new("publish-manifest", "invalid slot state")),
+    };
+    let stored = to_stored(manifest);
+    let bytes = serde_json::to_vec_pretty(&stored)
+        .map_err(|error| RegistryError::with("encode manifest", error))?;
+    if bytes.len() > limits.max_manifest_bytes {
+        return Err(RegistryError::new(
+            "publish-manifest",
+            "manifest exceeds configured size limit",
+        ));
+    }
+    let target = storage_root.join(&target_relative);
+    let directory = target
+        .parent()
+        .ok_or_else(|| RegistryError::new("publish-manifest", "slot has no parent"))?;
+    fs::create_dir_all(directory)
+        .map_err(|error| RegistryError::with("create registry directory", error))?;
+    let temporary = directory.join(format!(
+        ".{}.tmp.{}",
+        target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("manifest"),
+        std::process::id()
+    ));
+    let mut cleanup = TemporaryCleanup(Some(temporary.clone()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| RegistryError::with("create temporary manifest", error))?;
+    file.write_all(&bytes)
+        .map_err(|error| RegistryError::with("write temporary manifest", error))?;
+    file.sync_all()
+        .map_err(|error| RegistryError::with("sync temporary manifest", error))?;
+    drop(file);
+    fs::rename(&temporary, &target)
+        .map_err(|error| RegistryError::with("commit manifest slot", error))?;
+    cleanup.0 = None;
+    sync_directory(directory)?;
+    Ok(target_relative)
+}
+
+pub fn read_latest_manifest(
+    storage_root: &Path,
+    limits: RegistryLimits,
+) -> Result<CatalogManifest, RegistryError> {
+    read_manifest_slots(storage_root, limits)?
+        .into_iter()
+        .max_by_key(|(_, manifest)| manifest.generation)
+        .map(|(_, manifest)| manifest)
+        .ok_or_else(|| RegistryError::new("read-manifest", "no valid manifest slot"))
+}
+
+fn read_manifest_slots(
+    storage_root: &Path,
+    limits: RegistryLimits,
+) -> Result<Vec<(PathBuf, CatalogManifest)>, RegistryError> {
+    let mut manifests = Vec::new();
+    for relative in [PathBuf::from(MANIFEST_A), PathBuf::from(MANIFEST_B)] {
+        let path = storage_root.join(&relative);
+        if !path.exists() {
+            continue;
+        }
+        let result: Result<CatalogManifest, RegistryError> = (|| {
+            let bytes = read_regular_bounded(&path, limits.max_manifest_bytes)?;
+            let stored: StoredManifest = serde_json::from_slice(&bytes)
+                .map_err(|error| RegistryError::with("parse manifest", error))?;
+            let manifest = from_stored(stored)?;
+            validate_manifest(storage_root, &manifest, limits, false)?;
+            Ok(manifest)
+        })();
+        if let Ok(manifest) = result {
+            manifests.push((relative, manifest));
+        }
+    }
+    Ok(manifests)
+}
+
+fn validate_manifest(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    limits: RegistryLimits,
+    verify_hashes: bool,
+) -> Result<(), RegistryError> {
+    if manifest.systems.len() > limits.max_systems {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest system count exceeds configured limit",
+        ));
+    }
+    let mut previous_id: Option<&SystemId> = None;
+    for system in &manifest.systems {
+        if previous_id.is_some_and(|id| id >= &system.system_id) {
+            return Err(RegistryError::new(
+                "validate-manifest",
+                "manifest system IDs are duplicate or unsorted",
+            ));
+        }
+        previous_id = Some(&system.system_id);
+        if system.display_title.is_empty()
+            || system.section.is_empty()
+            || system.family.is_empty()
+            || system.producers.is_empty()
+        {
+            return Err(RegistryError::new(
+                "validate-manifest",
+                "manifest system metadata is incomplete",
+            ));
+        }
+        let unique_producers = system.producers.iter().collect::<BTreeSet<_>>();
+        if unique_producers.len() != system.producers.len() {
+            return Err(RegistryError::new(
+                "validate-manifest",
+                "manifest contains duplicate producers",
+            ));
+        }
+        validate_generation(
+            storage_root,
+            &system.system_id,
+            &system.active,
+            limits,
+            verify_hashes,
+        )?;
+        if let Some(previous) = &system.previous {
+            if previous.generation >= system.active.generation {
+                return Err(RegistryError::new(
+                    "validate-manifest",
+                    "previous generation is not older than active generation",
+                ));
+            }
+            validate_generation(
+                storage_root,
+                &system.system_id,
+                previous,
+                limits,
+                verify_hashes,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_generation(
+    storage_root: &Path,
+    system_id: &SystemId,
+    generation: &PublishedGeneration,
+    limits: RegistryLimits,
+    verify_hashes: bool,
+) -> Result<(), RegistryError> {
+    let expected_directory = PathBuf::from("systems").join(system_id.as_str());
+    let expected_sqlite = expected_directory.join(format!("{}.sqlite3", generation.generation));
+    let expected_navigation =
+        expected_directory.join(format!("{}.nav.lz4b", generation.generation));
+    if generation.sqlite_path != expected_sqlite
+        || generation.navigation_path != expected_navigation
+        || !safe_relative_path(&generation.sqlite_path)
+        || !safe_relative_path(&generation.navigation_path)
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest artifact path is not canonical",
+        ));
+    }
+    if generation.games > limits.shard.max_games as u64
+        || generation.sqlite_bytes > limits.shard.max_sqlite_bytes
+        || generation.navigation_bytes > limits.shard.max_navigation_compressed_bytes as u64
+        || !valid_hash(&generation.sqlite_hash)
+        || !valid_hash(&generation.navigation_hash)
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest generation metadata exceeds limits",
+        ));
+    }
+    let sqlite = storage_root.join(&generation.sqlite_path);
+    let navigation = storage_root.join(&generation.navigation_path);
+    if regular_file_size(&sqlite, limits.shard.max_sqlite_bytes)? != generation.sqlite_bytes
+        || regular_file_size(
+            &navigation,
+            limits.shard.max_navigation_compressed_bytes as u64,
+        )? != generation.navigation_bytes
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest artifact size does not match file",
+        ));
+    }
+    if verify_hashes
+        && (file_checksum(&sqlite)? != generation.sqlite_hash
+            || file_checksum(&navigation)? != generation.navigation_hash)
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest artifact hash does not match file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "builder")]
+fn to_stored(manifest: &CatalogManifest) -> StoredManifest {
+    StoredManifest {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        generation: manifest.generation,
+        systems: manifest
+            .systems
+            .iter()
+            .map(|system| StoredSystem {
+                system_id: system.system_id.as_str().to_string(),
+                display_title: system.display_title.clone(),
+                section: system.section.clone(),
+                family: system.family.clone(),
+                order: system.order,
+                producers: system
+                    .producers
+                    .iter()
+                    .map(|producer| producer.as_str().to_string())
+                    .collect(),
+                active: generation_to_stored(&system.active),
+                previous: system.previous.as_ref().map(generation_to_stored),
+            })
+            .collect(),
+    }
+}
+
+#[cfg(feature = "builder")]
+fn generation_to_stored(generation: &PublishedGeneration) -> StoredGeneration {
+    StoredGeneration {
+        generation: generation.generation,
+        sqlite_path: path_string(&generation.sqlite_path),
+        navigation_path: path_string(&generation.navigation_path),
+        sqlite_bytes: generation.sqlite_bytes,
+        navigation_bytes: generation.navigation_bytes,
+        sqlite_hash: generation.sqlite_hash.clone(),
+        navigation_hash: generation.navigation_hash.clone(),
+        games: generation.games,
+    }
+}
+
+fn from_stored(stored: StoredManifest) -> Result<CatalogManifest, RegistryError> {
+    if stored.schema_version != MANIFEST_SCHEMA_VERSION {
+        return Err(RegistryError::new(
+            "read-manifest",
+            "unsupported manifest schema version",
+        ));
+    }
+    Ok(CatalogManifest {
+        generation: stored.generation,
+        systems: stored
+            .systems
+            .into_iter()
+            .map(|system| {
+                Ok(ManifestSystem {
+                    system_id: SystemId::parse(&system.system_id)
+                        .map_err(|error| RegistryError::new("read-manifest", error.to_string()))?,
+                    display_title: system.display_title,
+                    section: system.section,
+                    family: system.family,
+                    order: system.order,
+                    producers: system
+                        .producers
+                        .into_iter()
+                        .map(|value| {
+                            ScanUnitId::parse(&value).map_err(|error| {
+                                RegistryError::new("read-manifest", error.to_string())
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    active: generation_from_stored(system.active),
+                    previous: system.previous.map(generation_from_stored),
+                })
+            })
+            .collect::<Result<_, RegistryError>>()?,
+    })
+}
+
+fn generation_from_stored(generation: StoredGeneration) -> PublishedGeneration {
+    PublishedGeneration {
+        generation: generation.generation,
+        sqlite_path: PathBuf::from(generation.sqlite_path),
+        navigation_path: PathBuf::from(generation.navigation_path),
+        sqlite_bytes: generation.sqlite_bytes,
+        navigation_bytes: generation.navigation_bytes,
+        sqlite_hash: generation.sqlite_hash,
+        navigation_hash: generation.navigation_hash,
+        games: generation.games,
+    }
+}
+
+#[cfg(feature = "builder")]
+pub fn garbage_collect_unreferenced(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+) -> Result<Vec<PathBuf>, RegistryError> {
+    let retained = manifest
+        .systems
+        .iter()
+        .flat_map(|system| {
+            std::iter::once(&system.active)
+                .chain(system.previous.iter())
+                .flat_map(|generation| {
+                    [
+                        generation.sqlite_path.clone(),
+                        generation.navigation_path.clone(),
+                    ]
+                })
+        })
+        .collect::<BTreeSet<_>>();
+    let mut removed = Vec::new();
+    let systems_directory = storage_root.join("systems");
+    let Ok(system_directories) = fs::read_dir(&systems_directory) else {
+        return Ok(removed);
+    };
+    for system_directory in system_directories {
+        let system_directory = system_directory
+            .map_err(|error| RegistryError::with("read systems directory", error))?;
+        let file_type = system_directory
+            .file_type()
+            .map_err(|error| RegistryError::with("read system directory type", error))?;
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
+        let Some(system_name) = system_directory.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(system_id) = SystemId::parse(&system_name) else {
+            continue;
+        };
+        if system_id.as_str() != system_name {
+            continue;
+        }
+        let relative_directory = PathBuf::from("systems").join(system_id.as_str());
+        let entries = fs::read_dir(system_directory.path())
+            .map_err(|error| RegistryError::with("read system directory", error))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| RegistryError::with("read system directory", error))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| RegistryError::with("read generation file type", error))?;
+            if !file_type.is_file() || file_type.is_symlink() {
+                continue;
+            }
+            let relative = relative_directory.join(entry.file_name());
+            if retained.contains(&relative) || !generation_artifact_name(&entry.file_name()) {
+                continue;
+            }
+            fs::remove_file(entry.path())
+                .map_err(|error| RegistryError::with("remove orphan generation", error))?;
+            removed.push(relative);
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(feature = "builder")]
+fn generation_artifact_name(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let number = name
+        .strip_suffix(".sqlite3")
+        .or_else(|| name.strip_suffix(".nav.lz4b"));
+    number.is_some_and(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+#[cfg(feature = "builder")]
+fn ensure_staging_path(storage_root: &Path, path: &Path) -> Result<(), RegistryError> {
+    let canonical_root = fs::canonicalize(storage_root)
+        .map_err(|error| RegistryError::with("canonicalize catalog root", error))?;
+    let staging = storage_root.join("staging");
+    let canonical_staging = fs::canonicalize(&staging)
+        .map_err(|error| RegistryError::with("canonicalize staging directory", error))?;
+    let canonical_path = fs::canonicalize(path)
+        .map_err(|error| RegistryError::with("canonicalize staged artifact", error))?;
+    if !canonical_staging.starts_with(&canonical_root)
+        || !canonical_path.starts_with(&canonical_staging)
+        || canonical_path == canonical_staging
+    {
+        return Err(RegistryError::new(
+            "publish-artifact",
+            "staged artifact is outside the catalog staging directory",
+        ));
+    }
+    Ok(())
+}
+
+fn safe_relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn valid_hash(value: &str) -> bool {
+    value.len() == 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn regular_file_size(path: &Path, maximum: u64) -> Result<u64, RegistryError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| RegistryError::with("stat catalog artifact", error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(RegistryError::new(
+            "validate-artifact",
+            "catalog artifact is not a regular file",
+        ));
+    }
+    if metadata.len() > maximum {
+        return Err(RegistryError::new(
+            "validate-artifact",
+            "catalog artifact exceeds configured size limit",
+        ));
+    }
+    Ok(metadata.len())
+}
+
+fn read_regular_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>, RegistryError> {
+    regular_file_size(path, maximum as u64)?;
+    fs::read(path).map_err(|error| RegistryError::with("read manifest slot", error))
+}
+
+fn file_checksum(path: &Path) -> Result<String, RegistryError> {
+    let mut file = File::open(path)
+        .map_err(|error| RegistryError::with("open artifact for checksum", error))?;
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| RegistryError::with("read artifact checksum", error))?;
+        if read == 0 {
+            break;
+        }
+        for byte in &buffer[..read] {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    Ok(format!("{hash:016x}"))
+}
+
+#[cfg(feature = "builder")]
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(feature = "builder")]
+fn sync_directory(path: &Path) -> Result<(), RegistryError> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| RegistryError::with("sync publication directory", error))
+}
+
+#[cfg(feature = "builder")]
+struct TemporaryCleanup(Option<PathBuf>);
+
+#[cfg(feature = "builder")]
+impl Drop for TemporaryCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryError {
+    stage: &'static str,
+    message: String,
+}
+
+impl RegistryError {
+    fn new(stage: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            stage,
+            message: message.into(),
+        }
+    }
+
+    fn with(stage: &'static str, error: impl fmt::Display) -> Self {
+        Self::new(stage, error.to_string())
+    }
+
+    pub fn stage(&self) -> &'static str {
+        self.stage
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for RegistryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.stage, self.message)
+    }
+}
+
+impl Error for RegistryError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn uncommitted_generation_does_not_replace_the_old_manifest() {
+        let root = temporary_root("manifest-last");
+        let system_id = SystemId::parse("snes").unwrap();
+        let first = create_generation(&root, &system_id, 1);
+        let first_manifest = manifest(1, first.clone(), None);
+        publish_manifest(&root, &first_manifest, limits()).unwrap();
+
+        let second = create_generation(&root, &system_id, 2);
+        assert_eq!(
+            read_latest_manifest(&root, limits()).unwrap(),
+            first_manifest
+        );
+
+        let second_manifest = manifest(2, second, Some(first));
+        publish_manifest(&root, &second_manifest, limits()).unwrap();
+        assert_eq!(
+            read_latest_manifest(&root, limits()).unwrap(),
+            second_manifest
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn corrupt_newest_slot_falls_back_to_the_previous_valid_slot() {
+        let root = temporary_root("slot-fallback");
+        let system_id = SystemId::parse("snes").unwrap();
+        let first = create_generation(&root, &system_id, 1);
+        publish_manifest(&root, &manifest(1, first.clone(), None), limits()).unwrap();
+        let second = create_generation(&root, &system_id, 2);
+        publish_manifest(&root, &manifest(2, second, Some(first.clone())), limits()).unwrap();
+        fs::write(root.join(MANIFEST_B), b"corrupt").unwrap();
+        assert_eq!(
+            read_latest_manifest(&root, limits()).unwrap(),
+            manifest(1, first, None)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn garbage_collection_retains_active_and_previous_generations_only() {
+        let root = temporary_root("garbage-collection");
+        let system_id = SystemId::parse("snes").unwrap();
+        let first = create_generation(&root, &system_id, 1);
+        let second = create_generation(&root, &system_id, 2);
+        let third = create_generation(&root, &system_id, 3);
+        let obsolete = create_generation(&root, &SystemId::parse("gamegear").unwrap(), 1);
+        let manifest = manifest(3, third, Some(second));
+        let removed = garbage_collect_unreferenced(&root, &manifest).unwrap();
+        assert_eq!(removed.len(), 4);
+        assert!(!root.join(first.sqlite_path).exists());
+        assert!(!root.join(first.navigation_path).exists());
+        assert!(!root.join(obsolete.sqlite_path).exists());
+        assert!(!root.join(obsolete.navigation_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stored_manifest_rejects_traversal_paths() {
+        let stored = StoredManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            generation: 1,
+            systems: vec![StoredSystem {
+                system_id: "snes".to_string(),
+                display_title: "SNES".to_string(),
+                section: "Consoles".to_string(),
+                family: "Nintendo".to_string(),
+                order: 1,
+                producers: vec!["snes-root".to_string()],
+                active: StoredGeneration {
+                    generation: 1,
+                    sqlite_path: "../escape.sqlite3".to_string(),
+                    navigation_path: "systems/snes/1.nav.lz4b".to_string(),
+                    sqlite_bytes: 1,
+                    navigation_bytes: 1,
+                    sqlite_hash: "0000000000000000".to_string(),
+                    navigation_hash: "0000000000000000".to_string(),
+                    games: 1,
+                },
+                previous: None,
+            }],
+        };
+        let manifest = from_stored(stored).unwrap();
+        let root = temporary_root("traversal");
+        assert_eq!(
+            validate_manifest(&root, &manifest, limits(), false)
+                .unwrap_err()
+                .message(),
+            "manifest artifact path is not canonical"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    fn create_generation(
+        root: &Path,
+        system_id: &SystemId,
+        generation: u64,
+    ) -> PublishedGeneration {
+        let staging = root.join("staging").join(format!("run-{generation}"));
+        fs::create_dir_all(&staging).unwrap();
+        let sqlite = staging.join("system.sqlite3");
+        let navigation = staging.join("system.nav.lz4b");
+        let data = SystemShardData {
+            system_id: system_id.clone(),
+            generation,
+            games: vec![SystemGame {
+                stable_key: "one".to_string(),
+                title: "Synthetic One".to_string(),
+                launch_ref: "/games/SNES/One.sfc".to_string(),
+            }],
+        };
+        write_system_shard(&sqlite, &navigation, &data, limits().shard).unwrap();
+        publish_system_artifacts(
+            root,
+            &sqlite,
+            &navigation,
+            system_id,
+            generation,
+            1,
+            limits(),
+        )
+        .unwrap()
+    }
+
+    fn manifest(
+        generation: u64,
+        active: PublishedGeneration,
+        previous: Option<PublishedGeneration>,
+    ) -> CatalogManifest {
+        CatalogManifest {
+            generation,
+            systems: vec![ManifestSystem {
+                system_id: SystemId::parse("snes").unwrap(),
+                display_title: "SNES".to_string(),
+                section: "Consoles".to_string(),
+                family: "Nintendo".to_string(),
+                order: 1,
+                producers: vec![ScanUnitId::parse("snes-root").unwrap()],
+                active,
+                previous,
+            }],
+        }
+    }
+
+    fn limits() -> RegistryLimits {
+        RegistryLimits {
+            max_manifest_bytes: 1024 * 1024,
+            max_systems: 100,
+            shard: SystemShardLimits {
+                max_sqlite_bytes: 2 * 1024 * 1024,
+                max_navigation_compressed_bytes: 256 * 1024,
+                max_navigation_decoded_bytes: 1024 * 1024,
+                max_games: 100,
+            },
+        }
+    }
+
+    fn temporary_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-shard-registry-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        root
+    }
+}

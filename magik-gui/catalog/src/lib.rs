@@ -45,6 +45,7 @@ pub mod preview_worker;
 #[cfg(feature = "builder")]
 pub mod reconciliation_planner;
 pub mod runtime_thread;
+pub mod shard_registry;
 pub mod sharded_catalog;
 mod software_identity;
 mod sqlite_catalog;
