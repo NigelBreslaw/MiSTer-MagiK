@@ -5,6 +5,9 @@
 # Measure warm launcher startup catalog timing without forcing a rebuild.
 set -euo pipefail
 
+echo "ERROR: profile-warm-catalog-start was retired with Catalog V2; use device-startup-reveal-acceptance.sh for V3 warm-start measurements" >&2
+exit 2
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
 source "$HERE/scripts/lib/magik-layout.sh"

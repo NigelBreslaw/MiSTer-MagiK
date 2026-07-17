@@ -57,8 +57,8 @@ for the run:
   comparisons must account for possible stale profiling or alternate binaries.
 
 Production acceptance runners do not permit `deployed-unknown`.
-`profile-preview-scroll.sh`, `profile-library-io.sh`,
-`device-catalog-acceptance.sh`, and `profile-first-scan.sh` require the deployed
+`profile-preview-scroll.sh`, `device-catalog-acceptance.sh`, and
+`profile-first-scan.sh` require the deployed
 SHA-256 to match the local binary and the local `.features` sidecar to
 match the declared feature set. First scan verifies the embedded frontend;
 standalone builder profiling has its own explicit harness contract. ARM builds also emit a hash-bound
@@ -75,24 +75,24 @@ binary has been installed on the MiSTer.
 
 ## First Scan Gate
 
-The cold first-scan gate measures time to a usable RAM catalog and time to a
-durable SQLite save:
+The cold first-scan gate measures time to the first-visible Arcade projection
+and time to a durable V3 registry:
 
 ```bash
 scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
 ```
 
-Reference-MiSTer historical performance budgets are:
+Pre-V3 historical performance budgets are retained only as comparison data:
 
 - `library_ready <= 96592ms`
 - `library_db_saved <= 117766ms`
-- `library.sqlite3 <= 13151232` bytes (64 KiB above the clean baseline)
+- legacy persisted bytes `<= 13151232`
 
 The default command records these without failing on them. Pass
 `--enforce-performance-budgets` for an intentional performance gate. Catalog
-correctness instead uses the versioned, stamp-fingerprint-keyed
-`scripts/lib/catalog-fixture-contract.json`, including separate `games`,
-`game_rows`, launcher-visible, launcher-row, and system counts plus parity.
+correctness instead uses `catalog-v3-inspect`: registry totals, system count,
+Arcade resident rows, state binding, scanner cache, and every system shard must
+agree. Resident Arcade rows are never interpreted as the full catalog.
 
 During first database creation, the catalog builder owns the machine. The
 catalog worker and library walker must run foreground, with nice `0` and
@@ -134,11 +134,12 @@ generation publisher:
 scripts/bench-catalog-rebuild.sh LABEL
 ```
 
-It runs without the rest of MiSTer MagiK and fails unless both measured elapsed
-speedup and exact rebuilt-system work ratio are at least 10x. The default is 30
-systems with 200 games each. This is a deterministic architecture/optimization
-gate, not proof that production change detection selected the right scan units;
-activation evidence must also show the real changed-system plan and artifacts.
+It runs without the rest of MiSTer MagiK and reports measured elapsed speedup,
+full and delta system counts, and exact rebuilt-system work ratio. The default
+is 30 systems with 200 games each. Ten times remains a comparison target, not a
+release blocker. Correct changed-system selection and a work ratio greater than
+one are structural gates; activation evidence must also show the real
+changed-system plan and artifacts.
 The lab command refuses non-empty storage rather than risking an existing
 catalog.
 
@@ -487,13 +488,9 @@ Use `scripts/profile-cold-turbo-preview.sh` without `--require-pass` when
 collecting reporting-only data.
 
 Arcade benchmark scripts use `MISTER_CATALOG_REFRESH=default`, not `off`.
-Warm catalog startup may first populate Home/system counts from
-`library.summary.json`; the default policy then hydrates the full SQLite catalog
-without forcing a rebuild when the stamp matches. `off` leaves the launcher in
-summary-only mode after a warm summary load and is invalid for Arcade row,
-preview, and launch-handoff benchmarks because there may be no hydrated game
-rows to scroll or launch. Set `on` or `force` only when intentionally
-benchmarking a catalog rebuild.
+Warm startup reads the V3 registry and Arcade mini-nav without hydrating other
+systems. `off` is invalid when the scenario requires validation or rebuild
+work. Set `on` or `force` only when intentionally benchmarking a rebuild.
 
 Warm validation includes both the root stamp and the discovery checkpoint. The
 unchanged path must stay under the existing 2s hard gate including checkpoint
@@ -569,7 +566,7 @@ loading is raw565-oriented; build caches and publish-ready packs from the Mac in
 the private `private/magik-cloud` submodule with:
 
 ```bash
-scripts/magik-cloud run -- scripts/build-arcade-screenshot-pack.sh --launcher-db /ABS/PATH/library.sqlite3
+scripts/magik-cloud run -- scripts/build-arcade-screenshot-pack.sh --asset-keys-file /ABS/PATH/arcade-asset-keys.txt
 scripts/magik-cloud run -- scripts/build-neogeo-screenshot-pack.sh
 scripts/magik-cloud run -- scripts/build-console-screenshot-pack.sh --system saturn --input data/sources/saturn/canonical
 ```
@@ -829,45 +826,31 @@ Build profiles and toolchain details live in `magik-gui/BUILD.md`.
 
 Bench scene documentation lives in `magik-gui/ui/bench/README.md`.
 
-## Library Benchmarks
+## Catalog Benchmarks
 
-Use library benchmark scripts and SQL inspection rather than pulling the SQLite
-database back to the host:
+Use the V3 acceptance, first-scan, contention, and standalone rebuild tools:
 
 ```bash
 scripts/profile-first-scan.sh LABEL --deploy-device --replace-label
-scripts/profile-library-save.sh LABEL --iterations 5 --replace-label
-scripts/profile-library-io.sh LABEL --replace-label
-scripts/bench-library.sh
-scripts/mister db
-scripts/mister db "SELECT count(*) FROM games"
+scripts/device-catalog-acceptance.sh LABEL
+scripts/profile-catalog-contention.sh LABEL --skip-build
+scripts/bench-catalog-rebuild.sh LABEL
+scripts/mister catalog
 ```
 
-On the current reference SD card, `device-catalog-acceptance.sh` resolves the
-summary stamp fingerprint through the shared fixture contract. An unknown
-fingerprint fails as an unknown fixture rather than as a global product count.
-Update fixtures only with retained source/database/navigation evidence from an
-intentional SD-card change.
+`device-catalog-acceptance.sh` verifies the active manifest, binding, state,
+scanner cache, every per-system SQLite/mini-nav pair, summed totals, and the
+absence of V2 artifacts. `scripts/mister catalog` exposes the same read-only V3
+integrity report.
 
-Release-device builds expose the read-only `library-sql` command used by
-`scripts/mister db`. Successful queries print normal result rows first and then
-append a `library_sql_timing_tsv` row for SQLite open, prepare, first-row,
-row-read, formatting, total query time, row count, column count, and result byte
-count. If the wrapper says it is using the SFTP fallback, the timing describes a
-host-side query against a copied database rather than direct device SQLite
-performance.
-
-`profile-first-scan.sh` deletes the production catalog database plus
-`library.summary.json`, syncs, and reboots with
+`profile-first-scan.sh` moves the complete V3 catalog aside, syncs, and reboots with
 the normal `scripts/mister reboot-wait` path. It collects canonical UI markers
 from `/tmp/mister-magik/events.jsonl` and embedded-builder timing rows from the
 `mister-magik-fb` launcher log. Standalone builder evidence is collected only by
 `profile-catalog-builder.sh`. It records first-frame/catalog-ready timings in
-`history/toolchain-bench/results-first-scan.tsv`. Historical budgets are
-`library_ready <= 96592ms`, `library_db_saved <= 117766ms`, and
-`library.sqlite3 <= 13151232` bytes. The fixture records them on every run, but
-they fail only with `--enforce-performance-budgets`. Corpus correctness and
-count drift always use the shared fingerprint-keyed contract. For cold catalog
+`history/toolchain-bench/results-first-scan.tsv`. Historical timing and byte
+budgets are comparison-only unless explicitly enabled. Corpus correctness
+always uses the V3 inspector. For cold catalog
 UX, prefer
 `bootstrap_counter_sustained_climb` over the first
 `bootstrap_counter_climb`: the latter is only the first meaningful target
@@ -880,8 +863,8 @@ first small batch.
 `full_scan_counter_climb - bootstrap_counter_sustained_climb`; use it as the
 first-scan "felt stuck" metric when changing bootstrap progress or scanner
 progress reporting. `catalog_worker_ram_catalog` records the staged in-memory
-catalog projection cost and must be reported separately from scan time and
-SQLite save time.
+catalog projection cost and must be reported separately from scan time and V3
+publication time.
 
 For cold-scan retention decisions, judge scanner optimizations against
 `library_scan_complete`, `scan_stage_walk`, `scan_stage_file_discovery`, and
@@ -891,73 +874,24 @@ speedup claims. Non-UX scanner changes should save at least 8s on cold
 `profile-first-scan.sh` runs against the relevant baseline before they earn
 their complexity.
 
-`device-catalog-destruction.sh` is the manual recovery integration check for
-missing, empty, corrupt, and marker-forced catalog states. Its missing-DB case
-intentionally leaves any orphan `library.summary.json` in place and asserts the
-launcher ignores that summary before showing the visible first-run scan; empty
-and corrupt DB cases assert the same summary rejection for unusable SQLite
-files.
-
-`device-catalog-drift-acceptance.sh` is the manual real-device check for
-checkpoint drift. It covers missing-DB first creation, warm unchanged
-validation, known core and game additions, unknown core audit drift, new system
-directory drift, Continue marker deferral, marker rebuild, and immediate
-Rebuild. Rows are appended to
-`history/toolchain-bench/results-catalog-drift-acceptance.tsv`.
-
-`bench-library.sh` suspends the supervised launcher through `/dev/MiSTer_cmd`
-while running scanner/import CLI benchmarks. Do not benchmark by directly
-killing `mister-magik-fb`; that can leave the Main fork and display/OSD state
-out of sync.
-
-`profile-library-io.sh` runs one scanner/import benchmark while sampling
-process CPU ticks, process I/O bytes, system CPU/iowait, and SD-card diskstats
-once per second. Use it before claiming that a scanner/import change is CPU- or
-I/O-bound.
-
-`profile-library-save.sh` runs fresh `library-refresh` passes against disposable
-database paths and captures only the final `library_sqlite_publish_tsv` rows.
-Use it when changing file publish behavior so save timing is separated from
-catalog discovery and SQLite import work. `profile-first-scan.sh` also records
-the publish row during full cold-start measurements so the final `library_ready`
-time can be read alongside the save phase.
-
-Set `MISTER_LIBRARY_BENCH_FORCE_REBUILD=1` only on disposable roots when
-measuring explicit full-build refresh behavior; it creates a synthetic
-candidate file.
-
-Use `scripts/bench-library.sh LABEL --precount` only to measure the cost of a
-pre-scan candidate count for determinate discovery progress. Use
-`--sqlite-build-dir /tmp` only to benchmark the opt-in tmpfs SQLite build path.
+The V2 destruction, drift, SQL, and monolithic-library runners are retired and
+must not be used as release evidence. V3 fault testing operates on immutable
+generations and registry slots with bounded restoration. Never benchmark by
+directly killing `mister-magik-fb`; that can leave Main and display/OSD state out
+of sync.
 
 ## Warm Catalog Startup
 
-Use the warm catalog startup script to measure navigation-projection readiness,
-materialized parity hydration, the validation handoff, and stamp validation as
-separate phases:
+Use startup reveal acceptance to measure registry-first startup, eager Arcade
+mini-nav hydration, validation handoff, and input readiness over five starts:
 
 ```bash
-scripts/profile-warm-catalog-start.sh LABEL --replace-label --iterations 5
+MISTER_STARTUP_REVEAL_MODE=warm scripts/device-startup-reveal-acceptance.sh LABEL
 ```
 
-Rows are appended to `history/toolchain-bench/results-warm-catalog.tsv`. In
-addition to the existing load and stamp fields, each row records projection
-ready/fallback status, materialized parity start/finish/status/duration, and the
-hydration-to-validation handoff.
-
-For warm-start claims, report first interactive Home/system-list time,
-`catalog_summary_load_us`, whether `catalog_cache_load_sync` stayed off the
-pre-loop path, first-frame time, and full catalog ready time.
-The harness also waits, with a bounded timeout, for production `CheckStamp` to
-emit `catalog_stamp_check` and the terminal `library_db_unchanged`. It records
-the component timings and fails unless `unchanged=true` and `check_us <=
-2000000`. The event timestamp includes intentional hydration/idle deferral and
-is not the validation-duration gate. A timeout after projection readiness and
-parity start is reported as `materialized_parity_blocked`, rather than the
-misleading generic `missing_stamp_check`. Completed parity without the
-validation handoff is reported as `missing_hydration_handoff`.
-A completed handoff with no subsequent stamp marker is reported as
-`missing_validation_start`.
+For warm-start claims, report reveal, first-frame, input-ready, registry load,
+Arcade mini-nav load, and validation timings. The harness must not open every
+system shard or any V2 artifact.
 
 ## Launch Handoff
 

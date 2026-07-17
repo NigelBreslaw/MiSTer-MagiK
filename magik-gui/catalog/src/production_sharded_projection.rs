@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Production dual-publication bridge from the canonical RAM catalog to V3.
+//! Production V3 projection from the canonical RAM catalog into system shards.
 
 use crate::arcade_catalog::ArcadeCatalog;
 use crate::catalog_classify::{system_definition, LauncherSection, SystemId};

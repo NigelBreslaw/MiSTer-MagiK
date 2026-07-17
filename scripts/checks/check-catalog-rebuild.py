@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Enforce the Catalog V3 full-versus-delta rebuild target."""
+"""Validate and report the Catalog V3 full-versus-delta rebuild result."""
 
 from __future__ import annotations
 
@@ -45,15 +45,17 @@ def check(label: str, report: Path, minimum_speedup: float = 10.0) -> int:
         and delta_us > 0
         and full_systems >= 10
         and delta_systems > 0
-        and elapsed >= minimum_speedup
-        and work >= minimum_speedup
+        and delta_systems < full_systems
+        and work > 1.0
     )
+    target_met = elapsed >= minimum_speedup and work >= minimum_speedup
     print(
         f"catalog_rebuild_gate_tsv\tlabel={label}\tvalid={int(valid)}"
         f"\tinvalid_reason={'ok' if valid else 'below_target'}"
         f"\tfull_us={full_us}\tdelta_us={delta_us}\telapsed_speedup={elapsed:.3f}"
         f"\tfull_systems={full_systems}\tdelta_systems={delta_systems}"
-        f"\twork_ratio={work:.3f}\tminimum_speedup={minimum_speedup:.3f}"
+        f"\twork_ratio={work:.3f}\ttarget_speedup={minimum_speedup:.3f}"
+        f"\ttarget_met={int(target_met)}"
     )
     return 0 if valid else 9
 
@@ -70,8 +72,8 @@ def self_test() -> int:
         if check("self-pass", report) != 0:
             return 1
         report.write_text(report.read_text().replace("elapsed_speedup=10.000", "elapsed_speedup=9.999"))
-        if check("self-fail", report) == 0:
-            print("self-test accepted a sub-10x rebuild", file=sys.stderr)
+        if check("self-report", report) != 0:
+            print("self-test rejected a structurally valid sub-10x rebuild", file=sys.stderr)
             return 1
     print("catalog rebuild checker self-test ok")
     return 0

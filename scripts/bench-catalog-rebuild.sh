@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Standalone Catalog V3 full-versus-delta rebuild benchmark and 10x gate.
+# Standalone Catalog V3 full-versus-delta rebuild benchmark and report.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

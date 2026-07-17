@@ -315,13 +315,13 @@ stateDiagram-v2
     HoldBlack --> RevealLauncher: catalog loaded + bridge synced + first frame ready
 
     ReturnFromGame --> HoldBlackReturn: keep framebuffer black
-    HoldBlackReturn --> HydrateReturnCatalog: cached summary lacks navigation rows
-    HydrateReturnCatalog --> RestoreContext: navigation catalog loaded
-    HoldBlackReturn --> RestoreContext: navigation catalog already loaded
+    HoldBlackReturn --> RestoreContext: valid return capsule
+    HoldBlackReturn --> HydrateReturnSystem: capsule unavailable or stale
+    HydrateReturnSystem --> RestoreContext: registry + selected mini-nav loaded
     RestoreContext --> WaitRelevantPreview: restored selection known
     WaitRelevantPreview --> RevealLauncher: selected preview exact, no preview exists, or 250ms wait expires
 
-    HydrateReturnCatalog --> SearchIndexBuilding: background, after catalog publication
+    HydrateReturnSystem --> SearchIndexBuilding: background, after selected mini-nav
     SearchIndexBuilding --> SearchIndexReady: never gates reveal or input
 
     RevealLauncher --> InputEnabled
@@ -331,11 +331,11 @@ stateDiagram-v2
 Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
 stays visible for at least two seconds while catalog work starts in the
 background. Warm boot and return-from-game keep HDMI black until the first
-intended launcher frame is ready. Warm summary startup may defer background
-catalog validation so the first visible frame wins, but return-from-game treats
-navigation hydration as foreground reveal work: it starts immediately, even when
-normal refresh is disabled, because restoring the exact Arcade row requires
-hydrated navigation rows. Return-from-game may wait at most 250ms for the selected
+intended launcher frame is ready. Warm registry startup opens only Arcade's
+mini-nav before reveal; other systems remain lazy. Return-from-game consumes a
+bounded catalog capsule when possible. If that capsule is unavailable, only the
+registry and selected system mini-nav are foreground reveal work. Return-from-game
+may wait at most 250ms for the selected
 preview so the restored Arcade frame is complete, but preview readiness is not a
 hard visibility dependency: if the relevant preview never becomes exact, the
 launcher must reveal after the bounded preview hold rather than leaving HDMI
@@ -391,15 +391,24 @@ display without valid scan-out.
 
 ## Catalog And Preview Model
 
-The finalized RAM navigation projection is the runtime catalog contract. A
-current stamped `library.nav.lz4b` is the preferred warm path; SQLite durably
-stores the same canonical compressed projection beside source facts so an
-interrupted sidecar publication can recover without semantic loss. Joined-SQL
-hydration is a degraded compatibility fallback and is never allowed to
-republish the adjacent projection pair. Schema 64 also retains populated
-materialized compatibility tables until release tools and benchmark selectors
-finish migrating; they are not the runtime owner. The UI must avoid scanning
-media during hot launcher paths.
+Catalog V3 is the sole production catalog. Its schema-one manifest registry
+names immutable schema-one SQLite/mini-nav pairs for each playable system.
+Warm startup reads the registry and Arcade mini-nav only; selecting another
+system opens only that system's mini-nav. The registry's summed counts are the
+full catalog total, while resident Arcade rows describe only eager memory.
+
+A first build scans Arcade as unrestricted first-visible work, reveals the
+launcher after that live projection is acknowledged, then continues the
+complete build in the background. Background walkers, classification batches,
+archive inspection, prepared-payload indexing, and projection work all obey the
+launcher idle latch through UI-independent cooperative checkpoints. Changed
+systems receive new immutable artifacts and unchanged systems retain their
+existing generations. The manifest is the atomic publication boundary.
+
+The catalog-state fingerprint, registry generation, and binding must agree.
+The separate scanner cache owns discovery timestamps and software hashes. The
+UI must never scan media on launcher hot paths, and production never reads or
+creates `library.sqlite3`, `library.summary.json`, or `library.nav.lz4b`.
 
 See `docs/catalog.md` for the current catalog lifecycle, worker request modes,
 root stamp semantics, SQLite publish model, and benchmark gates.
@@ -482,29 +491,24 @@ is applied when results become ready without delaying reveal or input.
 
 Current rules:
 
-- Production `mister-magik-fb` exposes the minimal command surface:
-  `ui`, `early-black`, `library-refresh`, and `experiment-capabilities`.
+- Production `mister-magik-fb` exposes the minimal command surface, including
+  `ui`, `early-black`, `library-refresh`, and read-only `catalog-v3-inspect`.
   Low-level probes are diagnostic/experiment builds, not release commands.
-- Build/update the library cache outside the UI hot path with
+- Build/update the catalog outside the UI hot path with
   `mister-magik-fb library-refresh` or `scripts/mister` helpers.
-- Launcher boot may seed Home/system counts from `library.summary.json` before
-  the first usable frame when a usable database exists. Full SQLite row
-  hydration then runs through the lifecycle scheduler after the first visible
-  copy and configured warm-validation delay, without forcing a rebuild. If the
-  stamp is stale, the launcher shows a `Library changed` dialog instead of
-  rebuilding automatically. `Rebuild` runs the same full database builder used
-  by explicit refresh; `Continue` writes a one-shot marker so the next MagiK
-  boot goes directly to the `Updating Library` rebuild screen. Use
-  `startup_timing` log lines to separate summary seed, full SQLite hydration,
-  catalog construction, Slint bridge sync, stamp check, user choice, and build
-  costs.
+- Launcher boot seeds Home/system counts from the V3 registry and eagerly
+  hydrates only Arcade. Other systems load lazily. If source state is stale,
+  the launcher shows a `Library changed` dialog; `Rebuild` uses the same
+  per-system reconciler as explicit refresh, while `Continue` writes a one-shot
+  next-boot marker. Use `startup_timing` logs to separate registry load, Arcade
+  mini-nav hydration, bridge sync, stamp check, user choice, and build costs.
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.
-- When the SQLite catalog is missing or empty, boot must start the Slint
+- When the V3 registry is missing or invalid, boot must start the Slint
   launcher immediately and let the launcher worker perform the first scan behind
   a visible full-screen scan state. Do not run foreground `library-refresh`
-  before UI on first boot or after Reset Database; that regresses to a black
+  before UI on first boot or after Reset Catalog; that regresses to a black
   HDMI screen while the index is built.
 - The launcher presents a minimal `MiSTer MagiK` Slint splash immediately after
   `app.show()` and before catalog loading. Keep that path free of catalog,
@@ -518,8 +522,8 @@ Current rules:
 - Preview requests use derived archive paths and identity keys. The catalog does
   not index screenshot archives or walk PNG/JPG screenshot folders; missing
   preview entries fail at runtime and show the blank preview state.
-- Catalog code must not read `gamelist.xml`; runtime catalog loading goes
-  through the SQLite library cache and materialized projections.
+- Catalog code must not read `gamelist.xml`; runtime loading goes through the V3
+  registry and per-system mini-navs.
 - MAME XML and MAME software-list XML are database-publisher inputs only. The
   production conversion to `mame.sqlite3` runs exclusively in
   `.github/workflows/game-databases.yml`; application distribution consumes a
