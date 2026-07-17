@@ -481,6 +481,10 @@ pub fn catalog_load_counter_detail() -> String {
     catalog_load_metrics::format_snapshot(catalog_load_metrics::snapshot())
 }
 
+pub fn is_catalog_schema_mismatch_error(error: &str) -> bool {
+    error.starts_with("catalog schema mismatch:")
+}
+
 pub fn record_catalog_worker_cache_load() {
     catalog_load_metrics::record_worker_cache_load();
 }

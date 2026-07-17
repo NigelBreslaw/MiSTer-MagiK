@@ -187,8 +187,17 @@ pub(super) fn start_library_catalog_worker(
                                     name: "catalog_worker_cache_load_failed".to_string(),
                                     detail: e.clone(),
                                 });
-                                let _ = tx.send(CatalogWorkerMessage::LoadFailed { error: e });
-                                return;
+                                if library_db::is_catalog_schema_mismatch_error(&e) {
+                                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                                        name: "catalog_schema_mismatch_rebuild".to_string(),
+                                        detail: e,
+                                    });
+                                    cache_state = CatalogCacheState::Missing;
+                                } else {
+                                    let _ =
+                                        tx.send(CatalogWorkerMessage::LoadFailed { error: e });
+                                    return;
+                                }
                             }
                         }
                     } else if let Some(projected) = startup_projection_catalog.as_ref() {
@@ -272,8 +281,15 @@ pub(super) fn start_library_catalog_worker(
                                 let _ = tx.send(CatalogWorkerMessage::Timing {
                                     name: "catalog_worker_materialized_parity_load_failed"
                                         .to_string(),
-                                    detail: e,
+                                    detail: e.clone(),
                                 });
+                                if library_db::is_catalog_schema_mismatch_error(&e) {
+                                    let _ = tx.send(CatalogWorkerMessage::Timing {
+                                        name: "catalog_schema_mismatch_rebuild".to_string(),
+                                        detail: e,
+                                    });
+                                    cache_state = CatalogCacheState::Missing;
+                                }
                             }
                         }
                     }
@@ -321,8 +337,16 @@ pub(super) fn start_library_catalog_worker(
                                 name: "catalog_worker_cache_load_failed".to_string(),
                                 detail: e.clone(),
                             });
-                            let _ = tx.send(CatalogWorkerMessage::LoadFailed { error: e });
-                            return;
+                            if library_db::is_catalog_schema_mismatch_error(&e) {
+                                let _ = tx.send(CatalogWorkerMessage::Timing {
+                                    name: "catalog_schema_mismatch_rebuild".to_string(),
+                                    detail: e,
+                                });
+                                cache_state = CatalogCacheState::Missing;
+                            } else {
+                                let _ = tx.send(CatalogWorkerMessage::LoadFailed { error: e });
+                                return;
+                            }
                         }
                     }
                 }
@@ -1806,6 +1830,23 @@ mod tests {
         );
         assert_eq!(
             catalog_worker_plan(CatalogCacheState::Empty, CatalogWorkerRequest::CheckStamp),
+            CatalogWorkerPlan::ForceBuild
+        );
+    }
+
+    #[test]
+    fn catalog_schema_mismatch_is_classified_for_automatic_rebuild() {
+        assert!(library_db::is_catalog_schema_mismatch_error(
+            "catalog schema mismatch: expected 34, found 33"
+        ));
+        assert!(library_db::is_catalog_schema_mismatch_error(
+            "catalog schema mismatch: expected 34, found missing"
+        ));
+        assert!(!library_db::is_catalog_schema_mismatch_error(
+            "open catalog database: input/output error"
+        ));
+        assert_eq!(
+            catalog_worker_plan(CatalogCacheState::Missing, CatalogWorkerRequest::LoadOnly),
             CatalogWorkerPlan::ForceBuild
         );
     }
