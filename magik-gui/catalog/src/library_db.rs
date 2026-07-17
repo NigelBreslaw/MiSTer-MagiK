@@ -1375,6 +1375,7 @@ fn build_catalog_from_scan_with_preferred_and_progress(
     let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
         preview_worker::preview_archive_paths_for_catalog_projection(),
     );
+    let scanner_cache = crate::scanner_cache::load_or_migrate_default();
     build_catalog_from_scan_with_sources_and_preferred_and_progress(
         root,
         scan,
@@ -1382,8 +1383,8 @@ fn build_catalog_from_scan_with_preferred_and_progress(
             mame_sqlite_path: &mame_sqlite_path,
             hbmame_sqlite_path: &hbmame_sqlite_path,
             preview_paths: &preview_paths,
-            software_hash_cache: SoftwareHashCache::load(&default_sqlite_path()),
-            discovery_history: sqlite_catalog::DiscoveryHistory::load(&default_sqlite_path()),
+            software_hash_cache: scanner_cache.software_hash_cache,
+            discovery_history: scanner_cache.discovery_history,
         },
         preferred_discoveries,
         progress,

@@ -60,6 +60,7 @@ pub mod reconciliation_executor;
 #[cfg(feature = "builder")]
 pub mod reconciliation_planner;
 pub mod runtime_thread;
+pub mod scanner_cache;
 pub mod shard_registry;
 pub mod sharded_builder_protocol;
 pub mod sharded_catalog;

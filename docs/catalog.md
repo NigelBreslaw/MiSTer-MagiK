@@ -99,6 +99,9 @@ publication still pauses heavy work until the launcher has applied it.
 - `magik-gui/catalog/src/catalog_stamp.rs` owns the warm validation stamp.
 - `magik-gui/catalog/src/catalog_state.rs` owns schema-one V3 scan-state
   persistence and one-time V2 migration reads.
+- `magik-gui/catalog/src/scanner_cache.rs` owns the separate schema-one V3
+  discovery-timestamp and software-hash cache. It preserves first-seen identity
+  losslessly and can be exercised without the launcher or global database.
 - `magik-gui/catalog/src/catalog_store.rs` owns stamp persistence helpers.
 - `magik-gui/catalog/src/catalog_build_record.rs` owns the completed-build
   duration sidecar used by the Info screen.

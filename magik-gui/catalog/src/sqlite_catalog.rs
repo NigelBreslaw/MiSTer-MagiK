@@ -323,10 +323,7 @@ impl PreviewIndexRefreshRow {
 
 pub const PREVIEW_INDEX_REFRESH_TSV_HEADER: &str = "preview_index_refresh_tsv\tlabel\tsystem_id\tpack_path\tindex_path\tindex_entries\tcandidate_rows\tupdated_rows\tindex_read_us\tsql_update_us\ttotal_us\tresult\terror";
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct DiscoveryHistory {
-    by_game_id: HashMap<String, Option<i64>>,
-}
+pub(crate) use crate::scanner_cache::DiscoveryHistory;
 
 impl DiscoveryHistory {
     pub(crate) fn load(path: &Path) -> Option<Self> {
@@ -357,13 +354,6 @@ impl DiscoveryHistory {
             }
         }
         Some(Self { by_game_id })
-    }
-
-    pub(crate) fn discovered_at_for(&self, game_id: &str, scan: &LibraryScan) -> Option<i64> {
-        self.by_game_id
-            .get(game_id)
-            .copied()
-            .unwrap_or(Some(scan.scanned_at_unix))
     }
 }
 
