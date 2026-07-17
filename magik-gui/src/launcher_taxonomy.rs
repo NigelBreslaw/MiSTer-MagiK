@@ -113,7 +113,14 @@ pub struct LauncherTaxonomy {
 
 impl LauncherTaxonomy {
     pub fn from_catalog(catalog: &ArcadeCatalog) -> Self {
-        TaxonomyBuilder::new(catalog).build()
+        TaxonomyBuilder::new(catalog, None).build()
+    }
+
+    pub fn from_catalog_with_shells(
+        catalog: &ArcadeCatalog,
+        visible_zero_systems: &std::collections::HashSet<String>,
+    ) -> Self {
+        TaxonomyBuilder::new(catalog, Some(visible_zero_systems)).build()
     }
 
     pub fn token(&self) -> LauncherTaxonomyToken {
@@ -246,15 +253,20 @@ struct ClassifiedSystem {
 
 struct TaxonomyBuilder<'a> {
     catalog: &'a ArcadeCatalog,
+    visible_zero_systems: Option<&'a std::collections::HashSet<String>>,
     taxonomy: LauncherTaxonomy,
     buckets: HashMap<Bucket, Vec<ClassifiedSystem>>,
     snk_systems: Vec<ClassifiedSystem>,
 }
 
 impl<'a> TaxonomyBuilder<'a> {
-    fn new(catalog: &'a ArcadeCatalog) -> Self {
+    fn new(
+        catalog: &'a ArcadeCatalog,
+        visible_zero_systems: Option<&'a std::collections::HashSet<String>>,
+    ) -> Self {
         Self {
             catalog,
+            visible_zero_systems,
             taxonomy: LauncherTaxonomy {
                 token: LauncherTaxonomyToken::from_catalog(catalog),
                 ..LauncherTaxonomy::default()
@@ -278,7 +290,11 @@ impl<'a> TaxonomyBuilder<'a> {
         for system in &self.catalog.systems {
             let id = normalize_system_id(&system.id);
             let count = system.count.max(self.catalog.system_game_count(&system.id));
-            if count == 0 {
+            if count == 0
+                && !self
+                    .visible_zero_systems
+                    .is_some_and(|systems| systems.contains(&id))
+            {
                 continue;
             }
             let kind = self.catalog.platform_kind(&system.id);

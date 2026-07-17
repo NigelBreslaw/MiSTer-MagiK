@@ -8,6 +8,7 @@ pub(super) enum LauncherWorkerUiIntent {
     None,
     CatalogScan(CatalogScanBridgeStatus),
     ClearCatalogScan,
+    ShowCatalogBackgroundScan,
     HideCatalogBackgroundScan,
     InfoDatabaseBuild(String),
     MediaProgress {
@@ -43,6 +44,10 @@ pub(super) fn sync_launcher_worker_ui_intent(
         }
         LauncherWorkerUiIntent::ClearCatalogScan => {
             status_presenter.clear_catalog_scan();
+        }
+        LauncherWorkerUiIntent::ShowCatalogBackgroundScan => {
+            status_presenter.clear_catalog_scan();
+            status_presenter.sync_catalog_background_scan_visible(true);
         }
         LauncherWorkerUiIntent::HideCatalogBackgroundScan => {
             status_presenter.sync_catalog_background_scan_visible(false);

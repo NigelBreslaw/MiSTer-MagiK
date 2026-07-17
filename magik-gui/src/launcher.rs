@@ -20,7 +20,7 @@ use crate::settings::MagikSettings;
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -687,6 +687,10 @@ pub struct LauncherNav {
     game_list_memory: HashMap<String, GameListMemory>,
     collection_filters: HashMap<String, ArcadeFilter>,
     collection_search_queries: HashMap<String, String>,
+    catalog_build_active: bool,
+    catalog_build_systems: HashSet<String>,
+    catalog_build_ready: HashSet<String>,
+    catalog_build_failures: HashSet<String>,
     taxonomy: LauncherTaxonomy,
     taxonomy_token: LauncherTaxonomyToken,
     menu_path: Vec<String>,
@@ -915,6 +919,10 @@ impl LauncherNav {
             game_list_memory: HashMap::new(),
             collection_filters: HashMap::new(),
             collection_search_queries: HashMap::new(),
+            catalog_build_active: false,
+            catalog_build_systems: HashSet::new(),
+            catalog_build_ready: HashSet::new(),
+            catalog_build_failures: HashSet::new(),
             taxonomy: LauncherTaxonomy::default(),
             taxonomy_token: LauncherTaxonomyToken::default(),
             menu_path: vec![ROOT_MENU_ID.to_string()],
@@ -943,7 +951,8 @@ impl LauncherNav {
         let old_path = self.menu_path.clone();
         let old_collection = self.active_collection_id.clone();
         let had_active_collection = old_collection.is_some();
-        self.taxonomy = LauncherTaxonomy::from_catalog(catalog);
+        self.taxonomy =
+            LauncherTaxonomy::from_catalog_with_shells(catalog, &self.catalog_build_systems);
         self.taxonomy_token = token;
         for diagnostic in self.taxonomy.diagnostics() {
             crate::ui_errln!("{diagnostic}");
@@ -1075,6 +1084,77 @@ impl LauncherNav {
             .menu(self.current_menu_id())
             .map(|menu| menu.count)
             .unwrap_or(0)
+    }
+
+    pub fn catalog_build_started(&mut self) {
+        self.catalog_build_systems.clear();
+        self.catalog_build_ready.clear();
+        self.catalog_build_failures.clear();
+        self.catalog_build_active = true;
+    }
+
+    pub fn catalog_system_discovered(&mut self, system_id: &str) {
+        if !self.catalog_build_active {
+            self.catalog_build_started();
+        }
+        self.catalog_build_active = true;
+        self.catalog_build_systems.insert(system_id.to_string());
+    }
+
+    pub fn catalog_system_ready(&mut self, system_id: &str) {
+        self.catalog_build_systems.insert(system_id.to_string());
+        self.catalog_build_ready.insert(system_id.to_string());
+        self.catalog_build_failures.remove(system_id);
+    }
+
+    pub fn catalog_system_failed(&mut self, system_id: &str) {
+        self.catalog_build_systems.insert(system_id.to_string());
+        self.catalog_build_failures.insert(system_id.to_string());
+    }
+
+    pub fn catalog_build_finished(&mut self, catalog: &ArcadeCatalog) {
+        self.catalog_build_active = false;
+        self.catalog_build_systems.retain(|system_id| {
+            catalog.system_game_count(system_id) > 0
+                || self.catalog_build_failures.contains(system_id)
+        });
+        self.catalog_build_ready
+            .retain(|system_id| self.catalog_build_systems.contains(system_id));
+    }
+
+    pub fn catalog_with_build_shells(&self, mut catalog: ArcadeCatalog) -> ArcadeCatalog {
+        for system_id in &self.catalog_build_systems {
+            catalog = catalog.with_system_placeholder(system_id);
+        }
+        catalog
+    }
+
+    pub fn menu_item_catalog_presentation(&self, item: &LauncherMenuItem) -> (bool, bool, bool) {
+        match item.kind {
+            LauncherMenuItemKind::Menu => {
+                let partial = self.menu_contains_failed_descendant(&item.id);
+                (self.catalog_build_active, partial, true)
+            }
+            LauncherMenuItemKind::Collection => {
+                let failed = self.catalog_build_failures.contains(&item.id);
+                let scanning = self.catalog_build_active
+                    && self.catalog_build_systems.contains(&item.id)
+                    && !self.catalog_build_ready.contains(&item.id)
+                    && !failed;
+                let available =
+                    self.catalog_build_ready.contains(&item.id) || (item.count > 0 && !failed);
+                (scanning, failed, available)
+            }
+        }
+    }
+
+    fn menu_contains_failed_descendant(&self, menu_id: &str) -> bool {
+        self.taxonomy.menu(menu_id).is_some_and(|menu| {
+            menu.items.iter().any(|item| match item.kind {
+                LauncherMenuItemKind::Menu => self.menu_contains_failed_descendant(&item.id),
+                LauncherMenuItemKind::Collection => self.catalog_build_failures.contains(&item.id),
+            })
+        })
     }
 
     pub fn menu_path(&self) -> &[String] {
@@ -1431,7 +1511,10 @@ impl LauncherNav {
                         self.open_menu(&item.id);
                     }
                     LauncherMenuItemKind::Collection => {
-                        self.activate_collection(catalog, &item.id);
+                        let (_, _, available) = self.menu_item_catalog_presentation(&item);
+                        if available {
+                            self.activate_collection(catalog, &item.id);
+                        }
                     }
                 }
             }
@@ -6949,5 +7032,62 @@ mod tests {
         nav.set_arcade_exit_locked(false);
         nav.leave_arcade(false, "arcade");
         assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn progressive_catalog_shell_is_busy_unavailable_and_rolls_up_failure() {
+        let catalog = arcade_catalog(Vec::new(), Vec::new()).with_system_placeholder("snes");
+        let mut nav = LauncherNav::new();
+        nav.catalog_system_discovered("snes");
+        nav.sync_launcher_taxonomy(&catalog);
+
+        let consoles = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == crate::launcher_taxonomy::CONSOLES_MENU_ID)
+            .expect("discovered console publishes its parent")
+            .clone();
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&consoles),
+            (true, false, true)
+        );
+        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
+        let snes = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == "snes")
+            .expect("discovered leaf is visible")
+            .clone();
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&snes),
+            (true, false, false)
+        );
+
+        nav.catalog_system_ready("snes");
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&snes),
+            (false, false, true)
+        );
+
+        nav.catalog_system_failed("snes");
+        nav.catalog_build_finished(&catalog);
+        nav.go_root();
+        let consoles = nav
+            .current_menu_items()
+            .iter()
+            .find(|item| item.id == crate::launcher_taxonomy::CONSOLES_MENU_ID)
+            .expect("failed descendant keeps parent visible")
+            .clone();
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&consoles),
+            (false, true, true)
+        );
+
+        nav.catalog_build_started();
+        assert_eq!(
+            nav.menu_item_catalog_presentation(&consoles),
+            (true, false, true),
+            "a new build must not inherit the previous build's failures"
+        );
     }
 }

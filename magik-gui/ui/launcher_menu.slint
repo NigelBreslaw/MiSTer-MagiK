@@ -9,6 +9,7 @@ export enum MenuItemKind {
 export enum MenuItemStatus {
     ready,
     scanning,
+    partial,
     failed,
 }
 
@@ -17,6 +18,7 @@ export struct MenuItem {
     label: string,
     subtitle: string,
     focused: bool,
+    available: bool,
     node-kind: MenuItemKind,
     status: MenuItemStatus,
 }

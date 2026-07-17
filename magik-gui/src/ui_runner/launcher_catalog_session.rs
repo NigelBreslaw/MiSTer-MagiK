@@ -55,6 +55,17 @@ pub(super) enum CatalogSessionEffect {
         timing: mister_magik_catalog::arcade_catalog::ArcadeTextIndexBuildTiming,
     },
     SyncCatalogBridge,
+    CatalogBuildStarted,
+    CatalogSystemDiscovered {
+        system_id: String,
+    },
+    CatalogSystemReady {
+        system_id: String,
+    },
+    CatalogSystemFailed {
+        system_id: String,
+    },
+    CatalogBuildFinished,
     Ui(LauncherWorkerUiIntent),
     FinishMediaWorker,
     FinishMediaWorkerIfNoCatalogSeedPending,
@@ -273,6 +284,7 @@ impl LauncherCatalogSession {
                 self.games_found_counter.reset();
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_load_failed", error.clone());
                 effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                 if context.catalog_partial {
@@ -286,6 +298,7 @@ impl LauncherCatalogSession {
                 ));
             }
             CatalogWorkerMessage::FreshCleanupStarted => {
+                effects.push(CatalogSessionEffect::CatalogBuildStarted);
                 effects.event("library_fresh_cleanup_started", "lock=acquired");
                 effects.push(CatalogSessionEffect::Lifecycle(
                     LauncherLifecycleInput::CatalogFreshCleanupStarted,
@@ -302,15 +315,24 @@ impl LauncherCatalogSession {
                 effects.ui(catalog_rebuild_started_intent(true));
             }
             CatalogWorkerMessage::SystemDiscovered { system_id } => {
+                effects.push(CatalogSessionEffect::CatalogSystemDiscovered {
+                    system_id: system_id.clone(),
+                });
                 effects.push(CatalogSessionEffect::MediaSystemDiscovered {
                     system_id,
                     media_gate: context.media_gate,
                 });
             }
             CatalogWorkerMessage::SystemShardReady { system_id, games } => {
+                effects.push(CatalogSessionEffect::CatalogSystemReady {
+                    system_id: system_id.clone(),
+                });
                 effects.push(CatalogSessionEffect::ApplySystemShard { system_id, games });
             }
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
+                effects.push(CatalogSessionEffect::CatalogSystemFailed {
+                    system_id: system_id.clone(),
+                });
                 effects.event(
                     "catalog_system_shard_failed",
                     format!("system={system_id} error={error}"),
@@ -387,6 +409,7 @@ impl LauncherCatalogSession {
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event("library_db_saved", format_library_refresh_summary(&summary));
                 effects.push(CatalogSessionEffect::MarkCatalogDurable {
                     generation_fingerprint,
@@ -423,6 +446,7 @@ impl LauncherCatalogSession {
                 effects.push(CatalogSessionEffect::ConfirmCatalogSeed);
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 effects.event(
                     "library_db_unchanged",
                     format_library_refresh_summary(&summary),
@@ -449,6 +473,7 @@ impl LauncherCatalogSession {
                 self.refresh_failed = false;
                 effects.push(CatalogSessionEffect::FinishMediaWorker);
                 effects.push(CatalogSessionEffect::CatalogValidationFinished);
+                effects.push(CatalogSessionEffect::CatalogBuildFinished);
                 if context.catalog_ready {
                     effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
                     self.games_found_counter.reset();
@@ -637,7 +662,7 @@ impl LauncherCatalogSession {
             ));
         } else if durable_save_pending {
             self.foreground_update = false;
-            effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
+            effects.ui(LauncherWorkerUiIntent::ShowCatalogBackgroundScan);
         } else {
             effects.ui(LauncherWorkerUiIntent::ClearCatalogScan);
         }
@@ -765,6 +790,17 @@ mod tests {
         effects
             .into_effects()
             .into_iter()
+            .filter(|effect| {
+                !matches!(
+                    effect,
+                    CatalogSessionEffect::CatalogBuildStarted
+                        | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                        | CatalogSessionEffect::CatalogSystemReady { .. }
+                        | CatalogSessionEffect::CatalogSystemFailed { .. }
+                        | CatalogSessionEffect::CatalogBuildFinished
+                        | CatalogSessionEffect::ApplySystemShard { .. }
+                )
+            })
             .map(|effect| match effect {
                 CatalogSessionEffect::StartupEvent(_) => "event",
                 CatalogSessionEffect::UseCatalog { .. } => "catalog",
@@ -774,6 +810,14 @@ mod tests {
                 CatalogSessionEffect::StartSearchIndex { .. } => "start-search-index",
                 CatalogSessionEffect::SearchIndexesReady { .. } => "search-indexes-ready",
                 CatalogSessionEffect::SyncCatalogBridge => "sync",
+                CatalogSessionEffect::CatalogBuildStarted
+                | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                | CatalogSessionEffect::CatalogSystemReady { .. }
+                | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::CatalogBuildFinished
+                | CatalogSessionEffect::ApplySystemShard { .. } => {
+                    unreachable!("presentation effects filtered above")
+                }
                 CatalogSessionEffect::Ui(_) => "ui",
                 CatalogSessionEffect::FinishMediaWorker => "finish-media",
                 CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending => {
@@ -796,6 +840,17 @@ mod tests {
         let mut effect_names = Vec::new();
         let mut ui_names = Vec::new();
         for effect in effects.into_effects() {
+            if matches!(
+                effect,
+                CatalogSessionEffect::CatalogBuildStarted
+                    | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                    | CatalogSessionEffect::CatalogSystemReady { .. }
+                    | CatalogSessionEffect::CatalogSystemFailed { .. }
+                    | CatalogSessionEffect::CatalogBuildFinished
+                    | CatalogSessionEffect::ApplySystemShard { .. }
+            ) {
+                continue;
+            }
             match effect {
                 CatalogSessionEffect::StartupEvent(_) => effect_names.push("event"),
                 CatalogSessionEffect::UseCatalog { .. } => effect_names.push("catalog"),
@@ -811,11 +866,20 @@ mod tests {
                     effect_names.push("search-indexes-ready")
                 }
                 CatalogSessionEffect::SyncCatalogBridge => effect_names.push("sync"),
+                CatalogSessionEffect::CatalogBuildStarted
+                | CatalogSessionEffect::CatalogSystemDiscovered { .. }
+                | CatalogSessionEffect::CatalogSystemReady { .. }
+                | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::CatalogBuildFinished
+                | CatalogSessionEffect::ApplySystemShard { .. } => {
+                    unreachable!("presentation effects filtered above")
+                }
                 CatalogSessionEffect::Ui(intent) => {
                     effect_names.push("ui");
                     ui_names.push(match intent {
                         LauncherWorkerUiIntent::CatalogScan(_) => "catalog-scan",
                         LauncherWorkerUiIntent::ClearCatalogScan => "clear-catalog-scan",
+                        LauncherWorkerUiIntent::ShowCatalogBackgroundScan => "show-background-scan",
                         LauncherWorkerUiIntent::HideCatalogBackgroundScan => "hide-background-scan",
                         LauncherWorkerUiIntent::InfoDatabaseBuild(_) => "info-database-build",
                         LauncherWorkerUiIntent::MediaProgress { .. } => "media-progress",
@@ -908,6 +972,67 @@ mod tests {
         ));
 
         assert_eq!(values, vec!["119 seconds"]);
+    }
+
+    #[test]
+    fn progressive_presentation_effects_follow_worker_event_sequence() {
+        let now = Instant::now();
+        let context = || CatalogWorkerMessageContext {
+            catalog_ready: false,
+            catalog_partial: false,
+            screen: Screen::Home,
+            media_gate: None,
+        };
+        let mut session = LauncherCatalogSession::new(false);
+
+        let started = session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::FreshCleanupStarted,
+            now,
+        );
+        assert!(started
+            .into_effects()
+            .into_iter()
+            .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildStarted)));
+
+        let discovered = session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemDiscovered {
+                system_id: "snes".to_string(),
+            },
+            now,
+        );
+        assert!(discovered.into_effects().into_iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemDiscovered { system_id } if system_id == "snes"
+        )));
+
+        let ready = session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::SystemShardReady {
+                system_id: "snes".to_string(),
+                games: Vec::new(),
+            },
+            now,
+        );
+        assert!(ready.into_effects().into_iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemReady { system_id } if system_id == "snes"
+        )));
+
+        let finished = session.handle_worker_message(
+            context(),
+            CatalogWorkerMessage::Persisted {
+                summary: refresh_summary(),
+                completed_build_seconds: Some(1),
+                generation_fingerprint: None,
+            },
+            now,
+        );
+        assert!(finished
+            .into_effects()
+            .into_iter()
+            .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished)));
     }
 
     #[test]

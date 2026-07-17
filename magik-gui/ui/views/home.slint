@@ -10,14 +10,14 @@ export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
     property <length> narrow-tile-width: 191px * s;
     property <length> tile-gap: 16px * s;
-    property <length> tile-width: root-menu && MisterBridge.menu-items.length > 0
-        ? (system-viewport.width
-            - Math.max(0, MisterBridge.menu-items.length - 1) * tile-gap)
-            / MisterBridge.menu-items.length
+    property <length> tile-width: root-menu
+        ? (system-viewport.width - 3 * tile-gap) / 4
         : narrow-tile-width;
     property <length> tile-pitch: tile-width + tile-gap;
-    property <length> content-width: MisterBridge.menu-items.length * tile-width
-        + Math.max(0, MisterBridge.menu-items.length - 1) * tile-gap;
+    property <int> layout-item-count: root-menu ? Math.max(4, MisterBridge.menu-items.length)
+        : MisterBridge.menu-items.length;
+    property <length> content-width: layout-item-count * tile-width
+        + Math.max(0, layout-item-count - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px * s;
     property <int> first-visible-index: floor(scroll-x / tile-pitch);
 
@@ -105,8 +105,9 @@ export component HomeGrid inherits Rectangle {
                     height: parent.height;
                     background: transparent;
 
-                    // Root tiles divide the full viewport between the available items. Nested
-                    // menus retain four 191px tiles, four 16px gaps, and half of the fifth tile
+                    // Root tiles always retain their final four-column width while catalog
+                    // destinations publish progressively. Nested menus retain four 191px tiles,
+                    // four 16px gaps, and half of the fifth tile
                     // in the 924px viewport. A sixth, fully off-screen delegate ensures the
                     // incoming tile is already present while a slot is recycled across a pitch
                     // boundary. At the end, clamping aligns the final tile's right edge.

@@ -684,20 +684,43 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
         .current_menu_items()
         .iter()
         .enumerate()
-        .map(|(index, item)| slint_ui::launcher::MenuItem {
-            id: item.id.clone().into(),
-            label: item.title.clone().into(),
-            subtitle: format!("{} games", item.count).into(),
-            focused: index == nav.selected,
-            node_kind: match item.kind {
-                crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
-                    slint_ui::launcher::MenuItemKind::Group
-                }
-                crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
-                    slint_ui::launcher::MenuItemKind::Collection
-                }
-            },
-            status: slint_ui::launcher::MenuItemStatus::Ready,
+        .map(|(index, item)| {
+            let (scanning, failed, available) = nav.menu_item_catalog_presentation(item);
+            let partial = !scanning
+                && item.kind == crate::launcher_taxonomy::LauncherMenuItemKind::Menu
+                && failed;
+            slint_ui::launcher::MenuItem {
+                id: item.id.clone().into(),
+                label: item.title.clone().into(),
+                subtitle: if scanning {
+                    "Scanning…".into()
+                } else if partial {
+                    "Some items failed".into()
+                } else if failed {
+                    "Scan failed".into()
+                } else {
+                    format!("{} games", item.count).into()
+                },
+                focused: index == nav.selected,
+                available,
+                node_kind: match item.kind {
+                    crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
+                        slint_ui::launcher::MenuItemKind::Group
+                    }
+                    crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
+                        slint_ui::launcher::MenuItemKind::Collection
+                    }
+                },
+                status: if scanning {
+                    slint_ui::launcher::MenuItemStatus::Scanning
+                } else if partial {
+                    slint_ui::launcher::MenuItemStatus::Partial
+                } else if failed {
+                    slint_ui::launcher::MenuItemStatus::Failed
+                } else {
+                    slint_ui::launcher::MenuItemStatus::Ready
+                },
+            }
         })
         .collect();
     Rc::new(VecModel::from(rows))
@@ -732,6 +755,7 @@ pub(super) fn slint_sharded_menu_items(
                 label: tile.display_title.clone().into(),
                 subtitle: subtitle.into(),
                 focused: index == selected,
+                available: matches!(tile.state, LauncherSystemState::Ready { .. }),
                 node_kind: slint_ui::launcher::MenuItemKind::Collection,
                 status,
             }
@@ -1410,11 +1434,13 @@ mod tests {
         let ready = rows.row_data(0).unwrap();
         assert_eq!(ready.subtitle.as_str(), "42 games");
         assert_eq!(ready.status, slint_ui::launcher::MenuItemStatus::Ready);
+        assert!(ready.available);
         let scanning = rows.row_data(1).unwrap();
         assert_eq!(scanning.subtitle.as_str(), "Scanning…");
         assert_eq!(
             scanning.status,
             slint_ui::launcher::MenuItemStatus::Scanning
         );
+        assert!(!scanning.available);
     }
 }

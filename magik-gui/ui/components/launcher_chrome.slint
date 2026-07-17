@@ -10,14 +10,29 @@ export component LauncherTile inherits Rectangle {
     in property <bool> focused;
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
+    property <bool> scan-pulse;
 
     border-width: 2px;
     border-color: status == MenuItemStatus.failed
         ? #a9445b
-        : status == MenuItemStatus.scanning ? #52647d : #5a4973;
+        : status == MenuItemStatus.partial ? #c58b3a
+        : status == MenuItemStatus.scanning
+            ? (scan-pulse ? #7b91ad : #52647d)
+            : #5a4973;
     background: status == MenuItemStatus.failed
         ? #291820
+        : status == MenuItemStatus.partial ? #292318
         : status == MenuItemStatus.scanning ? #172131 : #181829;
+
+    animate border-color {
+        duration: status == MenuItemStatus.scanning ? 700ms : 100ms;
+    }
+
+    Timer {
+        interval: 700ms;
+        running: root.status == MenuItemStatus.scanning;
+        triggered => { root.scan-pulse = !root.scan-pulse; }
+    }
 
     VerticalLayout {
         padding: 16px;
@@ -30,6 +45,7 @@ export component LauncherTile inherits Rectangle {
                 ? #06d6a0
                 : status == MenuItemStatus.failed
                     ? #ef8da2
+                    : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
             font-size: 16px;
             width: 100%;
@@ -46,6 +62,7 @@ export component LauncherTile inherits Rectangle {
                 ? #d8d4dd
                 : status == MenuItemStatus.failed
                     ? #ef8da2
+                    : status == MenuItemStatus.partial ? #f0c36e
                     : status == MenuItemStatus.scanning ? #8ca4b5 : #9080a800;
             font-size: 8px;
             horizontal-alignment: center;

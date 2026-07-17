@@ -4319,7 +4319,7 @@ fn apply_catalog_session_effects(
                 publication_ack,
             } => {
                 let taxonomy_sync_required = catalog_taxonomy_sync_required(*catalog_ready, source);
-                *catalog = ready_catalog;
+                *catalog = nav.catalog_with_build_shells(ready_catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 *catalog_ready = true;
                 *return_capsule_active = false;
@@ -4434,6 +4434,37 @@ fn apply_catalog_session_effects(
                 }
             }
             CatalogSessionEffect::SyncCatalogBridge => {
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogBuildStarted => {
+                nav.catalog_build_started();
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogSystemDiscovered { system_id } => {
+                nav.catalog_system_discovered(&system_id);
+                *catalog = catalog.with_system_placeholder(&system_id);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogSystemReady { system_id } => {
+                nav.catalog_system_ready(&system_id);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogSystemFailed { system_id } => {
+                nav.catalog_system_failed(&system_id);
+                *catalog = catalog.with_system_placeholder(&system_id);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogBuildFinished => {
+                nav.catalog_build_finished(catalog);
+                *catalog_version = (*catalog_version).wrapping_add(1);
+                nav.sync_launcher_taxonomy(catalog);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::Ui(intent) => {

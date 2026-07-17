@@ -537,6 +537,29 @@ impl ArcadeCatalog {
         )
     }
 
+    /// Adds a zero-game system shell so progressive launcher taxonomy can
+    /// publish the real destination before its shard is ready.
+    pub fn with_system_placeholder(&self, system_id: &str) -> Self {
+        if self.systems.iter().any(|system| system.id == system_id) {
+            return self.clone();
+        }
+        let mut systems = self.systems.clone();
+        systems.push(GameSystemEntry {
+            id: system_id.to_string(),
+            title: crate::catalog_classify::system_definition(system_id)
+                .map(|definition| definition.title.clone())
+                .unwrap_or_else(|| system_id.to_ascii_uppercase()),
+            count: 0,
+        });
+        Self::new_with_deferred_text_indexes_and_platform_kinds(
+            self.root.clone(),
+            self.games.iter().cloned().collect(),
+            systems,
+            self.launch_plans_by_ref.values().cloned().collect(),
+            self.platform_kinds.as_ref().clone(),
+        )
+    }
+
     pub fn system_game_count(&self, system_id: &str) -> usize {
         self.system_game_indexes(system_id).len()
     }
