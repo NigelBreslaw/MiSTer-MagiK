@@ -40,6 +40,9 @@ continues. Once that first snapshot is acknowledged, the builder changes to the
 background catalog thread policy; full-scan preparation and persistence also
 obey the launcher's idle/input gate. The final snapshot replaces the temporary
 one and is the only generation persisted as V2 and dual-published as V3.
+Catalog progress and timing messages do not reset that gate: doing so would
+make the worker throttle itself after every status update. A pending catalog
+publication still pauses heavy work until the launcher has applied it.
 
 ## Goals
 

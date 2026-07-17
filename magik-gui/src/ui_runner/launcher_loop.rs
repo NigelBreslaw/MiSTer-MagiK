@@ -889,7 +889,7 @@ struct CatalogBackgroundIdleInput {
     scripted_input_active: bool,
     pad_changed: bool,
     pad_active: bool,
-    catalog_messages_active: bool,
+    catalog_publication_pending: bool,
     media_message_seen: bool,
     nav_motion_active: bool,
     preview_critical: bool,
@@ -905,7 +905,7 @@ impl CatalogBackgroundIdleInput {
             && !self.scripted_input_active
             && !self.pad_changed
             && !self.pad_active
-            && !self.catalog_messages_active
+            && !self.catalog_publication_pending
             && !self.media_message_seen
             && !self.nav_motion_active
             && !self.preview_critical
@@ -959,6 +959,10 @@ fn pad_state_has_active_input(state: &PadState) -> bool {
         || state.left_y.abs() > 0.0
         || state.right_x.abs() > 0.0
         || state.right_y.abs() > 0.0
+}
+
+fn catalog_message_requires_publication_pause(message: &CatalogWorkerMessage) -> bool {
+    matches!(message, CatalogWorkerMessage::Ready { .. })
 }
 
 fn pad_state_home_horizontal_held(state: &PadState) -> bool {
@@ -1370,7 +1374,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_ready_stationary_edge_since: Option<Instant> = None;
     let mut catalog_background_idle_gate =
         CatalogBackgroundIdleGate::new(CATALOG_BACKGROUND_IDLE_SETTLE);
-    let mut catalog_or_media_message_seen_last_loop = false;
+    let mut media_message_seen_last_loop = false;
     let mut media_events = MediaJobEventBuf::new();
     let mut lifecycle_effects = LifecycleEffects::new();
     let mut preview_systems_entered = BTreeSet::new();
@@ -2070,28 +2074,28 @@ pub(super) fn run_launcher_loop(
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
         let pad_changed_for_background = pad_changed_for_input.unwrap_or(false);
-        let catalog_background_allowed = catalog_background_idle_gate.allow(
-            CatalogBackgroundIdleInput {
-                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-                startup_return_waiting_for_catalog,
-                startup_input_enabled: lifecycle.startup_input_enabled(),
-                launching,
-                setup_active,
-                benchmark_active: launcher_bench_active,
-                scripted_input_active: launcher_input_script.active(),
-                pad_changed: pad_changed_for_background,
-                pad_active: pad_state_has_active_input(pad.state()),
-                catalog_messages_active: pending_catalog_ready.is_some()
-                    || !deferred_catalog_events.is_empty()
-                    || catalog_or_media_message_seen_last_loop,
-                media_message_seen: catalog_or_media_message_seen_last_loop,
-                nav_motion_active: catalog_background_nav_motion_active(&nav),
-                preview_critical: nav.screen == Screen::Arcade
-                    && selected_arcade_game_has_preview(&nav, &catalog)
-                    && !matches!(preview.trace_cache_state(), "exact" | "empty"),
-            },
-            loop_start,
-        );
+        let catalog_background_input = CatalogBackgroundIdleInput {
+            first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+            startup_return_waiting_for_catalog,
+            startup_input_enabled: lifecycle.startup_input_enabled(),
+            launching,
+            setup_active,
+            benchmark_active: launcher_bench_active,
+            scripted_input_active: launcher_input_script.active(),
+            pad_changed: pad_changed_for_background,
+            pad_active: pad_state_has_active_input(pad.state()),
+            catalog_publication_pending: pending_catalog_ready.is_some()
+                || deferred_catalog_events
+                    .iter()
+                    .any(catalog_message_requires_publication_pause),
+            media_message_seen: media_message_seen_last_loop,
+            nav_motion_active: catalog_background_nav_motion_active(&nav),
+            preview_critical: nav.screen == Screen::Arcade
+                && selected_arcade_game_has_preview(&nav, &catalog)
+                && !matches!(preview.trace_cache_state(), "exact" | "empty"),
+        };
+        let catalog_background_allowed =
+            catalog_background_idle_gate.allow(catalog_background_input, loop_start);
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
             catalog_background_allowed,
         );
@@ -2352,8 +2356,7 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = media_worker_trace_start {
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
         }
-        catalog_or_media_message_seen_last_loop =
-            prepare_trace.catalog_message_count > 0 || media_message_seen;
+        media_message_seen_last_loop = media_message_seen;
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
@@ -6475,6 +6478,27 @@ mod tests {
         ));
         assert!(!gate.allow(input, now + Duration::from_millis(2401)));
         assert!(gate.allow(input, now + Duration::from_millis(4401)));
+    }
+
+    #[test]
+    pub(super) fn catalog_progress_does_not_pause_its_own_background_worker() {
+        let progress = CatalogWorkerMessage::Progress {
+            title: "Indexing library".to_string(),
+            detail: "Still working".to_string(),
+            percent: -1,
+        };
+        assert!(!catalog_message_requires_publication_pause(&progress));
+
+        let ready = CatalogWorkerMessage::Ready {
+            catalog: ArcadeCatalog::new(PathBuf::from("/fixture"), Vec::new(), Vec::new()),
+            summary: None,
+            load_us: 0,
+            source: CatalogSource::FreshBuild,
+            durable_save_pending: true,
+            generation_fingerprint: None,
+            publication_ack: None,
+        };
+        assert!(catalog_message_requires_publication_pause(&ready));
     }
 
     #[test]
