@@ -965,6 +965,14 @@ fn catalog_message_requires_publication_pause(message: &CatalogWorkerMessage) ->
     matches!(message, CatalogWorkerMessage::Ready { .. })
 }
 
+fn direct_preview_requested(
+    screen: Screen,
+    memory_guard_active: bool,
+    raw_transition_available: bool,
+) -> bool {
+    screen == Screen::Arcade && !memory_guard_active && raw_transition_available
+}
+
 fn pad_state_home_horizontal_held(state: &PadState) -> bool {
     state.dpad_left || state.dpad_right
 }
@@ -3287,7 +3295,11 @@ pub(super) fn run_launcher_loop(
             || startup_reveal_ready;
         let wants_arcade_list =
             should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
-        let wants_preview = !memory_guard.active() && preview.raw_transition_frame().is_some();
+        let wants_preview = direct_preview_requested(
+            nav.screen,
+            memory_guard.active(),
+            preview.raw_transition_frame().is_some(),
+        );
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
         let composition_decision = composition.tick(UiCompositionInput {
@@ -6499,6 +6511,15 @@ mod tests {
             publication_ack: None,
         };
         assert!(catalog_message_requires_publication_pause(&ready));
+    }
+
+    #[test]
+    pub(super) fn direct_preview_request_is_scoped_to_the_arcade_screen() {
+        assert!(direct_preview_requested(Screen::Arcade, false, true));
+        assert!(!direct_preview_requested(Screen::Settings, false, true));
+        assert!(!direct_preview_requested(Screen::Home, false, true));
+        assert!(!direct_preview_requested(Screen::Arcade, true, true));
+        assert!(!direct_preview_requested(Screen::Arcade, false, false));
     }
 
     #[test]
