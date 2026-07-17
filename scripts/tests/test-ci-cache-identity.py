@@ -67,7 +67,10 @@ def main() -> int:
         assert changed_lock["host_target"] != changed_cross["host_target"]
 
         toolchain = fixture / "magik-gui/rust-toolchain.toml"
-        toolchain.write_text(toolchain.read_text(encoding="utf-8").replace("1.97.0", "1.98.0"), encoding="utf-8")
+        toolchain.write_text(
+            toolchain.read_text(encoding="utf-8") + "\n# cache identity test\n",
+            encoding="utf-8",
+        )
         changed_toolchain = MODULE.identities(fixture)
         assert changed_toolchain["rust_abi"] != changed_lock["rust_abi"]
         assert changed_toolchain["host_target"] != changed_lock["host_target"]
