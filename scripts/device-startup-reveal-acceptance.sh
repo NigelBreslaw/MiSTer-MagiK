@@ -16,6 +16,10 @@ RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 TSV="$ROOT/history/toolchain-bench/results-startup-reveal.tsv"
 OUT="$ROOT/build/startup-reveal-acceptance/$LABEL"
 SELECTED="${MISTER_STARTUP_REVEAL_SELECTED_INDEX:-17}"
+[[ "$SELECTED" =~ ^[0-9]+$ ]] || {
+  echo "MISTER_STARTUP_REVEAL_SELECTED_INDEX must be a non-negative integer" >&2
+  exit 2
+}
 
 mkdir -p "$(dirname "$TSV")" "$OUT"
 if [ ! -f "$TSV" ]; then
@@ -50,6 +54,10 @@ wait_status() {
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     data = json.load(f)
+runtime = data.get("runtime") or {}
+runtime["main_status"] = runtime.get("main_status") or {}
+runtime["slint_status"] = runtime.get("slint_status") or {}
+data["runtime"] = runtime
 ok = bool(eval(sys.argv[2], {"__builtins__": {"int": int, "str": str, "len": len}}, {"data": data}))
 raise SystemExit(0 if ok else 1)
 PY
@@ -168,20 +176,26 @@ run_return() {
   {
     printf 'export MISTER_CATALOG_REFRESH=off\n'
     printf 'export MISTER_LAUNCHER_START_SCREEN=arcade\n'
+    printf 'export MISTER_LAUNCHER_START_SYSTEM=arcade\n'
     printf 'export MISTER_ARCADE_SELECTED_INDEX=%s\n' "$SELECTED"
     printf 'export MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED=1\n'
   } >"$env_file"
 
-  local i log
+  local i log old_pid
   for i in 1 2 3; do
+    old_pid="$(remote "pidof mister-magik-fb 2>/dev/null || true")"
+    old_pid="${old_pid##* }"
+    old_pid="${old_pid:-0}"
     remote "rm -f '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
-    wait_status "return-prime-$i" 60 "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive'" ||
+    wait_status "return-prime-$i" 60 "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid') or 0) != $old_pid" ||
       fail "return iteration $i could not prime launcher"
     "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
     remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
     wait_status "return-state-written-$i" 90 "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured') or data['runtime']['main_status'].get('launcher_active') is False" ||
       true
     remote "test -s '$RETURN_STATE'" >/dev/null || fail "return state not written for iteration $i"
+    remote "grep -Eq '\"game_index\"[[:space:]]*:[[:space:]]*$SELECTED([,}])' '$RETURN_STATE'" >/dev/null ||
+      fail "return iteration $i captured the wrong arcade row; expected $SELECTED"
     reset_remote_logs
     remote "rm -f '$REMOTE_ENV'; printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd"
     wait_status "return-restored-$i" 90 "data['runtime']['slint_status'].get('input_enabled') is True and data['runtime']['slint_status'].get('screen') == 'arcade' and int(data['runtime']['slint_status'].get('arcade_selected', -1)) == $SELECTED" ||
