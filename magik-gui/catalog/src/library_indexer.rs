@@ -76,6 +76,7 @@ impl<'a> LibraryIndexer<'a> {
             CoverageAuditMode::Inline,
             progress,
             scan_events,
+            Vec::new(),
         )
     }
 
@@ -84,12 +85,26 @@ impl<'a> LibraryIndexer<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScan {
+        self.scan_without_coverage_audit_with_progress_events_and_exclusions(
+            progress,
+            scan_events,
+            Vec::new(),
+        )
+    }
+
+    pub(crate) fn scan_without_coverage_audit_with_progress_events_and_exclusions(
+        &self,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+        excluded_targets: Vec<PathBuf>,
+    ) -> LibraryScan {
         scan_library_with_progress_and_events(
             self.cfg,
             self.priority,
             CoverageAuditMode::Deferred,
             progress,
             scan_events,
+            excluded_targets,
         )
     }
 
@@ -211,6 +226,7 @@ fn scan_library_with_progress_and_events(
     audit_mode: CoverageAuditMode,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
+    excluded_targets: Vec<PathBuf>,
 ) -> LibraryScan {
     crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
@@ -243,6 +259,7 @@ fn scan_library_with_progress_and_events(
         LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
             plan.clone(),
+            excluded_targets,
             crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         ),
         LibraryScanPriority::Foreground => {

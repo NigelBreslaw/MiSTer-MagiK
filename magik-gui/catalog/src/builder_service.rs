@@ -58,6 +58,7 @@ pub fn run(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
         ),
+        arcade_bootstrap_scan: None,
     };
     run_with_backend(
         operation,
@@ -423,6 +424,7 @@ struct PreparedBuild {
 struct SystemBuilderBackend {
     background_rebuild: bool,
     bootstrap_first_visible: bool,
+    arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
 
 fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
@@ -554,6 +556,7 @@ impl BuilderBackend for SystemBuilderBackend {
             Some(&mut scan_events),
         )?;
         let stats = scanned.stats().clone();
+        self.arcade_bootstrap_scan = Some(scanned.clone());
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
         let (artifact, catalog, timing, scanner_cache) =
             scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
@@ -605,10 +608,18 @@ impl BuilderBackend for SystemBuilderBackend {
             }
         };
         let scanned = if self.background_rebuild {
-            library_db::scan_default_library_ram_background_with_events(
-                Some(progress),
-                Some(&mut scan_events),
-            )?
+            if let Some(arcade) = self.arcade_bootstrap_scan.take() {
+                library_db::scan_default_library_ram_background_reusing_arcade_with_events(
+                    arcade,
+                    Some(progress),
+                    Some(&mut scan_events),
+                )?
+            } else {
+                library_db::scan_default_library_ram_background_with_events(
+                    Some(progress),
+                    Some(&mut scan_events),
+                )?
+            }
         } else {
             library_db::scan_default_library_ram_foreground_with_events(
                 Some(progress),

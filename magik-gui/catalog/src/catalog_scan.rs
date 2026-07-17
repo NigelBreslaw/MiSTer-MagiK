@@ -164,12 +164,18 @@ pub(crate) fn discover_files_pipelined_foreground_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
 ) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan(roots, plan, RuntimeThreadRole::LibraryWalkerForeground)
+    discover_files_pipelined_with_plan(
+        roots,
+        plan,
+        Vec::new(),
+        RuntimeThreadRole::LibraryWalkerForeground,
+    )
 }
 
 pub(crate) fn discover_files_pipelined_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
+    excluded_targets: Vec<PathBuf>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
@@ -180,7 +186,7 @@ pub(crate) fn discover_files_pipelined_with_plan(
             let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
-            let dirs = walk_index_candidates_with_plan(&roots, &plan, &tx);
+            let dirs = walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,
@@ -275,11 +281,12 @@ enum PlannedScanTarget {
 fn walk_index_candidates_with_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
+    excluded_targets: &[PathBuf],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> usize {
     let profiles = plan.base_profiles();
     let candidate_exts = source_index_extensions(profiles);
-    let targets = scan_targets_for_plan(roots, plan, profiles);
+    let targets = scan_targets_for_plan(roots, plan, profiles, excluded_targets);
     library_db::report_library_scan_timing(
         "walk_targets",
         0,
@@ -352,10 +359,17 @@ fn scan_targets_for_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
     profiles: &[LaunchProfile],
+    excluded_targets: &[PathBuf],
 ) -> Vec<PlannedScanTarget> {
     let mut seen = HashSet::new();
     let mut targets = Vec::new();
     for path in scan_targets_for_roots(roots, profiles) {
+        if excluded_targets
+            .iter()
+            .any(|excluded| same_library_path(excluded, &path))
+        {
+            continue;
+        }
         let key = path.display().to_string().to_ascii_lowercase();
         if seen.insert(key) {
             let game_dir_header = plan
@@ -953,11 +967,11 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
         if !is_real_dir(path) {
             continue;
         }
-        push_prepared_collection_targets(&mut targets, path);
         if is_direct_scan_root(path, profiles) {
             push_scan_target(&mut targets, path.to_path_buf());
             continue;
         }
+        push_prepared_collection_targets(&mut targets, path);
         if path_name_eq(path, "games") {
             push_profile_game_dirs(&mut targets, path, profiles);
             continue;
@@ -2568,6 +2582,22 @@ mod tests {
             .normal_files
             .iter()
             .any(|file| file.path == raw_media.display().to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_arcade_root_does_not_pull_in_prepared_computer_collection() {
+        let root = unique_temp_dir("explicit-arcade-target");
+        let arcade = root.join("_Arcade");
+        let prepared = root.join("_Computer/X68000 Games");
+        std::fs::create_dir_all(&arcade).expect("create Arcade");
+        std::fs::create_dir_all(&prepared).expect("create prepared collection");
+
+        let profiles = launch_profiles::builtin_profiles();
+        let targets = scan_targets_for_roots(&[arcade.display().to_string()], &profiles);
+
+        assert_eq!(targets, vec![arcade]);
+        assert!(!targets.contains(&prepared));
         let _ = std::fs::remove_dir_all(root);
     }
 

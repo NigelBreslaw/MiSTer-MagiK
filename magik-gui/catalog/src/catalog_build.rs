@@ -17,6 +17,7 @@ use crate::library_db::{
 use crate::library_indexer::LibraryIndexer;
 use crate::sqlite_catalog;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
 pub(crate) struct CatalogRefreshPipeline<'a> {
@@ -114,6 +115,34 @@ impl<'a> CatalogRefreshPipeline<'a> {
         )
     }
 
+    pub(crate) fn scan_ram_artifact_with_reused_prefix(
+        &self,
+        reused: LibraryRamScanArtifact,
+        excluded_targets: Vec<PathBuf>,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
+        let scan_t = Instant::now();
+        let mut scan = LibraryIndexer::new(self.cfg)
+            .scan_without_coverage_audit_with_progress_events_and_exclusions(
+                progress,
+                scan_events,
+                excluded_targets,
+            );
+        let reused_scan_us = reused.stats.scan_us;
+        merge_reused_scan(&mut scan, reused.scan);
+        let covered_payloads = covered_payload_paths(&scan.discoveries);
+        let preferred_discoveries =
+            preferred_playable_discovery_indices_by_key(&scan.discoveries, &covered_payloads);
+        let mut stats = scan_stats_with_discovery_count(&scan, scan_t, preferred_discoveries.len());
+        stats.scan_us = stats.scan_us.saturating_add(reused_scan_us);
+        crate::library_db::apply_library_path_map_to_ram_artifact(LibraryRamScanArtifact {
+            scan,
+            stats,
+            preferred_discoveries,
+        })
+    }
+
     fn scan_ram_artifact_with_events_using(
         &self,
         indexer: LibraryIndexer<'_>,
@@ -201,6 +230,20 @@ impl<'a> CatalogRefreshPipeline<'a> {
             catalog: LibraryCatalogLoad::from_precomputed(catalog, catalog_us),
         })
     }
+}
+
+fn merge_reused_scan(scan: &mut LibraryScan, mut reused: LibraryScan) {
+    reused.normal_files.append(&mut scan.normal_files);
+    reused.containers.append(&mut scan.containers);
+    reused.entries.append(&mut scan.entries);
+    reused.discoveries.append(&mut scan.discoveries);
+    scan.normal_files = reused.normal_files;
+    scan.containers = reused.containers;
+    scan.entries = reused.entries;
+    scan.discoveries = reused.discoveries;
+    scan.ignored_files = scan.ignored_files.saturating_add(reused.ignored_files);
+    scan.discover_us = scan.discover_us.saturating_add(reused.discover_us);
+    scan.classify_us = scan.classify_us.saturating_add(reused.classify_us);
 }
 
 fn scan_stats(scan: &LibraryScan, scan_t: Instant) -> LibraryScanStats {

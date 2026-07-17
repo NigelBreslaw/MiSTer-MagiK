@@ -224,6 +224,7 @@ pub struct LibraryScanArtifact {
     pub(crate) stamp: catalog_stamp::CatalogStamp,
 }
 
+#[derive(Clone)]
 pub struct LibraryRamScanArtifact {
     pub(crate) scan: LibraryScan,
     pub(crate) stats: LibraryScanStats,
@@ -974,6 +975,22 @@ pub fn scan_default_library_ram_background_with_events(
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production();
     Ok(CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events(progress, scan_events))
+}
+
+pub fn scan_default_library_ram_background_reusing_arcade_with_events(
+    arcade: LibraryRamScanArtifact,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(
+        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_reused_prefix(
+            arcade,
+            vec![PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)],
+            progress,
+            scan_events,
+        ),
+    )
 }
 
 pub fn bootstrap_default_library_progress(
@@ -2308,6 +2325,54 @@ mod tests {
             scan,
             preferred_discoveries,
         }
+    }
+
+    #[test]
+    fn authoritative_scan_reusing_arcade_matches_a_single_full_scan() {
+        let root = unique_temp_dir("reuse-arcade-scan");
+        let arcade = root.join("_Arcade");
+        let dos = root.join("_DOS Games");
+        std::fs::create_dir_all(&arcade).expect("create Arcade");
+        std::fs::create_dir_all(&dos).expect("create DOS launchers");
+        std::fs::write(
+            arcade.join("Puck Man.mra"),
+            "<misterromdescription><name>Puck Man</name><setname>puckman</setname></misterromdescription>",
+        )
+        .expect("write Arcade launcher");
+        std::fs::write(
+            dos.join("Doom.mgl"),
+            "<mistergamelist><rbf>AO486</rbf><file delay=\"1\" type=\"s\">../games/AO486/Doom.vhd</file></mistergamelist>",
+        )
+        .expect("write DOS launcher");
+
+        let full_cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("full.sqlite3"),
+        };
+        let bootstrap_cfg = BenchConfig {
+            roots: vec![arcade.display().to_string()],
+            sqlite_path: root.join("bootstrap.sqlite3"),
+        };
+        let full = CatalogRefreshPipeline::new(&full_cfg)
+            .scan_ram_artifact_foreground_with_events(None, None);
+        let bootstrap = CatalogRefreshPipeline::new(&bootstrap_cfg)
+            .scan_ram_artifact_foreground_with_events(None, None);
+        let reused = CatalogRefreshPipeline::new(&full_cfg).scan_ram_artifact_with_reused_prefix(
+            bootstrap,
+            vec![arcade.clone()],
+            None,
+            None,
+        );
+
+        assert_eq!(reused.stats.discoveries, full.stats.discoveries);
+        assert_eq!(reused.stats.normal_files, full.stats.normal_files);
+        assert_eq!(reused.stats.containers, full.stats.containers);
+        assert_eq!(reused.stats.entries, full.stats.entries);
+        assert_eq!(
+            catalog_game_snapshots(&reused.catalog(&arcade)),
+            catalog_game_snapshots(&full.catalog(&arcade)),
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
