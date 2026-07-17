@@ -51,6 +51,8 @@ pub mod preview_worker;
 #[cfg(feature = "builder")]
 pub mod progressive_scheduler;
 #[cfg(feature = "builder")]
+pub mod rebuild_benchmark;
+#[cfg(feature = "builder")]
 pub mod reconciliation_executor;
 #[cfg(feature = "builder")]
 pub mod reconciliation_planner;

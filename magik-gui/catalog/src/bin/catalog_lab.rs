@@ -23,6 +23,9 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         if command == "bootstrap-fixture" {
             return bootstrap_fixture(args);
         }
+        if command == "rebuild-bench" {
+            return rebuild_bench(args);
+        }
         return Err(format!("unknown command {command:?}\n{}", usage()));
     }
     let root = args
@@ -55,6 +58,60 @@ fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         summary.spec.small_system_games,
         summary.spec.large_system_games,
         summary.spec.large_system_depth
+    );
+    Ok(())
+}
+
+fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    use mister_magik_catalog::rebuild_benchmark::run_rebuild_benchmark;
+    use mister_magik_catalog::shard_registry::RegistryLimits;
+    use mister_magik_catalog::system_shard::SystemShardLimits;
+
+    let storage = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("rebuild-bench needs STORAGE\n{}", usage()))?;
+    let systems = args
+        .next()
+        .unwrap_or_else(|| "20".to_string())
+        .parse::<usize>()
+        .map_err(|_| "rebuild-bench SYSTEMS is invalid".to_string())?;
+    let games = args
+        .next()
+        .unwrap_or_else(|| "200".to_string())
+        .parse::<usize>()
+        .map_err(|_| "rebuild-bench GAMES_PER_SYSTEM is invalid".to_string())?;
+    if args.next().is_some() {
+        return Err(format!(
+            "rebuild-bench has unexpected arguments\n{}",
+            usage()
+        ));
+    }
+    let outcome = run_rebuild_benchmark(
+        &storage,
+        systems,
+        games,
+        RegistryLimits {
+            max_manifest_bytes: 8 * 1024 * 1024,
+            max_systems: 4096,
+            shard: SystemShardLimits {
+                max_sqlite_bytes: 8 * 1024 * 1024 * 1024,
+                max_navigation_compressed_bytes: 512 * 1024 * 1024,
+                max_navigation_decoded_bytes: 512 * 1024 * 1024,
+                max_games: 2_000_000,
+            },
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    println!(
+        "catalog_rebuild_bench_tsv\tfull_us={}\tdelta_us={}\telapsed_speedup={:.3}\tfull_systems={}\tdelta_systems={}\twork_ratio={:.3}\tgames_per_system={}",
+        outcome.full_us,
+        outcome.delta_us,
+        outcome.elapsed_speedup(),
+        outcome.full_systems,
+        outcome.delta_systems,
+        outcome.work_ratio(),
+        outcome.games_per_system,
     );
     Ok(())
 }
@@ -113,5 +170,5 @@ fn bootstrap_fixture(mut args: impl Iterator<Item = String>) -> Result<(), Strin
 }
 
 fn usage() -> String {
-    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]\n       catalog-lab bootstrap-fixture SOURCE STORAGE snes|c64".to_string()
+    "usage: catalog-lab fixture OUTPUT [--arcade-games N] [--small-system-games N] [--large-system-games N] [--large-system-depth N]\n       catalog-lab bootstrap-fixture SOURCE STORAGE snes|c64\n       catalog-lab rebuild-bench STORAGE [SYSTEMS] [GAMES_PER_SYSTEM]".to_string()
 }

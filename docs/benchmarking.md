@@ -121,6 +121,44 @@ the optimization is invalid if either branch inherits the background CPU0
 policy. Compare `wall_us` with the sequential audit+stamp+catalog sum, but keep
 the canonical `library_ready` marker as the reference regression gate.
 
+## Catalog V3 Rebuild And UI-Contention Gates
+
+Catalog V3 has two separate acceptance claims. Neither may be inferred from the
+other.
+
+The standalone reconciliation benchmark compares an all-system publication
+with a one-system delta using the production schema-one shard writer and
+generation publisher:
+
+```bash
+scripts/bench-catalog-rebuild.sh LABEL
+```
+
+It runs without the rest of MiSTer MagiK and fails unless both measured elapsed
+speedup and exact rebuilt-system work ratio are at least 10x. The default is 30
+systems with 200 games each. This is a deterministic architecture/optimization
+gate, not proof that production change detection selected the right scan units;
+activation evidence must also show the real changed-system plan and artifacts.
+The lab command refuses non-empty storage rather than risking an existing
+catalog.
+
+Once any catalog is usable, a build or rebuild is background work and may not
+drop a single UI frame. The extended contention gate runs the production
+`human-turbo-hold` scenario for at least 120 seconds while forcing catalog work:
+
+```bash
+scripts/profile-catalog-contention.sh LABEL --skip-build
+```
+
+It retains the normal frame-pacing, latch-drop, search-overlap, and exact-preview
+gates from `profile-arcade-scroll.sh`, then correlates the frame trace with the
+per-thread sample. A pass requires at least ten CPU-active catalog sample
+intervals and 600 overlapping frames. During those overlapping frames it
+requires zero over-budget work frames, zero two-frame wall stalls, only
+`vsync` sources, zero vsync miss streak, and successful Main presentation. A
+quiet or already-finished catalog run is invalid evidence. Use
+`scripts/profile-catalog-contention.sh --self-test` for the parser contract.
+
 ## Startup Reveal Gate
 
 Startup reveal checks cover the three launcher entry modes: cold no-catalog,

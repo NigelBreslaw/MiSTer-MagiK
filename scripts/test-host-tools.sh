@@ -25,6 +25,8 @@ esac
 
 python3 "$ROOT/scripts/checks/check-license-headers.py"
 python3 "$ROOT/scripts/checks/check-agent-guidance.py"
+python3 "$ROOT/scripts/checks/check-catalog-contention.py" --self-test
+python3 "$ROOT/scripts/checks/check-catalog-rebuild.py" --self-test
 python3 "$ROOT/scripts/tests/test-doctor.py"
 
 if [ "$MODE" = full ]; then
@@ -62,6 +64,7 @@ for script in \
   "$ROOT/scripts/lib/arming-state-lib.sh" \
   "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" \
   "$ROOT/scripts/lib/catalog-device-test-lib.sh" \
+  "$ROOT/scripts/bench-catalog-rebuild.sh" \
   "$ROOT/scripts/bench-toolchain.sh" \
   "$ROOT/scripts/build-mister-agent.sh" \
   "$ROOT/scripts/deploy-rust.sh" \
@@ -88,6 +91,7 @@ for script in \
   "$ROOT/scripts/profile-media-cold-boot.sh" \
   "$ROOT/scripts/profile-media-arcade-contention.sh" \
   "$ROOT/scripts/profile-arcade-scroll.sh" \
+  "$ROOT/scripts/profile-catalog-contention.sh" \
   "$ROOT/scripts/profile-preview-index-refresh.sh" \
   "$ROOT/scripts/profile-preview-pack-decode.sh" \
   "$ROOT/scripts/profile-preview-scroll.sh" \
