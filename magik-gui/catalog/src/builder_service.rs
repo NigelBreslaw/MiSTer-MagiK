@@ -32,8 +32,8 @@ pub fn set_background_heavy_work_allowed(allowed: bool) {
     BACKGROUND_HEAVY_WORK_ALLOWED.store(allowed, Ordering::Release);
 }
 
-fn wait_for_background_heavy_work(operation: BuilderOperation) {
-    if operation != BuilderOperation::Rebuild {
+fn wait_for_background_heavy_work_enabled(enabled: bool) {
+    if !enabled {
         return;
     }
     while !BACKGROUND_HEAVY_WORK_ALLOWED.load(Ordering::Acquire) {
@@ -58,6 +58,10 @@ pub fn run(
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
         background_rebuild: operation == BuilderOperation::Rebuild,
+        bootstrap_first_visible: matches!(
+            operation,
+            BuilderOperation::Build | BuilderOperation::FreshBuild
+        ),
     };
     run_with_backend(
         operation,
@@ -133,6 +137,13 @@ trait BuilderBackend {
 
     fn fresh_cleanup(&mut self) -> Result<usize, String>;
     fn check(&mut self) -> Result<CheckOutput, StageFailure>;
+    fn bootstrap_first_visible(
+        &mut self,
+        _progress: &mut dyn FnMut(&str, &str),
+        _system_discovered: &mut dyn FnMut(String),
+    ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
+        Ok(None)
+    }
     fn scan(
         &mut self,
         progress: &mut dyn FnMut(&str, &str),
@@ -208,11 +219,69 @@ fn run_with_backend<B: BuilderBackend>(
         emit(CatalogBuilderEvent::FreshCleanupCompleted { protocol, removed });
     }
 
-    // First creation owns the dedicated full-screen catalog UI. A replacement
-    // rebuild leaves the published generation interactive, so every stage must
-    // remain on the background catalog policy.
+    let snapshot_path = config.snapshot_path;
+    let mut snapshot_cleanup = SnapshotCleanup::new(snapshot_path.clone());
+    if let Some(parent) = snapshot_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| fail(protocol, "snapshot", error.to_string(), emit))?;
+    }
+    snapshot_cleanup.arm();
+
+    // A first build owns the full-screen progress UI only until the first
+    // visible system is ready. The publication acknowledgement guarantees the
+    // launcher consumed this snapshot before the remaining scan is demoted.
     let build_role = initial_build_role(operation);
     apply_runtime_thread_policy(build_role);
+    let bootstrap = {
+        let protocol_output = RefCell::new(&mut *emit);
+        let mut progress = |title: &str, detail: &str| {
+            (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
+                protocol,
+                title: title.into(),
+                detail: detail.into(),
+            });
+        };
+        backend.bootstrap_first_visible(&mut progress, &mut |system_id| {
+            (protocol_output.borrow_mut())(CatalogBuilderEvent::SystemDiscovered {
+                protocol,
+                system_id,
+            });
+        })
+    }
+    .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
+    let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
+    if let Some(bootstrap) = bootstrap {
+        emit_timings(protocol, bootstrap.timings, emit);
+        let games = backend.games(&bootstrap.value);
+        let load_us = backend.load_us(&bootstrap.value);
+        let snapshot_started = Instant::now();
+        let snapshot_timings = backend
+            .write_snapshot(&snapshot_path, &bootstrap.value, &mut |title, detail| {
+                emit(CatalogBuilderEvent::Progress {
+                    protocol,
+                    title: title.into(),
+                    detail: detail.into(),
+                });
+            })
+            .map_err(|error| fail(protocol, "bootstrap-snapshot", error, emit))?;
+        emit_timings(protocol, snapshot_timings, emit);
+        emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_first_visible_ready".into(),
+            detail: format!(
+                "elapsed_us={} snapshot_us={} games={games}",
+                run_started.elapsed().as_micros(),
+                snapshot_started.elapsed().as_micros()
+            ),
+        });
+        emit(CatalogBuilderEvent::CatalogReady {
+            protocol,
+            snapshot_path: snapshot_path.display().to_string(),
+            games,
+            load_us,
+        });
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+    }
     let scanned = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut scan_progress = |title: &str, detail: &str| {
@@ -231,11 +300,11 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
     emit_timings(protocol, scanned.timings, emit);
-    wait_for_background_heavy_work(operation);
+    wait_for_background_heavy_work_enabled(background_build);
     let prepared = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut prepare_progress = |title: &str, detail: &str| {
-            wait_for_background_heavy_work(operation);
+            wait_for_background_heavy_work_enabled(background_build);
             (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
                 protocol,
                 title: title.into(),
@@ -249,19 +318,12 @@ fn run_with_backend<B: BuilderBackend>(
     emit_timings(protocol, prepared.timings, emit);
     let games = backend.games(&prepared.value);
     let load_us = backend.load_us(&prepared.value);
-    let snapshot_path = config.snapshot_path;
-    let mut snapshot_cleanup = SnapshotCleanup::new(snapshot_path.clone());
-    wait_for_background_heavy_work(operation);
+    wait_for_background_heavy_work_enabled(background_build);
     let snapshot_started = Instant::now();
-    if let Some(parent) = snapshot_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| fail(protocol, "snapshot", error.to_string(), emit))?;
-    }
-    snapshot_cleanup.arm();
     let snapshot_timings = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut snapshot_progress = |title: &str, detail: &str| {
-            wait_for_background_heavy_work(operation);
+            wait_for_background_heavy_work_enabled(background_build);
             (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
                 protocol,
                 title: title.into(),
@@ -295,14 +357,14 @@ fn run_with_backend<B: BuilderBackend>(
     });
     apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
     let mut progress = |title: &str, detail: &str| {
-        wait_for_background_heavy_work(operation);
+        wait_for_background_heavy_work_enabled(background_build);
         emit(CatalogBuilderEvent::Progress {
             protocol,
             title: title.into(),
             detail: detail.into(),
         });
     };
-    wait_for_background_heavy_work(operation);
+    wait_for_background_heavy_work_enabled(background_build);
     let summary = backend
         .persist(prepared.value, &mut progress)
         .map_err(|error| fail(protocol, "persist", error, emit))?;
@@ -358,6 +420,7 @@ struct PreparedBuild {
 
 struct SystemBuilderBackend {
     background_rebuild: bool,
+    bootstrap_first_visible: bool,
 }
 
 impl BuilderBackend for SystemBuilderBackend {
@@ -409,6 +472,64 @@ impl BuilderBackend for SystemBuilderBackend {
             timing_detail,
             decision,
         })
+    }
+
+    fn bootstrap_first_visible(
+        &mut self,
+        progress: &mut dyn FnMut(&str, &str),
+        system_discovered: &mut dyn FnMut(String),
+    ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
+        if !self.bootstrap_first_visible {
+            return Ok(None);
+        }
+        progress("Indexing library", "Scanning Arcade first…");
+        let mut scan_events = |event: library_db::LibraryScanEvent| match event {
+            library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
+                system_discovered(system_id);
+            }
+        };
+        let scanned = library_db::scan_arcade_bootstrap_ram_foreground_with_events(
+            Some(progress),
+            Some(&mut scan_events),
+        )?;
+        let stats = scanned.stats().clone();
+        let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
+        let (artifact, catalog, timing) =
+            scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
+        let games = catalog.len();
+        self.background_rebuild = true;
+        Ok(Some(StageOutput {
+            value: PreparedBuild {
+                artifact,
+                load_us: timing.catalog_us,
+                catalog,
+            },
+            timings: vec![
+                (
+                    "builder_first_visible_scan".into(),
+                    format!(
+                        "discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={}",
+                        stats.discover_us,
+                        stats.classify_us,
+                        stats.discoveries,
+                        stats.normal_files,
+                        stats.containers,
+                        stats.entries,
+                    ),
+                ),
+                (
+                    "builder_first_visible_prepare".into(),
+                    format!(
+                        "wall_us={} audit_us={} stamp_us={} catalog_us={} games={}",
+                        timing.wall_us,
+                        timing.audit_us,
+                        timing.stamp_us,
+                        timing.catalog_us,
+                        games,
+                    ),
+                ),
+            ],
+        }))
     }
 
     fn scan(
@@ -756,6 +877,7 @@ mod tests {
         fail_stage: Option<&'static str>,
         cleanup_removed: usize,
         check_unchanged: bool,
+        bootstrap_first_visible: bool,
         calls: Vec<&'static str>,
     }
 
@@ -792,6 +914,23 @@ mod tests {
                 timing_detail: "fixture timing".into(),
                 decision,
             })
+        }
+
+        fn bootstrap_first_visible(
+            &mut self,
+            progress: &mut dyn FnMut(&str, &str),
+            system_discovered: &mut dyn FnMut(String),
+        ) -> Result<Option<StageOutput<Self::Prepared>>, String> {
+            if !self.bootstrap_first_visible {
+                return Ok(None);
+            }
+            self.calls.push("bootstrap");
+            progress("Indexing library", "Scanning Arcade first…");
+            system_discovered("arcade".into());
+            Ok(Some(StageOutput {
+                value: (),
+                timings: vec![("builder_first_visible_scan".into(), "fixture".into())],
+            }))
         }
 
         fn scan(
@@ -1010,6 +1149,53 @@ mod tests {
             Some(CatalogBuilderEvent::FreshCleanupCompleted { removed: 4, .. })
         ));
         assert_eq!(backend.calls.first(), Some(&"fresh-cleanup"));
+    }
+
+    #[test]
+    fn cold_bootstrap_publishes_before_the_authoritative_full_scan() {
+        set_background_heavy_work_allowed(true);
+        let config = fixture_config("bootstrap");
+        let mut backend = FakeBackend {
+            bootstrap_first_visible: true,
+            ..FakeBackend::default()
+        };
+        let mut events = Vec::new();
+        run_with_backend(
+            BuilderOperation::Build,
+            config,
+            &mut backend,
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+
+        assert_eq!(
+            backend.calls,
+            [
+                "bootstrap",
+                "snapshot",
+                "scan",
+                "prepare-catalog",
+                "snapshot",
+                "persist",
+                "build-duration"
+            ]
+        );
+        let ready = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                matches!(event, CatalogBuilderEvent::CatalogReady { .. }).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ready.len(), 2);
+        let full_scan_timing = events
+            .iter()
+            .position(|event| {
+                matches!(event, CatalogBuilderEvent::Timing { name, .. } if name == "library_scan_complete")
+            })
+            .unwrap();
+        assert!(ready[0] < full_scan_timing);
+        assert!(full_scan_timing < ready[1]);
     }
 
     #[test]

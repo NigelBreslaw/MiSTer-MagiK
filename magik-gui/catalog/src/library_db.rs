@@ -899,6 +899,22 @@ pub fn scan_default_library_ram_foreground_with_events(
         .scan_ram_artifact_foreground_with_events(progress, scan_events))
 }
 
+/// Scan only the first visible Arcade collection for cold-start publication.
+/// The authoritative full scan follows after the launcher acknowledges this
+/// compact generation, so this artifact is never persisted as the final
+/// catalog database.
+pub fn scan_arcade_bootstrap_ram_foreground_with_events(
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig {
+        roots: vec![crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
+        sqlite_path: default_sqlite_path(),
+    };
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_ram_artifact_foreground_with_events(progress, scan_events))
+}
+
 pub fn scan_default_library_ram_background_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,

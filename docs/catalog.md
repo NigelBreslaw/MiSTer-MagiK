@@ -13,6 +13,15 @@ hydration still falls back to the richer V2 navigation/SQLite projection. Do
 not remove V2 until V3 also preserves metadata, preview identity, structured
 launch plans, filters, ordering, and device parity.
 
+On a cold build, the builder scans the configured `_Arcade` collection first,
+writes a temporary rich navigation snapshot, and publishes it through the same
+acknowledged `CatalogReady` boundary as a complete catalog. The launcher can
+therefore reveal Home and enter Arcade while the authoritative all-system scan
+continues. Once that first snapshot is acknowledged, the builder changes to the
+background catalog thread policy; full-scan preparation and persistence also
+obey the launcher's idle/input gate. The final snapshot replaces the temporary
+one and is the only generation persisted as V2 and dual-published as V3.
+
 ## Goals
 
 - Warm boot with a usable catalog should show the first usable UI within 3.5s.
