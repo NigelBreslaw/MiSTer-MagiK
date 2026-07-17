@@ -210,21 +210,22 @@ pub fn publish_bound_production_projection(
 pub fn validate_production_binding(
     storage_root: &Path,
     manifest_generation: u64,
-) -> Result<(), ReconciliationError> {
+) -> Result<String, ReconciliationError> {
     let binding = read_binding(storage_root)?;
     let state = crate::catalog_state::read(&crate::catalog_state::path_for_root(storage_root))
         .map_err(|error| ReconciliationError::new("binding", error))?;
+    let state_fingerprint = state.stamp.fingerprint_hex();
     if binding.schema_version != BINDING_SCHEMA_VERSION
         || binding.projection_contract != PROJECTION_CONTRACT
         || binding.manifest_generation != manifest_generation
-        || binding.catalog_fingerprint != state.stamp.fingerprint_hex()
+        || binding.catalog_fingerprint != state_fingerprint
     {
         return Err(ReconciliationError::new(
             "binding",
             "catalog binding does not match the active manifest and V3 state",
         ));
     }
-    Ok(())
+    Ok(state_fingerprint)
 }
 
 fn read_binding(storage_root: &Path) -> Result<CatalogBinding, ReconciliationError> {

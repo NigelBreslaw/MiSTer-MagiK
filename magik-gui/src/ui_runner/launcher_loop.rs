@@ -1049,7 +1049,12 @@ fn catalog_from_sharded_registry_and_summary(
     )
 }
 
-fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalog> {
+struct ShardedCatalogSeed {
+    catalog: ArcadeCatalog,
+    catalog_fingerprint: String,
+}
+
+fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatalogSeed> {
     use mister_magik_catalog::sharded_catalog::CatalogReader;
 
     let load_started = Instant::now();
@@ -1088,23 +1093,25 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
             return None;
         }
     };
-    if let Err(error) =
-        mister_magik_catalog::production_sharded_projection::validate_production_binding(
+    let catalog_fingerprint =
+        match mister_magik_catalog::production_sharded_projection::validate_production_binding(
             &storage,
             registry.generation(),
-        )
-    {
-        print_startup_event(
-            start,
-            "catalog_v3_registry_load",
-            format!(
-                "status=stale elapsed_us={} path={} error={error}",
-                load_started.elapsed().as_micros(),
-                storage.display()
-            ),
-        );
-        return None;
-    }
+        ) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                print_startup_event(
+                    start,
+                    "catalog_v3_registry_load",
+                    format!(
+                        "status=stale elapsed_us={} path={} error={error}",
+                        load_started.elapsed().as_micros(),
+                        storage.display()
+                    ),
+                );
+                return None;
+            }
+        };
     let systems = registry
         .systems()
         .iter()
@@ -1134,12 +1141,25 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ArcadeCatalo
         .and_then(|system_id| reader.open_system(system_id).ok())
         .map(|system| arcade_rows_from_shard("arcade", system.games()))
         .unwrap_or_default();
-    Some(ArcadeCatalog::new_with_deferred_text_indexes(
-        PathBuf::from(root),
-        games,
-        systems,
-        launch_plans,
-    ))
+    let platform_kinds = systems
+        .iter()
+        .map(|system| {
+            (
+                system.id.clone(),
+                mister_magik_catalog::catalog_classify::platform_kind_for_system(&system.id),
+            )
+        })
+        .collect();
+    Some(ShardedCatalogSeed {
+        catalog: ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+            PathBuf::from(root),
+            games,
+            systems,
+            launch_plans,
+            platform_kinds,
+        ),
+        catalog_fingerprint,
+    })
 }
 
 fn arcade_rows_from_shard(
@@ -1181,6 +1201,10 @@ fn arcade_rows_from_shard(
         })
         .collect();
     (games, launch_plans)
+}
+
+fn legacy_summary_seed_needed(capsule_ready: bool, sharded_ready: bool) -> bool {
+    !capsule_ready && !sharded_ready
 }
 
 fn read_catalog_summary_seed(
@@ -1585,20 +1609,21 @@ pub(super) fn run_launcher_loop(
         .then(|| read_sharded_registry_seed(&arcade_root, start))
         .flatten();
     let sharded_seed_ready = sharded_seed.is_some();
-    let summary_seed = (!capsule_seed_ready)
+    let sharded_catalog_fingerprint = sharded_seed
+        .as_ref()
+        .map(|seed| seed.catalog_fingerprint.clone());
+    let summary_seed = legacy_summary_seed_needed(capsule_seed_ready, sharded_seed_ready)
         .then(|| read_catalog_summary_seed(&sqlite_path, &summary_path, start))
         .flatten();
     if let Some(seed) = sharded_seed {
-        catalog = if let Some(summary) = summary_seed.as_ref() {
-            catalog_from_sharded_registry_and_summary(&arcade_root, seed, summary)
-        } else {
-            seed
-        };
+        catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = summary_seed
-        .as_ref()
-        .map(|summary| summary.catalog_stamp_fingerprint.clone());
+    let initial_catalog_fingerprint = sharded_catalog_fingerprint.or_else(|| {
+        summary_seed
+            .as_ref()
+            .map(|summary| summary.catalog_stamp_fingerprint.clone())
+    });
     let mut catalog_generation = CatalogGenerationState {
         current: initial_catalog_fingerprint.clone(),
         durable: initial_catalog_fingerprint,
@@ -5467,6 +5492,14 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             2
         );
+    }
+
+    #[test]
+    pub(super) fn valid_sharded_seed_never_reads_the_legacy_summary() {
+        assert!(!legacy_summary_seed_needed(false, true));
+        assert!(!legacy_summary_seed_needed(true, false));
+        assert!(!legacy_summary_seed_needed(true, true));
+        assert!(legacy_summary_seed_needed(false, false));
     }
 
     #[test]

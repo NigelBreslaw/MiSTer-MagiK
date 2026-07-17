@@ -51,6 +51,11 @@ already-loaded systems remain intact. A failed shard is reported once and does
 not create a per-frame retry loop. V3-seeded validation does not preload the V2
 navigation.
 
+A validated V3 registry also supplies the durable catalog fingerprint and uses
+the checked-in taxonomy for platform kinds. The launcher therefore does not
+open the legacy global summary during normal V3 startup; that summary remains
+only as a migration fallback when neither a return capsule nor V3 is usable.
+
 On a cold build, the builder scans the configured `_Arcade` collection first,
 writes a temporary rich navigation snapshot, and publishes it through the same
 acknowledged `CatalogReady` boundary as a complete catalog. The launcher can
