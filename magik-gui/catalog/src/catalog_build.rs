@@ -122,13 +122,45 @@ impl<'a> CatalogRefreshPipeline<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
+        self.scan_ram_artifact_with_reused_prefix_using(
+            LibraryIndexer::new(self.cfg),
+            reused,
+            excluded_targets,
+            progress,
+            scan_events,
+        )
+    }
+
+    pub(crate) fn scan_ram_artifact_foreground_with_reused_prefix(
+        &self,
+        reused: LibraryRamScanArtifact,
+        excluded_targets: Vec<PathBuf>,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
+        self.scan_ram_artifact_with_reused_prefix_using(
+            LibraryIndexer::foreground(self.cfg),
+            reused,
+            excluded_targets,
+            progress,
+            scan_events,
+        )
+    }
+
+    fn scan_ram_artifact_with_reused_prefix_using(
+        &self,
+        indexer: LibraryIndexer<'_>,
+        reused: LibraryRamScanArtifact,
+        excluded_targets: Vec<PathBuf>,
+        progress: ProgressCallback<'_>,
+        scan_events: ScanEventCallback<'_>,
+    ) -> LibraryRamScanArtifact {
         let scan_t = Instant::now();
-        let mut scan = LibraryIndexer::new(self.cfg)
-            .scan_without_coverage_audit_with_progress_events_and_exclusions(
-                progress,
-                scan_events,
-                excluded_targets,
-            );
+        let mut scan = indexer.scan_without_coverage_audit_with_progress_events_and_exclusions(
+            progress,
+            scan_events,
+            excluded_targets,
+        );
         let reused_scan_us = reused.stats.scan_us;
         merge_reused_scan(&mut scan, reused.scan);
         let covered_payloads = covered_payload_paths(&scan.discoveries);

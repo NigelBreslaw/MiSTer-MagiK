@@ -993,6 +993,22 @@ pub fn scan_default_library_ram_background_reusing_arcade_with_events(
     )
 }
 
+pub fn scan_default_library_ram_foreground_reusing_arcade_with_events(
+    arcade: LibraryRamScanArtifact,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production();
+    Ok(
+        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_foreground_with_reused_prefix(
+            arcade,
+            vec![PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)],
+            progress,
+            scan_events,
+        ),
+    )
+}
+
 pub fn bootstrap_default_library_progress(
     progress: ProgressCallback<'_>,
 ) -> LibraryBootstrapSummary {

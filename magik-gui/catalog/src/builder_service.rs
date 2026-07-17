@@ -53,7 +53,7 @@ pub fn run(
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
-        background_rebuild: operation == BuilderOperation::Rebuild,
+        replacement_rebuild: operation == BuilderOperation::Rebuild,
         bootstrap_first_visible: matches!(
             operation,
             BuilderOperation::Build | BuilderOperation::FreshBuild
@@ -246,7 +246,7 @@ fn run_with_backend<B: BuilderBackend>(
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
-    let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
+    let background_build = operation == BuilderOperation::Rebuild;
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -277,7 +277,7 @@ fn run_with_backend<B: BuilderBackend>(
             games,
             load_us,
         });
-        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        apply_runtime_thread_policy(build_role);
     }
     // First-visible serialization and publication are part of foreground
     // bootstrap. Entering the cooperative scope before CatalogReady creates a
@@ -357,7 +357,7 @@ fn run_with_backend<B: BuilderBackend>(
         games,
         load_us,
     });
-    apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+    apply_runtime_thread_policy(build_role);
     let mut progress = |title: &str, detail: &str| {
         wait_for_background_heavy_work_enabled(background_build);
         emit(CatalogBuilderEvent::Progress {
@@ -422,7 +422,7 @@ struct PreparedBuild {
 }
 
 struct SystemBuilderBackend {
-    background_rebuild: bool,
+    replacement_rebuild: bool,
     bootstrap_first_visible: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
 }
@@ -561,7 +561,6 @@ impl BuilderBackend for SystemBuilderBackend {
         let (artifact, catalog, timing, scanner_cache) =
             scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
         let games = catalog.len();
-        self.background_rebuild = true;
         Ok(Some(StageOutput {
             value: PreparedBuild {
                 artifact,
@@ -607,19 +606,25 @@ impl BuilderBackend for SystemBuilderBackend {
                 system_discovered(system_id);
             }
         };
-        let scanned = if self.background_rebuild {
-            if let Some(arcade) = self.arcade_bootstrap_scan.take() {
+        let scanned = if let Some(arcade) = self.arcade_bootstrap_scan.take() {
+            if self.replacement_rebuild {
                 library_db::scan_default_library_ram_background_reusing_arcade_with_events(
                     arcade,
                     Some(progress),
                     Some(&mut scan_events),
                 )?
             } else {
-                library_db::scan_default_library_ram_background_with_events(
+                library_db::scan_default_library_ram_foreground_reusing_arcade_with_events(
+                    arcade,
                     Some(progress),
                     Some(&mut scan_events),
                 )?
             }
+        } else if self.replacement_rebuild {
+            library_db::scan_default_library_ram_background_with_events(
+                Some(progress),
+                Some(&mut scan_events),
+            )?
         } else {
             library_db::scan_default_library_ram_foreground_with_events(
                 Some(progress),
@@ -649,7 +654,7 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (artifact, catalog, timing, scanner_cache) = if self.background_rebuild {
+        let (artifact, catalog, timing, scanner_cache) = if self.replacement_rebuild {
             scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
         } else {
             scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
@@ -692,9 +697,9 @@ impl BuilderBackend for SystemBuilderBackend {
                     timing.stamp_us,
                     timing.catalog_us,
                     timing.overlapped_us,
-                    if self.background_rebuild { "sequential-background" } else { "scoped-dual-core" },
-                    if self.background_rebuild { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
-                    if self.background_rebuild { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
+                    if self.replacement_rebuild { "sequential-background" } else { "scoped-dual-core" },
+                    if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
+                    if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
                 ),
             ),
         ];
@@ -1294,8 +1299,8 @@ mod tests {
         assert_eq!(ready.len(), 2);
         assert_eq!(
             backend.snapshot_background_scopes,
-            [false, true],
-            "first-visible mini-nav must publish before background latch cooperation"
+            [false, false],
+            "a cold initial build must remain foreground after first-visible publication"
         );
         let full_scan_timing = events
             .iter()

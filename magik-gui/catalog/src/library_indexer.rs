@@ -266,6 +266,7 @@ fn scan_library_with_progress_and_events(
             catalog_scan::discover_files_pipelined_foreground_with_plan(
                 cfg.roots.clone(),
                 plan.clone(),
+                excluded_targets,
             )
         }
     };

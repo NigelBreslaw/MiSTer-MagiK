@@ -163,11 +163,12 @@ pub(crate) fn discover_files_pipelined(roots: Vec<String>) -> mpsc::Receiver<Dis
 pub(crate) fn discover_files_pipelined_foreground_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
+    excluded_targets: Vec<PathBuf>,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_plan(
         roots,
         plan,
-        Vec::new(),
+        excluded_targets,
         RuntimeThreadRole::LibraryWalkerForeground,
     )
 }
