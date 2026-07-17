@@ -38,6 +38,10 @@ impl CatalogReader for LazyShardedCatalogReader {
                 .iter()
                 .map(|system| SystemSummary {
                     system_id: system.system_id.clone(),
+                    display_title: system.display_title.clone(),
+                    section: system.section.clone(),
+                    family: system.family.clone(),
+                    order: system.order,
                     generation: system.active.generation,
                     games: system.active.games,
                 })
@@ -87,6 +91,10 @@ impl CatalogReader for LazyShardedCatalogReader {
         Ok(SystemCatalog::new(
             SystemSummary {
                 system_id: loaded.system_id,
+                display_title: system.display_title.clone(),
+                section: system.section.clone(),
+                family: system.family.clone(),
+                order: system.order,
                 generation: loaded.generation,
                 games: loaded.games.len() as u64,
             },

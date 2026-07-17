@@ -215,6 +215,10 @@ pub struct SystemFailure {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemSummary {
     pub system_id: SystemId,
+    pub display_title: String,
+    pub section: String,
+    pub family: String,
+    pub order: u32,
     pub generation: u64,
     pub games: u64,
 }

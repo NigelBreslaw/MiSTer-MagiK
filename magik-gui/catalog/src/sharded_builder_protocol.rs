@@ -176,7 +176,7 @@ fn bounded_text(value: &str, label: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ProtocolSequence {
     run_id: Option<String>,
     intended_generation: Option<u64>,
