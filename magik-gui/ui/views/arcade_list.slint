@@ -30,26 +30,12 @@ component SearchKeyboardRow inherits Rectangle {
     height: 42px * MisterUi.scale;
     background: transparent;
 
-    function search-key-label(index: int) -> string {
-        return index == 0 ? "A" : index == 1 ? "B" : index == 2 ? "C" : index == 3 ? "D" :
-            index == 4 ? "E" : index == 5 ? "F" : index == 6 ? "G" : index == 7 ? "H" :
-            index == 8 ? "I" : index == 9 ? "J" : index == 10 ? "K" : index == 11 ? "L" :
-            index == 12 ? "M" : index == 13 ? "N" : index == 14 ? "O" : index == 15 ? "P" :
-            index == 16 ? "Q" : index == 17 ? "R" : index == 18 ? "S" : index == 19 ? "T" :
-            index == 20 ? "U" : index == 21 ? "V" : index == 22 ? "W" : index == 23 ? "X" :
-            index == 24 ? "Y" : index == 25 ? "Z" : index == 26 ? "0" : index == 27 ? "1" :
-            index == 28 ? "2" : index == 29 ? "3" : index == 30 ? "4" : index == 31 ? "5" :
-            index == 32 ? "6" : index == 33 ? "7" : index == 34 ? "8" : index == 35 ? "9" :
-            index == 36 ? "-" : index == 37 ? "." : index == 38 ? "'" : index == 39 ? "&" :
-            index == 40 ? "SPACE" : index == 41 ? "DEL" : "CLEAR";
-    }
-
     HorizontalLayout {
         spacing: 6px * MisterUi.scale;
 
         for key-offset in root.key-count: SearchKey {
             horizontal-stretch: 1;
-            label: search-key-label(root.start-index + key-offset);
+            label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
             selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
             keyboard-focused: MisterBridge.arcade-search-pane == 0;
         }

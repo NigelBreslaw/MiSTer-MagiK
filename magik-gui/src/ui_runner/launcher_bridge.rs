@@ -71,6 +71,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_scroll_y(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
     bridge.set_arcade_games_loading(false);
+    bridge.set_arcade_search_keys(ModelRc::new(VecModel::from(
+        crate::launcher::ARCADE_SEARCH_KEYS
+            .iter()
+            .map(|key| SharedString::from(key.label))
+            .collect::<Vec<_>>(),
+    )));
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());

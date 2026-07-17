@@ -67,10 +67,82 @@ const SETTINGS_MAX_SELECTED: usize = 5;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
-pub const ARCADE_SEARCH_KEYS: [&str; 43] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
-    "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", ".",
-    "'", "&", "SPACE", "DEL", "CLEAR",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArcadeSearchKeyAction {
+    Append(&'static str),
+    Space,
+    Delete,
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArcadeSearchKey {
+    pub label: &'static str,
+    pub action: ArcadeSearchKeyAction,
+}
+
+impl ArcadeSearchKey {
+    const fn append(label: &'static str) -> Self {
+        Self {
+            label,
+            action: ArcadeSearchKeyAction::Append(label),
+        }
+    }
+}
+
+pub const ARCADE_SEARCH_KEYS: [ArcadeSearchKey; 43] = [
+    ArcadeSearchKey::append("A"),
+    ArcadeSearchKey::append("B"),
+    ArcadeSearchKey::append("C"),
+    ArcadeSearchKey::append("D"),
+    ArcadeSearchKey::append("E"),
+    ArcadeSearchKey::append("F"),
+    ArcadeSearchKey::append("G"),
+    ArcadeSearchKey::append("H"),
+    ArcadeSearchKey::append("I"),
+    ArcadeSearchKey::append("J"),
+    ArcadeSearchKey::append("K"),
+    ArcadeSearchKey::append("L"),
+    ArcadeSearchKey::append("M"),
+    ArcadeSearchKey::append("N"),
+    ArcadeSearchKey::append("O"),
+    ArcadeSearchKey::append("P"),
+    ArcadeSearchKey::append("Q"),
+    ArcadeSearchKey::append("R"),
+    ArcadeSearchKey::append("S"),
+    ArcadeSearchKey::append("T"),
+    ArcadeSearchKey::append("U"),
+    ArcadeSearchKey::append("V"),
+    ArcadeSearchKey::append("W"),
+    ArcadeSearchKey::append("X"),
+    ArcadeSearchKey::append("Y"),
+    ArcadeSearchKey::append("Z"),
+    ArcadeSearchKey::append("0"),
+    ArcadeSearchKey::append("1"),
+    ArcadeSearchKey::append("2"),
+    ArcadeSearchKey::append("3"),
+    ArcadeSearchKey::append("4"),
+    ArcadeSearchKey::append("5"),
+    ArcadeSearchKey::append("6"),
+    ArcadeSearchKey::append("7"),
+    ArcadeSearchKey::append("8"),
+    ArcadeSearchKey::append("9"),
+    ArcadeSearchKey::append("-"),
+    ArcadeSearchKey::append("."),
+    ArcadeSearchKey::append("'"),
+    ArcadeSearchKey::append("&"),
+    ArcadeSearchKey {
+        label: "SPACE",
+        action: ArcadeSearchKeyAction::Space,
+    },
+    ArcadeSearchKey {
+        label: "DEL",
+        action: ArcadeSearchKeyAction::Delete,
+    },
+    ArcadeSearchKey {
+        label: "CLEAR",
+        action: ArcadeSearchKeyAction::Clear,
+    },
 ];
 
 const LAUNCH_IDLE: u8 = 0;
@@ -2473,13 +2545,13 @@ impl LauncherNav {
             .arcade_search
             .selected_key
             .min(ARCADE_SEARCH_KEYS.len() - 1)];
-        match key {
-            "SPACE" => self.arcade_search.query.push(' '),
-            "DEL" => {
+        match key.action {
+            ArcadeSearchKeyAction::Space => self.arcade_search.query.push(' '),
+            ArcadeSearchKeyAction::Delete => {
                 self.arcade_search.query.pop();
             }
-            "CLEAR" => self.arcade_search.query.clear(),
-            value => self.arcade_search.query.push_str(value),
+            ArcadeSearchKeyAction::Clear => self.arcade_search.query.clear(),
+            ArcadeSearchKeyAction::Append(value) => self.arcade_search.query.push_str(value),
         }
         if self.arcade_search.query.is_empty() {
             self.clear_arcade_search_results(system_id);
@@ -4659,6 +4731,28 @@ mod tests {
         );
 
         assert_eq!(nav.arcade_search.pane, ArcadeSearchPane::Results);
+    }
+
+    #[test]
+    fn arcade_search_key_actions_are_independent_of_display_labels() {
+        let catalog = filter_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Arcade;
+        nav.enter_arcade_search(&catalog, "arcade");
+
+        for (action, expected) in [
+            (ArcadeSearchKeyAction::Append("A"), "A"),
+            (ArcadeSearchKeyAction::Space, "A "),
+            (ArcadeSearchKeyAction::Delete, "A"),
+            (ArcadeSearchKeyAction::Clear, ""),
+        ] {
+            nav.arcade_search.selected_key = ARCADE_SEARCH_KEYS
+                .iter()
+                .position(|key| key.action == action)
+                .expect("search key action");
+            nav.activate_arcade_search_key(&catalog, "arcade");
+            assert_eq!(nav.arcade_search.query, expected);
+        }
     }
 
     #[test]
