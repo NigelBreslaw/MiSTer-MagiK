@@ -711,10 +711,12 @@ impl BuilderBackend for SystemBuilderBackend {
             crate::production_sharded_projection::production_registry_limits(),
         ) {
             Ok(outcome) => crate::catalog_logln!(
-                "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\telapsed_us={}",
+                "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
                 outcome.generation,
                 outcome.systems,
                 outcome.games,
+                outcome.rebuilt_systems,
+                outcome.removed_systems,
                 v3_started.elapsed().as_micros()
             ),
             Err(error) => crate::catalog_errln!(

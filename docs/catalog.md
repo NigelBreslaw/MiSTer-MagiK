@@ -12,8 +12,17 @@ title, launch reference, preview identity, filter metadata, newness, and the
 complete structured launch plan. The binding also names the `rich-game-v1`
 projection contract, so earlier schema-one development artifacts are rejected
 instead of being mistaken for rich shards. V2 remains during the transition
-until lazy system hydration, production delta planning, and device parity are
+until lazy system hydration, source-level delta scanning, and device parity are
 all proven; it is no longer retained because the shard row is lossy.
+
+Production V3 publication now compares each rich per-system projection with
+the active shard and rebuilds only systems whose metadata or game rows changed.
+Unchanged systems retain the same immutable SQLite/navigation generation and
+an entirely unchanged projection does not publish a new manifest generation.
+This currently removes redundant V3 serialization and writes; the preceding
+canonical full scan and V2 compatibility save still run, so end-to-end rebuild
+speedup must be reported from device measurements rather than inferred from the
+shard work ratio.
 
 When a rich V3 registry seeds Home, Arcade's mini-nav is opened with the
 registry and other systems remain unopened. Entering an unloaded collection
