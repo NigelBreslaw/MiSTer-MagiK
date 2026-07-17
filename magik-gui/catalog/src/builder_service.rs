@@ -783,20 +783,37 @@ impl BuilderBackend for SystemBuilderBackend {
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
         let projection_started = Instant::now();
-        let outcome = crate::production_sharded_projection::publish_bound_production_projection(
-            &crate::catalog_config::default_sharded_catalog_path(),
-            &prepared.catalog,
-            &catalog_fingerprint,
-            crate::production_sharded_projection::production_registry_limits(),
-        )
-        .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
+        let scanner_cache_path = crate::scanner_cache::default_path();
+        let (outcome, staged_scanner_cache, scanner_cache_stage_us) = std::thread::scope(|scope| {
+            let scanner_cache_worker = std::thread::Builder::new()
+                .name("scanner-cache-stage".to_string())
+                .spawn_scoped(scope, || {
+                    let started = Instant::now();
+                    let staged = crate::scanner_cache::stage(
+                        &scanner_cache_path,
+                        &prepared.scanner_cache,
+                    )?;
+                    Ok::<_, String>((staged, started.elapsed().as_micros()))
+                })
+                .map_err(|error| format!("spawn scanner cache staging worker: {error}"))?;
+            let outcome =
+                crate::production_sharded_projection::publish_bound_production_projection(
+                    &crate::catalog_config::default_sharded_catalog_path(),
+                    &prepared.catalog,
+                    &catalog_fingerprint,
+                    crate::production_sharded_projection::production_registry_limits(),
+                )
+                .map_err(|error| format!("publish V3 system catalogs: {error}"));
+            let staged = scanner_cache_worker
+                .join()
+                .map_err(|_| "scanner cache staging worker panicked".to_string())??;
+            Ok::<_, String>((outcome?, staged.0, staged.1))
+        })?;
         let projection_us = projection_started.elapsed().as_micros();
-        let scanner_cache_started = Instant::now();
-        crate::scanner_cache::write(
-            &crate::scanner_cache::default_path(),
-            &prepared.scanner_cache,
-        )?;
-        let scanner_cache_us = scanner_cache_started.elapsed().as_micros();
+        let scanner_cache_publish_started = Instant::now();
+        staged_scanner_cache.publish()?;
+        let scanner_cache_publish_us = scanner_cache_publish_started.elapsed().as_micros();
+        let scanner_cache_us = scanner_cache_stage_us + scanner_cache_publish_us;
         // Catalog state is the acceptance marker. Publishing it last ensures
         // an interrupted shard/cache write is detected and rebuilt.
         let catalog_state_started = Instant::now();
@@ -815,9 +832,11 @@ impl BuilderBackend for SystemBuilderBackend {
         let summary_started = Instant::now();
         let mut summary = crate::library_db::default_sharded_cached_summary(scan_stats.scan_us)?;
         crate::catalog_logln!(
-            "catalog_v3_persist_phases_tsv\tprojection_us={}\tscanner_cache_us={}\tcatalog_state_us={}\tsummary_us={}",
+            "catalog_v3_persist_phases_tsv\tprojection_us={}\tscanner_cache_us={}\tscanner_cache_stage_us={}\tscanner_cache_publish_us={}\tcatalog_state_us={}\tsummary_us={}",
             projection_us,
             scanner_cache_us,
+            scanner_cache_stage_us,
+            scanner_cache_publish_us,
             catalog_state_us,
             summary_started.elapsed().as_micros(),
         );

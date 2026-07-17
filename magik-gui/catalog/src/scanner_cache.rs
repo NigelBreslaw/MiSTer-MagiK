@@ -116,12 +116,44 @@ fn read_rows(conn: &Connection) -> Result<ScannerCacheState, String> {
 }
 
 #[cfg_attr(not(feature = "builder"), allow(dead_code))]
-pub(crate) fn write(path: &Path, state: &ScannerCacheState) -> Result<(), String> {
+pub(crate) struct StagedScannerCache {
+    temp: Option<PathBuf>,
+    final_path: PathBuf,
+}
+
+#[cfg_attr(not(feature = "builder"), allow(dead_code))]
+impl StagedScannerCache {
+    pub(crate) fn publish(mut self) -> Result<(), String> {
+        let temp = self.temp.as_ref().expect("staged scanner cache path");
+        std::fs::File::open(temp)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| format!("sync scanner cache: {error}"))?;
+        std::fs::rename(temp, &self.final_path)
+            .map_err(|error| format!("publish scanner cache: {error}"))?;
+        crate::sqlite_catalog::sync_parent_dir(&self.final_path);
+        self.temp = None;
+        Ok(())
+    }
+}
+
+impl Drop for StagedScannerCache {
+    fn drop(&mut self) {
+        if let Some(temp) = self.temp.take() {
+            let _ = std::fs::remove_file(temp);
+        }
+    }
+}
+
+#[cfg_attr(not(feature = "builder"), allow(dead_code))]
+pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScannerCache, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create scanner cache dir {}: {error}", parent.display()))?;
     }
-    let temp = path.with_file_name(format!(".{FILE_NAME}.tmp"));
+    let temp = path.with_file_name(format!(
+        ".{FILE_NAME}.stage.{}",
+        std::process::id()
+    ));
     let result = (|| {
         let _ = std::fs::remove_file(&temp);
         let mut conn = Connection::open(&temp)
@@ -180,15 +212,14 @@ pub(crate) fn write(path: &Path, state: &ScannerCacheState) -> Result<(), String
             .map_err(|error| format!("commit scanner cache: {error}"))?;
         conn.close()
             .map_err(|(_, error)| format!("close scanner cache: {error}"))?;
-        std::fs::File::open(&temp)
-            .and_then(|file| file.sync_all())
-            .map_err(|error| format!("sync scanner cache: {error}"))?;
-        std::fs::rename(&temp, path).map_err(|error| format!("publish scanner cache: {error}"))?;
-        crate::sqlite_catalog::sync_parent_dir(path);
-        Ok(())
+        read(&temp).map_err(|error| format!("validate staged scanner cache: {error}"))?;
+        Ok(StagedScannerCache {
+            temp: Some(temp.clone()),
+            final_path: path.to_path_buf(),
+        })
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(temp);
+        let _ = std::fs::remove_file(&temp);
     }
     result
 }
@@ -218,7 +249,7 @@ mod tests {
             },
             Some("one".into()),
         );
-        write(&path, &state).unwrap();
+        stage(&path, &state).unwrap().publish().unwrap();
         let loaded = read(&path).unwrap();
         assert_eq!(
             loaded.discovery_history.unwrap().by_game_id,
@@ -229,6 +260,25 @@ mod tests {
             state.software_hash_cache.entries
         );
         assert!(!root.join("library.sqlite3").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_scanner_cache_is_unreachable_until_publish() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-staged-scanner-cache-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let path = root.join(FILE_NAME);
+        let state = ScannerCacheState::default();
+
+        let staged = stage(&path, &state).unwrap();
+        assert!(!path.exists());
+        staged.publish().unwrap();
+        assert!(path.exists());
+        read(&path).unwrap();
+
         let _ = std::fs::remove_dir_all(root);
     }
 }
