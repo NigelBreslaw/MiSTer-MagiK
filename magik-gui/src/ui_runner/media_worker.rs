@@ -1270,13 +1270,8 @@ fn spawn_sha256_stdin() -> Result<Child, String> {
 }
 
 fn parse_sha256_output(output: &[u8]) -> Result<String, String> {
-    let text =
-        String::from_utf8(output.to_vec()).map_err(|e| format!("sha256 output utf8: {e}"))?;
-    text.split_whitespace()
-        .next()
-        .filter(|sha| sha.len() == 64)
-        .map(str::to_string)
-        .ok_or_else(|| format!("could not parse sha256 output: {text}"))
+    mister_magik_media_contract::Sha256::parse_command_output(output)
+        .map(mister_magik_media_contract::Sha256::into_string)
 }
 
 fn cleanup_pack_publish_temps(local_path: &Path) {
@@ -1693,37 +1688,32 @@ impl HttpCacheMetadata {
 }
 
 fn parse_http_headers(text: &str, effective_url: &str, source: &str) -> HttpCacheMetadata {
+    let headers = mister_magik_media_contract::HttpHeaders::parse(text);
     let mut metadata = HttpCacheMetadata {
         effective_url: effective_url.to_string(),
         source: source.to_string(),
+        status: headers.status,
+        etag: headers.get("etag").unwrap_or_default().to_string(),
+        last_modified: headers.get("last-modified").unwrap_or_default().to_string(),
+        cache_control: headers.get("cache-control").unwrap_or_default().to_string(),
+        age: headers.get("age").unwrap_or_default().to_string(),
+        cf_cache_status: headers
+            .get("cf-cache-status")
+            .unwrap_or_default()
+            .to_string(),
+        cf_ray: headers.get("cf-ray").unwrap_or_default().to_string(),
+        content_length: headers
+            .get("content-length")
+            .unwrap_or_default()
+            .to_string(),
+        content_encoding: headers
+            .get("content-encoding")
+            .unwrap_or_default()
+            .to_string(),
         ..Default::default()
     };
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if let Some(rest) = line.strip_prefix("HTTP/") {
-            metadata.status = rest
-                .split_whitespace()
-                .nth(1)
-                .or_else(|| rest.split_whitespace().next())
-                .and_then(|value| value.parse::<u16>().ok());
-            continue;
-        }
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().trim_end_matches('\r').to_string();
-        match name.trim().to_ascii_lowercase().as_str() {
-            "etag" => metadata.etag = value,
-            "last-modified" => metadata.last_modified = value,
-            "cache-control" => metadata.cache_control = value,
-            "age" => metadata.age = value,
-            "cf-cache-status" => metadata.cf_cache_status = value,
-            "cf-ray" => metadata.cf_ray = value,
-            "content-length" => metadata.content_length = value,
-            "content-encoding" => metadata.content_encoding = value,
-            "location" => metadata.effective_url = value,
-            _ => {}
-        }
+    if let Some(location) = headers.get("location") {
+        metadata.effective_url = location.to_string();
     }
     metadata
 }

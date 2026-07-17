@@ -18,9 +18,9 @@ const DEFAULT_REMOTE_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
 const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
     "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
 const DEFAULT_IMAGE_SIZE: &str = "320x320";
-const DEFAULT_MANIFEST_URL: &str = "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
-const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = "https://assets.mistermagik.com";
-const OFFICIAL_ASSET_HTTP_ORIGIN: &str = "http://assets.mistermagik.com";
+const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST_URL;
+const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTPS_ORIGIN;
+const OFFICIAL_ASSET_HTTP_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTP_ORIGIN;
 const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
 const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
 const BENCH_HEADER: &str = "type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
@@ -434,6 +434,18 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
+        mister_magik_media_contract::Sha256::parse(&identity.decoded_sha256)
+            .map_err(|error| format!("pack {system} {error}"))?;
+        if matches!(
+            base_url.as_str(),
+            OFFICIAL_ASSET_HTTPS_ORIGIN | OFFICIAL_ASSET_HTTP_ORIGIN
+        ) && !identity.remote_path.starts_with("http://")
+            && !identity.remote_path.starts_with("https://")
+        {
+            mister_magik_media_contract::validate_pack_object_path(
+                identity.remote_path.trim_start_matches('/'),
+            )?;
+        }
         let codec = pack
             .get("codec")
             .and_then(Value::as_str)
@@ -464,15 +476,7 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
 }
 
 fn manifest_object_base_url(manifest_url: &str) -> String {
-    let Some((scheme, rest)) = manifest_url.split_once("://") else {
-        return String::new();
-    };
-    let host = rest.split('/').next().unwrap_or("");
-    if host.is_empty() {
-        String::new()
-    } else {
-        format!("{scheme}://{host}")
-    }
+    mister_magik_media_contract::manifest_origin(manifest_url).unwrap_or_default()
 }
 
 fn default_local_path_for_pack(system: &str) -> String {
@@ -787,6 +791,10 @@ fn parse_index(system: &str, identity: &MediaVariant, value: &Value) -> Result<M
     if index.codec != "mmlz4b-index-v1" && index.codec != "mmlz4b-index-v2" {
         return Err(format!("pack {system} uses unsupported index codec {}", index.codec).into());
     }
+    mister_magik_media_contract::Sha256::parse(&index.sha256)
+        .map_err(|error| format!("pack {system} index {error}"))?;
+    mister_magik_media_contract::Sha256::parse(&index.archive_sha256)
+        .map_err(|error| format!("pack {system} index archive {error}"))?;
     if index.bytes == 0 {
         return Err(format!("pack {system} index has zero bytes").into());
     }
@@ -1217,7 +1225,7 @@ mod tests {
                 "remote_path": "packs/megadrive/megadrive-screenshots.mmlz4b",
                 "local_path": "/media/fat/mister-magik/assets/megadrive-screenshots.mmlz4b",
                 "bytes": 123,
-                "sha256": "abcdef",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "etag": "\"abc\"",
                 "asset_count": 42
             }]
@@ -1249,7 +1257,7 @@ mod tests {
                     "identity": {
                         "remote_path": "/packs/nes.mmlz4b",
                         "decoded_bytes": 99,
-                        "sha256_decoded": "ABCDEF"
+                        "sha256_decoded": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                     }
                 }
             }]
@@ -1261,7 +1269,10 @@ mod tests {
             manifest.packs[0].local_path,
             "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"
         );
-        assert_eq!(manifest.packs[0].identity.decoded_sha256, "abcdef");
+        assert_eq!(
+            manifest.packs[0].identity.decoded_sha256,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     #[test]
@@ -1431,13 +1442,13 @@ mod tests {
                     "system": "nes",
                     "remote_path": "packs/nes.mmlz4b",
                     "bytes": 10,
-                    "sha256": "aaaaaaaa"
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 {
                     "system": "snes",
                     "remote_path": "packs/snes.mmlz4b",
                     "bytes": 20,
-                    "sha256": "bbbbbbbb"
+                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                 }
             ]
         });
@@ -1509,16 +1520,17 @@ mod tests {
         let identity = MediaVariant {
             remote_path: "packs/nes.mmlz4b".to_string(),
             decoded_bytes: 10,
-            decoded_sha256: "aaaaaaaa".to_string(),
+            decoded_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
             etag: None,
         };
         let mut index = json!({
             "object": "packs/nes.mmlz4b.idx",
             "bytes": 4,
-            "sha256": "bbbbbbbb",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "codec": "mmlz4b-index-v2",
             "archive_bytes": 10,
-            "archive_sha256": "aaaaaaaa"
+            "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         });
 
         assert_eq!(
@@ -1547,7 +1559,8 @@ mod tests {
             .contains("must end with .mmlz4b.idx"));
         index["object"] = json!("packs/nes.mmlz4b.idx");
 
-        index["archive_sha256"] = json!("cccccccc");
+        index["archive_sha256"] =
+            json!("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
         assert!(parse_index("nes", &identity, &index)
             .unwrap_err()
             .to_string()
@@ -1587,7 +1600,7 @@ mod tests {
                 "system": "nes",
                 "remote_path": "packs/nes.zip",
                 "bytes": 10,
-                "sha256": "aaaaaaaa",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "codec": "zip"
             }]
         });
@@ -1601,15 +1614,15 @@ mod tests {
                 "system": "nes",
                 "remote_path": "packs/nes.mmlz4b",
                 "bytes": 10,
-                "sha256": "aaaaaaaa",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "codec": "mmlz4b",
                 "index": {
                     "object": "packs/nes.mmlz4b.idx",
                     "bytes": 4,
-                    "sha256": "bbbbbbbb",
+                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                     "codec": "mmlz4b-index-v1",
                     "archive_bytes": 11,
-                    "archive_sha256": "aaaaaaaa"
+                    "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 }
             }]
         });

@@ -2605,6 +2605,7 @@ dependencies = [
  "lz4_flex",
  "mister-magik-catalog",
  "mister-magik-framebuffer-stream",
+ "mister-magik-media-contract",
  "mister-magik-scanout-contract",
  "mister-magik-ui",
  "pprof",
@@ -2618,6 +2619,13 @@ dependencies = [
 [[package]]
 name = "mister-magik-framebuffer-stream"
 version = "0.1.0"
+
+[[package]]
+name = "mister-magik-media-contract"
+version = "0.1.0"
+dependencies = [
+ "mister-magik-catalog",
+]
 
 [[package]]
 name = "mister-magik-scanout-contract"

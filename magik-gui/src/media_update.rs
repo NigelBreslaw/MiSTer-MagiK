@@ -15,77 +15,14 @@ use mister_magik_catalog::media_identity::{
     size_qualified_screenshot_pack_filename, size_qualified_screenshot_pack_path,
     valid_screenshot_image_size,
 };
+pub use mister_magik_media_contract::{
+    MediaIndex, MediaManifest, MediaPack, MediaVariant, PackIdentity,
+};
 
-pub const DEFAULT_MANIFEST_URL: &str =
-    "https://assets.mistermagik.com/mister-magik/v1/manifest.json";
-const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = "https://assets.mistermagik.com";
-const OFFICIAL_ASSET_HTTP_ORIGIN: &str = "http://assets.mistermagik.com";
+pub const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST_URL;
+const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTPS_ORIGIN;
+const OFFICIAL_ASSET_HTTP_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTP_ORIGIN;
 const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaManifest {
-    pub schema: u64,
-    pub generated_at: String,
-    pub origin: String,
-    pub packs: Vec<MediaPack>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaPack {
-    pub id: String,
-    pub version: String,
-    pub image_size: String,
-    pub raw: MediaVariant,
-    pub variants: Vec<MediaVariant>,
-    pub index: Option<MediaIndex>,
-}
-
-impl MediaPack {
-    pub fn identity(&self) -> PackIdentity {
-        PackIdentity {
-            system: self.id.clone(),
-            image_size: self.image_size.clone(),
-            version: self.version.clone(),
-            sha256: self.raw.sha256.clone(),
-        }
-    }
-
-    pub fn variant_for_compression(&self, compression: &str) -> Option<&MediaVariant> {
-        let wanted = normalize_compression(compression)?;
-        self.variants
-            .iter()
-            .find(|variant| variant.compression == wanted)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaVariant {
-    pub compression: String,
-    pub codec: String,
-    pub object: String,
-    pub bytes: u64,
-    pub sha256: String,
-    pub url: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaIndex {
-    pub codec: String,
-    pub object: String,
-    pub bytes: u64,
-    pub sha256: String,
-    pub url: String,
-    pub archive_bytes: u64,
-    pub archive_sha256: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PackIdentity {
-    pub system: String,
-    pub image_size: String,
-    pub version: String,
-    pub sha256: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaUpdatePolicy {
@@ -181,15 +118,7 @@ pub fn parse_manifest_value(manifest_url: &str, value: &Value) -> Result<MediaMa
 }
 
 pub fn manifest_origin(manifest_url: &str) -> Result<String, String> {
-    let (scheme, rest) = manifest_url
-        .split_once("://")
-        .ok_or_else(|| format!("manifest URL must include scheme: {manifest_url}"))?;
-    let host = rest
-        .split('/')
-        .next()
-        .filter(|host| !host.is_empty())
-        .ok_or_else(|| format!("manifest URL must include host: {manifest_url}"))?;
-    Ok(format!("{scheme}://{host}"))
+    mister_magik_media_contract::manifest_origin(manifest_url)
 }
 
 pub fn is_supported_pack_id(id: &str) -> bool {
@@ -203,15 +132,17 @@ fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
     }
     let version = required_string(value, "version")?.to_string();
     let image_size = image_size_from_pack(value).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
-    let raw = MediaVariant {
-        compression: "none".to_string(),
-        codec: required_string(value, "codec")?.to_string(),
-        object: required_string(value, "object")?.to_string(),
-        bytes: required_u64(value, "bytes")?,
-        sha256: required_string(value, "sha256")?.to_string(),
-        url: String::new(),
-    }
-    .with_url(origin)?;
+    let raw = variant_with_url(
+        MediaVariant {
+            compression: "none".to_string(),
+            codec: required_string(value, "codec")?.to_string(),
+            object: required_string(value, "object")?.to_string(),
+            bytes: required_u64(value, "bytes")?,
+            sha256: required_string(value, "sha256")?.to_string(),
+            url: String::new(),
+        },
+        origin,
+    )?;
     if raw.codec != "mmlz4b" {
         return Err(format!("pack {id} uses unsupported codec {}", raw.codec));
     }
@@ -249,17 +180,20 @@ fn parse_pack(origin: &str, value: &Value) -> Result<MediaPack, String> {
 }
 
 fn parse_variant(origin: &str, value: &Value) -> Result<MediaVariant, String> {
-    let compression = normalize_compression(required_string(value, "compression")?)
-        .ok_or("unsupported media variant compression")?;
-    MediaVariant {
-        compression: compression.to_string(),
-        codec: required_string(value, "codec")?.to_string(),
-        object: required_string(value, "object")?.to_string(),
-        bytes: required_u64(value, "bytes")?,
-        sha256: required_string(value, "sha256")?.to_string(),
-        url: String::new(),
-    }
-    .with_url(origin)
+    let compression =
+        mister_magik_media_contract::normalize_compression(required_string(value, "compression")?)
+            .ok_or("unsupported media variant compression")?;
+    variant_with_url(
+        MediaVariant {
+            compression: compression.to_string(),
+            codec: required_string(value, "codec")?.to_string(),
+            object: required_string(value, "object")?.to_string(),
+            bytes: required_u64(value, "bytes")?,
+            sha256: required_string(value, "sha256")?.to_string(),
+            url: String::new(),
+        },
+        origin,
+    )
 }
 
 fn parse_index(
@@ -268,16 +202,18 @@ fn parse_index(
     raw: &MediaVariant,
     value: &Value,
 ) -> Result<MediaIndex, String> {
-    let index = MediaIndex {
-        codec: required_string(value, "codec")?.to_string(),
-        object: required_string(value, "object")?.to_string(),
-        bytes: required_u64(value, "bytes")?,
-        sha256: required_string(value, "sha256")?.to_string(),
-        url: String::new(),
-        archive_bytes: required_u64(value, "archive_bytes")?,
-        archive_sha256: required_string(value, "archive_sha256")?.to_string(),
-    }
-    .with_url(origin)?;
+    let index = index_with_url(
+        MediaIndex {
+            codec: required_string(value, "codec")?.to_string(),
+            object: required_string(value, "object")?.to_string(),
+            bytes: required_u64(value, "bytes")?,
+            sha256: required_string(value, "sha256")?.to_string(),
+            url: String::new(),
+            archive_bytes: required_u64(value, "archive_bytes")?,
+            archive_sha256: required_string(value, "archive_sha256")?.to_string(),
+        },
+        origin,
+    )?;
     if index.codec != "mmlz4b-index-v2" {
         return Err(format!(
             "pack {pack_id} uses unsupported index codec {}",
@@ -296,46 +232,33 @@ fn parse_index(
     Ok(index)
 }
 
-fn normalize_compression(value: &str) -> Option<&'static str> {
-    match value {
-        "none" | "identity" => Some("none"),
-        "gzip" | "gz" => Some("gzip"),
-        "brotli" | "br" => Some("brotli"),
-        _ => None,
+fn variant_with_url(mut value: MediaVariant, origin: &str) -> Result<MediaVariant, String> {
+    let object_path = media_object_path_for_validation(&value.object)?;
+    validate_object_path(object_path)?;
+    validate_sha256(&value.sha256)?;
+    if value.bytes == 0 {
+        return Err(format!("media object {} has zero bytes", value.object));
     }
+    value.url = media_object_url(origin, &value.object);
+    Ok(value)
 }
 
-impl MediaVariant {
-    fn with_url(mut self, origin: &str) -> Result<Self, String> {
-        let object_path = media_object_path_for_validation(&self.object)?;
-        validate_object_path(object_path)?;
-        validate_sha256(&self.sha256)?;
-        if self.bytes == 0 {
-            return Err(format!("media object {} has zero bytes", self.object));
-        }
-        self.url = media_object_url(origin, &self.object);
-        Ok(self)
+fn index_with_url(mut value: MediaIndex, origin: &str) -> Result<MediaIndex, String> {
+    let object_path = media_object_path_for_validation(&value.object)?;
+    validate_index_object_path(object_path)?;
+    validate_sha256(&value.sha256)?;
+    validate_sha256(&value.archive_sha256)?;
+    if value.bytes == 0 {
+        return Err(format!("media index {} has zero bytes", value.object));
     }
-}
-
-impl MediaIndex {
-    fn with_url(mut self, origin: &str) -> Result<Self, String> {
-        let object_path = media_object_path_for_validation(&self.object)?;
-        validate_index_object_path(object_path)?;
-        validate_sha256(&self.sha256)?;
-        validate_sha256(&self.archive_sha256)?;
-        if self.bytes == 0 {
-            return Err(format!("media index {} has zero bytes", self.object));
-        }
-        if self.archive_bytes == 0 {
-            return Err(format!(
-                "media index {} has zero archive bytes",
-                self.object
-            ));
-        }
-        self.url = media_object_url(origin, &self.object);
-        Ok(self)
+    if value.archive_bytes == 0 {
+        return Err(format!(
+            "media index {} has zero archive bytes",
+            value.object
+        ));
     }
+    value.url = media_object_url(origin, &value.object);
+    Ok(value)
 }
 
 pub fn media_object_url(origin: &str, object: &str) -> String {
@@ -511,74 +434,15 @@ fn state_entry_for_pack<'a>(state: Option<&'a Value>, pack: &MediaPack) -> Optio
 }
 
 fn validate_object_path(object: &str) -> Result<(), String> {
-    if object.contains("..") || object.starts_with('/') {
-        return Err(format!("unsafe media object path: {object}"));
-    }
-    let parts: Vec<_> = object.split('/').collect();
-    if parts.len() < 6
-        || parts[0] != "mister-magik"
-        || parts[1] != "v1"
-        || parts[2] != "packs"
-        || !is_supported_pack_id(parts[3])
-    {
-        return Err(format!("unexpected media object path: {object}"));
-    }
-    match parts.as_slice() {
-        // Compatibility path used by early manifests:
-        // mister-magik/v1/packs/<system>/<version>/<sha>.mmlz4b
-        ["mister-magik", "v1", "packs", system, version, _file]
-            if is_supported_pack_id(system) && valid_version_component(version) => {}
-        // Current magik-cloud path:
-        // mister-magik/v1/packs/<system>/screenshots/<size>/<version>/<sha>.mmlz4b
-        ["mister-magik", "v1", "packs", system, "screenshots", size, version, _file]
-            if is_supported_pack_id(system)
-                && valid_image_size(size)
-                && valid_version_component(version) => {}
-        _ => return Err(format!("unexpected media object path: {object}")),
-    }
-    let file = parts.last().copied().unwrap_or("");
-    let valid_ext =
-        file.ends_with(".mmlz4b") || file.ends_with(".mmlz4b.gz") || file.ends_with(".mmlz4b.br");
-    if !valid_ext {
-        return Err(format!("unexpected media object extension: {object}"));
-    }
-    let sha = file.split('.').next().unwrap_or("");
-    validate_sha256(sha)
+    mister_magik_media_contract::validate_pack_object_path(object)
 }
 
 fn validate_index_object_path(object: &str) -> Result<(), String> {
-    if object.contains("..") || object.starts_with('/') {
-        return Err(format!("unsafe media index object path: {object}"));
-    }
-    let parts: Vec<_> = object.split('/').collect();
-    match parts.as_slice() {
-        ["mister-magik", "v1", "packs", system, "screenshots", size, version, _file]
-            if is_supported_pack_id(system)
-                && valid_image_size(size)
-                && valid_version_component(version) => {}
-        _ => return Err(format!("unexpected media index object path: {object}")),
-    }
-    let file = parts.last().copied().unwrap_or("");
-    if !file.ends_with(".mmlz4b.idx") {
-        return Err(format!("unexpected media index object extension: {object}"));
-    }
-    let sha = file.split('.').next().unwrap_or("");
-    validate_sha256(sha)
+    mister_magik_media_contract::validate_index_object_path(object)
 }
 
 fn validate_sha256(value: &str) -> Result<(), String> {
-    if value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        Ok(())
-    } else {
-        Err(format!("invalid sha256: {value}"))
-    }
-}
-
-fn valid_version_component(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    mister_magik_media_contract::Sha256::parse(value).map(|_| ())
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {

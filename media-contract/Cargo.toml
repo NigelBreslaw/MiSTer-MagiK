@@ -1,0 +1,17 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "mister-magik-media-contract"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+mister-magik-catalog = { path = "../magik-gui/catalog", default-features = false }

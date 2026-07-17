@@ -13,7 +13,6 @@ use mister_magik_fb::media_update::{
     MediaVariant, DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -568,12 +567,8 @@ fn stream_fat_download_to_publish_temp(
 }
 
 fn parse_sha256_output(output: &[u8]) -> Result<String, String> {
-    let text = String::from_utf8(output.to_vec()).map_err(|e| format!("sha256 utf8: {e}"))?;
-    text.split_whitespace()
-        .next()
-        .filter(|sha| sha.len() == 64)
-        .map(str::to_string)
-        .ok_or_else(|| format!("could not parse sha256sum output: {text}"))
+    mister_magik_media_contract::Sha256::parse_command_output(output)
+        .map(mister_magik_media_contract::Sha256::into_string)
 }
 
 fn verify_downloaded_bytes(
@@ -676,20 +671,17 @@ fn add_curl_download_args(
 }
 
 fn parse_http_headers(text: &str) -> HttpMetadata {
-    let mut headers = BTreeMap::new();
-    for line in text.lines() {
-        let Some((name, value)) = line.trim().split_once(':') else {
-            continue;
-        };
-        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-    }
+    let headers = mister_magik_media_contract::HttpHeaders::parse(text);
     HttpMetadata {
-        etag: headers.get("etag").cloned().unwrap_or_default(),
+        etag: headers.get("etag").unwrap_or_default().to_string(),
         content_encoding: headers
             .get("content-encoding")
-            .cloned()
-            .unwrap_or_else(|| "identity".to_string()),
-        cf_cache_status: headers.get("cf-cache-status").cloned().unwrap_or_default(),
+            .unwrap_or("identity")
+            .to_string(),
+        cf_cache_status: headers
+            .get("cf-cache-status")
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
