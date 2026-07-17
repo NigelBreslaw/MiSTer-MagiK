@@ -30,6 +30,7 @@ fn main() {
     let bridge = app.global::<mister_magik_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(false);
     bridge.set_screen_mode(match state.as_str() {
+        "catalog-tiles" => 0,
         "settings" => 3,
         "about" => 4,
         "info" => 6,
@@ -41,6 +42,47 @@ fn main() {
     bridge.set_info_kernel_version("Kernel version detected at launcher startup".into());
     bridge.set_licenses_selected(1);
     bridge.set_licenses_expanded(expanded);
+    if state == "catalog-tiles" {
+        use mister_magik_ui::launcher::{MenuItem, MenuItemKind, MenuItemStatus};
+        bridge.set_startup_visible(false);
+        bridge.set_menu_title("MiSTer MagiK".into());
+        bridge.set_menu_breadcrumb("Systems".into());
+        bridge.set_selected_index(0);
+        bridge.set_menu_items(ModelRc::new(VecModel::from(vec![
+            MenuItem {
+                id: "arcade".into(),
+                label: "Arcade".into(),
+                subtitle: "2,184 games".into(),
+                focused: true,
+                node_kind: MenuItemKind::Collection,
+                status: MenuItemStatus::Ready,
+            },
+            MenuItem {
+                id: "snes".into(),
+                label: "SNES".into(),
+                subtitle: "Scanning…".into(),
+                focused: false,
+                node_kind: MenuItemKind::Collection,
+                status: MenuItemStatus::Scanning,
+            },
+            MenuItem {
+                id: "c64".into(),
+                label: "Commodore 64".into(),
+                subtitle: "Scanning…".into(),
+                focused: false,
+                node_kind: MenuItemKind::Collection,
+                status: MenuItemStatus::Scanning,
+            },
+            MenuItem {
+                id: "megadrive".into(),
+                label: "Mega Drive".into(),
+                subtitle: "Scan failed".into(),
+                focused: false,
+                node_kind: MenuItemKind::Collection,
+                status: MenuItemStatus::Failed,
+            },
+        ])));
+    }
     bridge.set_license_lines(ModelRc::new(VecModel::from(
         [
             "FFmpeg 8.1.2",

@@ -120,6 +120,7 @@ export component HomeGrid inherits Rectangle {
                         height: parent.height;
                         label: MisterBridge.menu-items[menu-index].label;
                         subtitle: MisterBridge.menu-items[menu-index].subtitle;
+                        status: MisterBridge.menu-items[menu-index].status;
                         focused: !MisterBridge.settings-focused
                             && MisterBridge.menu-items[menu-index].focused;
                         flat-focus-style: true;

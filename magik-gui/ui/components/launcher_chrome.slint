@@ -2,16 +2,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
+import { MenuItemStatus } from "../launcher_menu.slint";
 
 export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
     in property <bool> focused;
     in property <bool> flat-focus-style: false;
+    in property <MenuItemStatus> status: MenuItemStatus.ready;
 
     border-width: 2px;
-    border-color: #5a4973;
-    background: #181829;
+    border-color: status == MenuItemStatus.failed
+        ? #a9445b
+        : status == MenuItemStatus.scanning ? #52647d : #5a4973;
+    background: status == MenuItemStatus.failed
+        ? #291820
+        : status == MenuItemStatus.scanning ? #172131 : #181829;
 
     VerticalLayout {
         padding: 16px;
@@ -20,7 +26,11 @@ export component LauncherTile inherits Rectangle {
 
         Text {
             text: label;
-            color: focused ? #06d6a0 : #9080a8;
+            color: focused
+                ? #06d6a0
+                : status == MenuItemStatus.failed
+                    ? #ef8da2
+                    : status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
             font-size: 16px;
             width: 100%;
             horizontal-alignment: center;
@@ -32,7 +42,11 @@ export component LauncherTile inherits Rectangle {
 
         if subtitle != "" : Text {
             text: subtitle;
-            color: focused ? #d8d4dd : #9080a800;
+            color: focused
+                ? #d8d4dd
+                : status == MenuItemStatus.failed
+                    ? #ef8da2
+                    : status == MenuItemStatus.scanning ? #8ca4b5 : #9080a800;
             font-size: 8px;
             horizontal-alignment: center;
 

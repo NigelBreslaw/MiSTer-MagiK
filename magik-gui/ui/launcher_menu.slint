@@ -6,10 +6,17 @@ export enum MenuItemKind {
     collection,
 }
 
+export enum MenuItemStatus {
+    ready,
+    scanning,
+    failed,
+}
+
 export struct MenuItem {
     id: string,
     label: string,
     subtitle: string,
     focused: bool,
     node-kind: MenuItemKind,
+    status: MenuItemStatus,
 }
