@@ -55,6 +55,7 @@ pub mod reconciliation_planner;
 pub mod runtime_thread;
 pub mod shard_registry;
 pub mod sharded_catalog;
+pub mod sharded_builder_protocol;
 mod software_identity;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
