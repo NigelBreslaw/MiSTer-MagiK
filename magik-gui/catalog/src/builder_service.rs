@@ -415,6 +415,7 @@ fn emit_timings(
 struct PreparedBuild {
     artifact: library_db::LibraryScanArtifact,
     catalog: ArcadeCatalog,
+    scanner_cache: crate::scanner_cache::ScannerCacheState,
     load_us: u64,
 }
 
@@ -529,7 +530,7 @@ impl BuilderBackend for SystemBuilderBackend {
         )?;
         let stats = scanned.stats().clone();
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (artifact, catalog, timing) =
+        let (artifact, catalog, timing, scanner_cache) =
             scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
         let games = catalog.len();
         self.background_rebuild = true;
@@ -538,6 +539,7 @@ impl BuilderBackend for SystemBuilderBackend {
                 artifact,
                 load_us: timing.catalog_us,
                 catalog,
+                scanner_cache,
             },
             timings: vec![
                 (
@@ -611,7 +613,7 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (artifact, catalog, timing) = if self.background_rebuild {
+        let (artifact, catalog, timing, scanner_cache) = if self.background_rebuild {
             scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
         } else {
             scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
@@ -664,6 +666,7 @@ impl BuilderBackend for SystemBuilderBackend {
             value: PreparedBuild {
                 artifact,
                 catalog,
+                scanner_cache,
                 load_us,
             },
             timings,
@@ -735,37 +738,39 @@ impl BuilderBackend for SystemBuilderBackend {
     ) -> Result<BuilderSummary, String> {
         let catalog_fingerprint = prepared.artifact.stamp().fingerprint_hex();
         let catalog_state = prepared.artifact.catalog_state();
-        let summary = prepared
-            .artifact
-            .save_default_sqlite_with_catalog_projection(&prepared.catalog, Some(progress))
-            .map(BuilderSummary::from)?;
+        let scan_stats = prepared.artifact.stats().clone();
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
-        match crate::production_sharded_projection::publish_bound_production_projection(
+        let outcome = crate::production_sharded_projection::publish_bound_production_projection(
             &crate::catalog_config::default_sharded_catalog_path(),
             &prepared.catalog,
             &catalog_fingerprint,
             crate::production_sharded_projection::production_registry_limits(),
-        ) {
-            Ok(outcome) => {
-                crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
-                crate::catalog_logln!(
-                    "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
-                    outcome.generation,
-                    outcome.systems,
-                    outcome.games,
-                    outcome.rebuilt_systems,
-                    outcome.removed_systems,
-                    v3_started.elapsed().as_micros()
-                );
-            }
-            Err(error) => crate::catalog_errln!(
-                "catalog_v3_projection_tsv\tstatus=failed\telapsed_us={}\terror={}",
-                v3_started.elapsed().as_micros(),
-                error
-            ),
-        }
-        Ok(summary)
+        )
+        .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
+        crate::scanner_cache::write(
+            &crate::scanner_cache::default_path(),
+            &prepared.scanner_cache,
+        )?;
+        // Catalog state is the acceptance marker. Publishing it last ensures
+        // an interrupted shard/cache write is detected and rebuilt.
+        crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
+        let import_us = v3_started.elapsed().as_micros() as u64;
+        crate::catalog_logln!(
+            "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
+            outcome.generation,
+            outcome.systems,
+            outcome.games,
+            outcome.rebuilt_systems,
+            outcome.removed_systems,
+            import_us
+        );
+        let mut summary = crate::library_db::default_sharded_cached_summary(scan_stats.scan_us)?;
+        summary.skipped = false;
+        summary.discover_us = scan_stats.discover_us;
+        summary.classify_us = scan_stats.classify_us;
+        summary.import_us = import_us;
+        Ok(BuilderSummary::from(summary))
     }
 
     fn write_build_duration(

@@ -13,7 +13,7 @@ const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "scanner-cache.sqlite3";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DiscoveryHistory {
+pub struct DiscoveryHistory {
     pub(crate) by_game_id: HashMap<String, Option<i64>>,
 }
 
@@ -27,7 +27,7 @@ impl DiscoveryHistory {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ScannerCacheState {
+pub struct ScannerCacheState {
     pub(crate) discovery_history: Option<DiscoveryHistory>,
     pub(crate) software_hash_cache: SoftwareHashCache,
 }

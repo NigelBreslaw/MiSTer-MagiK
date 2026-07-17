@@ -373,7 +373,15 @@ impl LibraryRamScanArtifact {
     pub fn complete_coverage_audit_and_catalog_foreground(
         self,
         root: impl AsRef<Path>,
-    ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
+    ) -> Result<
+        (
+            LibraryScanArtifact,
+            ArcadeCatalog,
+            CatalogPrepareTiming,
+            crate::scanner_cache::ScannerCacheState,
+        ),
+        String,
+    > {
         self.complete_coverage_audit_and_catalog_foreground_with_progress(root, &mut |_, _| {})
     }
 
@@ -381,41 +389,53 @@ impl LibraryRamScanArtifact {
         mut self,
         root: impl AsRef<Path>,
         progress: &mut dyn FnMut(&str, &str),
-    ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
+    ) -> Result<
+        (
+            LibraryScanArtifact,
+            ArcadeCatalog,
+            CatalogPrepareTiming,
+            crate::scanner_cache::ScannerCacheState,
+        ),
+        String,
+    > {
         let root = root.as_ref().to_path_buf();
         apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
         let wall_t = std::time::Instant::now();
-        let ((audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us), catalog, timing) =
-            std::thread::scope(|scope| {
-                let scan = &self.scan;
-                let audit_worker = std::thread::Builder::new()
-                    .name("catalog-audit".to_string())
-                    .spawn_scoped(scope, move || {
-                        let worker_t = std::time::Instant::now();
-                        apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
-                        let (audit_rows, stamp, audit_us, stamp_us) =
-                            coverage_audit_and_stamp(scan);
-                        (
-                            audit_rows,
-                            stamp,
-                            audit_us,
-                            stamp_us,
-                            worker_t.elapsed().as_micros() as u64,
-                        )
-                    })
-                    .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
+        let (
+            (audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us),
+            catalog,
+            timing,
+            scanner_cache,
+        ) = std::thread::scope(|scope| {
+            let scan = &self.scan;
+            let audit_worker = std::thread::Builder::new()
+                .name("catalog-audit".to_string())
+                .spawn_scoped(scope, move || {
+                    let worker_t = std::time::Instant::now();
+                    apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
+                    let (audit_rows, stamp, audit_us, stamp_us) = coverage_audit_and_stamp(scan);
+                    (
+                        audit_rows,
+                        stamp,
+                        audit_us,
+                        stamp_us,
+                        worker_t.elapsed().as_micros() as u64,
+                    )
+                })
+                .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
 
-                let (catalog, timing) = build_catalog_from_scan_with_preferred_and_progress(
+            let (catalog, timing, scanner_cache) =
+                build_catalog_from_scan_with_preferred_and_progress(
                     &root,
                     scan,
                     &self.preferred_discoveries,
                     progress,
                 );
-                let audit_result = audit_worker
-                    .join()
-                    .map_err(|_| "catalog audit/stamp worker panicked".to_string())?;
-                Ok::<_, String>((audit_result, catalog, timing))
-            })?;
+            let audit_result = audit_worker
+                .join()
+                .map_err(|_| "catalog audit/stamp worker panicked".to_string())?;
+            Ok::<_, String>((audit_result, catalog, timing, scanner_cache))
+        })?;
         let wall_us = wall_t.elapsed().as_micros() as u64;
         let overlapped_us = audit_stamp_worker_us
             .saturating_add(timing.total_us)
@@ -448,6 +468,7 @@ impl LibraryRamScanArtifact {
                 wall_us,
                 overlapped_us,
             },
+            scanner_cache,
         ))
     }
 
@@ -458,7 +479,15 @@ impl LibraryRamScanArtifact {
         mut self,
         root: impl AsRef<Path>,
         progress: &mut dyn FnMut(&str, &str),
-    ) -> Result<(LibraryScanArtifact, ArcadeCatalog, CatalogPrepareTiming), String> {
+    ) -> Result<
+        (
+            LibraryScanArtifact,
+            ArcadeCatalog,
+            CatalogPrepareTiming,
+            crate::scanner_cache::ScannerCacheState,
+        ),
+        String,
+    > {
         apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
         let wall_t = std::time::Instant::now();
         let audit_worker_t = std::time::Instant::now();
@@ -472,7 +501,7 @@ impl LibraryRamScanArtifact {
         );
         self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
         self.stats.audit_rows = self.scan.audit_rows.len();
-        let (catalog, timing) = build_catalog_from_scan_with_preferred_and_progress(
+        let (catalog, timing, scanner_cache) = build_catalog_from_scan_with_preferred_and_progress(
             root.as_ref(),
             &self.scan,
             &self.preferred_discoveries,
@@ -497,6 +526,7 @@ impl LibraryRamScanArtifact {
                 wall_us,
                 overlapped_us: 0,
             },
+            scanner_cache,
         ))
     }
 }
@@ -1369,7 +1399,11 @@ fn build_catalog_from_scan_with_preferred_and_progress(
     scan: &LibraryScan,
     preferred_discoveries: &BTreeMap<String, usize>,
     progress: &mut dyn FnMut(&str, &str),
-) -> (ArcadeCatalog, CatalogProjectionTiming) {
+) -> (
+    ArcadeCatalog,
+    CatalogProjectionTiming,
+    crate::scanner_cache::ScannerCacheState,
+) {
     let mame_sqlite_path = default_mame_sqlite_path();
     let hbmame_sqlite_path = default_hbmame_sqlite_path();
     let preview_paths = PreviewArchivePaths::from_paths_with_sidecar_entries(
@@ -1449,7 +1483,11 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
     sources: CatalogBuildSources<'_>,
     discoveries: &BTreeMap<String, usize>,
     progress: &mut dyn FnMut(&str, &str),
-) -> (ArcadeCatalog, CatalogProjectionTiming) {
+) -> (
+    ArcadeCatalog,
+    CatalogProjectionTiming,
+    crate::scanner_cache::ScannerCacheState,
+) {
     let total_t = std::time::Instant::now();
     progress(
         "Indexing library",
@@ -1457,6 +1495,8 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
     );
     let metadata_t = std::time::Instant::now();
     let mut software_hash_cache = sources.software_hash_cache;
+    let previous_discovery_history = sources.discovery_history;
+    let mut updated_discovery_history = crate::scanner_cache::DiscoveryHistory::default();
     let mut platform_kinds = scan
         .profiles
         .iter()
@@ -1522,7 +1562,7 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         arcade_metadata: &arcade_metadata,
         preview_paths: sources.preview_paths,
         software_hash_cache: &mut software_hash_cache,
-        discovery_history: sources.discovery_history.as_ref(),
+        discovery_history: previous_discovery_history.as_ref(),
         now,
     };
 
@@ -1546,6 +1586,12 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
                 row_progress.report(completed, completed == discoveries.len());
                 continue;
             };
+            updated_discovery_history.by_game_id.insert(
+                key.clone(),
+                previous_discovery_history
+                    .as_ref()
+                    .and_then(|history| history.discovered_at_for(key, scan)),
+            );
             if let Some(plan) = projection.launch_plan {
                 launch_plans.push(plan);
             }
@@ -1583,6 +1629,10 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
             projection_rows_us,
             indexes_us,
             total_us: total_t.elapsed().as_micros() as u64,
+        },
+        crate::scanner_cache::ScannerCacheState {
+            discovery_history: Some(updated_discovery_history),
+            software_hash_cache,
         },
     )
 }
@@ -2341,6 +2391,58 @@ mod tests {
     }
 
     #[test]
+    fn projection_returns_lossless_v3_scanner_state() {
+        let root = unique_temp_dir("projection-scanner-state");
+        let scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "1942")]);
+        let covered_payloads = covered_payload_paths(&scan.discoveries);
+        let preferred =
+            preferred_playable_discovery_indices_by_key(&scan.discoveries, &covered_payloads);
+        let game_id = preferred.keys().next().expect("projected game id").clone();
+        let mut history = crate::scanner_cache::DiscoveryHistory::default();
+        history.by_game_id.insert(game_id.clone(), Some(123));
+        let cache_key = crate::software_identity::SoftwareHashCacheKey {
+            list_name: "nes".into(),
+            file_path: "/games/One.nes".into(),
+            size: 42,
+            mtime_secs: 7,
+        };
+        let mut software_hash_cache = SoftwareHashCache::default();
+        software_hash_cache
+            .entries
+            .insert(cache_key.clone(), Some("one".into()));
+
+        let (_catalog, _timing, scanner_cache) =
+            build_catalog_from_scan_with_sources_and_preferred_and_progress(
+                "/media/fat/_Arcade",
+                &scan,
+                CatalogBuildSources {
+                    mame_sqlite_path: &root.join("missing-mame.sqlite3"),
+                    hbmame_sqlite_path: &root.join("missing-hbmame.sqlite3"),
+                    preview_paths: &PreviewArchivePaths::from_paths(Vec::<String>::new()),
+                    software_hash_cache,
+                    discovery_history: Some(history),
+                },
+                &preferred,
+                &mut |_, _| {},
+            );
+
+        assert_eq!(
+            scanner_cache
+                .discovery_history
+                .expect("updated discovery history")
+                .by_game_id
+                .get(&game_id),
+            Some(&Some(123))
+        );
+        assert_eq!(
+            scanner_cache.software_hash_cache.entries.get(&cache_key),
+            Some(&Some("one".into()))
+        );
+        assert!(!root.join("library.sqlite3").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sqlite_launcher_projection_order_sorts_after_variant_collapse() {
         let launcher_rows = vec![
             CatalogProjectionRow {
@@ -2630,7 +2732,7 @@ mod tests {
         let sequential_artifact = sequential_ram.complete_coverage_audit();
 
         let parallel_ram = ram_artifact_for_test(scan, 42);
-        let (parallel_artifact, parallel_catalog, timing) = parallel_ram
+        let (parallel_artifact, parallel_catalog, timing, _scanner_cache) = parallel_ram
             .complete_coverage_audit_and_catalog_foreground("/media/fat/_Arcade")
             .expect("parallel catalog prepare");
 
@@ -2695,7 +2797,7 @@ mod tests {
             );
 
         let ram = ram_artifact_for_test(scan, 0);
-        let (artifact, _catalog, _timing) = ram
+        let (artifact, _catalog, _timing, _scanner_cache) = ram
             .complete_coverage_audit_and_catalog_foreground("/media/fat/_Arcade")
             .expect("parallel catalog prepare");
         install_test_console_core(&root, "SNES");

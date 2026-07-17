@@ -460,7 +460,7 @@ pub(super) fn start_library_catalog_worker(
                             return;
                         }
                     };
-                    let (ram_artifact, catalog, timing) = match ram_artifact
+                    let (ram_artifact, catalog, timing, _scanner_cache) = match ram_artifact
                         .complete_coverage_audit_and_catalog_foreground_with_progress(
                             &root,
                             &mut progress,
