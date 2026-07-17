@@ -9,7 +9,6 @@ use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
 use crate::media_identity;
 use crate::preview_worker;
-use crate::sqlite_catalog;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -208,47 +207,18 @@ fn write_bytes_atomically_with(
     final_path: &Path,
     write: impl FnOnce(&mut File) -> std::io::Result<()>,
 ) -> Result<(), String> {
-    if let Some(parent) = final_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create catalog summary dir {}: {e}", parent.display()))?;
-    }
-    let temp_path = summary_temp_path_for(final_path);
-    let result = (|| -> Result<(), String> {
-        let mut file = File::create(&temp_path)
-            .map_err(|e| format!("create catalog summary temp {}: {e}", temp_path.display()))?;
-        write(&mut file)
-            .map_err(|e| format!("write catalog summary temp {}: {e}", temp_path.display()))?;
-        crate::fs_fault::maybe_fault("catalog.summary.after_temp_write", final_path);
-        file.sync_all()
-            .map_err(|e| format!("sync catalog summary temp {}: {e}", temp_path.display()))?;
-        crate::fs_fault::maybe_fault("catalog.summary.after_temp_sync", final_path);
-        drop(file);
-        std::fs::rename(&temp_path, final_path).map_err(|e| {
-            format!(
-                "replace catalog summary {} from {}: {e}",
-                final_path.display(),
-                temp_path.display()
-            )
-        })?;
-        crate::fs_fault::maybe_fault(
-            "catalog.summary.after_rename_before_parent_sync",
-            final_path,
-        );
-        sqlite_catalog::sync_parent_dir(final_path);
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
+    crate::atomic_publish::write_atomically(
+        final_path,
+        "catalog summary",
+        "catalog.summary.json",
+        Some("catalog.summary"),
+        write,
+    )
 }
 
+#[cfg(test)]
 fn summary_temp_path_for(final_path: &Path) -> PathBuf {
-    let file_name = final_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("catalog.summary.json");
-    final_path.with_file_name(format!(".{file_name}.tmp"))
+    crate::atomic_publish::temp_path(final_path, "catalog.summary.json")
 }
 
 #[cfg(test)]

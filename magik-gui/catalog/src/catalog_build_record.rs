@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -54,57 +53,18 @@ pub fn read_completed_build_duration(sqlite_path: &Path) -> Result<Option<u64>, 
 }
 
 fn write_seconds_atomically(final_path: &Path, seconds: u64) -> Result<(), String> {
-    if let Some(parent) = final_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "create catalog build duration dir {}: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let temp_path = temp_path_for(final_path);
-    let result = (|| -> Result<(), String> {
-        let mut file = File::create(&temp_path).map_err(|error| {
-            format!(
-                "create catalog build duration temp {}: {error}",
-                temp_path.display()
-            )
-        })?;
-        writeln!(file, "{seconds}").map_err(|error| {
-            format!(
-                "write catalog build duration temp {}: {error}",
-                temp_path.display()
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            format!(
-                "sync catalog build duration temp {}: {error}",
-                temp_path.display()
-            )
-        })?;
-        drop(file);
-        std::fs::rename(&temp_path, final_path).map_err(|error| {
-            format!(
-                "replace catalog build duration {} from {}: {error}",
-                final_path.display(),
-                temp_path.display()
-            )
-        })?;
-        crate::sqlite_catalog::sync_parent_dir(final_path);
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
+    crate::atomic_publish::write_atomically(
+        final_path,
+        "catalog build duration",
+        BUILD_DURATION_FILE_NAME,
+        None,
+        |file| writeln!(file, "{seconds}"),
+    )
 }
 
+#[cfg(test)]
 fn temp_path_for(final_path: &Path) -> PathBuf {
-    let file_name = final_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(BUILD_DURATION_FILE_NAME);
-    final_path.with_file_name(format!(".{file_name}.tmp"))
+    crate::atomic_publish::temp_path(final_path, BUILD_DURATION_FILE_NAME)
 }
 
 #[cfg(test)]

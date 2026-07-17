@@ -12,7 +12,6 @@ use crate::bounded_lz4;
 use crate::catalog_config::{CATALOG_BUILD_VERSION, SCHEMA_VERSION};
 use crate::catalog_load_metrics;
 use crate::catalog_stamp::CatalogStamp;
-use crate::sqlite_catalog;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -1080,51 +1079,13 @@ impl<'a> NavigationBinaryReader<'a> {
 }
 
 fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = final_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create catalog navigation dir {}: {e}", parent.display()))?;
-    }
-    let temp_path = navigation_temp_path_for(final_path);
-    let result = (|| -> Result<(), String> {
-        let mut file = File::create(&temp_path).map_err(|e| {
-            format!(
-                "create catalog navigation temp {}: {e}",
-                temp_path.display()
-            )
-        })?;
-        file.write_all(bytes)
-            .map_err(|e| format!("write catalog navigation temp {}: {e}", temp_path.display()))?;
-        crate::fs_fault::maybe_fault("catalog.navigation.after_temp_write", final_path);
-        file.sync_all()
-            .map_err(|e| format!("sync catalog navigation temp {}: {e}", temp_path.display()))?;
-        crate::fs_fault::maybe_fault("catalog.navigation.after_temp_sync", final_path);
-        drop(file);
-        std::fs::rename(&temp_path, final_path).map_err(|e| {
-            format!(
-                "replace catalog navigation {} from {}: {e}",
-                final_path.display(),
-                temp_path.display()
-            )
-        })?;
-        crate::fs_fault::maybe_fault(
-            "catalog.navigation.after_rename_before_parent_sync",
-            final_path,
-        );
-        sqlite_catalog::sync_parent_dir(final_path);
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
-}
-
-fn navigation_temp_path_for(final_path: &Path) -> PathBuf {
-    let file_name = final_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("catalog.nav.lz4b");
-    final_path.with_file_name(format!(".{file_name}.tmp"))
+    crate::atomic_publish::write_atomically(
+        final_path,
+        "catalog navigation",
+        "catalog.nav.lz4b",
+        Some("catalog.navigation"),
+        |file| file.write_all(bytes),
+    )
 }
 
 #[cfg(test)]
