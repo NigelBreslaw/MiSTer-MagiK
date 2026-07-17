@@ -172,7 +172,7 @@ name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
  "libc",
- "lz4_flex 0.13.1",
+ "lz4_flex 0.14.0",
  "quick-xml",
  "rusqlite",
  "serde",
