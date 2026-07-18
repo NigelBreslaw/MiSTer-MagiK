@@ -65,7 +65,6 @@ pub(super) struct LauncherFrameAccounting {
     last_rolling_rows: u64,
     frame_budget_total: FrameBudgetAccumulator,
     frame_budget_window: FrameBudgetAccumulator,
-    last_frame_budget_status: runtime_status::FrameBudgetStatus,
     frame_analytics_mode: FrameAnalyticsMode,
     frame_analytics_samples: VecDeque<runtime_status::FrameBudgetRecentFrame>,
     slow_frame_samples: VecDeque<runtime_status::FrameBudgetSlowFrame>,
@@ -966,10 +965,6 @@ impl LauncherFrameAccounting {
             last_rolling_rows: 0,
             frame_budget_total: FrameBudgetAccumulator::default(),
             frame_budget_window: FrameBudgetAccumulator::default(),
-            last_frame_budget_status: runtime_status::FrameBudgetStatus {
-                budget_us: FRAME_BUDGET_US,
-                ..runtime_status::FrameBudgetStatus::default()
-            },
             frame_analytics_mode: FrameAnalyticsMode::Off,
             frame_analytics_samples: VecDeque::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
             slow_frame_samples: VecDeque::with_capacity(FRAME_SLOW_SAMPLE_CAP),
@@ -1841,11 +1836,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
-        let frame_budget = if idle {
-            self.last_frame_budget_status.clone()
-        } else {
-            self.current_frame_budget_status()
-        };
+        let frame_budget = self.current_frame_budget_status();
         let enqueue = self.status_publisher.enqueue(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
@@ -1912,7 +1903,7 @@ impl LauncherFrameAccounting {
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
-            frame_budget: frame_budget.clone(),
+            frame_budget,
         });
         if !matches!(enqueue, runtime_status::LauncherStatusEnqueue::Accepted) {
             if matches!(enqueue, runtime_status::LauncherStatusEnqueue::Disconnected) {
@@ -1921,7 +1912,6 @@ impl LauncherFrameAccounting {
             return enqueue;
         }
         if !idle {
-            self.last_frame_budget_status = frame_budget;
             self.frame_budget_window = FrameBudgetAccumulator::default();
         }
         self.frame_analytics_samples.clear();
