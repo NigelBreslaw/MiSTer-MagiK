@@ -303,20 +303,36 @@ import json
 import sys
 
 path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+except (OSError, json.JSONDecodeError) as error:
+    print(f"composition_gate_tsv\tvalid=0\tinvalid_reason=missing_or_invalid_status\tdetail={error}")
+    raise SystemExit(11)
 slint = data.get("runtime", {}).get("slint_status")
 if not isinstance(slint, dict):
     print("composition_gate_tsv\tvalid=0\tinvalid_reason=missing_slint_status")
     raise SystemExit(11)
+status_pid = int(slint.get("pid") or 0)
+launcher_pids = {
+    int(process.get("pid") or 0)
+    for process in data.get("processes", {}).get("mister-magik-fb", [])
+    if isinstance(process, dict)
+}
+collected_ms = int(data.get("collected_at_unix") or 0) * 1000
+published_ms = int(slint.get("ts_unix_ms") or 0)
+age_ms = max(0, collected_ms - published_ms) if collected_ms and published_ms else 2**63 - 1
+current = status_pid > 0 and status_pid in launcher_pids
 count = int(slint.get("composition_recovery_count") or 0)
 state = slint.get("composition_state") or ""
 kind = slint.get("last_composition_invariant_kind") or ""
 detail = slint.get("last_composition_invariant_detail") or ""
 print(
-    f"composition_gate_tsv\tstate={state}\trecovery_count={count}\tlast_kind={kind}\tlast_detail={detail}\tvalid={1 if count == 0 else 0}"
+    f"composition_gate_tsv\tstate={state}\trecovery_count={count}\tlast_kind={kind}\tlast_detail={detail}"
+    f"\tstatus_pid={status_pid}\tstatus_current={1 if current else 0}\tstatus_age_ms={age_ms}"
+    f"\tvalid={1 if count == 0 and current and age_ms <= 5000 else 0}"
 )
-raise SystemExit(0 if count == 0 else 11)
+raise SystemExit(0 if count == 0 and current and age_ms <= 5000 else 11)
 PY
 }
 
@@ -1004,7 +1020,7 @@ else
     fi
   fi
 fi
-if [[ -s "$local_status_json" ]] && ! check_composition_recovery_gate "$local_status_json"; then
+if ! check_composition_recovery_gate "$local_status_json"; then
   echo "arcade scroll composition recovery occurred; see $local_status_json" >&2
   exit 13
 fi

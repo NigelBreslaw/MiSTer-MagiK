@@ -244,9 +244,19 @@ and copy-path conclusions into one broad run.
   `*-arcade-latch-drops.tsv` and `*-fpga-latch-{before,after}.log`.
 - Frame-tail/status-write claims: use Arcade turbo when the suspected work
   appears after latch post during active Arcade frames. Report
-  `status_write_due_frame_finish_max`, `status_write_deferred_frames`,
+  `runtime_status_write_us` (UI enqueue), `runtime_status_worker_us`,
+  `runtime_status_publish_sequence`, `runtime_status_published_age_ms`,
+  `runtime_status_failures`, `runtime_status_disconnected`,
   `frame_tail_slack_*`, `work_gt_16667`, fallback/timeout/error counts, and
-  latch status.
+  latch status. Catalog-contention acceptance requires an enqueue p99 no higher
+  than 500us, published status no older than 5s, no publisher failure or
+  disconnection, work p99 no higher than 6809us, and no over-budget work,
+  present, latch-backend, or latch-deadline failures.
+
+Return-from-game acceptance must probe latch readiness after each restored
+launcher and after the final ordinary launcher restart. A restored Arcade
+selection is insufficient if Main returned without the manifest-owned latch
+RBF, scanout-slots module/device, or supported latch commands.
 
 Performance-impact commits should name the one focused command used for
 before/after and the metric it owns. Benchmark/correctness commits may update

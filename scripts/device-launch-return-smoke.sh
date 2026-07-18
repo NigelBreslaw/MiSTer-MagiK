@@ -17,7 +17,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
+source "$HERE/scripts/lib/magik-layout.sh"
 source "$HERE/scripts/lib/mister-fifo-lib.sh"
+source "$HERE/scripts/lib/latch-readiness-lib.sh"
+magik_layout_select dev
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"
 RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 STALE_RETURN_STATE="/tmp/mister-magik/stale-launcher-return-state.json"
@@ -191,6 +194,26 @@ wait_remote() {
   return 1
 }
 
+prove_latch_ready() {
+  local label="$1" artifact="$2" output status
+  set +e
+  output="$(latch_readiness_probe "$MISTER" 2>&1)"
+  status="$?"
+  set -e
+  printf '%s\n' "$output" | tee "$artifact"
+  if [[ "$status" -eq 0 ]]; then
+    echo "ok: latch ready $label"
+    return 0
+  fi
+  if ! latch_readiness_is_contract_failure "$output"; then
+    echo "FAIL: latch readiness transport failed $label; stopping device calls" >&2
+    return "$status"
+  fi
+  echo "FAIL: latch unavailable $label" >&2
+  dump_failure_artifacts
+  return 1
+}
+
 tmp_env="$(mktemp)"
 tmp_results="$(mktemp)"
 cleanup() {
@@ -258,6 +281,7 @@ EOF
     dump_failure_artifacts
     exit 1
   }
+  prove_latch_ready "after game $iteration return" "$ARTIFACTS_DIR/iteration-$iteration-latch-readiness.tsv"
   IFS=$'\t' read -r return_start_ms black_start_ms reveal_ms input_ms total_return_ms black_ms launch_to_black_ms reveal_to_input_ms <<<"$metrics"
   capture_iteration_artifacts "$iteration"
   result="pass"
@@ -287,6 +311,7 @@ remote "cp '$STALE_RETURN_STATE' '$RETURN_STATE'"
 send_main_command "mister_magik_restart_launcher"
 wait_remote "stale return state ignored on normal launcher start" 60 "grep -q '\"screen\":\"home\"' '$STATUS' 2>/dev/null && grep -q '\"start_screen\":\"home\"' '$STATUS' 2>/dev/null"
 wait_remote "stale return state consumed" 10 "test ! -e '$RETURN_STATE'"
+prove_latch_ready "after normal launcher start" "$ARTIFACTS_DIR/normal-start-latch-readiness.tsv"
 capture_remote_file "$STATUS" "$ARTIFACTS_DIR/normal-start-status.json"
 capture_remote_file "$MAIN_STATUS" "$ARTIFACTS_DIR/normal-start-main-status.json"
 capture_remote_file "$REMOTE_LOG" "$ARTIFACTS_DIR/normal-start-launcher.log"
