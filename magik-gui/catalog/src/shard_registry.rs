@@ -20,6 +20,8 @@ use std::io::Read;
 #[cfg(feature = "builder")]
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+#[cfg(feature = "builder")]
+use std::time::{Duration, Instant};
 
 const MANIFEST_A: &str = "registry/manifest-a.json";
 const MANIFEST_B: &str = "registry/manifest-b.json";
@@ -127,6 +129,14 @@ pub fn publish_system_artifacts(
         true,
         false,
     )
+    .map(|published| published.generation)
+}
+
+#[cfg(feature = "builder")]
+pub(crate) struct ArtifactPublication {
+    pub(crate) generation: PublishedGeneration,
+    pub(crate) copy_hash_time: Duration,
+    pub(crate) copied_bytes: u64,
 }
 
 #[cfg(feature = "builder")]
@@ -142,7 +152,7 @@ fn publish_system_artifacts_with_options(
     validate_staged: bool,
     sync_target_directory: bool,
     copy_staged: bool,
-) -> Result<PublishedGeneration, RegistryError> {
+) -> Result<ArtifactPublication, RegistryError> {
     if !copy_staged {
         ensure_staging_path(storage_root, staged_sqlite)?;
         ensure_staging_path(storage_root, staged_navigation)?;
@@ -178,7 +188,7 @@ fn publish_system_artifacts_with_options(
         .ok_or_else(|| RegistryError::new("publish-artifact", "target has no parent"))?;
     fs::create_dir_all(target_directory)
         .map_err(|error| RegistryError::with("create system generation directory", error))?;
-    let (sqlite_hash, navigation_hash) = if copy_staged {
+    let (sqlite_hash, navigation_hash, copy_hash_time, copied_bytes) = if copy_staged {
         let copied = (|| {
             let sqlite = copy_staged_artifact(
                 staged_sqlite,
@@ -192,7 +202,12 @@ fn publish_system_artifacts_with_options(
                 "navigation",
                 navigation_bytes,
             )?;
-            Ok((sqlite.hash, navigation.hash))
+            Ok((
+                sqlite.hash,
+                navigation.hash,
+                sqlite.copy_hash_time + navigation.copy_hash_time,
+                sqlite.bytes.saturating_add(navigation.bytes),
+            ))
         })();
         match copied {
             Ok(hashes) => hashes,
@@ -209,20 +224,24 @@ fn publish_system_artifacts_with_options(
             .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
         fs::rename(staged_navigation, &target_navigation)
             .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
-        (sqlite_hash, navigation_hash)
+        (sqlite_hash, navigation_hash, Duration::ZERO, 0)
     };
     if sync_target_directory {
         sync_directory(target_directory)?;
     }
-    Ok(PublishedGeneration {
-        generation,
-        sqlite_path,
-        navigation_path,
-        sqlite_bytes,
-        navigation_bytes,
-        sqlite_hash,
-        navigation_hash,
-        games,
+    Ok(ArtifactPublication {
+        generation: PublishedGeneration {
+            generation,
+            sqlite_path,
+            navigation_path,
+            sqlite_bytes,
+            navigation_bytes,
+            sqlite_hash,
+            navigation_hash,
+            games,
+        },
+        copy_hash_time,
+        copied_bytes,
     })
 }
 
@@ -235,7 +254,7 @@ pub(crate) fn publish_prevalidated_system_artifacts_deferred(
     generation: u64,
     games: u64,
     limits: RegistryLimits,
-) -> Result<PublishedGeneration, RegistryError> {
+) -> Result<ArtifactPublication, RegistryError> {
     publish_system_artifacts_with_options(
         storage_root,
         staged_sqlite,
@@ -281,6 +300,7 @@ fn copy_staged_artifact(
     let mut copied = 0_u64;
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let mut buffer = [0_u8; 256 * 1024];
+    let copy_hash_started = Instant::now();
     loop {
         let read = input
             .read(&mut buffer)
@@ -300,6 +320,7 @@ fn copy_staged_artifact(
             format!("copied {label} size does not match staged artifact"),
         ));
     }
+    let copy_hash_time = copy_hash_started.elapsed();
     drop(output);
     fs::rename(&temporary, target)
         .map_err(|error| RegistryError::with("commit copied artifact", error))?;
@@ -307,6 +328,7 @@ fn copy_staged_artifact(
     Ok(CopiedArtifact {
         bytes: copied,
         hash: format!("{hash:016x}"),
+        copy_hash_time,
     })
 }
 
@@ -315,6 +337,7 @@ fn copy_staged_artifact(
 struct CopiedArtifact {
     bytes: u64,
     hash: String,
+    copy_hash_time: Duration,
 }
 
 #[cfg(all(feature = "builder", target_os = "linux"))]
