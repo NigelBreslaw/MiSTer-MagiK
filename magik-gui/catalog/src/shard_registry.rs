@@ -125,6 +125,7 @@ pub fn publish_system_artifacts(
         limits,
         true,
         true,
+        false,
     )
 }
 
@@ -140,9 +141,12 @@ fn publish_system_artifacts_with_options(
     limits: RegistryLimits,
     validate_staged: bool,
     sync_target_directory: bool,
+    copy_staged: bool,
 ) -> Result<PublishedGeneration, RegistryError> {
-    ensure_staging_path(storage_root, staged_sqlite)?;
-    ensure_staging_path(storage_root, staged_navigation)?;
+    if !copy_staged {
+        ensure_staging_path(storage_root, staged_sqlite)?;
+        ensure_staging_path(storage_root, staged_navigation)?;
+    }
     if validate_staged {
         open_system_shard(
             staged_sqlite,
@@ -176,10 +180,23 @@ fn publish_system_artifacts_with_options(
         .ok_or_else(|| RegistryError::new("publish-artifact", "target has no parent"))?;
     fs::create_dir_all(target_directory)
         .map_err(|error| RegistryError::with("create system generation directory", error))?;
-    fs::rename(staged_sqlite, &target_sqlite)
-        .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
-    fs::rename(staged_navigation, &target_navigation)
-        .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
+    if copy_staged {
+        let copied = (|| {
+            copy_staged_artifact(staged_sqlite, &target_sqlite, "SQLite")?;
+            copy_staged_artifact(staged_navigation, &target_navigation, "navigation")?;
+            Ok(())
+        })();
+        if let Err(error) = copied {
+            let _ = fs::remove_file(&target_sqlite);
+            let _ = fs::remove_file(&target_navigation);
+            return Err(error);
+        }
+    } else {
+        fs::rename(staged_sqlite, &target_sqlite)
+            .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
+        fs::rename(staged_navigation, &target_navigation)
+            .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
+    }
     if sync_target_directory {
         sync_directory(target_directory)?;
     }
@@ -215,7 +232,51 @@ pub(crate) fn publish_prevalidated_system_artifacts_deferred(
         limits,
         false,
         false,
+        true,
     )
+}
+
+#[cfg(feature = "builder")]
+fn copy_staged_artifact(
+    source: &Path,
+    target: &Path,
+    label: &'static str,
+) -> Result<(), RegistryError> {
+    let expected = regular_file_size(source, u64::MAX)?;
+    let temporary = target.with_file_name(format!(
+        ".{}.tmp.{}",
+        target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("artifact"),
+        std::process::id()
+    ));
+    let mut cleanup = TemporaryCleanup(Some(temporary.clone()));
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(RegistryError::with("remove stale artifact copy", error)),
+    }
+    let mut input = File::open(source)
+        .map_err(|error| RegistryError::with("open staged artifact", error))?;
+    let mut output = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| RegistryError::with("create artifact copy", error))?;
+    let copied = std::io::copy(&mut input, &mut output)
+        .map_err(|error| RegistryError::with("copy staged artifact", error))?;
+    if copied != expected {
+        return Err(RegistryError::new(
+            "publish-artifact",
+            format!("copied {label} size does not match staged artifact"),
+        ));
+    }
+    drop(output);
+    fs::rename(&temporary, target)
+        .map_err(|error| RegistryError::with("commit copied artifact", error))?;
+    cleanup.0 = None;
+    Ok(())
 }
 
 #[cfg(all(feature = "builder", target_os = "linux"))]

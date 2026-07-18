@@ -64,6 +64,18 @@ not overlap. On Linux, those explicit lifetime boundaries also return wholly
 free glibc arenas to the kernel so a completed phase cannot inflate the next
 phase's RSS.
 
+On MiSTer, each bounded system shard is constructed and validated under
+`/tmp/mister-magik/catalog-v3-build` when the materialized rows have a
+conservative amount of free tmpfs headroom; otherwise that shard falls back to
+the catalog's on-media staging directory. Publication then performs one sequential
+copy of the finished SQLite and navigation artifacts into same-filesystem
+temporary files on `/media/fat`, renames them into their immutable generation
+paths, and retains the existing artifact barrier and manifest-last commit. This
+keeps normal SQLite page creation, indexing, and validation reads off the SD
+card while preserving the one-system-at-a-time lifetime bound. Because tmpfs
+pages consume RAM, first-scan qualification still gates the process-wide peak
+HWM independently of Rust heap retention.
+
 `state/scanner-cache.sqlite3` separately owns discovery timestamps and software
 hashes. It is scanner state, not a game catalog or UI projection.
 

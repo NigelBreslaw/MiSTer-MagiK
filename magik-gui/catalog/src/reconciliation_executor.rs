@@ -20,6 +20,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -319,7 +320,7 @@ fn build_shard_job(
 ) -> Result<CompletedShard, ReconciliationError> {
     let started = Instant::now();
     let system_id = job.materialized.system_id.clone();
-    let staging = storage_root.join("staging").join(format!(
+    let staging = shard_build_root(storage_root, &job.materialized.games).join(format!(
         "reconcile-{}-{generation}-{nonce}-{}",
         std::process::id(),
         system_id.as_str()
@@ -364,7 +365,10 @@ fn build_shard_job(
         }
     };
     let publish_time = publish_started.elapsed();
-    let _ = fs::remove_dir(staging);
+    // Copy publication deliberately leaves the validated tmpfs sources in
+    // place until both immutable targets exist. Release them as soon as this
+    // bounded shard has been published so the next shard reuses the RAM.
+    let _ = fs::remove_dir_all(staging);
     Ok(CompletedShard {
         system: ManifestSystem {
             system_id: job.materialized.system_id,
@@ -380,6 +384,56 @@ fn build_shard_job(
         publish_time,
         elapsed: started.elapsed(),
     })
+}
+
+fn shard_build_root(storage_root: &Path, games: &[SystemGame]) -> PathBuf {
+    if cfg!(target_os = "linux")
+        && storage_root.starts_with(Path::new("/media/fat"))
+        && tmpfs_available_bytes(Path::new("/tmp"))
+            .is_some_and(|available| available >= estimated_shard_build_bytes(games))
+    {
+        PathBuf::from("/tmp/mister-magik/catalog-v3-build")
+    } else {
+        storage_root.join("staging")
+    }
+}
+
+fn estimated_shard_build_bytes(games: &[SystemGame]) -> u64 {
+    const FIXED_HEADROOM: u64 = 32 * 1024 * 1024;
+    const EXPANSION_HEADROOM: u64 = 6;
+    let strings = games.iter().fold(0_u64, |total, game| {
+        let game_bytes = [
+            game.stable_key.len(),
+            game.title.len(),
+            game.launch_ref.len(),
+            game.preview_archive_path.len(),
+            game.preview_asset_key.len(),
+            game.manufacturer.len(),
+            game.control.len(),
+        ]
+        .into_iter()
+        .fold(0_u64, |sum, len| sum.saturating_add(len as u64));
+        total.saturating_add(game_bytes).saturating_add(256)
+    });
+    FIXED_HEADROOM.saturating_add(strings.saturating_mul(EXPANSION_HEADROOM))
+}
+
+#[cfg(target_os = "linux")]
+fn tmpfs_available_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and a successful statvfs initializes stats.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let stats = unsafe { stats.assume_init() };
+    (stats.f_bavail as u64).checked_mul(stats.f_frsize as u64)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tmpfs_available_bytes(_path: &Path) -> Option<u64> {
+    None
 }
 
 fn validate_materialized(
@@ -631,6 +685,35 @@ mod tests {
 
         assert_eq!(materializer.calls, 10);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_catalog_builds_shards_in_tmpfs() {
+        let device = Path::new("/media/fat/mister-magik/catalog-v3");
+        let games = [game("One")];
+        if cfg!(target_os = "linux")
+            && tmpfs_available_bytes(Path::new("/tmp"))
+                .is_some_and(|available| available >= estimated_shard_build_bytes(&games))
+        {
+            assert_eq!(
+                shard_build_root(device, &games),
+                PathBuf::from("/tmp/mister-magik/catalog-v3-build")
+            );
+        } else {
+            assert_eq!(
+                shard_build_root(device, &games),
+                device.join("staging")
+            );
+        }
+        let host = Path::new("/private/tmp/catalog-v3");
+        assert_eq!(shard_build_root(host, &games), host.join("staging"));
+    }
+
+    #[test]
+    fn shard_build_estimate_grows_with_materialized_rows() {
+        let small = estimated_shard_build_bytes(&[game("One")]);
+        let large = estimated_shard_build_bytes(&[game("One"), game("Two")]);
+        assert!(large > small);
     }
 
     struct StreamingFixtureMaterializer {
