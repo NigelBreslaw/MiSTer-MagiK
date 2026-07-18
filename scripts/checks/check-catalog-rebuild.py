@@ -27,7 +27,11 @@ def check(label: str, report: Path, minimum_speedup: float = 10.0) -> int:
     if row is None:
         return fail(label, "missing_benchmark_row", str(report))
     fields = dict(field.split("=", 1) for field in row.split("\t")[1:] if "=" in field)
-    required = {"full_us", "delta_us", "elapsed_speedup", "full_systems", "delta_systems", "work_ratio"}
+    required = {
+        "full_us", "delta_us", "elapsed_speedup", "full_systems", "delta_systems", "work_ratio",
+        "full_logical_bytes", "full_allocated_bytes", "full_files", "full_directories",
+        "navigation_open_p50_us", "navigation_open_p95_us", "navigation_open_p99_us",
+    }
     missing = sorted(required - set(fields))
     if missing:
         return fail(label, "missing_field", ",".join(missing))
@@ -38,6 +42,13 @@ def check(label: str, report: Path, minimum_speedup: float = 10.0) -> int:
         full_systems = int(fields["full_systems"])
         delta_systems = int(fields["delta_systems"])
         work = float(fields["work_ratio"])
+        logical = int(fields["full_logical_bytes"])
+        allocated = int(fields["full_allocated_bytes"])
+        files = int(fields["full_files"])
+        directories = int(fields["full_directories"])
+        open_p50 = int(fields["navigation_open_p50_us"])
+        open_p95 = int(fields["navigation_open_p95_us"])
+        open_p99 = int(fields["navigation_open_p99_us"])
     except ValueError as error:
         return fail(label, "invalid_number", str(error))
     valid = (
@@ -47,6 +58,11 @@ def check(label: str, report: Path, minimum_speedup: float = 10.0) -> int:
         and delta_systems > 0
         and delta_systems < full_systems
         and work > 1.0
+        and logical > 0
+        and allocated > 0
+        and files > 0
+        and directories > 0
+        and 0 <= open_p50 <= open_p95 <= open_p99
     )
     target_met = elapsed >= minimum_speedup and work >= minimum_speedup
     print(
@@ -55,6 +71,10 @@ def check(label: str, report: Path, minimum_speedup: float = 10.0) -> int:
         f"\tfull_us={full_us}\tdelta_us={delta_us}\telapsed_speedup={elapsed:.3f}"
         f"\tfull_systems={full_systems}\tdelta_systems={delta_systems}"
         f"\twork_ratio={work:.3f}\ttarget_speedup={minimum_speedup:.3f}"
+        f"\tfull_logical_bytes={logical}\tfull_allocated_bytes={allocated}"
+        f"\tfull_files={files}\tfull_directories={directories}"
+        f"\tnavigation_open_p50_us={open_p50}\tnavigation_open_p95_us={open_p95}"
+        f"\tnavigation_open_p99_us={open_p99}"
         f"\ttarget_met={int(target_met)}"
     )
     return 0 if valid else 9
@@ -67,7 +87,10 @@ def self_test() -> int:
         report = Path(directory) / "report.tsv"
         report.write_text(
             "catalog_rebuild_bench_tsv\tfull_us=1000\tdelta_us=100"
-            "\telapsed_speedup=10.000\tfull_systems=10\tdelta_systems=1\twork_ratio=10.000\n"
+            "\telapsed_speedup=10.000\tfull_systems=10\tdelta_systems=1\twork_ratio=10.000"
+            "\tfull_logical_bytes=10000\tfull_allocated_bytes=12000\tfull_files=20"
+            "\tfull_directories=12\tnavigation_open_p50_us=10"
+            "\tnavigation_open_p95_us=20\tnavigation_open_p99_us=30\n"
         )
         if check("self-pass", report) != 0:
             return 1

@@ -134,6 +134,11 @@ generation publisher:
 scripts/bench-catalog-rebuild.sh LABEL
 ```
 
+The report also owns the catalog layout metrics for storage experiments:
+logical and allocated bytes, file/directory counts, and navigation-open
+p50/p95/p99. Compare matched command shapes and medians; filesystem allocation
+is meaningful only when the baseline and candidate use the same filesystem.
+
 It runs without the rest of MiSTer MagiK and reports measured elapsed speedup,
 full and delta system counts, and exact rebuilt-system work ratio. The default
 is 30 systems with 200 games each. Ten times remains a comparison target, not a

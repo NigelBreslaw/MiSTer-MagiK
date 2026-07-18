@@ -104,7 +104,7 @@ fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     println!(
-        "catalog_rebuild_bench_tsv\tfull_us={}\tdelta_us={}\telapsed_speedup={:.3}\tfull_systems={}\tdelta_systems={}\twork_ratio={:.3}\tgames_per_system={}",
+        "catalog_rebuild_bench_tsv\tfull_us={}\tdelta_us={}\telapsed_speedup={:.3}\tfull_systems={}\tdelta_systems={}\twork_ratio={:.3}\tgames_per_system={}\tfull_logical_bytes={}\tfull_allocated_bytes={}\tfull_files={}\tfull_directories={}\tnavigation_open_p50_us={}\tnavigation_open_p95_us={}\tnavigation_open_p99_us={}",
         outcome.full_us,
         outcome.delta_us,
         outcome.elapsed_speedup(),
@@ -112,6 +112,13 @@ fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         outcome.delta_systems,
         outcome.work_ratio(),
         outcome.games_per_system,
+        outcome.full_logical_bytes,
+        outcome.full_allocated_bytes,
+        outcome.full_files,
+        outcome.full_directories,
+        outcome.navigation_open_p50_us,
+        outcome.navigation_open_p95_us,
+        outcome.navigation_open_p99_us,
     );
     Ok(())
 }

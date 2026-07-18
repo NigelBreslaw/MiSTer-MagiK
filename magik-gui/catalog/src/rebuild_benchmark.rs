@@ -11,6 +11,8 @@ use crate::reconciliation_executor::{
 use crate::shard_registry::RegistryLimits;
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
 use crate::system_shard::SystemGame;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -21,6 +23,13 @@ pub struct RebuildBenchmarkOutcome {
     pub full_systems: usize,
     pub delta_systems: usize,
     pub games_per_system: usize,
+    pub full_logical_bytes: u64,
+    pub full_allocated_bytes: u64,
+    pub full_files: usize,
+    pub full_directories: usize,
+    pub navigation_open_p50_us: u64,
+    pub navigation_open_p95_us: u64,
+    pub navigation_open_p99_us: u64,
 }
 
 impl RebuildBenchmarkOutcome {
@@ -65,6 +74,8 @@ pub fn run_rebuild_benchmark(
     let full_started = Instant::now();
     execute_reconciliation(storage_root, &full_plan, limits, &mut materializer)?;
     let full_us = elapsed_us(full_started);
+    let layout = measure_layout(storage_root)?;
+    let navigation_open = measure_navigation_open(storage_root, limits, &system_ids)?;
     let delta_plan = plan(Some(1), 2, &system_ids[..1]);
     let delta_started = Instant::now();
     execute_reconciliation(storage_root, &delta_plan, limits, &mut materializer)?;
@@ -75,7 +86,83 @@ pub fn run_rebuild_benchmark(
         full_systems: systems,
         delta_systems: 1,
         games_per_system,
+        full_logical_bytes: layout.logical_bytes,
+        full_allocated_bytes: layout.allocated_bytes,
+        full_files: layout.files,
+        full_directories: layout.directories,
+        navigation_open_p50_us: percentile(&navigation_open, 50),
+        navigation_open_p95_us: percentile(&navigation_open, 95),
+        navigation_open_p99_us: percentile(&navigation_open, 99),
     })
+}
+
+#[derive(Default)]
+struct LayoutMeasurement {
+    logical_bytes: u64,
+    allocated_bytes: u64,
+    files: usize,
+    directories: usize,
+}
+
+fn measure_layout(root: &Path) -> Result<LayoutMeasurement, ReconciliationError> {
+    let mut measurement = LayoutMeasurement::default();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| ReconciliationError::new("benchmark-layout", error.to_string()))?;
+        measurement.allocated_bytes = measurement
+            .allocated_bytes
+            .saturating_add(metadata.blocks().saturating_mul(512));
+        if metadata.is_dir() {
+            measurement.directories += 1;
+            let entries = fs::read_dir(&path)
+                .map_err(|error| ReconciliationError::new("benchmark-layout", error.to_string()))?;
+            for entry in entries {
+                pending.push(
+                    entry
+                        .map_err(|error| {
+                            ReconciliationError::new("benchmark-layout", error.to_string())
+                        })?
+                        .path(),
+                );
+            }
+        } else if metadata.is_file() {
+            measurement.files += 1;
+            measurement.logical_bytes = measurement.logical_bytes.saturating_add(metadata.len());
+        }
+    }
+    Ok(measurement)
+}
+
+fn measure_navigation_open(
+    root: &Path,
+    limits: RegistryLimits,
+    systems: &[SystemId],
+) -> Result<Vec<u64>, ReconciliationError> {
+    use crate::lazy_sharded_reader::LazyShardedCatalogReader;
+    use crate::sharded_catalog::CatalogReader;
+
+    let reader = LazyShardedCatalogReader::open(root, limits)
+        .map_err(|error| ReconciliationError::new("benchmark-open", error.to_string()))?;
+    let mut timings = Vec::with_capacity(systems.len());
+    for system in systems {
+        let started = Instant::now();
+        let _ = reader
+            .open_system(system)
+            .map_err(|error| ReconciliationError::new("benchmark-open", error.to_string()))?;
+        timings.push(elapsed_us(started));
+    }
+    timings.sort_unstable();
+    Ok(timings)
+}
+
+fn percentile(sorted: &[u64], percentile: usize) -> u64 {
+    let index = sorted
+        .len()
+        .saturating_sub(1)
+        .saturating_mul(percentile)
+        .div_ceil(100);
+    sorted.get(index).copied().unwrap_or(0)
 }
 
 fn plan(current: Option<u64>, intended: u64, systems: &[SystemId]) -> ReconcilePlan {
