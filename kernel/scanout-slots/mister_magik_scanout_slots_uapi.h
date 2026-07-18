@@ -7,7 +7,7 @@
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
-#define MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION 1U
+#define MISTER_MAGIK_SCANOUT_SLOTS_ABI_VERSION 2U
 #define MISTER_MAGIK_SCANOUT_SLOTS_SLOT_COUNT 2U
 #define MISTER_MAGIK_SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE 0x00000001U
 
@@ -19,10 +19,10 @@ struct mister_magik_scanout_slot {
 struct mister_magik_scanout_slots_layout {
 	__u32 abi_version;
 	__u32 slot_count;
-	__u32 width;
-	__u32 height;
-	__u32 stride_bytes;
-	__u32 frame_bytes;
+	__u32 max_width;
+	__u32 max_height;
+	__u32 max_stride_bytes;
+	__u32 slot_capacity_bytes;
 	__u32 map_bytes;
 	__u32 flags;
 	struct mister_magik_scanout_slot

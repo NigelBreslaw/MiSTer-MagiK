@@ -8,6 +8,7 @@ module tb_mister_magik_vblank_latch;
 	`include "mister_magik_latch_protocol.svh"
 	localparam [7:0] SET_LATCH = MAGIK_UIO_SET_FBUF_LATCH;
 	localparam [7:0] GET_LATCH = MAGIK_UIO_GET_FBUF_LATCH;
+	localparam [7:0] GET_CAPS = MAGIK_UIO_GET_FBUF_LATCH_CAPS;
 
 	reg clk_sys = 1'b0;
 	reg hdmi_vbl = 1'b0;
@@ -198,6 +199,19 @@ module tb_mister_magik_vblank_latch;
 		end
 	endtask
 
+	task automatic expect_caps(input [3:0] index, input [15:0] expected);
+		begin
+			@(negedge clk_sys);
+			cmd_id = GET_CAPS;
+			word_index = index;
+			cmd_data = 1'b1;
+			#1;
+			expect_true(response_valid, "capability word must be valid");
+			expect16(response_data, expected, "capability word mismatch");
+			cmd_data = 1'b0;
+		end
+	endtask
+
 	task automatic send_route(
 		input [15:0] mode_value,
 		input [31:0] base,
@@ -272,6 +286,13 @@ module tb_mister_magik_vblank_latch;
 
 		check_ack(SET_LATCH, 16'h4D47);
 		check_ack(GET_LATCH, 16'h4D48);
+		check_ack(GET_CAPS, 16'h4D49);
+		expect_caps(4'd0, 16'd2);
+		expect_caps(4'd1, 16'h0007);
+		expect_caps(4'd2, 16'd1280);
+		expect_caps(4'd3, 16'd720);
+		expect_caps(4'd4, 16'd2560);
+		expect_caps(4'd15, 16'd0);
 		requirement_coverage[0] = 1'b1; // LATCH-001
 		check_unrelated_ack();
 

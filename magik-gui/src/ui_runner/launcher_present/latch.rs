@@ -3,9 +3,14 @@
 
 use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
+use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
 use std::io;
 
 pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
+    fn read_latch_capabilities(
+        &mut self,
+    ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)>;
+
     fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus>;
 
     fn post_latched_rgb565(
@@ -19,6 +24,12 @@ pub(in crate::ui_runner) trait LatchHardware: LauncherDisplayHardware {
 }
 
 impl LatchHardware for Fpga {
+    fn read_latch_capabilities(
+        &mut self,
+    ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
+        self.read_magik_latched_fbuf_capabilities()
+    }
+
     fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus> {
         self.read_magik_latched_fbuf_status()
     }
@@ -56,13 +67,13 @@ pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
 }
 
 impl PluginLatchFrameBuffers {
-    fn open(width: usize, height: usize) -> Option<Self> {
+    fn open(width: usize, height: usize) -> Result<Self, LatchFailure> {
         let stride_bytes = rgb565_stride_bytes(width);
         let buffer1 = open_hidden_buffer(1, width, height, stride_bytes)?;
         let buffer2 = open_hidden_buffer(2, width, height, stride_bytes)?;
         let base1 = hidden_buffer_base(&buffer1, 1)?;
         let base2 = hidden_buffer_base(&buffer2, 2)?;
-        Some(Self {
+        Ok(Self {
             buffer1,
             buffer2,
             base1,
@@ -120,25 +131,58 @@ fn open_hidden_buffer(
     width: usize,
     height: usize,
     stride_bytes: usize,
-) -> Option<ScanoutSlotsRgb565Framebuffer> {
-    let index = HiddenRgb565BufferIndex::new(slot_index).ok()?;
+) -> Result<ScanoutSlotsRgb565Framebuffer, LatchFailure> {
+    let index = HiddenRgb565BufferIndex::new(slot_index).map_err(|error| {
+        LatchFailure::runtime(
+            LatchFailureStage::ModuleLayout,
+            LatchFailureReason::ScanoutLayoutMismatch,
+            error.to_string(),
+        )
+    })?;
     match ScanoutSlotsRgb565Framebuffer::open(index, width, height, stride_bytes) {
-        Ok(buffer) => Some(buffer),
+        Ok(buffer) => Ok(buffer),
         Err(e) => {
             crate::ui_errln!("fpga_vblank_latch_hidden_open_failed buffer={slot_index} error={e}");
-            None
+            Err(LatchFailure::incompatible(
+                LatchFailureStage::BufferMap,
+                if matches!(
+                    e,
+                    mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsError::InvalidLayout(
+                        _
+                    )
+                ) {
+                    LatchFailureReason::ScanoutLayoutMismatch
+                } else if matches!(
+                    e,
+                    mister_magik_fb::framebuffer::scanout_slots::ScanoutSlotsError::InvalidGeometry(
+                        _
+                    )
+                ) {
+                    LatchFailureReason::ScanoutGeometryUnsupported
+                } else {
+                    LatchFailureReason::ScanoutMapFailed
+                },
+                e.to_string(),
+            ))
         }
     }
 }
 
-fn hidden_buffer_base(buffer: &ScanoutSlotsRgb565Framebuffer, slot_index: u8) -> Option<u32> {
+fn hidden_buffer_base(
+    buffer: &ScanoutSlotsRgb565Framebuffer,
+    slot_index: u8,
+) -> Result<u32, LatchFailure> {
     match buffer.physical_addr() {
-        Ok(base) => Some(base),
+        Ok(base) => Ok(base),
         Err(e) => {
             crate::ui_errln!(
                 "fpga_vblank_latch_hidden_open_failed buffer={slot_index} stage=physical_addr error={e}"
             );
-            None
+            Err(LatchFailure::runtime(
+                LatchFailureStage::ModuleLayout,
+                LatchFailureReason::ScanoutLayoutMismatch,
+                e.to_string(),
+            ))
         }
     }
 }
@@ -151,6 +195,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     height: usize,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
     hidden_active_verified: bool,
+    capabilities_verified: bool,
     last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
 }
@@ -174,12 +219,12 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
 }
 
 impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
-    pub(in crate::ui_runner) fn open(ui: &UiDisplay) -> Option<Self> {
+    pub(in crate::ui_runner) fn open(ui: &UiDisplay) -> Result<Self, LatchFailure> {
         let width = ui.render_w();
         let height = ui.render_h();
         let buffers = PluginLatchFrameBuffers::open(width, height)?;
         let route = LauncherFramebufferRoute::for_scan(ui.scan_w(), ui.scan_h(), ui.direct_video());
-        Some(Self::new(
+        Ok(Self::new(
             buffers,
             width,
             height,
@@ -207,6 +252,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             height,
             latch_geometry,
             hidden_active_verified: false,
+            capabilities_verified: false,
             last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(width, height),
         }
@@ -219,26 +265,70 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         hardware: &mut H,
         display_session: &mut LauncherDisplaySession,
         apply_overlays: F,
-    ) -> Result<FpgaVblankLatchHiddenPresentStats, String>
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
         H: LatchHardware,
         F: FnOnce(&mut B::Buffer, LatchPresentPlan) -> Result<(), String>,
     {
         if self.disabled {
-            return Err(
-                "fpga latch presenter disabled after unsupported command response".to_string(),
-            );
+            return Err(LatchFailure::incompatible(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaStatusUnsupported,
+                "presenter disabled after unsupported command response",
+            ));
+        }
+
+        if !self.capabilities_verified {
+            let (magic_hi, magic_lo, capabilities) =
+                hardware.read_latch_capabilities().map_err(|error| {
+                    LatchFailure::runtime(
+                        LatchFailureStage::FpgaCapabilities,
+                        LatchFailureReason::FpgaTransportFailed,
+                        error.to_string(),
+                    )
+                })?;
+            let supported = magic_hi == crate::fpga::MAGIK_FBUF_CAPS_MAGIC
+                || magic_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
+            if !supported || !capabilities.production_ready() {
+                self.disabled = true;
+                return Err(LatchFailure::incompatible(
+                    LatchFailureStage::FpgaCapabilities,
+                    if supported {
+                        LatchFailureReason::FpgaCapabilitiesInsufficient
+                    } else {
+                        LatchFailureReason::FpgaProtocolUnsupported
+                    },
+                    format!(
+                        "magic=0x{magic_hi:04x}/0x{magic_lo:04x} protocol={} flags=0x{:04x} max={}x{} stride={}",
+                        capabilities.protocol_version,
+                        capabilities.flags,
+                        capabilities.max_width,
+                        capabilities.max_height,
+                        capabilities.max_stride_bytes
+                    ),
+                ));
+            }
+            self.capabilities_verified = true;
         }
 
         let status_start = Instant::now();
-        let before_status = hardware.read_latched_status().map_err(|e| e.to_string())?;
+        let before_status = hardware.read_latched_status().map_err(|e| {
+            LatchFailure::runtime(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaTransportFailed,
+                e.to_string(),
+            )
+        })?;
         let mut status_us = status_start.elapsed().as_micros() as u64;
         self.sync_latch_state_from_status(before_status, display_session)?;
 
-        let plan = self
-            .latch_state
-            .plan_next(input)
-            .ok_or_else(|| "no writable hidden latch buffer".to_string())?;
+        let plan = self.latch_state.plan_next(input).ok_or_else(|| {
+            LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::NoWritableHiddenBuffer,
+                "both hidden buffers are active or pending",
+            )
+        })?;
         let buffer_index = plan.slot_index;
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
         let rect_count = plan.restore_rects.len() as u32;
@@ -254,14 +344,22 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 Ok(bytes) => copied_bytes = copied_bytes.saturating_add(bytes),
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
-                    return Err(e);
+                    return Err(LatchFailure::runtime(
+                        LatchFailureStage::FrameCopy,
+                        LatchFailureReason::FrameCopyFailed,
+                        e,
+                    ));
                 }
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
         if let Err(e) = apply_overlays(buffer, plan) {
             self.latch_state.mark_attempt_failed(buffer_index);
-            return Err(e);
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::OverlayCompose,
+                LatchFailureReason::OverlayComposeFailed,
+                e,
+            ));
         }
 
         let sequence = self.sequence;
@@ -277,7 +375,11 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             Ok(ack) => ack,
             Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(e.to_string());
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::LatchPost,
+                    LatchFailureReason::LatchPostFailed,
+                    e.to_string(),
+                ));
             }
         };
         let post_us = post_start.elapsed().as_micros();
@@ -285,7 +387,11 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             Ok(elapsed_us) => elapsed_us,
             Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(e.to_string());
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::RouteArm,
+                    LatchFailureReason::RouteArmFailed,
+                    e.to_string(),
+                ));
             }
         };
         let set_supported = ack.0 == crate::fpga::MAGIK_FBUF_LATCH_MAGIC
@@ -296,7 +402,11 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             Ok(status) => status,
             Err(e) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
-                return Err(e.to_string());
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::FpgaStatus,
+                    LatchFailureReason::FpgaTransportFailed,
+                    e.to_string(),
+                ));
             }
         };
         status_us = status_us.saturating_add(status_start.elapsed().as_micros() as u64);
@@ -306,7 +416,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         if !set_supported || !status_supported {
             self.latch_state.mark_attempt_failed(buffer_index);
             self.disabled = true;
-            return Err(format!(
+            return Err(LatchFailure::incompatible(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaStatusUnsupported,
+                format!(
                 "unsupported latch core set_supported={} status_supported={} ack_high=0x{:04x} ack_low=0x{:04x} status_high=0x{:04x} status_low=0x{:04x}",
                 u8::from(set_supported),
                 u8::from(status_supported),
@@ -314,6 +427,23 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 ack.1,
                 after_status.magic_hi,
                 after_status.magic_lo
+            )));
+        }
+
+        let posted_sequence_observed = after_status.active_sequence == sequence
+            || (after_status.pending() && after_status.pending_sequence == sequence);
+        if !posted_sequence_observed {
+            self.latch_state.mark_attempt_failed(buffer_index);
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::PostVerification,
+                LatchFailureReason::PostedSequenceUnverified,
+                format!(
+                    "posted={} active={} pending={} pending_sequence={}",
+                    sequence,
+                    after_status.active_sequence,
+                    u8::from(after_status.pending()),
+                    after_status.pending_sequence
+                ),
             ));
         }
 
@@ -372,7 +502,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         &mut self,
         status: crate::fpga::LatchedFbufStatus,
         display_session: &mut LauncherDisplaySession,
-    ) -> Result<(), String> {
+    ) -> Result<(), LatchFailure> {
         let sync = match classify_latch_status(
             status,
             self.buffers.base_addr(1),
@@ -384,8 +514,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             Ok(sync) => sync,
             Err(LatchStatusSyncError::Unsupported { magic_hi, magic_lo }) => {
                 self.disabled = true;
-                return Err(format!(
-                    "unsupported latch status ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                return Err(LatchFailure::incompatible(
+                    LatchFailureStage::FpgaStatus,
+                    LatchFailureReason::FpgaStatusUnsupported,
+                    format!("ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"),
                 ));
             }
             Err(LatchStatusSyncError::HiddenGeometryMismatch {
@@ -399,9 +531,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 self.latch_state.invalidate_all();
                 display_session.note_latch_route_lost();
                 self.hidden_active_verified = false;
-                return Err(format!(
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::PostVerification,
+                    LatchFailureReason::ActiveGeometryMismatch,
+                    format!(
                     "latched framebuffer geometry mismatch active={active_width}x{active_height} stride={active_stride} expected={expected_width}x{expected_height} stride={expected_stride}"
-                ));
+                )));
             }
         };
 
@@ -628,6 +763,7 @@ mod tests {
         posts: Vec<io::Result<(u16, u16)>>,
         read_count: usize,
         post_bases: Vec<u32>,
+        last_posted_sequence: Option<u16>,
         set_vga_fb_calls: usize,
         events: Option<EventLog>,
     }
@@ -652,17 +788,39 @@ mod tests {
     }
 
     impl LatchHardware for FakeHardware {
+        fn read_latch_capabilities(
+            &mut self,
+        ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
+            Ok((
+                crate::fpga::MAGIK_FBUF_CAPS_MAGIC,
+                0,
+                mister_magik_latch_contract::decode_capabilities(&[
+                    2,
+                    mister_magik_latch_contract::REQUIRED_CAPS,
+                    1280,
+                    720,
+                    2560,
+                ])
+                .map_err(io::Error::other)?,
+            ))
+        }
+
         fn read_latched_status(&mut self) -> io::Result<crate::fpga::LatchedFbufStatus> {
             if let Some(events) = &self.events {
                 events.borrow_mut().push(TestEvent::ReadStatus);
             }
             self.read_count += 1;
-            self.statuses.remove(0)
+            let mut status = self.statuses.remove(0)?;
+            if let Some(sequence) = self.last_posted_sequence.take() {
+                status.pending_sequence = sequence;
+                status.flags |= 0x0004;
+            }
+            Ok(status)
         }
 
         fn post_latched_rgb565(
             &mut self,
-            _sequence: u16,
+            sequence: u16,
             base_addr: u32,
             _fb_width: u16,
             _fb_height: u16,
@@ -672,11 +830,15 @@ mod tests {
                 events.borrow_mut().push(TestEvent::Post);
             }
             self.post_bases.push(base_addr);
-            if self.posts.is_empty() {
+            let result = if self.posts.is_empty() {
                 Ok((crate::fpga::MAGIK_FBUF_LATCH_MAGIC, 0))
             } else {
                 self.posts.remove(0)
+            };
+            if result.is_ok() {
+                self.last_posted_sequence = Some(sequence);
             }
+            result
         }
     }
 
@@ -734,7 +896,7 @@ mod tests {
         presenter: &mut FpgaVblankLatchHiddenPresenter<FakeBuffers>,
         hardware: &mut FakeHardware,
         display: &mut LauncherDisplaySession,
-    ) -> Result<FpgaVblankLatchHiddenPresentStats, String> {
+    ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
         let pixels = cached_pixels();
         presenter.present_cached_full_frame(
             CachedFrameView::new(&pixels, WIDTH, HEIGHT),
@@ -904,6 +1066,7 @@ mod tests {
         assert!(present(&mut presenter, &mut hardware, &mut display).is_err());
         assert!(present(&mut presenter, &mut hardware, &mut display)
             .unwrap_err()
+            .to_string()
             .contains("disabled"));
         assert_eq!(hardware.read_count, 1);
     }
@@ -921,7 +1084,7 @@ mod tests {
 
         let error = present(&mut presenter, &mut hardware, &mut display).unwrap_err();
 
-        assert!(error.contains("geometry mismatch"));
+        assert!(error.to_string().contains("geometry mismatch"));
         assert!(hardware.post_bases.is_empty());
     }
 

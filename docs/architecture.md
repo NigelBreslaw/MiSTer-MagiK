@@ -69,8 +69,10 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   RBF and stock-kernel plugin support are available. It copies complete cached
   RGB565 frames into scanout-slot-module hidden slots, posts the selected physical
   address before vblank, then waits for vblank only as the pacing boundary for
-  the next frame. The single-frame `/dev/fb0` dirty-copy path remains the
-  fallback renderer and can be forced with `MISTER_PRESENT_BACKEND=fb0-dirty`;
+  the next frame. A latch readiness failure enters a compatibility screen and
+  emits machine-readable failure records; it never presents the normal launcher
+  through `/dev/fb0`. The single-frame `/dev/fb0` dirty-copy path is an explicit
+  diagnostic renderer selected only with `MISTER_PRESENT_BACKEND=fb0-dirty`;
   that path intentionally keeps the older order: wait for vblank, then
   dirty-copy to `/dev/fb0`.
   Latch mode keeps a larger late-frame headroom window than `/dev/fb0` for
@@ -87,7 +89,8 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
   does not activate the fast path, and `load_core` from the launcher state does
   not prove the patched core is running.
   Runtime proof comes from Main's cmdline, the scanout-slots module, passive
-  `fpga-latch-report` magic for commands `0x57`/`0x58`, and advancing latch
+  `fpga-latch-report` magic for commands `0x57`/`0x58`, production-ready
+  protocol-v2 capabilities from `0x59`, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
   For `/dev/fb0`, userspace wall/loop cadence is the visual proof because the
@@ -102,9 +105,9 @@ The launcher path uses a planned Linux framebuffer and FPGA scaling:
 
 Important policy:
 
-- Do not render Slint directly into the live framebuffer for production. The
-  latch path is the default production renderer when support is available; the
-  cached-RAM plus `/dev/fb0` dirty-copy path is the fallback design.
+- Do not render the normal Slint launcher into the live framebuffer. The latch
+  path is the required production renderer; cached-RAM plus `/dev/fb0`
+  dirty-copy is diagnostic-only, apart from the dedicated compatibility screen.
 - Do not assume `/dev/fb0` contents are visible on HDMI. The FPGA may be scanning
   another buffer.
 - RGB888/8888 UI support and color-route smoke tooling have been removed from

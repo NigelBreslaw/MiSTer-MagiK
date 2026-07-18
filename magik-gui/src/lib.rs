@@ -17,6 +17,7 @@ pub mod framebuffer;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
+pub mod latch_readiness;
 pub mod launch_preparation;
 pub mod launcher;
 pub mod launcher_taxonomy;

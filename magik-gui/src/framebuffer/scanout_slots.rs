@@ -19,7 +19,7 @@ pub const SCANOUT_SLOTS_ABI_VERSION: u32 = mister_magik_scanout_contract::ABI_VE
 pub const SCANOUT_SLOTS_SLOT_COUNT: usize = mister_magik_scanout_contract::SLOT_COUNT;
 pub const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize =
     mister_magik_scanout_contract::REGION_OFFSET_BYTES;
-pub const SCANOUT_SLOT_FRAME_BYTES: usize = mister_magik_scanout_contract::FRAME_BYTES;
+pub const SCANOUT_SLOT_CAPACITY_BYTES: usize = mister_magik_scanout_contract::SLOT_CAPACITY_BYTES;
 pub const SCANOUT_SLOT_MAP_BYTES: usize = mister_magik_scanout_contract::MAP_BYTES;
 pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 =
     mister_magik_scanout_contract::LAYOUT_WRITE_COMBINE;
@@ -124,10 +124,17 @@ impl ScanoutSlotsRgb565Framebuffer {
         layout: &ScanoutSlotsLayout,
     ) -> Result<Self, ScanoutSlotsError> {
         let frame_len = validate_scanout_slots_geometry(width, height, stride_bytes)?;
-        if frame_len != layout.frame_bytes as usize {
+        if width > layout.max_width as usize
+            || height > layout.max_height as usize
+            || stride_bytes > layout.max_stride_bytes as usize
+            || frame_len > layout.slot_capacity_bytes as usize
+        {
             return Err(ScanoutSlotsError::InvalidGeometry(format!(
-                "requested frame has {frame_len} bytes, ABI requires {}",
-                layout.frame_bytes
+                "requested frame {width}x{height} stride={stride_bytes} bytes={frame_len} exceeds ABI maximum {}x{} stride={} capacity={}",
+                layout.max_width,
+                layout.max_height,
+                layout.max_stride_bytes,
+                layout.slot_capacity_bytes
             )));
         }
         let slot = layout.slots[index.get() as usize - 1];
@@ -430,11 +437,11 @@ mod tests {
         ScanoutSlotsLayout {
             abi_version: SCANOUT_SLOTS_ABI_VERSION,
             slot_count: 2,
-            width: 960,
-            height: 540,
-            stride_bytes: 1920,
-            frame_bytes: 1_036_800,
-            map_bytes: 1_040_384,
+            max_width: 1280,
+            max_height: 720,
+            max_stride_bytes: 2560,
+            slot_capacity_bytes: 1_843_200,
+            map_bytes: 1_843_200,
             flags: SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE,
             slots: [
                 ScanoutSlotLayout {
@@ -443,7 +450,7 @@ mod tests {
                 },
                 ScanoutSlotLayout {
                     physical_address: 0x22fd_2000,
-                    mmap_offset_bytes: 1_048_576,
+                    mmap_offset_bytes: 8_294_400,
                 },
             ],
             reserved: [0; 4],
@@ -489,6 +496,18 @@ mod tests {
         assert_eq!(HiddenRgb565BufferIndex::new(2).unwrap().get(), 2);
         assert!(HiddenRgb565BufferIndex::new(0).is_err());
         assert!(HiddenRgb565BufferIndex::new(3).is_err());
+    }
+
+    #[test]
+    fn capacity_accepts_qualified_540p_and_native_720p_geometry() {
+        assert_eq!(
+            validate_scanout_slots_geometry(960, 540, 1920),
+            Ok(1_036_800)
+        );
+        assert_eq!(
+            validate_scanout_slots_geometry(1280, 720, 2560),
+            Ok(1_843_200)
+        );
     }
 
     #[test]

@@ -4,25 +4,26 @@
 use super::super::*;
 use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
 use mister_magik_fb::framebuffer::vsync::VsyncPace;
+use mister_magik_fb::latch_readiness::LatchFailure;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fb0PresentReason {
     Explicit,
-    LatchUnavailable,
-    RuntimeLatchFailure,
-    RouteRecoveryRetry,
+    CompatibilityScreen,
 }
 
 enum LauncherPresenterState<L> {
     ExplicitFb0,
     Latch(L),
-    LatchUnavailable,
+    Compatibility {
+        failure: LatchFailure,
+        screen_ready: bool,
+    },
 }
 
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
-    failure_logged: bool,
-    fb0_route_pending: bool,
+    compatibility_transitions: u64,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentFrame {
@@ -60,7 +61,9 @@ trait PresentationAdapters<L> {
         &mut self,
         latch: &mut L,
         frame: LauncherFramePlan,
-    ) -> Result<Self::Output, String>;
+    ) -> Result<Self::Output, LatchFailure>;
+
+    fn present_compatibility_black(&mut self) -> Self::Output;
 
     fn present_fb0(
         &mut self,
@@ -79,18 +82,33 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         let state = match launcher_present_backend() {
             LauncherPresentBackend::FpgaVblankLatchHidden => {
                 match FpgaVblankLatchHiddenPresenter::open(ui) {
-                    Some(presenter) => LauncherPresenterState::Latch(presenter),
-                    None => LauncherPresenterState::LatchUnavailable,
+                    Ok(presenter) => LauncherPresenterState::Latch(presenter),
+                    Err(failure) => {
+                        crate::ui_errln!(
+                            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
+                            failure.state.code(),
+                            failure.stage.code(),
+                            failure.reason_code(),
+                            failure.detail.replace(['\t', '\n', '\r'], " ")
+                        );
+                        LauncherPresenterState::Compatibility {
+                            failure,
+                            screen_ready: false,
+                        }
+                    }
                 }
             }
-            LauncherPresentBackend::None | LauncherPresentBackend::Fb0Dirty => {
-                LauncherPresenterState::ExplicitFb0
-            }
+            LauncherPresentBackend::None
+            | LauncherPresentBackend::Fb0Dirty
+            | LauncherPresentBackend::CompatibilityFb0 => LauncherPresenterState::ExplicitFb0,
         };
+        let compatibility_transitions = u64::from(matches!(
+            state,
+            LauncherPresenterState::Compatibility { .. }
+        ));
         Self {
             state,
-            failure_logged: false,
-            fb0_route_pending: false,
+            compatibility_transitions,
         }
     }
 
@@ -118,7 +136,9 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
     pub(in crate::ui_runner) fn publish_stream_refinement_if_due(&self) -> bool {
         match &self.state {
             LauncherPresenterState::Latch(latch) => latch.publish_requested_full_snapshot(),
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::LatchUnavailable => false,
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Compatibility { .. } => {
+                false
+            }
         }
     }
 }
@@ -127,14 +147,32 @@ impl<L> LauncherPresenter<L> {
     pub(in crate::ui_runner) fn pacing_backend(&self) -> LauncherPresentBackend {
         match self.state {
             LauncherPresenterState::Latch(_) => LauncherPresentBackend::FpgaVblankLatchHidden,
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::LatchUnavailable => {
-                LauncherPresentBackend::Fb0Dirty
+            LauncherPresenterState::ExplicitFb0 => LauncherPresentBackend::Fb0Dirty,
+            LauncherPresenterState::Compatibility { .. } => {
+                LauncherPresentBackend::CompatibilityFb0
             }
         }
     }
 
     pub(in crate::ui_runner) fn needs_frame(&self) -> bool {
-        self.fb0_route_pending
+        matches!(
+            self.state,
+            LauncherPresenterState::Compatibility {
+                screen_ready: false,
+                ..
+            }
+        )
+    }
+
+    pub(in crate::ui_runner) fn compatibility_failure(&self) -> Option<&LatchFailure> {
+        match &self.state {
+            LauncherPresenterState::Compatibility { failure, .. } => Some(failure),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Latch(_) => None,
+        }
+    }
+
+    pub(in crate::ui_runner) fn compatibility_transitions(&self) -> u64 {
+        self.compatibility_transitions
     }
 
     fn present_with<A>(&mut self, frame: LauncherFramePlan, adapters: &mut A) -> A::Output
@@ -147,17 +185,14 @@ impl<L> LauncherPresenter<L> {
                     .present_fb0(frame, Fb0PresentReason::Explicit)
                     .output;
             }
-            LauncherPresenterState::LatchUnavailable => {
-                let reason = if self.fb0_route_pending {
-                    Fb0PresentReason::RouteRecoveryRetry
-                } else {
-                    Fb0PresentReason::LatchUnavailable
-                };
-                let result = adapters.present_fb0(frame, reason);
-                if result.route_active {
-                    self.fb0_route_pending = false;
+            LauncherPresenterState::Compatibility { screen_ready, .. } => {
+                if !*screen_ready {
+                    *screen_ready = true;
+                    return adapters.present_compatibility_black();
                 }
-                return result.output;
+                return adapters
+                    .present_fb0(frame, Fb0PresentReason::CompatibilityScreen)
+                    .output;
             }
             LauncherPresenterState::Latch(latch) => match adapters.present_latch(latch, frame) {
                 Ok(output) => return output,
@@ -165,23 +200,29 @@ impl<L> LauncherPresenter<L> {
             },
         };
 
-        self.state = LauncherPresenterState::LatchUnavailable;
-        self.fb0_route_pending = true;
-        if !self.failure_logged {
-            self.failure_logged = true;
-            crate::ui_errln!(
-                "fpga_vblank_latch_hidden_present_failed: {latch_error}; switching permanently to fb0-dirty"
-            );
-            boot_analytics::event(
-                "fpga_vblank_latch_hidden_present_failed",
-                format!("fallback=fb0-dirty error={latch_error}"),
-            );
-        }
-        let result = adapters.present_fb0(frame, Fb0PresentReason::RuntimeLatchFailure);
-        if result.route_active {
-            self.fb0_route_pending = false;
-        }
-        result.output
+        crate::ui_errln!(
+            "latch_failure_tsv\tvalid=0\tstate={}\tstage={}\treason={}\taction=compatibility-screen\tdetail={}",
+            latch_error.state.code(),
+            latch_error.stage.code(),
+            latch_error.reason_code(),
+            latch_error.detail.replace(['\t', '\n', '\r'], " ")
+        );
+        boot_analytics::event(
+            "fpga_vblank_latch_compatibility",
+            format!(
+                "state={:?} stage={:?} reason={} detail={}",
+                latch_error.state,
+                latch_error.stage,
+                latch_error.reason_code(),
+                latch_error.detail
+            ),
+        );
+        self.compatibility_transitions = self.compatibility_transitions.saturating_add(1);
+        self.state = LauncherPresenterState::Compatibility {
+            failure: latch_error,
+            screen_ready: true,
+        };
+        adapters.present_compatibility_black()
     }
 }
 
@@ -198,20 +239,11 @@ struct LivePresentationAdapters<'a, 'target> {
 fn run_fb0_transaction<T>(
     frame: LauncherFramePlan,
     reason: Fb0PresentReason,
-    full_rect: DirtyRect,
     present: impl FnOnce(LauncherFramePlan) -> T,
     activate_route: impl FnOnce() -> bool,
 ) -> Fb0AdapterOutput<T> {
-    let frame = if reason == Fb0PresentReason::RuntimeLatchFailure {
-        frame.for_fb0_recovery(full_rect)
-    } else {
-        frame
-    };
     let output = present(frame);
-    let restore_route = matches!(
-        reason,
-        Fb0PresentReason::RuntimeLatchFailure | Fb0PresentReason::RouteRecoveryRetry
-    );
+    let restore_route = reason == Fb0PresentReason::CompatibilityScreen;
     let route_active = !restore_route || activate_route();
     Fb0AdapterOutput {
         output,
@@ -279,7 +311,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         &mut self,
         latch: &mut FpgaVblankLatchHiddenPresenter,
         frame: LauncherFramePlan,
-    ) -> Result<Self::Output, String> {
+    ) -> Result<Self::Output, LatchFailure> {
         let frame_t3 = Instant::now();
         let cpu_t3 = FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode);
         let present_phase_us = self.targets.pacer.age_since_last_hit_us(frame_t3) as u128;
@@ -350,6 +382,26 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         })
     }
 
+    fn present_compatibility_black(&mut self) -> Self::Output {
+        let (_, frame_t3, cpu_t3, pacing_trace) = self.pace_before_fb0();
+        self.targets.fb0.clear_black();
+        if let Err(error) = self
+            .display
+            .activate_fb0_route_with_hardware(self.targets.hardware)
+        {
+            crate::ui_errln!("compatibility_fb0_route_failed: {error}");
+            boot_analytics::event("compatibility_fb0_route_failed", error);
+        }
+        LauncherPresentCycle {
+            presentation: compatibility_present_result(),
+            frame_t3,
+            frame_t4: Instant::now(),
+            cpu_t3,
+            cpu_t4: FrameAnalyticsCpuStamp::capture(self.frame_analytics_mode),
+            pacing_trace,
+        }
+    }
+
     fn present_fb0(
         &mut self,
         frame: LauncherFramePlan,
@@ -365,12 +417,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let transaction = run_fb0_transaction(
             frame,
             reason,
-            DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: cached_frame.width(),
-                y1: cached_frame.height(),
-            },
             |frame_plan| {
                 Fb0DirtyPresenter::present(Fb0DirtyPresentRequest {
                     frame_plan,
@@ -399,7 +445,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         );
         Fb0AdapterOutput {
             output: LauncherPresentCycle {
-                presentation: fb0_present_result(transaction.output),
+                presentation: fb0_present_result(transaction.output, reason),
                 frame_t3,
                 frame_t4: Instant::now(),
                 cpu_t3,
@@ -411,7 +457,10 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
     }
 }
 
-fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
+fn fb0_present_result(
+    stats: Fb0DirtyPresentStats,
+    reason: Fb0PresentReason,
+) -> LauncherPresentResult {
     LauncherPresentResult {
         copied_rows: stats.copied_rows,
         direct_preview_rows: stats.direct_preview_rows,
@@ -425,8 +474,16 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         hidden_arcade_compose_us: 0,
         direct_preview_present_us: stats.direct_preview_present_us,
         arcade_list_present_us: stats.arcade_list_present_us,
-        main_present_backend: LauncherPresentBackend::Fb0Dirty,
-        main_present_status: LauncherPresentStatus::None,
+        main_present_backend: if reason == Fb0PresentReason::CompatibilityScreen {
+            LauncherPresentBackend::CompatibilityFb0
+        } else {
+            LauncherPresentBackend::Fb0Dirty
+        },
+        main_present_status: if reason == Fb0PresentReason::CompatibilityScreen {
+            LauncherPresentStatus::Compatibility
+        } else {
+            LauncherPresentStatus::None
+        },
         main_present_buffer: 0,
         main_present_hidden_copy_us: 0,
         main_present_hidden_invalid_bytes: 0,
@@ -439,6 +496,13 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         main_present_route_us: 0,
         arcade_update_label: stats.arcade_update_label,
     }
+}
+
+fn compatibility_present_result() -> LauncherPresentResult {
+    let mut result = empty_present_result();
+    result.main_present_backend = LauncherPresentBackend::CompatibilityFb0;
+    result.main_present_status = LauncherPresentStatus::Compatibility;
+    result
 }
 
 fn latch_present_result(
@@ -534,11 +598,12 @@ mod tests {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Event {
         Latch,
+        CompatibilityBlack,
         Fb0(Fb0PresentReason),
     }
 
     struct FakeAdapters {
-        latch_result: Result<u8, String>,
+        latch_result: Result<u8, LatchFailure>,
         events: Vec<Event>,
         latch_frames: Vec<LauncherFramePlan>,
         fb0_frames: Vec<LauncherFramePlan>,
@@ -558,7 +623,11 @@ mod tests {
 
         fn failing() -> Self {
             Self {
-                latch_result: Err("failed latch".to_string()),
+                latch_result: Err(LatchFailure::runtime(
+                    mister_magik_fb::latch_readiness::LatchFailureStage::LatchPost,
+                    mister_magik_fb::latch_readiness::LatchFailureReason::LatchPostFailed,
+                    "failed latch",
+                )),
                 ..Self::succeeding()
             }
         }
@@ -571,10 +640,15 @@ mod tests {
             &mut self,
             _latch: &mut FakeLatch,
             frame: LauncherFramePlan,
-        ) -> Result<Self::Output, String> {
+        ) -> Result<Self::Output, LatchFailure> {
             self.events.push(Event::Latch);
             self.latch_frames.push(frame);
             self.latch_result.clone()
+        }
+
+        fn present_compatibility_black(&mut self) -> Self::Output {
+            self.events.push(Event::CompatibilityBlack);
+            3
         }
 
         fn present_fb0(
@@ -609,8 +683,7 @@ mod tests {
     fn presenter(state: LauncherPresenterState<FakeLatch>) -> LauncherPresenter<FakeLatch> {
         LauncherPresenter {
             state,
-            failure_logged: false,
-            fb0_route_pending: false,
+            compatibility_transitions: 0,
         }
     }
 
@@ -638,48 +711,60 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_latch_uses_fb0_without_retrying_latch() {
-        let mut presenter = presenter(LauncherPresenterState::LatchUnavailable);
+    fn startup_failure_blacks_before_presenting_compatibility_screen() {
+        let mut presenter = presenter(LauncherPresenterState::Compatibility {
+            failure: LatchFailure::incompatible(
+                mister_magik_fb::latch_readiness::LatchFailureStage::BufferMap,
+                mister_magik_fb::latch_readiness::LatchFailureReason::ScanoutDeviceMissing,
+                "missing",
+            ),
+            screen_ready: false,
+        });
         let mut adapters = FakeAdapters::succeeding();
 
-        assert_eq!(presenter.present_with(frame(), &mut adapters), 2);
+        assert_eq!(presenter.present_with(frame(), &mut adapters), 3);
+        assert_eq!(adapters.events, [Event::CompatibilityBlack]);
         assert_eq!(
-            adapters.events,
-            [Event::Fb0(Fb0PresentReason::LatchUnavailable)]
+            presenter.pacing_backend(),
+            LauncherPresentBackend::CompatibilityFb0
         );
-        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
     }
 
     #[test]
-    fn runtime_failure_immediately_falls_back_with_same_frame() {
+    fn runtime_failure_blacks_instead_of_presenting_launcher_through_fb0() {
         let expected = frame();
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
-        assert_eq!(presenter.present_with(expected, &mut adapters), 2);
-        assert_eq!(
-            adapters.events,
-            [
-                Event::Latch,
-                Event::Fb0(Fb0PresentReason::RuntimeLatchFailure)
-            ]
-        );
+        assert_eq!(presenter.present_with(expected, &mut adapters), 3);
+        assert_eq!(adapters.events, [Event::Latch, Event::CompatibilityBlack]);
         assert_eq!(adapters.latch_frames, [expected]);
-        assert_eq!(adapters.fb0_frames, [expected]);
+        assert!(adapters.fb0_frames.is_empty());
     }
 
     #[test]
-    fn runtime_failure_marks_latch_unavailable() {
+    fn runtime_failure_enters_structured_compatibility_state() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
         presenter.present_with(frame(), &mut adapters);
 
-        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
+        assert_eq!(
+            presenter.pacing_backend(),
+            LauncherPresentBackend::CompatibilityFb0
+        );
+        assert_eq!(
+            presenter
+                .compatibility_failure()
+                .expect("compatibility failure")
+                .reason_code(),
+            "latch-post-failed"
+        );
+        assert_eq!(presenter.compatibility_transitions(), 1);
     }
 
     #[test]
-    fn frame_after_runtime_failure_uses_fb0_pacing_and_skips_latch() {
+    fn frame_after_runtime_failure_renders_only_compatibility_screen() {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut first = FakeAdapters::failing();
         presenter.present_with(frame(), &mut first);
@@ -688,28 +773,12 @@ mod tests {
         assert_eq!(presenter.present_with(frame(), &mut second), 2);
         assert_eq!(
             second.events,
-            [Event::Fb0(Fb0PresentReason::LatchUnavailable)]
+            [Event::Fb0(Fb0PresentReason::CompatibilityScreen)]
         );
-        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
-    }
-
-    #[test]
-    fn failed_fb0_route_recovery_is_retried_without_retrying_latch() {
-        let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
-        let mut first = FakeAdapters::failing();
-        first.route_active = false;
-        presenter.present_with(frame(), &mut first);
-        assert!(presenter.needs_frame());
-        let mut second = FakeAdapters::succeeding();
-
-        presenter.present_with(frame(), &mut second);
-
         assert_eq!(
-            second.events,
-            [Event::Fb0(Fb0PresentReason::RouteRecoveryRetry)]
+            presenter.pacing_backend(),
+            LauncherPresentBackend::CompatibilityFb0
         );
-        assert_eq!(presenter.pacing_backend(), LauncherPresentBackend::Fb0Dirty);
-        assert!(!presenter.needs_frame());
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -746,25 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn live_fb0_fallback_restores_layers_before_route_and_retries_failed_route() {
-        let full = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: 10,
-            y1: 10,
-        };
-        let preview = DirtyRect {
-            x0: 2,
-            y0: 2,
-            x1: 4,
-            y1: 4,
-        };
-        let arcade = DirtyRect {
-            x0: 6,
-            y0: 6,
-            x1: 8,
-            y1: 8,
-        };
+    fn compatibility_screen_copy_completes_before_route_activation() {
         let logical_frame = LauncherFramePlan::new(
             DirtyRectList::from_one(DirtyRect {
                 x0: 0,
@@ -772,15 +823,14 @@ mod tests {
                 x1: 1,
                 y1: 1,
             }),
-            Some(DirectLayerState::new(preview, 1)),
             None,
-            Some(DirectLayerState::new(arcade, 1)),
+            None,
+            None,
             None,
         );
         let pixels = vec![Rgb565Pixel(0); 100];
         let cached = CachedFrameView::new(&pixels, 10, 10);
-        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(10, 10));
-        target.direct_preview_565_rect_mut(preview);
+        let target = UiFrameTarget::cached(FramebufferTargetGeometry::new(10, 10));
         let direct_preview = target.direct_preview_view();
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut sink = TransactionSink {
@@ -789,8 +839,7 @@ mod tests {
 
         let failed = run_fb0_transaction(
             logical_frame,
-            Fb0PresentReason::RuntimeLatchFailure,
-            full,
+            Fb0PresentReason::CompatibilityScreen,
             |frame| Fb0DirtyPresenter::present_to(frame, cached, direct_preview, &mut sink),
             || {
                 events.borrow_mut().push(TransactionEvent::RouteFailed);
@@ -800,27 +849,15 @@ mod tests {
 
         assert!(!failed.route_active);
         let first_events = events.borrow().clone();
-        let preview_index = first_events
-            .iter()
-            .position(|event| *event == TransactionEvent::Preview)
-            .expect("preview copy");
-        assert!(first_events[..preview_index]
-            .iter()
-            .all(|event| *event == TransactionEvent::Cached));
         assert_eq!(
-            &first_events[preview_index..],
-            &[
-                TransactionEvent::Preview,
-                TransactionEvent::Arcade,
-                TransactionEvent::RouteFailed,
-            ]
+            first_events,
+            [TransactionEvent::Cached, TransactionEvent::RouteFailed]
         );
 
         events.borrow_mut().clear();
         let retried = run_fb0_transaction(
             logical_frame,
-            Fb0PresentReason::RouteRecoveryRetry,
-            full,
+            Fb0PresentReason::CompatibilityScreen,
             |frame| Fb0DirtyPresenter::present_to(frame, cached, direct_preview, &mut sink),
             || {
                 events.borrow_mut().push(TransactionEvent::RouteOk);
@@ -830,10 +867,5 @@ mod tests {
 
         assert!(retried.route_active);
         assert_eq!(events.borrow().last(), Some(&TransactionEvent::RouteOk));
-        assert!(events
-            .borrow()
-            .iter()
-            .take(events.borrow().len() - 1)
-            .all(|event| *event == TransactionEvent::Cached));
     }
 }

@@ -40,8 +40,10 @@ pub const UIO_AUDVOL: u16 = 0x26;
 // the stock command ranges used by the Menu core.
 pub const MAGIK_UIO_SET_FBUF_LATCH: u16 = mister_magik_latch_contract::SET_FBUF_LATCH;
 pub const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;
+pub const MAGIK_UIO_GET_FBUF_LATCH_CAPS: u16 = mister_magik_latch_contract::GET_FBUF_LATCH_CAPS;
 pub const MAGIK_FBUF_LATCH_MAGIC: u16 = mister_magik_latch_contract::LATCH_MAGIC;
 pub const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
+pub const MAGIK_FBUF_CAPS_MAGIC: u16 = mister_magik_latch_contract::CAPS_MAGIC;
 
 // user_io.h CONF_* flags for UIO_BUT_SW (direct_video + HPS framebuffer path).
 pub const CONF_VGA_SCALER: u16 = 0x0004;
@@ -422,6 +424,23 @@ impl Fpga {
         let res = self.cmd_capture(MAGIK_UIO_SET_FBUF_LATCH);
         self.disable_io();
         res
+    }
+
+    pub fn read_magik_latched_fbuf_capabilities(
+        &mut self,
+    ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
+        let result = (|| {
+            let (magic_hi, magic_lo) = self.cmd_capture(MAGIK_UIO_GET_FBUF_LATCH_CAPS)?;
+            let mut words = [0u16; mister_magik_latch_contract::CAPS_WORD_COUNT];
+            for word in &mut words {
+                *word = self.spi_capture(0)?.1;
+            }
+            let capabilities = mister_magik_latch_contract::decode_capabilities(&words)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            Ok((magic_hi, magic_lo, capabilities))
+        })();
+        self.disable_io();
+        result
     }
 
     pub fn post_magik_latched_fbuf_rgb565(

@@ -18,17 +18,15 @@ cmdline=\$(tr '\\000' ' ' < \"/proc/\$pid/cmdline\")
 case \"\$cmdline\" in *'$latch_rbf'*) ;; *) echo \"latch_readiness_tsv valid=0 reason=wrong-main-core cmdline=\$cmdline\"; exit 21 ;; esac
 grep -q '^mister_magik_scanout_slots ' /proc/modules || { echo 'latch_readiness_tsv valid=0 reason=scanout-module-missing'; exit 22; }
 test -c /dev/mister-magik-scanout-slots || { echo 'latch_readiness_tsv valid=0 reason=scanout-device-missing'; exit 23; }
-report=\$('$bin' fpga-latch-report) || { echo 'latch_readiness_tsv valid=0 reason=latch-report-failed'; exit 24; }
+report=\$('$bin' latch-readiness-report) || { printf '%s\\n' "\$report"; echo 'latch_readiness_tsv valid=0 state=runtime-fault stage=live-probe reason=latch-readiness-command-failed'; exit 24; }
 printf '%s\\n' \"\$report\"
-printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x57.*supported=1.*ack_high=0x4d47' || { echo 'latch_readiness_tsv valid=0 reason=set-command-unsupported'; exit 25; }
-printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x58.*supported=1.*ack_high=0x4d48' || { echo 'latch_readiness_tsv valid=0 reason=status-command-unsupported'; exit 26; }
-echo 'latch_readiness_tsv valid=1 reason=active-and-supported'
+printf '%s\\n' \"\$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' || { echo 'latch_readiness_tsv valid=0 state=runtime-fault stage=live-probe reason=readiness-proof-missing'; exit 25; }
 "
 }
 
 latch_readiness_is_contract_failure() {
   case "$1" in
-    *"latch_readiness_tsv valid=0 reason="*) return 0 ;;
+    *"latch_readiness_tsv valid=0 "*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -76,11 +74,11 @@ latch_readiness_self_test() {
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/latch-readiness-lib.XXXXXX")"
   fake="$tmp/mister"
   log="$tmp/log"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$2" >>"$LATCH_READINESS_TEST_LOG"\ncase "$2" in *fpga-latch-report*) printf "fpga_latch_set_probe_tsv\\tcmd=0x57\\tsupported=1\\tack_high=0x4d47\\nfpga_latch_status_tsv\\tcmd=0x58\\tsupported=1\\tack_high=0x4d48\\n";; esac\n' >"$fake"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$2" >>"$LATCH_READINESS_TEST_LOG"\ncase "$2" in *latch-readiness-report*) printf "latch_readiness_tsv\\tvalid=1\\tstate=ready\\tstage=none\\treason=none\\n";; esac\n' >"$fake"
   chmod +x "$fake"
   LATCH_READINESS_TEST_LOG="$log" latch_readiness_probe "$fake"
   grep -q 'wrong-main-core' "$log"
-  grep -q 'fpga-latch-report' "$log"
+  grep -q 'latch-readiness-report' "$log"
   latch_readiness_is_contract_failure 'latch_readiness_tsv valid=0 reason=wrong-main-core'
   if latch_readiness_is_contract_failure 'connection timed out'; then
     echo 'transport failure was misclassified as a latch contract failure' >&2

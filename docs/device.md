@@ -264,19 +264,21 @@ Then load the stock-kernel scanout-slots module so MagiK has hidden RGB565 slots
    ```
 
    Use `MISTER_PRESENT_BACKEND=fb0-dirty scripts/run-rust.sh launcher 0` only
-   when intentionally forcing the legacy `/dev/fb0` fallback.
+   when intentionally forcing the legacy `/dev/fb0` diagnostic path.
 
    Slint renders into cached RGB565 RAM. The latch presenter composes direct
    preview/Arcade layers there, copies damage into alternating write-combined
    hidden slots, and posts the selected physical address before vblank. The
-   `/dev/fb0` fallback waits for vblank before copying dirty
+   `/dev/fb0` diagnostic path waits for vblank before copying dirty
    rows into the live framebuffer. Latch mode keeps a larger late-frame headroom
    window for inactive or non-motion frames, but active Home horizontal motion
    stays frame-driven and avoids waiting a whole vblank before rendering.
 
-5. Verify support with passive `fpga-latch-report`. The MagiK latch commands
-   `0x57` and `0x58` should report supported status/magic: `0x57` acks
-   `0x4d47`, and `0x58` acks `0x4d48`. `fpga-latch-post-report` is an active
+5. Verify support with `latch-readiness-report` and passive
+   `fpga-latch-report`. Readiness must emit `latch_readiness_tsv valid=1
+   state=ready`. Commands `0x57` and `0x58` should report supported
+   status/magic, while `0x59` must report protocol-v2 production capabilities.
+   `fpga-latch-post-report` is an active
    smoke test that posts a latch request; do not use it as a passive before/after
    counter sample.
 
@@ -287,8 +289,8 @@ final present goes through hidden buffers. The reliable proof signals are:
 - Main's cmdline contains the MagiK Menu latch RBF path.
 - `mister_magik_scanout_slots` is present in `/proc/modules` and
   `/dev/mister-magik-scanout-slots` exists.
-- Passive `fpga-latch-report` reports `0x57`/`0x58` `supported=1` with
-  `0x4d47` and `0x4d48` acks.
+- Passive `fpga-latch-report` reports `0x57`/`0x58`/`0x59` `supported=1`,
+  protocol version 2, and `production_ready=1`.
 - `flip_count` and `post_count` advance during a launcher run, with
   `drop_count=0`.
 - Home-row benchmark traces show `main_present_backend=fpga-vblank-latch-hidden`
@@ -307,8 +309,11 @@ The latch backend is only active while the MagiK Menu latch RBF and plugin
 support are active. Returning from a game or requesting `load_core menu.rbf`
 is redirected to the manifest-owned production RBF; “Exit to MiSTer” remains on
 that already-active core. Runtime counters and benchmark traces must be checked
-again after return. MagiK falls back to `/dev/fb0` if hidden buffers or latch
-commands are unavailable.
+again after return. If hidden buffers or latch commands are unavailable, MagiK
+shows only the compatibility screen and logs `latch_failure_tsv valid=0`; it
+does not silently run the normal launcher through `/dev/fb0`. Startup preflight
+is also available in `/tmp/mister-magik/latch-readiness.json` and
+`/tmp/mister-magik-slint.log`, so diagnostics do not require framebuffer capture.
 
 Latch performance runners fail closed before capture. They verify the active
 Main cmdline, scanout module/device, and both passive FPGA acknowledgements;
@@ -329,7 +334,7 @@ Supported launcher rendering paths are:
 - Default when supported: FPGA vblank latch hidden-buffer presentation, which
   uses the stock-kernel plugin for fast hidden-slot writes and the MagiK Menu
   latch RBF to latch the selected buffer on HDMI vblank.
-- Fallback/diagnostic override: `MISTER_PRESENT_BACKEND=fb0-dirty`, cached
+- Explicit diagnostic override: `MISTER_PRESENT_BACKEND=fb0-dirty`, cached
   RGB565 rendering plus dirty copies into `/dev/fb0`.
 
 Main-mediated present request/ack and FIFO present experiments are retired; do

@@ -388,6 +388,7 @@ fn dispatch_fpga(cmd: &str, f: &mut Fpga) {
         #[cfg(feature = "diagnostics")]
         "input" => run_input(),
         "fpga-latch-report" => run_fpga_latch_report(),
+        "latch-readiness-report" => run_latch_readiness_report(f),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
@@ -1203,6 +1204,164 @@ fn run_scanout_slots_map_report() {
     }
 }
 
+fn publish_latch_readiness_report(report: &mister_magik_fb::latch_readiness::LatchReadinessReport) {
+    crate::ui_logln!(
+        "latch_readiness_tsv\tvalid={}\tstate={}\tstage={}\treason={}\tdetail={}",
+        u8::from(report.state == mister_magik_fb::latch_readiness::LatchReadinessState::Ready),
+        report.state.code(),
+        report.stage.map_or("none", |stage| stage.code()),
+        report.reason_code.as_deref().unwrap_or("none"),
+        report.detail.replace(['\t', '\n', '\r'], " ")
+    );
+    if let Err(error) = report.write_atomic(mister_magik_fb::latch_readiness::REPORT_PATH) {
+        crate::ui_errln!("latch_readiness_report_write_failed\terror={error}");
+        std::process::exit(50);
+    }
+    match serde_json::to_string(report) {
+        Ok(json) => crate::ui_logln!("latch_readiness_json\t{json}"),
+        Err(error) => {
+            crate::ui_errln!("latch_readiness_report_serialize_failed\terror={error}");
+            std::process::exit(50);
+        }
+    }
+    if report.state != mister_magik_fb::latch_readiness::LatchReadinessState::Ready {
+        std::process::exit(match report.state {
+            mister_magik_fb::latch_readiness::LatchReadinessState::InstallationFault => 30,
+            mister_magik_fb::latch_readiness::LatchReadinessState::PlatformIncompatible => 40,
+            mister_magik_fb::latch_readiness::LatchReadinessState::RuntimeFault => 50,
+            mister_magik_fb::latch_readiness::LatchReadinessState::Ready => 0,
+        });
+    }
+}
+
+fn run_latch_readiness_report(fpga: &mut Fpga) {
+    use mister_magik_fb::latch_readiness::{
+        LatchFailure, LatchFailureReason, LatchFailureStage, LatchReadinessReport,
+    };
+
+    let kernel_release = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .unwrap_or_else(|_| "unknown".to_string())
+        .trim()
+        .to_string();
+    if kernel_release != mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE {
+        let failure = LatchFailure::incompatible(
+            LatchFailureStage::Kernel,
+            LatchFailureReason::KernelReleaseUnsupported,
+            format!(
+                "detected={} expected={}",
+                kernel_release,
+                mister_magik_scanout_contract::QUALIFIED_KERNEL_RELEASE
+            ),
+        );
+        publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+        return;
+    }
+
+    let device = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(mister_magik_scanout_contract::DEVICE)
+    {
+        Ok(device) => device,
+        Err(error) => {
+            let failure = LatchFailure::incompatible(
+                LatchFailureStage::ModuleOpen,
+                LatchFailureReason::ScanoutDeviceMissing,
+                error.to_string(),
+            );
+            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            return;
+        }
+    };
+    let layout =
+        match mister_magik_fb::framebuffer::scanout_slots::read_scanout_slots_layout(&device) {
+            Ok(layout) => layout,
+            Err(error) => {
+                let failure = LatchFailure::incompatible(
+                    LatchFailureStage::ModuleLayout,
+                    LatchFailureReason::ScanoutAbiMismatch,
+                    error.to_string(),
+                );
+                publish_latch_readiness_report(&LatchReadinessReport::failed(
+                    kernel_release,
+                    &failure,
+                ));
+                return;
+            }
+        };
+
+    let (caps_hi, caps_lo, caps) = match fpga.read_magik_latched_fbuf_capabilities() {
+        Ok(caps) => caps,
+        Err(error) => {
+            let failure = LatchFailure::runtime(
+                LatchFailureStage::FpgaCapabilities,
+                LatchFailureReason::FpgaTransportFailed,
+                error.to_string(),
+            );
+            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            return;
+        }
+    };
+    let caps_supported =
+        caps_hi == fpga::MAGIK_FBUF_CAPS_MAGIC || caps_lo == fpga::MAGIK_FBUF_CAPS_MAGIC;
+    if !caps_supported || !caps.production_ready() {
+        let failure = LatchFailure::incompatible(
+            LatchFailureStage::FpgaCapabilities,
+            if caps_supported {
+                LatchFailureReason::FpgaCapabilitiesInsufficient
+            } else {
+                LatchFailureReason::FpgaProtocolUnsupported
+            },
+            format!(
+                "magic=0x{caps_hi:04x}/0x{caps_lo:04x} protocol={} flags=0x{:04x} max={}x{} stride={}",
+                caps.protocol_version,
+                caps.flags,
+                caps.max_width,
+                caps.max_height,
+                caps.max_stride_bytes
+            ),
+        );
+        publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+        return;
+    }
+
+    let status = match fpga.read_magik_latched_fbuf_status() {
+        Ok(status) if status.supported() => status,
+        Ok(status) => {
+            let failure = LatchFailure::incompatible(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaStatusUnsupported,
+                format!("magic=0x{:04x}/0x{:04x}", status.magic_hi, status.magic_lo),
+            );
+            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            return;
+        }
+        Err(error) => {
+            let failure = LatchFailure::runtime(
+                LatchFailureStage::FpgaStatus,
+                LatchFailureReason::FpgaTransportFailed,
+                error.to_string(),
+            );
+            publish_latch_readiness_report(&LatchReadinessReport::failed(kernel_release, &failure));
+            return;
+        }
+    };
+
+    let mut report = LatchReadinessReport::ready(kernel_release);
+    report.scanout_abi_version = Some(layout.abi_version);
+    report.scanout_slot_capacity_bytes = Some(layout.slot_capacity_bytes);
+    report.latch_protocol_version = Some(caps.protocol_version);
+    report.latch_capability_flags = Some(caps.flags);
+    report.latch_max_width = Some(caps.max_width);
+    report.latch_max_height = Some(caps.max_height);
+    report.latch_max_stride_bytes = Some(caps.max_stride_bytes);
+    report.detail = format!(
+        "live platform ready flip_count={} post_count={} drop_count={}",
+        status.flip_count, status.post_count, status.drop_count
+    );
+    publish_latch_readiness_report(&report);
+}
+
 fn run_fpga_latch_report() {
     let mut fpga = match Fpga::open() {
         Ok(fpga) => fpga,
@@ -1262,6 +1421,37 @@ fn run_fpga_latch_report() {
         status.active_height,
         status.active_stride
     );
+
+    let (caps_hi, caps_lo, caps) = match fpga.read_magik_latched_fbuf_capabilities() {
+        Ok(caps) => caps,
+        Err(e) => {
+            crate::ui_logln!(
+                "fpga_latch_caps_tsv\tcmd=0x{:02x}\tsupported=0\tproduction_ready=0\tmagic_expected=0x{:04x}\terror={e}",
+                fpga::MAGIK_UIO_GET_FBUF_LATCH_CAPS,
+                fpga::MAGIK_FBUF_CAPS_MAGIC
+            );
+            std::process::exit(1);
+        }
+    };
+    let caps_supported =
+        caps_hi == fpga::MAGIK_FBUF_CAPS_MAGIC || caps_lo == fpga::MAGIK_FBUF_CAPS_MAGIC;
+    crate::ui_logln!(
+        "fpga_latch_caps_tsv\tcmd=0x{:02x}\tsupported={}\tproduction_ready={}\tmagic_expected=0x{:04x}\tack_high=0x{:04x}\tack_low=0x{:04x}\tprotocol_version={}\tflags=0x{:04x}\tmax_width={}\tmax_height={}\tmax_stride_bytes={}",
+        fpga::MAGIK_UIO_GET_FBUF_LATCH_CAPS,
+        bool_tsv(caps_supported),
+        bool_tsv(caps_supported && caps.production_ready()),
+        fpga::MAGIK_FBUF_CAPS_MAGIC,
+        caps_hi,
+        caps_lo,
+        caps.protocol_version,
+        caps.flags,
+        caps.max_width,
+        caps.max_height,
+        caps.max_stride_bytes
+    );
+    if !set_supported || !status.supported() || !caps_supported || !caps.production_ready() {
+        std::process::exit(1);
+    }
 }
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

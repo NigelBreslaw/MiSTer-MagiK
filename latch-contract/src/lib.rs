@@ -3,9 +3,52 @@
 
 pub const SET_FBUF_LATCH: u16 = 0x57;
 pub const GET_FBUF_LATCH: u16 = 0x58;
+pub const GET_FBUF_LATCH_CAPS: u16 = 0x59;
 pub const LATCH_MAGIC: u16 = 0x4d47;
 pub const STATUS_MAGIC: u16 = 0x4d48;
+pub const CAPS_MAGIC: u16 = 0x4d49;
+pub const PROTOCOL_VERSION: u16 = 2;
+pub const CAP_RGB565: u16 = 1 << 0;
+pub const CAP_DOUBLE_BUFFER: u16 = 1 << 1;
+pub const CAP_VARIABLE_GEOMETRY: u16 = 1 << 2;
+pub const REQUIRED_CAPS: u16 = CAP_RGB565 | CAP_DOUBLE_BUFFER | CAP_VARIABLE_GEOMETRY;
+pub const CAPS_WORD_COUNT: usize = 5;
 pub const STATUS_WORD_COUNT: usize = 11;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LatchCapabilities {
+    pub protocol_version: u16,
+    pub flags: u16,
+    pub max_width: u16,
+    pub max_height: u16,
+    pub max_stride_bytes: u16,
+}
+
+impl LatchCapabilities {
+    pub fn production_ready(self) -> bool {
+        self.protocol_version == PROTOCOL_VERSION
+            && self.flags & REQUIRED_CAPS == REQUIRED_CAPS
+            && self.max_width >= 1280
+            && self.max_height >= 720
+            && self.max_stride_bytes >= 2560
+    }
+}
+
+pub fn decode_capabilities(words: &[u16]) -> Result<LatchCapabilities, String> {
+    if words.len() != CAPS_WORD_COUNT {
+        return Err(format!(
+            "latch capabilities need {CAPS_WORD_COUNT} words, got {}",
+            words.len()
+        ));
+    }
+    Ok(LatchCapabilities {
+        protocol_version: words[0],
+        flags: words[1],
+        max_width: words[2],
+        max_height: words[3],
+        max_stride_bytes: words[4],
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LatchStatus {
@@ -70,5 +113,15 @@ mod tests {
         assert!(decode_status(&[0; STATUS_WORD_COUNT + 1])
             .unwrap_err()
             .contains("got 12"));
+    }
+
+    #[test]
+    fn production_capabilities_require_protocol_v2_and_native_720p() {
+        let caps = decode_capabilities(&[2, REQUIRED_CAPS, 1280, 720, 2560]).unwrap();
+        assert!(caps.production_ready());
+        assert!(!decode_capabilities(&[1, REQUIRED_CAPS, 1280, 720, 2560])
+            .unwrap()
+            .production_ready());
+        assert!(decode_capabilities(&[]).is_err());
     }
 }

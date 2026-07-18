@@ -41,15 +41,20 @@ impl LauncherPresentBackend {
             Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
             Some(retired) if is_retired_present_backend(retired) => {
                 crate::ui_errln!(
-                    "launcher_present_backend_retired value={retired}; falling back to fb0-dirty"
+                    "launcher_present_backend_retired value={retired}; using required latch backend"
                 );
                 boot_analytics::event(
                     "launcher_present_backend_retired",
-                    format!("{retired} fallback=fb0-dirty"),
+                    format!("{retired} backend=fpga-vblank-latch-hidden"),
                 );
-                Self::Fb0Dirty
+                Self::FpgaVblankLatchHidden
             }
-            _ => Self::Fb0Dirty,
+            Some(invalid) => {
+                crate::ui_errln!(
+                    "launcher_present_backend_invalid value={invalid}; using required latch backend"
+                );
+                Self::FpgaVblankLatchHidden
+            }
         }
     }
 
@@ -59,7 +64,7 @@ impl LauncherPresentBackend {
 
     fn log_if_experimental(self) {
         match self {
-            Self::None | Self::Fb0Dirty => {}
+            Self::None | Self::Fb0Dirty | Self::CompatibilityFb0 => {}
             Self::FpgaVblankLatchHidden => {
                 crate::ui_logln!("launcher_present_backend=fpga-vblank-latch-hidden");
                 boot_analytics::event("launcher_present_backend", "fpga-vblank-latch-hidden");
@@ -87,10 +92,11 @@ fn present_mode_label_for_backend_status(
     backend: LauncherPresentBackend,
     status: LauncherPresentStatus,
 ) -> &'static str {
-    if backend.is_latch() && status == LauncherPresentStatus::Ok {
-        "Mode=latch"
-    } else {
-        "Mode=/dev/fb0"
+    match (backend, status) {
+        (LauncherPresentBackend::FpgaVblankLatchHidden, LauncherPresentStatus::Ok) => "Mode=latch",
+        (LauncherPresentBackend::CompatibilityFb0, _)
+        | (_, LauncherPresentStatus::Compatibility) => "Mode=compatibility",
+        _ => "Mode=/dev/fb0 diagnostic",
     }
 }
 
@@ -1967,7 +1973,9 @@ pub(super) fn run_launcher_loop(
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
         scheduler.record_loading_frame(loop_start);
-        let launching = scheduler.launch_is_active() || !loading_title.is_empty();
+        let compatibility_active = launcher_presenter.compatibility_failure().is_some();
+        let launching =
+            scheduler.launch_is_active() || !loading_title.is_empty() || compatibility_active;
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut full_bridge_dirty = false;
@@ -2486,6 +2494,7 @@ pub(super) fn run_launcher_loop(
                 catalog_ready
             };
             if launcher_bench_active
+                && !compatibility_active
                 && catalog_ready_for_bench
                 && launcher_bench_waiting_for_initial_preview
             {
@@ -2503,6 +2512,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if launcher_bench_active
+                && !compatibility_active
                 && catalog_ready_for_bench
                 && !launcher_bench_waiting_for_initial_preview
                 && launcher_bench_next_step.elapsed() >= scenario.period()
@@ -3668,6 +3678,13 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if let Some(failure) = launcher_presenter.compatibility_failure() {
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            bridge.set_compatibility_visible(true);
+            bridge.set_compatibility_reason(failure.reason_code().into());
+            bridge.set_compatibility_detail(failure.detail.as_str().into());
+            request_launcher_redraw!();
+        }
         app.global::<slint_ui::launcher::MisterBridge>()
             .set_present_mode_label(
                 present_mode_label_for_backend_status(
@@ -5593,20 +5610,20 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn launcher_present_backend_retired_values_fall_back_to_fb0_dirty() {
+    pub(super) fn launcher_present_backend_retired_values_use_required_latch_backend() {
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some(&["main", "flip-v1"].join("-"))),
-            LauncherPresentBackend::Fb0Dirty
+            LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some(&["main", "vsync-hidden"].join("-"))),
-            LauncherPresentBackend::Fb0Dirty
+            LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some(
                 &["plugin", "main", "vsync-hidden"].join("-")
             )),
-            LauncherPresentBackend::Fb0Dirty
+            LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
             LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden")),
@@ -5626,23 +5643,23 @@ mod tests {
         assert_eq!(
             present_mode_label_for_backend_status(
                 LauncherPresentBackend::FpgaVblankLatchHidden,
-                LauncherPresentStatus::Unsupported,
+                LauncherPresentStatus::Compatibility,
             ),
-            "Mode=/dev/fb0"
+            "Mode=compatibility"
         );
         assert_eq!(
             present_mode_label_for_backend_status(
                 LauncherPresentBackend::Fb0Dirty,
                 LauncherPresentStatus::None,
             ),
-            "Mode=/dev/fb0"
+            "Mode=/dev/fb0 diagnostic"
         );
         assert_eq!(
             present_mode_label_for_backend_status(
                 LauncherPresentBackend::None,
                 LauncherPresentStatus::None,
             ),
-            "Mode=/dev/fb0"
+            "Mode=/dev/fb0 diagnostic"
         );
     }
 

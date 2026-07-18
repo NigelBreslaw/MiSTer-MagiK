@@ -43,7 +43,7 @@ int main(void)
 	const unsigned long starts[] = { 0x227e9000UL, 0x22fd2000UL };
 	void *resources[2] = { NULL, NULL };
 	struct fixture fixture = { .fail_index = -1 };
-	const unsigned long map = 1040384UL;
+	const unsigned long map = 1843200UL;
 
 	assert(mister_magik_scanout_ranges_valid(0x22001000UL, map,
 		starts[0], starts[1], map, 0xffffffffUL));

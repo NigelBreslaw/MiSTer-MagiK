@@ -55,6 +55,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("scanout-slots-map-report", CommandKind::PreFpga),
     CommandSpec::new("fpga-latch-report", CommandKind::Fpga),
+    CommandSpec::new("latch-readiness-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]
     CommandSpec::new("fpga-latch-post-report", CommandKind::Fpga),
     #[cfg(all(feature = "diagnostics", feature = "ui"))]

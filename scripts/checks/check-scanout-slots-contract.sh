@@ -45,7 +45,7 @@ for text in \
   MISTER_MAGIK_SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE; do
   require_text "$UAPI" "$text"
 done
-for text in 0x227e_9000 0x22fd_2000 1_040_384; do
+for text in 0x227e_9000 0x22fd_2000 1_843_200; do
   require_text "$RUST_CONTRACT" "$text"
 done
 uapi_sha256="$(sha256sum "$UAPI" | awk '{print $1}')"

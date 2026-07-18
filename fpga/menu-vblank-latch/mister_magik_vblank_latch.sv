@@ -55,8 +55,10 @@ module mister_magik_vblank_latch (
 	assign apply = pending && vbl_rise;
 	assign response_valid =
 		(cmd_start && ((cmd_id == MAGIK_UIO_SET_FBUF_LATCH) ||
-		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH))) ||
-		(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH));
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS))) ||
+		(cmd_data && ((cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)));
 
 	always @(*) begin
 		response_data = 16'd0;
@@ -64,6 +66,7 @@ module mister_magik_vblank_latch (
 			case(cmd_id)
 				MAGIK_UIO_SET_FBUF_LATCH: response_data = MAGIK_FBUF_LATCH_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH: response_data = MAGIK_FBUF_STATUS_MAGIC;
+				MAGIK_UIO_GET_FBUF_LATCH_CAPS: response_data = MAGIK_FBUF_CAPS_MAGIC;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -80,6 +83,16 @@ module mister_magik_vblank_latch (
 				4'd8:  response_data = {4'd0, active_lfb_width};
 				4'd9:  response_data = {4'd0, active_lfb_height};
 				4'd10: response_data = {2'd0, active_lfb_stride};
+				default: response_data = 16'd0;
+			endcase
+		end
+		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS)) begin
+			case(word_index)
+				4'd0: response_data = MAGIK_FBUF_PROTOCOL_VERSION;
+				4'd1: response_data = MAGIK_FBUF_CAPS_FLAGS;
+				4'd2: response_data = MAGIK_FBUF_MAX_WIDTH;
+				4'd3: response_data = MAGIK_FBUF_MAX_HEIGHT;
+				4'd4: response_data = MAGIK_FBUF_MAX_STRIDE;
 				default: response_data = 16'd0;
 			endcase
 		end

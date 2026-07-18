@@ -42,6 +42,15 @@ require_probe() {
   local text="$1"
   grep -q $'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1' <<<"$text" || return 1
   grep -q $'fpga_latch_status_tsv\tcmd=0x58\tsupported=1' <<<"$text" || return 1
+  grep -q $'fpga_latch_caps_tsv\tcmd=0x59\tsupported=1' <<<"$text" || return 1
+  grep -q $'protocol_version=2' <<<"$text" || return 1
+  grep -q $'production_ready=1' <<<"$text" || return 1
+}
+
+require_readiness() {
+  local text="$1"
+  grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' <<<"$text" || return 1
+  ! grep -Eq 'latch_(readiness|failure)_tsv[[:space:]]+valid=0' <<<"$text"
 }
 
 require_equal_hash() {
@@ -70,10 +79,12 @@ require_counter_advance() {
 
 self_test() {
   local good bad before after marker expected runtime
-  good=$'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1\nfpga_latch_status_tsv\tcmd=0x58\tsupported=1\tflip_count=4\tpost_count=5\tdrop_count=0'
+  good=$'fpga_latch_set_probe_tsv\tcmd=0x57\tsupported=1\nfpga_latch_status_tsv\tcmd=0x58\tsupported=1\tflip_count=4\tpost_count=5\tdrop_count=0\nfpga_latch_caps_tsv\tcmd=0x59\tsupported=1\tprotocol_version=2\tproduction_ready=1'
   bad="${good/supported=1/supported=0}"
   require_probe "$good"
   ! require_probe "$bad"
+  require_readiness $'latch_readiness_tsv\tvalid=1\tstate=ready\tstage=none\treason=none'
+  ! require_readiness $'latch_readiness_tsv\tvalid=0\tstate=platform-incompatible\tstage=kernel\treason=kernel-release-mismatch'
   before=$'fpga_latch_status_tsv\tflip_count=4\tpost_count=5\tdrop_count=0'
   after=$'fpga_latch_status_tsv\tflip_count=5\tpost_count=6\tdrop_count=1'
   require_counter_advance "$before" "$after" flip_count
@@ -88,7 +99,7 @@ self_test() {
   cleanup_test() { rm -f "$marker"; }
   cleanup_test
   [[ ! -e "$marker" ]]
-  echo "qualification self-test valid=1 cases=hash-mismatch,unsupported-command,missing-module,counter-stall,cleanup"
+  echo "qualification self-test valid=1 cases=hash-mismatch,unsupported-command,missing-capabilities,readiness-failure,missing-module,counter-stall,cleanup"
 }
 
 if [[ "$SELF_TEST" -eq 1 ]]; then
@@ -115,9 +126,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "==> Verify exact local/deployed RBF and runtime"
-REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiKDev); cmdline=\$(tr '\\000' ' ' < /proc/\$pid/cmdline); echo \"\$cmdline\" | grep -Fq '$REMOTE_RBF'; echo rbf_sha256=\$actual; echo main_rbf='$REMOTE_RBF'; echo module_ready=1; echo device_ready=1; '$REMOTE_BIN' fpga-latch-report")"
+REMOTE_STATE="$($MISTER run "set -e; test -f '$REMOTE_META'; expected=\$(sed -n 's/^rbf_sha256=//p' '$REMOTE_META'); actual=\$(sha256sum '$REMOTE_RBF' | awk '{print \$1}'); test \"\$expected\" = '$EXPECTED_HASH'; test \"\$actual\" = '$EXPECTED_HASH'; test -e /dev/mister-magik-scanout-slots; grep -q '^mister_magik_scanout_slots ' /proc/modules; pid=\$(pidof MiSTer_MagiKDev); cmdline=\$(tr '\\000' ' ' < /proc/\$pid/cmdline); echo \"\$cmdline\" | grep -Fq '$REMOTE_RBF'; echo rbf_sha256=\$actual; echo main_rbf='$REMOTE_RBF'; echo module_ready=1; echo device_ready=1; '$REMOTE_BIN' fpga-latch-report; '$REMOTE_BIN' latch-readiness-report")"
 require_runtime "$REMOTE_STATE" "$EXPECTED_HASH"
 require_probe "$REMOTE_STATE"
+require_readiness "$REMOTE_STATE"
 BEFORE="$REMOTE_STATE"
 
 echo "==> Deliberate over-post and recovery"
@@ -151,8 +163,9 @@ if [[ "$SOAK_SECS" -gt 0 ]]; then
   "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-SOAK" --skip-build --secs "$SOAK_SECS" --ui-fb-size 960x540
 fi
 
-FINAL="$($MISTER run "'$REMOTE_BIN' fpga-latch-report")"
+FINAL="$($MISTER run "'$REMOTE_BIN' fpga-latch-report; '$REMOTE_BIN' latch-readiness-report")"
 require_probe "$FINAL"
+require_readiness "$FINAL"
 require_counter_advance "$BEFORE" "$FINAL" flip_count
 printf 'fpga_latch_qualification_tsv\tlabel=%s\trbf_sha256=%s\tsoak_secs=%s\thdmi_evidence=%s\tvalid=1\n' \
   "$LABEL" "$EXPECTED_HASH" "$SOAK_SECS" "${HDMI_EVIDENCE:-not-supplied}"

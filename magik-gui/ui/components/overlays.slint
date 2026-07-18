@@ -6,6 +6,51 @@ import { MisterBridge } from "../api.slint";
 import { LauncherTile, OsdSideLabel } from "launcher_chrome.slint";
 import { ScreenshotPackProgressRow } from "progress.slint";
 
+export component CompatibilityScreen inherits Rectangle {
+    property <int> s: MisterUi.scale;
+
+    background: #09070d;
+
+    VerticalLayout {
+        padding-left: 80px * root.s;
+        padding-right: 80px * root.s;
+        padding-top: 70px * root.s;
+        padding-bottom: 70px * root.s;
+        spacing: 22px * root.s;
+        alignment: center;
+
+        Text {
+            text: "MiSTer MagiK compatibility check failed";
+            color: #ff5d73;
+            font-size: 18px * root.s;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-reason;
+            color: #ffd166;
+            font-size: 11px * root.s;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: MisterBridge.compatibility-detail;
+            color: #e8e0f0;
+            font-size: 8px * root.s;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        Text {
+            text: "The normal launcher is disabled. Diagnostics: /tmp/mister-magik";
+            color: #9080a8;
+            font-size: 7px * root.s;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
+}
+
 export component CatalogScanPopup inherits Rectangle {
     in property <int> s;
     property <length> scan-osd-width: 56px * s;
