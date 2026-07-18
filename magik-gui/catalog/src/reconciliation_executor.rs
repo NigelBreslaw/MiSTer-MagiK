@@ -11,7 +11,7 @@ use crate::shard_registry::{
     CatalogManifest, ManifestSystem, RegistryLimits,
     PublishedGeneration,
 };
-use crate::sharded_catalog::{PlannedSystemAction, ReconcilePlan};
+use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan};
 use crate::system_shard::{
     write_system_shard_with_durability, ShardDurability, SystemGame, SystemShardData,
 };
@@ -21,7 +21,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
@@ -158,7 +158,11 @@ pub fn execute_reconciliation(
     let mut artifact_publish_time = Duration::ZERO;
     let mut artifact_publish_bytes = 0_u64;
     let mut slowest_shard = (String::new(), Duration::ZERO);
-    let worker_count = 1;
+    let mut worker_count = 1;
+    let mut pipeline_overlap = Duration::ZERO;
+    let mut pipeline_queue_wait = Duration::ZERO;
+    let mut pipeline_peak_in_flight = 1_usize;
+    let mut pipeline_fallbacks = 0_usize;
     for planned in &plan.systems {
         if planned.action == PlannedSystemAction::Remove {
             systems.retain(|system| system.system_id != planned.system_id);
@@ -171,10 +175,29 @@ pub fn execute_reconciliation(
         .iter()
         .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
         .collect::<Vec<_>>();
-    for batch in rebuilds.chunks(worker_count) {
-        crate::cooperative_work::checkpoint();
-        let mut shard_jobs = Vec::with_capacity(batch.len());
-        for planned in batch {
+    let completed_shards = if current.is_none() && rebuilds.len() > 1 {
+        worker_count = 2;
+        let pipeline = execute_fresh_pipeline(
+            storage_root,
+            &rebuilds,
+            expected_generation,
+            nonce,
+            limits,
+            materializer,
+        )
+        .inspect_err(|_| {
+            remove_planned_generation(storage_root, &rebuilds, expected_generation)
+        })?;
+        materialize_time += pipeline.materialize_time;
+        pipeline_overlap = pipeline.overlap;
+        pipeline_queue_wait = pipeline.queue_wait;
+        pipeline_peak_in_flight = pipeline.peak_in_flight;
+        pipeline_fallbacks = pipeline.fallbacks;
+        pipeline.completed
+    } else {
+        let mut sequential = Vec::with_capacity(rebuilds.len());
+        for planned in &rebuilds {
+            crate::cooperative_work::checkpoint();
             let phase_started = Instant::now();
             let materialized = match materializer.materialize(
                 &planned.system_id,
@@ -182,70 +205,49 @@ pub fn execute_reconciliation(
             ) {
                 Ok(materialized) => materialized,
                 Err(error) => {
-                    remove_uncommitted_generation(storage_root, &systems, expected_generation);
+                    remove_planned_generation(storage_root, &rebuilds, expected_generation);
                     return Err(error);
                 }
             };
             materialize_time += phase_started.elapsed();
-            validate_materialized(&planned.system_id, &materialized)?;
+            if let Err(error) = validate_materialized(&planned.system_id, &materialized) {
+                remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                return Err(error);
+            }
             let previous = systems
                 .iter()
                 .find(|system| system.system_id == planned.system_id)
                 .map(|system| system.active.clone());
-            shard_jobs.push(ShardBuildJob {
-                materialized,
-                previous,
-            });
-        }
-        let jobs = Arc::new(Mutex::new(shard_jobs.into_iter()));
-        let completed = Arc::new(Mutex::new(Vec::new()));
-        let first_error = Arc::new(Mutex::new(None));
-        std::thread::scope(|scope| {
-            for _ in 0..batch.len() {
-                let jobs = Arc::clone(&jobs);
-                let completed = Arc::clone(&completed);
-                let first_error = Arc::clone(&first_error);
-                scope.spawn(move || loop {
-                    if first_error.lock().expect("shard error lock").is_some() {
-                        break;
-                    }
-                    let Some(job) = jobs.lock().expect("shard job lock").next() else {
-                        break;
-                    };
-                    match build_shard_job(
-                        storage_root,
-                        expected_generation,
-                        nonce,
-                        limits,
-                        job,
-                    ) {
-                        Ok(shard) => completed.lock().expect("completed shard lock").push(shard),
-                        Err(error) => {
-                            let mut first = first_error.lock().expect("shard error lock");
-                            if first.is_none() {
-                                *first = Some(error);
-                            }
-                            break;
-                        }
-                    }
-                });
+            let shard = build_shard_job(
+                storage_root,
+                expected_generation,
+                nonce,
+                limits,
+                ShardBuildJob {
+                    materialized,
+                    previous,
+                },
+            );
+            match shard {
+                Ok(shard) => sequential.push(shard),
+                Err(error) => {
+                    remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                    return Err(error);
+                }
             }
-        });
-        if let Some(error) = first_error.lock().expect("shard error lock").take() {
-            return Err(error);
         }
-        let mut completed = completed.lock().expect("completed shard lock");
-        for shard in completed.drain(..) {
-            shard_write_time += shard.write_time;
-            artifact_publish_time += shard.publish_time;
-            artifact_publish_bytes = artifact_publish_bytes.saturating_add(shard.artifact_bytes);
-            if shard.elapsed > slowest_shard.1 {
-                slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
-            }
-            rebuilt.push(shard.system.system_id.clone());
-            systems.retain(|system| system.system_id != shard.system.system_id);
-            systems.push(shard.system);
+        sequential
+    };
+    for shard in completed_shards {
+        shard_write_time += shard.write_time;
+        artifact_publish_time += shard.publish_time;
+        artifact_publish_bytes = artifact_publish_bytes.saturating_add(shard.artifact_bytes);
+        if shard.elapsed > slowest_shard.1 {
+            slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
         }
+        rebuilt.push(shard.system.system_id.clone());
+        systems.retain(|system| system.system_id != shard.system.system_id);
+        systems.push(shard.system);
     }
     rebuilt.sort();
     let shard_batch_time = shard_batch_started.elapsed();
@@ -267,7 +269,7 @@ pub fn execute_reconciliation(
     let manifest_time = manifest_started.elapsed();
     materializer.commit_facts()?;
     crate::catalog_logln!(
-        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_write_us={}\tartifact_publish_us={}\tartifact_copy_hash_us={}\tartifact_publish_bytes={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
+        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_write_us={}\tartifact_publish_us={}\tartifact_copy_hash_us={}\tartifact_publish_bytes={}\tpipeline_overlap_us={}\tpipeline_queue_wait_us={}\tpipeline_peak_in_flight={}\tpipeline_fallbacks={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
         expected_generation,
         rebuilt.len(),
         materialize_time.as_micros(),
@@ -277,6 +279,10 @@ pub fn execute_reconciliation(
         artifact_publish_time.as_micros(),
         artifact_publish_time.as_micros(),
         artifact_publish_bytes,
+        pipeline_overlap.as_micros(),
+        pipeline_queue_wait.as_micros(),
+        pipeline_peak_in_flight,
+        pipeline_fallbacks,
         barrier_time.as_micros(),
         manifest_time.as_micros(),
         slowest_shard.0,
@@ -289,17 +295,247 @@ pub fn execute_reconciliation(
     })
 }
 
-fn remove_uncommitted_generation(
+struct FreshPipelineOutcome {
+    completed: Vec<CompletedShard>,
+    materialize_time: Duration,
+    overlap: Duration,
+    queue_wait: Duration,
+    peak_in_flight: usize,
+    fallbacks: usize,
+}
+
+fn execute_fresh_pipeline(
     storage_root: &Path,
-    systems: &[ManifestSystem],
+    rebuilds: &[&PlannedSystem],
+    generation: u64,
+    nonce: u128,
+    limits: RegistryLimits,
+    materializer: &mut impl ReconciliationMaterializer,
+) -> Result<FreshPipelineOutcome, ReconciliationError> {
+    let pipeline_started = Instant::now();
+    let background = crate::cooperative_work::in_background_scope();
+    let (staged_tx, staged_rx) = mpsc::sync_channel::<StagedShard>(1);
+    let (completed_tx, completed_rx) = mpsc::channel::<Result<CompletedShard, ReconciliationError>>();
+    std::thread::scope(|scope| {
+        let publisher = scope.spawn(move || {
+            let _background_scope =
+                background.then(crate::cooperative_work::BackgroundScope::enter);
+            publish_staged_shards(storage_root, generation, limits, staged_rx, completed_tx)
+        });
+        let mut completed = Vec::with_capacity(rebuilds.len());
+        let mut in_flight = 0_usize;
+        let mut peak_in_flight = 0_usize;
+        let mut materialize_time = Duration::ZERO;
+        let mut build_time = Duration::ZERO;
+        let mut queue_wait = Duration::ZERO;
+        let mut fallbacks = 0_usize;
+        let mut failure = None;
+
+        for planned in rebuilds {
+            crate::cooperative_work::checkpoint();
+            while in_flight >= 2 {
+                if let Err(error) = receive_published_shard(
+                    &completed_rx,
+                    &mut completed,
+                    &mut in_flight,
+                    &mut queue_wait,
+                ) {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            if failure.is_some() {
+                break;
+            }
+
+            let phase_started = Instant::now();
+            let materialized = match materializer.materialize(&planned.system_id, generation) {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            };
+            materialize_time += phase_started.elapsed();
+            if let Err(error) = validate_materialized(&planned.system_id, &materialized) {
+                failure = Some(error);
+                break;
+            }
+
+            let device_fallback = storage_root.starts_with(Path::new("/media/fat"))
+                && !shard_build_root(storage_root, &materialized.games)
+                    .starts_with(Path::new("/tmp/mister-magik/catalog-v3-build"));
+            if device_fallback {
+                while in_flight > 0 {
+                    if let Err(error) = receive_published_shard(
+                        &completed_rx,
+                        &mut completed,
+                        &mut in_flight,
+                        &mut queue_wait,
+                    ) {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                if failure.is_some() {
+                    break;
+                }
+            }
+
+            peak_in_flight = peak_in_flight.max(in_flight.saturating_add(1));
+            let staged = match build_and_validate_shard(
+                storage_root,
+                generation,
+                nonce,
+                limits,
+                ShardBuildJob {
+                    materialized,
+                    previous: None,
+                },
+            ) {
+                Ok(staged) => staged,
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            };
+            build_time += staged.build_elapsed;
+
+            let staged_on_media = storage_root.starts_with(Path::new("/media/fat"))
+                && !staged
+                    .staging
+                    .starts_with(Path::new("/tmp/mister-magik/catalog-v3-build"));
+            if staged_on_media {
+                fallbacks += 1;
+                match publish_staged_shard(storage_root, generation, limits, staged) {
+                    Ok(shard) => completed.push(shard),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            let wait_started = Instant::now();
+            if let Err(error) = staged_tx.send(staged) {
+                failure = completed_rx
+                    .recv()
+                    .ok()
+                    .and_then(Result::err)
+                    .or_else(|| {
+                        Some(ReconciliationError::new(
+                            "pipeline",
+                            format!("publisher stopped before accepting shard: {error}"),
+                        ))
+                    });
+                break;
+            }
+            queue_wait += wait_started.elapsed();
+            in_flight += 1;
+            peak_in_flight = peak_in_flight.max(in_flight);
+            while let Ok(result) = completed_rx.try_recv() {
+                in_flight = in_flight.saturating_sub(1);
+                match result {
+                    Ok(shard) => completed.push(shard),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            if failure.is_some() {
+                break;
+            }
+        }
+
+        drop(staged_tx);
+        while failure.is_none() && in_flight > 0 {
+            if let Err(error) = receive_published_shard(
+                &completed_rx,
+                &mut completed,
+                &mut in_flight,
+                &mut queue_wait,
+            ) {
+                failure = Some(error);
+            }
+        }
+        let publisher_result = publisher
+            .join()
+            .map_err(|_| ReconciliationError::new("pipeline", "publisher thread panicked"))?;
+        if failure.is_none() {
+            failure = publisher_result.err();
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+
+        let publish_time = completed
+            .iter()
+            .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
+        let serial_time = materialize_time
+            .saturating_add(build_time)
+            .saturating_add(publish_time);
+        Ok(FreshPipelineOutcome {
+            completed,
+            materialize_time,
+            overlap: serial_time.saturating_sub(pipeline_started.elapsed()),
+            queue_wait,
+            peak_in_flight,
+            fallbacks,
+        })
+    })
+}
+
+fn publish_staged_shards(
+    storage_root: &Path,
+    generation: u64,
+    limits: RegistryLimits,
+    staged_rx: Receiver<StagedShard>,
+    completed_tx: mpsc::Sender<Result<CompletedShard, ReconciliationError>>,
+) -> Result<(), ReconciliationError> {
+    for staged in staged_rx {
+        crate::cooperative_work::checkpoint();
+        let result = publish_staged_shard(storage_root, generation, limits, staged);
+        let failed = result.is_err();
+        if completed_tx.send(result).is_err() {
+            return Ok(());
+        }
+        if failed {
+            return Err(ReconciliationError::new(
+                "pipeline",
+                "publisher stopped after artifact failure",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn receive_published_shard(
+    completed_rx: &Receiver<Result<CompletedShard, ReconciliationError>>,
+    completed: &mut Vec<CompletedShard>,
+    in_flight: &mut usize,
+    queue_wait: &mut Duration,
+) -> Result<(), ReconciliationError> {
+    let wait_started = Instant::now();
+    let result = completed_rx
+        .recv()
+        .map_err(|_| ReconciliationError::new("pipeline", "publisher disconnected"))?;
+    *queue_wait += wait_started.elapsed();
+    *in_flight = in_flight.saturating_sub(1);
+    completed.push(result?);
+    Ok(())
+}
+
+fn remove_planned_generation(
+    storage_root: &Path,
+    rebuilds: &[&PlannedSystem],
     generation: u64,
 ) {
-    for system in systems
-        .iter()
-        .filter(|system| system.active.generation == generation)
-    {
-        let _ = fs::remove_file(storage_root.join(&system.active.sqlite_path));
-        let _ = fs::remove_file(storage_root.join(&system.active.navigation_path));
+    for planned in rebuilds {
+        let directory = storage_root.join("systems").join(planned.system_id.as_str());
+        let _ = fs::remove_file(directory.join(format!("{generation}.sqlite3")));
+        let _ = fs::remove_file(directory.join(format!("{generation}.nav.lz4b")));
     }
 }
 
@@ -457,10 +693,21 @@ fn publish_staged_shard(
 }
 
 fn shard_build_root(storage_root: &Path, games: &[SystemGame]) -> PathBuf {
+    shard_build_root_for_available(
+        storage_root,
+        games,
+        tmpfs_available_bytes(Path::new("/tmp")),
+    )
+}
+
+fn shard_build_root_for_available(
+    storage_root: &Path,
+    games: &[SystemGame],
+    available: Option<u64>,
+) -> PathBuf {
     if cfg!(target_os = "linux")
         && storage_root.starts_with(Path::new("/media/fat"))
-        && tmpfs_available_bytes(Path::new("/tmp"))
-            .is_some_and(|available| available >= estimated_shard_build_bytes(games))
+        && available.is_some_and(|available| available >= estimated_shard_build_bytes(games))
     {
         PathBuf::from("/tmp/mister-magik/catalog-v3-build")
     } else {
@@ -794,6 +1041,74 @@ mod tests {
         let small = estimated_shard_build_bytes(&[game("One")]);
         let large = estimated_shard_build_bytes(&[game("One"), game("Two")]);
         assert!(large > small);
+    }
+
+    #[test]
+    fn low_tmpfs_capacity_selects_on_media_staging() {
+        let device = Path::new("/media/fat/mister-magik/catalog-v3");
+        assert_eq!(
+            shard_build_root_for_available(device, &[game("One")], Some(0)),
+            device.join("staging")
+        );
+    }
+
+    #[test]
+    fn fresh_pipeline_publishes_exactly_seventy_one_systems_with_two_slots() {
+        let root = temporary_root("pipeline-71");
+        let planned = (0..71)
+            .map(|index| PlannedSystem {
+                system_id: system(&format!("fixture-{index:02}")),
+                action: PlannedSystemAction::Rebuild,
+                reasons: vec![ReconcileReason::SourceChanged],
+            })
+            .collect::<Vec<_>>();
+        let borrowed = planned.iter().collect::<Vec<_>>();
+        let mut materializer = StreamingFixtureMaterializer {
+            root: root.clone(),
+            calls: 0,
+        };
+
+        let outcome = execute_fresh_pipeline(
+            &root,
+            &borrowed,
+            1,
+            99,
+            limits(),
+            &mut materializer,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.completed.len(), 71);
+        assert_eq!(outcome.peak_in_flight, 2);
+        assert_eq!(outcome.fallbacks, 0);
+        let unique = outcome
+            .completed
+            .iter()
+            .map(|shard| shard.system.system_id.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), 71);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publisher_failure_leaves_no_authoritative_fresh_manifest() {
+        let root = temporary_root("pipeline-publisher-failure");
+        let blocked = root.join("systems/c64/1.sqlite3");
+        fs::create_dir_all(&blocked).unwrap();
+        let mut materializer = FixtureMaterializer::new();
+
+        let error = execute_reconciliation(
+            &root,
+            &plan(None, 1, &["c64", "snes"]),
+            limits(),
+            &mut materializer,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.stage(), "publish-artifact");
+        assert!(read_latest_manifest(&root, limits()).is_err());
+        assert!(!root.join("staging").join("reconcile").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
