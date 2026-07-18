@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 thread_local! {
     static FAIL_ARTIFACT_BARRIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FAIL_MANIFEST_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_MANIFEST_PUBLICATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 fn run_artifact_barrier(storage_root: &Path) -> Result<(), ReconciliationError> {
@@ -47,7 +47,10 @@ fn run_manifest_publication(
     limits: RegistryLimits,
 ) -> Result<(), ReconciliationError> {
     #[cfg(test)]
-    if FAIL_MANIFEST_PUBLICATION.with(|fail| fail.replace(false)) {
+    #[cfg(test)]
+    let injected_failure = FAIL_MANIFEST_PUBLICATION.with(|fail| fail.replace(0));
+    #[cfg(test)]
+    if injected_failure == 1 {
         return Err(ReconciliationError::new(
             "publish-manifest",
             "injected manifest publication failure",
@@ -55,7 +58,15 @@ fn run_manifest_publication(
     }
     publish_manifest(storage_root, manifest, limits)
         .map(|_| ())
-        .map_err(|error| ReconciliationError::new("publish-manifest", error.to_string()))
+        .map_err(|error| ReconciliationError::new("publish-manifest", error.to_string()))?;
+    #[cfg(test)]
+    if injected_failure == 2 {
+        return Err(ReconciliationError::new(
+            "publish-manifest",
+            "injected post-rename manifest failure",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -298,7 +309,11 @@ pub fn execute_reconciliation(
     let (barrier_time, manifest_time) = match finalize {
         Ok(times) => times,
         Err(error) => {
-            remove_planned_generation(storage_root, &rebuilds, expected_generation);
+            let intended_is_authoritative = read_latest_manifest(storage_root, limits)
+                .is_ok_and(|manifest| manifest.generation == expected_generation);
+            if !intended_is_authoritative {
+                remove_planned_generation(storage_root, &rebuilds, expected_generation);
+            }
             return Err(error);
         }
     };
@@ -1033,7 +1048,7 @@ mod tests {
     fn failed_manifest_publication_removes_uncommitted_generation() {
         let root = temporary_root("manifest-failure");
         let mut materializer = FixtureMaterializer::new();
-        FAIL_MANIFEST_PUBLICATION.with(|fail| fail.set(true));
+        FAIL_MANIFEST_PUBLICATION.with(|fail| fail.set(1));
 
         let error =
             execute_reconciliation(&root, &plan(None, 1, &["c64"]), limits(), &mut materializer)
@@ -1043,6 +1058,24 @@ mod tests {
         assert!(read_latest_manifest(&root, limits()).is_err());
         assert!(!root.join("systems/c64/1.sqlite3").exists());
         assert!(!root.join("systems/c64/1.nav.lz4b").exists());
+        assert_eq!(materializer.commits, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_rename_manifest_failure_preserves_authoritative_artifacts() {
+        let root = temporary_root("post-rename-manifest-failure");
+        let mut materializer = FixtureMaterializer::new();
+        FAIL_MANIFEST_PUBLICATION.with(|fail| fail.set(2));
+
+        let error =
+            execute_reconciliation(&root, &plan(None, 1, &["c64"]), limits(), &mut materializer)
+                .unwrap_err();
+
+        assert_eq!(error.stage(), "publish-manifest");
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
+        assert!(root.join("systems/c64/1.sqlite3").exists());
+        assert!(root.join("systems/c64/1.nav.lz4b").exists());
         assert_eq!(materializer.commits, 0);
         fs::remove_dir_all(root).unwrap();
     }
