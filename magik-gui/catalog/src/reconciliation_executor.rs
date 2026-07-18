@@ -428,7 +428,17 @@ fn tmpfs_available_bytes(path: &Path) -> Option<u64> {
         return None;
     }
     let stats = unsafe { stats.assume_init() };
-    (stats.f_bavail as u64).checked_mul(stats.f_frsize as u64)
+    statvfs_value_to_u64(stats.f_bavail).checked_mul(statvfs_value_to_u64(stats.f_frsize))
+}
+
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+fn statvfs_value_to_u64(value: u64) -> u64 {
+    value
+}
+
+#[cfg(all(target_os = "linux", target_pointer_width = "32"))]
+fn statvfs_value_to_u64<T: Into<u64>>(value: T) -> u64 {
+    value.into()
 }
 
 #[cfg(not(target_os = "linux"))]
