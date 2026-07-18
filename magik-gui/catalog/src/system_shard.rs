@@ -136,7 +136,7 @@ pub(crate) fn write_system_shard_with_durability(
     connection
         .execute_batch(
             "PRAGMA page_size=4096;
-             PRAGMA cache_size=-65536;
+             PRAGMA cache_size=-8192;
              PRAGMA temp_store=MEMORY;
              PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE shard_meta (

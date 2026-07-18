@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "scanner-cache.sqlite3";
-const WRITE_BATCH_ROWS: usize = 512;
+const WRITE_BATCH_ROWS: usize = 8_192;
 
 #[derive(Clone, Debug, Default)]
 pub struct DiscoveryHistory {
@@ -215,7 +215,7 @@ pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScan
             "PRAGMA journal_mode=OFF;
              PRAGMA synchronous=OFF;
              PRAGMA page_size=32768;
-             PRAGMA cache_size=-65536;
+             PRAGMA cache_size=-8192;
              PRAGMA temp_store=MEMORY;
              PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE scanner_cache_meta(key TEXT PRIMARY KEY,value INTEGER NOT NULL) WITHOUT ROWID;
