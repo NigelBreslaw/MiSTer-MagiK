@@ -259,7 +259,7 @@ fn run_with_backend<B: BuilderBackend>(
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
-    let background_build = operation == BuilderOperation::Rebuild;
+    let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -303,7 +303,7 @@ fn run_with_backend<B: BuilderBackend>(
                 detail: format!("status=error error={}", error.replace('\t', " ")),
             }),
         }
-        apply_runtime_thread_policy(build_role);
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
     }
     // First-visible serialization and publication are part of foreground
     // bootstrap. Entering the cooperative scope before CatalogReady creates a
@@ -1618,8 +1618,8 @@ mod tests {
             .expect("retained first-visible timing");
         assert_eq!(
             backend.snapshot_background_scopes,
-            [false, false],
-            "a cold initial build must remain foreground after first-visible publication"
+            [false, true],
+            "only the acknowledged first-visible snapshot remains foreground"
         );
         let full_scan_timing = events
             .iter()

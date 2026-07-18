@@ -162,6 +162,20 @@ publication lock, or UI lock, and it must not emit progress that suggests work
 advanced while paused. Reopening the latch resumes the same operation without
 discarding discoveries or restarting the scan.
 
+That latch is in-process pause/resume only. A first build also keeps disposable
+durable progress in `catalog-v3/state/build-progress.sqlite3`. Completed scan
+targets are committed atomically with their eligible-input fingerprints. After
+a launcher handoff terminates MagiK, the next launcher re-enumerates target
+metadata, hydrates exact matches without reparsing or classifying them, and
+continues with new or changed targets under the same build ID. Completed,
+unpublished system shards are likewise hash- and schema-checked before reuse.
+
+Neither the latch nor the progress journal is catalog authority. Readers accept
+only the normal publication chain: all immutable shards, artifact barrier,
+complete manifest, catalog binding, scanner cache, and catalog state. The
+journal is removed last after that chain succeeds; missing, corrupt, or
+contract-mismatched recovery state is discarded and rebuilt.
+
 The catalog crate owns only a generic cooperative-work permission signal and
 background scope. It does not depend on Slint or launcher types. The UI runner
 adapts the latch into that signal.
