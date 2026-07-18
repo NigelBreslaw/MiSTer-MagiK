@@ -3296,7 +3296,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_events_ignore_systems_without_screenshot_packs() {
+    fn scan_events_report_systems_without_screenshot_packs() {
         let root = unique_temp_dir("scan-events-unsupported-systems");
         install_test_console_core(&root, "GBA");
         install_test_console_core(&root, "NES");
@@ -3319,7 +3319,8 @@ mod tests {
         let scan = scan_library_with_progress_and_events(&cfg, None, Some(&mut scan_events));
 
         assert_eq!(unique_discovery_count(&scan.discoveries), 2);
-        assert_eq!(systems, ["nes"]);
+        systems.sort();
+        assert_eq!(systems, ["gba", "nes"]);
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -28,18 +28,6 @@ use std::time::Instant;
 
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
-const SCREENSHOT_PACK_SYSTEM_IDS: &[&str] = &[
-    "arcade",
-    "neogeo",
-    "nes",
-    "snes",
-    "n64",
-    "sms",
-    "megadrive",
-    "saturn",
-    "amiga",
-];
-
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
     priority: LibraryScanPriority,
@@ -590,7 +578,7 @@ fn report_new_discovered_systems(
     };
     for discovery in discoveries {
         let system_id = catalog_system_id_for_discovery(discovery);
-        if !screenshot_pack_system_supported(&system_id) {
+        if !is_reportable_catalog_system_id(&system_id) {
             continue;
         }
         if discovered_systems.insert(system_id.clone()) {
@@ -599,8 +587,8 @@ fn report_new_discovered_systems(
     }
 }
 
-fn screenshot_pack_system_supported(system_id: &str) -> bool {
-    SCREENSHOT_PACK_SYSTEM_IDS.contains(&system_id)
+fn is_reportable_catalog_system_id(system_id: &str) -> bool {
+    system_id != "unknown"
 }
 
 fn bootstrap_library_progress(
@@ -674,6 +662,12 @@ fn is_bootstrap_launcher_path(path: &Path) -> bool {
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+
+    #[test]
+    fn catalog_progress_reports_valid_systems_but_not_the_unknown_sentinel() {
+        assert!(is_reportable_catalog_system_id("gba"));
+        assert!(!is_reportable_catalog_system_id("unknown"));
+    }
 
     #[test]
     fn file_discovery_source_classes_separate_metadata_reads_from_paths() {
