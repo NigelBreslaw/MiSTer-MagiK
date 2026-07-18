@@ -8,6 +8,8 @@ mod arcade_bootstrap_index;
 pub mod arcade_catalog;
 mod atomic_publish;
 mod bounded_lz4;
+#[cfg(feature = "builder")]
+pub mod build_progress;
 pub mod builder_protocol;
 #[cfg(feature = "builder")]
 pub mod builder_service;

@@ -1,0 +1,509 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Disposable durable progress for an interrupted first catalog build.
+//!
+//! This database is never catalog authority. A caller must still publish the
+//! normal shard manifest, binding, scanner cache, and catalog state in order.
+
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const FILE_NAME: &str = "build-progress.sqlite3";
+const SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BuildContract {
+    pub roots: Vec<String>,
+    pub path_mapping: Vec<(String, String)>,
+    pub scanner_version: u32,
+    pub profile_version: String,
+    pub taxonomy_version: String,
+    pub namespace_backend: String,
+    pub projection_contract: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BuildStats {
+    pub normal_files: u64,
+    pub containers: u64,
+    pub entries: u64,
+    pub audit_rows: u64,
+    pub discoveries: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScanTarget {
+    pub ordinal: u32,
+    pub key: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CompletedTarget {
+    pub target: ScanTarget,
+    pub input_fingerprint: String,
+    /// Versioned scanner-owned JSON. The journal deliberately does not
+    /// interpret payload/container/entry/discovery facts.
+    pub output_json: String,
+    pub accumulated_stats: BuildStats,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CompletedShard {
+    pub system_id: String,
+    pub generation: u64,
+    pub sqlite_path: String,
+    pub metadata_path: String,
+    pub content_hash: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OpenStatus {
+    Created,
+    Resumed,
+    Recreated { reason: String },
+}
+
+pub struct BuildProgressJournal {
+    path: PathBuf,
+    conn: Connection,
+    build_id: String,
+}
+
+pub fn path_for_root(storage_root: &Path) -> PathBuf {
+    storage_root.join("state").join(FILE_NAME)
+}
+
+pub fn remove(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            crate::sqlite_catalog::sync_parent_dir(path);
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("remove build progress {}: {error}", path.display())),
+    }
+}
+
+impl BuildProgressJournal {
+    pub fn open_or_create(
+        path: &Path,
+        contract: &BuildContract,
+        targets: &[ScanTarget],
+    ) -> Result<(Self, OpenStatus), String> {
+        if path.exists() {
+            match Self::open_existing(path, contract, targets) {
+                Ok(journal) => return Ok((journal, OpenStatus::Resumed)),
+                Err(reason) => {
+                    remove(path)?;
+                    let journal = Self::create(path, contract, targets)?;
+                    return Ok((journal, OpenStatus::Recreated { reason }));
+                }
+            }
+        }
+        Ok((Self::create(path, contract, targets)?, OpenStatus::Created))
+    }
+
+    pub fn build_id(&self) -> &str {
+        &self.build_id
+    }
+
+    pub fn completed_targets(&self) -> Result<Vec<CompletedTarget>, String> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.ordinal,t.target_key,t.path,c.input_fingerprint,c.output_json,c.stats_json
+             FROM scan_targets t JOIN completed_targets c USING(ordinal) ORDER BY t.ordinal",
+        ).map_err(|error| format!("prepare completed targets: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(|error| format!("read completed targets: {error}"))?;
+        rows.map(|row| {
+            let (ordinal, key, path, input_fingerprint, output_json, stats_json) =
+                row.map_err(|error| format!("read completed target: {error}"))?;
+            let accumulated_stats = serde_json::from_str(&stats_json)
+                .map_err(|error| format!("decode completed target stats: {error}"))?;
+            Ok(CompletedTarget {
+                target: ScanTarget { ordinal, key, path },
+                input_fingerprint,
+                output_json,
+                accumulated_stats,
+            })
+        })
+        .collect()
+    }
+
+    /// Atomically makes all output for one target resumable.
+    pub fn checkpoint_target(&mut self, completed: &CompletedTarget) -> Result<(), String> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| format!("begin target checkpoint: {error}"))?;
+        let expected = tx
+            .query_row(
+                "SELECT target_key,path FROM scan_targets WHERE ordinal=?1",
+                [completed.target.ordinal],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("read checkpoint target: {error}"))?
+            .ok_or_else(|| format!("unknown scan target ordinal {}", completed.target.ordinal))?;
+        if expected != (completed.target.key.clone(), completed.target.path.clone()) {
+            return Err(format!(
+                "scan target {} does not match journal contract",
+                completed.target.ordinal
+            ));
+        }
+        let stats_json = serde_json::to_string(&completed.accumulated_stats)
+            .map_err(|error| format!("encode target stats: {error}"))?;
+        tx.execute(
+            "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json)
+             VALUES(?1,?2,?3,?4)
+             ON CONFLICT(ordinal) DO UPDATE SET input_fingerprint=excluded.input_fingerprint,
+                 output_json=excluded.output_json,stats_json=excluded.stats_json",
+            params![
+                completed.target.ordinal,
+                completed.input_fingerprint,
+                completed.output_json,
+                stats_json
+            ],
+        )
+        .map_err(|error| format!("write target checkpoint: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit target checkpoint: {error}"))
+    }
+
+    pub fn record_shard(&mut self, shard: &CompletedShard) -> Result<(), String> {
+        let json = serde_json::to_string(shard)
+            .map_err(|error| format!("encode completed shard: {error}"))?;
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|error| format!("begin shard checkpoint: {error}"))?;
+        tx.execute(
+            "INSERT INTO completed_shards(system_id,shard_json) VALUES(?1,?2)
+                    ON CONFLICT(system_id) DO UPDATE SET shard_json=excluded.shard_json",
+            params![shard.system_id, json],
+        )
+        .map_err(|error| format!("write shard checkpoint: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("commit shard checkpoint: {error}"))
+    }
+
+    pub fn completed_shards(&self) -> Result<Vec<CompletedShard>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT shard_json FROM completed_shards ORDER BY system_id")
+            .map_err(|error| format!("prepare completed shards: {error}"))?;
+        let decoded = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("read completed shards: {error}"))?
+            .map(|row| {
+                serde_json::from_str(
+                    &row.map_err(|error| format!("read completed shard: {error}"))?,
+                )
+                .map_err(|error| format!("decode completed shard: {error}"))
+            })
+            .collect();
+        decoded
+    }
+
+    fn create(
+        path: &Path,
+        contract: &BuildContract,
+        targets: &[ScanTarget],
+    ) -> Result<Self, String> {
+        validate_targets(targets)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                format!("create build progress dir {}: {error}", parent.display())
+            })?;
+        }
+        let conn = Connection::open(path)
+            .map_err(|error| format!("create build progress {}: {error}", path.display()))?;
+        configure(&conn)?;
+        conn.execute_batch(
+            "CREATE TABLE progress_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
+             CREATE TABLE scan_targets(ordinal INTEGER PRIMARY KEY,target_key TEXT NOT NULL UNIQUE,path TEXT NOT NULL);
+             CREATE TABLE completed_targets(ordinal INTEGER PRIMARY KEY REFERENCES scan_targets(ordinal),
+                 input_fingerprint TEXT NOT NULL,output_json TEXT NOT NULL,stats_json TEXT NOT NULL);
+             CREATE TABLE completed_shards(system_id TEXT PRIMARY KEY,shard_json TEXT NOT NULL) WITHOUT ROWID;"
+        ).map_err(|error| format!("create build progress schema: {error}"))?;
+        let build_id = new_build_id();
+        let contract_json = serde_json::to_string(contract)
+            .map_err(|error| format!("encode build contract: {error}"))?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|error| format!("begin build progress: {error}"))?;
+        tx.execute(
+            "INSERT INTO progress_meta(key,value) VALUES('schema_version',?1)",
+            [SCHEMA_VERSION.to_string()],
+        )
+        .map_err(|error| format!("write progress schema: {error}"))?;
+        tx.execute(
+            "INSERT INTO progress_meta(key,value) VALUES('build_id',?1)",
+            [&build_id],
+        )
+        .map_err(|error| format!("write progress build id: {error}"))?;
+        tx.execute(
+            "INSERT INTO progress_meta(key,value) VALUES('contract',?1)",
+            [&contract_json],
+        )
+        .map_err(|error| format!("write progress contract: {error}"))?;
+        for target in targets {
+            tx.execute(
+                "INSERT INTO scan_targets(ordinal,target_key,path) VALUES(?1,?2,?3)",
+                params![target.ordinal, target.key, target.path],
+            )
+            .map_err(|error| format!("write scan target: {error}"))?;
+        }
+        tx.commit()
+            .map_err(|error| format!("commit build progress: {error}"))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            conn,
+            build_id,
+        })
+    }
+
+    fn open_existing(
+        path: &Path,
+        contract: &BuildContract,
+        targets: &[ScanTarget],
+    ) -> Result<Self, String> {
+        validate_targets(targets)?;
+        let conn = Connection::open(path)
+            .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
+        configure(&conn)?;
+        let version: String = meta(&conn, "schema_version")?;
+        if version != SCHEMA_VERSION.to_string() {
+            return Err(format!("unsupported build progress schema {version}"));
+        }
+        let stored_contract: BuildContract = serde_json::from_str(&meta(&conn, "contract")?)
+            .map_err(|error| format!("decode build contract: {error}"))?;
+        if &stored_contract != contract {
+            return Err("build contract changed".to_string());
+        }
+        let stored_targets = read_targets(&conn)?;
+        if stored_targets != targets {
+            return Err("ordered scan targets changed".to_string());
+        }
+        let build_id = meta(&conn, "build_id")?;
+        // Decode every durable row now; corrupt recovery data is disposable.
+        let journal = Self {
+            path: path.to_path_buf(),
+            conn,
+            build_id,
+        };
+        journal.completed_targets()?;
+        journal.completed_shards()?;
+        Ok(journal)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn configure(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
+    )
+    .map_err(|error| format!("configure build progress: {error}"))?;
+    Ok(())
+}
+
+fn meta(conn: &Connection, key: &str) -> Result<String, String> {
+    conn.query_row(
+        "SELECT value FROM progress_meta WHERE key=?1",
+        [key],
+        |row| row.get(0),
+    )
+    .map_err(|error| format!("read build progress {key}: {error}"))
+}
+
+fn read_targets(conn: &Connection) -> Result<Vec<ScanTarget>, String> {
+    let mut stmt = conn
+        .prepare("SELECT ordinal,target_key,path FROM scan_targets ORDER BY ordinal")
+        .map_err(|error| format!("prepare scan targets: {error}"))?;
+    let targets = stmt
+        .query_map([], |row| {
+            Ok(ScanTarget {
+                ordinal: row.get(0)?,
+                key: row.get(1)?,
+                path: row.get(2)?,
+            })
+        })
+        .map_err(|error| format!("read scan targets: {error}"))?
+        .map(|row| row.map_err(|error| format!("read scan target: {error}")))
+        .collect();
+    targets
+}
+
+fn validate_targets(targets: &[ScanTarget]) -> Result<(), String> {
+    for (index, target) in targets.iter().enumerate() {
+        if target.ordinal as usize != index {
+            return Err("scan target ordinals must be contiguous from zero".to_string());
+        }
+        if target.key.is_empty() || target.path.is_empty() {
+            return Err("scan target key and path must not be empty".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn new_build_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}-{:x}", std::process::id(), nanos)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "mister-magik-{name}-{}-{}.sqlite3",
+            std::process::id(),
+            new_build_id()
+        ))
+    }
+    fn contract() -> BuildContract {
+        BuildContract {
+            roots: vec!["/games".into()],
+            path_mapping: vec![],
+            scanner_version: 12,
+            profile_version: "p1".into(),
+            taxonomy_version: "t1".into(),
+            namespace_backend: "native".into(),
+            projection_contract: "v3".into(),
+        }
+    }
+    fn targets() -> Vec<ScanTarget> {
+        vec![ScanTarget {
+            ordinal: 0,
+            key: "arcade".into(),
+            path: "/games/arcade".into(),
+        }]
+    }
+    fn completed() -> CompletedTarget {
+        CompletedTarget {
+            target: targets().remove(0),
+            input_fingerprint: "abc".into(),
+            output_json: r#"{"files":1}"#.into(),
+            accumulated_stats: BuildStats {
+                normal_files: 1,
+                ..BuildStats::default()
+            },
+        }
+    }
+
+    #[test]
+    fn journal_round_trip_retains_id_targets_and_shards() {
+        let path = temp_path("build-progress-round-trip");
+        let (mut journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert_eq!(status, OpenStatus::Created);
+        let id = journal.build_id().to_string();
+        journal.checkpoint_target(&completed()).unwrap();
+        let shard = CompletedShard {
+            system_id: "arcade".into(),
+            generation: 4,
+            sqlite_path: "systems/arcade/4.sqlite3".into(),
+            metadata_path: "systems/arcade/4.json".into(),
+            content_hash: "def".into(),
+        };
+        journal.record_shard(&shard).unwrap();
+        drop(journal);
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert_eq!(status, OpenStatus::Resumed);
+        assert_eq!(journal.build_id(), id);
+        assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
+        assert_eq!(journal.completed_shards().unwrap(), vec![shard]);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn failed_target_checkpoint_is_atomic() {
+        let path = temp_path("build-progress-atomic");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        let mut invalid = completed();
+        invalid.target.key = "wrong".into();
+        assert!(journal.checkpoint_target(&invalid).is_err());
+        assert!(journal.completed_targets().unwrap().is_empty());
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn corrupt_journal_is_discarded() {
+        let path = temp_path("build-progress-corrupt");
+        std::fs::write(&path, b"not sqlite").unwrap();
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert!(matches!(status, OpenStatus::Recreated { .. }));
+        assert!(journal.completed_targets().unwrap().is_empty());
+        drop(journal);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn schema_mismatch_is_discarded() {
+        let path = temp_path("build-progress-schema");
+        let (journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        drop(journal);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "UPDATE progress_meta SET value='999' WHERE key='schema_version'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let (_, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert!(
+            matches!(status, OpenStatus::Recreated { reason } if reason.contains("unsupported"))
+        );
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn changed_contract_or_targets_starts_a_new_build() {
+        let path = temp_path("build-progress-stale");
+        let (journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        let old_id = journal.build_id().to_string();
+        drop(journal);
+        let mut changed = contract();
+        changed.scanner_version += 1;
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &changed, &targets()).unwrap();
+        assert!(matches!(status, OpenStatus::Recreated { reason } if reason.contains("contract")));
+        assert_ne!(journal.build_id(), old_id);
+        drop(journal);
+        let changed_targets = vec![ScanTarget {
+            ordinal: 0,
+            key: "console".into(),
+            path: "/games/console".into(),
+        }];
+        let (_, status) =
+            BuildProgressJournal::open_or_create(&path, &changed, &changed_targets).unwrap();
+        assert!(matches!(status, OpenStatus::Recreated { reason } if reason.contains("targets")));
+        remove(&path).unwrap();
+    }
+}
