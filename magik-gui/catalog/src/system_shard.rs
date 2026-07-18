@@ -82,6 +82,15 @@ struct StoredNavigation {
 }
 
 #[cfg(feature = "builder")]
+#[derive(Serialize)]
+struct StoredNavigationRef<'a> {
+    schema_version: u32,
+    system_id: &'a str,
+    generation: u64,
+    games: &'a [SystemGame],
+}
+
+#[cfg(feature = "builder")]
 pub fn write_system_shard(
     sqlite_path: &Path,
     navigation_path: &Path,
@@ -106,11 +115,11 @@ pub(crate) fn write_system_shard_with_durability(
     durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
-    let stored = StoredNavigation {
+    let stored = StoredNavigationRef {
         schema_version: NAVIGATION_SCHEMA_VERSION,
-        system_id: data.system_id.as_str().to_string(),
+        system_id: data.system_id.as_str(),
         generation: data.generation,
-        games: data.games.to_vec(),
+        games: &data.games,
     };
     let navigation = encode_navigation(&stored, limits)?;
     let navigation_hash = checksum_hex(&navigation);
@@ -358,43 +367,75 @@ pub fn open_system_shard(
              FROM games ORDER BY ordinal",
         )
         .map_err(|error| SystemShardError::with("prepare canonical shard games", error))?;
-    let canonical = statement
-        .query_map([], |row| {
-            let launch_plan_json: Option<String> = row.get(11)?;
-            let launch_plan = launch_plan_json
-                .map(|encoded| serde_json::from_str(&encoded))
-                .transpose()
-                .map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        11,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })?;
-            Ok(SystemGame {
-                stable_key: row.get(0)?,
-                title: row.get(1)?,
-                launch_ref: row.get(2)?,
-                preview_archive_path: row
-                    .get::<_, Option<String>>(3)?
-                    .unwrap_or_else(|| preview_archive_default.clone()),
-                preview_asset_key: row.get(4)?,
-                has_preview: row.get(5)?,
-                year: row.get(6)?,
-                manufacturer: row.get(7)?,
-                players: row.get(8)?,
-                control: row.get(9)?,
-                is_new: row.get(10)?,
-                launch_plan,
-            })
-        })
-        .map_err(|error| SystemShardError::with("query canonical shard games", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| SystemShardError::with("read canonical shard game", error))?;
-    if canonical != stored.games {
+    let mut rows = statement
+        .query([])
+        .map_err(|error| SystemShardError::with("query canonical shard games", error))?;
+    for expected in &stored.games {
+        let row = rows
+            .next()
+            .map_err(|error| SystemShardError::with("read canonical shard game", error))?
+            .ok_or_else(|| {
+                SystemShardError::new("read", "canonical shard has fewer games than navigation")
+            })?;
+        let launch_plan_json: Option<String> = row
+            .get(11)
+            .map_err(|error| SystemShardError::with("read canonical launch plan", error))?;
+        let launch_plan = launch_plan_json
+            .map(|encoded| serde_json::from_str(&encoded))
+            .transpose()
+            .map_err(|error| SystemShardError::with("decode canonical launch plan", error))?;
+        let canonical = SystemGame {
+            stable_key: row
+                .get(0)
+                .map_err(|error| SystemShardError::with("read stable key", error))?,
+            title: row
+                .get(1)
+                .map_err(|error| SystemShardError::with("read title", error))?,
+            launch_ref: row
+                .get(2)
+                .map_err(|error| SystemShardError::with("read launch ref", error))?,
+            preview_archive_path: row
+                .get::<_, Option<String>>(3)
+                .map_err(|error| SystemShardError::with("read preview archive", error))?
+                .unwrap_or_else(|| preview_archive_default.clone()),
+            preview_asset_key: row
+                .get(4)
+                .map_err(|error| SystemShardError::with("read preview key", error))?,
+            has_preview: row
+                .get(5)
+                .map_err(|error| SystemShardError::with("read preview flag", error))?,
+            year: row
+                .get(6)
+                .map_err(|error| SystemShardError::with("read year", error))?,
+            manufacturer: row
+                .get(7)
+                .map_err(|error| SystemShardError::with("read manufacturer", error))?,
+            players: row
+                .get(8)
+                .map_err(|error| SystemShardError::with("read players", error))?,
+            control: row
+                .get(9)
+                .map_err(|error| SystemShardError::with("read control", error))?,
+            is_new: row
+                .get(10)
+                .map_err(|error| SystemShardError::with("read new flag", error))?,
+            launch_plan,
+        };
+        if &canonical != expected {
+            return Err(SystemShardError::new(
+                "read",
+                "canonical and navigation games differ",
+            ));
+        }
+    }
+    if rows
+        .next()
+        .map_err(|error| SystemShardError::with("read trailing canonical game", error))?
+        .is_some()
+    {
         return Err(SystemShardError::new(
             "read",
-            "canonical and navigation games differ",
+            "canonical shard has more games than navigation",
         ));
     }
     Ok(LoadedSystemShard {
@@ -499,7 +540,7 @@ fn common_preview_archive_path(games: &[SystemGame]) -> String {
 
 #[cfg(feature = "builder")]
 fn encode_navigation(
-    stored: &StoredNavigation,
+    stored: &impl Serialize,
     limits: SystemShardLimits,
 ) -> Result<Vec<u8>, SystemShardError> {
     let decoded = serde_json::to_vec(stored)
