@@ -2556,7 +2556,7 @@ pub(super) fn run_launcher_loop(
 
             let input_session = ControllerSetupInputSession::new(&pad, &setup);
             let launcher_state = input_session.launcher_state().clone();
-            let setup_state = input_session.setup_state().clone();
+            let setup_state = input_session.setup_state();
             let active_idx = pad.active_idx();
             let info = pad.info();
 

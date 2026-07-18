@@ -385,8 +385,10 @@ manual reboot during the 2026-07-07 HDMI bad-state investigation. Treat
 - Do not leave a paused Main process after experiments; reboot if unsure.
 - `ui` and `fb` paths put the VT into graphics mode so fbcon does not draw over
   the launcher, and restore text mode on exit.
-- Missing libinput quirks DB warnings are expected on the MiSTer. The Linux js
-  input path is the current working input path.
+- Missing libinput quirks DB warnings are expected on the MiSTer. Controllers
+  use the Linux joystick (`/dev/input/js*`) path. Keyboard navigation uses
+  keyboard-capable evdev nodes: cursor keys map to the D-pad, A and Enter map
+  to controller A, and B and Escape map to controller B.
 
 ## Display Modes
 

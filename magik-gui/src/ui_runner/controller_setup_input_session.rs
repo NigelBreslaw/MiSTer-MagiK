@@ -21,11 +21,11 @@ impl<'a> ControllerSetupInputSession<'a> {
         self.pad.state()
     }
 
-    pub(super) fn setup_state(&self) -> &'a PadState {
+    pub(super) fn setup_state(&self) -> PadState {
         if self.setup.is_active() {
-            self.pad.state_at(self.setup.target_pad_idx)
+            self.pad.navigation_state_at(self.setup.target_pad_idx)
         } else {
-            self.pad.state()
+            self.pad.state().clone()
         }
     }
 }
@@ -143,5 +143,19 @@ mod tests {
 
         assert!(matches!(action, SetupAction::None));
         assert_eq!(setup.phase, SetupPhase::Configure);
+    }
+
+    #[test]
+    fn setup_navigation_accepts_keyboard_without_merging_other_pads() {
+        let mut fixture = PadPoolFixture::new(vec![PadState::with_a(false)]);
+        fixture.pool.set_test_keyboard_state(PadState::with_a(true));
+        let mut setup = SetupNav::new();
+        setup.open_for(PadRegistryStatus::MovedPort, 0);
+
+        assert!(
+            ControllerSetupInputSession::new(&fixture.pool, &setup)
+                .setup_state()
+                .btn_a
+        );
     }
 }

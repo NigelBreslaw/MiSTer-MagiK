@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Linux joystick API (`/dev/input/js*`) — multi-pad poll + per-device layouts.
+//! Linux navigation input — joystick layouts plus keyboard evdev aliases.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -17,6 +17,21 @@ const JS_EVENT_SIZE: usize = 8;
 const JS_EVENT_INIT: u8 = 0x80;
 
 const PAD_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
+const INPUT_EVENT_SIZE: usize = if cfg!(target_pointer_width = "64") {
+    24
+} else {
+    16
+};
+
+const EV_KEY: u16 = 1;
+const KEY_ESC: u16 = 1;
+const KEY_ENTER: u16 = 28;
+const KEY_A: u16 = 30;
+const KEY_B: u16 = 48;
+const KEY_UP: u16 = 103;
+const KEY_LEFT: u16 = 105;
+const KEY_RIGHT: u16 = 106;
+const KEY_DOWN: u16 = 108;
 
 pub struct PadReader {
     file: File,
@@ -26,9 +41,10 @@ pub struct PadReader {
     state: PadState,
 }
 
-/// Poll every connected `/dev/input/js*` and merge into one navigation [`PadState`].
+/// Poll connected joysticks and keyboards and merge them into one navigation [`PadState`].
 pub struct PadPool {
     pads: Vec<PadReader>,
+    keyboards: Vec<KeyboardReader>,
     merged: PadState,
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
@@ -36,7 +52,7 @@ pub struct PadPool {
 }
 
 impl PadPool {
-    /// Open all joystick nodes under `/dev/input/js*` and load the controller registry.
+    /// Open joystick and keyboard input nodes and load the controller registry.
     pub fn open_all() -> io::Result<Self> {
         let mut db = crate::controller_db::ControllerDb::load();
         crate::ui_errln!("controller db: {} entries from {}", db.len(), db.path());
@@ -58,6 +74,16 @@ impl PadPool {
         }
         Ok(Self {
             pads,
+            keyboards: discover_keyboard_devices()
+                .into_iter()
+                .filter_map(|path| match KeyboardReader::open(&path) {
+                    Ok(reader) => Some(reader),
+                    Err(e) => {
+                        crate::ui_errln!("keyboard: skip {path}: {e}");
+                        None
+                    }
+                })
+                .collect(),
             merged: PadState::default(),
             active_idx: 0,
             db,
@@ -120,6 +146,15 @@ impl PadPool {
             Some(pad) => &pad.state,
             None => no_pad_state(),
         }
+    }
+
+    pub fn navigation_state_at(&self, idx: usize) -> PadState {
+        let mut state = self.state_at(idx).clone();
+        for keyboard in &self.keyboards {
+            keyboard.merge_into(&mut state);
+        }
+        state.rebuild_pressed_now();
+        state
     }
 
     /// Save a new default registry entry for a pad (does not mark setup complete).
@@ -210,6 +245,21 @@ impl PadPool {
                 }
             }
         }
+        let mut i = 0;
+        while i < self.keyboards.len() {
+            match self.keyboards[i].poll() {
+                Ok(keyboard_changed) => {
+                    changed |= keyboard_changed;
+                    i += 1;
+                }
+                Err(e) => {
+                    let path = self.keyboards[i].path.clone();
+                    crate::ui_errln!("keyboard: disconnected {path}: {e}");
+                    self.keyboards.remove(i);
+                    changed = true;
+                }
+            }
+        }
         if changed {
             self.rebuild_merged_state();
         }
@@ -244,6 +294,19 @@ impl PadPool {
                 Err(e) => crate::ui_errln!("pad: hotplug skip {path}: {e}"),
             }
         }
+        for path in discover_keyboard_devices() {
+            if self.keyboards.iter().any(|keyboard| keyboard.path == path) {
+                continue;
+            }
+            match KeyboardReader::open(&path) {
+                Ok(reader) => {
+                    crate::ui_errln!("keyboard: hotplug added {path}");
+                    self.keyboards.push(reader);
+                    changed = true;
+                }
+                Err(e) => crate::ui_errln!("keyboard: hotplug skip {path}: {e}"),
+            }
+        }
         changed
     }
 
@@ -263,6 +326,10 @@ impl PadPool {
             .get(active_idx)
             .map(|pad| pad.state.last_event_label.clone());
         self.merged = merge_pad_states(&states);
+        for keyboard in &self.keyboards {
+            keyboard.merge_into(&mut self.merged);
+        }
+        self.merged.rebuild_pressed_now();
         self.merged.last_raw_event = active_raw;
         if let Some(last_raw) = active_raw_label {
             self.merged.last_raw = last_raw;
@@ -289,6 +356,7 @@ impl PadPool {
                     state,
                 })
                 .collect(),
+            keyboards: Vec::new(),
             merged: PadState::default(),
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
@@ -296,6 +364,24 @@ impl PadPool {
         };
         pool.rebuild_merged_state();
         pool
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_keyboard_state(&mut self, state: PadState) {
+        self.keyboards = vec![KeyboardReader {
+            file: File::open("/dev/null").expect("open /dev/null"),
+            path: "test-keyboard".into(),
+            state: KeyboardState {
+                up: state.dpad_up,
+                down: state.dpad_down,
+                left: state.dpad_left,
+                right: state.dpad_right,
+                a: state.btn_a,
+                b: state.btn_b,
+                ..KeyboardState::default()
+            },
+        }];
+        self.rebuild_merged_state();
     }
 }
 
@@ -311,6 +397,85 @@ impl crate::setup_nav::SetupPadSource for PadPool {
     fn info_at(&self, idx: usize) -> &PadInfo {
         self.info_at(idx)
     }
+}
+
+#[derive(Default)]
+struct KeyboardState {
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    a: bool,
+    enter: bool,
+    b: bool,
+    escape: bool,
+}
+
+struct KeyboardReader {
+    file: File,
+    path: String,
+    state: KeyboardState,
+}
+
+impl KeyboardReader {
+    fn open(path: &str) -> io::Result<Self> {
+        let file = OpenOptions::new().read(true).open(path)?;
+        set_nonblocking(&file)?;
+        crate::ui_errln!("keyboard: opened {path}");
+        Ok(Self {
+            file,
+            path: path.to_string(),
+            state: KeyboardState::default(),
+        })
+    }
+
+    fn poll(&mut self) -> io::Result<bool> {
+        drain_keyboard_events(&mut self.file, &mut self.state)
+    }
+
+    fn merge_into(&self, state: &mut PadState) {
+        state.dpad_up |= self.state.up;
+        state.dpad_down |= self.state.down;
+        state.dpad_left |= self.state.left;
+        state.dpad_right |= self.state.right;
+        state.btn_a |= self.state.a || self.state.enter;
+        state.btn_b |= self.state.b || self.state.escape;
+    }
+}
+
+fn drain_keyboard_events<R: Read>(reader: &mut R, state: &mut KeyboardState) -> io::Result<bool> {
+    let mut buf = [0u8; INPUT_EVENT_SIZE];
+    let mut changed = false;
+    loop {
+        match reader.read_exact(&mut buf) {
+            Ok(()) => {
+                let (event_type, code, value) = parse_input_event(&buf);
+                if event_type != EV_KEY {
+                    continue;
+                }
+                let pressed = value != 0;
+                let field = match code {
+                    KEY_UP => Some(&mut state.up),
+                    KEY_DOWN => Some(&mut state.down),
+                    KEY_LEFT => Some(&mut state.left),
+                    KEY_RIGHT => Some(&mut state.right),
+                    KEY_A => Some(&mut state.a),
+                    KEY_ENTER => Some(&mut state.enter),
+                    KEY_B => Some(&mut state.b),
+                    KEY_ESC => Some(&mut state.escape),
+                    _ => None,
+                };
+                if let Some(field) = field {
+                    changed |= *field != pressed;
+                    *field = pressed;
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(changed)
 }
 
 impl PadReader {
@@ -448,6 +613,43 @@ fn discover_js_devices() -> Vec<String> {
             .unwrap_or(0)
     });
     paths
+}
+
+fn discover_keyboard_devices() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/input") else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("event") || !name[5..].chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let capabilities = std::fs::read_to_string(entry.path().join("device/capabilities/key"))
+            .unwrap_or_default();
+        // Letter keys distinguish keyboards from controllers that expose
+        // Enter as a Home button on their companion evdev node.
+        if capability_has_key(&capabilities, KEY_A) && capability_has_key(&capabilities, KEY_B) {
+            paths.push(format!("/dev/input/{name}"));
+        }
+    }
+    paths.sort();
+    paths
+}
+
+fn capability_has_key(words: &str, code: u16) -> bool {
+    capability_has_key_with_word_bits(words, code, usize::BITS as usize)
+}
+
+fn capability_has_key_with_word_bits(words: &str, code: u16, word_bits: usize) -> bool {
+    let word_index = code as usize / word_bits;
+    let bit_index = code as usize % word_bits;
+    words
+        .split_whitespace()
+        .rev()
+        .nth(word_index)
+        .and_then(|word| usize::from_str_radix(word, 16).ok())
+        .is_some_and(|word| word & (1usize << bit_index) != 0)
 }
 
 fn merge_pad_states(states: &[&PadState]) -> PadState {
@@ -751,7 +953,6 @@ pub fn sniff(path: Option<&str>, secs: u64) -> io::Result<()> {
 }
 
 const EV_SYN: u16 = 0;
-const EV_KEY: u16 = 1;
 const EV_REL: u16 = 2;
 const EV_ABS: u16 = 3;
 const EV_MSC: u16 = 4;
@@ -1019,6 +1220,15 @@ mod tests {
         buf
     }
 
+    fn input_event_bytes(event_type: u16, code: u16, value: i32) -> [u8; INPUT_EVENT_SIZE] {
+        let mut buf = [0u8; INPUT_EVENT_SIZE];
+        let offset = if INPUT_EVENT_SIZE == 24 { 16 } else { 8 };
+        buf[offset..offset + 2].copy_from_slice(&event_type.to_le_bytes());
+        buf[offset + 2..offset + 4].copy_from_slice(&code.to_le_bytes());
+        buf[offset + 4..offset + 8].copy_from_slice(&value.to_le_bytes());
+        buf
+    }
+
     struct PendingEventsThenWouldBlock {
         bytes: Vec<u8>,
         pos: usize,
@@ -1046,6 +1256,7 @@ mod tests {
     fn empty_pool() -> PadPool {
         PadPool {
             pads: Vec::new(),
+            keyboards: Vec::new(),
             merged: PadState::default(),
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
@@ -1064,6 +1275,91 @@ mod tests {
         assert_eq!(pool.info().name, "No controller");
         assert_eq!(pool.info_at(3).name, "No controller");
         assert!(!pool.state_at(3).btn_a);
+    }
+
+    #[test]
+    fn keyboard_maps_arrows_letters_enter_and_escape_to_navigation() {
+        let events = [
+            input_event_bytes(EV_KEY, KEY_LEFT, 1),
+            input_event_bytes(EV_KEY, KEY_UP, 1),
+            input_event_bytes(EV_KEY, KEY_A, 1),
+            input_event_bytes(EV_KEY, KEY_ENTER, 1),
+            input_event_bytes(EV_KEY, KEY_B, 1),
+            input_event_bytes(EV_KEY, KEY_ESC, 1),
+        ]
+        .concat();
+        let mut reader = PendingEventsThenWouldBlock::new(events);
+        let mut keyboard = KeyboardState::default();
+
+        assert!(drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard"));
+
+        let keyboard = KeyboardReader {
+            file: File::open("/dev/null").expect("open /dev/null"),
+            path: "test".into(),
+            state: keyboard,
+        };
+        let mut state = PadState::default();
+        keyboard.merge_into(&mut state);
+        assert!(state.dpad_left);
+        assert!(state.dpad_up);
+        assert!(state.btn_a);
+        assert!(state.btn_b);
+    }
+
+    #[test]
+    fn keyboard_alias_release_keeps_action_held_by_other_alias() {
+        let events = [
+            input_event_bytes(EV_KEY, KEY_A, 1),
+            input_event_bytes(EV_KEY, KEY_ENTER, 1),
+            input_event_bytes(EV_KEY, KEY_A, 0),
+        ]
+        .concat();
+        let mut reader = PendingEventsThenWouldBlock::new(events);
+        let mut keyboard = KeyboardState::default();
+
+        drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard");
+
+        assert!(!keyboard.a);
+        assert!(keyboard.enter);
+    }
+
+    #[test]
+    fn keyboard_capability_words_are_decoded_low_word_last() {
+        let mut words = vec![0usize; KEY_LEFT as usize / usize::BITS as usize + 1];
+        words[KEY_LEFT as usize / usize::BITS as usize] |=
+            1usize << (KEY_LEFT as usize % usize::BITS as usize);
+        let capabilities = words
+            .iter()
+            .rev()
+            .map(|word| format!("{word:x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(capability_has_key(&capabilities, KEY_LEFT));
+        assert!(!capability_has_key(&capabilities, KEY_RIGHT));
+    }
+
+    #[test]
+    fn keyboard_capability_words_decode_arm32_kernel_format() {
+        let mut words = vec![0u32; KEY_LEFT as usize / 32 + 1];
+        words[KEY_LEFT as usize / 32] |= 1u32 << (KEY_LEFT as usize % 32);
+        let capabilities = words
+            .iter()
+            .rev()
+            .map(|word| format!("{word:x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(capability_has_key_with_word_bits(
+            &capabilities,
+            KEY_LEFT,
+            32
+        ));
+        assert!(!capability_has_key_with_word_bits(
+            &capabilities,
+            KEY_RIGHT,
+            32
+        ));
     }
 
     #[test]
