@@ -308,6 +308,30 @@ struct ShardBuildJob {
     previous: Option<PublishedGeneration>,
 }
 
+struct StagedShard {
+    staging: PathBuf,
+    metadata: Option<MaterializedSystemMetadata>,
+    game_count: u64,
+    previous: Option<PublishedGeneration>,
+    write_time: Duration,
+    build_elapsed: Duration,
+}
+
+struct MaterializedSystemMetadata {
+    system_id: SystemId,
+    display_title: String,
+    section: String,
+    family: String,
+    order: u32,
+    producers: Vec<ScanUnitId>,
+}
+
+impl Drop for StagedShard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.staging);
+    }
+}
+
 struct CompletedShard {
     system: ManifestSystem,
     write_time: Duration,
@@ -323,6 +347,17 @@ fn build_shard_job(
     limits: RegistryLimits,
     job: ShardBuildJob,
 ) -> Result<CompletedShard, ReconciliationError> {
+    let staged = build_and_validate_shard(storage_root, generation, nonce, limits, job)?;
+    publish_staged_shard(storage_root, generation, limits, staged)
+}
+
+fn build_and_validate_shard(
+    storage_root: &Path,
+    generation: u64,
+    nonce: u128,
+    limits: RegistryLimits,
+    job: ShardBuildJob,
+) -> Result<StagedShard, ReconciliationError> {
     let started = Instant::now();
     let system_id = job.materialized.system_id.clone();
     let staging = shard_build_root(storage_root, &job.materialized.games).join(format!(
@@ -334,6 +369,14 @@ fn build_shard_job(
     let sqlite = staging.join("system.sqlite3");
     let navigation = staging.join("system.nav.lz4b");
     let game_count = job.materialized.games.len() as u64;
+    let metadata = MaterializedSystemMetadata {
+        system_id: job.materialized.system_id.clone(),
+        display_title: job.materialized.display_title,
+        section: job.materialized.section,
+        family: job.materialized.family,
+        order: job.materialized.order,
+        producers: job.materialized.producers,
+    };
     let write_started = Instant::now();
     if let Err(error) = write_system_shard_with_durability(
         &sqlite,
@@ -350,6 +393,29 @@ fn build_shard_job(
         return Err(ReconciliationError::new("write", error.to_string()));
     }
     let write_time = write_started.elapsed();
+    Ok(StagedShard {
+        staging,
+        metadata: Some(metadata),
+        game_count,
+        previous: job.previous,
+        write_time,
+        build_elapsed: started.elapsed(),
+    })
+}
+
+fn publish_staged_shard(
+    storage_root: &Path,
+    generation: u64,
+    limits: RegistryLimits,
+    mut staged: StagedShard,
+) -> Result<CompletedShard, ReconciliationError> {
+    let sqlite = staged.staging.join("system.sqlite3");
+    let navigation = staged.staging.join("system.nav.lz4b");
+    let metadata = staged
+        .metadata
+        .take()
+        .expect("staged shard owns system metadata");
+    let system_id = metadata.system_id.clone();
     let publish_started = Instant::now();
     // The deferred writer has already reopened and fully validated both files.
     let active = publish_prevalidated_system_artifacts_deferred(
@@ -358,14 +424,13 @@ fn build_shard_job(
         &navigation,
         &system_id,
         generation,
-        game_count,
+        staged.game_count,
         limits,
     )
     .map_err(|error| ReconciliationError::new("publish-artifact", error.to_string()));
     let active = match active {
         Ok(active) => active,
         Err(error) => {
-            let _ = fs::remove_dir_all(&staging);
             return Err(error);
         }
     };
@@ -373,24 +438,20 @@ fn build_shard_job(
     let artifact_bytes = active
         .sqlite_bytes
         .saturating_add(active.navigation_bytes);
-    // Copy publication deliberately leaves the validated tmpfs sources in
-    // place until both immutable targets exist. Release them as soon as this
-    // bounded shard has been published so the next shard reuses the RAM.
-    let _ = fs::remove_dir_all(staging);
     Ok(CompletedShard {
         system: ManifestSystem {
-            system_id: job.materialized.system_id,
-            display_title: job.materialized.display_title,
-            section: job.materialized.section,
-            family: job.materialized.family,
-            order: job.materialized.order,
-            producers: job.materialized.producers,
+            system_id: metadata.system_id,
+            display_title: metadata.display_title,
+            section: metadata.section,
+            family: metadata.family,
+            order: metadata.order,
+            producers: metadata.producers,
             active,
-            previous: job.previous,
+            previous: staged.previous.take(),
         },
-        write_time,
+        write_time: staged.write_time,
         publish_time,
-        elapsed: started.elapsed(),
+        elapsed: staged.build_elapsed.saturating_add(publish_time),
         artifact_bytes,
     })
 }
@@ -733,6 +794,30 @@ mod tests {
         let small = estimated_shard_build_bytes(&[game("One")]);
         let large = estimated_shard_build_bytes(&[game("One"), game("Two")]);
         assert!(large > small);
+    }
+
+    #[test]
+    fn staged_shard_owns_cleanup_until_publication() {
+        let root = temporary_root("staged-cleanup");
+        let staged = build_and_validate_shard(
+            &root,
+            1,
+            42,
+            limits(),
+            ShardBuildJob {
+                materialized: FixtureMaterializer::new()
+                    .materialize(&system("c64"), 1)
+                    .unwrap(),
+                previous: None,
+            },
+        )
+        .unwrap();
+        let staging = staged.staging.clone();
+        assert!(staging.join("system.sqlite3").exists());
+        assert!(staging.join("system.nav.lz4b").exists());
+        drop(staged);
+        assert!(!staging.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     struct StreamingFixtureMaterializer {
