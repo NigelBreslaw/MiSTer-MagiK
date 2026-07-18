@@ -422,11 +422,13 @@ fn run_with_backend<B: BuilderBackend>(
     });
     let mut builder_summary = summary;
     builder_summary.completed_build_seconds = Some(completed_build_seconds);
+    crate::catalog_logln!("catalog_builder_event_tsv\tevent=Persisted");
     emit(CatalogBuilderEvent::Persisted {
         protocol,
         summary: builder_summary,
     });
     snapshot_cleanup.remove_now();
+    crate::catalog_logln!("catalog_builder_event_tsv\tevent=Done");
     emit(CatalogBuilderEvent::Done { protocol });
     Ok(())
 }
