@@ -156,6 +156,7 @@ pub fn execute_reconciliation(
     let mut materialize_time = Duration::ZERO;
     let mut shard_write_time = Duration::ZERO;
     let mut artifact_publish_time = Duration::ZERO;
+    let mut artifact_publish_bytes = 0_u64;
     let mut slowest_shard = (String::new(), Duration::ZERO);
     let worker_count = 1;
     for planned in &plan.systems {
@@ -237,6 +238,7 @@ pub fn execute_reconciliation(
         for shard in completed.drain(..) {
             shard_write_time += shard.write_time;
             artifact_publish_time += shard.publish_time;
+            artifact_publish_bytes = artifact_publish_bytes.saturating_add(shard.artifact_bytes);
             if shard.elapsed > slowest_shard.1 {
                 slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
             }
@@ -265,7 +267,7 @@ pub fn execute_reconciliation(
     let manifest_time = manifest_started.elapsed();
     materializer.commit_facts()?;
     crate::catalog_logln!(
-        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_write_us={}\tartifact_publish_us={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
+        "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt={}\tmaterialize_us={}\tshard_workers={}\tshard_batch_us={}\tshard_write_us={}\tartifact_publish_us={}\tartifact_copy_hash_us={}\tartifact_publish_bytes={}\tbarrier_us={}\tmanifest_us={}\tslowest_system={}\tslowest_us={}",
         expected_generation,
         rebuilt.len(),
         materialize_time.as_micros(),
@@ -273,6 +275,8 @@ pub fn execute_reconciliation(
         shard_batch_time.as_micros(),
         shard_write_time.as_micros(),
         artifact_publish_time.as_micros(),
+        artifact_publish_time.as_micros(),
+        artifact_publish_bytes,
         barrier_time.as_micros(),
         manifest_time.as_micros(),
         slowest_shard.0,
@@ -309,6 +313,7 @@ struct CompletedShard {
     write_time: Duration,
     publish_time: Duration,
     elapsed: Duration,
+    artifact_bytes: u64,
 }
 
 fn build_shard_job(
@@ -365,6 +370,9 @@ fn build_shard_job(
         }
     };
     let publish_time = publish_started.elapsed();
+    let artifact_bytes = active
+        .sqlite_bytes
+        .saturating_add(active.navigation_bytes);
     // Copy publication deliberately leaves the validated tmpfs sources in
     // place until both immutable targets exist. Release them as soon as this
     // bounded shard has been published so the next shard reuses the RAM.
@@ -383,6 +391,7 @@ fn build_shard_job(
         write_time,
         publish_time,
         elapsed: started.elapsed(),
+        artifact_bytes,
     })
 }
 

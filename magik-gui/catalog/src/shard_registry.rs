@@ -173,30 +173,44 @@ fn publish_system_artifacts_with_options(
         staged_navigation,
         limits.shard.max_navigation_compressed_bytes as u64,
     )?;
-    let sqlite_hash = file_checksum(staged_sqlite)?;
-    let navigation_hash = file_checksum(staged_navigation)?;
     let target_directory = target_sqlite
         .parent()
         .ok_or_else(|| RegistryError::new("publish-artifact", "target has no parent"))?;
     fs::create_dir_all(target_directory)
         .map_err(|error| RegistryError::with("create system generation directory", error))?;
-    if copy_staged {
+    let (sqlite_hash, navigation_hash) = if copy_staged {
         let copied = (|| {
-            copy_staged_artifact(staged_sqlite, &target_sqlite, "SQLite")?;
-            copy_staged_artifact(staged_navigation, &target_navigation, "navigation")?;
-            Ok(())
+            let sqlite = copy_staged_artifact(
+                staged_sqlite,
+                &target_sqlite,
+                "SQLite",
+                sqlite_bytes,
+            )?;
+            let navigation = copy_staged_artifact(
+                staged_navigation,
+                &target_navigation,
+                "navigation",
+                navigation_bytes,
+            )?;
+            Ok((sqlite.hash, navigation.hash))
         })();
-        if let Err(error) = copied {
-            let _ = fs::remove_file(&target_sqlite);
-            let _ = fs::remove_file(&target_navigation);
-            return Err(error);
+        match copied {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                let _ = fs::remove_file(&target_sqlite);
+                let _ = fs::remove_file(&target_navigation);
+                return Err(error);
+            }
         }
     } else {
+        let sqlite_hash = file_checksum(staged_sqlite)?;
+        let navigation_hash = file_checksum(staged_navigation)?;
         fs::rename(staged_sqlite, &target_sqlite)
             .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
         fs::rename(staged_navigation, &target_navigation)
             .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
-    }
+        (sqlite_hash, navigation_hash)
+    };
     if sync_target_directory {
         sync_directory(target_directory)?;
     }
@@ -241,8 +255,8 @@ fn copy_staged_artifact(
     source: &Path,
     target: &Path,
     label: &'static str,
-) -> Result<(), RegistryError> {
-    let expected = regular_file_size(source, u64::MAX)?;
+    expected: u64,
+) -> Result<CopiedArtifact, RegistryError> {
     let temporary = target.with_file_name(format!(
         ".{}.tmp.{}",
         target
@@ -264,8 +278,22 @@ fn copy_staged_artifact(
         .write(true)
         .open(&temporary)
         .map_err(|error| RegistryError::with("create artifact copy", error))?;
-    let copied = std::io::copy(&mut input, &mut output)
-        .map_err(|error| RegistryError::with("copy staged artifact", error))?;
+    let mut copied = 0_u64;
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut buffer = [0_u8; 256 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| RegistryError::with("read staged artifact", error))?;
+        if read == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..read])
+            .map_err(|error| RegistryError::with("copy staged artifact", error))?;
+        copied = copied.saturating_add(read as u64);
+        update_checksum(&mut hash, &buffer[..read]);
+    }
     if copied != expected {
         return Err(RegistryError::new(
             "publish-artifact",
@@ -276,7 +304,17 @@ fn copy_staged_artifact(
     fs::rename(&temporary, target)
         .map_err(|error| RegistryError::with("commit copied artifact", error))?;
     cleanup.0 = None;
-    Ok(())
+    Ok(CopiedArtifact {
+        bytes: copied,
+        hash: format!("{hash:016x}"),
+    })
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CopiedArtifact {
+    bytes: u64,
+    hash: String,
 }
 
 #[cfg(all(feature = "builder", target_os = "linux"))]
@@ -810,12 +848,16 @@ fn file_checksum(path: &Path) -> Result<String, RegistryError> {
         if read == 0 {
             break;
         }
-        for byte in &buffer[..read] {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        update_checksum(&mut hash, &buffer[..read]);
     }
     Ok(format!("{hash:016x}"))
+}
+
+fn update_checksum(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
 }
 
 #[cfg(feature = "builder")]
@@ -882,6 +924,41 @@ mod tests {
     use super::*;
     use crate::system_shard::{write_system_shard, SystemGame, SystemShardData};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn copied_artifact_hashes_the_bytes_during_the_copy() {
+        let root = temporary_root("copy-hash");
+        let source = root.join("source");
+        let target = root.join("target");
+        let bytes = b"catalog artifact bytes";
+        fs::write(&source, bytes).unwrap();
+
+        let copied = copy_staged_artifact(&source, &target, "fixture", bytes.len() as u64)
+            .expect("copy fixture artifact");
+
+        assert_eq!(copied.bytes, bytes.len() as u64);
+        assert_eq!(copied.hash, file_checksum(&source).unwrap());
+        assert_eq!(fs::read(target).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn truncated_artifact_copy_is_removed_before_publication() {
+        let root = temporary_root("copy-truncated");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::write(&source, b"short").unwrap();
+
+        let error = copy_staged_artifact(&source, &target, "fixture", 99)
+            .expect_err("size mismatch must fail");
+
+        assert!(error.message().contains("size does not match"));
+        assert!(!target.exists());
+        assert!(!root.join(format!(".target.tmp.{}", std::process::id())).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     #[cfg(feature = "builder")]
