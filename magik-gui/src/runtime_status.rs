@@ -5,8 +5,11 @@
 
 use serde_json::{json, Value};
 use std::fs::{create_dir_all, OpenOptions};
-use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "/tmp/mister-magik";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
@@ -73,6 +76,167 @@ pub struct LauncherStatus<'a> {
     pub reveal_ms: u64,
     pub input_enabled_ms: u64,
     pub frame_budget: FrameBudgetStatus,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LauncherStatusPublishStats {
+    pub sequence: u64,
+    pub worker_write_us: u64,
+    pub published_age_ms: u64,
+    pub failures: u64,
+    pub pending: bool,
+    pub disconnected: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LauncherStatusEnqueue {
+    NotDue,
+    Accepted,
+    Busy,
+    Disconnected,
+}
+
+struct LauncherStatusPublishState {
+    started: Instant,
+    pending: AtomicBool,
+    disconnected: AtomicBool,
+    sequence: AtomicU64,
+    worker_write_us: AtomicU64,
+    published_at_ms: AtomicU64,
+    failures: AtomicU64,
+}
+
+pub struct LauncherStatusPublisher {
+    tx: Option<SyncSender<Value>>,
+    state: Arc<LauncherStatusPublishState>,
+}
+
+impl Default for LauncherStatusPublisher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LauncherStatusPublisher {
+    pub fn new() -> Self {
+        Self::new_with_writer(write_status_value)
+    }
+
+    fn new_with_writer(writer: impl Fn(Value) -> io::Result<()> + Send + 'static) -> Self {
+        let state = Arc::new(LauncherStatusPublishState {
+            started: Instant::now(),
+            pending: AtomicBool::new(false),
+            disconnected: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+            worker_write_us: AtomicU64::new(0),
+            published_at_ms: AtomicU64::new(0),
+            failures: AtomicU64::new(0),
+        });
+        let (tx, rx) = sync_channel::<Value>(1);
+        let worker_state = Arc::clone(&state);
+        let spawn = std::thread::Builder::new()
+            .name("runtime-status".to_string())
+            .spawn(move || {
+                while let Ok(value) = rx.recv() {
+                    let started = Instant::now();
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| writer(value)));
+                    worker_state.worker_write_us.store(
+                        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                        Ordering::Release,
+                    );
+                    if matches!(result, Ok(Ok(()))) {
+                        worker_state.published_at_ms.store(
+                            worker_state
+                                .started
+                                .elapsed()
+                                .as_millis()
+                                .min(u128::from(u64::MAX)) as u64
+                                + 1,
+                            Ordering::Release,
+                        );
+                        worker_state.sequence.fetch_add(1, Ordering::Release);
+                    } else {
+                        worker_state.failures.fetch_add(1, Ordering::AcqRel);
+                    }
+                    worker_state.pending.store(false, Ordering::Release);
+                    if result.is_err() {
+                        worker_state.disconnected.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                worker_state.disconnected.store(true, Ordering::Release);
+                worker_state.pending.store(false, Ordering::Release);
+            });
+        if spawn.is_err() {
+            state.disconnected.store(true, Ordering::Release);
+            return Self { tx: None, state };
+        }
+        Self {
+            tx: Some(tx),
+            state,
+        }
+    }
+
+    pub fn ready(&self) -> bool {
+        !self.state.pending.load(Ordering::Acquire)
+            && !self.state.disconnected.load(Ordering::Acquire)
+    }
+
+    pub fn enqueue(&self, status: LauncherStatus<'_>) -> LauncherStatusEnqueue {
+        self.enqueue_value(launcher_status_value(status, unix_ms(), std::process::id()))
+    }
+
+    fn enqueue_value(&self, value: Value) -> LauncherStatusEnqueue {
+        if self
+            .state
+            .pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return LauncherStatusEnqueue::Busy;
+        }
+        let Some(tx) = &self.tx else {
+            self.state.pending.store(false, Ordering::Release);
+            return LauncherStatusEnqueue::Disconnected;
+        };
+        match tx.try_send(value) {
+            Ok(()) => LauncherStatusEnqueue::Accepted,
+            Err(TrySendError::Full(_)) => {
+                self.state.pending.store(false, Ordering::Release);
+                LauncherStatusEnqueue::Busy
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.state.disconnected.store(true, Ordering::Release);
+                self.state.pending.store(false, Ordering::Release);
+                LauncherStatusEnqueue::Disconnected
+            }
+        }
+    }
+
+    pub fn stats(&self) -> LauncherStatusPublishStats {
+        let sequence = self.state.sequence.load(Ordering::Acquire);
+        let published_at = self.state.published_at_ms.load(Ordering::Acquire);
+        let now = self
+            .state
+            .started
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
+            + 1;
+        LauncherStatusPublishStats {
+            sequence,
+            worker_write_us: self.state.worker_write_us.load(Ordering::Acquire),
+            published_age_ms: if published_at == 0 {
+                u64::MAX
+            } else {
+                now.saturating_sub(published_at)
+            },
+            failures: self.state.failures.load(Ordering::Acquire),
+            pending: self.state.pending.load(Ordering::Acquire),
+            disconnected: self.state.disconnected.load(Ordering::Acquire),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -194,12 +358,19 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
 }
 
 pub fn write_launcher_status(status: LauncherStatus<'_>) {
-    let _ = create_dir_all(DIR);
     let value = launcher_status_value(status, unix_ms(), std::process::id());
-    let tmp = format!("{STATUS_PATH}.tmp");
-    if std::fs::write(&tmp, format!("{value}\n")).is_ok() {
-        let _ = std::fs::rename(tmp, STATUS_PATH);
+    let _ = write_status_value(value);
+}
+
+fn write_status_value(mut value: Value) -> io::Result<()> {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("rss_kb".into(), json!(current_rss_kb()));
+        object.insert("rss_hwm_kb".into(), json!(current_rss_hwm_kb()));
     }
+    create_dir_all(DIR)?;
+    let tmp = format!("{STATUS_PATH}.tmp");
+    std::fs::write(&tmp, format!("{value}\n"))?;
+    std::fs::rename(tmp, STATUS_PATH)
 }
 
 fn event_value(name: &str, detail: &str, ts_unix_ms: u128, ts_boot_ms: u64, pid: u32) -> Value {
@@ -323,9 +494,6 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
         "frame_budget".to_string(),
         frame_budget_status_value(&status.frame_budget),
     );
-    insert!("rss_kb", current_rss_kb());
-    insert!("rss_hwm_kb", current_rss_hwm_kb());
-
     Value::Object(map)
 }
 
@@ -525,7 +693,8 @@ fn unix_ms() -> u128 {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn unique_name(prefix: &str) -> String {
         let nanos = SystemTime::now()
@@ -571,6 +740,69 @@ mod tests {
         assert_eq!(value["pid"], 99);
         assert_eq!(value["event"], "first_frame");
         assert_eq!(value["detail"], "catalog_ready=true");
+    }
+
+    #[test]
+    fn status_publisher_bounds_pending_work_and_reports_completion() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let publisher = LauncherStatusPublisher::new_with_writer(move |_value| {
+            started_tx.send(()).expect("announce writer start");
+            release_rx.recv().expect("release writer");
+            Ok(())
+        });
+
+        assert_eq!(
+            publisher.enqueue_value(json!({"sequence": 1})),
+            LauncherStatusEnqueue::Accepted
+        );
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer starts");
+        assert_eq!(
+            publisher.enqueue_value(json!({"sequence": 2})),
+            LauncherStatusEnqueue::Busy
+        );
+        assert!(publisher.stats().pending);
+
+        release_tx.send(()).expect("release writer");
+        for _ in 0..100 {
+            if !publisher.stats().pending {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let stats = publisher.stats();
+        assert_eq!(stats.sequence, 1);
+        assert_eq!(stats.failures, 0);
+        assert!(!stats.pending);
+        assert!(!stats.disconnected);
+        assert!(stats.published_age_ms < 1_000);
+        assert!(publisher.ready());
+    }
+
+    #[test]
+    fn status_publisher_reports_write_failures_without_sticking_pending() {
+        let publisher = LauncherStatusPublisher::new_with_writer(|_value| {
+            Err(io::Error::other("expected test failure"))
+        });
+
+        assert_eq!(
+            publisher.enqueue_value(json!({"sequence": 1})),
+            LauncherStatusEnqueue::Accepted
+        );
+        for _ in 0..100 {
+            if !publisher.stats().pending {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let stats = publisher.stats();
+        assert_eq!(stats.sequence, 0);
+        assert_eq!(stats.failures, 1);
+        assert!(!stats.pending);
+        assert_eq!(stats.published_age_ms, u64::MAX);
+        assert!(publisher.ready());
     }
 
     #[test]
@@ -824,8 +1056,8 @@ mod tests {
         assert_eq!(value["active_pad_name"], "Pad");
         assert_eq!(value["last_raw_event"], "type=1 num=0 val=1");
         assert_eq!(value["last_input_ms_ago"], 100);
-        assert!(value["rss_kb"].as_u64().is_some());
-        assert!(value["rss_hwm_kb"].as_u64().is_some());
+        assert!(value.get("rss_kb").is_none());
+        assert!(value.get("rss_hwm_kb").is_none());
     }
 
     #[test]
@@ -930,6 +1162,8 @@ mod tests {
         assert_eq!(value["catalog_background_scan_visible"], true);
         assert_eq!(value["confirm_visible"], false);
         assert_eq!(value["loading_title"], "1942");
+        assert!(value["rss_kb"].as_u64().is_some());
+        assert!(value["rss_hwm_kb"].as_u64().is_some());
         assert_eq!(value["frame_budget"]["frames_total"], 0);
         assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }
