@@ -346,14 +346,14 @@ pub fn open_system_shard(
             "navigation identity or count does not match shard",
         ));
     }
-    let embedded: Vec<u8> = connection
+    let embedded_matches: bool = connection
         .query_row(
-            "SELECT payload FROM navigation_payload WHERE singleton=1",
-            [],
+            "SELECT payload = ?1 FROM navigation_payload WHERE singleton=1",
+            [&navigation],
             |row| row.get(0),
         )
-        .map_err(|error| SystemShardError::with("read embedded navigation", error))?;
-    if embedded != navigation {
+        .map_err(|error| SystemShardError::with("compare embedded navigation", error))?;
+    if !embedded_matches {
         return Err(SystemShardError::new(
             "read",
             "embedded and adjacent navigation differ",
