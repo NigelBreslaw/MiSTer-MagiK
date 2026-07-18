@@ -846,6 +846,7 @@ mod library_snapshot {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use super::{parse_control_request, ControlRequest};
     use super::scanout_slots_contract::{
         ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
         GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
