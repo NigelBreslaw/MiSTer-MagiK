@@ -1825,6 +1825,19 @@ impl LauncherFrameAccounting {
             confirm_right_label,
             arcade_selected,
             arcade_visual_index,
+            arcade_drawer_open: nav.arcade_filter.drawer_open,
+            arcade_drawer_level: nav.arcade_filter.title(),
+            arcade_drawer_selected: nav.arcade_filter.selected,
+            arcade_drawer_requested_hash: if nav.arcade_filter.drawer_open {
+                crate::arcade_list_renderer::requested_filter_content_hash()
+            } else {
+                0
+            },
+            arcade_drawer_rendered_hash: if nav.arcade_filter.drawer_open {
+                crate::arcade_list_renderer::rendered_filter_content_hash()
+            } else {
+                0
+            },
             preview_cache_state,
             preview_transition_effect,
             preview_transition_progress,

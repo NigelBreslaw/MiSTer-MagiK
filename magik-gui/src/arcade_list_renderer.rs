@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::arcade_catalog::{
@@ -42,6 +43,8 @@ const ARCADE_ROW_FINGERPRINT_CACHE_PRUNE_TO: usize = 384;
 const ARCADE_LIST_LAYER_COPY_BANDS: [(usize, usize); 1] = [(0, ARCADE_LIST_H)];
 const ARCADE_SELECTION_FRAME_THICKNESS: usize = 3;
 const ARCADE_SELECTION_FRAME_COLOR: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
+static REQUESTED_FILTER_CONTENT_HASH: AtomicU64 = AtomicU64::new(0);
+static RENDERED_FILTER_CONTENT_HASH: AtomicU64 = AtomicU64::new(0);
 const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
 const ARCADE_NEW_BADGE_FILL_565: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
@@ -136,6 +139,7 @@ pub(crate) struct ArcadeListItem {
 struct ArcadeFilterListDrawKey {
     len: usize,
     visual_px: i32,
+    content_hash: u64,
     visible_hash: u64,
 }
 
@@ -300,8 +304,10 @@ impl ArcadeListRenderer {
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
             visual_px,
+            content_hash: arcade_filter_content_hash(items),
             visible_hash: arcade_filter_visible_window_hash(items, visual_px),
         };
+        REQUESTED_FILTER_CONTENT_HASH.store(key.content_hash, Ordering::Relaxed);
         if !force && self.last_filter_draw.as_ref() == Some(&key) {
             return None;
         }
@@ -314,17 +320,13 @@ impl ArcadeListRenderer {
             .as_ref()
             .map(|previous| previous.visual_px - key.visual_px)
             .unwrap_or(0);
-        let can_reuse_scrolled_surface = previous
-            .as_ref()
-            .is_some_and(|previous| previous.len == key.len)
-            && !previous.as_ref().is_some_and(|previous| {
-                previous.len == key.len
-                    && previous.visual_px == key.visual_px
-                    && previous.visible_hash != key.visible_hash
-            });
+        let can_reuse_scrolled_surface = previous.as_ref().is_some_and(|previous| {
+            previous.len == key.len && previous.content_hash == key.content_hash
+        });
         if previous.is_none() || !can_reuse_scrolled_surface || items.is_empty() {
             self.surface_y = 0;
             self.draw_filter_content_band(items, visual_px, 0, ARCADE_LIST_H);
+            RENDERED_FILTER_CONTENT_HASH.store(key.content_hash, Ordering::Relaxed);
         } else if content_delta == 0 {
         } else if content_delta.unsigned_abs() as usize >= ARCADE_LIST_H {
             self.surface_y = 0;
@@ -1109,6 +1111,14 @@ impl ArcadeListRenderer {
     }
 }
 
+pub(crate) fn rendered_filter_content_hash() -> u64 {
+    RENDERED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
+}
+
+pub(crate) fn requested_filter_content_hash() -> u64 {
+    REQUESTED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
+}
+
 fn draw_new_badge(row: &mut [Pixel], width: usize, font: &mut ConsoleFont) {
     let x = width.saturating_sub(58);
     let y = 14usize;
@@ -1300,6 +1310,18 @@ fn arcade_filter_visible_window_hash(items: &[ArcadeListItem], visual_px: i32) -
     hash
 }
 
+fn arcade_filter_content_hash(items: &[ArcadeListItem]) -> u64 {
+    let mut hash = ARCADE_LIST_HASH_OFFSET;
+    arcade_hash_usize(&mut hash, items.len());
+    for (idx, item) in items.iter().enumerate() {
+        arcade_hash_usize(&mut hash, idx);
+        arcade_hash_bytes(&mut hash, item.title.as_bytes());
+        arcade_hash_usize(&mut hash, item.count.unwrap_or(usize::MAX));
+        arcade_hash_bytes(&mut hash, &[item.active as u8]);
+    }
+    hash
+}
+
 fn arcade_game_hash(game: &ArcadeGameEntry) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
     arcade_hash_game(&mut hash, game);
@@ -1478,6 +1500,17 @@ mod tests {
             .collect()
     }
 
+    fn filter_items(labels: &[&str]) -> Vec<ArcadeListItem> {
+        labels
+            .iter()
+            .map(|title| ArcadeListItem {
+                title: (*title).to_string(),
+                count: Some(1),
+                active: false,
+            })
+            .collect()
+    }
+
     fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
         let mut pixels = Vec::with_capacity(renderer.width * ARCADE_LIST_H);
         for y in 0..ARCADE_LIST_H {
@@ -1589,6 +1622,74 @@ mod tests {
         ));
 
         assert_eq!(renderer.surface, before);
+    }
+
+    #[test]
+    fn equal_length_filter_transition_with_position_change_matches_fresh_redraw() {
+        let top = filter_items(&[
+            "Games A-Z",
+            "Search",
+            "Decades",
+            "Manufacturer",
+            "Players",
+            "Controls",
+        ]);
+        let decades = filter_items(&["1970's", "1980's", "1990's", "2000's", "2010's", "2020's"]);
+
+        let mut transitioned = ArcadeListRenderer::new();
+        assert!(matches!(
+            transitioned.draw_filter_items(&top, 2, 2.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let update = transitioned.draw_filter_items(&decades, 0, 0.0, false);
+        let transitioned_pixels = surface_in_viewport_order(&transitioned);
+
+        let mut fresh = ArcadeListRenderer::new();
+        assert!(matches!(
+            fresh.draw_filter_items(&decades, 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let fresh_pixels = surface_in_viewport_order(&fresh);
+
+        assert!(matches!(update, Some(ArcadeListUpdate::Full(_))));
+        assert_eq!(transitioned_pixels, fresh_pixels);
+    }
+
+    #[test]
+    fn filter_row_metadata_change_forces_full_redraw() {
+        let mut renderer = ArcadeListRenderer::new();
+        let mut items = filter_items(&["1970's", "1980's", "1990's"]);
+        assert!(matches!(
+            renderer.draw_filter_items(&items, 1, 1.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        items[0].count = Some(99);
+        assert!(matches!(
+            renderer.draw_filter_items(&items, 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        items[0].active = true;
+        assert!(matches!(
+            renderer.draw_filter_items(&items, 1, 1.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+    }
+
+    #[test]
+    fn unchanged_filter_content_keeps_incremental_scroll_path() {
+        let mut renderer = ArcadeListRenderer::new();
+        let items = filter_items(&["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]);
+        assert!(matches!(
+            renderer.draw_filter_items(&items, 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+
+        assert!(matches!(
+            renderer.draw_filter_items(&items, 1, 1.0 / ARCADE_ROW_HEIGHT as f32, false,),
+            Some(ArcadeListUpdate::Scroll { .. })
+        ));
     }
 
     #[test]

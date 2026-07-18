@@ -44,6 +44,11 @@ pub struct LauncherStatus<'a> {
     pub confirm_right_label: &'a str,
     pub arcade_selected: usize,
     pub arcade_visual_index: f32,
+    pub arcade_drawer_open: bool,
+    pub arcade_drawer_level: &'a str,
+    pub arcade_drawer_selected: usize,
+    pub arcade_drawer_requested_hash: u64,
+    pub arcade_drawer_rendered_hash: u64,
     pub preview_cache_state: &'a str,
     pub preview_transition_effect: &'a str,
     pub preview_transition_progress: f32,
@@ -269,6 +274,17 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
     insert!(
         "arcade_visual_index",
         (status.arcade_visual_index * 1000.0).round() / 1000.0
+    );
+    insert!("arcade_drawer_open", status.arcade_drawer_open);
+    insert!("arcade_drawer_level", status.arcade_drawer_level);
+    insert!("arcade_drawer_selected", status.arcade_drawer_selected);
+    insert!(
+        "arcade_drawer_requested_hash",
+        status.arcade_drawer_requested_hash
+    );
+    insert!(
+        "arcade_drawer_rendered_hash",
+        status.arcade_drawer_rendered_hash
     );
     insert!("preview_cache_state", status.preview_cache_state);
     insert!(
@@ -608,6 +624,11 @@ mod tests {
                 confirm_right_label: "Rebuild",
                 arcade_selected: 3,
                 arcade_visual_index: 3.25,
+                arcade_drawer_open: true,
+                arcade_drawer_level: "Decades",
+                arcade_drawer_selected: 0,
+                arcade_drawer_requested_hash: 123,
+                arcade_drawer_rendered_hash: 123,
                 preview_cache_state: "exact",
                 preview_transition_effect: "fade",
                 preview_transition_progress: 0.5,
@@ -802,6 +823,11 @@ mod tests {
         assert_eq!(value["confirm_right_label"], "Rebuild");
         assert_eq!(value["arcade_selected"], 3);
         assert_eq!(value["arcade_visual_index"], 3.25);
+        assert_eq!(value["arcade_drawer_open"], true);
+        assert_eq!(value["arcade_drawer_level"], "Decades");
+        assert_eq!(value["arcade_drawer_selected"], 0);
+        assert_eq!(value["arcade_drawer_requested_hash"], 123);
+        assert_eq!(value["arcade_drawer_rendered_hash"], 123);
         assert_eq!(value["preview_cache_state"], "exact");
         assert_eq!(value["preview_transition_effect"], "fade");
         assert_eq!(value["preview_transition_progress"], 0.5);
@@ -883,6 +909,11 @@ mod tests {
             confirm_right_label: "",
             arcade_selected: 0,
             arcade_visual_index: 0.0,
+            arcade_drawer_open: false,
+            arcade_drawer_level: "Filters",
+            arcade_drawer_selected: 0,
+            arcade_drawer_requested_hash: 0,
+            arcade_drawer_rendered_hash: 0,
             preview_cache_state: "placeholder",
             preview_transition_effect: "fade",
             preview_transition_progress: 1.0,

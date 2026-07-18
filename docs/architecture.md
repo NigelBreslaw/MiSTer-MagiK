@@ -477,6 +477,15 @@ release boundary belongs to the navigation state machine rather than the input
 polling or rendering loop. `Decades` currently contains decade values such as
 `1970's`; those values are filter leaves, not branches containing individual
 calendar years.
+
+The Rust drawer renderer treats the complete ordered row content as its
+identity: labels, counts, active flags, and row order. A drawer identity change
+always resets the circular surface and produces a full list-layer update, even
+when the old and new drawers contain the same number of rows or the selection
+also moves. Incremental surface scrolling is valid only while that complete
+content identity is unchanged. Row count and scroll position are never content
+identity.
+
 The Rust-painted game list viewport shows ten 48 px rows and is 510 logical px
 wide, intentionally borrowing a little space across the old half-screen split
 so longer game titles remain visible without covering the centered preview

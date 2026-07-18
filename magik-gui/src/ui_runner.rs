@@ -74,6 +74,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::{mpsc, OnceLock};
 
+mod arcade_drawer;
 mod catalog_worker;
 mod controller_loop;
 mod controller_setup_input_session;
