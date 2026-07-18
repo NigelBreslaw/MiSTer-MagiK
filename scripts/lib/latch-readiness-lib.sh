@@ -13,19 +13,24 @@ latch_readiness_probe() {
   local bin="$app/mister-magik-fb"
 
   "$mister" run "
-set -e
-pid=\$(pidof '$main_name')
-test -n \"\$pid\"
+pid=\$(pidof '$main_name') || { echo 'latch_readiness_tsv valid=0 reason=main-not-running'; exit 20; }
 cmdline=\$(tr '\\000' ' ' < \"/proc/\$pid/cmdline\")
-case \"\$cmdline\" in *'$latch_rbf'*) ;; *) echo \"latch_readiness_error=wrong-main-core cmdline=\$cmdline\"; exit 21 ;; esac
-grep -q '^mister_magik_scanout_slots ' /proc/modules
-test -c /dev/mister-magik-scanout-slots
-report=\$('$bin' fpga-latch-report)
+case \"\$cmdline\" in *'$latch_rbf'*) ;; *) echo \"latch_readiness_tsv valid=0 reason=wrong-main-core cmdline=\$cmdline\"; exit 21 ;; esac
+grep -q '^mister_magik_scanout_slots ' /proc/modules || { echo 'latch_readiness_tsv valid=0 reason=scanout-module-missing'; exit 22; }
+test -c /dev/mister-magik-scanout-slots || { echo 'latch_readiness_tsv valid=0 reason=scanout-device-missing'; exit 23; }
+report=\$('$bin' fpga-latch-report) || { echo 'latch_readiness_tsv valid=0 reason=latch-report-failed'; exit 24; }
 printf '%s\\n' \"\$report\"
-printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x57.*supported=1.*ack_high=0x4d47'
-printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x58.*supported=1.*ack_high=0x4d48'
+printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x57.*supported=1.*ack_high=0x4d47' || { echo 'latch_readiness_tsv valid=0 reason=set-command-unsupported'; exit 25; }
+printf '%s\\n' \"\$report\" | grep -Eq 'cmd=0x58.*supported=1.*ack_high=0x4d48' || { echo 'latch_readiness_tsv valid=0 reason=status-command-unsupported'; exit 26; }
 echo 'latch_readiness_tsv valid=1 reason=active-and-supported'
 "
+}
+
+latch_readiness_is_contract_failure() {
+  case "$1" in
+    *"latch_readiness_tsv valid=0 reason="*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 latch_readiness_activate() {
@@ -34,9 +39,19 @@ latch_readiness_activate() {
   local latch_rbf="$app/fpga/menu-magik-vblank-latch.rbf"
   local fifo_command
 
-  if latch_readiness_probe "$mister" >/dev/null 2>&1; then
-    latch_readiness_probe "$mister"
+  local probe_output probe_status
+  set +e
+  probe_output="$(latch_readiness_probe "$mister" 2>&1)"
+  probe_status="$?"
+  set -e
+  if [[ "$probe_status" -eq 0 ]]; then
+    printf '%s\n' "$probe_output"
     return 0
+  fi
+  if ! latch_readiness_is_contract_failure "$probe_output"; then
+    printf '%s\n' "$probe_output" >&2
+    echo "ERROR: latch readiness transport failed; refusing follow-up device calls" >&2
+    return "$probe_status"
   fi
 
   if ! declare -F platform_manifest_verify >/dev/null 2>&1; then
@@ -66,6 +81,11 @@ latch_readiness_self_test() {
   LATCH_READINESS_TEST_LOG="$log" latch_readiness_probe "$fake"
   grep -q 'wrong-main-core' "$log"
   grep -q 'fpga-latch-report' "$log"
+  latch_readiness_is_contract_failure 'latch_readiness_tsv valid=0 reason=wrong-main-core'
+  if latch_readiness_is_contract_failure 'connection timed out'; then
+    echo 'transport failure was misclassified as a latch contract failure' >&2
+    return 1
+  fi
   rm -rf "$tmp"
   echo "latch readiness library self-test ok"
 }

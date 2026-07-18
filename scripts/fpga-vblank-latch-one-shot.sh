@@ -17,9 +17,9 @@ echo "==> Verifying MiSTer is reachable and launcher boot is supervised"
 "$MISTER" status
 
 echo "==> Uploading diagnostics binary"
-"$MISTER" run "pidof mister-magik-fb 2>/dev/null | xargs -r kill -9; mkdir -p /media/fat/mister-magik-dev"
-"$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
-"$MISTER" run "chmod +x '$REMOTE_BIN'; sync"
+"$MISTER" agent deploy-magik-bin \
+  "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
+  "$REMOTE_BIN"
 
 echo "==> Running FPGA vblank latch capability report"
 "$MISTER" run "'$REMOTE_BIN' fpga-latch-report" | tee "$LOCAL_REPORT"

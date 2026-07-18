@@ -36,10 +36,12 @@ echo "==> Clearing any old scanout-slots module"
 cleanup
 
 echo "==> Uploading diagnostics binary and scanout-slots module"
-"$MISTER" run "pidof mister-magik-fb 2>/dev/null | xargs -r kill -9; mkdir -p /media/fat/mister-magik-dev '$REMOTE_DIR'"
-"$MISTER" put "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" "$REMOTE_BIN"
+"$MISTER" run "mkdir -p '$REMOTE_DIR'"
+"$MISTER" agent deploy-magik-bin \
+  "$ROOT/magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb" \
+  "$REMOTE_BIN"
 "$MISTER" put "$LOCAL_KO" "$REMOTE_KO"
-"$MISTER" run "chmod +x '$REMOTE_BIN'; chmod 600 '$REMOTE_KO'; sync"
+"$MISTER" run "chmod 600 '$REMOTE_KO'; sync"
 
 echo "==> Loading module"
 "$MISTER" run "insmod '$REMOTE_KO'; test -e /dev/mister-magik-scanout-slots; grep '^mister_magik_scanout_slots ' /proc/modules"
