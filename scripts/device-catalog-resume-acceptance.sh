@@ -90,6 +90,8 @@ REMOTE_ENV="$REMOTE_APP/launcher.env"
 REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_STATUS="/tmp/mister-magik/status.json"
+REMOTE_MAIN_STATUS="/tmp/mister-magik/main-status.json"
+REMOTE_RETURN_STATE="/tmp/mister-magik/launcher-return-state.json"
 REMOTE_GATE="/tmp/mister-magik/catalog-resume-gate"
 REMOTE_WATCHER="/tmp/mister-magik/catalog-resume-watcher.pid"
 REMOTE_JOURNAL="$REMOTE_CATALOG/state/build-progress.sqlite3"
@@ -116,16 +118,16 @@ remote() {
 }
 
 wait_remote() {
-  local label="$1" timeout="$2" command="$3" deadline=$((SECONDS + timeout))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if remote "$command" >/dev/null 2>&1; then
-      echo "ok: $label"
-      return 0
-    fi
-    sleep 1
-  done
-  remote "tail -160 '$REMOTE_LOG' 2>/dev/null || true; ps w | grep -E 'MiSTer|mister-magik-fb' | grep -v grep || true" >&2 || true
-  fail "timeout waiting for $label"
+  local label="$1" timeout="$2" command="$3" output status
+  set +e
+  output="$(remote "elapsed=0; while [ \"\$elapsed\" -lt '$timeout' ]; do if $command; then exit 0; fi; sleep 1; elapsed=\$((elapsed + 1)); done; echo 'timeout waiting for $label' >&2; tail -160 '$REMOTE_LOG' 2>/dev/null || true; ps w | grep -E 'MiSTer|mister-magik-fb' | grep -v grep || true; exit 124" 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    printf '%s\n' "$output" >&2
+    fail "$label failed with status $status"
+  fi
+  echo "ok: $label"
 }
 
 main_command() {
@@ -152,18 +154,22 @@ latest_resume_line() {
 }
 
 cleanup() {
-  local status=$?
+  local status=$? cleanup_failed=0
   trap - EXIT INT TERM
   rm -f "$ENV_LOCAL"
   if [ "$CLEANUP_ACTIVE" -eq 1 ]; then
-    remote "rm -f '$REMOTE_GATE' '$REMOTE_WATCHER'; if [ -f /tmp/catalog-resume-watcher.log ]; then :; fi; rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+    remote "rm -f /tmp/catalog-resume-watcher-cleanup-failed; if [ -s '$REMOTE_WATCHER' ]; then watcher=\$(cat '$REMOTE_WATCHER'); case \"\$watcher\" in *[!0-9]*|'') ;; *) kill \"\$watcher\" 2>/dev/null || true; wait \"\$watcher\" 2>/dev/null || true; if kill -0 \"\$watcher\" 2>/dev/null; then : > /tmp/catalog-resume-watcher-cleanup-failed; fi ;; esac; fi; rm -f '$REMOTE_GATE' '$REMOTE_WATCHER' /tmp/catalog-resume-watcher.log '$REMOTE_ENV'" >/dev/null 2>&1 || true
     if ! remote "test -p /dev/MiSTer_cmd" >/dev/null 2>&1 || ! main_command "load_core menu.rbf" >/dev/null 2>&1; then
       "$MISTER" reboot-wait --raw >/dev/null 2>&1 || true
     fi
     remote "killall mister-magik-fb 2>/dev/null || true; rm -rf '$REMOTE_CATALOG'; if [ -d '$REMOTE_BACKUP/catalog-v3' ]; then mv '$REMOTE_BACKUP/catalog-v3' '$REMOTE_CATALOG'; fi; rm -f '$REMOTE_BOOTSTRAP'; if [ -f '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b' ]; then mv '$REMOTE_BACKUP/arcade-bootstrap.nav.lz4b' '$REMOTE_BOOTSTRAP'; fi; if [ -f '$REMOTE_BACKUP/launcher.env' ]; then mv '$REMOTE_BACKUP/launcher.env' '$REMOTE_ENV'; fi; rmdir '$REMOTE_BACKUP' 2>/dev/null || true; rm -f '$REMOTE_GATE' '$REMOTE_WATCHER' /tmp/catalog-resume-watcher.log" >/dev/null 2>&1 || true
     main_command "mister_magik_restart_launcher" >/dev/null 2>&1 || true
-    remote "ls -l /media/fat/mister-magik*/launcher.env /tmp/mister-magik/fs-fault* /media/fat/mister-magik*/rebuild-on-next-boot 2>/dev/null || true" >&2 || true
+    if ! remote "test ! -e '$REMOTE_GATE'; test ! -e '$REMOTE_WATCHER'; test ! -e /tmp/catalog-resume-watcher-cleanup-failed; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; ! grep -q 'MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED=1' '$REMOTE_ENV' 2>/dev/null"; then
+      echo "FAIL: cleanup left a test arming file" >&2
+      cleanup_failed=1
+    fi
   fi
+  if [ "$cleanup_failed" -ne 0 ] && [ "$status" -eq 0 ]; then status=1; fi
   exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -185,7 +191,7 @@ wait_remote "initial cold launcher" 45 "ps w | grep -q '[m]ister-magik-fb ui lau
 ACTIVE_PID="$(remote "ps w | awk '/[m]ister-magik-fb ui launcher/ { print \$1; exit }'")"
 
 BUILD_ID=""
-PREVIOUS_ORDINAL=-1
+PREVIOUS_CHECKPOINTS=0
 HANDOFFS=0
 PIDS=""
 
@@ -195,15 +201,20 @@ for cycle in 1 2 3; do
   wait_remote "cycle $cycle durable target gate" "$TIMEOUT" "test -f '$REMOTE_GATE'"
   commit_line="$(remote "grep 'catalog_resume_tsv.*phase=target-committed' '$REMOTE_LOG' | tail -1")"
   ordinal="$(resume_field "$commit_line" target_ordinal)"
+  checkpoint_count="$(resume_field "$commit_line" committed)"
   [[ "$ordinal" =~ ^[0-9]+$ ]] || fail "cycle $cycle missing committed target ordinal"
-  [ "$ordinal" -gt "$PREVIOUS_ORDINAL" ] || fail "checkpoint ordinal did not increase ($PREVIOUS_ORDINAL -> $ordinal)"
-  PREVIOUS_ORDINAL="$ordinal"
+  [[ "$checkpoint_count" =~ ^[0-9]+$ ]] || fail "cycle $cycle missing durable checkpoint count"
+  [ "$checkpoint_count" -gt "$PREVIOUS_CHECKPOINTS" ] || fail "durable checkpoint count did not increase ($PREVIOUS_CHECKPOINTS -> $checkpoint_count)"
+  reused_count="$(resume_field "$commit_line" reused)"
+  [ "${reused_count:-0}" -ge "$PREVIOUS_CHECKPOINTS" ] || fail "cycle $cycle did not reuse all $PREVIOUS_CHECKPOINTS prior checkpoints"
+  PREVIOUS_CHECKPOINTS="$checkpoint_count"
   cycle_id="$(resume_field "$commit_line" build_id)"
   [ -n "$cycle_id" ] || fail "cycle $cycle missing build ID"
   if [ -z "$BUILD_ID" ]; then BUILD_ID="$cycle_id"; else [ "$cycle_id" = "$BUILD_ID" ] || fail "build ID changed"; fi
 
   PIDS="$PIDS $launcher_pid"
   wait_remote "cycle $cycle real game handoff" 45 "! kill -0 '$launcher_pid' 2>/dev/null"
+  wait_remote "cycle $cycle Main-mediated game state" 15 "test -s '$REMOTE_RETURN_STATE' && { grep -q '\"launcher_state\":\"HandoffToGame\"' '$REMOTE_MAIN_STATUS' 2>/dev/null || grep -q '\"launcher_state\":\"Unconfigured\"' '$REMOTE_MAIN_STATUS' 2>/dev/null; }"
   HANDOFFS=$((HANDOFFS + 1))
 
   if [ "$cycle" -lt 3 ]; then
@@ -218,6 +229,11 @@ for cycle in 1 2 3; do
   else
     remote "rm -f '$REMOTE_ENV' '$REMOTE_GATE' '$REMOTE_WATCHER' /tmp/catalog-resume-watcher.log"
     main_command "load_core menu.rbf"
+    wait_remote "cycle 3 resumed launcher" 45 "ps w | grep -q '[m]ister-magik-fb ui launcher'"
+    wait_remote "cycle 3 resume evidence" "$TIMEOUT" "grep -q 'catalog_resume_tsv.*phase=target-reused' '$REMOTE_LOG' 2>/dev/null"
+    final_resume_line="$(remote "grep 'catalog_resume_tsv.*phase=target-reused' '$REMOTE_LOG' | tail -1")"
+    [ "$(resume_field "$final_resume_line" build_id)" = "$BUILD_ID" ] || fail "cycle 3 resumed with different build ID"
+    [ "$(resume_field "$final_resume_line" reused)" -ge "$PREVIOUS_CHECKPOINTS" ] || fail "cycle 3 did not reuse all prior checkpoints"
   fi
 done
 
@@ -236,4 +252,4 @@ cmp -s "$BASELINE_NORMAL" "$FINAL_NORMAL" || {
   fail "final fingerprint, totals, or per-system counts differ from baseline"
 }
 
-echo "catalog_resume_acceptance_tsv\tlabel=$LABEL\tbuild_id=$BUILD_ID\thandoffs=$HANDOFFS\tlast_target_ordinal=$PREVIOUS_ORDINAL\tresult=pass"
+echo "catalog_resume_acceptance_tsv\tlabel=$LABEL\tbuild_id=$BUILD_ID\thandoffs=$HANDOFFS\tdurable_checkpoints=$PREVIOUS_CHECKPOINTS\tresult=pass"

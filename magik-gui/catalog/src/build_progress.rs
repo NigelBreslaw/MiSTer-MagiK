@@ -608,4 +608,46 @@ mod tests {
         assert_eq!(completed[0].target.key, "arcade");
         remove(&path).unwrap();
     }
+
+    #[test]
+    fn three_process_equivalent_interruptions_keep_one_build_and_accumulate_work() {
+        let path = temp_path("build-progress-three-interruptions");
+        let targets = (0..4)
+            .map(|ordinal| ScanTarget {
+                ordinal,
+                key: format!("target-{ordinal}"),
+                path: format!("/games/{ordinal}"),
+            })
+            .collect::<Vec<_>>();
+        let mut build_id = String::new();
+        for ordinal in 0..3 {
+            let (mut journal, status) =
+                BuildProgressJournal::open_or_create(&path, &contract(), &targets).unwrap();
+            if ordinal == 0 {
+                assert_eq!(status, OpenStatus::Created);
+                build_id = journal.build_id().to_string();
+            } else {
+                assert_eq!(status, OpenStatus::Resumed);
+                assert_eq!(journal.build_id(), build_id);
+            }
+            assert_eq!(journal.completed_targets().unwrap().len(), ordinal as usize);
+            journal
+                .checkpoint_target(&CompletedTarget {
+                    target: targets[ordinal as usize].clone(),
+                    input_fingerprint: format!("fingerprint-{ordinal}"),
+                    output_json: format!(r#"{{"target":{ordinal}}}"#),
+                    accumulated_stats: BuildStats {
+                        discoveries: (ordinal + 1) as u64,
+                        ..BuildStats::default()
+                    },
+                })
+                .unwrap();
+        }
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets).unwrap();
+        assert_eq!(status, OpenStatus::Resumed);
+        assert_eq!(journal.build_id(), build_id);
+        assert_eq!(journal.completed_targets().unwrap().len(), 3);
+        remove(&path).unwrap();
+    }
 }

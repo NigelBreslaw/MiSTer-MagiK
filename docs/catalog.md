@@ -169,6 +169,9 @@ a launcher handoff terminates MagiK, the next launcher re-enumerates target
 metadata, hydrates exact matches without reparsing or classifying them, and
 continues with new or changed targets under the same build ID. Completed,
 unpublished system shards are likewise hash- and schema-checked before reuse.
+Resumable first-build shard publication is deliberately sequential: each shard
+is synced, validated, and journaled before the next begins. Warm replacement
+rebuilds retain the bounded producer/publisher pipeline.
 
 Neither the latch nor the progress journal is catalog authority. Readers accept
 only the normal publication chain: all immutable shards, artifact barrier,

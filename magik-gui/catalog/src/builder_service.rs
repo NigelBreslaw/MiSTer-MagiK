@@ -396,7 +396,11 @@ fn run_with_backend<B: BuilderBackend>(
             detail: format!("status=error error={}", error.replace('\t', " ")),
         }),
     }
-    apply_runtime_thread_policy(build_role);
+    apply_runtime_thread_policy(if background_build {
+        RuntimeThreadRole::CatalogWorker
+    } else {
+        build_role
+    });
     let mut progress = |title: &str, detail: &str| {
         wait_for_background_heavy_work_enabled(background_build);
         emit(CatalogBuilderEvent::Progress {
@@ -754,7 +758,8 @@ impl BuilderBackend for SystemBuilderBackend {
         // The bootstrap is UI-only. A resumable full build owns one stable,
         // complete ordered target list across the first and later processes.
         self.arcade_bootstrap_scan.take();
-        let scanned = if self.replacement_rebuild {
+        let background_full_build = self.replacement_rebuild || self.bootstrap_first_visible;
+        let scanned = if background_full_build {
             library_db::scan_default_library_ram_background_with_events(
                 Some(progress),
                 Some(&mut scan_events),
@@ -789,7 +794,8 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (prepared_state, catalog, timing, scanner_cache) = if self.replacement_rebuild {
+        let background_full_build = self.replacement_rebuild || self.bootstrap_first_visible;
+        let (prepared_state, catalog, timing, scanner_cache) = if background_full_build {
             scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
         } else {
             scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
@@ -835,9 +841,9 @@ impl BuilderBackend for SystemBuilderBackend {
                     timing.stamp_us,
                     timing.catalog_us,
                     timing.overlapped_us,
-                    if self.replacement_rebuild { "sequential-background" } else { "sequential-foreground" },
-                    if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
-                    if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
+                    if background_full_build { "sequential-background" } else { "sequential-foreground" },
+                    if background_full_build { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
+                    if background_full_build { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
                 ),
             ),
         ];

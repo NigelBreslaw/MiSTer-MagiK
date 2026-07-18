@@ -175,6 +175,7 @@ impl TargetOffsets {
 struct ResumeScan {
     journal: crate::build_progress::BuildProgressJournal,
     reusable: HashMap<u32, crate::build_progress::CompletedTarget>,
+    invalidated_targets: BTreeSet<u32>,
     target_count: usize,
     reused: usize,
     invalidated: usize,
@@ -260,10 +261,10 @@ fn prepare_resume_scan(
     let targets: Vec<_> = descriptors.iter().map(progress_target).collect();
     let contract = crate::build_progress::BuildContract {
         roots: cfg.roots.clone(),
-        path_mapping: std::env::var("MISTER_CATALOG_PATH_MAPPING")
-            .ok()
-            .map(|value| vec![("environment".to_string(), value)])
-            .unwrap_or_default(),
+        path_mapping: crate::catalog_config::library_path_map_from_env()
+            .into_iter()
+            .map(|rule| (rule.from, rule.to))
+            .collect(),
         scanner_version: crate::catalog_config::SCHEMA_VERSION,
         profile_version: launch_profiles::PROFILE_SET_VERSION.to_string(),
         taxonomy_version: crate::catalog_classify::SYSTEM_TAXONOMY_VERSION.to_string(),
@@ -284,28 +285,36 @@ fn prepare_resume_scan(
             return None;
         }
     };
-    let completed = journal.completed_targets().unwrap_or_default();
-    let fingerprints = if completed.is_empty() {
-        HashMap::new()
-    } else {
-        validate_target_fingerprints(cfg, plan, excluded_targets, priority)
-    };
-    let completed: HashMap<_, _> = completed
+    let completed: HashMap<_, _> = journal
+        .completed_targets()
+        .unwrap_or_default()
         .into_iter()
         .map(|target| (target.target.ordinal, target))
         .collect();
-    let reusable = completed
+    let fingerprints = if completed.is_empty() {
+        HashMap::new()
+    } else {
+        validate_target_fingerprints(cfg, plan, excluded_targets, priority, &completed)
+    };
+    let reusable: HashMap<u32, crate::build_progress::CompletedTarget> = completed
         .iter()
         .filter(|(ordinal, saved)| fingerprints.get(ordinal) == Some(&saved.input_fingerprint))
         .map(|(ordinal, saved)| (*ordinal, saved.clone()))
         .collect();
+    let durable_completed = completed.len();
+    let invalidated_targets = completed
+        .keys()
+        .filter(|ordinal| !reusable.contains_key(ordinal))
+        .copied()
+        .collect();
     let state = ResumeScan {
         journal,
         reusable,
+        invalidated_targets,
         target_count: targets.len(),
         reused: 0,
         invalidated: 0,
-        committed: 0,
+        committed: durable_completed,
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
     Some(state)
@@ -316,19 +325,35 @@ fn validate_target_fingerprints(
     plan: &launch_profiles::CatalogScanPlan,
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
+    completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
 ) -> HashMap<u32, String> {
+    let descriptors =
+        catalog_scan::planned_scan_target_descriptors(cfg.roots.as_slice(), plan, excluded_targets);
+    let completed_paths: BTreeSet<_> = completed
+        .values()
+        .map(|saved| saved.target.path.as_str())
+        .collect();
+    let mut validation_exclusions = excluded_targets.to_vec();
+    validation_exclusions.extend(
+        descriptors
+            .iter()
+            .filter(|descriptor| {
+                !completed_paths.contains(descriptor.path.to_string_lossy().as_ref())
+            })
+            .map(|descriptor| descriptor.path.clone()),
+    );
     let rx = match priority {
         LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
             plan.clone(),
-            excluded_targets.to_vec(),
+            validation_exclusions,
             crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         ),
         LibraryScanPriority::Foreground => {
             catalog_scan::discover_files_pipelined_foreground_with_plan(
                 cfg.roots.clone(),
                 plan.clone(),
-                excluded_targets.to_vec(),
+                validation_exclusions,
             )
         }
     };
@@ -337,10 +362,19 @@ fn validate_target_fingerprints(
     while let Ok(event) = rx.recv() {
         match event {
             DiscoveryEvent::TargetStart(descriptor) => {
-                current = Some((
-                    descriptor.ordinal as u32,
-                    Fingerprint::for_descriptor(&descriptor),
-                ));
+                let original = completed.values().find(|saved| {
+                    saved.target.path == descriptor.path.to_string_lossy()
+                        && saved
+                            .target
+                            .key
+                            .starts_with(&format!("{:?}:", descriptor.kind))
+                });
+                current = original.map(|saved| {
+                    (
+                        saved.target.ordinal,
+                        Fingerprint::for_descriptor(&descriptor),
+                    )
+                });
             }
             DiscoveryEvent::File(file) => {
                 if let Some((_, fingerprint)) = current.as_mut() {
@@ -517,11 +551,13 @@ fn scan_library_with_progress_and_events(
     let mut target_offsets = None;
     let mut target_fingerprint = Fingerprint::new();
     let mut skip_target = false;
+    let mut target_checkpointable = true;
     while let Ok(event) = rx.recv() {
         crate::cooperative_work::checkpoint();
         let files = match event {
             DiscoveryEvent::TargetStart(descriptor) => {
                 target_fingerprint = Fingerprint::for_descriptor(&descriptor);
+                target_checkpointable = true;
                 target_offsets = Some(TargetOffsets::capture(
                     &game_dir_facts,
                     &normal_files,
@@ -531,6 +567,20 @@ fn scan_library_with_progress_and_events(
                     &discoveries,
                 ));
                 skip_target = false;
+                if let Some(state) = resume.as_mut() {
+                    if state
+                        .invalidated_targets
+                        .remove(&(descriptor.ordinal as u32))
+                    {
+                        state.invalidated += 1;
+                        report_resume(
+                            state,
+                            "target-invalidated",
+                            descriptor.ordinal,
+                            "fingerprint-changed",
+                        );
+                    }
+                }
                 if let Some(saved) = resume
                     .as_mut()
                     .and_then(|state| state.reusable.remove(&(descriptor.ordinal as u32)))
@@ -578,7 +628,7 @@ fn scan_library_with_progress_and_events(
                 Vec::new()
             }
             DiscoveryEvent::TargetComplete(descriptor) => {
-                if !skip_target {
+                if !skip_target && target_checkpointable {
                     if let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut()) {
                         let output = TargetOutput {
                             game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
@@ -632,6 +682,7 @@ fn scan_library_with_progress_and_events(
                 target_descriptor = None;
                 target_offsets = None;
                 skip_target = false;
+                target_checkpointable = true;
                 Vec::new()
             }
             DiscoveryEvent::File(file) => {
@@ -654,6 +705,9 @@ fn scan_library_with_progress_and_events(
                     continue;
                 }
                 target_fingerprint.facts(&runtime.facts);
+                if runtime.overflowed {
+                    target_checkpointable = false;
+                }
                 for file in &runtime.files {
                     target_fingerprint.file(file);
                 }
