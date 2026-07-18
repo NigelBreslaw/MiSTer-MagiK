@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PATCH="$ROOT/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
 LATCH_RTL="$ROOT/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
+LATCH_PROTOCOL="$ROOT/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
 WORK_DIR="${MISTER_MENU_BUILD_DIR:-$OUT_DIR/Menu_MiSTer-vblank-latch-work}"
 if [[ -n "${MISTER_MENU_DIR:-}" ]]; then
@@ -74,6 +75,10 @@ if [[ ! -f "$PLATFORM_CONTRACT" ]]; then
   echo "missing scanout platform contract: $PLATFORM_CONTRACT" >&2
   exit 1
 fi
+if [[ ! -f "$LATCH_PROTOCOL" ]]; then
+  echo "missing latch protocol header: $LATCH_PROTOCOL" >&2
+  exit 1
+fi
 
 MENU_ABS="$(abs_path "$MENU_DIR")"
 
@@ -125,6 +130,7 @@ case "$APPLY_PATCH" in
       git -C "$WORK_DIR" apply --recount --check "$PATCH"
     fi
     cp "$LATCH_RTL" "$WORK_DIR/sys/mister_magik_vblank_latch.sv"
+    cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
     printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
@@ -175,6 +181,7 @@ PY
   git -C "$MENU_ABS" status --short 2>/dev/null | sed 's/^/source_status=/'
   shasum -a 256 "$PATCH" | awk '{print "patch_sha256="$1}'
   shasum -a 256 "$LATCH_RTL" | awk '{print "latch_rtl_sha256="$1}'
+  shasum -a 256 "$LATCH_PROTOCOL" | awk '{print "latch_protocol_sha256="$1}'
   echo "apply_patch=$APPLY_PATCH"
   echo "build_date=$BUILD_DATE"
   echo "work_dir=$WORK_DIR"

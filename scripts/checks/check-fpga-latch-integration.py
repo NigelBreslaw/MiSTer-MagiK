@@ -73,12 +73,14 @@ def main() -> None:
 
     patch = root / "fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch"
     rtl = root / "fpga/menu-vblank-latch/mister_magik_vblank_latch.sv"
+    protocol = root / "fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
         shutil.copy2(rtl, work / "sys/mister_magik_vblank_latch.sv")
+        shutil.copy2(protocol, work / "sys/mister_magik_latch_protocol.svh")
         with (work / "menu.qsf").open("a") as output:
             output.write("\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\n")
 
