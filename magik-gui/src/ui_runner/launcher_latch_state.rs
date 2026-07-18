@@ -337,9 +337,7 @@ fn direct_layer_redraw_update(
     intersects_restore: bool,
 ) -> Option<ArcadeListUpdate> {
     let desired = desired?;
-    if intersects_restore {
-        Some(ArcadeListUpdate::Full(desired.rect))
-    } else if let Some(current) = current {
+    if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
             Some(ArcadeListUpdate::Full(desired.rect))
         } else if current.content_offset_y != desired.content_offset_y {
@@ -350,6 +348,8 @@ fn direct_layer_redraw_update(
                     .clamp(isize::MIN as i64, isize::MAX as i64) as isize,
                 rect: desired.rect,
             })
+        } else if intersects_restore {
+            Some(ArcadeListUpdate::Full(desired.rect))
         } else {
             dirty
         }
@@ -908,7 +908,7 @@ mod tests {
         let desired = layer(arcade, 7).with_content_offset_y(-11);
 
         assert_eq!(
-            direct_layer_redraw_update(current.into(), desired.into(), None, false),
+            direct_layer_redraw_update(current.into(), desired.into(), None, true),
             Some(ArcadeListUpdate::Scroll {
                 delta_y: -8,
                 rect: arcade,
