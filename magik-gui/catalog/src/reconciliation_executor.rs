@@ -156,16 +156,7 @@ pub fn execute_reconciliation(
     let mut shard_write_time = Duration::ZERO;
     let mut artifact_publish_time = Duration::ZERO;
     let mut slowest_shard = (String::new(), Duration::ZERO);
-    let rebuild_count = plan
-        .systems
-        .iter()
-        .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
-        .count();
-    let worker_count = if actual_generation.is_none() {
-        3.min(rebuild_count.max(1))
-    } else {
-        1
-    };
+    let worker_count = 1;
     for planned in &plan.systems {
         if planned.action == PlannedSystemAction::Remove {
             systems.retain(|system| system.system_id != planned.system_id);
