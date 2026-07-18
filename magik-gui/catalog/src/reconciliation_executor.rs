@@ -352,8 +352,19 @@ fn planned_generation_cleanup_is_safe(
 ) -> bool {
     match read_latest_manifest(storage_root, limits) {
         Ok(manifest) => manifest.generation != intended_generation,
-        Err(_) => !manifest_slots_present(storage_root),
+        Err(_) => manifest_slots_definitely_absent(storage_root),
     }
+}
+
+fn manifest_slots_definitely_absent(storage_root: &Path) -> bool {
+    ["registry/manifest-a.json", "registry/manifest-b.json"]
+        .iter()
+        .all(
+            |relative| match fs::symlink_metadata(storage_root.join(relative)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Ok(_) | Err(_) => false,
+            },
+        )
 }
 
 struct FreshPipelineOutcome {
@@ -1095,6 +1106,17 @@ mod tests {
         fs::create_dir_all(root.join("registry")).unwrap();
         fs::write(root.join("registry/manifest-a.json"), b"not-json").unwrap();
 
+        assert!(!planned_generation_cleanup_is_safe(&root, limits(), 1));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_metadata_error_is_not_treated_as_absence() {
+        let root = temporary_root("manifest-metadata-error");
+        fs::write(root.join("registry"), b"not-a-directory").unwrap();
+
+        assert!(!manifest_slots_definitely_absent(&root));
         assert!(!planned_generation_cleanup_is_safe(&root, limits(), 1));
 
         fs::remove_dir_all(root).unwrap();
