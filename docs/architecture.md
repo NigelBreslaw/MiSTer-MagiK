@@ -290,14 +290,6 @@ framebuffer presentation, route reassertion, and frame accounting.
 Lifecycle and scheduler internals should use explicit enum states for startup
 readiness, pending launch refs, and worker availability instead of parallel
 booleans or `Option` fields that can express impossible combinations.
-
-Launcher runtime status is sampled by frame accounting but serialized and
-atomically published by a dedicated background writer. Its channel has capacity
-one: the UI thread never waits for filesystem I/O, and it does not enqueue a
-second snapshot while one is pending. The frame trace records enqueue time,
-worker duration, publication sequence and age, failures, pending state, and
-worker disconnection so a stalled or lost publisher is an acceptance failure
-rather than a silent loss of observability.
 Library load recovery follows the same rule: the lifecycle state owns dialog
 text, Retry/Rebuild selection, strict retry, locked cleanup phases, and fresh
 build transitions. The frame loop renders the lifecycle view and executes its

@@ -6395,8 +6395,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn existing_invalid_sqlite_forces_v3_rebuild_after_first_frame()
-    {
+    pub(super) fn existing_invalid_sqlite_forces_v3_rebuild_after_first_frame() {
         let root = unique_temp_dir("catalog-invalid-header-startup");
         let sqlite_path = root.join("library.sqlite3");
         assert_eq!(

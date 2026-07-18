@@ -5,11 +5,8 @@
 
 use serde_json::{json, Value};
 use std::fs::{create_dir_all, OpenOptions};
-use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "/tmp/mister-magik";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
@@ -76,380 +73,6 @@ pub struct LauncherStatus<'a> {
     pub reveal_ms: u64,
     pub input_enabled_ms: u64,
     pub frame_budget: FrameBudgetStatus,
-}
-
-struct LauncherStatusOwned {
-    scene: String,
-    screen: String,
-    frames: u64,
-    idle: bool,
-    idle_loops: u64,
-    fps_estimate: f64,
-    rolling_fps: f64,
-    rolling_prepare_us: u64,
-    rolling_render_us: u64,
-    rolling_custom_draw_us: u64,
-    rolling_vsync_us: u64,
-    rolling_present_us: u64,
-    rolling_rows: u64,
-    last_frame_ms_ago: u64,
-    catalog_ready: bool,
-    catalog_games: usize,
-    catalog_systems: usize,
-    catalog_refresh_done: bool,
-    catalog_scan_visible: bool,
-    catalog_scan_message: String,
-    catalog_scan_title: String,
-    catalog_scan_detail: String,
-    catalog_scan_percent: i32,
-    catalog_background_scan_visible: bool,
-    confirm_visible: bool,
-    confirm_title: String,
-    confirm_selected: i32,
-    confirm_left_label: String,
-    confirm_right_label: String,
-    arcade_selected: usize,
-    arcade_visual_index: f32,
-    preview_cache_state: String,
-    preview_transition_effect: String,
-    preview_transition_progress: f32,
-    composition_state: String,
-    composition_recovery_count: u64,
-    last_composition_invariant_kind: String,
-    last_composition_invariant_detail: String,
-    bench_scenario: String,
-    start_screen: String,
-    lock_screen: String,
-    route_reassert_count: u64,
-    last_route_reassert_frame: u64,
-    last_route_reassert_ok: bool,
-    last_route_reassert_error: String,
-    launch_state: String,
-    loading_title: String,
-    input_pad_count: usize,
-    active_pad_index: usize,
-    active_pad_name: String,
-    active_pad_path: String,
-    last_raw_event: String,
-    last_input_ms_ago: u64,
-    startup_mode: String,
-    startup_reveal_state: String,
-    revealed: bool,
-    input_enabled: bool,
-    reveal_ms: u64,
-    input_enabled_ms: u64,
-    frame_budget: FrameBudgetStatus,
-}
-
-impl LauncherStatusOwned {
-    fn from_borrowed(status: LauncherStatus<'_>) -> Self {
-        Self {
-            scene: status.scene.to_owned(),
-            screen: status.screen.to_owned(),
-            frames: status.frames,
-            idle: status.idle,
-            idle_loops: status.idle_loops,
-            fps_estimate: status.fps_estimate,
-            rolling_fps: status.rolling_fps,
-            rolling_prepare_us: status.rolling_prepare_us,
-            rolling_render_us: status.rolling_render_us,
-            rolling_custom_draw_us: status.rolling_custom_draw_us,
-            rolling_vsync_us: status.rolling_vsync_us,
-            rolling_present_us: status.rolling_present_us,
-            rolling_rows: status.rolling_rows,
-            last_frame_ms_ago: status.last_frame_ms_ago,
-            catalog_ready: status.catalog_ready,
-            catalog_games: status.catalog_games,
-            catalog_systems: status.catalog_systems,
-            catalog_refresh_done: status.catalog_refresh_done,
-            catalog_scan_visible: status.catalog_scan_visible,
-            catalog_scan_message: status.catalog_scan_message.to_owned(),
-            catalog_scan_title: status.catalog_scan_title.to_owned(),
-            catalog_scan_detail: status.catalog_scan_detail.to_owned(),
-            catalog_scan_percent: status.catalog_scan_percent,
-            catalog_background_scan_visible: status.catalog_background_scan_visible,
-            confirm_visible: status.confirm_visible,
-            confirm_title: status.confirm_title.to_owned(),
-            confirm_selected: status.confirm_selected,
-            confirm_left_label: status.confirm_left_label.to_owned(),
-            confirm_right_label: status.confirm_right_label.to_owned(),
-            arcade_selected: status.arcade_selected,
-            arcade_visual_index: status.arcade_visual_index,
-            preview_cache_state: status.preview_cache_state.to_owned(),
-            preview_transition_effect: status.preview_transition_effect.to_owned(),
-            preview_transition_progress: status.preview_transition_progress,
-            composition_state: status.composition_state.to_owned(),
-            composition_recovery_count: status.composition_recovery_count,
-            last_composition_invariant_kind: status.last_composition_invariant_kind.to_owned(),
-            last_composition_invariant_detail: status.last_composition_invariant_detail.to_owned(),
-            bench_scenario: status.bench_scenario.to_owned(),
-            start_screen: status.start_screen.to_owned(),
-            lock_screen: status.lock_screen.to_owned(),
-            route_reassert_count: status.route_reassert_count,
-            last_route_reassert_frame: status.last_route_reassert_frame,
-            last_route_reassert_ok: status.last_route_reassert_ok,
-            last_route_reassert_error: status.last_route_reassert_error.to_owned(),
-            launch_state: status.launch_state.to_owned(),
-            loading_title: status.loading_title.to_owned(),
-            input_pad_count: status.input_pad_count,
-            active_pad_index: status.active_pad_index,
-            active_pad_name: status.active_pad_name.to_owned(),
-            active_pad_path: status.active_pad_path.to_owned(),
-            last_raw_event: status.last_raw_event.to_owned(),
-            last_input_ms_ago: status.last_input_ms_ago,
-            startup_mode: status.startup_mode.to_owned(),
-            startup_reveal_state: status.startup_reveal_state.to_owned(),
-            revealed: status.revealed,
-            input_enabled: status.input_enabled,
-            reveal_ms: status.reveal_ms,
-            input_enabled_ms: status.input_enabled_ms,
-            frame_budget: status.frame_budget,
-        }
-    }
-
-    fn as_borrowed(&self) -> LauncherStatus<'_> {
-        LauncherStatus {
-            scene: &self.scene,
-            screen: &self.screen,
-            frames: self.frames,
-            idle: self.idle,
-            idle_loops: self.idle_loops,
-            fps_estimate: self.fps_estimate,
-            rolling_fps: self.rolling_fps,
-            rolling_prepare_us: self.rolling_prepare_us,
-            rolling_render_us: self.rolling_render_us,
-            rolling_custom_draw_us: self.rolling_custom_draw_us,
-            rolling_vsync_us: self.rolling_vsync_us,
-            rolling_present_us: self.rolling_present_us,
-            rolling_rows: self.rolling_rows,
-            last_frame_ms_ago: self.last_frame_ms_ago,
-            catalog_ready: self.catalog_ready,
-            catalog_games: self.catalog_games,
-            catalog_systems: self.catalog_systems,
-            catalog_refresh_done: self.catalog_refresh_done,
-            catalog_scan_visible: self.catalog_scan_visible,
-            catalog_scan_message: &self.catalog_scan_message,
-            catalog_scan_title: &self.catalog_scan_title,
-            catalog_scan_detail: &self.catalog_scan_detail,
-            catalog_scan_percent: self.catalog_scan_percent,
-            catalog_background_scan_visible: self.catalog_background_scan_visible,
-            confirm_visible: self.confirm_visible,
-            confirm_title: &self.confirm_title,
-            confirm_selected: self.confirm_selected,
-            confirm_left_label: &self.confirm_left_label,
-            confirm_right_label: &self.confirm_right_label,
-            arcade_selected: self.arcade_selected,
-            arcade_visual_index: self.arcade_visual_index,
-            preview_cache_state: &self.preview_cache_state,
-            preview_transition_effect: &self.preview_transition_effect,
-            preview_transition_progress: self.preview_transition_progress,
-            composition_state: &self.composition_state,
-            composition_recovery_count: self.composition_recovery_count,
-            last_composition_invariant_kind: &self.last_composition_invariant_kind,
-            last_composition_invariant_detail: &self.last_composition_invariant_detail,
-            bench_scenario: &self.bench_scenario,
-            start_screen: &self.start_screen,
-            lock_screen: &self.lock_screen,
-            route_reassert_count: self.route_reassert_count,
-            last_route_reassert_frame: self.last_route_reassert_frame,
-            last_route_reassert_ok: self.last_route_reassert_ok,
-            last_route_reassert_error: &self.last_route_reassert_error,
-            launch_state: &self.launch_state,
-            loading_title: &self.loading_title,
-            input_pad_count: self.input_pad_count,
-            active_pad_index: self.active_pad_index,
-            active_pad_name: &self.active_pad_name,
-            active_pad_path: &self.active_pad_path,
-            last_raw_event: &self.last_raw_event,
-            last_input_ms_ago: self.last_input_ms_ago,
-            startup_mode: &self.startup_mode,
-            startup_reveal_state: &self.startup_reveal_state,
-            revealed: self.revealed,
-            input_enabled: self.input_enabled,
-            reveal_ms: self.reveal_ms,
-            input_enabled_ms: self.input_enabled_ms,
-            frame_budget: self.frame_budget.clone(),
-        }
-    }
-}
-
-type LauncherStatusValueBuilder = Box<dyn FnOnce() -> Value + Send>;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LauncherStatusPublishStats {
-    pub sequence: u64,
-    pub worker_write_us: u64,
-    pub published_age_ms: u64,
-    pub failures: u64,
-    pub pending: bool,
-    pub disconnected: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LauncherStatusEnqueue {
-    NotDue,
-    Accepted,
-    Busy,
-    Disconnected,
-}
-
-struct LauncherStatusPublishState {
-    started: Instant,
-    pending: AtomicBool,
-    disconnected: AtomicBool,
-    sequence: AtomicU64,
-    worker_write_us: AtomicU64,
-    published_at_ms: AtomicU64,
-    failures: AtomicU64,
-}
-
-pub struct LauncherStatusPublisher {
-    tx: Option<SyncSender<LauncherStatusValueBuilder>>,
-    state: Arc<LauncherStatusPublishState>,
-}
-
-impl Default for LauncherStatusPublisher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LauncherStatusPublisher {
-    pub fn new() -> Self {
-        Self::new_with_writer(write_status_value)
-    }
-
-    fn new_with_writer(writer: impl Fn(Value) -> io::Result<()> + Send + 'static) -> Self {
-        let state = Arc::new(LauncherStatusPublishState {
-            started: Instant::now(),
-            pending: AtomicBool::new(false),
-            disconnected: AtomicBool::new(false),
-            sequence: AtomicU64::new(0),
-            worker_write_us: AtomicU64::new(0),
-            published_at_ms: AtomicU64::new(0),
-            failures: AtomicU64::new(0),
-        });
-        let (tx, rx) = sync_channel::<LauncherStatusValueBuilder>(1);
-        let worker_state = Arc::clone(&state);
-        let spawn = std::thread::Builder::new()
-            .name("runtime-status".to_string())
-            .spawn(move || {
-                while let Ok(build_value) = rx.recv() {
-                    let started = Instant::now();
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        writer(build_value())
-                    }));
-                    worker_state.worker_write_us.store(
-                        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
-                        Ordering::Release,
-                    );
-                    if matches!(result, Ok(Ok(()))) {
-                        worker_state.published_at_ms.store(
-                            worker_state
-                                .started
-                                .elapsed()
-                                .as_millis()
-                                .min(u128::from(u64::MAX)) as u64
-                                + 1,
-                            Ordering::Release,
-                        );
-                        worker_state.sequence.fetch_add(1, Ordering::Release);
-                    } else {
-                        worker_state.failures.fetch_add(1, Ordering::AcqRel);
-                    }
-                    worker_state.pending.store(false, Ordering::Release);
-                    if result.is_err() {
-                        worker_state.disconnected.store(true, Ordering::Release);
-                        break;
-                    }
-                }
-                worker_state.disconnected.store(true, Ordering::Release);
-                worker_state.pending.store(false, Ordering::Release);
-            });
-        if spawn.is_err() {
-            state.disconnected.store(true, Ordering::Release);
-            return Self { tx: None, state };
-        }
-        Self {
-            tx: Some(tx),
-            state,
-        }
-    }
-
-    pub fn ready(&self) -> bool {
-        !self.state.pending.load(Ordering::Acquire)
-            && !self.state.disconnected.load(Ordering::Acquire)
-    }
-
-    pub fn enqueue(&self, status: LauncherStatus<'_>) -> LauncherStatusEnqueue {
-        if !self.claim_pending() {
-            return LauncherStatusEnqueue::Busy;
-        }
-        let status = LauncherStatusOwned::from_borrowed(status);
-        let ts_unix_ms = unix_ms();
-        let pid = std::process::id();
-        self.send_claimed(Box::new(move || {
-            launcher_status_value(status.as_borrowed(), ts_unix_ms, pid)
-        }))
-    }
-
-    #[cfg(test)]
-    fn enqueue_value(&self, value: Value) -> LauncherStatusEnqueue {
-        if !self.claim_pending() {
-            return LauncherStatusEnqueue::Busy;
-        }
-        self.send_claimed(Box::new(move || value))
-    }
-
-    fn claim_pending(&self) -> bool {
-        self.state
-            .pending
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    }
-
-    fn send_claimed(&self, build_value: LauncherStatusValueBuilder) -> LauncherStatusEnqueue {
-        let Some(tx) = &self.tx else {
-            self.state.pending.store(false, Ordering::Release);
-            return LauncherStatusEnqueue::Disconnected;
-        };
-        match tx.try_send(build_value) {
-            Ok(()) => LauncherStatusEnqueue::Accepted,
-            Err(TrySendError::Full(_)) => {
-                self.state.pending.store(false, Ordering::Release);
-                LauncherStatusEnqueue::Busy
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.state.disconnected.store(true, Ordering::Release);
-                self.state.pending.store(false, Ordering::Release);
-                LauncherStatusEnqueue::Disconnected
-            }
-        }
-    }
-
-    pub fn stats(&self) -> LauncherStatusPublishStats {
-        let sequence = self.state.sequence.load(Ordering::Acquire);
-        let published_at = self.state.published_at_ms.load(Ordering::Acquire);
-        let now = self
-            .state
-            .started
-            .elapsed()
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64
-            + 1;
-        LauncherStatusPublishStats {
-            sequence,
-            worker_write_us: self.state.worker_write_us.load(Ordering::Acquire),
-            published_age_ms: if published_at == 0 {
-                u64::MAX
-            } else {
-                now.saturating_sub(published_at)
-            },
-            failures: self.state.failures.load(Ordering::Acquire),
-            pending: self.state.pending.load(Ordering::Acquire),
-            disconnected: self.state.disconnected.load(Ordering::Acquire),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -571,19 +194,12 @@ pub fn event(name: &str, detail: impl std::fmt::Display) {
 }
 
 pub fn write_launcher_status(status: LauncherStatus<'_>) {
+    let _ = create_dir_all(DIR);
     let value = launcher_status_value(status, unix_ms(), std::process::id());
-    let _ = write_status_value(value);
-}
-
-fn write_status_value(mut value: Value) -> io::Result<()> {
-    if let Some(object) = value.as_object_mut() {
-        object.insert("rss_kb".into(), json!(current_rss_kb()));
-        object.insert("rss_hwm_kb".into(), json!(current_rss_hwm_kb()));
-    }
-    create_dir_all(DIR)?;
     let tmp = format!("{STATUS_PATH}.tmp");
-    std::fs::write(&tmp, format!("{value}\n"))?;
-    std::fs::rename(tmp, STATUS_PATH)
+    if std::fs::write(&tmp, format!("{value}\n")).is_ok() {
+        let _ = std::fs::rename(tmp, STATUS_PATH);
+    }
 }
 
 fn event_value(name: &str, detail: &str, ts_unix_ms: u128, ts_boot_ms: u64, pid: u32) -> Value {
@@ -707,6 +323,9 @@ fn launcher_status_value(status: LauncherStatus<'_>, ts_unix_ms: u128, pid: u32)
         "frame_budget".to_string(),
         frame_budget_status_value(&status.frame_budget),
     );
+    insert!("rss_kb", current_rss_kb());
+    insert!("rss_hwm_kb", current_rss_hwm_kb());
+
     Value::Object(map)
 }
 
@@ -906,8 +525,7 @@ fn unix_ms() -> u128 {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::mpsc;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_name(prefix: &str) -> String {
         let nanos = SystemTime::now()
@@ -953,69 +571,6 @@ mod tests {
         assert_eq!(value["pid"], 99);
         assert_eq!(value["event"], "first_frame");
         assert_eq!(value["detail"], "catalog_ready=true");
-    }
-
-    #[test]
-    fn status_publisher_bounds_pending_work_and_reports_completion() {
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let publisher = LauncherStatusPublisher::new_with_writer(move |_value| {
-            started_tx.send(()).expect("announce writer start");
-            release_rx.recv().expect("release writer");
-            Ok(())
-        });
-
-        assert_eq!(
-            publisher.enqueue_value(json!({"sequence": 1})),
-            LauncherStatusEnqueue::Accepted
-        );
-        started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("writer starts");
-        assert_eq!(
-            publisher.enqueue_value(json!({"sequence": 2})),
-            LauncherStatusEnqueue::Busy
-        );
-        assert!(publisher.stats().pending);
-
-        release_tx.send(()).expect("release writer");
-        for _ in 0..100 {
-            if !publisher.stats().pending {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let stats = publisher.stats();
-        assert_eq!(stats.sequence, 1);
-        assert_eq!(stats.failures, 0);
-        assert!(!stats.pending);
-        assert!(!stats.disconnected);
-        assert!(stats.published_age_ms < 1_000);
-        assert!(publisher.ready());
-    }
-
-    #[test]
-    fn status_publisher_reports_write_failures_without_sticking_pending() {
-        let publisher = LauncherStatusPublisher::new_with_writer(|_value| {
-            Err(io::Error::other("expected test failure"))
-        });
-
-        assert_eq!(
-            publisher.enqueue_value(json!({"sequence": 1})),
-            LauncherStatusEnqueue::Accepted
-        );
-        for _ in 0..100 {
-            if !publisher.stats().pending {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        let stats = publisher.stats();
-        assert_eq!(stats.sequence, 0);
-        assert_eq!(stats.failures, 1);
-        assert!(!stats.pending);
-        assert_eq!(stats.published_age_ms, u64::MAX);
-        assert!(publisher.ready());
     }
 
     #[test]
@@ -1269,8 +824,8 @@ mod tests {
         assert_eq!(value["active_pad_name"], "Pad");
         assert_eq!(value["last_raw_event"], "type=1 num=0 val=1");
         assert_eq!(value["last_input_ms_ago"], 100);
-        assert!(value.get("rss_kb").is_none());
-        assert!(value.get("rss_hwm_kb").is_none());
+        assert!(value["rss_kb"].as_u64().is_some());
+        assert!(value["rss_hwm_kb"].as_u64().is_some());
     }
 
     #[test]
@@ -1375,8 +930,6 @@ mod tests {
         assert_eq!(value["catalog_background_scan_visible"], true);
         assert_eq!(value["confirm_visible"], false);
         assert_eq!(value["loading_title"], "1942");
-        assert!(value["rss_kb"].as_u64().is_some());
-        assert!(value["rss_hwm_kb"].as_u64().is_some());
         assert_eq!(value["frame_budget"]["frames_total"], 0);
         assert!(!std::path::Path::new(&format!("{STATUS_PATH}.tmp")).exists());
     }

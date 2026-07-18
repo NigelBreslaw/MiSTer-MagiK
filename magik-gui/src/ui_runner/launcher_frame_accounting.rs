@@ -48,7 +48,6 @@ pub(super) struct LauncherFrameAccounting {
     last_preview_trace_finish_done: Option<Instant>,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
-    status_publisher: runtime_status::LauncherStatusPublisher,
     last_status_write: Instant,
     first_copy_logged: bool,
     first_frame_logged: bool,
@@ -65,6 +64,7 @@ pub(super) struct LauncherFrameAccounting {
     last_rolling_rows: u64,
     frame_budget_total: FrameBudgetAccumulator,
     frame_budget_window: FrameBudgetAccumulator,
+    last_frame_budget_status: runtime_status::FrameBudgetStatus,
     frame_analytics_mode: FrameAnalyticsMode,
     frame_analytics_samples: VecDeque<runtime_status::FrameBudgetRecentFrame>,
     slow_frame_samples: VecDeque<runtime_status::FrameBudgetSlowFrame>,
@@ -257,12 +257,6 @@ pub(super) struct LauncherFrameCpuTrace {
 pub(super) struct LauncherFrameFinishTraceTiming {
     runtime_status_write_us: u128,
     runtime_status_write_deferred: bool,
-    runtime_status_worker_us: u64,
-    runtime_status_publish_sequence: u64,
-    runtime_status_published_age_ms: u64,
-    runtime_status_failures: u64,
-    runtime_status_pending: bool,
-    runtime_status_disconnected: bool,
     frame_finish_us: u128,
 }
 
@@ -530,12 +524,6 @@ struct PreviewScrollTraceRow {
     search_index_state: &'static str,
     startup_elapsed_us: u128,
     monotonic_us: u128,
-    runtime_status_worker_us: u64,
-    runtime_status_publish_sequence: u64,
-    runtime_status_published_age_ms: u64,
-    runtime_status_failures: u64,
-    runtime_status_pending: u8,
-    runtime_status_disconnected: u8,
 }
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -663,16 +651,8 @@ impl PreviewScrollTraceRow {
         out.pop();
         let _ = writeln!(
             out,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            self.search_index_state,
-            self.startup_elapsed_us,
-            self.monotonic_us,
-            self.runtime_status_worker_us,
-            self.runtime_status_publish_sequence,
-            self.runtime_status_published_age_ms,
-            self.runtime_status_failures,
-            self.runtime_status_pending,
-            self.runtime_status_disconnected,
+            "\t{}\t{}\t{}",
+            self.search_index_state, self.startup_elapsed_us, self.monotonic_us
         );
     }
 }
@@ -686,7 +666,6 @@ fn preview_scroll_trace_row_from_frame(
     runtime_status_write_deferred: bool,
     frame_finish_us: u128,
     post_finish_tail_us: u128,
-    runtime_status_stats: runtime_status::LauncherStatusPublishStats,
 ) -> PreviewScrollTraceRow {
     let wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
     let frame_tail_slack_us = u128::from(frame.vsync_period_us).saturating_sub(wall_us);
@@ -796,12 +775,6 @@ fn preview_scroll_trace_row_from_frame(
                 .duration_since(frame.startup_start)
                 .as_micros(),
         ),
-        runtime_status_worker_us: runtime_status_stats.worker_write_us,
-        runtime_status_publish_sequence: runtime_status_stats.sequence,
-        runtime_status_published_age_ms: runtime_status_stats.published_age_ms,
-        runtime_status_failures: runtime_status_stats.failures,
-        runtime_status_pending: u8::from(runtime_status_stats.pending),
-        runtime_status_disconnected: u8::from(runtime_status_stats.disconnected),
     }
 }
 
@@ -948,7 +921,6 @@ impl LauncherFrameAccounting {
             last_preview_trace_finish_done: None,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
-            status_publisher: runtime_status::LauncherStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
             first_copy_logged: false,
             first_frame_logged: false,
@@ -965,6 +937,10 @@ impl LauncherFrameAccounting {
             last_rolling_rows: 0,
             frame_budget_total: FrameBudgetAccumulator::default(),
             frame_budget_window: FrameBudgetAccumulator::default(),
+            last_frame_budget_status: runtime_status::FrameBudgetStatus {
+                budget_us: FRAME_BUDGET_US,
+                ..runtime_status::FrameBudgetStatus::default()
+            },
             frame_analytics_mode: FrameAnalyticsMode::Off,
             frame_analytics_samples: VecDeque::with_capacity(FRAME_ANALYTICS_SAMPLE_CAP),
             slow_frame_samples: VecDeque::with_capacity(FRAME_SLOW_SAMPLE_CAP),
@@ -987,7 +963,7 @@ impl LauncherFrameAccounting {
     }
 
     pub(super) fn status_write_due(&self) -> bool {
-        self.last_status_write.elapsed() >= Duration::from_secs(1) && self.status_publisher.ready()
+        self.last_status_write.elapsed() >= Duration::from_secs(1)
     }
 
     pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
@@ -1101,7 +1077,9 @@ impl LauncherFrameAccounting {
     ) -> LauncherFrameFinishTraceTiming {
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let frame_finish_start = Instant::now();
-        let status_write_now = frame.status_write_due;
+        let status_write_now = should_write_runtime_status(frame);
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        let runtime_status_write_deferred = false;
         if status_write_now {
             self.refresh_frame_analytics_mode();
         }
@@ -1117,7 +1095,7 @@ impl LauncherFrameAccounting {
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         let runtime_status_write_start =
             (status_write_now && self.preview_scroll_trace.is_some()).then(Instant::now);
-        let status_enqueue = self.write_runtime_status(
+        self.write_runtime_status(
             status_write_now,
             frame.frames,
             frame.run_start,
@@ -1155,30 +1133,15 @@ impl LauncherFrameAccounting {
             startup_status,
             None,
         );
-        #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-        let _ = status_enqueue;
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-        let runtime_status_write_deferred = frame.status_write_due
-            && !matches!(
-                status_enqueue,
-                runtime_status::LauncherStatusEnqueue::Accepted
-            );
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         {
             let runtime_status_write_us = runtime_status_write_start
                 .map(|start| start.elapsed().as_micros())
                 .unwrap_or(0);
-            let runtime_status_stats = self.status_publisher.stats();
             let frame_finish_us = frame_finish_start.elapsed().as_micros();
             LauncherFrameFinishTraceTiming {
                 runtime_status_write_us,
                 runtime_status_write_deferred,
-                runtime_status_worker_us: runtime_status_stats.worker_write_us,
-                runtime_status_publish_sequence: runtime_status_stats.sequence,
-                runtime_status_published_age_ms: runtime_status_stats.published_age_ms,
-                runtime_status_failures: runtime_status_stats.failures,
-                runtime_status_pending: runtime_status_stats.pending,
-                runtime_status_disconnected: runtime_status_stats.disconnected,
                 frame_finish_us,
             }
         }
@@ -1198,14 +1161,6 @@ impl LauncherFrameAccounting {
                 frame,
                 timing.runtime_status_write_us,
                 timing.runtime_status_write_deferred,
-                runtime_status::LauncherStatusPublishStats {
-                    sequence: timing.runtime_status_publish_sequence,
-                    worker_write_us: timing.runtime_status_worker_us,
-                    published_age_ms: timing.runtime_status_published_age_ms,
-                    failures: timing.runtime_status_failures,
-                    pending: timing.runtime_status_pending,
-                    disconnected: timing.runtime_status_disconnected,
-                },
                 timing.frame_finish_us,
                 defer_preview_trace_flush,
             );
@@ -1286,7 +1241,7 @@ impl LauncherFrameAccounting {
             .saturating_duration_since(self.last_rendered_frame_at)
             .as_millis()
             .min(u64::MAX as u128) as u64;
-        let _ = self.write_runtime_status(
+        self.write_runtime_status(
             status_write_due,
             frames,
             run_start,
@@ -1332,7 +1287,6 @@ impl LauncherFrameAccounting {
         frame: &LauncherPresentedFrame,
         runtime_status_write_us: u128,
         runtime_status_write_deferred: bool,
-        runtime_status_stats: runtime_status::LauncherStatusPublishStats,
         frame_finish_us: u128,
         defer_flush: bool,
     ) {
@@ -1386,7 +1340,6 @@ impl LauncherFrameAccounting {
             runtime_status_write_deferred,
             frame_finish_us,
             post_finish_tail_us,
-            runtime_status_stats,
         );
         if let Some(trace) = self.preview_scroll_trace.as_mut() {
             trace.push(row, !defer_flush);
@@ -1806,9 +1759,9 @@ impl LauncherFrameAccounting {
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
         idle_status: Option<(u64, u64)>,
-    ) -> runtime_status::LauncherStatusEnqueue {
+    ) {
         if !status_write_due {
-            return runtime_status::LauncherStatusEnqueue::NotDue;
+            return;
         }
         let idle = idle_status.is_some();
         let (idle_loops, last_frame_ms_ago) = idle_status.unwrap_or((0, 0));
@@ -1836,8 +1789,12 @@ impl LauncherFrameAccounting {
             self.last_rolling_present_us
         };
         let rolling_rows = if idle { 0 } else { self.last_rolling_rows };
-        let frame_budget = self.current_frame_budget_status();
-        let enqueue = self.status_publisher.enqueue(LauncherStatus {
+        let frame_budget = if idle {
+            self.last_frame_budget_status.clone()
+        } else {
+            self.current_frame_budget_status()
+        };
+        runtime_status::write_launcher_status(LauncherStatus {
             scene: "launcher",
             screen: screen_label(nav.screen),
             frames,
@@ -1903,15 +1860,10 @@ impl LauncherFrameAccounting {
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
-            frame_budget,
+            frame_budget: frame_budget.clone(),
         });
-        if !matches!(enqueue, runtime_status::LauncherStatusEnqueue::Accepted) {
-            if matches!(enqueue, runtime_status::LauncherStatusEnqueue::Disconnected) {
-                boot_analytics::event("runtime_status_writer_disconnected", "status=disabled");
-            }
-            return enqueue;
-        }
         if !idle {
+            self.last_frame_budget_status = frame_budget;
             self.frame_budget_window = FrameBudgetAccumulator::default();
         }
         self.frame_analytics_samples.clear();
@@ -1919,7 +1871,6 @@ impl LauncherFrameAccounting {
         if idle {
             self.idle_loops_since_status = 0;
         }
-        enqueue
     }
 }
 
@@ -1940,6 +1891,10 @@ fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
 fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
     let frame_wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
     u128::from(frame.vsync_period_us).saturating_sub(frame_wall_us)
+}
+
+fn should_write_runtime_status(frame: &LauncherPresentedFrame) -> bool {
+    frame.status_write_due
 }
 
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
@@ -2336,7 +2291,6 @@ mod tests {
             false,
             654,
             987,
-            runtime_status::LauncherStatusPublishStats::default(),
         )
         .write_tsv(&mut expected_row);
         preview_scroll_trace_row_from_frame(
@@ -2347,7 +2301,6 @@ mod tests {
             false,
             654,
             987,
-            runtime_status::LauncherStatusPublishStats::default(),
         )
         .write_tsv(&mut built_row);
 
@@ -2364,16 +2317,7 @@ mod tests {
         frame.startup_monotonic_us = 1_000_000;
         frame.run_start = loop_start;
 
-        let row = preview_scroll_trace_row_from_frame(
-            &frame,
-            16_667,
-            0,
-            0,
-            false,
-            0,
-            0,
-            runtime_status::LauncherStatusPublishStats::default(),
-        );
+        let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
 
         assert_eq!(row.elapsed_us, 0);
         assert_eq!(row.startup_elapsed_us, 250_000);
@@ -2395,16 +2339,7 @@ mod tests {
         builder.presentation.arcade_list_present_us = 500;
         let built = builder.build();
 
-        let row = preview_scroll_trace_row_from_frame(
-            &built,
-            16_667,
-            3_210,
-            0,
-            false,
-            654,
-            987,
-            runtime_status::LauncherStatusPublishStats::default(),
-        );
+        let row = preview_scroll_trace_row_from_frame(&built, 16_667, 3_210, 0, false, 654, 987);
 
         assert_eq!(row.fb_present_us, 1_700);
         assert_eq!(row.vsync_us, 8_200);
@@ -2463,16 +2398,7 @@ mod tests {
             frame.main_present_backend = backend;
             frame.main_present_status = status;
 
-            let row = preview_scroll_trace_row_from_frame(
-                &frame,
-                16_667,
-                0,
-                0,
-                false,
-                0,
-                0,
-                runtime_status::LauncherStatusPublishStats::default(),
-            );
+            let row = preview_scroll_trace_row_from_frame(&frame, 16_667, 0, 0, false, 0, 0);
 
             assert_eq!(row.main_present_backend, expected_backend);
             assert_eq!(row.main_present_status, expected_status);
@@ -2480,14 +2406,28 @@ mod tests {
     }
 
     #[test]
-    fn latch_frames_keep_runtime_status_due_at_low_slack() {
+    fn latch_frames_do_not_suppress_runtime_status_writes() {
         let start = Instant::now();
         let mut low_slack = presented_frame(46, start, 15_500);
         low_slack.status_write_due = true;
         low_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
 
         assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
-        assert!(low_slack.status_write_due);
+        assert!(should_write_runtime_status(&low_slack));
+
+        let mut enough_slack = presented_frame(47, start, 14_000);
+        enough_slack.status_write_due = true;
+        enough_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
+        assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
+        assert!(should_write_runtime_status(&enough_slack));
+
+        let mut non_latch = presented_frame(48, start, 15_500);
+        non_latch.status_write_due = true;
+        non_latch.main_present_backend = LauncherPresentBackend::Fb0Dirty;
+        assert!(should_write_runtime_status(&non_latch));
+
+        non_latch.status_write_due = false;
+        assert!(!should_write_runtime_status(&non_latch));
     }
 
     #[test]
@@ -2608,7 +2548,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\truntime_status_worker_us\truntime_status_publish_sequence\truntime_status_published_age_ms\truntime_status_failures\truntime_status_pending\truntime_status_disconnected\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_route_us\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

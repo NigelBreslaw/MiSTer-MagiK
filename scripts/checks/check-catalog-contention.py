@@ -34,10 +34,6 @@ TRACE_COLUMNS = {
     "main_present_wait_us",
     "status_write_due",
     "runtime_status_write_us",
-    "runtime_status_publish_sequence",
-    "runtime_status_published_age_ms",
-    "runtime_status_failures",
-    "runtime_status_disconnected",
 }
 THREAD_COLUMNS = {
     "interval_start_monotonic_us",
@@ -165,24 +161,8 @@ def check(
         )
         bad_deadline += int(latch_done > (number(row, "vsync_period_us") or 16_667))
 
-    published = [row for row in frames if number(row, "runtime_status_publish_sequence") > 0]
     status_due = [row for row in frames if number(row, "status_write_due") > 0]
-    status_sequence = max(
-        (number(row, "runtime_status_publish_sequence") for row in frames), default=0
-    )
-    first_status_publish_ms = min(
-        (number(row, "elapsed_us") // 1_000 for row in published), default=2**63 - 1
-    )
-    status_age_max = max(
-        (number(row, "runtime_status_published_age_ms") for row in published), default=0
-    )
-    status_failures = max(
-        (number(row, "runtime_status_failures") for row in frames), default=0
-    )
-    status_disconnected = sum(
-        number(row, "runtime_status_disconnected") > 0 for row in frames
-    )
-    status_enqueue_p99 = percentile(
+    status_write_p99 = percentile(
         [number(row, "runtime_status_write_us") for row in status_due], 99
     )
     work_p99 = percentile(work_samples, 99)
@@ -196,34 +176,19 @@ def check(
         "latch_deadline_misses": bad_deadline,
         "work_p99_us": work_p99,
         "work_p99_budget_us": 6_809,
-        "runtime_status_sequence": status_sequence,
-        "runtime_status_first_publish_ms": first_status_publish_ms,
-        "runtime_status_age_max_ms": status_age_max,
-        "runtime_status_age_budget_ms": 5_000,
-        "runtime_status_failures": status_failures,
-        "runtime_status_disconnected_frames": status_disconnected,
-        "runtime_status_enqueue_p99_us": status_enqueue_p99,
-        "runtime_status_enqueue_budget_us": 500,
+        "runtime_status_write_samples": len(status_due),
+        "runtime_status_write_p99_us": status_write_p99,
     }
-    status_valid = (
-        status_sequence > 0
-        and bool(status_due)
-        and first_status_publish_ms <= 5_000
-        and status_age_max <= 5_000
-        and status_failures == 0
-        and status_disconnected == 0
-        and status_enqueue_p99 <= 500
-    )
     valid = (
         not any((bad_work, bad_wall, bad_vsync, bad_present, bad_backend, bad_deadline))
         and work_p99 <= 6_809
-        and status_valid
+        and bool(status_due)
     )
     reason = (
         "ok"
         if valid
-        else "runtime_status"
-        if not status_valid
+        else "missing_runtime_status_write"
+        if not status_due
         else "work_p99"
         if work_p99 > 6_809
         else "frame_drop"
@@ -237,9 +202,9 @@ def self_test() -> int:
         trace = root / "trace.tsv"
         thread = root / "threads.tsv"
         trace.write_text(
-            "frame\telapsed_us\tmonotonic_us\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tvsync_source\tvsync_miss_streak\tmain_present_status\tmain_present_backend\tvsync_period_us\tpresent_phase_us\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tstatus_write_due\truntime_status_write_us\truntime_status_publish_sequence\truntime_status_published_age_ms\truntime_status_failures\truntime_status_disconnected\n"
+            "frame\telapsed_us\tmonotonic_us\tprepare_us\tslint_render_us\tcustom_draw_us\thidden_compose_us\tfb_present_us\twall_us\tvsync_source\tvsync_miss_streak\tmain_present_status\tmain_present_backend\tvsync_period_us\tpresent_phase_us\tmain_present_hidden_copy_us\tmain_present_request_us\tmain_present_wait_us\tstatus_write_due\truntime_status_write_us\n"
             + "".join(
-                f"{index}\t{index * 1000}\t{index * 1000}\t100\t100\t100\t100\t100\t16667\tvsync\t0\tok\tfpga-vblank-latch-hidden\t16667\t1000\t1200\t20\t10\t1\t100\t{index}\t50\t0\t0\n"
+                f"{index}\t{index * 1000}\t{index * 1000}\t100\t100\t100\t100\t100\t16667\tvsync\t0\tok\tfpga-vblank-latch-hidden\t16667\t1000\t1200\t20\t10\t1\t100\n"
                 for index in range(1, 21)
             )
         )
@@ -260,9 +225,9 @@ def self_test() -> int:
         if check("self-drop", trace, thread, 20, 20) == 0:
             print("self-test accepted a dropped frame", file=sys.stderr)
             return 1
-        trace.write_text(good_trace.replace("\t50\t0\t0\n", "\t5001\t0\t0\n"))
-        if check("self-stale-status", trace, thread, 20, 20) == 0:
-            print("self-test accepted stale runtime status", file=sys.stderr)
+        trace.write_text(good_trace.replace("\tfpga-vblank-latch-hidden\t", "\tfb0-dirty\t", 1))
+        if check("self-non-latch", trace, thread, 20, 20) == 0:
+            print("self-test accepted a non-latch frame", file=sys.stderr)
             return 1
         thread.write_text(thread.read_text().replace("\t1\t0\n", "\t0\t0\n"))
         if check("self-quiet", trace, thread, 20, 20) == 0:

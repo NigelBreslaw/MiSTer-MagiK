@@ -747,10 +747,9 @@ pub(super) fn slint_sharded_menu_items(
         .enumerate()
         .map(|(index, tile)| {
             let (subtitle, status) = match &tile.state {
-                LauncherSystemState::Queued | LauncherSystemState::Scanning => (
-                    String::new(),
-                    slint_ui::launcher::MenuItemStatus::Scanning,
-                ),
+                LauncherSystemState::Queued | LauncherSystemState::Scanning => {
+                    (String::new(), slint_ui::launcher::MenuItemStatus::Scanning)
+                }
                 LauncherSystemState::Ready { games, .. } => (
                     format!("{games} games"),
                     slint_ui::launcher::MenuItemStatus::Ready,
@@ -1284,7 +1283,12 @@ mod tests {
 
         assert!(!rows.row_data(0).expect("first row").focused);
         assert!(rows.row_data(1).expect("second row").focused);
-        assert!(updated_rows.row_data(1).expect("updated second row").focused);
+        assert!(
+            updated_rows
+                .row_data(1)
+                .expect("updated second row")
+                .focused
+        );
     }
 
     #[test]
