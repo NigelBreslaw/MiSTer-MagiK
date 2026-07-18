@@ -76,11 +76,20 @@ binary has been installed on the MiSTer.
 ## First Scan Gate
 
 The cold first-scan gate measures time to the first-visible Arcade projection
-and time to a durable V3 registry:
+and time to a durable V3 registry. Its default preserves the locally generated
+Arcade bootstrap index while removing Catalog V3, which measures the normal
+recovery/update path:
 
 ```bash
 scripts/profile-first-scan.sh LABEL --skip-build --replace-label --thread-sample
 ```
+
+Use `--drop-arcade-bootstrap-index` for a separate genuine first-ever run. That
+mode removes both Catalog V3 and the retained index, so it must keep the safe
+foreground MRA scan within its own baseline rather than being compared as an
+index-hit regression. Retained evidence must include
+`builder_first_visible_ready`, `launcher_first_frame_presented`, and the Arcade
+bootstrap probe/publish timing rows.
 
 Pre-V3 historical performance budgets are retained only as comparison data:
 

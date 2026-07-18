@@ -391,20 +391,25 @@ display without valid scan-out.
 
 ## Catalog And Preview Model
 
-Catalog V3 is the sole production catalog. Its schema-one manifest registry
-names immutable schema-two SQLite/schema-one mini-nav pairs for each playable
-system.
+Catalog V3 is the sole authoritative production catalog. Its schema-one
+manifest registry names immutable schema-two SQLite/schema-one mini-nav pairs
+for each playable system. A small checksummed Arcade bootstrap mini-nav may be
+retained beside Catalog V3 as a disposable startup accelerator; it is never a
+complete catalog or publication authority.
 Warm startup reads the registry and Arcade mini-nav only; selecting another
 system opens only that system's mini-nav. The registry's summed counts are the
 full catalog total, while resident Arcade rows describe only eager memory.
 
-A first build scans Arcade as unrestricted first-visible work, reveals the
-launcher after that live projection is acknowledged, then continues the
-complete build in the background. Background walkers, classification batches,
-archive inspection, prepared-payload indexing, and projection work all obey the
-launcher idle latch through UI-independent cooperative checkpoints. Changed
-systems receive new immutable artifacts and unchanged systems retain their
-existing generations. The manifest is the atomic publication boundary.
+A build without a valid registry first probes the retained Arcade mini-nav. A
+matching index restores the exact local Arcade projection; a missing, corrupt,
+oversized, or stale index falls back to the unrestricted first-visible Arcade
+scan. After that projection is acknowledged, the launcher reveals and the
+complete authoritative scan continues. It audits the retained projection and
+atomically refreshes the bootstrap index. Background walkers, classification
+batches, archive inspection, prepared-payload indexing, and projection work all
+obey the launcher idle latch through UI-independent cooperative checkpoints.
+Changed systems receive new immutable artifacts and unchanged systems retain
+their existing generations. The manifest is the atomic publication boundary.
 
 The catalog-state fingerprint, registry generation, and binding must agree.
 The separate scanner cache owns discovery timestamps and software hashes. The

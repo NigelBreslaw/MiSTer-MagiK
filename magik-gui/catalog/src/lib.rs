@@ -3,6 +3,8 @@
 
 //! Catalog, library scan, and preview-loading logic for MiSTer MagiK.
 
+#[cfg(feature = "builder")]
+mod arcade_bootstrap_index;
 pub mod arcade_catalog;
 mod atomic_publish;
 mod bounded_lz4;

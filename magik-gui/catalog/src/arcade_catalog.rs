@@ -497,6 +497,40 @@ impl ArcadeCatalog {
         self.system_game_view(system_id).iter().cloned().collect()
     }
 
+    #[cfg(feature = "builder")]
+    pub(crate) fn isolated_system_catalog(&self, system_id: &str) -> Self {
+        let games = self.system_games(system_id);
+        let retained_refs = games
+            .iter()
+            .map(|game| game.mra_path.clone())
+            .collect::<BTreeSet<_>>();
+        let launch_plans = self
+            .launch_plans_by_ref
+            .values()
+            .filter(|plan| retained_refs.contains(&plan.launch_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        let systems = self
+            .systems
+            .iter()
+            .filter(|system| system.id == system_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let platform_kinds = self
+            .platform_kinds
+            .get(system_id)
+            .copied()
+            .map(|kind| HashMap::from([(system_id.to_string(), kind)]))
+            .unwrap_or_default();
+        Self::new_with_deferred_text_indexes_and_platform_kinds(
+            self.root.clone(),
+            games,
+            systems,
+            launch_plans,
+            platform_kinds,
+        )
+    }
+
     pub fn replacing_system_games(
         &self,
         system_id: &str,
@@ -1890,6 +1924,88 @@ mod tests {
             replaced.launch_target_for_ref("magik-plan:snes"),
             LaunchTarget::Structured(_)
         ));
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn isolated_system_catalog_keeps_exact_rows_launch_plans_and_platform_kind() {
+        let arcade_plan = StructuredLaunchPlan {
+            launch_ref: "magik-plan:arcade".into(),
+            title: "1942".into(),
+            system_id: "arcade".into(),
+            core_path: "Arcade/1942".into(),
+            payload_path: "/media/fat/_Arcade/1942.mra".into(),
+            mount_kind: "launch-core".into(),
+            mount_index: 0,
+            delay_secs: 0,
+        };
+        let console_plan = StructuredLaunchPlan {
+            launch_ref: "magik-plan:snes".into(),
+            title: "F-Zero".into(),
+            system_id: "snes".into(),
+            core_path: "SNES".into(),
+            payload_path: "/media/fat/games/SNES/F-Zero.sfc".into(),
+            mount_kind: "load-file".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+        let game = |title: &str, launch_ref: &str, system_id: &str| ArcadeGameEntry {
+            title: title.into(),
+            mra_path: launch_ref.into(),
+            preview_archive_path: "".into(),
+            preview_asset_key: "".into(),
+            has_preview: false,
+            system_id: system_id.into(),
+            year: None,
+            manufacturer: "".into(),
+            players: None,
+            control: "".into(),
+            is_new: false,
+        };
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+            PathBuf::from("/fixture"),
+            vec![
+                game("1942", &arcade_plan.launch_ref, "arcade"),
+                game("F-Zero", &console_plan.launch_ref, "snes"),
+            ],
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "snes".into(),
+                    title: "SNES".into(),
+                    count: 1,
+                },
+            ],
+            vec![arcade_plan.clone(), console_plan],
+            HashMap::from([
+                ("arcade".to_string(), PlatformKind::Arcade),
+                ("snes".to_string(), PlatformKind::Console),
+            ]),
+        );
+
+        let isolated = catalog.isolated_system_catalog("arcade");
+
+        assert_eq!(isolated.games.len(), 1);
+        assert_eq!(isolated.games[0].title.as_ref(), "1942");
+        assert_eq!(
+            isolated.games[0].mra_path.as_ref(),
+            arcade_plan.launch_ref.as_ref()
+        );
+        assert_eq!(isolated.games[0].system_id.as_ref(), "arcade");
+        assert_eq!(isolated.systems.len(), 1);
+        assert_eq!(isolated.systems[0].id, "arcade");
+        assert_eq!(isolated.platform_kind("arcade"), PlatformKind::Arcade);
+        assert_eq!(
+            isolated.structured_launch_plan_for_ref(&arcade_plan.launch_ref),
+            Some(&arcade_plan)
+        );
+        assert!(isolated
+            .structured_launch_plan_for_ref("magik-plan:snes")
+            .is_none());
     }
     use crate::test_support::arcade_game;
 

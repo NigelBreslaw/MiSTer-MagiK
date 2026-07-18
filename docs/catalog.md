@@ -86,16 +86,30 @@ Resident Arcade rows must never be reported as the total catalog.
 
 ## First Build And Progressive Reveal
 
-With no valid registry, the launcher shows its Slint splash immediately while
-the builder scans Arcade as foreground first-visible work. When that bounded
-projection is acknowledged, the launcher can reveal Home and Arcade. System
-discoveries update scanning tiles while the complete authoritative scan
+With no valid registry, the launcher shows its Slint splash immediately. It
+first probes the bounded `arcade-bootstrap.nav.lz4b` index beside `catalog-v3`.
+The index is an exact, checksummed Arcade mini-nav plus its source stamp. A
+matching index restores the canonical Arcade rows and structured launch plans
+without walking `_Arcade` or opening every MRA. Missing, corrupt, oversized, or
+stale indexes fall back to the existing foreground Arcade scan. When that
+bounded projection is acknowledged, the launcher can reveal Home and Arcade.
+System discoveries update scanning tiles while the complete authoritative scan
 continues.
+
+The retained index is generated locally from each MiSTer's canonical catalog;
+it is not a catalog of one developer's paths and is not assumed to match every
+Update All installation. Different game sets and files therefore receive their
+own exact index. The standard `/media/fat/_Arcade` root remains the production
+Arcade bootstrap input, matching the existing foreground scanner.
 
 After the first-visible boundary, the build becomes background work. The full
 catalog is projected into per-system immutable artifacts and committed through
-the registry. Only the final complete generation is durable authority; the
-first-visible projection is a live bootstrap result.
+the registry. Only the final complete generation is catalog authority. The
+bootstrap index is a disposable startup accelerator: it is published atomically
+after a valid first-visible snapshot, refreshed from the completed full catalog,
+and never used to suppress the authoritative background scan. That scan audits
+weak filesystem stamps and replaces any initially stale projection during the
+same launch.
 
 Foreground first-visible Arcade work does not obey the background idle latch.
 It must finish promptly because there is no usable game UI yet. It must also
@@ -183,11 +197,16 @@ cargo test --manifest-path magik-gui/catalog/Cargo.toml --features builder
 cargo run --release --manifest-path magik-gui/catalog/Cargo.toml \
   --features builder --bin catalog-lab -- rebuild-bench STORAGE SYSTEMS GAMES
 scripts/bench-catalog-rebuild.sh LABEL
+scripts/profile-first-scan.sh LABEL --drop-arcade-bootstrap-index
+scripts/profile-first-scan.sh LABEL
 ```
 
 The standalone suite covers registry atomicity, shard integrity, lazy reads,
 incremental reconciliation, scan checkpoints, first-visible bootstrap, and
 pause/resume behavior.
+The two first-scan invocations distinguish a genuine first-ever fallback from
+the production retained-index recovery path; the latter removes `catalog-v3`
+but deliberately preserves `arcade-bootstrap.nav.lz4b`.
 
 On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/mister catalog`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,

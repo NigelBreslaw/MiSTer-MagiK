@@ -14,6 +14,7 @@ REMOTE_LOG="/tmp/mister-magik-slint.log"
 REMOTE_EVENTS="/tmp/mister-magik/events.jsonl"
 REMOTE_CATALOG="$MISTER_MAGIK_CATALOG_V3"
 REMOTE_CATALOG_STATE="$MISTER_MAGIK_CATALOG_STATE"
+REMOTE_ARCADE_BOOTSTRAP_INDEX="$MISTER_MAGIK_ARCADE_BOOTSTRAP_INDEX"
 REMOTE_ENV="$MISTER_MAGIK_LAUNCHER_ENV"
 BENCH_DIR="$HERE/history/toolchain-bench"
 OUT_DIR="$HERE/build/first-scan-profiles"
@@ -26,6 +27,7 @@ NAMESPACE_BACKEND=""
 CATALOG_FIXTURE_CONTRACT="$HERE/scripts/lib/catalog-fixture-contract.json"
 CATALOG_FIXTURE_TOOL="$HERE/scripts/lib/catalog-fixture-contract.py"
 ENFORCE_PERFORMANCE_BUDGETS=0
+DROP_ARCADE_BOOTSTRAP_INDEX=0
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
 source "$HERE/scripts/lib/mister-supervision-lib.sh"
 source "$HERE/scripts/lib/bench-context-lib.sh"
@@ -33,7 +35,7 @@ source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--enforce-performance-budgets]
+Usage: scripts/profile-first-scan.sh LABEL [--deploy-device|--skip-build] [--replace-label] [--timeout SECS] [--namespace-backend auto|walkdir|fd-relative] [--thread-sample] [--drop-arcade-bootstrap-index] [--enforce-performance-budgets]
        scripts/profile-first-scan.sh --self-test
 
 Deletes the Catalog V3 generation, reboots the
@@ -42,6 +44,9 @@ rows to history/toolchain-bench/results-first-scan.tsv. Set
 MISTER_FIRST_SCAN_RESULTS_TSV to keep qualification output under build/.
 --thread-sample records /proc per-thread CPU/core/scheduler samples once per
 second after reboot while the first scan completes.
+By default the durable Arcade bootstrap index is preserved, measuring the
+production recovery path after Catalog V3 loss. --drop-arcade-bootstrap-index
+also removes that index, measuring a genuine first-ever fallback scan.
 Historical timing and database-size budgets are recorded by default. Pass
 --enforce-performance-budgets only for an explicit reference-performance gate.
 EOF
@@ -203,6 +208,8 @@ first_scan_marker_self_test() {
   events="$tmp/events.jsonl"
   combined="$tmp/combined.log"
   printf '%s\n' \
+    $'startup_timing\tbuilder_first_visible_ready\t450ms\telapsed_us=449500 snapshot_us=20 games=10' \
+    $'startup_timing\tlauncher_first_frame_presented\t465ms\tscreen=home systems=1 catalog_ready=1' \
     $'startup_timing\tbuilder_catalog_ready\t1001ms\telapsed_us=1000500 snapshot_us=20' \
     $'startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 audit_us=11000 stamp_us=1500 audit_rows=4' \
     $'startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 games=10' \
@@ -223,6 +230,8 @@ first_scan_marker_self_test() {
   [[ "$(grep -c $'^startup_timing\tbuilder_deferred_audit_stamp\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tbuilder_catalog_projection\t' "$combined")" == "1" ]]
   [[ "$(grep -c $'^startup_timing\tbuilder_catalog_prepare_overlap\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tbuilder_first_visible_ready\t' "$combined")" == "1" ]]
+  [[ "$(grep -c $'^startup_timing\tlauncher_first_frame_presented\t' "$combined")" == "1" ]]
   grep -q $'^startup_timing\tlibrary_ready\t1200ms\tsource=launcher-events elapsed_ms=1200 builder_elapsed_us=1000500$' "$combined"
   grep -q $'^startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 ' "$combined"
   grep -q $'^startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 ' "$combined"
@@ -407,6 +416,7 @@ while [[ $# -gt 0 ]]; do
     --timeout) TIMEOUT_SECS="${2:?}"; shift 2 ;;
     --namespace-backend) NAMESPACE_BACKEND="${2:?}"; shift 2 ;;
     --thread-sample) thread_sample_enabled="1"; shift ;;
+    --drop-arcade-bootstrap-index) DROP_ARCADE_BOOTSTRAP_INDEX=1; shift ;;
     --enforce-performance-budgets) ENFORCE_PERFORMANCE_BUDGETS=1; shift ;;
     --sqlite-publish-mode) echo "--sqlite-publish-mode was removed; library DB publishing has one supported path" >&2; exit 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -478,7 +488,11 @@ commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if [[ "$commit" != "unknown" ]] && first_scan_commit_is_dirty "$HERE"; then
   commit="${commit}-dirty"
 fi
-echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s"
+bootstrap_mode="retained-index"
+if [[ "$DROP_ARCADE_BOOTSTRAP_INDEX" -eq 1 ]]; then
+  bootstrap_mode="first-ever-fallback"
+fi
+echo "==> first-scan profile label=$LABEL commit=$commit deploy=$DEPLOY timeout=${TIMEOUT_SECS}s bootstrap=$bootstrap_mode"
 env_file="$(mktemp)"
 local_log="$(mktemp)"
 local_events="$(mktemp)"
@@ -508,7 +522,7 @@ emit_thread_sample_artifact_report() {
     "$LABEL" "$raw_log" "$REMOTE_LOG" "$([[ -f "$raw_log" ]] && echo true || echo false)" "$raw_log_bytes"
   printf 'artifact_tsv\tlabel=%s\tkind=runtime_events\tlocal_path=%s\tremote_path=%s\texists=%s\tbytes=%s\n' \
     "$LABEL" "$raw_events" "$REMOTE_EVENTS" "$([[ -f "$raw_events" ]] && echo true || echo false)" "$([[ -f "$raw_events" ]] && wc -c <"$raw_events" | tr -d ' ' || echo 0)"
-  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tdeploy=%s\t%s\t%s\n' "$LABEL" "$commit" "$DEPLOY" "$source_fields" "$binary_fields"
+  printf 'run_context_tsv\tlabel=%s\tcommit=%s\tdeploy=%s\tarcade_bootstrap=%s\t%s\t%s\n' "$LABEL" "$commit" "$DEPLOY" "$bootstrap_mode" "$source_fields" "$binary_fields"
   if [[ "$thread_sample_enabled" == "1" ]]; then
     thread_sample_emit_artifacts
     thread_sample_emit_summary "$LABEL" "first-scan-embedded-builder" "$thread_sample_local_tsv"
@@ -555,7 +569,10 @@ if [ -n \"\$builder_pids\" ]; then
     kill -9 \$builder_pids 2>/dev/null || true
   fi
 fi
-for path in '$REMOTE_CATALOG'; do
+for path in '$REMOTE_CATALOG' '$REMOTE_ARCADE_BOOTSTRAP_INDEX'; do
+  if [ \"\$path\" = '$REMOTE_ARCADE_BOOTSTRAP_INDEX' ] && [ '$DROP_ARCADE_BOOTSTRAP_INDEX' -ne 1 ]; then
+    continue
+  fi
   if [ -e \"\$path\" ]; then
     bytes=\$(wc -c <\"\$path\" 2>/dev/null || echo 0)
     echo \"artifact_reset_tsv	$LABEL	removed	\$path	\$bytes\"
@@ -564,16 +581,25 @@ for path in '$REMOTE_CATALOG'; do
   fi
 done
 rm -rf '$REMOTE_CATALOG'
+if [ '$DROP_ARCADE_BOOTSTRAP_INDEX' -eq 1 ]; then
+  rm -f '$REMOTE_ARCADE_BOOTSTRAP_INDEX'
+fi
 rm -f '$REMOTE_LOG' '$REMOTE_EVENTS'
 sync
-for path in '$REMOTE_CATALOG'; do
+for path in '$REMOTE_CATALOG' '$REMOTE_ARCADE_BOOTSTRAP_INDEX'; do
+  if [ \"\$path\" = '$REMOTE_ARCADE_BOOTSTRAP_INDEX' ] && [ '$DROP_ARCADE_BOOTSTRAP_INDEX' -ne 1 ]; then
+    continue
+  fi
   if [ -e \"\$path\" ]; then
     echo \"artifact reset failed: \$path was republished\" >&2
     exit 1
   fi
 done
 sleep 1
-for path in '$REMOTE_CATALOG'; do
+for path in '$REMOTE_CATALOG' '$REMOTE_ARCADE_BOOTSTRAP_INDEX'; do
+  if [ \"\$path\" = '$REMOTE_ARCADE_BOOTSTRAP_INDEX' ] && [ '$DROP_ARCADE_BOOTSTRAP_INDEX' -ne 1 ]; then
+    continue
+  fi
   if [ -e \"\$path\" ]; then
     echo \"artifact reset failed after settle: \$path was republished\" >&2
     exit 1
@@ -642,7 +668,7 @@ gate_failed=0
 
 awk -v label="$LABEL" -v commit="$commit" -F '\t' '
   BEGIN { OFS = "\t" }
-  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "catalog_worker_ram_catalog" || $2 == "builder_deferred_audit_stamp" || $2 == "builder_catalog_projection" || $2 == "builder_catalog_prepare_overlap") {
+  $1 == "startup_timing" && ($2 == "first_frame" || $2 == "builder_first_visible_scan" || $2 == "builder_first_visible_prepare" || $2 == "builder_first_visible_ready" || $2 == "launcher_first_frame_presented" || $2 == "builder_arcade_bootstrap_index_probe" || $2 == "builder_arcade_bootstrap_index_publish" || $2 == "builder_arcade_bootstrap_index_refresh" || $2 == "bootstrap_counter_climb" || $2 == "bootstrap_counter_sustained_climb" || $2 == "full_scan_counter_climb" || $2 == "catalog_counter_climb" || $2 == "library_scan_complete" || $2 == "library_db_saved" || $2 == "library_ready" || $2 == "catalog_bridge_sync_update" || $2 == "catalog_worker_ram_catalog" || $2 == "builder_deferred_audit_stamp" || $2 == "builder_catalog_projection" || $2 == "builder_catalog_prepare_overlap") {
     ms = $3
     sub(/ms$/, "", ms)
     if ($2 == "bootstrap_counter_sustained_climb") {

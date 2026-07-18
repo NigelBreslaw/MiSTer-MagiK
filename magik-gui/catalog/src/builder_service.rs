@@ -159,6 +159,13 @@ trait BuilderBackend {
         prepared: &Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<Vec<(String, String)>, String>;
+    fn retain_first_visible_snapshot(
+        &mut self,
+        _path: &Path,
+        _prepared: &Self::Prepared,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     fn persist(
         &mut self,
         prepared: Self::Prepared,
@@ -277,6 +284,19 @@ fn run_with_backend<B: BuilderBackend>(
             games,
             load_us,
         });
+        match backend.retain_first_visible_snapshot(&snapshot_path, &bootstrap.value) {
+            Ok(Some(detail)) => emit(CatalogBuilderEvent::Timing {
+                protocol,
+                name: "builder_arcade_bootstrap_index_publish".into(),
+                detail,
+            }),
+            Ok(None) => {}
+            Err(error) => emit(CatalogBuilderEvent::Timing {
+                protocol,
+                name: "builder_arcade_bootstrap_index_publish".into(),
+                detail: format!("status=error error={}", error.replace('\t', " ")),
+            }),
+        }
         apply_runtime_thread_policy(build_role);
     }
     // First-visible serialization and publication are part of foreground
@@ -357,6 +377,19 @@ fn run_with_backend<B: BuilderBackend>(
         games,
         load_us,
     });
+    match backend.retain_first_visible_snapshot(&snapshot_path, &prepared.value) {
+        Ok(Some(detail)) => emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_arcade_bootstrap_index_refresh".into(),
+            detail,
+        }),
+        Ok(None) => {}
+        Err(error) => emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_arcade_bootstrap_index_refresh".into(),
+            detail: format!("status=error error={}", error.replace('\t', " ")),
+        }),
+    }
     apply_runtime_thread_policy(build_role);
     let mut progress = |title: &str, detail: &str| {
         wait_for_background_heavy_work_enabled(background_build);
@@ -415,10 +448,19 @@ fn emit_timings(
 }
 
 struct PreparedBuild {
-    artifact: library_db::LibraryScanArtifact,
+    artifact: Option<library_db::LibraryScanArtifact>,
+    stamp: crate::catalog_stamp::CatalogStamp,
     catalog: ArcadeCatalog,
     scanner_cache: crate::scanner_cache::ScannerCacheState,
     load_us: u64,
+    bootstrap_source: BootstrapSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapSource {
+    LiveScan,
+    RetainedIndex,
+    FullBuild,
 }
 
 struct SystemBuilderBackend {
@@ -545,6 +587,52 @@ impl BuilderBackend for SystemBuilderBackend {
         if !self.bootstrap_first_visible {
             return Ok(None);
         }
+        let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
+        match crate::arcade_bootstrap_index::probe(Path::new(root)) {
+            crate::arcade_bootstrap_index::ProbeResult::Hit(loaded) => {
+                system_discovered("arcade".to_string());
+                let games = loaded.catalog.len();
+                return Ok(Some(StageOutput {
+                    value: PreparedBuild {
+                        artifact: None,
+                        stamp: loaded.stamp,
+                        catalog: loaded.catalog,
+                        scanner_cache: crate::scanner_cache::ScannerCacheState::default(),
+                        load_us: loaded.decode_us,
+                        bootstrap_source: BootstrapSource::RetainedIndex,
+                    },
+                    timings: vec![
+                        (
+                            "builder_arcade_bootstrap_index_probe".into(),
+                            format!(
+                                "status=hit elapsed_us={} decode_us={} bytes={} games={games}",
+                                loaded.probe_us, loaded.decode_us, loaded.bytes
+                            ),
+                        ),
+                        (
+                            "builder_first_visible_scan".into(),
+                            format!(
+                                "source=retained-index discover_us=0 classify_us=0 discoveries={games} normal_files=0 containers=0 entries=0"
+                            ),
+                        ),
+                        (
+                            "builder_first_visible_prepare".into(),
+                            format!(
+                                "source=retained-index wall_us={} audit_us=0 stamp_us=0 catalog_us={} games={games}",
+                                loaded.probe_us, loaded.decode_us
+                            ),
+                        ),
+                    ],
+                }));
+            }
+            crate::arcade_bootstrap_index::ProbeResult::Miss { reason, probe_us } => {
+                crate::catalog_logln!(
+                    "arcade_bootstrap_index_tsv\tstatus=miss\treason={}\tprobe_us={}",
+                    reason,
+                    probe_us
+                );
+            }
+        }
         progress("Indexing library", "Scanning Arcade first…");
         let mut scan_events = |event: library_db::LibraryScanEvent| match event {
             library_db::LibraryScanEvent::SystemDiscovered { system_id } => {
@@ -557,16 +645,18 @@ impl BuilderBackend for SystemBuilderBackend {
         )?;
         let stats = scanned.stats().clone();
         self.arcade_bootstrap_scan = Some(scanned.clone());
-        let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
         let (artifact, catalog, timing, scanner_cache) =
             scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
         let games = catalog.len();
+        let stamp = artifact.stamp().clone();
         Ok(Some(StageOutput {
             value: PreparedBuild {
-                artifact,
+                artifact: Some(artifact),
+                stamp,
                 load_us: timing.catalog_us,
                 catalog,
                 scanner_cache,
+                bootstrap_source: BootstrapSource::LiveScan,
             },
             timings: vec![
                 (
@@ -705,10 +795,12 @@ impl BuilderBackend for SystemBuilderBackend {
         ];
         Ok(StageOutput {
             value: PreparedBuild {
-                artifact,
+                stamp: artifact.stamp().clone(),
+                artifact: Some(artifact),
                 catalog,
                 scanner_cache,
                 load_us,
+                bootstrap_source: BootstrapSource::FullBuild,
             },
             timings,
         })
@@ -735,7 +827,7 @@ impl BuilderBackend for SystemBuilderBackend {
                 write_catalog_navigation_snapshot_with_timing(
                     path,
                     &prepared.catalog,
-                    prepared.artifact.stamp(),
+                    &prepared.stamp,
                 )
             },
         )?;
@@ -772,43 +864,67 @@ impl BuilderBackend for SystemBuilderBackend {
         ])
     }
 
+    fn retain_first_visible_snapshot(
+        &mut self,
+        path: &Path,
+        prepared: &Self::Prepared,
+    ) -> Result<Option<String>, String> {
+        let (bytes, elapsed_us) = match prepared.bootstrap_source {
+            BootstrapSource::LiveScan => {
+                crate::arcade_bootstrap_index::publish_from_snapshot(path)?
+            }
+            BootstrapSource::FullBuild => {
+                crate::arcade_bootstrap_index::publish_from_full_catalog(&prepared.catalog)?
+            }
+            BootstrapSource::RetainedIndex => return Ok(None),
+        };
+        Ok(Some(format!(
+            "status=published elapsed_us={elapsed_us} bytes={bytes} path={}",
+            crate::arcade_bootstrap_index::default_path().display()
+        )))
+    }
+
     fn persist(
         &mut self,
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<BuilderSummary, String> {
-        let catalog_fingerprint = prepared.artifact.stamp().fingerprint_hex();
-        let catalog_state = prepared.artifact.catalog_state();
-        let scan_stats = prepared.artifact.stats().clone();
+        let artifact = prepared
+            .artifact
+            .ok_or_else(|| "cannot persist full catalog from retained Arcade index".to_string())?;
+        let catalog_fingerprint = artifact.stamp().fingerprint_hex();
+        let catalog_state = artifact.catalog_state();
+        let scan_stats = artifact.stats().clone();
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
         let projection_started = Instant::now();
         let scanner_cache_path = crate::scanner_cache::default_path();
-        let (outcome, staged_scanner_cache, scanner_cache_stage_us) = std::thread::scope(|scope| {
-            let scanner_cache_worker = std::thread::Builder::new()
-                .name("scanner-cache-stage".to_string())
-                .spawn_scoped(scope, || {
-                    let started = Instant::now();
-                    let staged = crate::scanner_cache::stage(
-                        &scanner_cache_path,
-                        &prepared.scanner_cache,
-                    )?;
-                    Ok::<_, String>((staged, started.elapsed().as_micros()))
-                })
-                .map_err(|error| format!("spawn scanner cache staging worker: {error}"))?;
-            let outcome =
-                crate::production_sharded_projection::publish_bound_production_projection(
-                    &crate::catalog_config::default_sharded_catalog_path(),
-                    &prepared.catalog,
-                    &catalog_fingerprint,
-                    crate::production_sharded_projection::production_registry_limits(),
-                )
-                .map_err(|error| format!("publish V3 system catalogs: {error}"));
-            let staged = scanner_cache_worker
-                .join()
-                .map_err(|_| "scanner cache staging worker panicked".to_string())??;
-            Ok::<_, String>((outcome?, staged.0, staged.1))
-        })?;
+        let (outcome, staged_scanner_cache, scanner_cache_stage_us) =
+            std::thread::scope(|scope| {
+                let scanner_cache_worker = std::thread::Builder::new()
+                    .name("scanner-cache-stage".to_string())
+                    .spawn_scoped(scope, || {
+                        let started = Instant::now();
+                        let staged = crate::scanner_cache::stage(
+                            &scanner_cache_path,
+                            &prepared.scanner_cache,
+                        )?;
+                        Ok::<_, String>((staged, started.elapsed().as_micros()))
+                    })
+                    .map_err(|error| format!("spawn scanner cache staging worker: {error}"))?;
+                let outcome =
+                    crate::production_sharded_projection::publish_bound_production_projection(
+                        &crate::catalog_config::default_sharded_catalog_path(),
+                        &prepared.catalog,
+                        &catalog_fingerprint,
+                        crate::production_sharded_projection::production_registry_limits(),
+                    )
+                    .map_err(|error| format!("publish V3 system catalogs: {error}"));
+                let staged = scanner_cache_worker
+                    .join()
+                    .map_err(|_| "scanner cache staging worker panicked".to_string())??;
+                Ok::<_, String>((outcome?, staged.0, staged.1))
+            })?;
         let projection_us = projection_started.elapsed().as_micros();
         let scanner_cache_publish_started = Instant::now();
         staged_scanner_cache.publish()?;
@@ -1119,6 +1235,19 @@ mod tests {
             )])
         }
 
+        fn retain_first_visible_snapshot(
+            &mut self,
+            path: &Path,
+            _prepared: &Self::Prepared,
+        ) -> Result<Option<String>, String> {
+            self.calls.push("retain-first-visible");
+            assert!(
+                path.exists(),
+                "first-visible snapshot must exist before retention"
+            );
+            Ok(Some("status=published elapsed_us=1 bytes=18".to_string()))
+        }
+
         fn persist(
             &mut self,
             _prepared: Self::Prepared,
@@ -1247,6 +1376,7 @@ mod tests {
                 "scan",
                 "prepare-catalog",
                 "snapshot",
+                "retain-first-visible",
                 "persist",
                 "build-duration"
             ]
@@ -1301,9 +1431,11 @@ mod tests {
             [
                 "bootstrap",
                 "snapshot",
+                "retain-first-visible",
                 "scan",
                 "prepare-catalog",
                 "snapshot",
+                "retain-first-visible",
                 "persist",
                 "build-duration"
             ]
@@ -1316,6 +1448,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(ready.len(), 2);
+        let retained = events
+            .iter()
+            .position(|event| {
+                matches!(event, CatalogBuilderEvent::Timing { name, .. } if name == "builder_arcade_bootstrap_index_publish")
+        })
+            .expect("retained first-visible timing");
         assert_eq!(
             backend.snapshot_background_scopes,
             [false, false],
@@ -1328,6 +1466,8 @@ mod tests {
             })
             .unwrap();
         assert!(ready[0] < full_scan_timing);
+        assert!(ready[0] < retained);
+        assert!(retained < full_scan_timing);
         assert!(full_scan_timing < ready[1]);
     }
 
