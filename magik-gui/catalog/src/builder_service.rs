@@ -52,6 +52,12 @@ pub fn run(
     operation: BuilderOperation,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
+    if matches!(
+        operation,
+        BuilderOperation::Build | BuilderOperation::FreshBuild
+    ) {
+        std::env::set_var("MISTER_CATALOG_DURABLE_RESUME", "1");
+    }
     let mut backend = SystemBuilderBackend {
         replacement_rebuild: operation == BuilderOperation::Rebuild,
         bootstrap_first_visible: matches!(
@@ -464,7 +470,10 @@ struct PreparedPersistence {
 impl PreparedPersistence {
     fn from_prepared(state: library_db::LibraryPreparedState) -> Self {
         let (catalog_state, scan_stats) = state.into_parts();
-        Self { catalog_state, scan_stats }
+        Self {
+            catalog_state,
+            scan_stats,
+        }
     }
 }
 
@@ -740,21 +749,10 @@ impl BuilderBackend for SystemBuilderBackend {
                 system_discovered(system_id);
             }
         };
-        let scanned = if let Some(arcade) = self.arcade_bootstrap_scan.take() {
-            if self.replacement_rebuild {
-                library_db::scan_default_library_ram_background_reusing_arcade_with_events(
-                    arcade,
-                    Some(progress),
-                    Some(&mut scan_events),
-                )?
-            } else {
-                library_db::scan_default_library_ram_foreground_reusing_arcade_with_events(
-                    arcade,
-                    Some(progress),
-                    Some(&mut scan_events),
-                )?
-            }
-        } else if self.replacement_rebuild {
+        // The bootstrap is UI-only. A resumable full build owns one stable,
+        // complete ordered target list across the first and later processes.
+        self.arcade_bootstrap_scan.take();
+        let scanned = if self.replacement_rebuild {
             library_db::scan_default_library_ram_background_with_events(
                 Some(progress),
                 Some(&mut scan_events),
@@ -966,10 +964,8 @@ impl BuilderBackend for SystemBuilderBackend {
         report_catalog_memory("shards-complete");
         progress("Indexing library", "Saving scanner cache…");
         let scanner_cache_stage_started = Instant::now();
-        let staged_scanner_cache = crate::scanner_cache::stage(
-            &crate::scanner_cache::default_path(),
-            &scanner_cache,
-        )?;
+        let staged_scanner_cache =
+            crate::scanner_cache::stage(&crate::scanner_cache::default_path(), &scanner_cache)?;
         let scanner_cache_stage_us = scanner_cache_stage_started.elapsed().as_micros();
         drop(scanner_cache);
         let scanner_cache_publish_started = Instant::now();
@@ -983,6 +979,7 @@ impl BuilderBackend for SystemBuilderBackend {
         crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
         let catalog_state_us = catalog_state_started.elapsed().as_micros();
         report_catalog_memory("catalog-state-complete");
+        crate::build_progress::remove(&crate::catalog_config::default_build_progress_path())?;
         let import_us = v3_started.elapsed().as_micros() as u64;
         crate::catalog_logln!(
             "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
@@ -1219,7 +1216,8 @@ mod tests {
 
     #[test]
     fn proc_status_memory_parser_requires_current_and_peak_rss() {
-        let status = "Name:\tmister-magik-fb\nVmPeak:\t250000 kB\nVmHWM:\t127999 kB\nVmRSS:\t96000 kB\n";
+        let status =
+            "Name:\tmister-magik-fb\nVmPeak:\t250000 kB\nVmHWM:\t127999 kB\nVmRSS:\t96000 kB\n";
         assert_eq!(
             parse_process_memory(status),
             Some(ProcessMemory {

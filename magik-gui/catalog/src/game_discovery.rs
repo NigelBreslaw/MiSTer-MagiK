@@ -11,10 +11,11 @@ use crate::library_db::{
 use crate::media_metadata;
 use crate::prepared_collections::PreparedLaunchProvenance;
 use crate::prepared_collections::{self, PreparedCollectionId};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct GameDiscovery {
     pub(crate) source_path: String,
     pub(crate) launch_ref: String,
@@ -34,7 +35,7 @@ pub(crate) struct GameDiscovery {
     pub(crate) confidence: DiscoveryConfidence,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum DiscoverySourceKind {
     Mra,
     Mgl,
@@ -43,7 +44,7 @@ pub(crate) enum DiscoverySourceKind {
     CatalogEntry,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) enum DiscoveryConfidence {
     MraHardware,
     MraCore,

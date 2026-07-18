@@ -6,6 +6,7 @@
 use crate::catalog_scan::should_ignore_path;
 use crate::launch_profiles;
 use crate::namespace_walk;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,7 +18,7 @@ pub(crate) struct InstalledCore {
     pub(crate) path: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct GameDirFact {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
@@ -49,7 +50,7 @@ pub(crate) struct GameDirHeader {
     pub(crate) signature: GameDirSignature,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum GameDirSignature {
     Present { len: u64, mtime_nanos: i64 },
     Unavailable,

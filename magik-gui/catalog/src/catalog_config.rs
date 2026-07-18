@@ -48,7 +48,6 @@ pub fn default_sharded_catalog_path() -> PathBuf {
 }
 
 /// Mutable, non-authoritative progress for an interrupted catalog build.
-#[cfg(feature = "builder")]
 pub fn default_build_progress_path() -> PathBuf {
     crate::build_progress::path_for_root(&default_sharded_catalog_path())
 }

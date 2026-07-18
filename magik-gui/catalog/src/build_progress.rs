@@ -282,7 +282,7 @@ impl BuildProgressJournal {
         targets: &[ScanTarget],
     ) -> Result<Self, String> {
         validate_targets(targets)?;
-        let conn = Connection::open(path)
+        let mut conn = Connection::open(path)
             .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         let version: String = meta(&conn, "schema_version")?;
@@ -296,7 +296,7 @@ impl BuildProgressJournal {
         }
         let stored_targets = read_targets(&conn)?;
         if stored_targets != targets {
-            return Err("ordered scan targets changed".to_string());
+            reconcile_targets(&mut conn, &stored_targets, targets)?;
         }
         let build_id = meta(&conn, "build_id")?;
         // Decode every durable row now; corrupt recovery data is disposable.
@@ -313,6 +313,66 @@ impl BuildProgressJournal {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+fn reconcile_targets(
+    conn: &mut Connection,
+    stored: &[ScanTarget],
+    current: &[ScanTarget],
+) -> Result<(), String> {
+    let mut saved = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT ordinal,input_fingerprint,output_json,stats_json FROM completed_targets",
+            )
+            .map_err(|error| format!("prepare target reconciliation: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| format!("read target reconciliation: {error}"))?;
+        for row in rows {
+            let (ordinal, fingerprint, output, stats) =
+                row.map_err(|error| format!("read target reconciliation row: {error}"))?;
+            if let Some(target) = stored.iter().find(|target| target.ordinal == ordinal) {
+                saved.insert(
+                    (target.key.clone(), target.path.clone()),
+                    (fingerprint, output, stats),
+                );
+            }
+        }
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("begin target reconciliation: {error}"))?;
+    tx.execute("DELETE FROM completed_targets", [])
+        .map_err(|error| format!("clear completed targets: {error}"))?;
+    tx.execute("DELETE FROM scan_targets", [])
+        .map_err(|error| format!("clear scan targets: {error}"))?;
+    for target in current {
+        tx.execute(
+            "INSERT INTO scan_targets(ordinal,target_key,path) VALUES(?1,?2,?3)",
+            params![target.ordinal, target.key, target.path],
+        )
+        .map_err(|error| format!("reconcile scan target: {error}"))?;
+        if let Some((fingerprint, output, stats)) =
+            saved.get(&(target.key.clone(), target.path.clone()))
+        {
+            tx.execute(
+                "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json) VALUES(?1,?2,?3,?4)",
+                params![target.ordinal, fingerprint, output, stats],
+            )
+            .map_err(|error| format!("restore reconciled target: {error}"))?;
+        }
+    }
+    tx.commit()
+        .map_err(|error| format!("commit target reconciliation: {error}"))
 }
 
 fn configure(conn: &Connection) -> Result<(), String> {
@@ -483,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_contract_or_targets_starts_a_new_build() {
+    fn changed_contract_starts_a_new_build() {
         let path = temp_path("build-progress-stale");
         let (journal, _) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
@@ -496,14 +556,37 @@ mod tests {
         assert!(matches!(status, OpenStatus::Recreated { reason } if reason.contains("contract")));
         assert_ne!(journal.build_id(), old_id);
         drop(journal);
-        let changed_targets = vec![ScanTarget {
-            ordinal: 0,
-            key: "console".into(),
-            path: "/games/console".into(),
-        }];
-        let (_, status) =
-            BuildProgressJournal::open_or_create(&path, &changed, &changed_targets).unwrap();
-        assert!(matches!(status, OpenStatus::Recreated { reason } if reason.contains("targets")));
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn target_addition_preserves_matching_completed_work_at_its_new_ordinal() {
+        let path = temp_path("build-progress-target-reconcile");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        journal.checkpoint_target(&completed()).unwrap();
+        let build_id = journal.build_id().to_string();
+        drop(journal);
+        let changed_targets = vec![
+            ScanTarget {
+                ordinal: 0,
+                key: "new".into(),
+                path: "/games/new".into(),
+            },
+            ScanTarget {
+                ordinal: 1,
+                key: "arcade".into(),
+                path: "/games/arcade".into(),
+            },
+        ];
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &changed_targets).unwrap();
+        assert_eq!(status, OpenStatus::Resumed);
+        assert_eq!(journal.build_id(), build_id);
+        let completed = journal.completed_targets().unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].target.ordinal, 1);
+        assert_eq!(completed[0].target.key, "arcade");
         remove(&path).unwrap();
     }
 }

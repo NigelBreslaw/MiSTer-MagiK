@@ -22,6 +22,7 @@ use crate::library_db::{
 };
 use crate::media_metadata;
 use crate::prepared_collections::PreparedPayloadIndex;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -131,6 +132,245 @@ struct ScanTimingStats {
     file_discovery_breakdown: HashMap<String, HashMap<String, FileDiscoveryTimingBucket>>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct TargetOutput {
+    game_dir_facts: Vec<crate::catalog_discovery::GameDirFact>,
+    normal_files: Vec<LibraryPayloadFile>,
+    containers: Vec<crate::library_db::LibraryContainer>,
+    entries: Vec<crate::library_db::LibraryContainerEntry>,
+    ignored_files: usize,
+    discoveries: Vec<GameDiscovery>,
+}
+
+#[derive(Clone, Copy)]
+struct TargetOffsets {
+    facts: usize,
+    files: usize,
+    containers: usize,
+    entries: usize,
+    ignored: usize,
+    discoveries: usize,
+}
+
+impl TargetOffsets {
+    fn capture(
+        facts: &[crate::catalog_discovery::GameDirFact],
+        files: &[LibraryPayloadFile],
+        containers: &[crate::library_db::LibraryContainer],
+        entries: &[crate::library_db::LibraryContainerEntry],
+        ignored: usize,
+        discoveries: &[GameDiscovery],
+    ) -> Self {
+        Self {
+            facts: facts.len(),
+            files: files.len(),
+            containers: containers.len(),
+            entries: entries.len(),
+            ignored,
+            discoveries: discoveries.len(),
+        }
+    }
+}
+
+struct ResumeScan {
+    journal: crate::build_progress::BuildProgressJournal,
+    reusable: HashMap<u32, crate::build_progress::CompletedTarget>,
+    target_count: usize,
+    reused: usize,
+    invalidated: usize,
+    committed: usize,
+}
+
+struct Fingerprint(u64);
+
+impl Fingerprint {
+    fn new() -> Self {
+        Self(0xcbf29ce484222325)
+    }
+
+    fn for_descriptor(descriptor: &catalog_scan::ScanTargetDescriptor) -> Self {
+        let mut value = Self::new();
+        value.bytes(descriptor.path.to_string_lossy().as_bytes());
+        value.bytes(format!("{:?}", descriptor.kind).as_bytes());
+        value
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+        self.0 ^= 0xff;
+        self.0 = self.0.wrapping_mul(0x100000001b3);
+    }
+
+    fn file(&mut self, file: &catalog_scan::FoundFile) {
+        self.bytes(file.path.to_string_lossy().as_bytes());
+        self.bytes(file.ext.as_bytes());
+        self.bytes(&file.size.to_le_bytes());
+        self.bytes(&file.mtime_secs.to_le_bytes());
+    }
+
+    fn facts(&mut self, facts: &crate::catalog_discovery::GameDirFact) {
+        if let Ok(encoded) = serde_json::to_vec(facts) {
+            self.bytes(&encoded);
+        }
+    }
+
+    fn finish(&self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
+fn progress_target(
+    descriptor: &catalog_scan::ScanTargetDescriptor,
+) -> crate::build_progress::ScanTarget {
+    crate::build_progress::ScanTarget {
+        ordinal: descriptor.ordinal as u32,
+        key: format!("{:?}:{}", descriptor.kind, descriptor.path.display()),
+        path: descriptor.path.display().to_string(),
+    }
+}
+
+fn report_resume(state: &ResumeScan, phase: &str, ordinal: usize, reason: &str) {
+    crate::catalog_logln!(
+        "catalog_resume_tsv\tbuild_id={}\tphase={}\ttarget_ordinal={}\ttarget_count={}\tcommitted={}\treused={}\tinvalidated={}\treason={}",
+        state.journal.build_id(),
+        phase,
+        ordinal,
+        state.target_count,
+        state.committed,
+        state.reused,
+        state.invalidated,
+        reason.replace(['\t', '\n'], " ")
+    );
+}
+
+fn prepare_resume_scan(
+    cfg: &BenchConfig,
+    plan: &launch_profiles::CatalogScanPlan,
+    excluded_targets: &[PathBuf],
+    priority: LibraryScanPriority,
+) -> Option<ResumeScan> {
+    if !library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME") {
+        return None;
+    }
+    let descriptors =
+        catalog_scan::planned_scan_target_descriptors(&cfg.roots, plan, excluded_targets);
+    let targets: Vec<_> = descriptors.iter().map(progress_target).collect();
+    let contract = crate::build_progress::BuildContract {
+        roots: cfg.roots.clone(),
+        path_mapping: std::env::var("MISTER_CATALOG_PATH_MAPPING")
+            .ok()
+            .map(|value| vec![("environment".to_string(), value)])
+            .unwrap_or_default(),
+        scanner_version: crate::catalog_config::SCHEMA_VERSION,
+        profile_version: launch_profiles::PROFILE_SET_VERSION.to_string(),
+        taxonomy_version: crate::catalog_classify::SYSTEM_TAXONOMY_VERSION.to_string(),
+        namespace_backend: std::env::var("MISTER_NAMESPACE_BACKEND")
+            .unwrap_or_else(|_| "default".to_string()),
+        projection_contract: crate::sharded_catalog::MANIFEST_SCHEMA_VERSION.to_string(),
+    };
+    let path = crate::catalog_config::default_build_progress_path();
+    let (journal, status) = match crate::build_progress::BuildProgressJournal::open_or_create(
+        &path, &contract, &targets,
+    ) {
+        Ok(opened) => opened,
+        Err(error) => {
+            crate::catalog_logln!(
+                "catalog_resume_tsv\tphase=journal-disabled\treason={}",
+                error.replace(['\t', '\n'], " ")
+            );
+            return None;
+        }
+    };
+    let completed = journal.completed_targets().unwrap_or_default();
+    let fingerprints = if completed.is_empty() {
+        HashMap::new()
+    } else {
+        validate_target_fingerprints(cfg, plan, excluded_targets, priority)
+    };
+    let completed: HashMap<_, _> = completed
+        .into_iter()
+        .map(|target| (target.target.ordinal, target))
+        .collect();
+    let reusable = completed
+        .iter()
+        .filter(|(ordinal, saved)| fingerprints.get(ordinal) == Some(&saved.input_fingerprint))
+        .map(|(ordinal, saved)| (*ordinal, saved.clone()))
+        .collect();
+    let state = ResumeScan {
+        journal,
+        reusable,
+        target_count: targets.len(),
+        reused: 0,
+        invalidated: 0,
+        committed: 0,
+    };
+    report_resume(&state, "journal-open", 0, &format!("{status:?}"));
+    Some(state)
+}
+
+fn validate_target_fingerprints(
+    cfg: &BenchConfig,
+    plan: &launch_profiles::CatalogScanPlan,
+    excluded_targets: &[PathBuf],
+    priority: LibraryScanPriority,
+) -> HashMap<u32, String> {
+    let rx = match priority {
+        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
+            cfg.roots.clone(),
+            plan.clone(),
+            excluded_targets.to_vec(),
+            crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+        ),
+        LibraryScanPriority::Foreground => {
+            catalog_scan::discover_files_pipelined_foreground_with_plan(
+                cfg.roots.clone(),
+                plan.clone(),
+                excluded_targets.to_vec(),
+            )
+        }
+    };
+    let mut current: Option<(u32, Fingerprint)> = None;
+    let mut fingerprints = HashMap::new();
+    while let Ok(event) = rx.recv() {
+        match event {
+            DiscoveryEvent::TargetStart(descriptor) => {
+                current = Some((
+                    descriptor.ordinal as u32,
+                    Fingerprint::for_descriptor(&descriptor),
+                ));
+            }
+            DiscoveryEvent::File(file) => {
+                if let Some((_, fingerprint)) = current.as_mut() {
+                    fingerprint.file(&file);
+                }
+            }
+            DiscoveryEvent::GameDirFacts(facts) => {
+                if let Some((_, fingerprint)) = current.as_mut() {
+                    fingerprint.facts(&facts);
+                }
+            }
+            DiscoveryEvent::RuntimeDirectory(runtime) => {
+                if let Some((_, fingerprint)) = current.as_mut() {
+                    fingerprint.facts(&runtime.facts);
+                    for file in &runtime.files {
+                        fingerprint.file(file);
+                    }
+                }
+            }
+            DiscoveryEvent::TargetComplete(_) => {
+                if let Some((ordinal, fingerprint)) = current.take() {
+                    fingerprints.insert(ordinal, fingerprint.finish());
+                }
+            }
+            DiscoveryEvent::Done { .. } => break,
+        }
+    }
+    fingerprints
+}
+
 #[derive(Default)]
 struct FileDiscoveryTimingBucket {
     elapsed_us: u64,
@@ -231,6 +471,7 @@ fn scan_library_with_progress_and_events(
             plan.game_dir_headers().len(),
         ),
     );
+    let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority);
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
     crate::cooperative_work::checkpoint();
@@ -272,15 +513,150 @@ fn scan_library_with_progress_and_events(
     let mut idx = 0usize;
     let mut first_discovery_reported = false;
     let mut discovered_systems = BTreeSet::new();
+    let mut target_descriptor = None;
+    let mut target_offsets = None;
+    let mut target_fingerprint = Fingerprint::new();
+    let mut skip_target = false;
     while let Ok(event) = rx.recv() {
         crate::cooperative_work::checkpoint();
         let files = match event {
-            DiscoveryEvent::File(file) => vec![file],
+            DiscoveryEvent::TargetStart(descriptor) => {
+                target_fingerprint = Fingerprint::for_descriptor(&descriptor);
+                target_offsets = Some(TargetOffsets::capture(
+                    &game_dir_facts,
+                    &normal_files,
+                    &containers,
+                    &entries,
+                    ignored_files,
+                    &discoveries,
+                ));
+                skip_target = false;
+                if let Some(saved) = resume
+                    .as_mut()
+                    .and_then(|state| state.reusable.remove(&(descriptor.ordinal as u32)))
+                {
+                    match serde_json::from_str::<TargetOutput>(&saved.output_json) {
+                        Ok(output) => {
+                            let first = discoveries.len();
+                            game_dir_facts.extend(output.game_dir_facts);
+                            normal_files.extend(output.normal_files);
+                            containers.extend(output.containers);
+                            entries.extend(output.entries);
+                            ignored_files = ignored_files.saturating_add(output.ignored_files);
+                            discoveries.extend(output.discoveries);
+                            profiles = plan.finalize_profiles(&game_dir_facts);
+                            report_new_discovered_systems(
+                                &discoveries[first..],
+                                &mut discovered_systems,
+                                &mut scan_events,
+                            );
+                            skip_target = true;
+                            if let Some(state) = resume.as_mut() {
+                                state.reused += 1;
+                                report_resume(
+                                    state,
+                                    "target-reused",
+                                    descriptor.ordinal,
+                                    "fingerprint-match",
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(state) = resume.as_mut() {
+                                state.invalidated += 1;
+                                report_resume(
+                                    state,
+                                    "target-invalidated",
+                                    descriptor.ordinal,
+                                    &format!("decode-error:{error}"),
+                                );
+                            }
+                        }
+                    }
+                }
+                target_descriptor = Some(descriptor);
+                Vec::new()
+            }
+            DiscoveryEvent::TargetComplete(descriptor) => {
+                if !skip_target {
+                    if let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut()) {
+                        let output = TargetOutput {
+                            game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
+                            normal_files: normal_files[offsets.files..].to_vec(),
+                            containers: containers[offsets.containers..].to_vec(),
+                            entries: entries[offsets.entries..].to_vec(),
+                            ignored_files: ignored_files.saturating_sub(offsets.ignored),
+                            discoveries: discoveries[offsets.discoveries..].to_vec(),
+                        };
+                        match serde_json::to_string(&output) {
+                            Ok(output_json) => {
+                                let completed = crate::build_progress::CompletedTarget {
+                                    target: progress_target(&descriptor),
+                                    input_fingerprint: target_fingerprint.finish(),
+                                    output_json,
+                                    accumulated_stats: crate::build_progress::BuildStats {
+                                        normal_files: normal_files.len() as u64,
+                                        containers: containers.len() as u64,
+                                        entries: entries.len() as u64,
+                                        audit_rows: 0,
+                                        discoveries: discoveries.len() as u64,
+                                    },
+                                };
+                                match state.journal.checkpoint_target(&completed) {
+                                    Ok(()) => {
+                                        state.committed += 1;
+                                        report_resume(
+                                            state,
+                                            "target-committed",
+                                            descriptor.ordinal,
+                                            "durable",
+                                        );
+                                    }
+                                    Err(error) => report_resume(
+                                        state,
+                                        "checkpoint-failed",
+                                        descriptor.ordinal,
+                                        &error,
+                                    ),
+                                }
+                            }
+                            Err(error) => report_resume(
+                                state,
+                                "checkpoint-failed",
+                                descriptor.ordinal,
+                                &format!("encode-error:{error}"),
+                            ),
+                        }
+                    }
+                }
+                target_descriptor = None;
+                target_offsets = None;
+                skip_target = false;
+                Vec::new()
+            }
+            DiscoveryEvent::File(file) => {
+                if skip_target {
+                    Vec::new()
+                } else {
+                    target_fingerprint.file(&file);
+                    vec![file]
+                }
+            }
             DiscoveryEvent::GameDirFacts(facts) => {
-                game_dir_facts.push(facts);
+                if !skip_target {
+                    target_fingerprint.facts(&facts);
+                    game_dir_facts.push(facts);
+                }
                 Vec::new()
             }
             DiscoveryEvent::RuntimeDirectory(runtime) => {
+                if skip_target {
+                    continue;
+                }
+                target_fingerprint.facts(&runtime.facts);
+                for file in &runtime.files {
+                    target_fingerprint.file(file);
+                }
                 game_dir_facts.push(runtime.facts);
                 profiles = plan.finalize_profiles(&game_dir_facts);
                 if runtime.overflowed {
@@ -469,6 +845,7 @@ fn scan_library_with_progress_and_events(
             }
         }
     }
+    let _ = target_descriptor;
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
     }

@@ -324,7 +324,7 @@ mod cooperative_tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PreparedCollectionId {
     AmigaVision,
     ZeroMhz,
@@ -349,7 +349,7 @@ impl fmt::Display for PreparedCollectionId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LaunchQuality {
     Prepared,
     Generic,
@@ -364,7 +364,7 @@ impl LaunchQuality {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PreparedLaunchProvenance {
     pub collection_id: PreparedCollectionId,
     pub launch_quality: LaunchQuality,

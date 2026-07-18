@@ -9,7 +9,7 @@
 //! launchable by guesswork.
 
 use crate::catalog_discovery;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -20,7 +20,7 @@ pub const CORE_LAUNCH_MANIFEST_VERSION: u32 = 1;
 
 const CORE_LAUNCH_MANIFEST_JSON: &str = include_str!("../data/core_launch_manifest.json");
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RuleSourceKind {
     MainSource,
     Mgl,
@@ -29,7 +29,7 @@ pub enum RuleSourceKind {
     MagikProfile,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuleProvenance {
     pub kind: RuleSourceKind,
     pub detail: String,
@@ -72,7 +72,7 @@ impl RuleProvenance {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MountKind {
     Launcher,
     LoadFile,
@@ -80,7 +80,7 @@ pub enum MountKind {
     Core,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MountSpec {
     pub kind: MountKind,
     pub index: u8,
@@ -113,7 +113,7 @@ impl MountSpec {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum PayloadDisposition {
     Playable,
     AttachedMedia,
@@ -147,7 +147,7 @@ pub enum IgnoreReason {
     Demo,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PayloadRule {
     pub extensions: Vec<String>,
     pub mount: MountSpec,

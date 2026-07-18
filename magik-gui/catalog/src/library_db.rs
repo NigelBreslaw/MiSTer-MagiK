@@ -80,7 +80,7 @@ pub(crate) fn amigavision_installed_listings() -> Vec<CollectionListing> {
         },
     ]
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LibraryContainer {
     pub file_path: String,
     pub format: ArchiveFormat,
@@ -91,7 +91,7 @@ pub struct LibraryContainer {
     pub scan_us: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LibraryContainerEntry {
     pub file_path: String,
     pub entry_path: String,
@@ -105,7 +105,9 @@ pub struct LibraryContainerEntry {
     pub launch_ref: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum ArchiveFormat {
     Zip,
     SevenZip,
@@ -129,7 +131,7 @@ impl ArchiveFormat {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ArchiveScanStatus {
     Ok,
     HeaderOnly,
@@ -406,22 +408,23 @@ impl LibraryRamScanArtifact {
         let wall_t = std::time::Instant::now();
         let (audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us) =
             std::thread::scope(|scope| {
-            let scan = &self.scan;
-            let audit_worker = std::thread::Builder::new()
-                .name("catalog-audit".to_string())
-                .spawn_scoped(scope, move || {
-                    let worker_t = std::time::Instant::now();
-                    apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
-                    let (audit_rows, stamp, audit_us, stamp_us) = coverage_audit_and_stamp(scan);
-                    (
-                        audit_rows,
-                        stamp,
-                        audit_us,
-                        stamp_us,
-                        worker_t.elapsed().as_micros() as u64,
-                    )
-                })
-                .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
+                let scan = &self.scan;
+                let audit_worker = std::thread::Builder::new()
+                    .name("catalog-audit".to_string())
+                    .spawn_scoped(scope, move || {
+                        let worker_t = std::time::Instant::now();
+                        apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
+                        let (audit_rows, stamp, audit_us, stamp_us) =
+                            coverage_audit_and_stamp(scan);
+                        (
+                            audit_rows,
+                            stamp,
+                            audit_us,
+                            stamp_us,
+                            worker_t.elapsed().as_micros() as u64,
+                        )
+                    })
+                    .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
 
                 audit_worker
                     .join()
@@ -730,7 +733,7 @@ pub(crate) struct FileSignature {
     pub(crate) mtime_secs: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LibraryPayloadFile {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) path: String,
@@ -2885,8 +2888,7 @@ mod tests {
         std::fs::write(root.join("games/SNES/Game.sfc"), b"sfc").expect("write drift game");
 
         let current_cores = crate::catalog_discovery::installed_cores_for_roots(&roots);
-        let current_game_dirs =
-            crate::catalog_discovery::top_level_game_dirs_for_roots(&roots);
+        let current_game_dirs = crate::catalog_discovery::top_level_game_dirs_for_roots(&roots);
         let current_audit = core_audit::audit_catalog_coverage_from_facts(
             &profiles,
             &current_cores,
@@ -2901,14 +2903,14 @@ mod tests {
                 &current_cores,
                 &current_game_dirs,
             );
-        let drift =
-            CatalogDriftSummary::from_checkpoints(Some(&prepared.catalog_state.checkpoint), &current_checkpoint);
+        let drift = CatalogDriftSummary::from_checkpoints(
+            Some(&prepared.catalog_state.checkpoint),
+            &current_checkpoint,
+        );
         assert!(!drift.unchanged);
         assert!(drift.changed_cores > 0 || drift.changed_game_dirs > 0);
-        let current_stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
-            &roots,
-            &current_audit,
-        );
+        let current_stamp =
+            catalog_stamp::compute_default_catalog_stamp_with_audit(&roots, &current_audit);
         assert_ne!(prepared.catalog_state.stamp, current_stamp);
         let _ = std::fs::remove_dir_all(root);
     }

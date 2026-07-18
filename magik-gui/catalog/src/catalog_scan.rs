@@ -45,6 +45,25 @@ pub(crate) struct RuntimeDirectoryCandidates {
     pub(crate) overflowed: bool,
 }
 
+/// Stable identity and ordering for one target in a planned library scan.
+///
+/// Target boundary events use this descriptor so consumers can associate all
+/// discoveries between `TargetStart` and `TargetComplete` with exactly one
+/// planned target without inferring boundaries from file paths.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ScanTargetDescriptor {
+    pub(crate) ordinal: usize,
+    pub(crate) path: PathBuf,
+    pub(crate) kind: ScanTargetKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ScanTargetKind {
+    Static,
+    Runtime,
+    FactsOnly,
+}
+
 pub(crate) struct ArchiveScan {
     pub(crate) container: LibraryContainer,
     pub(crate) entries: Vec<LibraryContainerEntry>,
@@ -57,6 +76,7 @@ pub(crate) fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, 
     let mut dirs = 0usize;
     while let Ok(event) = rx.recv() {
         match event {
+            DiscoveryEvent::TargetStart(_) | DiscoveryEvent::TargetComplete(_) => {}
             DiscoveryEvent::File(_) => candidates += 1,
             DiscoveryEvent::GameDirFacts(_) => {}
             DiscoveryEvent::RuntimeDirectory(runtime) => candidates += runtime.files.len(),
@@ -107,9 +127,11 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
 }
 
 pub(crate) enum DiscoveryEvent {
+    TargetStart(ScanTargetDescriptor),
     File(FoundFile),
     GameDirFacts(GameDirFact),
     RuntimeDirectory(RuntimeDirectoryCandidates),
+    TargetComplete(ScanTargetDescriptor),
     Done { dirs: usize, discover_us: u64 },
 }
 
@@ -279,6 +301,18 @@ enum PlannedScanTarget {
     FactsOnly(GameDirHeader),
 }
 
+pub(crate) fn planned_scan_target_descriptors(
+    roots: &[String],
+    plan: &CatalogScanPlan,
+    excluded_targets: &[PathBuf],
+) -> Vec<ScanTargetDescriptor> {
+    scan_targets_for_plan(roots, plan, plan.base_profiles(), excluded_targets)
+        .iter()
+        .enumerate()
+        .map(|(ordinal, target)| target.descriptor(ordinal))
+        .collect()
+}
+
 fn walk_index_candidates_with_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
@@ -302,8 +336,12 @@ fn walk_index_candidates_with_plan(
     let mut dirs = 0usize;
     let mut producer_us = 0u64;
     let mut send_stats = SyncSendStats::default();
-    for target in targets {
+    for (ordinal, target) in targets.into_iter().enumerate() {
         let mut target_send_stats = SyncSendStats::default();
+        let descriptor = target.descriptor(ordinal);
+        if !target_send_stats.send(tx, DiscoveryEvent::TargetStart(descriptor.clone())) {
+            break;
+        }
         let stats = match target {
             PlannedScanTarget::Static {
                 path,
@@ -347,13 +385,33 @@ fn walk_index_candidates_with_plan(
             }
         };
         dirs += stats.dirs;
-        send_stats.add(&target_send_stats);
         if stats.aborted {
+            send_stats.add(&target_send_stats);
             break;
         }
+        if !target_send_stats.send(tx, DiscoveryEvent::TargetComplete(descriptor)) {
+            send_stats.add(&target_send_stats);
+            break;
+        }
+        send_stats.add(&target_send_stats);
     }
     report_walker_pipeline_breakdown(producer_us, &send_stats);
     dirs
+}
+
+impl PlannedScanTarget {
+    fn descriptor(&self, ordinal: usize) -> ScanTargetDescriptor {
+        let (path, kind) = match self {
+            Self::Static { path, .. } => (path.clone(), ScanTargetKind::Static),
+            Self::Runtime(header) => (header.path.clone(), ScanTargetKind::Runtime),
+            Self::FactsOnly(header) => (header.path.clone(), ScanTargetKind::FactsOnly),
+        };
+        ScanTargetDescriptor {
+            ordinal,
+            path,
+            kind,
+        }
+    }
 }
 
 fn scan_targets_for_plan(
@@ -1616,6 +1674,9 @@ mod tests {
         let found = rx
             .try_iter()
             .map(|event| match event {
+                DiscoveryEvent::TargetStart(_) | DiscoveryEvent::TargetComplete(_) => {
+                    unreachable!("direct walk does not emit planned target boundaries")
+                }
                 DiscoveryEvent::File(file) => file.path,
                 DiscoveryEvent::GameDirFacts(_) => {
                     unreachable!("direct walk does not collect game-dir facts")
@@ -1652,6 +1713,60 @@ mod tests {
         let dirs = walk_index_candidates_streaming(targets, &profiles, &candidate_exts, &tx);
 
         assert_eq!(dirs, 1);
+    }
+
+    #[test]
+    fn planned_scan_brackets_each_target_with_stable_descriptors() {
+        let root = unique_temp_dir("planned-target-boundaries");
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).expect("create arcade dir");
+        std::fs::write(arcade.join("game.mra"), "<misterromdescription/>")
+            .expect("write arcade launcher");
+
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
+        let dirs = walk_index_candidates_with_plan(&roots, &plan, &[], &tx);
+        drop(tx);
+
+        let mut open = None;
+        let mut completed = Vec::new();
+        for event in rx.try_iter() {
+            match event {
+                DiscoveryEvent::TargetStart(descriptor) => {
+                    assert!(
+                        open.replace(descriptor).is_none(),
+                        "targets must not overlap"
+                    );
+                }
+                DiscoveryEvent::TargetComplete(descriptor) => {
+                    let started = open.take().expect("target completion must have a start");
+                    assert_eq!(descriptor, started);
+                    completed.push(descriptor);
+                }
+                DiscoveryEvent::File(_)
+                | DiscoveryEvent::GameDirFacts(_)
+                | DiscoveryEvent::RuntimeDirectory(_) => {
+                    assert!(open.is_some(), "target payload must be bracketed");
+                }
+                DiscoveryEvent::Done { .. } => unreachable!("direct planned walk has no done"),
+            }
+        }
+
+        assert!(open.is_none(), "last target must be complete");
+        assert!(!completed.is_empty());
+        assert_eq!(
+            completed
+                .iter()
+                .map(|target| target.ordinal)
+                .collect::<Vec<_>>(),
+            (0..completed.len()).collect::<Vec<_>>()
+        );
+        assert!(completed
+            .iter()
+            .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static }));
+        assert!(dirs >= 1);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
