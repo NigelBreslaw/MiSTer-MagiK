@@ -309,9 +309,7 @@ pub fn execute_reconciliation(
     let (barrier_time, manifest_time) = match finalize {
         Ok(times) => times,
         Err(error) => {
-            let intended_is_authoritative = read_latest_manifest(storage_root, limits)
-                .is_ok_and(|manifest| manifest.generation == expected_generation);
-            if !intended_is_authoritative {
+            if planned_generation_cleanup_is_safe(storage_root, limits, expected_generation) {
                 remove_planned_generation(storage_root, &rebuilds, expected_generation);
             }
             return Err(error);
@@ -345,6 +343,17 @@ pub fn execute_reconciliation(
         rebuilt,
         removed,
     })
+}
+
+fn planned_generation_cleanup_is_safe(
+    storage_root: &Path,
+    limits: RegistryLimits,
+    intended_generation: u64,
+) -> bool {
+    match read_latest_manifest(storage_root, limits) {
+        Ok(manifest) => manifest.generation != intended_generation,
+        Err(_) => !manifest_slots_present(storage_root),
+    }
 }
 
 struct FreshPipelineOutcome {
@@ -1077,6 +1086,17 @@ mod tests {
         assert!(root.join("systems/c64/1.sqlite3").exists());
         assert!(root.join("systems/c64/1.nav.lz4b").exists());
         assert_eq!(materializer.commits, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ambiguous_manifest_read_failure_preserves_generation() {
+        let root = temporary_root("ambiguous-manifest-read");
+        fs::create_dir_all(root.join("registry")).unwrap();
+        fs::write(root.join("registry/manifest-a.json"), b"not-json").unwrap();
+
+        assert!(!planned_generation_cleanup_is_safe(&root, limits(), 1));
+
         fs::remove_dir_all(root).unwrap();
     }
 
