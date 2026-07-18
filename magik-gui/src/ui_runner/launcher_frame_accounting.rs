@@ -1541,30 +1541,29 @@ impl LauncherFrameAccounting {
         if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
             self.frame_analytics_samples.pop_front();
         }
-        self.frame_analytics_samples
-            .push_back(runtime_status::FrameBudgetRecentFrame {
-                frame: frame.frames,
-                wall_us,
-                prepare_us,
-                render_us,
-                custom_draw_us,
-                vsync_us,
-                present_us,
-                cpu_prepare_us: cpu_delta(frame.cpu_loop_start, frame.cpu_t0),
-                cpu_render_us: cpu_delta(frame.cpu_t1, frame.cpu_t2),
-                cpu_custom_draw_us: cpu_delta(
-                    frame.cpu_custom_draw_start,
-                    frame.cpu_custom_draw_done,
-                ),
-                cpu_vsync_us: cpu_delta(frame.cpu_custom_draw_done, frame.cpu_t3),
-                cpu_present_us: cpu_delta(frame.cpu_t3, frame.cpu_t4),
-                process_cpu_us: frame
-                    .cpu_t4
-                    .process_us
-                    .saturating_sub(frame.cpu_loop_start.process_us),
-                vsync_source: vsync_source_label(frame.vsync_source),
-                vsync_miss_streak: frame.vsync_miss_streak,
-            });
+        let sample = runtime_status::FrameBudgetRecentFrame {
+            frame: frame.frames,
+            wall_us,
+            prepare_us,
+            render_us,
+            custom_draw_us,
+            vsync_us,
+            present_us,
+            cpu_prepare_us: cpu_delta(frame.cpu_loop_start, frame.cpu_t0),
+            cpu_render_us: cpu_delta(frame.cpu_t1, frame.cpu_t2),
+            cpu_custom_draw_us: cpu_delta(frame.cpu_custom_draw_start, frame.cpu_custom_draw_done),
+            cpu_vsync_us: cpu_delta(frame.cpu_custom_draw_done, frame.cpu_t3),
+            cpu_present_us: cpu_delta(frame.cpu_t3, frame.cpu_t4),
+            process_cpu_us: frame
+                .cpu_t4
+                .process_us
+                .saturating_sub(frame.cpu_loop_start.process_us),
+            vsync_source: vsync_source_label(frame.vsync_source),
+            vsync_miss_streak: frame.vsync_miss_streak,
+        };
+        self.status_publisher
+            .record_recent_frame(sample, FRAME_ANALYTICS_SAMPLE_CAP);
+        self.frame_analytics_samples.push_back(sample);
     }
 
     fn push_slow_frame_sample(
@@ -1589,72 +1588,72 @@ impl LauncherFrameAccounting {
                 )
             })
             .unwrap_or((0, 0));
-        self.slow_frame_samples
-            .push_back(runtime_status::FrameBudgetSlowFrame {
-                frame: frame.frames,
-                severity: if wall_us > FRAME_BUDGET_US {
-                    "drop"
-                } else {
-                    "near-drop"
-                },
-                wall_us,
-                warning_us: FRAME_NEAR_DROP_US,
-                budget_us: FRAME_BUDGET_US,
-                over_budget_us: wall_us.saturating_sub(FRAME_BUDGET_US),
-                dominant_phase: dominant_frame_phase(
-                    prepare_us,
-                    render_us,
-                    custom_draw_us,
-                    vsync_us,
-                    present_us,
-                ),
+        let sample = runtime_status::FrameBudgetSlowFrame {
+            frame: frame.frames,
+            severity: if wall_us > FRAME_BUDGET_US {
+                "drop"
+            } else {
+                "near-drop"
+            },
+            wall_us,
+            warning_us: FRAME_NEAR_DROP_US,
+            budget_us: FRAME_BUDGET_US,
+            over_budget_us: wall_us.saturating_sub(FRAME_BUDGET_US),
+            dominant_phase: dominant_frame_phase(
                 prepare_us,
                 render_us,
                 custom_draw_us,
                 vsync_us,
                 present_us,
-                present_bytes: usize_to_u64_saturating(frame.present_bytes),
-                wasted_present_bytes: usize_to_u64_saturating(frame.wasted_present_bytes),
-                copied_rows: frame.copied_rows,
-                direct_preview_rows: frame.direct_preview_rows,
-                dirty_y0,
-                dirty_y1,
-                catalog_worker_us: u128_to_u64_saturating(frame.prepare_trace.catalog_worker_us),
-                catalog_message_count: frame.prepare_trace.catalog_message_count,
-                catalog_backlog: frame.prepare_trace.catalog_backlog,
-                catalog_ready_deferred: frame.prepare_trace.catalog_ready_deferred,
-                catalog_ready_deferred_age_us: u128_to_u64_saturating(
-                    frame.prepare_trace.catalog_ready_deferred_age_us,
-                ),
-                media_worker_us: u128_to_u64_saturating(frame.prepare_trace.media_worker_us),
-                media_gate_us: u128_to_u64_saturating(frame.prepare_trace.media_gate_us),
-                preview_schedule_us: u128_to_u64_saturating(
-                    frame.prepare_trace.preview_schedule_us,
-                ),
-                preview_apply_us: u128_to_u64_saturating(frame.prepare_trace.preview_apply_us),
-                preview_worker_drained: frame.prepare_trace.preview_worker_drained,
-                preview_ready_processed: frame.prepare_trace.preview_ready_processed,
-                preview_selected_processed: frame.prepare_trace.preview_selected_processed,
-                preview_prefetch_processed: frame.prepare_trace.preview_prefetch_processed,
-                preview_stale_results: frame.prepare_trace.preview_stale_results,
-                preview_cache_inserts: frame.prepare_trace.preview_cache_inserts,
-                preview_cache_evictions: frame.prepare_trace.preview_cache_evictions,
-                preview_failed_results: frame.prepare_trace.preview_failed_results,
-                preview_backlog: frame.prepare_trace.preview_backlog,
-                status_write_due: frame.status_write_due,
-                status_string_copy_us: u128_to_u64_saturating(
-                    frame.prepare_trace.status_string_copy_us,
-                ),
-                status_string_copy_bytes: usize_to_u64_saturating(frame.status_string_copy_bytes),
-                analytics_mode: frame_analytics_mode_label(self.frame_analytics_mode),
-                vsync_source: vsync_source_label(frame.vsync_source),
-                vsync_miss_streak: frame.vsync_miss_streak,
-                vsync_stale_hits: frame.vsync_stale_hits,
-                vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
-                vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
-                frame_start_phase_us: frame.frame_start_phase_us,
-                present_phase_us: u128_to_u64_saturating(frame.present_phase_us),
-            });
+            ),
+            prepare_us,
+            render_us,
+            custom_draw_us,
+            vsync_us,
+            present_us,
+            present_bytes: usize_to_u64_saturating(frame.present_bytes),
+            wasted_present_bytes: usize_to_u64_saturating(frame.wasted_present_bytes),
+            copied_rows: frame.copied_rows,
+            direct_preview_rows: frame.direct_preview_rows,
+            dirty_y0,
+            dirty_y1,
+            catalog_worker_us: u128_to_u64_saturating(frame.prepare_trace.catalog_worker_us),
+            catalog_message_count: frame.prepare_trace.catalog_message_count,
+            catalog_backlog: frame.prepare_trace.catalog_backlog,
+            catalog_ready_deferred: frame.prepare_trace.catalog_ready_deferred,
+            catalog_ready_deferred_age_us: u128_to_u64_saturating(
+                frame.prepare_trace.catalog_ready_deferred_age_us,
+            ),
+            media_worker_us: u128_to_u64_saturating(frame.prepare_trace.media_worker_us),
+            media_gate_us: u128_to_u64_saturating(frame.prepare_trace.media_gate_us),
+            preview_schedule_us: u128_to_u64_saturating(frame.prepare_trace.preview_schedule_us),
+            preview_apply_us: u128_to_u64_saturating(frame.prepare_trace.preview_apply_us),
+            preview_worker_drained: frame.prepare_trace.preview_worker_drained,
+            preview_ready_processed: frame.prepare_trace.preview_ready_processed,
+            preview_selected_processed: frame.prepare_trace.preview_selected_processed,
+            preview_prefetch_processed: frame.prepare_trace.preview_prefetch_processed,
+            preview_stale_results: frame.prepare_trace.preview_stale_results,
+            preview_cache_inserts: frame.prepare_trace.preview_cache_inserts,
+            preview_cache_evictions: frame.prepare_trace.preview_cache_evictions,
+            preview_failed_results: frame.prepare_trace.preview_failed_results,
+            preview_backlog: frame.prepare_trace.preview_backlog,
+            status_write_due: frame.status_write_due,
+            status_string_copy_us: u128_to_u64_saturating(
+                frame.prepare_trace.status_string_copy_us,
+            ),
+            status_string_copy_bytes: usize_to_u64_saturating(frame.status_string_copy_bytes),
+            analytics_mode: frame_analytics_mode_label(self.frame_analytics_mode),
+            vsync_source: vsync_source_label(frame.vsync_source),
+            vsync_miss_streak: frame.vsync_miss_streak,
+            vsync_stale_hits: frame.vsync_stale_hits,
+            vsync_wait_start_age_us: frame.vsync_wait_start_age_us,
+            vsync_accepted_hit_age_us: frame.vsync_accepted_hit_age_us,
+            frame_start_phase_us: frame.frame_start_phase_us,
+            present_phase_us: u128_to_u64_saturating(frame.present_phase_us),
+        };
+        self.status_publisher
+            .record_slow_frame(sample, FRAME_SLOW_SAMPLE_CAP);
+        self.slow_frame_samples.push_back(sample);
     }
 
     fn current_frame_budget_status(
@@ -1665,10 +1664,8 @@ impl LauncherFrameAccounting {
         let window = self.frame_budget_window;
         let mut recent_frames = reuse.recent_frames;
         recent_frames.clear();
-        recent_frames.extend(self.frame_analytics_samples.iter().copied());
         let mut slow_frames = reuse.slow_frames;
         slow_frames.clear();
-        slow_frames.extend(self.slow_frame_samples.iter().copied());
         runtime_status::FrameBudgetStatus {
             budget_us: FRAME_BUDGET_US,
             frames_total: total.frames,
@@ -2558,35 +2555,39 @@ mod tests {
             ));
         }
 
-        let status = accounting.current_frame_budget_status(Default::default());
-        assert_eq!(status.slow_frames.len(), FRAME_SLOW_SAMPLE_CAP);
-        assert_eq!(status.slow_frames[0].frame, 8);
-        assert_eq!(status.slow_frames[31].frame, 39);
-        assert_eq!(status.slow_frames[31].dominant_phase, "fb-present");
-        assert_eq!(status.slow_frames[31].catalog_message_count, 2);
-        assert_eq!(status.slow_frames[31].media_worker_us, 60);
-        assert_eq!(status.slow_frames[31].preview_worker_drained, 5);
-        assert_eq!(status.slow_frames[31].preview_cache_evictions, 2);
-        assert_eq!(status.slow_frames[31].preview_backlog, 6);
-        assert_eq!(status.slow_frames[31].dirty_y0, 12);
-        assert_eq!(status.slow_frames[31].dirty_y1, 24);
-        assert_eq!(status.slow_frames[31].vsync_wait_start_age_us, 12_000);
-        assert_eq!(status.slow_frames[31].vsync_accepted_hit_age_us, 500);
-        assert_eq!(status.slow_frames[31].frame_start_phase_us, 8_000);
-        let slow_frames_allocation = status.slow_frames.as_ptr();
+        assert_eq!(accounting.slow_frame_samples.len(), FRAME_SLOW_SAMPLE_CAP);
+        assert_eq!(accounting.slow_frame_samples[0].frame, 8);
+        assert_eq!(accounting.slow_frame_samples[31].frame, 39);
+        assert_eq!(
+            accounting.slow_frame_samples[31].dominant_phase,
+            "fb-present"
+        );
+        assert_eq!(accounting.slow_frame_samples[31].catalog_message_count, 2);
+        assert_eq!(accounting.slow_frame_samples[31].media_worker_us, 60);
+        assert_eq!(accounting.slow_frame_samples[31].preview_worker_drained, 5);
+        assert_eq!(accounting.slow_frame_samples[31].preview_cache_evictions, 2);
+        assert_eq!(accounting.slow_frame_samples[31].preview_backlog, 6);
+        assert_eq!(accounting.slow_frame_samples[31].dirty_y0, 12);
+        assert_eq!(accounting.slow_frame_samples[31].dirty_y1, 24);
+        assert_eq!(
+            accounting.slow_frame_samples[31].vsync_wait_start_age_us,
+            12_000
+        );
+        assert_eq!(
+            accounting.slow_frame_samples[31].vsync_accepted_hit_age_us,
+            500
+        );
+        assert_eq!(
+            accounting.slow_frame_samples[31].frame_start_phase_us,
+            8_000
+        );
 
         accounting.frame_analytics_samples.clear();
-        let status_after_recent_clear = accounting.current_frame_budget_status(status);
+        let status_after_recent_clear = accounting.current_frame_budget_status(Default::default());
         assert!(status_after_recent_clear.recent_frames.is_empty());
-        assert_eq!(
-            status_after_recent_clear.slow_frames.as_ptr(),
-            slow_frames_allocation
-        );
-        assert_eq!(
-            status_after_recent_clear.slow_frames.len(),
-            FRAME_SLOW_SAMPLE_CAP
-        );
-        assert_eq!(status_after_recent_clear.slow_frames[0].frame, 8);
+        assert!(status_after_recent_clear.slow_frames.is_empty());
+        assert_eq!(accounting.slow_frame_samples.len(), FRAME_SLOW_SAMPLE_CAP);
+        assert_eq!(accounting.slow_frame_samples[0].frame, 8);
     }
 
     #[test]
@@ -2595,12 +2596,14 @@ mod tests {
         let mut accounting = LauncherFrameAccounting::new(start);
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US));
 
-        let status = accounting.current_frame_budget_status(Default::default());
-        assert_eq!(status.slow_frames.len(), 1);
-        assert_eq!(status.slow_frames[0].frame, 7);
-        assert_eq!(status.slow_frames[0].severity, "near-drop");
-        assert_eq!(status.slow_frames[0].warning_us, FRAME_NEAR_DROP_US);
-        assert_eq!(status.slow_frames[0].over_budget_us, 0);
+        assert_eq!(accounting.slow_frame_samples.len(), 1);
+        assert_eq!(accounting.slow_frame_samples[0].frame, 7);
+        assert_eq!(accounting.slow_frame_samples[0].severity, "near-drop");
+        assert_eq!(
+            accounting.slow_frame_samples[0].warning_us,
+            FRAME_NEAR_DROP_US
+        );
+        assert_eq!(accounting.slow_frame_samples[0].over_budget_us, 0);
     }
 }
 

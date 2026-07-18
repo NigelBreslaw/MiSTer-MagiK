@@ -298,8 +298,10 @@ second snapshot while one is pending. The frame trace records enqueue time,
 worker duration, publication sequence and age, failures, pending state, and
 worker disconnection so a stalled or lost publisher is an acceptance failure
 rather than a silent loss of observability. Completed snapshots return through
-a one-slot recycle channel; the next sample reuses their string and frame-history
-allocations before handing ownership back to the writer.
+a one-slot recycle channel, so the next sample reuses their string allocations.
+Recent and slow frame records enter a bounded shared history incrementally with
+a non-blocking `try_lock`; the writer merges that history into the JSON instead
+of forcing the UI thread to bulk-copy it once per second.
 Library load recovery follows the same rule: the lifecycle state owns dialog
 text, Retry/Rebuild selection, strict retry, locked cleanup phases, and fresh
 build transitions. The frame loop renders the lifecycle view and executes its

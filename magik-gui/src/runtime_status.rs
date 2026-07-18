@@ -4,11 +4,12 @@
 //! Agent-readable runtime status and recent events.
 
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TryRecvError, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const DIR: &str = "/tmp/mister-magik";
@@ -396,10 +397,17 @@ struct LauncherStatusPublishState {
     failures: AtomicU64,
 }
 
+#[derive(Default)]
+struct LauncherStatusHistory {
+    recent_frames: VecDeque<FrameBudgetRecentFrame>,
+    slow_frames: VecDeque<FrameBudgetSlowFrame>,
+}
+
 pub struct LauncherStatusPublisher {
     tx: Option<SyncSender<LauncherStatusJob>>,
     recycled_rx: Receiver<LauncherStatusOwned>,
     spare: Option<LauncherStatusOwned>,
+    history: Arc<Mutex<LauncherStatusHistory>>,
     state: Arc<LauncherStatusPublishState>,
 }
 
@@ -426,6 +434,8 @@ impl LauncherStatusPublisher {
         });
         let (tx, rx) = sync_channel::<LauncherStatusJob>(1);
         let (recycled_tx, recycled_rx) = sync_channel::<LauncherStatusOwned>(1);
+        let history = Arc::new(Mutex::new(LauncherStatusHistory::default()));
+        let worker_history = Arc::clone(&history);
         let worker_state = Arc::clone(&state);
         let spawn = std::thread::Builder::new()
             .name("runtime-status".to_string())
@@ -436,10 +446,22 @@ impl LauncherStatusPublisher {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let value = match job {
                             LauncherStatusJob::Status {
-                                status,
+                                mut status,
                                 ts_unix_ms,
                                 pid,
                             } => {
+                                if let Ok(mut history) = worker_history.lock() {
+                                    status.frame_budget.recent_frames.clear();
+                                    status
+                                        .frame_budget
+                                        .recent_frames
+                                        .extend(history.recent_frames.drain(..));
+                                    status.frame_budget.slow_frames.clear();
+                                    status
+                                        .frame_budget
+                                        .slow_frames
+                                        .extend(history.slow_frames.iter().copied());
+                                }
                                 let value =
                                     launcher_status_value(status.as_borrowed(), ts_unix_ms, pid);
                                 recycled = Some(status);
@@ -486,6 +508,7 @@ impl LauncherStatusPublisher {
                 tx: None,
                 recycled_rx,
                 spare: None,
+                history,
                 state,
             };
         }
@@ -493,6 +516,7 @@ impl LauncherStatusPublisher {
             tx: Some(tx),
             recycled_rx,
             spare: None,
+            history,
             state,
         }
     }
@@ -508,6 +532,26 @@ impl LauncherStatusPublisher {
             .as_mut()
             .map(|status| std::mem::take(&mut status.frame_budget))
             .unwrap_or_default()
+    }
+
+    pub fn record_recent_frame(&self, frame: FrameBudgetRecentFrame, capacity: usize) {
+        let Ok(mut history) = self.history.try_lock() else {
+            return;
+        };
+        if history.recent_frames.len() == capacity {
+            history.recent_frames.pop_front();
+        }
+        history.recent_frames.push_back(frame);
+    }
+
+    pub fn record_slow_frame(&self, frame: FrameBudgetSlowFrame, capacity: usize) {
+        let Ok(mut history) = self.history.try_lock() else {
+            return;
+        };
+        if history.slow_frames.len() == capacity {
+            history.slow_frames.pop_front();
+        }
+        history.slow_frames.push_back(frame);
     }
 
     pub fn enqueue(&mut self, status: LauncherStatus<'_>) -> LauncherStatusEnqueue {
@@ -1172,6 +1216,33 @@ mod tests {
         assert!(!stats.pending);
         assert_eq!(stats.published_age_ms, u64::MAX);
         assert!(publisher.ready());
+    }
+
+    #[test]
+    fn status_publisher_bounds_incremental_frame_history() {
+        let publisher = LauncherStatusPublisher::new_with_writer(|_value| Ok(()));
+        for frame in 1..=3 {
+            publisher.record_recent_frame(
+                FrameBudgetRecentFrame {
+                    frame,
+                    ..FrameBudgetRecentFrame::default()
+                },
+                2,
+            );
+            publisher.record_slow_frame(
+                FrameBudgetSlowFrame {
+                    frame,
+                    ..FrameBudgetSlowFrame::default()
+                },
+                2,
+            );
+        }
+
+        let history = publisher.history.lock().expect("history lock");
+        assert_eq!(history.recent_frames.len(), 2);
+        assert_eq!(history.recent_frames[0].frame, 2);
+        assert_eq!(history.slow_frames.len(), 2);
+        assert_eq!(history.slow_frames[0].frame, 2);
     }
 
     #[test]
