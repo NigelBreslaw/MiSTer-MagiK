@@ -7,6 +7,8 @@ use crate::catalog_classify::SystemId;
 use crate::sharded_catalog::{NAVIGATION_SCHEMA_VERSION, SHARD_SCHEMA_VERSION};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "builder")]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -112,6 +114,7 @@ pub(crate) fn write_system_shard_with_durability(
     };
     let navigation = encode_navigation(&stored, limits)?;
     let navigation_hash = checksum_hex(&navigation);
+    let preview_archive_default = common_preview_archive_path(&data.games);
     create_parent(sqlite_path)?;
     create_parent(navigation_path)?;
     if sqlite_path.exists() || navigation_path.exists() {
@@ -145,7 +148,7 @@ pub(crate) fn write_system_shard_with_durability(
                  ordinal INTEGER NOT NULL UNIQUE,
                  title TEXT NOT NULL,
                  launch_ref TEXT NOT NULL,
-                 preview_archive_path TEXT NOT NULL,
+                 preview_archive_path TEXT,
                  preview_asset_key TEXT NOT NULL,
                  has_preview INTEGER NOT NULL,
                  year INTEGER,
@@ -176,6 +179,7 @@ pub(crate) fn write_system_shard_with_durability(
         ("generation", generation.to_string()),
         ("game_count", data.games.len().to_string()),
         ("navigation_hash", navigation_hash.clone()),
+        ("preview_archive_path", preview_archive_default.clone()),
     ] {
         transaction
             .execute(
@@ -211,7 +215,8 @@ pub(crate) fn write_system_shard_with_durability(
                     ))?,
                     game.title,
                     game.launch_ref,
-                    game.preview_archive_path,
+                    (game.preview_archive_path != preview_archive_default)
+                        .then_some(game.preview_archive_path.as_str()),
                     game.preview_asset_key,
                     i64::from(game.has_preview),
                     game.year.map(i64::from),
@@ -313,6 +318,7 @@ pub fn open_system_shard(
         ));
     }
     let stored_hash = meta_text(&connection, "navigation_hash")?;
+    let preview_archive_default = meta_text(&connection, "preview_archive_path")?;
     let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
     if checksum_hex(&navigation) != stored_hash {
         return Err(SystemShardError::new(
@@ -369,7 +375,9 @@ pub fn open_system_shard(
                 stable_key: row.get(0)?,
                 title: row.get(1)?,
                 launch_ref: row.get(2)?,
-                preview_archive_path: row.get(3)?,
+                preview_archive_path: row
+                    .get::<_, Option<String>>(3)?
+                    .unwrap_or_else(|| preview_archive_default.clone()),
                 preview_asset_key: row.get(4)?,
                 has_preview: row.get(5)?,
                 year: row.get(6)?,
@@ -471,6 +479,22 @@ fn validate_loaded_games(games: &[SystemGame], max_games: usize) -> Result<(), S
         ));
     }
     Ok(())
+}
+
+#[cfg(feature = "builder")]
+fn common_preview_archive_path(games: &[SystemGame]) -> String {
+    let mut counts = BTreeMap::<&str, usize>::new();
+    for game in games {
+        *counts.entry(&game.preview_archive_path).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(|(left_path, left_count), (right_path, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| right_path.cmp(left_path))
+        })
+        .map_or_else(String::new, |(path, _)| path.to_string())
 }
 
 #[cfg(feature = "builder")]
@@ -609,7 +633,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "builder")]
-    fn schema_one_shard_round_trips_and_matches_navigation() {
+    fn schema_two_shard_round_trips_and_matches_navigation() {
         let root = temporary_root("round-trip");
         let sqlite = root.join("1.sqlite3");
         let navigation = root.join("1.nav.lz4b");
@@ -619,6 +643,15 @@ mod tests {
         assert_eq!(loaded.generation, 1);
         assert_eq!(loaded.games, data.games);
         assert_eq!(loaded.navigation_hash.len(), 16);
+        let connection = Connection::open(&sqlite).unwrap();
+        let defaults: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM games WHERE preview_archive_path IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(defaults, 1);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -633,8 +666,8 @@ mod tests {
         let connection = Connection::open(&sqlite).unwrap();
         connection
             .execute(
-                "UPDATE shard_meta SET value='2' WHERE key='schema_version'",
-                [],
+                "UPDATE shard_meta SET value=?1 WHERE key='schema_version'",
+                [SHARD_SCHEMA_VERSION + 1],
             )
             .unwrap();
         drop(connection);

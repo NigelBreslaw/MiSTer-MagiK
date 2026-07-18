@@ -1,9 +1,10 @@
 # Catalog V3
 
 Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
-registry, shard, navigation, state, binding, and scanner-cache schemas are all
-version **1**. There is no V2 read fallback, migration bridge, dual publication,
-global summary, or global navigation file.
+registry, navigation, state, binding, and scanner-cache schemas are version
+**1**; the SQLite shard schema is version **2**. There is no legacy read
+fallback, migration bridge, dual publication, global summary, or global
+navigation file.
 
 The catalog is split by playable system (`arcade`, `snes`, `c64`, and so on),
 not by launcher presentation groups such as Nintendo or Sega. A system is the
@@ -206,7 +207,7 @@ zero vsync misses, and zero present failures.
 - `catalog_state.rs`: schema-one stamp/checkpoint state.
 - `scanner_cache.rs`: schema-one scanner cache.
 - `shard_registry.rs`: schema-one manifests and artifact validation.
-- `system_shard.rs`: schema-one per-system SQLite and mini-nav artifacts.
+- `system_shard.rs`: schema-two per-system SQLite and schema-one mini-nav artifacts.
 - `production_sharded_projection.rs`: production reconciliation, binding, and
   publication.
 - `lazy_sharded_reader.rs`: registry-first and per-system reads.

@@ -392,7 +392,8 @@ display without valid scan-out.
 ## Catalog And Preview Model
 
 Catalog V3 is the sole production catalog. Its schema-one manifest registry
-names immutable schema-one SQLite/mini-nav pairs for each playable system.
+names immutable schema-two SQLite/schema-one mini-nav pairs for each playable
+system.
 Warm startup reads the registry and Arcade mini-nav only; selecting another
 system opens only that system's mini-nav. The registry's summed counts are the
 full catalog total, while resident Arcade rows describe only eager memory.
