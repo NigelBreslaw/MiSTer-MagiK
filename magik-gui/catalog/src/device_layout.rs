@@ -63,6 +63,18 @@ pub fn current_app_path(relative: &str) -> PathBuf {
 /// Explicit benchmark/test overrides retain precedence.
 pub fn initialize_process_env() {
     let layout = DeviceLayout::current();
+    initialize_process_env_with(
+        layout,
+        |name| std::env::var_os(name).is_some(),
+        |name, value| std::env::set_var(name, value),
+    );
+}
+
+fn initialize_process_env_with(
+    layout: DeviceLayout,
+    mut is_set: impl FnMut(&str) -> bool,
+    mut set: impl FnMut(&str, PathBuf),
+) {
     for (name, relative) in [
         ("MISTER_LIBRARY_SQLITE", "library.sqlite3"),
         ("MISTER_MAME_SQLITE", "mame.sqlite3"),
@@ -71,8 +83,8 @@ pub fn initialize_process_env() {
         ("MISTER_MEDIA_ASSET_DIR", "assets"),
         ("MISTER_LIBRARY_BENCH_SQLITE", "library-scan-bench.sqlite3"),
     ] {
-        if std::env::var_os(name).is_none() {
-            std::env::set_var(name, layout.app_path(relative));
+        if !is_set(name) {
+            set(name, layout.app_path(relative));
         }
     }
 }
@@ -80,6 +92,7 @@ pub fn initialize_process_env() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn resolves_fixed_layout_from_executable_parent() {
@@ -96,5 +109,32 @@ mod tests {
             DeviceLayout::Dev.app_path("settings.json"),
             PathBuf::from("/media/fat/mister-magik-dev/settings.json")
         );
+        assert_eq!(DeviceLayout::Public.app_dir(), PUBLIC_APP_DIR);
+        assert_eq!(DeviceLayout::Public.main_path(), PUBLIC_MAIN);
+        assert_eq!(
+            DeviceLayout::for_executable(Path::new("mister-magik-fb")),
+            DeviceLayout::Public
+        );
+    }
+
+    #[test]
+    fn process_environment_defaults_preserve_explicit_overrides() {
+        let existing = BTreeSet::from(["MISTER_LIBRARY_SQLITE"]);
+        let mut seeded = BTreeMap::new();
+
+        initialize_process_env_with(
+            DeviceLayout::Dev,
+            |name| existing.contains(name),
+            |name, value| {
+                seeded.insert(name.to_string(), value);
+            },
+        );
+
+        assert!(!seeded.contains_key("MISTER_LIBRARY_SQLITE"));
+        assert_eq!(
+            seeded.get("MISTER_MEDIA_ASSET_DIR"),
+            Some(&PathBuf::from("/media/fat/mister-magik-dev/assets"))
+        );
+        assert_eq!(seeded.len(), 5);
     }
 }

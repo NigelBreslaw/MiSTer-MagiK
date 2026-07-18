@@ -414,6 +414,50 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_inspect_rejects_incomplete_and_conflicting_arguments_before_io() {
+        for (args, expected) in [
+            (vec![], "usage: library-sql"),
+            (vec!["--path"], "--path needs a value"),
+            (vec!["--query"], "--query needs a statement"),
+            (
+                vec!["SELECT 1", "--query", "SELECT 2"],
+                "cannot mix positional SQL",
+            ),
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            let error = run_sqlite_inspect_cli(&args).expect_err("invalid arguments must fail");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn sqlite_inspect_rejects_directory_and_non_database_files() {
+        let root = unique_temp_dir("sqlite-inspect-invalid-files");
+        let text = root.join("not.sqlite3");
+        std::fs::write(&text, b"not a sqlite database").expect("write invalid database");
+
+        let directory_error = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            root.display().to_string(),
+            "SELECT 1".to_string(),
+        ])
+        .expect_err("directory must fail");
+        assert!(directory_error.ends_with(" is not a file"));
+
+        let invalid_error = run_sqlite_inspect_cli(&[
+            "--path".to_string(),
+            text.display().to_string(),
+            "SELECT 1".to_string(),
+        ])
+        .expect_err("invalid database must fail");
+        assert!(
+            invalid_error.starts_with("open ") || invalid_error.starts_with("prepare query:"),
+            "{invalid_error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn sqlite_inspect_formats_common_cell_types() {
         let root = unique_temp_dir("sqlite-inspect-cell-types");
         let db = root.join("library.sqlite3");

@@ -30,20 +30,16 @@ pub fn create_catalog_stamp_schema(conn: &Connection) -> Result<(), String> {
 }
 
 pub fn write_catalog_stamp(conn: &Connection, stamp: &CatalogStamp) -> Result<(), String> {
-    conn.execute("DELETE FROM catalog_stamp", [])
-        .map_err(|e| format!("clear catalog stamp: {e}"))?;
     write_compressed_lines(conn, "catalog_stamp", stamp.lines())
-        .map_err(|e| format!("insert catalog stamp: {e}"))
+        .map_err(|e| format!("write catalog stamp: {e}"))
 }
 
 pub fn write_catalog_discovery_checkpoint(
     conn: &Connection,
     checkpoint: &CatalogDiscoveryCheckpoint,
 ) -> Result<(), String> {
-    conn.execute("DELETE FROM catalog_discovery_checkpoint", [])
-        .map_err(|e| format!("clear catalog discovery checkpoint: {e}"))?;
     write_compressed_lines(conn, "catalog_discovery_checkpoint", checkpoint.lines())
-        .map_err(|e| format!("insert catalog discovery checkpoint: {e}"))
+        .map_err(|e| format!("write catalog discovery checkpoint: {e}"))
 }
 
 pub fn read_catalog_stamp(conn: &Connection) -> Result<Option<CatalogStamp>, String> {
@@ -69,7 +65,10 @@ pub fn read_catalog_discovery_checkpoint(
 fn write_compressed_lines(conn: &Connection, table: &str, lines: &[String]) -> Result<(), String> {
     let encoded = encode_lines(lines)?;
     let compressed = lz4_flex::compress_prepend_size(&encoded);
-    let sql = format!("INSERT INTO {table}(id,bytes) VALUES (0,?1)");
+    let sql = format!(
+        "INSERT INTO {table}(id,bytes) VALUES (0,?1) \
+         ON CONFLICT(id) DO UPDATE SET bytes=excluded.bytes"
+    );
     conn.execute(&sql, params![compressed])
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -270,5 +269,65 @@ mod tests {
         assert!(read_catalog_discovery_checkpoint(&conn)
             .expect("read missing checkpoint")
             .is_none());
+    }
+
+    #[test]
+    fn failed_stamp_update_preserves_last_known_good_value() {
+        let conn = Connection::open_in_memory().expect("open sqlite");
+        create_catalog_stamp_schema(&conn).expect("create schema");
+        let original = CatalogStamp::from_lines(vec!["schema\t30".to_string()]);
+        write_catalog_stamp(&conn, &original).expect("write original stamp");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_stamp_update BEFORE UPDATE ON catalog_stamp
+             BEGIN SELECT RAISE(ABORT, 'scripted update failure'); END;",
+        )
+        .expect("create rejection trigger");
+
+        let replacement = CatalogStamp::from_lines(vec!["schema\t31".to_string()]);
+        assert!(write_catalog_stamp(&conn, &replacement).is_err());
+
+        assert_eq!(
+            read_catalog_stamp(&conn)
+                .expect("read retained stamp")
+                .expect("retained stamp"),
+            original
+        );
+    }
+
+    #[test]
+    fn compressed_store_rejects_corrupt_truncated_and_oversized_payloads() {
+        for payload in [
+            vec![0xff],
+            (u32::try_from(MAX_COMPRESSED_LINE_STORE_BYTES).unwrap() + 1)
+                .to_le_bytes()
+                .to_vec(),
+        ] {
+            let conn = Connection::open_in_memory().expect("open sqlite");
+            create_catalog_stamp_schema(&conn).expect("create schema");
+            conn.execute(
+                "INSERT INTO catalog_stamp(id,bytes) VALUES(0,?1)",
+                params![payload],
+            )
+            .expect("insert corrupt payload");
+
+            assert!(read_catalog_stamp(&conn).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_store_reports_wrong_schema_instead_of_creating_data() {
+        let conn = Connection::open_in_memory().expect("open sqlite");
+        conn.execute_batch("CREATE TABLE catalog_stamp(id INTEGER PRIMARY KEY, value TEXT);")
+            .expect("create wrong schema");
+
+        let error = read_catalog_stamp(&conn).expect_err("wrong schema must fail");
+
+        assert!(error.contains("no such column: line"), "{error}");
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM catalog_stamp", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 }
