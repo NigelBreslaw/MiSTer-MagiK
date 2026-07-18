@@ -203,6 +203,12 @@ impl ReconciliationMaterializer for BenchmarkMaterializer {
                 stable_key: format!("{index:08}"),
                 title: format!("Synthetic Game {index:08}"),
                 launch_ref: format!("/games/{}/{index:08}.rom", system_id.as_str()),
+                preview_archive_path: format!(
+                    "/media/fat/mister-magik/video-snaps/{}-screenshots.mmlz4b",
+                    system_id.as_str()
+                ),
+                preview_asset_key: format!("Synthetic Game {index:08}"),
+                has_preview: true,
                 ..SystemGame::default()
             })
             .collect();
