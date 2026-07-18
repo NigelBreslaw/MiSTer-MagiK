@@ -113,8 +113,11 @@ jobs:
           test -n "$AWS_ACCESS_KEY_ID" || { echo "QUARTUS_R2_READ_ACCESS_KEY_ID secret is required" >&2; exit 2; }
           test -n "$AWS_SECRET_ACCESS_KEY" || { echo "QUARTUS_R2_READ_SECRET_ACCESS_KEY secret is required" >&2; exit 2; }
           started="$(date +%s)"
-          scripts/quartus-r2-cache.sh restore
-          status=$?
+          if scripts/quartus-r2-cache.sh restore; then
+            status=0
+          else
+            status=$?
+          fi
           finished="$(date +%s)"
           printf 'quartus_r2_restore_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
           if [[ "$status" -eq 0 ]]; then
