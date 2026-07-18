@@ -224,6 +224,25 @@ pub struct LibraryScanArtifact {
     pub(crate) stamp: catalog_stamp::CatalogStamp,
 }
 
+pub struct LibraryPreparedState {
+    pub(crate) catalog_state: crate::catalog_state::CatalogState,
+    pub(crate) stats: LibraryScanStats,
+}
+
+impl LibraryPreparedState {
+    pub fn stats(&self) -> &LibraryScanStats {
+        &self.stats
+    }
+
+    pub fn stamp(&self) -> &catalog_stamp::CatalogStamp {
+        &self.catalog_state.stamp
+    }
+
+    pub fn into_parts(self) -> (crate::catalog_state::CatalogState, LibraryScanStats) {
+        (self.catalog_state, self.stats)
+    }
+}
+
 #[derive(Clone)]
 pub struct LibraryRamScanArtifact {
     pub(crate) scan: LibraryScan,
@@ -262,24 +281,7 @@ impl LibraryScanArtifact {
     }
 
     pub fn catalog_state(&self) -> crate::catalog_state::CatalogState {
-        crate::catalog_state::CatalogState {
-            stamp: self.stamp.clone(),
-            checkpoint: crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
-                &self.scan.roots,
-                &default_mame_sqlite_path(),
-                &default_hbmame_sqlite_path(),
-                &self.scan.audit_rows,
-                &self.scan.installed_cores,
-                &self.scan.game_dir_facts,
-            ),
-            stats: crate::catalog_state::CatalogStateStats {
-                normal_files: self.stats.normal_files,
-                containers: self.stats.containers,
-                entries: self.stats.entries,
-                audit_rows: self.stats.audit_rows,
-                discoveries: self.stats.discoveries,
-            },
-        }
+        catalog_state_from_scan(&self.scan, &self.stats, self.stamp.clone())
     }
 
     pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
@@ -376,7 +378,7 @@ impl LibraryRamScanArtifact {
         root: impl AsRef<Path>,
     ) -> Result<
         (
-            LibraryScanArtifact,
+            LibraryPreparedState,
             ArcadeCatalog,
             CatalogPrepareTiming,
             crate::scanner_cache::ScannerCacheState,
@@ -392,7 +394,7 @@ impl LibraryRamScanArtifact {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<
         (
-            LibraryScanArtifact,
+            LibraryPreparedState,
             ArcadeCatalog,
             CatalogPrepareTiming,
             crate::scanner_cache::ScannerCacheState,
@@ -402,12 +404,8 @@ impl LibraryRamScanArtifact {
         let root = root.as_ref().to_path_buf();
         apply_runtime_thread_policy(CATALOG_PREPARE_WORKER_ROLE);
         let wall_t = std::time::Instant::now();
-        let (
-            (audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us),
-            catalog,
-            timing,
-            scanner_cache,
-        ) = std::thread::scope(|scope| {
+        let (audit_rows, stamp, audit_us, stamp_us, audit_stamp_worker_us) =
+            std::thread::scope(|scope| {
             let scan = &self.scan;
             let audit_worker = std::thread::Builder::new()
                 .name("catalog-audit".to_string())
@@ -425,23 +423,10 @@ impl LibraryRamScanArtifact {
                 })
                 .map_err(|error| format!("spawn catalog audit/stamp worker: {error}"))?;
 
-            let (catalog, timing, scanner_cache) =
-                build_catalog_from_scan_with_preferred_and_progress(
-                    &root,
-                    scan,
-                    &self.preferred_discoveries,
-                    progress,
-                );
-            let audit_result = audit_worker
-                .join()
-                .map_err(|_| "catalog audit/stamp worker panicked".to_string())?;
-            Ok::<_, String>((audit_result, catalog, timing, scanner_cache))
-        })?;
-        let wall_us = wall_t.elapsed().as_micros() as u64;
-        let overlapped_us = audit_stamp_worker_us
-            .saturating_add(timing.total_us)
-            .saturating_sub(wall_us);
-
+                audit_worker
+                    .join()
+                    .map_err(|_| "catalog audit/stamp worker panicked".to_string())
+            })?;
         self.scan.audit_rows = audit_rows;
         report_library_scan_timing(
             "coverage_audit_deferred",
@@ -450,13 +435,20 @@ impl LibraryRamScanArtifact {
         );
         self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
         self.stats.audit_rows = self.scan.audit_rows.len();
-        let artifact = LibraryScanArtifact {
-            scan: self.scan,
-            stats: self.stats,
-            stamp,
-        };
+        let catalog_state = catalog_state_from_scan(&self.scan, &self.stats, stamp);
+        release_non_projection_scan_facts(&mut self.scan);
+        let (catalog, timing, scanner_cache) = build_catalog_from_scan_with_preferred_and_progress(
+            &root,
+            &self.scan,
+            &self.preferred_discoveries,
+            progress,
+        );
+        let wall_us = wall_t.elapsed().as_micros() as u64;
         Ok((
-            artifact,
+            LibraryPreparedState {
+                catalog_state,
+                stats: self.stats,
+            },
             catalog,
             CatalogPrepareTiming {
                 audit_us,
@@ -467,7 +459,7 @@ impl LibraryRamScanArtifact {
                 projection_rows_us: timing.projection_rows_us,
                 indexes_us: timing.indexes_us,
                 wall_us,
-                overlapped_us,
+                overlapped_us: 0,
             },
             scanner_cache,
         ))
@@ -482,7 +474,7 @@ impl LibraryRamScanArtifact {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<
         (
-            LibraryScanArtifact,
+            LibraryPreparedState,
             ArcadeCatalog,
             CatalogPrepareTiming,
             crate::scanner_cache::ScannerCacheState,
@@ -502,6 +494,8 @@ impl LibraryRamScanArtifact {
         );
         self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
         self.stats.audit_rows = self.scan.audit_rows.len();
+        let catalog_state = catalog_state_from_scan(&self.scan, &self.stats, stamp);
+        release_non_projection_scan_facts(&mut self.scan);
         let (catalog, timing, scanner_cache) = build_catalog_from_scan_with_preferred_and_progress(
             root.as_ref(),
             &self.scan,
@@ -510,10 +504,9 @@ impl LibraryRamScanArtifact {
         );
         let wall_us = wall_t.elapsed().as_micros() as u64;
         Ok((
-            LibraryScanArtifact {
-                scan: self.scan,
+            LibraryPreparedState {
+                catalog_state,
                 stats: self.stats,
-                stamp,
             },
             catalog,
             CatalogPrepareTiming {
@@ -530,6 +523,41 @@ impl LibraryRamScanArtifact {
             scanner_cache,
         ))
     }
+}
+
+fn catalog_state_from_scan(
+    scan: &LibraryScan,
+    stats: &LibraryScanStats,
+    stamp: catalog_stamp::CatalogStamp,
+) -> crate::catalog_state::CatalogState {
+    crate::catalog_state::CatalogState {
+        stamp,
+        checkpoint: crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
+            &scan.roots,
+            &default_mame_sqlite_path(),
+            &default_hbmame_sqlite_path(),
+            &scan.audit_rows,
+            &scan.installed_cores,
+            &scan.game_dir_facts,
+        ),
+        stats: crate::catalog_state::CatalogStateStats {
+            normal_files: stats.normal_files,
+            containers: stats.containers,
+            entries: stats.entries,
+            audit_rows: stats.audit_rows,
+            discoveries: stats.discoveries,
+        },
+    }
+}
+
+fn release_non_projection_scan_facts(scan: &mut LibraryScan) {
+    scan.roots = Vec::new();
+    scan.installed_cores = Vec::new();
+    scan.game_dir_facts = Vec::new();
+    scan.normal_files = Vec::new();
+    scan.containers = Vec::new();
+    scan.entries = Vec::new();
+    scan.audit_rows = Vec::new();
 }
 
 fn coverage_audit_and_stamp(
@@ -2793,7 +2821,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_catalog_prepare_is_sequentially_equivalent() {
+    fn compact_catalog_prepare_is_equivalent_to_full_scan_prepare() {
         let root = unique_temp_dir("parallel-catalog-prepare-equivalence");
         std::fs::create_dir_all(root.join("games/NES")).expect("create games dir");
         install_test_console_core(&root, "NES");
@@ -2806,23 +2834,19 @@ mod tests {
         let sequential_catalog = sequential_ram.catalog("/media/fat/_Arcade");
         let sequential_artifact = sequential_ram.complete_coverage_audit();
 
-        let parallel_ram = ram_artifact_for_test(scan, 42);
-        let (parallel_artifact, parallel_catalog, timing, _scanner_cache) = parallel_ram
+        let compact_ram = ram_artifact_for_test(scan, 42);
+        let (compact_state, compact_catalog, timing, _scanner_cache) = compact_ram
             .complete_coverage_audit_and_catalog_foreground("/media/fat/_Arcade")
-            .expect("parallel catalog prepare");
+            .expect("compact catalog prepare");
 
         assert_eq!(
-            catalog_game_snapshots(&parallel_catalog),
+            catalog_game_snapshots(&compact_catalog),
             catalog_game_snapshots(&sequential_catalog)
         );
-        assert_eq!(parallel_catalog.systems, sequential_catalog.systems);
+        assert_eq!(compact_catalog.systems, sequential_catalog.systems);
+        assert_eq!(compact_state.stamp(), &sequential_artifact.stamp);
         assert_eq!(
-            parallel_artifact.scan.audit_rows,
-            sequential_artifact.scan.audit_rows
-        );
-        assert_eq!(parallel_artifact.stamp, sequential_artifact.stamp);
-        assert_eq!(
-            parallel_artifact.stats.audit_rows,
+            compact_state.stats().audit_rows,
             sequential_artifact.stats.audit_rows
         );
         let sequential_navigation =
@@ -2831,24 +2855,18 @@ mod tests {
                 &sequential_artifact.stamp,
             )
             .expect("encode sequential navigation");
-        let parallel_navigation = crate::catalog_navigation::encode_catalog_navigation_for_storage(
-            &parallel_catalog,
-            &parallel_artifact.stamp,
+        let compact_navigation = crate::catalog_navigation::encode_catalog_navigation_for_storage(
+            &compact_catalog,
+            compact_state.stamp(),
         )
-        .expect("encode parallel navigation");
-        assert_eq!(parallel_navigation, sequential_navigation);
-        assert_eq!(
-            timing.overlapped_us,
-            timing
-                .audit_stamp_worker_us
-                .saturating_add(timing.catalog_us)
-                .saturating_sub(timing.wall_us)
-        );
+        .expect("encode compact navigation");
+        assert_eq!(compact_navigation, sequential_navigation);
+        assert_eq!(timing.overlapped_us, 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn parallel_catalog_prepare_preserves_post_scan_drift_detection() {
+    fn compact_catalog_prepare_preserves_post_scan_drift_detection() {
         let root = unique_temp_dir("parallel-catalog-prepare-drift");
         std::fs::create_dir_all(root.join("games/NES")).expect("create initial games dir");
         install_test_console_core(&root, "NES");
@@ -2856,56 +2874,42 @@ mod tests {
         scan.roots = vec![root.display().to_string()];
         scan.installed_cores = crate::catalog_discovery::installed_cores_for_roots(&scan.roots);
         scan.game_dir_facts = crate::catalog_discovery::top_level_game_dirs_for_roots(&scan.roots);
-        let initial_audit = core_audit::audit_catalog_coverage_from_facts(
-            &scan.profiles,
-            &scan.installed_cores,
-            &scan.game_dir_facts,
-        );
-        let stored_checkpoint =
-            crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
-                &scan.roots,
-                &root.join("mame.sqlite3"),
-                &root.join("hbmame.sqlite3"),
-                &initial_audit,
-                &scan.installed_cores,
-                &scan.game_dir_facts,
-            );
-
+        let profiles = scan.profiles.clone();
+        let roots = scan.roots.clone();
         let ram = ram_artifact_for_test(scan, 0);
-        let (artifact, _catalog, _timing, _scanner_cache) = ram
+        let (prepared, _catalog, _timing, _scanner_cache) = ram
             .complete_coverage_audit_and_catalog_foreground("/media/fat/_Arcade")
-            .expect("parallel catalog prepare");
+            .expect("compact catalog prepare");
         install_test_console_core(&root, "SNES");
         std::fs::create_dir_all(root.join("games/SNES")).expect("create drift games dir");
         std::fs::write(root.join("games/SNES/Game.sfc"), b"sfc").expect("write drift game");
 
-        let current_cores =
-            crate::catalog_discovery::installed_cores_for_roots(&artifact.scan.roots);
+        let current_cores = crate::catalog_discovery::installed_cores_for_roots(&roots);
         let current_game_dirs =
-            crate::catalog_discovery::top_level_game_dirs_for_roots(&artifact.scan.roots);
+            crate::catalog_discovery::top_level_game_dirs_for_roots(&roots);
         let current_audit = core_audit::audit_catalog_coverage_from_facts(
-            &artifact.scan.profiles,
+            &profiles,
             &current_cores,
             &current_game_dirs,
         );
         let current_checkpoint =
             crate::catalog_checkpoint::compute_catalog_discovery_checkpoint_from_facts(
-                &artifact.scan.roots,
-                &root.join("mame.sqlite3"),
-                &root.join("hbmame.sqlite3"),
+                &roots,
+                &default_mame_sqlite_path(),
+                &default_hbmame_sqlite_path(),
                 &current_audit,
                 &current_cores,
                 &current_game_dirs,
             );
         let drift =
-            CatalogDriftSummary::from_checkpoints(Some(&stored_checkpoint), &current_checkpoint);
+            CatalogDriftSummary::from_checkpoints(Some(&prepared.catalog_state.checkpoint), &current_checkpoint);
         assert!(!drift.unchanged);
         assert!(drift.changed_cores > 0 || drift.changed_game_dirs > 0);
         let current_stamp = catalog_stamp::compute_default_catalog_stamp_with_audit(
-            &artifact.scan.roots,
+            &roots,
             &current_audit,
         );
-        assert_ne!(artifact.stamp, current_stamp);
+        assert_ne!(prepared.catalog_state.stamp, current_stamp);
         let _ = std::fs::remove_dir_all(root);
     }
 

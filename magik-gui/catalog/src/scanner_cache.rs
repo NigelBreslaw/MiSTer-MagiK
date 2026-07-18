@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "scanner-cache.sqlite3";
+const WRITE_BATCH_ROWS: usize = 512;
 
 #[derive(Clone, Debug, Default)]
 pub struct DiscoveryHistory {
@@ -115,6 +116,58 @@ fn read_rows(conn: &Connection) -> Result<ScannerCacheState, String> {
     })
 }
 
+fn validate_staged(path: &Path, expected: &ScannerCacheState) -> Result<(), String> {
+    crate::cooperative_work::checkpoint();
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("open staged scanner cache {}: {error}", path.display()))?;
+    let version = conn
+        .query_row(
+            "SELECT value FROM scanner_cache_meta WHERE key='schema_version'",
+            [],
+            |row| row.get::<_, u32>(0),
+        )
+        .map_err(|error| format!("read staged scanner cache schema: {error}"))?;
+    if version != SCHEMA_VERSION {
+        return Err(format!(
+            "staged scanner cache schema {version} is unsupported; expected {SCHEMA_VERSION}"
+        ));
+    }
+    let history_rows = conn
+        .query_row("SELECT COUNT(*) FROM games", [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count staged discovery history: {error}"))?;
+    let expected_history_rows = i64::try_from(
+        expected
+        .discovery_history
+        .as_ref()
+        .map_or(0, |history| history.by_game_id.len()),
+    )
+    .map_err(|_| "discovery history row count exceeds SQLite integer".to_string())?;
+    if history_rows != expected_history_rows {
+        return Err(format!(
+            "staged discovery history has {history_rows} rows; expected {expected_history_rows}"
+        ));
+    }
+    let hash_rows = conn
+        .query_row("SELECT COUNT(*) FROM software_hash_cache", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("count staged software hash cache: {error}"))?;
+    let expected_hash_rows = i64::try_from(expected.software_hash_cache.entries.len())
+        .map_err(|_| "software hash cache row count exceeds SQLite integer".to_string())?;
+    if hash_rows != expected_hash_rows {
+        return Err(format!(
+            "staged software hash cache has {hash_rows} rows; expected {expected_hash_rows}"
+        ));
+    }
+    conn.close()
+        .map_err(|(_, error)| format!("close staged scanner cache: {error}"))?;
+    crate::cooperative_work::checkpoint();
+    Ok(())
+}
+
 #[cfg_attr(not(feature = "builder"), allow(dead_code))]
 pub(crate) struct StagedScannerCache {
     temp: Option<PathBuf>,
@@ -174,51 +227,69 @@ pub(crate) fn stage(path: &Path, state: &ScannerCacheState) -> Result<StagedScan
              ) WITHOUT ROWID;",
         )
         .map_err(|error| format!("create scanner cache schema: {error}"))?;
-        let tx = conn
-            .transaction()
-            .map_err(|error| format!("begin scanner cache: {error}"))?;
-        tx.execute(
+        conn.execute(
             "INSERT INTO scanner_cache_meta(key,value) VALUES ('schema_version',?1)",
             [SCHEMA_VERSION],
         )
         .map_err(|error| format!("write scanner cache schema: {error}"))?;
         if let Some(history) = &state.discovery_history {
-            let mut statement = tx
-                .prepare("INSERT INTO games(game_id,discovered_at_unix) VALUES (?1,?2)")
-                .map_err(|error| format!("prepare discovery history insert: {error}"))?;
-            for (game_id, discovered_at) in &history.by_game_id {
-                statement
-                    .execute(params![game_id, discovered_at])
-                    .map_err(|error| format!("write discovery history: {error}"))?;
+            let mut rows = history.by_game_id.iter().peekable();
+            while rows.peek().is_some() {
+                crate::cooperative_work::checkpoint();
+                let tx = conn
+                    .transaction()
+                    .map_err(|error| format!("begin discovery history batch: {error}"))?;
+                {
+                    let mut statement = tx
+                        .prepare("INSERT INTO games(game_id,discovered_at_unix) VALUES (?1,?2)")
+                        .map_err(|error| format!("prepare discovery history insert: {error}"))?;
+                    for (game_id, discovered_at) in rows.by_ref().take(WRITE_BATCH_ROWS) {
+                        statement
+                            .execute(params![game_id, discovered_at])
+                            .map_err(|error| format!("write discovery history: {error}"))?;
+                    }
+                }
+                tx.commit()
+                    .map_err(|error| format!("commit discovery history batch: {error}"))?;
             }
         }
-        {
-            let mut statement = tx
-                .prepare(
-                "INSERT INTO software_hash_cache(
-                     list_name,file_path,size,mtime_secs,software_name
-                 ) VALUES (?1,?2,?3,?4,?5)",
-            )
-                .map_err(|error| format!("prepare software hash cache insert: {error}"))?;
-            for (key, software_name) in &state.software_hash_cache.entries {
-                let size = i64::try_from(key.size)
-                    .map_err(|_| "software hash cache size exceeds SQLite integer".to_string())?;
-                statement
-                    .execute(params![
-                        key.list_name,
-                        key.file_path,
-                        size,
-                        key.mtime_secs,
-                        software_name
-                    ])
-                    .map_err(|error| format!("write software hash cache: {error}"))?;
+        let mut rows = state.software_hash_cache.entries.iter().peekable();
+        while rows.peek().is_some() {
+            crate::cooperative_work::checkpoint();
+            let tx = conn
+                .transaction()
+                .map_err(|error| format!("begin software hash cache batch: {error}"))?;
+            {
+                let mut statement = tx
+                    .prepare(
+                        "INSERT INTO software_hash_cache(
+                         list_name,file_path,size,mtime_secs,software_name
+                     ) VALUES (?1,?2,?3,?4,?5)",
+                    )
+                    .map_err(|error| format!("prepare software hash cache insert: {error}"))?;
+                for (key, software_name) in rows.by_ref().take(WRITE_BATCH_ROWS) {
+                    let size = i64::try_from(key.size).map_err(|_| {
+                        "software hash cache size exceeds SQLite integer".to_string()
+                    })?;
+                    statement
+                        .execute(params![
+                            key.list_name,
+                            key.file_path,
+                            size,
+                            key.mtime_secs,
+                            software_name
+                        ])
+                        .map_err(|error| format!("write software hash cache: {error}"))?;
+                }
             }
+            tx.commit()
+                .map_err(|error| format!("commit software hash cache batch: {error}"))?;
         }
-        tx.commit()
-            .map_err(|error| format!("commit scanner cache: {error}"))?;
+        crate::cooperative_work::checkpoint();
         conn.close()
             .map_err(|(_, error)| format!("close scanner cache: {error}"))?;
-        read(&temp).map_err(|error| format!("validate staged scanner cache: {error}"))?;
+        validate_staged(&temp, state)
+            .map_err(|error| format!("validate staged scanner cache: {error}"))?;
         Ok(StagedScannerCache {
             temp: Some(temp.clone()),
             final_path: path.to_path_buf(),

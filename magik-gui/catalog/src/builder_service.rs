@@ -448,12 +448,24 @@ fn emit_timings(
 }
 
 struct PreparedBuild {
-    artifact: Option<library_db::LibraryScanArtifact>,
+    persistence: Option<PreparedPersistence>,
     stamp: crate::catalog_stamp::CatalogStamp,
     catalog: ArcadeCatalog,
     scanner_cache: crate::scanner_cache::ScannerCacheState,
     load_us: u64,
     bootstrap_source: BootstrapSource,
+}
+
+struct PreparedPersistence {
+    catalog_state: crate::catalog_state::CatalogState,
+    scan_stats: library_db::LibraryScanStats,
+}
+
+impl PreparedPersistence {
+    fn from_prepared(state: library_db::LibraryPreparedState) -> Self {
+        let (catalog_state, scan_stats) = state.into_parts();
+        Self { catalog_state, scan_stats }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -594,7 +606,7 @@ impl BuilderBackend for SystemBuilderBackend {
                 let games = loaded.catalog.len();
                 return Ok(Some(StageOutput {
                     value: PreparedBuild {
-                        artifact: None,
+                        persistence: None,
                         stamp: loaded.stamp,
                         catalog: loaded.catalog,
                         scanner_cache: crate::scanner_cache::ScannerCacheState::default(),
@@ -645,13 +657,15 @@ impl BuilderBackend for SystemBuilderBackend {
         )?;
         let stats = scanned.stats().clone();
         self.arcade_bootstrap_scan = Some(scanned.clone());
-        let (artifact, catalog, timing, scanner_cache) =
+        let (prepared_state, catalog, timing, scanner_cache) =
             scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
         let games = catalog.len();
-        let stamp = artifact.stamp().clone();
+        let stamp = prepared_state.stamp().clone();
+        let persistence = PreparedPersistence::from_prepared(prepared_state);
+        report_catalog_memory("bootstrap-prepare-complete");
         Ok(Some(StageOutput {
             value: PreparedBuild {
-                artifact: Some(artifact),
+                persistence: Some(persistence),
                 stamp,
                 load_us: timing.catalog_us,
                 catalog,
@@ -732,6 +746,7 @@ impl BuilderBackend for SystemBuilderBackend {
             stats.containers,
             stats.entries
         );
+        report_catalog_memory("scan-complete");
         Ok(StageOutput {
             value: scanned,
             timings: vec![("library_scan_complete".into(), detail)],
@@ -744,12 +759,14 @@ impl BuilderBackend for SystemBuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
-        let (artifact, catalog, timing, scanner_cache) = if self.replacement_rebuild {
+        let (prepared_state, catalog, timing, scanner_cache) = if self.replacement_rebuild {
             scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
         } else {
             scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
         };
         let load_us = timing.catalog_us;
+        let persistence = PreparedPersistence::from_prepared(prepared_state);
+        report_catalog_memory("prepare-complete");
         let timings = vec![
             (
                 "builder_deferred_audit_stamp".into(),
@@ -758,7 +775,7 @@ impl BuilderBackend for SystemBuilderBackend {
                     timing.audit_stamp_worker_us,
                     timing.audit_us,
                     timing.stamp_us,
-                    artifact.stats().audit_rows
+                    persistence.scan_stats.audit_rows
                 ),
             ),
             (
@@ -787,7 +804,7 @@ impl BuilderBackend for SystemBuilderBackend {
                     timing.stamp_us,
                     timing.catalog_us,
                     timing.overlapped_us,
-                    if self.replacement_rebuild { "sequential-background" } else { "scoped-dual-core" },
+                    if self.replacement_rebuild { "sequential-background" } else { "sequential-foreground" },
                     if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.label() } else { RuntimeThreadRole::CatalogForeground.label() },
                     if self.replacement_rebuild { RuntimeThreadRole::CatalogWorker.default_policy().affinity.label() } else { RuntimeThreadRole::CatalogForeground.default_policy().affinity.label() },
                 ),
@@ -795,8 +812,8 @@ impl BuilderBackend for SystemBuilderBackend {
         ];
         Ok(StageOutput {
             value: PreparedBuild {
-                stamp: artifact.stamp().clone(),
-                artifact: Some(artifact),
+                stamp: persistence.catalog_state.stamp.clone(),
+                persistence: Some(persistence),
                 catalog,
                 scanner_cache,
                 load_us,
@@ -889,52 +906,51 @@ impl BuilderBackend for SystemBuilderBackend {
         prepared: Self::Prepared,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<BuilderSummary, String> {
-        let artifact = prepared
-            .artifact
+        let PreparedBuild {
+            persistence,
+            stamp: _,
+            catalog,
+            scanner_cache,
+            load_us: _,
+            bootstrap_source: _,
+        } = prepared;
+        let persistence = persistence
             .ok_or_else(|| "cannot persist full catalog from retained Arcade index".to_string())?;
-        let catalog_fingerprint = artifact.stamp().fingerprint_hex();
-        let catalog_state = artifact.catalog_state();
-        let scan_stats = artifact.stats().clone();
+        let catalog_fingerprint = persistence.catalog_state.stamp.fingerprint_hex();
+        let catalog_state = persistence.catalog_state;
+        let scan_stats = persistence.scan_stats;
         progress("Indexing library", "Publishing system catalogs…");
         let v3_started = Instant::now();
         let projection_started = Instant::now();
-        let scanner_cache_path = crate::scanner_cache::default_path();
-        let (outcome, staged_scanner_cache, scanner_cache_stage_us) =
-            std::thread::scope(|scope| {
-                let scanner_cache_worker = std::thread::Builder::new()
-                    .name("scanner-cache-stage".to_string())
-                    .spawn_scoped(scope, || {
-                        let started = Instant::now();
-                        let staged = crate::scanner_cache::stage(
-                            &scanner_cache_path,
-                            &prepared.scanner_cache,
-                        )?;
-                        Ok::<_, String>((staged, started.elapsed().as_micros()))
-                    })
-                    .map_err(|error| format!("spawn scanner cache staging worker: {error}"))?;
-                let outcome =
-                    crate::production_sharded_projection::publish_bound_production_projection(
-                        &crate::catalog_config::default_sharded_catalog_path(),
-                        &prepared.catalog,
-                        &catalog_fingerprint,
-                        crate::production_sharded_projection::production_registry_limits(),
-                    )
-                    .map_err(|error| format!("publish V3 system catalogs: {error}"));
-                let staged = scanner_cache_worker
-                    .join()
-                    .map_err(|_| "scanner cache staging worker panicked".to_string())??;
-                Ok::<_, String>((outcome?, staged.0, staged.1))
-            })?;
+        let outcome = crate::production_sharded_projection::publish_bound_production_projection(
+            &crate::catalog_config::default_sharded_catalog_path(),
+            &catalog,
+            &catalog_fingerprint,
+            crate::production_sharded_projection::production_registry_limits(),
+        )
+        .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
         let projection_us = projection_started.elapsed().as_micros();
+        drop(catalog);
+        report_catalog_memory("shards-complete");
+        progress("Indexing library", "Saving scanner cache…");
+        let scanner_cache_stage_started = Instant::now();
+        let staged_scanner_cache = crate::scanner_cache::stage(
+            &crate::scanner_cache::default_path(),
+            &scanner_cache,
+        )?;
+        let scanner_cache_stage_us = scanner_cache_stage_started.elapsed().as_micros();
+        drop(scanner_cache);
         let scanner_cache_publish_started = Instant::now();
         staged_scanner_cache.publish()?;
         let scanner_cache_publish_us = scanner_cache_publish_started.elapsed().as_micros();
         let scanner_cache_us = scanner_cache_stage_us + scanner_cache_publish_us;
+        report_catalog_memory("scanner-cache-complete");
         // Catalog state is the acceptance marker. Publishing it last ensures
         // an interrupted shard/cache write is detected and rebuilt.
         let catalog_state_started = Instant::now();
         crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
         let catalog_state_us = catalog_state_started.elapsed().as_micros();
+        report_catalog_memory("catalog-state-complete");
         let import_us = v3_started.elapsed().as_micros() as u64;
         crate::catalog_logln!(
             "catalog_v3_projection_tsv\tstatus=published\tgeneration={}\tsystems={}\tgames={}\trebuilt_systems={}\tremoved_systems={}\telapsed_us={}",
@@ -1002,6 +1018,44 @@ fn with_builder_progress_heartbeat<T: Send>(
                 }
             }
         }
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProcessMemory {
+    rss_kb: u64,
+    hwm_kb: u64,
+}
+
+fn report_catalog_memory(stage: &str) {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return;
+    };
+    let Some(memory) = parse_process_memory(&status) else {
+        return;
+    };
+    crate::catalog_logln!(
+        "catalog_memory_tsv\tstage={}\trss_kb={}\thwm_kb={}",
+        stage,
+        memory.rss_kb,
+        memory.hwm_kb,
+    );
+}
+
+fn parse_process_memory(status: &str) -> Option<ProcessMemory> {
+    let mut rss_kb = None;
+    let mut hwm_kb = None;
+    for line in status.lines() {
+        let mut fields = line.split_ascii_whitespace();
+        match fields.next() {
+            Some("VmRSS:") => rss_kb = fields.next()?.parse().ok(),
+            Some("VmHWM:") => hwm_kb = fields.next()?.parse().ok(),
+            _ => {}
+        }
+    }
+    Some(ProcessMemory {
+        rss_kb: rss_kb?,
+        hwm_kb: hwm_kb?,
     })
 }
 
@@ -1096,6 +1150,50 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn proc_status_memory_parser_requires_current_and_peak_rss() {
+        let status = "Name:\tmister-magik-fb\nVmPeak:\t250000 kB\nVmHWM:\t127999 kB\nVmRSS:\t96000 kB\n";
+        assert_eq!(
+            parse_process_memory(status),
+            Some(ProcessMemory {
+                rss_kb: 96_000,
+                hwm_kb: 127_999,
+            })
+        );
+        assert_eq!(parse_process_memory("VmRSS:\t10 kB\n"), None);
+    }
+
+    #[test]
+    fn prepared_persistence_is_lossless_without_retaining_the_scan() {
+        let scan = crate::test_support::sqlite_scan_with_normal_files(&["/games/One.rom"]);
+        let stats = library_db::LibraryScanStats {
+            scan_us: 10,
+            discover_us: 4,
+            classify_us: 6,
+            normal_files: 1,
+            containers: 0,
+            entries: 0,
+            audit_rows: 0,
+            discoveries: 0,
+        };
+        let artifact = library_db::LibraryScanArtifact {
+            scan,
+            stats: stats.clone(),
+            stamp: crate::catalog_stamp::CatalogStamp::from_lines(vec!["fixture".to_string()]),
+        };
+        let expected_state = artifact.catalog_state();
+        let prepared = library_db::LibraryPreparedState {
+            catalog_state: expected_state.clone(),
+            stats: stats.clone(),
+        };
+
+        let compact = PreparedPersistence::from_prepared(prepared);
+
+        assert_eq!(compact.catalog_state, expected_state);
+        assert_eq!(compact.scan_stats.scan_us, stats.scan_us);
+        assert_eq!(compact.scan_stats.normal_files, stats.normal_files);
+    }
 
     #[test]
     fn replacement_rebuild_is_background_but_first_creation_is_foreground() {

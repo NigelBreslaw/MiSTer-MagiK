@@ -56,6 +56,12 @@ are unreachable.
 binding before replacing catalog state. An interruption may cause a conservative
 rebuild, but cannot make incomplete artifacts authoritative.
 
+Cold-build persistence retains only compact catalog state and scan statistics.
+The complete filesystem scan is released before shard publication; the RAM
+catalog is released before scanner-cache staging. Scanner-cache staging is
+deliberately sequential with shard publication so their peak allocations do
+not overlap.
+
 `state/scanner-cache.sqlite3` separately owns discovery timestamps and software
 hashes. It is scanner state, not a game catalog or UI projection.
 

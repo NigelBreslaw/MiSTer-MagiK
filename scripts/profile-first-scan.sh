@@ -28,6 +28,8 @@ CATALOG_FIXTURE_CONTRACT="$HERE/scripts/lib/catalog-fixture-contract.json"
 CATALOG_FIXTURE_TOOL="$HERE/scripts/lib/catalog-fixture-contract.py"
 ENFORCE_PERFORMANCE_BUDGETS=0
 DROP_ARCADE_BOOTSTRAP_INDEX=0
+MAX_VMHWM_KB="${MISTER_FIRST_SCAN_MAX_VMHWM_KB:-}"
+MAX_SAVED_MS="${MISTER_FIRST_SCAN_MAX_SAVED_MS:-}"
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
 source "$HERE/scripts/lib/mister-supervision-lib.sh"
 source "$HERE/scripts/lib/bench-context-lib.sh"
@@ -49,6 +51,8 @@ production recovery path after Catalog V3 loss. --drop-arcade-bootstrap-index
 also removes that index, measuring a genuine first-ever fallback scan.
 Historical timing and database-size budgets are recorded by default. Pass
 --enforce-performance-budgets only for an explicit reference-performance gate.
+MISTER_FIRST_SCAN_MAX_VMHWM_KB and MISTER_FIRST_SCAN_MAX_SAVED_MS optionally
+enforce explicit peak-memory and durable-completion limits.
 EOF
 }
 
@@ -56,6 +60,11 @@ first_scan_commit_is_dirty_from_statuses() {
   local worktree_status="$1"
   local index_status="$2"
   [[ "$worktree_status" -ne 0 || "$index_status" -ne 0 ]]
+}
+
+first_scan_within_limit() {
+  local value="$1" maximum="$2"
+  [[ "$maximum" -eq 0 || "$value" -le "$maximum" ]]
 }
 
 first_scan_commit_is_dirty() {
@@ -213,7 +222,7 @@ first_scan_marker_self_test() {
     $'startup_timing\tbuilder_catalog_ready\t1001ms\telapsed_us=1000500 snapshot_us=20' \
     $'startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 audit_us=11000 stamp_us=1500 audit_rows=4' \
     $'startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 games=10' \
-    $'startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=24000 audit_stamp_worker_us=12500 audit_us=11000 stamp_us=1500 catalog_us=23500 overlapped_us=12000 mode=scoped-dual-core' \
+    $'startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=36000 audit_stamp_worker_us=12500 audit_us=11000 stamp_us=1500 catalog_us=23500 overlapped_us=0 mode=sequential-foreground' \
     $'startup_timing\tbuilder_persisted\t2001ms\telapsed_us=2000500' \
     $'startup_timing\tlibrary_ready\t1100ms\tgames=10' \
     $'startup_timing\tlibrary_db_saved\t2200ms\tbytes=20' >"$launcher"
@@ -235,7 +244,7 @@ first_scan_marker_self_test() {
   grep -q $'^startup_timing\tlibrary_ready\t1200ms\tsource=launcher-events elapsed_ms=1200 builder_elapsed_us=1000500$' "$combined"
   grep -q $'^startup_timing\tbuilder_deferred_audit_stamp\t1013ms\telapsed_us=12500 ' "$combined"
   grep -q $'^startup_timing\tbuilder_catalog_projection\t1024ms\telapsed_us=23500 ' "$combined"
-  grep -q $'^startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=24000 ' "$combined"
+  grep -q $'^startup_timing\tbuilder_catalog_prepare_overlap\t1024ms\twall_us=36000 .* overlapped_us=0 mode=sequential-foreground' "$combined"
   printf '%s\n' \
     '{"ts_unix_ms":101200,"ts_boot_ms":1200,"pid":42,"event":"library_ready","detail":"since_run_ui_ms=1200 games=10"}' \
     '{"ts_unix_ms":102400,"ts_boot_ms":2400,"pid":43,"event":"library_db_saved","detail":"since_run_ui_ms=2400 bytes=20"}' >"$events"
@@ -263,6 +272,10 @@ first_scan_marker_self_test() {
 }
 
 first_scan_self_test() {
+  first_scan_within_limit 131071 131071
+  ! first_scan_within_limit 131072 131071
+  first_scan_within_limit 187300 187300
+  ! first_scan_within_limit 187301 187300
   if first_scan_commit_is_dirty_from_statuses 0 0; then
     echo "first-scan dirty helper marked a clean source dirty" >&2
     return 1
@@ -299,6 +312,15 @@ first_scan_thread_sample_has_builder_evidence() {
     ' "$path"
 }
 
+first_scan_peak_vmhwm_kb() {
+  awk -F '\t' '
+    $1 == "thread_sample_tsv" && $2 != "sample" && $20 ~ /^[0-9]+$/ && $20 + 0 > peak {
+      peak = $20 + 0
+    }
+    END { print peak + 0 }
+  ' "$1"
+}
+
 first_scan_has_catalog_audit_policy_evidence() {
   local path="$1"
   [[ -s "$path" ]] &&
@@ -328,6 +350,7 @@ first_scan_thread_sample_self_test() {
     $'thread_sample_tsv\tsample\tts_unix\tinterval_start_monotonic_us\tmonotonic_us\tpid\ttid\tthread_name\tstate\tprocessor\tutime_jiffies\tstime_jiffies\tutime_delta_jiffies\tstime_delta_jiffies\tvoluntary_ctxt_switches\tnonvoluntary_ctxt_switches\tvoluntary_delta\tnonvoluntary_delta\tvmrss_kb\tvmhwm_kb' \
     $'thread_sample_tsv\t0\t1\t1\t1\t42\t42\tmister-magik-c\tR\t1\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000' >"$sample"
   first_scan_thread_sample_has_builder_evidence "$sample"
+  [[ "$(first_scan_peak_vmhwm_kb "$sample")" == "64000" ]]
   sed 's/\t1\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000$/\tnot-a-cpu\t1\t0\t0\t0\t1\t0\t0\t0\t64000\t64000/' "$sample" >"$tmp/bad-cpu.tsv"
   if first_scan_thread_sample_has_builder_evidence "$tmp/bad-cpu.tsv"; then
     rm -rf "$tmp"
@@ -438,6 +461,22 @@ if [[ -z "$LABEL" ]]; then
 fi
 if [[ ! "$LABEL" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "label must contain only letters, numbers, _, ., or -" >&2
+  exit 2
+fi
+if [[ -z "$MAX_VMHWM_KB" ]]; then
+  MAX_VMHWM_KB=$([[ "$DROP_ARCADE_BOOTSTRAP_INDEX" -eq 1 ]] && echo 131071 || echo 0)
+fi
+if [[ -z "$MAX_SAVED_MS" ]]; then
+  MAX_SAVED_MS=$([[ "$DROP_ARCADE_BOOTSTRAP_INDEX" -eq 1 ]] && echo 187300 || echo 0)
+fi
+for limit in "$MAX_VMHWM_KB" "$MAX_SAVED_MS"; do
+  if [[ ! "$limit" =~ ^[0-9]+$ ]]; then
+    echo "first-scan limits must be non-negative integers" >&2
+    exit 2
+  fi
+done
+if [[ "$MAX_VMHWM_KB" -gt 0 && "$thread_sample_enabled" != "1" ]]; then
+  echo "MISTER_FIRST_SCAN_MAX_VMHWM_KB requires --thread-sample" >&2
   exit 2
 fi
 if [[ ! "$TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
@@ -692,6 +731,9 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     note = ($4 == "" ? "-" : $4)
     print label, commit, "scan_stage_" $2, int(($3 + 500) / 1000), note
   }
+  $1 == "catalog_memory_tsv" {
+    print label, commit, "memory_" $2, 0, $3 " " $4
+  }
   END {
     if (bootstrap_sustained_ms != "" && full_scan_climb_ms != "") {
       plateau_ms = full_scan_climb_ms - bootstrap_sustained_ms
@@ -699,6 +741,20 @@ awk -v label="$LABEL" -v commit="$commit" -F '\t' '
     }
   }
 ' "$combined_log" >>"$TSV"
+
+peak_vmhwm_kb=0
+if [[ "$thread_sample_enabled" == "1" ]]; then
+  peak_vmhwm_kb="$(first_scan_peak_vmhwm_kb "$thread_sample_local_tsv")"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$LABEL" "$commit" "peak_vmhwm_kb" "0" "$peak_vmhwm_kb" >>"$TSV"
+fi
+if ! first_scan_within_limit "$peak_vmhwm_kb" "$MAX_VMHWM_KB"; then
+  echo "first scan peak HWM ${peak_vmhwm_kb} KiB exceeds ${MAX_VMHWM_KB} KiB" >&2
+  gate_failed=1
+fi
+if ! first_scan_within_limit "$saved_ms" "$MAX_SAVED_MS"; then
+  echo "first scan durable completion ${saved_ms}ms exceeds ${MAX_SAVED_MS}ms" >&2
+  gate_failed=1
+fi
 
 catalog_report="$OUT_DIR/${LABEL}-catalog-v3-inspect.tsv"
 if ! "$MISTER" run "'$REMOTE_BIN' catalog-v3-inspect" >"$catalog_report"; then
@@ -722,7 +778,7 @@ done
 emit_thread_sample_artifact_report | tee "$artifact_report"
 
 echo "appended to $TSV"
-echo "catalog_games=$catalog_games arcade_resident=$catalog_arcade_resident catalog_systems=$catalog_systems catalog_db_bytes=$catalog_db_bytes performance_budgets_enforced=$ENFORCE_PERFORMANCE_BUDGETS"
+echo "catalog_games=$catalog_games arcade_resident=$catalog_arcade_resident catalog_systems=$catalog_systems catalog_db_bytes=$catalog_db_bytes peak_vmhwm_kb=$peak_vmhwm_kb max_vmhwm_kb=$MAX_VMHWM_KB saved_ms=$saved_ms max_saved_ms=$MAX_SAVED_MS performance_budgets_enforced=$ENFORCE_PERFORMANCE_BUDGETS"
 printf '%s\n' "$status"
 if [[ "$gate_failed" -eq 1 ]]; then
   exit 1

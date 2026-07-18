@@ -591,11 +591,30 @@ mod tests {
             checkpoint: state.checkpoint,
             stats: state.stats,
         };
+        let different_fingerprint = different_state.stamp.fingerprint_hex();
+        let different_catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            vec![game("Different Game", "/games/SNES/Different.sfc", "snes")],
+            vec![GameSystemEntry {
+                id: "snes".to_string(),
+                title: "SNES".to_string(),
+                count: 1,
+            }],
+        );
+        let interrupted_outcome = publish_bound_production_projection(
+            &storage,
+            &different_catalog,
+            &different_fingerprint,
+            limits(),
+        )
+        .unwrap();
+        assert!(validate_production_binding(&storage, interrupted_outcome.generation).is_err());
         crate::catalog_state::write(
             &crate::catalog_state::path_for_root(&storage),
             &different_state,
         )
         .unwrap();
+        validate_production_binding(&storage, interrupted_outcome.generation).unwrap();
         assert!(validate_production_binding(&storage, outcome.generation).is_err());
         assert!(!root.join("library.sqlite3").exists());
         let _ = fs::remove_dir_all(root);

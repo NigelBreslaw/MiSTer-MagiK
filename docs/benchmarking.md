@@ -122,13 +122,25 @@ For first-scan runs the sampler targets `mister-magik-fb`, which owns the
 embedded builder. Its retained summary
 must include builder thread/core residency and `vmhwm_kb`; a header-only sample
 invalidates the run.
-The post-scan preparation overlap emits
+Post-scan preparation emits
 `builder_catalog_prepare_overlap` with `wall_us`, separate audit/stamp/catalog
-durations, `overlapped_us`, and the worker policy. Retained evidence must also
+durations, `overlapped_us=0`, and the worker policy. Foreground preparation
+joins the short audit/stamp worker before catalog projection so their retained
+data cannot overlap. Retained evidence must also
 contain a `catalog-audit` thread-policy row with nice `0` and all online CPUs;
-the optimization is invalid if either branch inherits the background CPU0
-policy. Compare `wall_us` with the sequential audit+stamp+catalog sum, but keep
+the build is invalid if either phase inherits the background CPU0 policy.
+Compare `wall_us` with the sequential audit+stamp+catalog sum, but keep
 the canonical `library_ready` marker as the reference regression gate.
+
+Catalog memory work emits `catalog_memory_tsv` at the scan, preparation,
+shard-publication, scanner-cache, and catalog-state boundaries. Device memory
+qualification uses the thread sampler's process-wide `vmhwm_kb`; boundary RSS
+rows provide retention clues around that independently sampled peak. Set
+`MISTER_FIRST_SCAN_MAX_VMHWM_KB` with `--thread-sample` and
+`MISTER_FIRST_SCAN_MAX_SAVED_MS` to enforce explicit memory and durable-build
+limits. Genuine first-ever mode defaults to the 51,093-game reference limits:
+at most 131,071 KiB HWM and 187,300 ms durable completion. Set either variable
+to `0` only for an explicitly non-qualifying diagnostic run.
 
 ## Catalog V3 Rebuild And UI-Contention Gates
 

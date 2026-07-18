@@ -546,9 +546,9 @@ pub(super) fn start_library_catalog_worker(
                         &tx,
                         library_db::CatalogProgress::saving_before_opening_launcher(),
                     );
-                    match ram_artifact.save_default_sqlite_with_catalog_projection(
-                        &projection_catalog,
-                        Some(&mut progress),
+                    let _ = (ram_artifact, projection_catalog, &mut progress);
+                    match Err::<library_db::LibraryRefreshSummary, _>(
+                        "retired in-process SQLite persistence path reached".to_string(),
                     ) {
                         Ok(summary) => {
                             let _ = tx.send(CatalogWorkerMessage::Persisted {
