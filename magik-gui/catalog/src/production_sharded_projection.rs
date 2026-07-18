@@ -99,7 +99,6 @@ pub fn publish_production_projection(
     let mut planned_systems = Vec::new();
     let planning_started = Instant::now();
     for system_id in &systems {
-        let candidate = materializer.project(system_id)?;
         let published = current_manifest.as_ref().and_then(|manifest| {
             manifest
                 .systems
@@ -108,6 +107,7 @@ pub fn publish_production_projection(
         });
         let unchanged = match published {
             Some(published) => {
+                let candidate = materializer.project(system_id)?;
                 published_system_matches(storage_root, published, &candidate, limits)?
             }
             None => false,
@@ -115,7 +115,6 @@ pub fn publish_production_projection(
         if unchanged {
             continue;
         }
-        materializer.stage(candidate);
         planned_systems.push(PlannedSystem {
             system_id: system_id.clone(),
             action: PlannedSystemAction::Rebuild,
@@ -283,7 +282,6 @@ fn write_binding(storage_root: &Path, binding: &CatalogBinding) -> Result<(), Re
 struct CatalogMaterializer<'a> {
     catalog: &'a ArcadeCatalog,
     titles: BTreeMap<SystemId, String>,
-    staged: BTreeMap<SystemId, MaterializedSystem>,
 }
 
 impl<'a> CatalogMaterializer<'a> {
@@ -297,19 +295,11 @@ impl<'a> CatalogMaterializer<'a> {
                     .map(|system_id| (system_id, system.title.clone()))
             })
             .collect();
-        Self {
-            catalog,
-            titles,
-            staged: BTreeMap::new(),
-        }
+        Self { catalog, titles }
     }
 
     fn project(&self, system_id: &SystemId) -> Result<MaterializedSystem, ReconciliationError> {
         materialize_catalog_system(self.catalog, &self.titles, system_id)
-    }
-
-    fn stage(&mut self, system: MaterializedSystem) {
-        self.staged.insert(system.system_id.clone(), system);
     }
 }
 
@@ -319,9 +309,7 @@ impl ReconciliationMaterializer for CatalogMaterializer<'_> {
         system_id: &SystemId,
         _generation: u64,
     ) -> Result<MaterializedSystem, ReconciliationError> {
-        self.staged
-            .remove(system_id)
-            .ok_or_else(|| ReconciliationError::new("projection", "planned system was not staged"))
+        self.project(system_id)
     }
 
     fn commit_facts(&mut self) -> Result<(), ReconciliationError> {

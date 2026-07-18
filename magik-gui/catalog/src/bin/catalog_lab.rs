@@ -104,7 +104,7 @@ fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     println!(
-        "catalog_rebuild_bench_tsv\tfull_us={}\tdelta_us={}\telapsed_speedup={:.3}\tfull_systems={}\tdelta_systems={}\twork_ratio={:.3}\tgames_per_system={}\tfull_logical_bytes={}\tfull_allocated_bytes={}\tfull_files={}\tfull_directories={}\tnavigation_open_p50_us={}\tnavigation_open_p95_us={}\tnavigation_open_p99_us={}",
+        "catalog_rebuild_bench_tsv\tfull_us={}\tdelta_us={}\telapsed_speedup={:.3}\tfull_systems={}\tdelta_systems={}\twork_ratio={:.3}\tgames_per_system={}\tfull_logical_bytes={}\tfull_allocated_bytes={}\tfull_files={}\tfull_directories={}\tnavigation_open_p50_us={}\tnavigation_open_p95_us={}\tnavigation_open_p99_us={}\tpeak_rss_bytes={}",
         outcome.full_us,
         outcome.delta_us,
         outcome.elapsed_speedup(),
@@ -119,8 +119,25 @@ fn rebuild_bench(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         outcome.navigation_open_p50_us,
         outcome.navigation_open_p95_us,
         outcome.navigation_open_p99_us,
+        peak_rss_bytes(),
     );
     Ok(())
+}
+
+fn peak_rss_bytes() -> u64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage initializes the supplied rusage structure on success.
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return 0;
+    }
+    // macOS and the BSDs report bytes; Linux and Android report KiB.
+    let resident = unsafe { usage.assume_init() }.ru_maxrss.max(0) as u64;
+    if cfg!(any(target_os = "linux", target_os = "android")) {
+        resident.saturating_mul(1024)
+    } else {
+        resident
+    }
 }
 
 fn bootstrap_fixture(mut args: impl Iterator<Item = String>) -> Result<(), String> {

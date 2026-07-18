@@ -156,83 +156,102 @@ pub fn execute_reconciliation(
     let mut shard_write_time = Duration::ZERO;
     let mut artifact_publish_time = Duration::ZERO;
     let mut slowest_shard = (String::new(), Duration::ZERO);
-    let mut shard_jobs = Vec::new();
-    for planned in &plan.systems {
-        match planned.action {
-            PlannedSystemAction::Remove => {
-                systems.retain(|system| system.system_id != planned.system_id);
-                removed.push(planned.system_id.clone());
-            }
-            PlannedSystemAction::Rebuild => {
-                let phase_started = Instant::now();
-                let materialized =
-                    materializer.materialize(&planned.system_id, expected_generation)?;
-                materialize_time += phase_started.elapsed();
-                validate_materialized(&planned.system_id, &materialized)?;
-                let previous = systems
-                    .iter()
-                    .find(|system| system.system_id == planned.system_id)
-                    .map(|system| system.active.clone());
-                shard_jobs.push(ShardBuildJob {
-                    materialized,
-                    previous,
-                });
-            }
-        }
-    }
-    let shard_batch_started = Instant::now();
+    let rebuild_count = plan
+        .systems
+        .iter()
+        .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
+        .count();
     let worker_count = if actual_generation.is_none() {
-        3.min(shard_jobs.len().max(1))
+        3.min(rebuild_count.max(1))
     } else {
         1
     };
-    let jobs = Arc::new(Mutex::new(shard_jobs.into_iter()));
-    let completed = Arc::new(Mutex::new(Vec::new()));
-    let first_error = Arc::new(Mutex::new(None));
-    std::thread::scope(|scope| {
-        for _ in 0..worker_count {
-            let jobs = Arc::clone(&jobs);
-            let completed = Arc::clone(&completed);
-            let first_error = Arc::clone(&first_error);
-            scope.spawn(move || loop {
-                if first_error.lock().expect("shard error lock").is_some() {
-                    break;
+    for planned in &plan.systems {
+        if planned.action == PlannedSystemAction::Remove {
+            systems.retain(|system| system.system_id != planned.system_id);
+            removed.push(planned.system_id.clone());
+        }
+    }
+    let shard_batch_started = Instant::now();
+    let rebuilds = plan
+        .systems
+        .iter()
+        .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
+        .collect::<Vec<_>>();
+    for batch in rebuilds.chunks(worker_count) {
+        crate::cooperative_work::checkpoint();
+        let mut shard_jobs = Vec::with_capacity(batch.len());
+        for planned in batch {
+            let phase_started = Instant::now();
+            let materialized = match materializer.materialize(
+                &planned.system_id,
+                expected_generation,
+            ) {
+                Ok(materialized) => materialized,
+                Err(error) => {
+                    remove_uncommitted_generation(storage_root, &systems, expected_generation);
+                    return Err(error);
                 }
-                let Some(job) = jobs.lock().expect("shard job lock").next() else {
-                    break;
-                };
-                match build_shard_job(
-                    storage_root,
-                    expected_generation,
-                    nonce,
-                    limits,
-                    job,
-                ) {
-                    Ok(shard) => completed.lock().expect("completed shard lock").push(shard),
-                    Err(error) => {
-                        let mut first = first_error.lock().expect("shard error lock");
-                        if first.is_none() {
-                            *first = Some(error);
-                        }
-                        break;
-                    }
-                }
+            };
+            materialize_time += phase_started.elapsed();
+            validate_materialized(&planned.system_id, &materialized)?;
+            let previous = systems
+                .iter()
+                .find(|system| system.system_id == planned.system_id)
+                .map(|system| system.active.clone());
+            shard_jobs.push(ShardBuildJob {
+                materialized,
+                previous,
             });
         }
-    });
-    if let Some(error) = first_error.lock().expect("shard error lock").take() {
-        return Err(error);
-    }
-    let mut completed = completed.lock().expect("completed shard lock");
-    for shard in completed.drain(..) {
-        shard_write_time += shard.write_time;
-        artifact_publish_time += shard.publish_time;
-        if shard.elapsed > slowest_shard.1 {
-            slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
+        let jobs = Arc::new(Mutex::new(shard_jobs.into_iter()));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let first_error = Arc::new(Mutex::new(None));
+        std::thread::scope(|scope| {
+            for _ in 0..batch.len() {
+                let jobs = Arc::clone(&jobs);
+                let completed = Arc::clone(&completed);
+                let first_error = Arc::clone(&first_error);
+                scope.spawn(move || loop {
+                    if first_error.lock().expect("shard error lock").is_some() {
+                        break;
+                    }
+                    let Some(job) = jobs.lock().expect("shard job lock").next() else {
+                        break;
+                    };
+                    match build_shard_job(
+                        storage_root,
+                        expected_generation,
+                        nonce,
+                        limits,
+                        job,
+                    ) {
+                        Ok(shard) => completed.lock().expect("completed shard lock").push(shard),
+                        Err(error) => {
+                            let mut first = first_error.lock().expect("shard error lock");
+                            if first.is_none() {
+                                *first = Some(error);
+                            }
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(error) = first_error.lock().expect("shard error lock").take() {
+            return Err(error);
         }
-        rebuilt.push(shard.system.system_id.clone());
-        systems.retain(|system| system.system_id != shard.system.system_id);
-        systems.push(shard.system);
+        let mut completed = completed.lock().expect("completed shard lock");
+        for shard in completed.drain(..) {
+            shard_write_time += shard.write_time;
+            artifact_publish_time += shard.publish_time;
+            if shard.elapsed > slowest_shard.1 {
+                slowest_shard = (shard.system.system_id.as_str().to_string(), shard.elapsed);
+            }
+            rebuilt.push(shard.system.system_id.clone());
+            systems.retain(|system| system.system_id != shard.system.system_id);
+            systems.push(shard.system);
+        }
     }
     rebuilt.sort();
     let shard_batch_time = shard_batch_started.elapsed();
@@ -272,6 +291,20 @@ pub fn execute_reconciliation(
         rebuilt,
         removed,
     })
+}
+
+fn remove_uncommitted_generation(
+    storage_root: &Path,
+    systems: &[ManifestSystem],
+    generation: u64,
+) {
+    for system in systems
+        .iter()
+        .filter(|system| system.active.generation == generation)
+    {
+        let _ = fs::remove_file(storage_root.join(&system.active.sqlite_path));
+        let _ = fs::remove_file(storage_root.join(&system.active.navigation_path));
+    }
 }
 
 struct ShardBuildJob {
@@ -583,6 +616,65 @@ mod tests {
         assert_eq!(materializer.commits, 1);
         assert!(root.join("systems/c64/2.sqlite3").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_build_materializes_bounded_batches_instead_of_the_whole_catalog() {
+        let root = temporary_root("bounded-materialization");
+        let ids = (0..10)
+            .map(|index| format!("fixture-{index:02}"))
+            .collect::<Vec<_>>();
+        let borrowed = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut materializer = StreamingFixtureMaterializer {
+            root: root.clone(),
+            calls: 0,
+        };
+
+        execute_reconciliation(
+            &root,
+            &plan(None, 1, &borrowed),
+            limits(),
+            &mut materializer,
+        )
+        .unwrap();
+
+        assert_eq!(materializer.calls, 10);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    struct StreamingFixtureMaterializer {
+        root: PathBuf,
+        calls: usize,
+    }
+
+    impl ReconciliationMaterializer for StreamingFixtureMaterializer {
+        fn materialize(
+            &mut self,
+            system_id: &SystemId,
+            _generation: u64,
+        ) -> Result<MaterializedSystem, ReconciliationError> {
+            if self.calls == 3 {
+                let published = walkdir::WalkDir::new(self.root.join("systems"))
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.file_name() == "1.sqlite3");
+                assert!(published, "fourth system was materialized before the first bounded batch was written");
+            }
+            self.calls += 1;
+            Ok(MaterializedSystem {
+                system_id: system_id.clone(),
+                display_title: system_id.as_str().to_string(),
+                section: "Fixture".to_string(),
+                family: "Fixture".to_string(),
+                order: 0,
+                producers: vec![ScanUnitId::parse("fixture-root").unwrap()],
+                games: vec![game("One")],
+            })
+        }
+
+        fn commit_facts(&mut self) -> Result<(), ReconciliationError> {
+            Ok(())
+        }
     }
 
     struct FixtureMaterializer {
