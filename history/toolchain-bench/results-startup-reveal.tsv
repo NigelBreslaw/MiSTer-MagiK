@@ -1,0 +1,18 @@
+label	mode	iteration	reveal_ms	input_enabled_ms	catalog_ready_ms	first_frame_ms	preview_state	result	notes
+PH2-20260718-STARTUP-WARM	warm_catalog	1	143	144		145	not_required	pass	-
+PH2-20260718-STARTUP-WARM	warm_catalog	2	138	138		139	not_required	pass	-
+PH2-20260718-STARTUP-WARM	warm_catalog	3	147	147		149	not_required	pass	-
+PH2-20260718-STARTUP-WARM	warm_catalog	4	182	182		184	not_required	pass	-
+PH2-20260718-STARTUP-WARM	warm_catalog	5	170	170		171	not_required	pass	-
+PH2-20260718-STARTUP-RETURN	return_from_game	1	143	143		145	exact	pass	-
+PH2-20260718-STARTUP-RETURN	return_from_game	2	134	134		135	exact	pass	-
+PH2-20260718-STARTUP-RETURN	return_from_game	3	129	129		130	exact	pass	-
+CATALOG-STORAGE-FINAL	cold_no_catalog	1	23620	23620	23587	28	not_required	pass	-
+CATALOG-STORAGE-FINAL	warm_catalog	1	183	183		184	not_required	pass	-
+CATALOG-STORAGE-FINAL	warm_catalog	2	289	289		290	not_required	pass	-
+CATALOG-STORAGE-FINAL	warm_catalog	3	263	264		265	not_required	pass	-
+CATALOG-STORAGE-FINAL	warm_catalog	4	277	277		278	not_required	pass	-
+CATALOG-STORAGE-FINAL	warm_catalog	5	192	193		194	not_required	pass	-
+CATALOG-STORAGE-FINAL	return_from_game	1	149	149		150	exact	pass	-
+CATALOG-STORAGE-FINAL	return_from_game	2	162	162		164	exact	pass	-
+CATALOG-STORAGE-FINAL	return_from_game	3	172	173		174	exact	pass	-
