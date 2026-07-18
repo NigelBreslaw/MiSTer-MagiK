@@ -461,7 +461,13 @@ a filter group or applies the highlighted value; `A` is the same action. D-pad
 left backs out one filter level; `B` is the same action except at the filter
 top level, where left is a no-op and `B` returns to the parent hierarchy
 level. `Home` always jumps back to the hierarchy root from Arcade or any open
-drawer level.
+drawer level. One physical `A` or right press performs exactly one hierarchy
+transition: after descending into a child, both activation controls must be
+released before another child can be entered or a leaf can be applied. This
+release boundary belongs to the navigation state machine rather than the input
+polling or rendering loop. `Decades` currently contains decade values such as
+`1970's`; those values are filter leaves, not branches containing individual
+calendar years.
 The Rust-painted game list viewport shows ten 48 px rows and is 510 logical px
 wide, intentionally borrowing a little space across the old half-screen split
 so longer game titles remain visible without covering the centered preview

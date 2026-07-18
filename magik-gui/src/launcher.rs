@@ -737,6 +737,16 @@ pub enum ArcadeFilterLevel {
     Controls,
 }
 
+impl ArcadeFilterLevel {
+    fn parent(self) -> Option<Self> {
+        match self {
+            Self::Top => None,
+            Self::Alphabet => None,
+            Self::Decades | Self::Manufacturers | Self::Players | Self::Controls => Some(Self::Top),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ArcadeFilterGroup {
     Games,
@@ -808,6 +818,9 @@ pub struct ArcadeFilterState {
     pub scroll_y: i32,
     pub visual_index: f32,
     pub active: ArcadeFilter,
+    // A branch transition consumes activation until both activation controls
+    // are released. One physical press can therefore cross only one edge.
+    activation_release_required: bool,
     scroll: ArcadeNav,
 }
 
@@ -833,6 +846,7 @@ impl ArcadeFilterState {
             scroll_y: 0,
             visual_index: 0.0,
             active: ArcadeFilter::All,
+            activation_release_required: false,
             scroll: ArcadeNav::with_row_height(ARCADE_ROW_HEIGHT),
         }
     }
@@ -1806,9 +1820,8 @@ impl LauncherNav {
         system_id: &str,
     ) -> Option<LauncherEvent> {
         let items = self.arcade_filter_items(catalog, system_id);
-        if rising(now.dpad_right, self.prev.dpad_right) {
-            self.activate_arcade_filter_selection(catalog, system_id, &items);
-            return None;
+        if self.arcade_filter.activation_release_required && !now.btn_a && !now.dpad_right {
+            self.arcade_filter.activation_release_required = false;
         }
         if rising(now.btn_home, self.prev.btn_home) {
             self.close_arcade_filter();
@@ -1821,6 +1834,12 @@ impl LauncherNav {
         }
         if rising(now.dpad_left, self.prev.dpad_left) {
             self.back_out_of_arcade_filter_level(catalog, system_id, false);
+            return None;
+        }
+        let activation_requested = !self.arcade_filter.activation_release_required
+            && (rising(now.dpad_right, self.prev.dpad_right) || rising(now.btn_a, self.prev.btn_a));
+        if activation_requested {
+            self.activate_arcade_filter_selection(catalog, system_id, &items);
             return None;
         }
         if !items.is_empty() {
@@ -1837,9 +1856,6 @@ impl LauncherNav {
         } else {
             self.arcade_filter.scroll.reset();
             self.sync_arcade_filter_from_scroll();
-        }
-        if rising(now.btn_a, self.prev.btn_a) {
-            self.activate_arcade_filter_selection(catalog, system_id, &items);
         }
         None
     }
@@ -2302,6 +2318,7 @@ impl LauncherNav {
     fn close_arcade_filter(&mut self) {
         self.arcade_filter.drawer_open = false;
         self.arcade_filter.level = ArcadeFilterLevel::Top;
+        self.arcade_filter.activation_release_required = false;
     }
 
     fn back_out_of_arcade_filter_level(
@@ -2317,8 +2334,8 @@ impl LauncherNav {
             }
         } else if self.arcade_filter.level == ArcadeFilterLevel::Alphabet {
             self.open_arcade_filter(catalog, system_id);
-        } else {
-            self.arcade_filter.level = ArcadeFilterLevel::Top;
+        } else if let Some(parent) = self.arcade_filter.level.parent() {
+            self.arcade_filter.level = parent;
             self.arcade_filter.selected = self.arcade_filter_top_group_index(
                 catalog,
                 system_id,
@@ -2404,6 +2421,7 @@ impl LauncherNav {
         level: ArcadeFilterLevel,
     ) {
         self.arcade_filter.level = level;
+        self.arcade_filter.activation_release_required = true;
         self.arcade_filter.selected = 0;
         let items = self.arcade_filter_items(catalog, system_id);
         if let Some(active_idx) = items.iter().position(|item| item.active) {
@@ -4964,6 +4982,68 @@ mod tests {
 
         assert!(nav.arcade_filter.drawer_open);
         assert_eq!(nav.arcade_filter.level, ArcadeFilterLevel::Decades);
+    }
+
+    #[test]
+    fn arcade_filter_one_activation_cannot_cross_two_hierarchy_edges() {
+        let catalog = filter_catalog();
+        let t0 = Instant::now();
+        let cases = [
+            (
+                ArcadeFilterGroup::Decades,
+                ArcadeFilterLevel::Decades,
+                ArcadeFilter::Decade(1970),
+            ),
+            (
+                ArcadeFilterGroup::Manufacturers,
+                ArcadeFilterLevel::Manufacturers,
+                ArcadeFilter::Manufacturer("Atari".to_string()),
+            ),
+            (
+                ArcadeFilterGroup::Players,
+                ArcadeFilterLevel::Players,
+                ArcadeFilter::Players(1),
+            ),
+            (
+                ArcadeFilterGroup::Controls,
+                ArcadeFilterLevel::Controls,
+                ArcadeFilter::Control("Buttons Only".to_string()),
+            ),
+        ];
+
+        for use_right in [false, true] {
+            for (group, level, expected_filter) in &cases {
+                let activation = pad_with(|pad| {
+                    if use_right {
+                        pad.dpad_right = true;
+                    } else {
+                        pad.btn_a = true;
+                    }
+                });
+                let mut nav = LauncherNav::new();
+                nav.screen = Screen::Arcade;
+                nav.arcade_filter.drawer_open = true;
+                nav.arcade_filter.level = ArcadeFilterLevel::Top;
+                nav.arcade_filter.selected =
+                    nav.arcade_filter_top_group_index(&catalog, "arcade", *group);
+
+                let _ = nav.handle_input(&activation, t0, &catalog);
+                assert_eq!(nav.arcade_filter.level, *level);
+
+                // Even if a runtime boundary loses edge history while the
+                // control is held, the hierarchy transition stays consumed.
+                nav.prev = PadState::default();
+                let _ = nav.handle_input(&activation, t0 + Duration::from_millis(16), &catalog);
+                assert!(nav.arcade_filter.drawer_open);
+                assert_eq!(nav.arcade_filter.level, *level);
+                assert_eq!(nav.arcade_filter.active, ArcadeFilter::All);
+
+                release(&mut nav, &catalog, t0, 32);
+                let _ = nav.handle_input(&activation, t0 + Duration::from_millis(48), &catalog);
+                assert!(!nav.arcade_filter.drawer_open);
+                assert_eq!(nav.arcade_filter.active, expected_filter.clone());
+            }
+        }
     }
 
     #[test]
