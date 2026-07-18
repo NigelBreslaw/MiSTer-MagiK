@@ -347,6 +347,28 @@ mod tests {
     }
 
     #[test]
+    fn frame_header_rejects_bad_lengths_and_unknown_kind() {
+        assert_eq!(
+            FrameHeader::decode(&[0; HEADER_LEN - 1]),
+            Err(FrameStreamError::BadHeaderLen(HEADER_LEN - 1))
+        );
+
+        let mut bytes = keyframe_header().encode();
+        bytes[12..14].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(
+            FrameHeader::decode(&bytes),
+            Err(FrameStreamError::BadHeaderLen(1))
+        );
+
+        let mut bytes = keyframe_header().encode();
+        bytes[8] = u8::MAX;
+        assert_eq!(
+            FrameHeader::decode(&bytes),
+            Err(FrameStreamError::UnknownKind(u8::MAX))
+        );
+    }
+
+    #[test]
     fn frame_header_validates_rect_payload_size() {
         let mut header = keyframe_header();
         header.kind = FrameKind::RectDelta;
@@ -513,6 +535,29 @@ mod tests {
         };
         header.raw_bytes = 100 * 100 * 2;
 
+        assert_eq!(header.validate_shape(), Err(FrameStreamError::BadRect));
+    }
+
+    #[test]
+    fn frame_shape_rejects_zero_overflowing_and_out_of_bounds_rects() {
+        let mut header = keyframe_header();
+        header.geometry.width = 0;
+        assert_eq!(header.validate_shape(), Err(FrameStreamError::BadGeometry));
+
+        let mut header = keyframe_header();
+        header.kind = FrameKind::RectDelta;
+        header.rect.width = 0;
+        header.raw_bytes = 0;
+        assert_eq!(header.validate_shape(), Err(FrameStreamError::BadRect));
+
+        let mut header = keyframe_header();
+        header.kind = FrameKind::RectDelta;
+        header.rect.x = u32::MAX;
+        assert_eq!(header.validate_shape(), Err(FrameStreamError::BadRect));
+
+        let mut header = keyframe_header();
+        header.kind = FrameKind::RectDelta;
+        header.rect.x = header.geometry.width;
         assert_eq!(header.validate_shape(), Err(FrameStreamError::BadRect));
     }
 }

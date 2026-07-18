@@ -62,6 +62,23 @@ pub fn decompress_size_prepended_exact(
             "decoded payload too large: {expected_raw} bytes (max {max_raw})"
         ));
     }
+    let declared_raw = payload
+        .get(..4)
+        .and_then(|prefix| prefix.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or_else(|| "decode lz4 payload: missing size prefix".to_string())?;
+    let declared_raw = usize::try_from(declared_raw)
+        .map_err(|_| format!("decoded payload size overflows usize: {declared_raw}"))?;
+    if declared_raw > max_raw {
+        return Err(format!(
+            "decoded payload too large: {declared_raw} bytes (max {max_raw})"
+        ));
+    }
+    if declared_raw != expected_raw {
+        return Err(format!(
+            "decoded payload size mismatch: expected {expected_raw}, got {declared_raw}"
+        ));
+    }
     let raw = lz4_flex::decompress_size_prepended(payload)
         .map_err(|error| format!("decode lz4 payload: {error}"))?;
     if raw.len() != expected_raw {
@@ -87,7 +104,19 @@ mod tests {
             parse_response_line(r#"{"ok":false,"error":"nope"}"#).unwrap(),
             ResponseEnvelope::Error("nope".to_string())
         );
+        assert_eq!(
+            parse_response_line(r#"{"ok":true}"#).unwrap(),
+            ResponseEnvelope::Ok {
+                full: json!({"ok": true}),
+                result: Value::Null,
+            }
+        );
+        assert_eq!(
+            parse_response_line(r#"{"ok":false}"#).unwrap(),
+            ResponseEnvelope::Error("agent command failed".to_string())
+        );
         assert!(parse_response_line("").is_err());
+        assert!(parse_response_line("  \n\t").is_err());
         assert!(parse_response_line("{").is_err());
     }
 
@@ -101,6 +130,8 @@ mod tests {
         assert!(
             binary_payload_len(&json!({"payload_bytes": MAX_BINARY_PAYLOAD_BYTES + 1})).is_err()
         );
+        assert!(binary_payload_len(&json!({})).is_err());
+        assert!(binary_payload_len(&json!({"payload_bytes": "4"})).is_err());
     }
 
     #[test]
@@ -111,5 +142,16 @@ mod tests {
             b"hello"
         );
         assert!(decompress_size_prepended_exact(&encoded, 4, 10).is_err());
+        assert!(decompress_size_prepended_exact(&encoded, 5, 4).is_err());
+        assert!(decompress_size_prepended_exact(&[], 0, 10).is_err());
+        assert!(decompress_size_prepended_exact(&[0, 0, 0, 0], 0, 10).is_err());
+    }
+
+    #[test]
+    fn exact_lz4_decode_rejects_oversized_embedded_size_before_decompression() {
+        let payload = (11_u32).to_le_bytes();
+        let error = decompress_size_prepended_exact(&payload, 5, 10).unwrap_err();
+
+        assert!(error.contains("too large"));
     }
 }

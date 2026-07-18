@@ -84,6 +84,14 @@ pub(crate) fn agent_binary_request_bounded(
     stream.flush()?;
 
     let mut reader = BufReader::new(stream);
+    read_agent_binary_response(&mut reader, start, max_payload_bytes)
+}
+
+fn read_agent_binary_response<R: BufRead>(
+    reader: &mut R,
+    start: Instant,
+    max_payload_bytes: u64,
+) -> Result<AgentBinaryResponse> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let response = parse_agent_response_line(line, start)?.response;
@@ -263,6 +271,45 @@ mod tests {
             }))
             .expect("raw fallback len"),
             11
+        );
+    }
+
+    #[test]
+    fn in_memory_binary_response_is_bounded_and_requires_exact_payload() {
+        let mut success =
+            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":4}}\nDATA".to_vec());
+        let response = read_agent_binary_response(&mut success, Instant::now(), 4).unwrap();
+        assert_eq!(response.payload, b"DATA");
+
+        let mut oversized =
+            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":5}}\nDATA!".to_vec());
+        assert!(
+            read_agent_binary_response(&mut oversized, Instant::now(), 4)
+                .unwrap_err()
+                .to_string()
+                .contains("too large")
+        );
+
+        let mut truncated =
+            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":5}}\nDATA".to_vec());
+        let error = read_agent_binary_response(&mut truncated, Instant::now(), 5).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[test]
+    fn in_memory_binary_response_surfaces_agent_error_before_payload_read() {
+        let mut reader = Cursor::new(b"{\"ok\":false,\"error\":\"denied\"}\nignored".to_vec());
+
+        assert_eq!(
+            read_agent_binary_response(&mut reader, Instant::now(), 10)
+                .unwrap_err()
+                .to_string(),
+            "denied"
         );
     }
 

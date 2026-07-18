@@ -3,6 +3,9 @@
 
 use std::env;
 
+#[cfg(any(target_os = "linux", test))]
+use serde_json::{json, Value};
+
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
 
@@ -53,6 +56,52 @@ fn decompress_lz4_block_exact(
         ));
     }
     Ok(raw)
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, PartialEq)]
+struct ControlRequest {
+    id: Option<Value>,
+    cmd: String,
+    args: Value,
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, PartialEq)]
+struct ControlRequestError {
+    id: Option<Value>,
+    message: String,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_control_request(
+    line: &str,
+    token: &str,
+    auth_disabled: bool,
+) -> Result<ControlRequest, ControlRequestError> {
+    let parsed: Value = serde_json::from_str(line.trim()).map_err(|error| ControlRequestError {
+        id: None,
+        message: format!("invalid json: {error}"),
+    })?;
+    let id = parsed.get("id").cloned();
+    if !auth_disabled && parsed.get("token").and_then(Value::as_str) != Some(token) {
+        return Err(ControlRequestError {
+            id,
+            message: "unauthorized".to_string(),
+        });
+    }
+    let cmd = parsed
+        .get("cmd")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ControlRequestError {
+            id: id.clone(),
+            message: "missing cmd".to_string(),
+        })?;
+    Ok(ControlRequest {
+        id,
+        cmd: cmd.to_string(),
+        args: parsed.get("args").cloned().unwrap_or_else(|| json!({})),
+    })
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -2050,23 +2099,19 @@ mod linux {
         reader: &mut R,
     ) -> String {
         let request_received = Instant::now();
-        let parsed: Value = match serde_json::from_str(line.trim()) {
-            Ok(value) => value,
-            Err(err) => return response(None, false, None, Some(&format!("invalid json: {err}"))),
+        let request = match parse_control_request(line, token, CONTROL_AUTH_DISABLED) {
+            Ok(request) => request,
+            Err(error) => {
+                if error.message == "unauthorized" {
+                    append_log_line("control_auth_failed".to_string());
+                }
+                return response(error.id, false, None, Some(&error.message));
+            }
         };
-        let id = parsed.get("id").cloned();
-        if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
-            append_log_line("control_auth_failed".to_string());
-            return response(id, false, None, Some("unauthorized"));
-        }
-        let cmd = match parsed.get("cmd").and_then(Value::as_str) {
-            Some(cmd) => cmd,
-            None => return response(id, false, None, Some("missing cmd")),
-        };
-        let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
+        let ControlRequest { id, cmd, args } = request;
         timeline_record_once("first_command", format!("cmd={cmd}"));
 
-        match cmd {
+        match cmd.as_str() {
             "ping" => response(id, true, Some(json!({"pong": true})), None),
             "status" => response(id, true, Some(status_json(boot_id, started)), None),
             "logs" => response(id, true, Some(log_ring_json()), None),
@@ -3874,6 +3919,57 @@ mod tests {
         assert!(decompress_lz4_block_exact(&payload, 17, 16, "fixture")
             .expect_err("oversized metadata should fail")
             .contains("exceeds max"));
+    }
+
+    #[test]
+    fn control_request_validation_is_portable_and_authenticates_before_dispatch() {
+        assert!(parse_control_request("{", "secret", false)
+            .unwrap_err()
+            .message
+            .starts_with("invalid json:"));
+        assert_eq!(
+            parse_control_request(r#"{"id":7,"token":"wrong","cmd":"ping"}"#, "secret", false)
+                .unwrap_err(),
+            ControlRequestError {
+                id: Some(json!(7)),
+                message: "unauthorized".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_control_request(r#"{"id":8,"token":"secret"}"#, "secret", false).unwrap_err(),
+            ControlRequestError {
+                id: Some(json!(8)),
+                message: "missing cmd".to_string(),
+            }
+        );
+
+        assert_eq!(
+            parse_control_request(
+                r#"{"id":9,"token":"secret","cmd":"status"}"#,
+                "secret",
+                false,
+            )
+            .unwrap(),
+            ControlRequest {
+                id: Some(json!(9)),
+                cmd: "status".to_string(),
+                args: json!({}),
+            }
+        );
+    }
+
+    #[test]
+    fn explicitly_disabled_control_auth_still_requires_a_command() {
+        let request =
+            parse_control_request(r#"{"id":1,"cmd":"ping","args":{"x":2}}"#, "", true).unwrap();
+        assert_eq!(request.args, json!({"x": 2}));
+        assert_eq!(request.cmd, "ping");
+        assert_eq!(
+            parse_control_request(r#"{"id":1}"#, "", true)
+                .unwrap_err()
+                .message,
+            "missing cmd"
+        );
     }
 
     #[test]

@@ -1180,28 +1180,43 @@ impl MagikDeployTransaction {
         validate_ms: u128,
         total_t: Instant,
     ) -> Result<MagikDeployReport> {
-        let prepare_ms = self.prepare(sess)?;
+        self.run_with(&SshDeployRemote { sess }, validate_ms, total_t)
+    }
+
+    fn run_with<R: DeployRemote>(
+        &self,
+        remote: &R,
+        validate_ms: u128,
+        total_t: Instant,
+    ) -> Result<MagikDeployReport> {
+        let prepare_ms = match self.prepare(remote) {
+            Ok(elapsed) => elapsed,
+            Err(error) => {
+                let _ = self.cleanup(remote);
+                return Err(error);
+            }
+        };
         let mut suspended = false;
         let mut cleaned = false;
         let result = (|| -> Result<MagikDeployReport> {
             let suspend_t = Instant::now();
-            magik_fifo_command(sess, "mister_magik_suspend")?;
+            deploy_fifo_command(remote, "mister_magik_suspend")?;
             let suspend_ms = suspend_t.elapsed().as_millis();
             suspended = true;
 
             let upload_t = Instant::now();
-            put(sess, &self.local, &self.upload)?;
+            remote.put(&self.local, &self.upload)?;
             let upload_ms = upload_t.elapsed().as_millis();
 
-            let swap_ms = self.swap_upload(sess)?;
-            let (chmod_size_ms, remote_bytes) = self.chmod_and_verify_size(sess)?;
+            let swap_ms = self.swap_upload(remote)?;
+            let (chmod_size_ms, remote_bytes) = self.chmod_and_verify_size(remote)?;
 
             let resume_t = Instant::now();
-            magik_fifo_command(sess, "mister_magik_resume")?;
+            deploy_fifo_command(remote, "mister_magik_resume")?;
             let resume_ms = resume_t.elapsed().as_millis();
             suspended = false;
 
-            let cleanup_ms = self.cleanup(sess)?;
+            let cleanup_ms = self.cleanup(remote)?;
             cleaned = true;
 
             Ok(MagikDeployReport {
@@ -1223,38 +1238,42 @@ impl MagikDeployTransaction {
 
         if result.is_err() {
             if !cleaned {
-                let _ = self.cleanup(sess);
+                let _ = self.cleanup(remote);
             }
             if suspended {
-                let _ = magik_fifo_command(sess, "mister_magik_resume");
+                let _ = deploy_fifo_command(remote, "mister_magik_resume");
             }
         }
         result
     }
 
-    fn prepare(&self, sess: &Session) -> Result<u128> {
+    fn prepare<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
         self.exec_phase(
-            sess,
+            remote,
             "prepare",
             &format!("mkdir -p {}; : > {}", sh(&self.remote_dir), sh(&self.lock)),
         )?;
         Ok(start.elapsed().as_millis())
     }
 
-    fn swap_upload(&self, sess: &Session) -> Result<u128> {
+    fn swap_upload<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
         self.exec_phase(
-            sess,
+            remote,
             "swap",
             &format!("mv {} {}", sh(&self.upload), sh(&self.remote)),
         )?;
         Ok(start.elapsed().as_millis())
     }
 
-    fn chmod_and_verify_size(&self, sess: &Session) -> Result<(u128, u64)> {
+    fn chmod_and_verify_size<R: DeployRemote>(&self, remote: &R) -> Result<(u128, u64)> {
         let start = Instant::now();
-        let out = self.exec_phase(sess, "chmod-size-verify", &self.chmod_size_verify_command())?;
+        let out = self.exec_phase(
+            remote,
+            "chmod-size-verify",
+            &self.chmod_size_verify_command(),
+        )?;
         let remote_bytes = parse_wc_byte_count(&out.stdout)
             .ok_or_else(|| format!("unable to parse deployed size from: {}", out.stdout.trim()))?;
         if remote_bytes != self.local_bytes {
@@ -1275,18 +1294,23 @@ impl MagikDeployTransaction {
         )
     }
 
-    fn cleanup(&self, sess: &Session) -> Result<u128> {
+    fn cleanup<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
         self.exec_phase(
-            sess,
+            remote,
             "cleanup",
             &format!("rm -f {} {}", sh(&self.upload), sh(&self.lock)),
         )?;
         Ok(start.elapsed().as_millis())
     }
 
-    fn exec_phase(&self, sess: &Session, phase: &str, command: &str) -> Result<ExecOutput> {
-        let out = exec(sess, command, true)?;
+    fn exec_phase<R: DeployRemote>(
+        &self,
+        remote: &R,
+        phase: &str,
+        command: &str,
+    ) -> Result<ExecOutput> {
+        let out = remote.exec(command)?;
         if out.rc != 0 {
             return Err(format!(
                 "deploy {phase} phase failed rc={} output={}",
@@ -1296,6 +1320,37 @@ impl MagikDeployTransaction {
             .into());
         }
         Ok(out)
+    }
+}
+
+trait DeployRemote {
+    fn exec(&self, command: &str) -> Result<ExecOutput>;
+    fn put(&self, local: &Path, remote: &str) -> Result<()>;
+}
+
+struct SshDeployRemote<'a> {
+    sess: &'a Session,
+}
+
+impl DeployRemote for SshDeployRemote<'_> {
+    fn exec(&self, command: &str) -> Result<ExecOutput> {
+        exec(self.sess, command, true)
+    }
+
+    fn put(&self, local: &Path, remote: &str) -> Result<()> {
+        put(self.sess, local, remote)
+    }
+}
+
+fn deploy_fifo_command<R: DeployRemote>(remote: &R, command: &str) -> Result<()> {
+    let out = remote.exec(&format!(
+        "if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
+        command
+    ))?;
+    if out.rc == 0 {
+        Ok(())
+    } else {
+        Err(format!("MiSTer command failed: {command}").into())
     }
 }
 
@@ -1327,22 +1382,6 @@ impl MagikDeployReport {
 
 fn parse_wc_byte_count(text: &str) -> Option<u64> {
     text.split_whitespace().next()?.parse::<u64>().ok()
-}
-
-fn magik_fifo_command(sess: &Session, command: &str) -> Result<()> {
-    let out = exec(
-        sess,
-        &format!(
-            "if [ -p /dev/MiSTer_cmd ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then printf '{}\\n' > /dev/MiSTer_cmd; fi",
-            command
-        ),
-        true,
-    )?;
-    if out.rc == 0 {
-        Ok(())
-    } else {
-        Err(format!("MiSTer command failed: {command}").into())
-    }
 }
 
 fn append_profile_row(path: &str, header: &str, row: &str) -> Result<()> {
@@ -4726,7 +4765,65 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::fs;
+
+    struct ScriptedDeployRemote {
+        events: RefCell<Vec<String>>,
+        fail_command_containing: Option<&'static str>,
+        fail_upload: bool,
+        remote_bytes: u64,
+    }
+
+    impl ScriptedDeployRemote {
+        fn events(&self) -> Vec<String> {
+            self.events.borrow().clone()
+        }
+    }
+
+    impl DeployRemote for ScriptedDeployRemote {
+        fn exec(&self, command: &str) -> Result<ExecOutput> {
+            self.events.borrow_mut().push(command.to_string());
+            if self
+                .fail_command_containing
+                .is_some_and(|needle| command.contains(needle))
+            {
+                return Ok(ExecOutput {
+                    rc: 9,
+                    stdout: "scripted failure".to_string(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(ExecOutput {
+                rc: 0,
+                stdout: if command.contains("wc -c") {
+                    format!("{} remote\n", self.remote_bytes)
+                } else {
+                    String::new()
+                },
+                stderr: String::new(),
+            })
+        }
+
+        fn put(&self, local: &Path, remote: &str) -> Result<()> {
+            self.events
+                .borrow_mut()
+                .push(format!("put {} {remote}", local.display()));
+            if self.fail_upload {
+                return Err("scripted upload failure".into());
+            }
+            Ok(())
+        }
+    }
+
+    fn scripted_deploy_remote(remote_bytes: u64) -> ScriptedDeployRemote {
+        ScriptedDeployRemote {
+            events: RefCell::new(Vec::new()),
+            fail_command_containing: None,
+            fail_upload: false,
+            remote_bytes,
+        }
+    }
 
     #[test]
     fn parses_sd_list_probe_options() {
@@ -5583,6 +5680,70 @@ H: Handlers=event3 js0"#
         );
 
         let _ = fs::remove_file(&local);
+    }
+
+    #[test]
+    fn deploy_transaction_runs_bounded_phases_in_order() {
+        let local = temp_path("deploy-scripted-success");
+        fs::write(&local, b"abc").unwrap();
+        let tx =
+            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
+                .unwrap();
+        let remote = scripted_deploy_remote(3);
+
+        let report = tx.run_with(&remote, 0, Instant::now()).unwrap();
+        let events = remote.events();
+
+        assert_eq!(report.remote_bytes, 3);
+        assert!(events[0].contains("mkdir -p"));
+        assert!(events[1].contains("mister_magik_suspend"));
+        assert!(events[2].starts_with("put "));
+        assert!(events[3].starts_with("mv "));
+        assert!(events[4].contains("wc -c"));
+        assert!(events[5].contains("mister_magik_resume"));
+        assert!(events[6].starts_with("rm -f "));
+        let _ = fs::remove_file(local);
+    }
+
+    #[test]
+    fn deploy_transaction_cleans_and_resumes_after_upload_failure() {
+        let local = temp_path("deploy-scripted-upload-failure");
+        fs::write(&local, b"abc").unwrap();
+        let tx =
+            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
+                .unwrap();
+        let mut remote = scripted_deploy_remote(3);
+        remote.fail_upload = true;
+
+        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        let events = remote.events();
+
+        assert!(events[1].contains("mister_magik_suspend"));
+        assert!(events[2].starts_with("put "));
+        assert!(events[3].starts_with("rm -f "));
+        assert!(events[4].contains("mister_magik_resume"));
+        assert_eq!(events.len(), 5);
+        let _ = fs::remove_file(local);
+    }
+
+    #[test]
+    fn deploy_transaction_cleans_partial_prepare_failure() {
+        let local = temp_path("deploy-scripted-prepare-failure");
+        fs::write(&local, b"abc").unwrap();
+        let tx =
+            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
+                .unwrap();
+        let mut remote = scripted_deploy_remote(3);
+        remote.fail_command_containing = Some("mkdir -p");
+
+        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        let events = remote.events();
+
+        assert_eq!(events.len(), 2);
+        assert!(events[0].contains("mkdir -p"));
+        assert!(events[1].starts_with("rm -f "));
+        assert!(!events.iter().any(|event| event.contains("suspend")));
+        let _ = fs::remove_file(local);
     }
 
     #[test]

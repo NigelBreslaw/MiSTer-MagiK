@@ -56,4 +56,19 @@ mod tests {
             (960, 540, 1920)
         );
     }
+
+    #[test]
+    fn status_masks_reserved_bits_and_rejects_wrong_word_counts() {
+        let status = decode_status(&[1, 2, u16::MAX, 3, 4, 5, 0, 0, u16::MAX, u16::MAX, u16::MAX])
+            .expect("masked status");
+
+        assert_eq!(status.flags, 0x7);
+        assert_eq!(status.width, 0x0fff);
+        assert_eq!(status.height, 0x0fff);
+        assert_eq!(status.stride, 0x3fff);
+        assert!(decode_status(&[]).unwrap_err().contains("got 0"));
+        assert!(decode_status(&[0; STATUS_WORD_COUNT + 1])
+            .unwrap_err()
+            .contains("got 12"));
+    }
 }

@@ -219,6 +219,7 @@ impl HttpHeaders {
         for raw_line in text.lines() {
             let line = raw_line.trim();
             if let Some(rest) = line.strip_prefix("HTTP/") {
+                parsed.values.clear();
                 parsed.status = rest
                     .split_whitespace()
                     .nth(1)
@@ -270,5 +271,60 @@ mod tests {
         assert_eq!(headers.status, Some(200));
         assert_eq!(headers.get("etag"), Some("abc"));
         assert_eq!(headers.get("CF-CACHE-STATUS"), Some("HIT"));
+        assert_eq!(headers.get("location"), None);
+    }
+
+    #[test]
+    fn compression_aliases_and_pack_variant_selection_are_normalized() {
+        let raw = MediaVariant {
+            compression: "none".to_string(),
+            codec: "mmlz4b".to_string(),
+            object: "raw".to_string(),
+            bytes: 1,
+            sha256: SHA.to_string(),
+            url: "raw".to_string(),
+        };
+        let gzip = MediaVariant {
+            compression: "gzip".to_string(),
+            ..raw.clone()
+        };
+        let pack = MediaPack {
+            id: "arcade".to_string(),
+            version: "v1".to_string(),
+            image_size: "320x320".to_string(),
+            raw,
+            variants: vec![gzip],
+            index: None,
+        };
+
+        assert_eq!(
+            pack.variant_for_compression("gz").unwrap().compression,
+            "gzip"
+        );
+        assert!(pack.variant_for_compression("zip").is_none());
+        assert_eq!(pack.identity().sha256, SHA);
+    }
+
+    #[test]
+    fn hashes_origins_and_index_paths_reject_malformed_inputs() {
+        assert_eq!(
+            Sha256::parse(&SHA.to_ascii_uppercase()).unwrap().as_str(),
+            SHA
+        );
+        assert!(Sha256::parse_command_output(&[0xff]).is_err());
+        assert!(Sha256::parse_command_output(b"  \n").is_err());
+        assert_eq!(
+            Sha256::parse_command_output(format!("{SHA}  file\n").as_bytes())
+                .unwrap()
+                .into_string(),
+            SHA
+        );
+        assert!(manifest_origin("assets.example/path").is_err());
+        assert!(manifest_origin("https:///path").is_err());
+
+        let index = format!("mister-magik/v1/packs/arcade/screenshots/320x320/v1/{SHA}.mmlz4b.idx");
+        assert!(validate_index_object_path(&index).is_ok());
+        assert!(validate_index_object_path(&format!("../{index}")).is_err());
+        assert!(validate_index_object_path(&index.replace("320x320", "0x320")).is_err());
     }
 }
