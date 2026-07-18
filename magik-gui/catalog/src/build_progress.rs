@@ -56,8 +56,9 @@ pub struct CompletedShard {
     pub system_id: String,
     pub generation: u64,
     pub sqlite_path: String,
-    pub metadata_path: String,
+    pub navigation_path: String,
     pub content_hash: String,
+    pub manifest_system_json: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,6 +90,23 @@ pub fn remove(path: &Path) -> Result<(), String> {
 }
 
 impl BuildProgressJournal {
+    pub fn open_for_projection(path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(path)
+            .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
+        configure(&conn)?;
+        let version: String = meta(&conn, "schema_version")?;
+        if version != SCHEMA_VERSION.to_string() {
+            return Err(format!("unsupported build progress schema {version}"));
+        }
+        let journal = Self {
+            path: path.to_path_buf(),
+            build_id: meta(&conn, "build_id")?,
+            conn,
+        };
+        journal.completed_targets()?;
+        journal.completed_shards()?;
+        Ok(journal)
+    }
     pub fn open_or_create(
         path: &Path,
         contract: &BuildContract,
@@ -483,8 +501,9 @@ mod tests {
             system_id: "arcade".into(),
             generation: 4,
             sqlite_path: "systems/arcade/4.sqlite3".into(),
-            metadata_path: "systems/arcade/4.json".into(),
+            navigation_path: "systems/arcade/4.nav".into(),
             content_hash: "def".into(),
+            manifest_system_json: "{}".into(),
         };
         journal.record_shard(&shard).unwrap();
         drop(journal);

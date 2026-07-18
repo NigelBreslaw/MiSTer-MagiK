@@ -280,7 +280,7 @@ pub fn system_title(system_id: &str) -> String {
         .unwrap_or_else(|| fallback_title(system_id))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct SystemId(String);
 
 impl SystemId {

@@ -4,12 +4,13 @@
 //! Physical scan-unit ownership and global discovery-claim relationships.
 
 use crate::catalog_classify::SystemId;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ScanUnitId(String);
 
 impl ScanUnitId {

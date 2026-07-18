@@ -6,15 +6,16 @@
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
 use crate::shard_registry::{
-    garbage_collect_unreferenced, manifest_slots_present, publish_manifest,
+    garbage_collect_unreferenced_with_retained, manifest_slots_present, publish_manifest,
     publish_prevalidated_system_artifacts_deferred, read_latest_manifest, sync_artifact_batch,
-    CatalogManifest, ManifestSystem, PublishedGeneration, RegistryLimits,
+    validate_published_system, CatalogManifest, ManifestSystem, PublishedGeneration,
+    RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan};
 use crate::system_shard::{
     write_system_shard_with_durability, ShardDurability, SystemGame, SystemShardData,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -163,12 +164,35 @@ pub fn execute_reconciliation(
         ));
     }
 
-    garbage_collect_unreferenced(
+    let mut resume_journal = crate::build_progress::BuildProgressJournal::open_for_projection(
+        &crate::build_progress::path_for_root(storage_root),
+    )
+    .ok();
+    let mut saved_systems = HashMap::new();
+    if let Some(journal) = resume_journal.as_ref() {
+        for saved in journal.completed_shards().unwrap_or_default() {
+            if saved.generation != expected_generation {
+                continue;
+            }
+            if let Ok(system) = serde_json::from_str::<ManifestSystem>(&saved.manifest_system_json)
+            {
+                saved_systems.insert(system.system_id.clone(), system);
+            }
+        }
+    }
+    let retained = saved_systems.values().flat_map(|system| {
+        [
+            system.active.sqlite_path.clone(),
+            system.active.navigation_path.clone(),
+        ]
+    });
+    garbage_collect_unreferenced_with_retained(
         storage_root,
         current.as_ref().unwrap_or(&CatalogManifest {
             generation: 0,
             systems: Vec::new(),
         }),
+        retained,
     )
     .map_err(|error| ReconciliationError::new("garbage-collect", error.to_string()))?;
 
@@ -206,8 +230,10 @@ pub fn execute_reconciliation(
         .iter()
         .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
         .collect::<Vec<_>>();
-    let pipeline_enabled =
-        current.is_none() && rebuilds.len() > 1 && !crate::cooperative_work::in_background_scope();
+    let pipeline_enabled = resume_journal.is_none()
+        && current.is_none()
+        && rebuilds.len() > 1
+        && !crate::cooperative_work::in_background_scope();
     let completed_shards = if pipeline_enabled {
         worker_count = 2;
         let pipeline = execute_fresh_pipeline(
@@ -236,14 +262,52 @@ pub fn execute_reconciliation(
                 match materializer.materialize(&planned.system_id, expected_generation) {
                     Ok(materialized) => materialized,
                     Err(error) => {
-                        remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                        if resume_journal.is_none() {
+                            remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                        }
                         return Err(error);
                     }
                 };
             materialize_time += phase_started.elapsed();
             if let Err(error) = validate_materialized(&planned.system_id, &materialized) {
-                remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                if resume_journal.is_none() {
+                    remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                }
                 return Err(error);
+            }
+            if let Some(saved) = saved_systems.remove(&planned.system_id) {
+                match saved_system_matches(storage_root, &saved, &materialized, limits) {
+                    Ok(true) => {
+                        crate::catalog_logln!(
+                            "catalog_resume_tsv\tphase=shard-reused\tsystem_id={}\tgeneration={}\treason=exact-match",
+                            planned.system_id.as_str(),
+                            expected_generation
+                        );
+                        sequential.push(CompletedShard {
+                            system: saved,
+                            write_time: Duration::ZERO,
+                            publish_time: Duration::ZERO,
+                            elapsed: Duration::ZERO,
+                            artifact_bytes: 0,
+                            copy_hash_time: Duration::ZERO,
+                        });
+                        continue;
+                    }
+                    Ok(false) => {
+                        crate::catalog_logln!(
+                            "catalog_resume_tsv\tphase=shard-invalidated\tsystem_id={}\tgeneration={}\treason=canonical-mismatch",
+                            planned.system_id.as_str(), expected_generation
+                        );
+                        remove_saved_system_artifacts(storage_root, &saved);
+                    }
+                    Err(error) => {
+                        crate::catalog_logln!(
+                            "catalog_resume_tsv\tphase=shard-invalidated\tsystem_id={}\tgeneration={}\treason={}",
+                            planned.system_id.as_str(), expected_generation, error
+                        );
+                        remove_saved_system_artifacts(storage_root, &saved);
+                    }
+                }
             }
             let previous = systems
                 .iter()
@@ -263,12 +327,46 @@ pub fn execute_reconciliation(
             );
             match shard {
                 Ok(shard) => {
+                    if let Some(journal) = resume_journal.as_mut() {
+                        sync_artifact_batch(storage_root).map_err(|error| {
+                            ReconciliationError::new("shard-checkpoint", error.to_string())
+                        })?;
+                        validate_published_system(storage_root, &shard.system, limits).map_err(
+                            |error| ReconciliationError::new("shard-checkpoint", error.to_string()),
+                        )?;
+                        let active = &shard.system.active;
+                        journal
+                            .record_shard(&crate::build_progress::CompletedShard {
+                                system_id: shard.system.system_id.as_str().to_string(),
+                                generation: active.generation,
+                                sqlite_path: active.sqlite_path.display().to_string(),
+                                navigation_path: active.navigation_path.display().to_string(),
+                                content_hash: format!(
+                                    "{}:{}",
+                                    active.sqlite_hash, active.navigation_hash
+                                ),
+                                manifest_system_json: serde_json::to_string(&shard.system)
+                                    .map_err(|error| {
+                                        ReconciliationError::new(
+                                            "shard-checkpoint",
+                                            error.to_string(),
+                                        )
+                                    })?,
+                            })
+                            .map_err(|error| ReconciliationError::new("shard-checkpoint", error))?;
+                        crate::catalog_logln!(
+                            "catalog_resume_tsv\tphase=shard-committed\tsystem_id={}\tgeneration={}\treason=durable",
+                            shard.system.system_id.as_str(), expected_generation
+                        );
+                    }
                     shard_build_wall_time += shard.elapsed.saturating_sub(shard.publish_time);
                     shard_publication_wall_time += shard.publish_time;
                     sequential.push(shard);
                 }
                 Err(error) => {
-                    remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                    if resume_journal.is_none() {
+                        remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                    }
                     return Err(error);
                 }
             }
@@ -309,7 +407,9 @@ pub fn execute_reconciliation(
     let (barrier_time, manifest_time) = match finalize {
         Ok(times) => times,
         Err(error) => {
-            if planned_generation_cleanup_is_safe(storage_root, limits, expected_generation) {
+            if resume_journal.is_none()
+                && planned_generation_cleanup_is_safe(storage_root, limits, expected_generation)
+            {
                 remove_planned_generation(storage_root, &rebuilds, expected_generation);
             }
             return Err(error);
@@ -343,6 +443,43 @@ pub fn execute_reconciliation(
         rebuilt,
         removed,
     })
+}
+
+fn saved_system_matches(
+    storage_root: &Path,
+    saved: &ManifestSystem,
+    candidate: &MaterializedSystem,
+    limits: RegistryLimits,
+) -> Result<bool, ReconciliationError> {
+    validate_published_system(storage_root, saved, limits)
+        .map_err(|error| ReconciliationError::new("shard-resume", error.to_string()))?;
+    if saved.system_id != candidate.system_id
+        || saved.display_title != candidate.display_title
+        || saved.section != candidate.section
+        || saved.family != candidate.family
+        || saved.order != candidate.order
+        || saved.producers != candidate.producers
+    {
+        return Ok(false);
+    }
+    let loaded = crate::system_shard::open_system_shard(
+        &storage_root.join(&saved.active.sqlite_path),
+        &storage_root.join(&saved.active.navigation_path),
+        &saved.system_id,
+        saved.active.generation,
+        limits.shard,
+    )
+    .map_err(|error| ReconciliationError::new("shard-resume", error.to_string()))?;
+    Ok(loaded.games == candidate.games)
+}
+
+fn remove_saved_system_artifacts(storage_root: &Path, saved: &ManifestSystem) {
+    let expected = PathBuf::from("systems").join(saved.system_id.as_str());
+    for path in [&saved.active.sqlite_path, &saved.active.navigation_path] {
+        if path.parent() == Some(expected.as_path()) {
+            let _ = fs::remove_file(storage_root.join(path));
+        }
+    }
 }
 
 fn planned_generation_cleanup_is_safe(
@@ -1079,6 +1216,62 @@ mod tests {
         assert!(!root.join("systems/c64/1.sqlite3").exists());
         assert!(!root.join("systems/c64/1.nav.lz4b").exists());
         assert_eq!(materializer.commits, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_first_build_adopts_durable_unpublished_shard() {
+        let root = temporary_root("resume-unpublished");
+        let progress_path = crate::build_progress::path_for_root(&root);
+        let contract = crate::build_progress::BuildContract {
+            roots: vec!["/fixture".into()],
+            path_mapping: Vec::new(),
+            scanner_version: 1,
+            profile_version: "1".into(),
+            taxonomy_version: "1".into(),
+            namespace_backend: "fixture".into(),
+            projection_contract: "1".into(),
+        };
+        let journal = crate::build_progress::BuildProgressJournal::open_or_create(
+            &progress_path,
+            &contract,
+            &[],
+        )
+        .unwrap()
+        .0;
+        drop(journal);
+
+        let mut interrupted = FixtureMaterializer::new();
+        interrupted.fail_on = Some(system("snes"));
+        let error = execute_reconciliation(
+            &root,
+            &plan(None, 1, &["c64", "snes"]),
+            limits(),
+            &mut interrupted,
+        )
+        .unwrap_err();
+        assert_eq!(error.stage(), "fixture");
+        let sqlite = root.join("systems/c64/1.sqlite3");
+        let before = fs::read(&sqlite).unwrap();
+        let journal =
+            crate::build_progress::BuildProgressJournal::open_for_projection(&progress_path)
+                .unwrap();
+        assert_eq!(journal.completed_shards().unwrap().len(), 1);
+        drop(journal);
+
+        let mut resumed = FixtureMaterializer::new();
+        execute_reconciliation(
+            &root,
+            &plan(None, 1, &["c64", "snes"]),
+            limits(),
+            &mut resumed,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&sqlite).unwrap(), before);
+        assert_eq!(
+            read_latest_manifest(&root, limits()).unwrap().systems.len(),
+            2
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

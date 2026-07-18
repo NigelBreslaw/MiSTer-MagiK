@@ -52,7 +52,7 @@ pub struct CatalogManifest {
     pub systems: Vec<ManifestSystem>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ManifestSystem {
     pub system_id: SystemId,
     pub display_title: String,
@@ -64,7 +64,7 @@ pub struct ManifestSystem {
     pub previous: Option<PublishedGeneration>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublishedGeneration {
     pub generation: u64,
     pub sqlite_path: PathBuf,
@@ -526,47 +526,87 @@ fn validate_manifest(
             ));
         }
         previous_id = Some(&system.system_id);
-        if system.display_title.is_empty()
-            || system.section.is_empty()
-            || system.family.is_empty()
-            || system.producers.is_empty()
-        {
+        validate_manifest_system_with_options(
+            storage_root,
+            system,
+            limits,
+            validate_artifacts,
+            verify_hashes,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_manifest_system_with_options(
+    storage_root: &Path,
+    system: &ManifestSystem,
+    limits: RegistryLimits,
+    validate_artifacts: bool,
+    verify_hashes: bool,
+) -> Result<(), RegistryError> {
+    if system.display_title.is_empty()
+        || system.section.is_empty()
+        || system.family.is_empty()
+        || system.producers.is_empty()
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest system metadata is incomplete",
+        ));
+    }
+    let unique_producers = system.producers.iter().collect::<BTreeSet<_>>();
+    if unique_producers.len() != system.producers.len() {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest contains duplicate producers",
+        ));
+    }
+    validate_generation(
+        storage_root,
+        &system.system_id,
+        &system.active,
+        limits,
+        validate_artifacts,
+        verify_hashes,
+    )?;
+    if let Some(previous) = &system.previous {
+        if previous.generation >= system.active.generation {
             return Err(RegistryError::new(
                 "validate-manifest",
-                "manifest system metadata is incomplete",
-            ));
-        }
-        let unique_producers = system.producers.iter().collect::<BTreeSet<_>>();
-        if unique_producers.len() != system.producers.len() {
-            return Err(RegistryError::new(
-                "validate-manifest",
-                "manifest contains duplicate producers",
+                "previous generation is not older than active generation",
             ));
         }
         validate_generation(
             storage_root,
             &system.system_id,
-            &system.active,
+            previous,
             limits,
             validate_artifacts,
             verify_hashes,
         )?;
-        if let Some(previous) = &system.previous {
-            if previous.generation >= system.active.generation {
-                return Err(RegistryError::new(
-                    "validate-manifest",
-                    "previous generation is not older than active generation",
-                ));
-            }
-            validate_generation(
-                storage_root,
-                &system.system_id,
-                previous,
-                limits,
-                validate_artifacts,
-                verify_hashes,
-            )?;
-        }
+    }
+    Ok(())
+}
+
+/// Fully validates one unpublished system entry before it is retained or
+/// adopted into a manifest. Unlike normal manifest reads, this verifies the
+/// stored hashes and reopens each shard to validate its schema and navigation.
+#[cfg(feature = "builder")]
+pub(crate) fn validate_published_system(
+    storage_root: &Path,
+    system: &ManifestSystem,
+    limits: RegistryLimits,
+) -> Result<(), RegistryError> {
+    validate_manifest_system_with_options(storage_root, system, limits, true, true)?;
+    for generation in std::iter::once(&system.active).chain(system.previous.iter()) {
+        open_system_shard(
+            &storage_root.join(&generation.sqlite_path),
+            &storage_root.join(&generation.navigation_path),
+            &system.system_id,
+            generation.generation,
+            limits.shard,
+        )
+        .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
     }
     Ok(())
 }
@@ -727,7 +767,16 @@ pub fn garbage_collect_unreferenced(
     storage_root: &Path,
     manifest: &CatalogManifest,
 ) -> Result<Vec<PathBuf>, RegistryError> {
-    let retained = manifest
+    garbage_collect_unreferenced_with_retained(storage_root, manifest, std::iter::empty())
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn garbage_collect_unreferenced_with_retained(
+    storage_root: &Path,
+    manifest: &CatalogManifest,
+    additional_retained: impl IntoIterator<Item = PathBuf>,
+) -> Result<Vec<PathBuf>, RegistryError> {
+    let mut retained = manifest
         .systems
         .iter()
         .flat_map(|system| {
@@ -741,6 +790,7 @@ pub fn garbage_collect_unreferenced(
                 })
         })
         .collect::<BTreeSet<_>>();
+    retained.extend(additional_retained);
     let mut removed = Vec::new();
     let systems_directory = storage_root.join("systems");
     let Ok(system_directories) = fs::read_dir(&systems_directory) else {
@@ -1038,6 +1088,50 @@ mod tests {
         assert!(!root.join(first.navigation_path).exists());
         assert!(!root.join(obsolete.sqlite_path).exists());
         assert!(!root.join(obsolete.navigation_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn garbage_collection_preserves_additional_unpublished_artifacts() {
+        let root = temporary_root("garbage-collection-retained");
+        let system_id = SystemId::parse("snes").unwrap();
+        let active = create_generation(&root, &system_id, 1);
+        let unpublished = create_generation(&root, &system_id, 2);
+        let obsolete = create_generation(&root, &SystemId::parse("gamegear").unwrap(), 1);
+        let retained = [
+            unpublished.sqlite_path.clone(),
+            unpublished.navigation_path.clone(),
+        ];
+
+        let removed =
+            garbage_collect_unreferenced_with_retained(&root, &manifest(1, active, None), retained)
+                .unwrap();
+
+        assert_eq!(removed.len(), 2);
+        assert!(root.join(unpublished.sqlite_path).exists());
+        assert!(root.join(unpublished.navigation_path).exists());
+        assert!(!root.join(obsolete.sqlite_path).exists());
+        assert!(!root.join(obsolete.navigation_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn unpublished_system_validation_checks_hashes_and_shard_contents() {
+        let root = temporary_root("validate-unpublished");
+        let system_id = SystemId::parse("snes").unwrap();
+        let generation = create_generation(&root, &system_id, 1);
+        let system = manifest(1, generation.clone(), None).systems.remove(0);
+
+        validate_published_system(&root, &system, limits()).unwrap();
+
+        fs::write(root.join(&generation.navigation_path), b"corrupt").unwrap();
+        let error = validate_published_system(&root, &system, limits()).unwrap_err();
+        assert!(
+            error.message().contains("size does not match")
+                || error.message().contains("hash does not match")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
