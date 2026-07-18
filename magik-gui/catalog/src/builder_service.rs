@@ -508,23 +508,52 @@ fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> String {
 /// republished.
 pub fn remove_default_production_catalog_artifacts() -> Result<usize, String> {
     let storage = crate::catalog_config::default_sharded_catalog_path();
+    let bootstrap_index = crate::arcade_bootstrap_index::default_path();
+    validate_v3_catalog_storage_path(&storage)?;
+    let mut removed = library_db::remove_default_catalog_artifacts()?;
+    removed = removed.saturating_add(remove_v3_and_bootstrap_artifacts_at(
+        &storage,
+        &bootstrap_index,
+    )?);
+    Ok(removed)
+}
+
+fn remove_v3_and_bootstrap_artifacts_at(
+    storage: &Path,
+    bootstrap_index: &Path,
+) -> Result<usize, String> {
+    validate_v3_catalog_storage_path(storage)?;
+    let mut removed = 0usize;
+    if storage.exists() {
+        let entries = walkdir::WalkDir::new(storage)
+            .into_iter()
+            .filter_map(Result::ok)
+            .count();
+        std::fs::remove_dir_all(storage)
+            .map_err(|error| format!("remove V3 catalog {}: {error}", storage.display()))?;
+        removed = removed.saturating_add(entries);
+    }
+    match std::fs::remove_file(bootstrap_index) {
+        Ok(()) => removed = removed.saturating_add(1),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "remove Arcade bootstrap index {}: {error}",
+                bootstrap_index.display()
+            ))
+        }
+    }
+    Ok(removed)
+}
+
+fn validate_v3_catalog_storage_path(storage: &Path) -> Result<(), String> {
     if storage.file_name().and_then(|name| name.to_str()) != Some("catalog-v3") {
         return Err(format!(
             "refusing to remove unexpected V3 catalog path {}",
             storage.display()
         ));
     }
-    let mut removed = library_db::remove_default_catalog_artifacts()?;
-    if storage.exists() {
-        let entries = walkdir::WalkDir::new(&storage)
-            .into_iter()
-            .filter_map(Result::ok)
-            .count();
-        std::fs::remove_dir_all(&storage)
-            .map_err(|error| format!("remove V3 catalog {}: {error}", storage.display()))?;
-        removed = removed.saturating_add(entries);
-    }
-    Ok(removed)
+    Ok(())
 }
 
 impl BuilderBackend for SystemBuilderBackend {
@@ -1165,6 +1194,28 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn reset_removes_v3_catalog_and_retained_arcade_bootstrap_index() {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-reset-artifacts-{}-{id}",
+            std::process::id()
+        ));
+        let storage = root.join("catalog-v3");
+        let shard = storage.join("systems/arcade/1.sqlite3");
+        let bootstrap_index = root.join("arcade-bootstrap.nav.lz4b");
+        std::fs::create_dir_all(shard.parent().unwrap()).unwrap();
+        std::fs::write(&shard, b"catalog").unwrap();
+        std::fs::write(&bootstrap_index, b"bootstrap").unwrap();
+
+        let removed = remove_v3_and_bootstrap_artifacts_at(&storage, &bootstrap_index).unwrap();
+
+        assert!(removed >= 2);
+        assert!(!storage.exists());
+        assert!(!bootstrap_index.exists());
+        let _ = std::fs::remove_dir(root);
+    }
 
     #[test]
     fn proc_status_memory_parser_requires_current_and_peak_rss() {
