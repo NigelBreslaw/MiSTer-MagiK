@@ -85,7 +85,16 @@ fn panic_report_value(
 }
 
 fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result<PathBuf> {
-    fs::create_dir_all(dir)?;
+    write_report_value_with(&SystemReportIo, dir, report_id, report)
+}
+
+fn write_report_value_with(
+    report_io: &impl ReportIo,
+    dir: &Path,
+    report_id: &str,
+    report: &Value,
+) -> io::Result<PathBuf> {
+    report_io.create_dir_all(dir)?;
     let path = dir.join(format!("{report_id}.json"));
     let tmp_path = dir.join(format!("{report_id}.json.tmp"));
     let latest_path = dir.join("latest.json");
@@ -93,18 +102,40 @@ fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result
     let mut bytes = serde_json::to_vec_pretty(report)?;
     bytes.push(b'\n');
 
-    write_file_sync(&tmp_path, &bytes)?;
+    report_io.write_file_sync(&tmp_path, &bytes)?;
     mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_temp_sync", &path);
-    fs::rename(&tmp_path, &path)?;
+    report_io.rename(&tmp_path, &path)?;
     mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_rename", &path);
-    write_file_sync(&latest_tmp_path, &bytes)?;
+    report_io.write_file_sync(&latest_tmp_path, &bytes)?;
     mister_magik_catalog::fs_fault::maybe_fault(
         "crash_report.latest.after_temp_sync",
         &latest_path,
     );
-    fs::rename(&latest_tmp_path, &latest_path)?;
+    report_io.rename(&latest_tmp_path, &latest_path)?;
     mister_magik_catalog::fs_fault::maybe_fault("crash_report.latest.after_rename", &latest_path);
     Ok(path)
+}
+
+trait ReportIo {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+    fn write_file_sync(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+}
+
+struct SystemReportIo;
+
+impl ReportIo for SystemReportIo {
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        fs::create_dir_all(path)
+    }
+
+    fn write_file_sync(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        write_file_sync(path, bytes)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fs::rename(from, to)
+    }
 }
 
 fn write_file_sync(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -160,9 +191,40 @@ fn process_id() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct ScriptedReportIo {
+        events: RefCell<Vec<String>>,
+        fail_at: Option<usize>,
+    }
+
+    impl ScriptedReportIo {
+        fn record(&self, event: String) -> io::Result<()> {
+            let mut events = self.events.borrow_mut();
+            events.push(event);
+            if self.fail_at == Some(events.len()) {
+                return Err(io::Error::other("scripted report I/O failure"));
+            }
+            Ok(())
+        }
+    }
+
+    impl ReportIo for ScriptedReportIo {
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            self.record(format!("mkdir {}", path.display()))
+        }
+
+        fn write_file_sync(&self, path: &Path, _bytes: &[u8]) -> io::Result<()> {
+            self.record(format!("write {}", path.display()))
+        }
+
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.record(format!("rename {} {}", from.display(), to.display()))
+        }
+    }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nonce = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -252,5 +314,55 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn crash_report_publishes_versioned_report_before_latest_pointer() {
+        let report_io = ScriptedReportIo {
+            events: RefCell::new(Vec::new()),
+            fail_at: None,
+        };
+        let dir = Path::new("/reports");
+
+        let path = write_report_value_with(
+            &report_io,
+            dir,
+            "report-slint-1-2",
+            &json!({"schema": "mister-magik-crash-report-v1"}),
+        )
+        .expect("scripted report");
+
+        assert_eq!(path, PathBuf::from("/reports/report-slint-1-2.json"));
+        assert_eq!(
+            *report_io.events.borrow(),
+            [
+                "mkdir /reports",
+                "write /reports/report-slint-1-2.json.tmp",
+                "rename /reports/report-slint-1-2.json.tmp /reports/report-slint-1-2.json",
+                "write /reports/latest.json.tmp",
+                "rename /reports/latest.json.tmp /reports/latest.json",
+            ]
+        );
+    }
+
+    #[test]
+    fn crash_report_stops_at_each_failed_atomic_io_step() {
+        for fail_at in 1..=5 {
+            let report_io = ScriptedReportIo {
+                events: RefCell::new(Vec::new()),
+                fail_at: Some(fail_at),
+            };
+
+            let error = write_report_value_with(
+                &report_io,
+                Path::new("/reports"),
+                "report-slint-1-2",
+                &json!({"schema": "mister-magik-crash-report-v1"}),
+            )
+            .expect_err("injected failure must stop publication");
+
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert_eq!(report_io.events.borrow().len(), fail_at);
+        }
     }
 }

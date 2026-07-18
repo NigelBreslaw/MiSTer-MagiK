@@ -318,6 +318,8 @@ pub(crate) struct PreviewState {
     visible_preview_key: String,
     visible_preview_load_source: &'static str,
     previous_image: Option<Arc<PreviewImage>>,
+    previous_was_empty: bool,
+    selection_transition: PreviewSelectionTransition,
     raw_transition_id: u64,
     raw_transition_duration_divisor: u32,
     window_preview_keys: Vec<String>,
@@ -331,6 +333,13 @@ pub(crate) struct PreviewState {
     prefetch_throttle_until: Option<Instant>,
     last_apply_trace: PreviewApplyTrace,
     frame_cache_evictions: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PreviewSelectionTransition {
+    #[default]
+    InstantOnEntry,
+    CrossFade,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -488,6 +497,8 @@ impl PreviewState {
             visible_preview_key: String::new(),
             visible_preview_load_source: "none",
             previous_image: None,
+            previous_was_empty: false,
+            selection_transition: PreviewSelectionTransition::InstantOnEntry,
             raw_transition_id: 0,
             raw_transition_duration_divisor: 1,
             window_preview_keys: Vec::new(),
@@ -513,6 +524,7 @@ impl PreviewState {
                 self.has_visible_preview || !self.visible_preview_key.is_empty();
             self.selected_mra_path = None;
             self.selected_preview_key = None;
+            self.selection_transition = PreviewSelectionTransition::InstantOnEntry;
             self.current_generation = 0;
             if fade_raw_preview_to_empty {
                 // The direct-preview backing is separate from Slint state; clearing
@@ -523,6 +535,7 @@ impl PreviewState {
                 self.visible_preview_key.clear();
                 self.visible_preview_load_source = "none";
                 self.previous_image = None;
+                self.previous_was_empty = false;
                 self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
                 self.raw_transition_duration_divisor = 1;
                 self.raw_dirty = false;
@@ -591,13 +604,17 @@ impl PreviewState {
         if self.visible_preview_key == next_path {
             return;
         }
-        self.previous_image = if self.has_visible_preview {
+        let had_visible_preview = !self.visible_preview_key.is_empty();
+        self.previous_image = if had_visible_preview {
             self.cache
                 .peek_shared(&self.visible_preview_key)
                 .map(Arc::clone)
         } else {
             None
         };
+        self.previous_was_empty = self.previous_image.is_none()
+            && !had_visible_preview
+            && self.selection_transition == PreviewSelectionTransition::CrossFade;
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
         self.raw_transition_duration_divisor = pace.duration_divisor();
     }
@@ -613,6 +630,7 @@ impl PreviewState {
         } else {
             None
         };
+        self.previous_was_empty = false;
         self.has_visible_preview = false;
         self.visible_preview_key.clear();
         self.visible_preview_load_source = "none";
@@ -630,6 +648,7 @@ impl PreviewState {
     pub(crate) fn finish_raw_empty_transition_if_idle(&mut self) {
         if !self.has_visible_preview && self.visible_preview_key.is_empty() && !self.raw_dirty {
             self.previous_image = None;
+            self.previous_was_empty = false;
         }
     }
 
@@ -661,11 +680,21 @@ impl PreviewState {
         } else {
             return None;
         };
+        let previous = self
+            .previous_image
+            .as_ref()
+            .map(|image| Self::raw_frame_from_image(image))
+            .or_else(|| {
+                self.previous_was_empty.then_some(PreviewRawFrame {
+                    pixels: PreviewRawPixels::Empty,
+                    source_w: 1,
+                    source_h: 1,
+                    display_w: ARCADE_PREVIEW_BOX_W,
+                    display_h: ARCADE_PREVIEW_BOX_H,
+                })
+            });
         Some(PreviewRawTransitionFrame {
-            previous: self
-                .previous_image
-                .as_ref()
-                .map(|image| Self::raw_frame_from_image(image)),
+            previous,
             current,
             transition_id: self.raw_transition_id,
             duration_divisor: self.raw_transition_duration_divisor,
@@ -1102,6 +1131,11 @@ pub(crate) fn request_arcade_preview_window(
         return false;
     }
     refresh_preview_window(games, selected, prefetch_radius, preview);
+    preview.selection_transition = if preview.selected_mra_path.is_some() {
+        PreviewSelectionTransition::CrossFade
+    } else {
+        PreviewSelectionTransition::InstantOnEntry
+    };
     preview.selected_mra_path = Some(selected_game.mra_path.to_string());
 
     let selected_has_preview = game_preview_key(selected_game).is_some();
@@ -2659,6 +2693,50 @@ mod tests {
             previous_transition_id.wrapping_add(1)
         );
         assert!(preview.previous_image.is_some());
+    }
+
+    #[test]
+    fn first_preview_on_list_entry_is_shown_without_a_fade() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["selected.png".into()],
+            None,
+        );
+        preview.has_visible_preview = true;
+
+        preview.begin_raw_transition_to("selected.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "selected.png".into();
+
+        let frame = preview
+            .raw_transition_frame()
+            .expect("initial preview frame");
+        assert!(frame.previous.is_none());
+    }
+
+    #[test]
+    fn preview_after_an_empty_in_list_selection_fades_in_from_empty() {
+        let mut preview = PreviewState::new();
+        preview.selection_transition = PreviewSelectionTransition::CrossFade;
+        preview.cache.insert(
+            "selected.png".into(),
+            preview_image(0x07e0),
+            &["selected.png".into()],
+            None,
+        );
+        preview.has_visible_preview = true;
+
+        preview.begin_raw_transition_to("selected.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "selected.png".into();
+
+        let frame = preview
+            .raw_transition_frame()
+            .expect("fade-in preview frame");
+        assert!(matches!(
+            frame.previous.expect("empty fade origin").pixels,
+            PreviewRawPixels::Empty
+        ));
     }
 
     #[test]

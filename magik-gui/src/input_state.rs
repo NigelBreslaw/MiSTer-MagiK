@@ -683,4 +683,51 @@ mod tests {
         );
         assert_eq!(layout_profile_name(&generic), "generic");
     }
+
+    #[test]
+    fn extreme_axes_are_clamped_and_deadzone_release_clears_direction() {
+        let mut state = PadState::default();
+        let profile = InputProfile::generic();
+
+        assert!(profile.apply_js_event(&mut state, js_axis(0, i16::MIN), false));
+        assert_eq!(state.left_x, -1.0);
+        assert!(state.dpad_left);
+
+        assert!(profile.apply_js_event(&mut state, js_axis(0, 0), false));
+        assert_eq!(state.left_x, 0.0);
+        assert!(!state.dpad_left);
+        assert!(!state.dpad_right);
+        assert_eq!(state.pressed_now, "—");
+    }
+
+    #[test]
+    fn repeated_button_events_are_idempotent_and_release_clears_summary() {
+        let mut state = PadState::default();
+        let profile = InputProfile::generic();
+
+        assert!(profile.apply_js_event(&mut state, js_button(0, 1), false));
+        assert!(profile.apply_js_event(&mut state, js_button(0, 1), false));
+        assert_eq!(state.pressed_now, "A");
+
+        assert!(profile.apply_js_event(&mut state, js_button(0, 0), false));
+        assert!(!state.btn_a);
+        assert_eq!(state.pressed_now, "—");
+    }
+
+    #[test]
+    fn unknown_event_type_preserves_held_state_and_records_diagnostics() {
+        let mut state = PadState::default();
+        let profile = InputProfile::generic();
+        profile.apply_js_event(&mut state, js_button(0, 1), false);
+
+        let unknown = PadRawEvent {
+            event_type: 0xff,
+            number: 7,
+            value: -2,
+        };
+        assert!(!profile.apply_js_event(&mut state, unknown, true));
+        assert!(state.btn_a);
+        assert_eq!(state.last_raw_event, Some(unknown));
+        assert_eq!(state.pressed_now, "A");
+    }
 }

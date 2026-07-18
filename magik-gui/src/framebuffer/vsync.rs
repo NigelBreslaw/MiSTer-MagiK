@@ -502,16 +502,22 @@ fn vsync_worker_backoff(status: &VsyncWaitStatus, fallback_period_us: u64) -> Op
 }
 
 fn configured_fallback_period_us() -> u64 {
-    if let Some(period_us) = std::env::var("MISTER_VSYNC_FALLBACK_HZ")
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
+    fallback_period_us_from(
+        std::env::var("MISTER_VSYNC_FALLBACK_HZ").ok().as_deref(),
+        mister_ini_menu_pal_enabled(),
+    )
+}
+
+fn fallback_period_us_from(hz: Option<&str>, menu_pal: bool) -> u64 {
+    if let Some(period_us) = hz
+        .and_then(|value| value.parse::<f64>().ok())
         .filter(|hz| *hz > 1.0)
         .map(|hz| (1_000_000.0 / hz).round() as u64)
     {
         return period_us;
     }
 
-    if mister_ini_menu_pal_enabled() {
+    if menu_pal {
         PAL_VSYNC_FALLBACK_US
     } else {
         DEFAULT_VSYNC_FALLBACK_US
@@ -519,24 +525,36 @@ fn configured_fallback_period_us() -> u64 {
 }
 
 fn configured_fresh_hit_max_age_us() -> u64 {
-    std::env::var("MISTER_VSYNC_FRESH_HIT_MAX_AGE_US")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+    fresh_hit_max_age_us_from(
+        std::env::var("MISTER_VSYNC_FRESH_HIT_MAX_AGE_US")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn fresh_hit_max_age_us_from(value: Option<&str>) -> u64 {
+    value
+        .and_then(|text| text.parse::<u64>().ok())
         .unwrap_or(DEFAULT_FRESH_HIT_MAX_AGE_US)
         .min(10_000)
 }
 
 fn configured_direct_wait_enabled() -> bool {
-    !matches!(
-        std::env::var("MISTER_VSYNC_DIRECT_WAIT").as_deref(),
-        Ok("0") | Ok("off") | Ok("false") | Ok("no")
-    )
+    direct_wait_enabled_from(std::env::var("MISTER_VSYNC_DIRECT_WAIT").ok().as_deref())
+}
+
+fn direct_wait_enabled_from(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false" | "no"))
 }
 
 fn mister_ini_menu_pal_enabled() -> bool {
     let Ok(ini) = std::fs::read_to_string("/media/fat/MiSTer.ini") else {
         return false;
     };
+    menu_pal_enabled_from(&ini)
+}
+
+fn menu_pal_enabled_from(ini: &str) -> bool {
     ini.lines().any(|line| {
         let line = line.split(';').next().unwrap_or("").trim();
         let Some((key, value)) = line.split_once('=') else {
@@ -551,6 +569,38 @@ mod tests {
     use super::*;
 
     const FALLBACK_60_US: u64 = 16_667;
+
+    #[test]
+    fn vsync_configuration_parsers_bound_and_default_invalid_values() {
+        assert_eq!(fallback_period_us_from(Some("50"), false), 20_000);
+        assert_eq!(
+            fallback_period_us_from(Some("invalid"), true),
+            PAL_VSYNC_FALLBACK_US
+        );
+        assert_eq!(
+            fallback_period_us_from(Some("1"), false),
+            DEFAULT_VSYNC_FALLBACK_US
+        );
+        assert_eq!(fresh_hit_max_age_us_from(Some("250")), 250);
+        assert_eq!(fresh_hit_max_age_us_from(Some("999999")), 10_000);
+        assert_eq!(
+            fresh_hit_max_age_us_from(Some("bad")),
+            DEFAULT_FRESH_HIT_MAX_AGE_US
+        );
+        assert!(!direct_wait_enabled_from(Some("off")));
+        assert!(!direct_wait_enabled_from(Some("0")));
+        assert!(direct_wait_enabled_from(Some("OFF")));
+        assert!(direct_wait_enabled_from(None));
+    }
+
+    #[test]
+    fn menu_pal_parser_ignores_comments_whitespace_and_other_sections() {
+        assert!(menu_pal_enabled_from(
+            ";menu_pal=1\n menu_pal = 1 ; enabled\n"
+        ));
+        assert!(!menu_pal_enabled_from("menu_pal=0\nother=1\n"));
+        assert!(!menu_pal_enabled_from("menu_pal\nmenu_pal=true\n"));
+    }
 
     #[test]
     fn learns_perfect_60hz() {
