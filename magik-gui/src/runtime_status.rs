@@ -78,6 +78,203 @@ pub struct LauncherStatus<'a> {
     pub frame_budget: FrameBudgetStatus,
 }
 
+struct LauncherStatusOwned {
+    scene: String,
+    screen: String,
+    frames: u64,
+    idle: bool,
+    idle_loops: u64,
+    fps_estimate: f64,
+    rolling_fps: f64,
+    rolling_prepare_us: u64,
+    rolling_render_us: u64,
+    rolling_custom_draw_us: u64,
+    rolling_vsync_us: u64,
+    rolling_present_us: u64,
+    rolling_rows: u64,
+    last_frame_ms_ago: u64,
+    catalog_ready: bool,
+    catalog_games: usize,
+    catalog_systems: usize,
+    catalog_refresh_done: bool,
+    catalog_scan_visible: bool,
+    catalog_scan_message: String,
+    catalog_scan_title: String,
+    catalog_scan_detail: String,
+    catalog_scan_percent: i32,
+    catalog_background_scan_visible: bool,
+    confirm_visible: bool,
+    confirm_title: String,
+    confirm_selected: i32,
+    confirm_left_label: String,
+    confirm_right_label: String,
+    arcade_selected: usize,
+    arcade_visual_index: f32,
+    preview_cache_state: String,
+    preview_transition_effect: String,
+    preview_transition_progress: f32,
+    composition_state: String,
+    composition_recovery_count: u64,
+    last_composition_invariant_kind: String,
+    last_composition_invariant_detail: String,
+    bench_scenario: String,
+    start_screen: String,
+    lock_screen: String,
+    route_reassert_count: u64,
+    last_route_reassert_frame: u64,
+    last_route_reassert_ok: bool,
+    last_route_reassert_error: String,
+    launch_state: String,
+    loading_title: String,
+    input_pad_count: usize,
+    active_pad_index: usize,
+    active_pad_name: String,
+    active_pad_path: String,
+    last_raw_event: String,
+    last_input_ms_ago: u64,
+    startup_mode: String,
+    startup_reveal_state: String,
+    revealed: bool,
+    input_enabled: bool,
+    reveal_ms: u64,
+    input_enabled_ms: u64,
+    frame_budget: FrameBudgetStatus,
+}
+
+impl LauncherStatusOwned {
+    fn from_borrowed(status: LauncherStatus<'_>) -> Self {
+        Self {
+            scene: status.scene.to_owned(),
+            screen: status.screen.to_owned(),
+            frames: status.frames,
+            idle: status.idle,
+            idle_loops: status.idle_loops,
+            fps_estimate: status.fps_estimate,
+            rolling_fps: status.rolling_fps,
+            rolling_prepare_us: status.rolling_prepare_us,
+            rolling_render_us: status.rolling_render_us,
+            rolling_custom_draw_us: status.rolling_custom_draw_us,
+            rolling_vsync_us: status.rolling_vsync_us,
+            rolling_present_us: status.rolling_present_us,
+            rolling_rows: status.rolling_rows,
+            last_frame_ms_ago: status.last_frame_ms_ago,
+            catalog_ready: status.catalog_ready,
+            catalog_games: status.catalog_games,
+            catalog_systems: status.catalog_systems,
+            catalog_refresh_done: status.catalog_refresh_done,
+            catalog_scan_visible: status.catalog_scan_visible,
+            catalog_scan_message: status.catalog_scan_message.to_owned(),
+            catalog_scan_title: status.catalog_scan_title.to_owned(),
+            catalog_scan_detail: status.catalog_scan_detail.to_owned(),
+            catalog_scan_percent: status.catalog_scan_percent,
+            catalog_background_scan_visible: status.catalog_background_scan_visible,
+            confirm_visible: status.confirm_visible,
+            confirm_title: status.confirm_title.to_owned(),
+            confirm_selected: status.confirm_selected,
+            confirm_left_label: status.confirm_left_label.to_owned(),
+            confirm_right_label: status.confirm_right_label.to_owned(),
+            arcade_selected: status.arcade_selected,
+            arcade_visual_index: status.arcade_visual_index,
+            preview_cache_state: status.preview_cache_state.to_owned(),
+            preview_transition_effect: status.preview_transition_effect.to_owned(),
+            preview_transition_progress: status.preview_transition_progress,
+            composition_state: status.composition_state.to_owned(),
+            composition_recovery_count: status.composition_recovery_count,
+            last_composition_invariant_kind: status.last_composition_invariant_kind.to_owned(),
+            last_composition_invariant_detail: status.last_composition_invariant_detail.to_owned(),
+            bench_scenario: status.bench_scenario.to_owned(),
+            start_screen: status.start_screen.to_owned(),
+            lock_screen: status.lock_screen.to_owned(),
+            route_reassert_count: status.route_reassert_count,
+            last_route_reassert_frame: status.last_route_reassert_frame,
+            last_route_reassert_ok: status.last_route_reassert_ok,
+            last_route_reassert_error: status.last_route_reassert_error.to_owned(),
+            launch_state: status.launch_state.to_owned(),
+            loading_title: status.loading_title.to_owned(),
+            input_pad_count: status.input_pad_count,
+            active_pad_index: status.active_pad_index,
+            active_pad_name: status.active_pad_name.to_owned(),
+            active_pad_path: status.active_pad_path.to_owned(),
+            last_raw_event: status.last_raw_event.to_owned(),
+            last_input_ms_ago: status.last_input_ms_ago,
+            startup_mode: status.startup_mode.to_owned(),
+            startup_reveal_state: status.startup_reveal_state.to_owned(),
+            revealed: status.revealed,
+            input_enabled: status.input_enabled,
+            reveal_ms: status.reveal_ms,
+            input_enabled_ms: status.input_enabled_ms,
+            frame_budget: status.frame_budget,
+        }
+    }
+
+    fn as_borrowed(&self) -> LauncherStatus<'_> {
+        LauncherStatus {
+            scene: &self.scene,
+            screen: &self.screen,
+            frames: self.frames,
+            idle: self.idle,
+            idle_loops: self.idle_loops,
+            fps_estimate: self.fps_estimate,
+            rolling_fps: self.rolling_fps,
+            rolling_prepare_us: self.rolling_prepare_us,
+            rolling_render_us: self.rolling_render_us,
+            rolling_custom_draw_us: self.rolling_custom_draw_us,
+            rolling_vsync_us: self.rolling_vsync_us,
+            rolling_present_us: self.rolling_present_us,
+            rolling_rows: self.rolling_rows,
+            last_frame_ms_ago: self.last_frame_ms_ago,
+            catalog_ready: self.catalog_ready,
+            catalog_games: self.catalog_games,
+            catalog_systems: self.catalog_systems,
+            catalog_refresh_done: self.catalog_refresh_done,
+            catalog_scan_visible: self.catalog_scan_visible,
+            catalog_scan_message: &self.catalog_scan_message,
+            catalog_scan_title: &self.catalog_scan_title,
+            catalog_scan_detail: &self.catalog_scan_detail,
+            catalog_scan_percent: self.catalog_scan_percent,
+            catalog_background_scan_visible: self.catalog_background_scan_visible,
+            confirm_visible: self.confirm_visible,
+            confirm_title: &self.confirm_title,
+            confirm_selected: self.confirm_selected,
+            confirm_left_label: &self.confirm_left_label,
+            confirm_right_label: &self.confirm_right_label,
+            arcade_selected: self.arcade_selected,
+            arcade_visual_index: self.arcade_visual_index,
+            preview_cache_state: &self.preview_cache_state,
+            preview_transition_effect: &self.preview_transition_effect,
+            preview_transition_progress: self.preview_transition_progress,
+            composition_state: &self.composition_state,
+            composition_recovery_count: self.composition_recovery_count,
+            last_composition_invariant_kind: &self.last_composition_invariant_kind,
+            last_composition_invariant_detail: &self.last_composition_invariant_detail,
+            bench_scenario: &self.bench_scenario,
+            start_screen: &self.start_screen,
+            lock_screen: &self.lock_screen,
+            route_reassert_count: self.route_reassert_count,
+            last_route_reassert_frame: self.last_route_reassert_frame,
+            last_route_reassert_ok: self.last_route_reassert_ok,
+            last_route_reassert_error: &self.last_route_reassert_error,
+            launch_state: &self.launch_state,
+            loading_title: &self.loading_title,
+            input_pad_count: self.input_pad_count,
+            active_pad_index: self.active_pad_index,
+            active_pad_name: &self.active_pad_name,
+            active_pad_path: &self.active_pad_path,
+            last_raw_event: &self.last_raw_event,
+            last_input_ms_ago: self.last_input_ms_ago,
+            startup_mode: &self.startup_mode,
+            startup_reveal_state: &self.startup_reveal_state,
+            revealed: self.revealed,
+            input_enabled: self.input_enabled,
+            reveal_ms: self.reveal_ms,
+            input_enabled_ms: self.input_enabled_ms,
+            frame_budget: self.frame_budget.clone(),
+        }
+    }
+}
+
+type LauncherStatusValueBuilder = Box<dyn FnOnce() -> Value + Send>;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LauncherStatusPublishStats {
     pub sequence: u64,
@@ -107,7 +304,7 @@ struct LauncherStatusPublishState {
 }
 
 pub struct LauncherStatusPublisher {
-    tx: Option<SyncSender<Value>>,
+    tx: Option<SyncSender<LauncherStatusValueBuilder>>,
     state: Arc<LauncherStatusPublishState>,
 }
 
@@ -132,15 +329,16 @@ impl LauncherStatusPublisher {
             published_at_ms: AtomicU64::new(0),
             failures: AtomicU64::new(0),
         });
-        let (tx, rx) = sync_channel::<Value>(1);
+        let (tx, rx) = sync_channel::<LauncherStatusValueBuilder>(1);
         let worker_state = Arc::clone(&state);
         let spawn = std::thread::Builder::new()
             .name("runtime-status".to_string())
             .spawn(move || {
-                while let Ok(value) = rx.recv() {
+                while let Ok(build_value) = rx.recv() {
                     let started = Instant::now();
-                    let result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| writer(value)));
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        writer(build_value())
+                    }));
                     worker_state.worker_write_us.store(
                         started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
                         Ordering::Release,
@@ -184,23 +382,38 @@ impl LauncherStatusPublisher {
     }
 
     pub fn enqueue(&self, status: LauncherStatus<'_>) -> LauncherStatusEnqueue {
-        self.enqueue_value(launcher_status_value(status, unix_ms(), std::process::id()))
-    }
-
-    fn enqueue_value(&self, value: Value) -> LauncherStatusEnqueue {
-        if self
-            .state
-            .pending
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if !self.claim_pending() {
             return LauncherStatusEnqueue::Busy;
         }
+        let status = LauncherStatusOwned::from_borrowed(status);
+        let ts_unix_ms = unix_ms();
+        let pid = std::process::id();
+        self.send_claimed(Box::new(move || {
+            launcher_status_value(status.as_borrowed(), ts_unix_ms, pid)
+        }))
+    }
+
+    #[cfg(test)]
+    fn enqueue_value(&self, value: Value) -> LauncherStatusEnqueue {
+        if !self.claim_pending() {
+            return LauncherStatusEnqueue::Busy;
+        }
+        self.send_claimed(Box::new(move || value))
+    }
+
+    fn claim_pending(&self) -> bool {
+        self.state
+            .pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn send_claimed(&self, build_value: LauncherStatusValueBuilder) -> LauncherStatusEnqueue {
         let Some(tx) = &self.tx else {
             self.state.pending.store(false, Ordering::Release);
             return LauncherStatusEnqueue::Disconnected;
         };
-        match tx.try_send(value) {
+        match tx.try_send(build_value) {
             Ok(()) => LauncherStatusEnqueue::Accepted,
             Err(TrySendError::Full(_)) => {
                 self.state.pending.store(false, Ordering::Release);
