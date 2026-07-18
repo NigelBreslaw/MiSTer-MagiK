@@ -7,6 +7,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/scripts/lib/magik-layout.sh"
+source "$HERE/scripts/lib/mister-fifo-lib.sh"
+source "$HERE/scripts/lib/platform-manifest-lib.sh"
+source "$HERE/scripts/lib/latch-readiness-lib.sh"
 export MISTER_IP="${MISTER_IP:-192.168.1.117}"
 export MISTER_PASS="${MISTER_PASS:-1}"
 export RUSTC_WRAPPER=""
@@ -29,4 +32,29 @@ if [ ! -x "$BIN" ] ||
   fi
 fi
 
-exec "$BIN" "$@"
+ARGS=("$@")
+if [[ "${ARGS[0]:-}" == "agent" && "${ARGS[1]:-}" == "deploy-magik-bin" ]]; then
+  "$BIN" "$@"
+  local_bin="${ARGS[2]:?agent deploy-magik-bin needs LOCAL [REMOTE]}"
+  remote_bin="${ARGS[3]:-${MISTER_MAGIK_BIN}}"
+elif [[ "${ARGS[0]:-}" == "deploy-magik-bin" ]]; then
+  "$BIN" "$@"
+  local_bin="${ARGS[1]:?deploy-magik-bin needs LOCAL [REMOTE]}"
+  remote_bin="${ARGS[2]:-${MISTER_MAGIK_BIN}}"
+else
+  exec "$BIN" "$@"
+fi
+
+case "$remote_bin" in
+  /media/fat/mister-magik-dev/mister-magik-fb) magik_layout_select dev ;;
+  /media/fat/mister-magik/mister-magik-fb) magik_layout_select public ;;
+  *) exit 0 ;;
+esac
+
+gui_sha256="$(shasum -a 256 "$local_bin" | awk '{print $1}')"
+magik_revision="$(git -C "$HERE" rev-parse HEAD)"
+echo "==> Rebinding $MISTER_MAGIK_LAYOUT platform manifest after canonical GUI deployment"
+platform_manifest_verify "$BIN" "$MISTER_MAGIK_LAYOUT" "$MISTER_MAGIK_MANIFEST" "" rebind "$gui_sha256" "$magik_revision"
+platform_manifest_verify "$BIN" "$MISTER_MAGIK_LAYOUT" "$MISTER_MAGIK_MANIFEST" "" verify
+echo "==> Ensuring the manifest-owned FPGA latch core is active"
+latch_readiness_activate "$BIN"

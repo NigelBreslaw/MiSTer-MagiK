@@ -17,6 +17,9 @@ ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
 source "$HERE/scripts/lib/bench-context-lib.sh"
 source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
+source "$HERE/scripts/lib/mister-fifo-lib.sh"
+source "$HERE/scripts/lib/platform-manifest-lib.sh"
+source "$HERE/scripts/lib/latch-readiness-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -912,6 +915,10 @@ if ! bench_context_require_binary_contract "$binary_path" "$deployed_sha256" "$f
   exit 1
 fi
 binary_fields="$(bench_context_binary_fields "$profile" launcher "$features" "$binary_path" "$runtime_type" "$deployment_state" "$deployed_sha256")"
+if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
+  echo "==> Proving the manifest-owned FPGA latch path before benchmark capture"
+  latch_readiness_activate "$MISTER"
+fi
 commit="$(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 source_fields="$(bench_context_source_fields "$HERE")"
 printf 'run_context_tsv\tlabel=%s\tcommit=%s\tcommand=%s\tscenario=%s\tsecs=%s\tdeploy=%s\t%s\t%s\n' \

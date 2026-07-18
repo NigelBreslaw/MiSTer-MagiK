@@ -153,10 +153,10 @@ if ! bench_context_require_binary_contract "$BIN" "$REMOTE_SHA256" "$BUILT_FEATU
   exit 1
 fi
 
-echo "==> Rebinding development platform manifest to deployed GUI"
-MAGIK_REVISION="$(git -C "$HERE" rev-parse HEAD)"
-verify_dev_platform_manifest rebind "$LOCAL_SHA256" "$MAGIK_REVISION"
-echo "==> Verifying rebound development platform manifest"
+# scripts/mister makes canonical GUI deployment, manifest rebinding, and latch
+# activation one fail-closed operation. Verify again here because this is the
+# public high-level deploy contract.
+echo "==> Verifying rebound development platform manifest and active latch path"
 verify_dev_platform_manifest verify
 SOURCE_FIELDS="$(bench_context_source_fields "$HERE")"
 printf 'deploy_identity_tsv\tprofile=%s\tfeatures=%s\tlocal_path=%s\tremote_path=%s\tlocal_sha256=%s\tdeployed_sha256=%s\tvalid=1\t%s\n' \

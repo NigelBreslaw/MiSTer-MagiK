@@ -218,6 +218,14 @@ The known-good activation sequence is:
    `gui_sha256`. The remaining manifest fields retain the complete platform's
    original provenance and must still match their installed artifacts.
 
+   The stable `scripts/mister agent deploy-magik-bin` and SSH fallback wrapper
+   apply that same canonical-GUI contract when their destination is a public or
+   development `mister-magik-fb`: after the byte swap they rebind and verify the
+   matching manifest, activate the manifest-owned latch RBF when necessary, and
+   require passive latch acknowledgements before returning success. Using the
+   underlying `tools/mister` binary directly is an internal transport operation
+   and does not provide this platform transaction.
+
    Release packages additionally retain `platform-bundle-v0.1.json`: it
    identifies the immutable main-qualified FPGA/kernel promotion that supplied
    the platform files. It is release provenance; `platform-v2.manifest` remains
@@ -301,6 +309,13 @@ is redirected to the manifest-owned production RBF; “Exit to MiSTer” remains
 that already-active core. Runtime counters and benchmark traces must be checked
 again after return. MagiK falls back to `/dev/fb0` if hidden buffers or latch
 commands are unavailable.
+
+Latch performance runners fail closed before capture. They verify the active
+Main cmdline, scanout module/device, and both passive FPGA acknowledgements;
+when the installed platform is valid but stock Menu is active, they use Main's
+bounded launch handoff to restore the manifest-owned latch RBF and prove it
+again. An invalid manifest is reported instead of producing fallback-backed
+benchmark evidence.
 
 The launcher path relies on Rust-owned framebuffer setup:
 

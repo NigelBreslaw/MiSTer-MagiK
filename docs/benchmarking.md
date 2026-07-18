@@ -207,6 +207,13 @@ Acceptance depends on `/tmp/mister-magik/status.json` reporting
 
 ## Latch Benchmark Split
 
+Latch-specific launch and Arcade benchmarks prove readiness before collecting
+frames. The shared gate requires the manifest-owned RBF in Main's cmdline, the
+scanout-slots module and device node, and supported `0x57` and `0x58`
+acknowledgements. A valid installed platform may be reactivated through Main;
+an invalid platform or unsupported latch aborts the run. Never interpret an
+analyzer's later backend rejection as an acceptable benchmark sample.
+
 Use one focused latch benchmark per claim. Do not bundle Home, Arcade, preview,
 and copy-path conclusions into one broad run.
 
