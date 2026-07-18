@@ -662,6 +662,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let games = catalog.len();
         let stamp = prepared_state.stamp().clone();
         let persistence = PreparedPersistence::from_prepared(prepared_state);
+        trim_catalog_allocator("bootstrap-prepare-complete");
         report_catalog_memory("bootstrap-prepare-complete");
         Ok(Some(StageOutput {
             value: PreparedBuild {
@@ -766,6 +767,7 @@ impl BuilderBackend for SystemBuilderBackend {
         };
         let load_us = timing.catalog_us;
         let persistence = PreparedPersistence::from_prepared(prepared_state);
+        trim_catalog_allocator("prepare-complete");
         report_catalog_memory("prepare-complete");
         let timings = vec![
             (
@@ -931,6 +933,7 @@ impl BuilderBackend for SystemBuilderBackend {
         .map_err(|error| format!("publish V3 system catalogs: {error}"))?;
         let projection_us = projection_started.elapsed().as_micros();
         drop(catalog);
+        trim_catalog_allocator("shards-complete");
         report_catalog_memory("shards-complete");
         progress("Indexing library", "Saving scanner cache…");
         let scanner_cache_stage_started = Instant::now();
@@ -1041,6 +1044,18 @@ fn report_catalog_memory(stage: &str) {
         memory.hwm_kb,
     );
 }
+
+#[cfg(target_os = "linux")]
+fn trim_catalog_allocator(stage: &str) {
+    // Cold-build phases release large, disjoint object graphs. glibc can keep
+    // those free arenas resident while the next phase faults in a new working
+    // set, so return wholly free pages at the explicit lifetime boundaries.
+    let released = unsafe { libc::malloc_trim(0) };
+    crate::catalog_logln!("catalog_allocator_trim_tsv\tstage={stage}\treleased={released}");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn trim_catalog_allocator(_stage: &str) {}
 
 fn parse_process_memory(status: &str) -> Option<ProcessMemory> {
     let mut rss_kb = None;
