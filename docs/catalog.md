@@ -67,14 +67,22 @@ phase's RSS.
 On MiSTer, each bounded system shard is constructed and validated under
 `/tmp/mister-magik/catalog-v3-build` when the materialized rows have a
 conservative amount of free tmpfs headroom; otherwise that shard falls back to
-the catalog's on-media staging directory. Publication then performs one sequential
-copy of the finished SQLite and navigation artifacts into same-filesystem
-temporary files on `/media/fat`, renames them into their immutable generation
-paths, and retains the existing artifact barrier and manifest-last commit. This
-keeps normal SQLite page creation, indexing, and validation reads off the SD
-card while preserving the one-system-at-a-time lifetime bound. Because tmpfs
-pages consume RAM, first-scan qualification still gates the process-wide peak
-HWM independently of Rust heap retention.
+the catalog's on-media staging directory. During a fresh build, one producer
+constructs the next shard while one publisher copies the preceding shard to the
+SD card. The one-entry handoff admits at most two in-flight shards, and capacity
+is checked again while the publisher's tmpfs allocation remains charged. If the
+next shard does not fit, publication drains before sequential on-media staging
+begins, avoiding simultaneous SD read/write contention. Incremental and
+replacement rebuilds remain sequential.
+
+Publication computes artifact hashes during the single bounded RAM-to-SD copy,
+writes same-filesystem temporary files on `/media/fat`, renames them into their
+immutable generation paths, and retains the existing artifact barrier and
+manifest-last commit. This keeps normal SQLite page creation, indexing,
+validation reads, and separate checksum passes off the SD card while preserving
+a two-system fresh-build lifetime bound. Because tmpfs pages consume RAM,
+first-scan qualification still gates the process-wide peak HWM independently of
+Rust heap retention.
 
 `state/scanner-cache.sqlite3` separately owns discovery timestamps and software
 hashes. It is scanner state, not a game catalog or UI projection.
@@ -224,6 +232,12 @@ scripts/profile-first-scan.sh LABEL
 The standalone suite covers registry atomicity, shard integrity, lazy reads,
 incremental reconciliation, scan checkpoints, first-visible bootstrap, and
 pause/resume behavior.
+Fresh-build reconciliation rows report `pipeline_overlap_us`,
+`pipeline_queue_wait_us`, `pipeline_peak_in_flight`, and `pipeline_fallbacks`.
+A qualifying pipelined run has positive overlap, never exceeds two in-flight
+shards, and reports fallback only when tmpfs capacity forced sequential
+on-media staging. `artifact_copy_hash_us` covers the fused copy/checksum phase,
+and `artifact_publish_bytes` records bytes passed to the publisher.
 The two first-scan invocations distinguish a genuine first-ever fallback from
 the production retained-index recovery path; the latter removes `catalog-v3`
 but deliberately preserves `arcade-bootstrap.nav.lz4b`.
