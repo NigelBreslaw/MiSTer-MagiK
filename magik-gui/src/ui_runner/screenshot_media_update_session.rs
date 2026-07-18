@@ -174,26 +174,21 @@ impl ScreenshotMediaUpdateSession {
     ) -> ScreenshotMediaUpdateEffects {
         let mut effects = ScreenshotMediaUpdateEffects::default();
         effects.event("catalog_system_discovered", format!("system={system_id}"));
-        let Some(media_gate) = media_gate else {
-            self.catalog_seed_pending = true;
-            effects.event(
-                "screenshot_media_catalog_defer",
-                format!("system={system_id} reason=media-gate-unavailable"),
-            );
-            return effects;
-        };
-        if media_gate.active {
-            self.catalog_seed_pending = true;
-            effects.event(
-                "screenshot_media_catalog_defer",
-                format!("system={system_id} reason={}", media_gate.reason),
-            );
-        } else {
-            effects.push(ScreenshotMediaUpdateEffect::EnsureWorker {
-                mode: "discovered-system",
-            });
-            effects.push(ScreenshotMediaUpdateEffect::EnsureSystem { system_id });
-        }
+        // Discovery means the scanner has found playable content for this
+        // system. Queue its pack immediately rather than waiting for the full
+        // catalog build and a later idle seed pass; the worker performs all
+        // manifest and download work off the UI thread.
+        effects.push(ScreenshotMediaUpdateEffect::EnsureWorker {
+            mode: "discovered-system",
+        });
+        let hard_block = media_gate.filter(|gate| {
+            gate.active && matches!(gate.reason, "low-memory" | "launch-handoff")
+        });
+        effects.push(ScreenshotMediaUpdateEffect::SetInteractionActive {
+            active: hard_block.is_some(),
+            reason: hard_block.map_or("system-discovered", |gate| gate.reason),
+        });
+        effects.push(ScreenshotMediaUpdateEffect::EnsureSystem { system_id });
         effects
     }
 
@@ -411,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn discovered_system_starts_worker_only_when_gate_is_idle() {
+    fn discovered_system_starts_worker_immediately_even_when_gate_is_active() {
         let mut session = ScreenshotMediaUpdateSession::default();
 
         let active = session.handle_catalog_system_discovered(
@@ -421,19 +416,29 @@ mod tests {
                 reason: "startup",
             }),
         );
-        assert_eq!(effect_names(active), vec!["event", "event"]);
-        assert!(session.catalog_seed_pending);
+        assert_eq!(
+            effect_names(active),
+            vec![
+                "event",
+                "ensure-worker",
+                "set-interaction",
+                "ensure-system"
+            ]
+        );
+        assert!(!session.catalog_seed_pending);
 
-        let idle = session.handle_catalog_system_discovered(
+        let unavailable = session.handle_catalog_system_discovered(
             "arcade".to_string(),
-            Some(MediaInteractionGate {
-                active: false,
-                reason: "idle",
-            }),
+            None,
         );
         assert_eq!(
-            effect_names(idle),
-            vec!["event", "ensure-worker", "ensure-system"]
+            effect_names(unavailable),
+            vec![
+                "event",
+                "ensure-worker",
+                "set-interaction",
+                "ensure-system"
+            ]
         );
     }
 
