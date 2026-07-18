@@ -332,7 +332,7 @@ fn build_shard_job(
     if let Err(error) = write_system_shard_with_durability(
         &sqlite,
         &navigation,
-        &SystemShardData {
+        SystemShardData {
             system_id: system_id.clone(),
             generation,
             games: job.materialized.games,

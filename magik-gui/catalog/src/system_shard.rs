@@ -100,7 +100,7 @@ pub fn write_system_shard(
     write_system_shard_with_durability(
         sqlite_path,
         navigation_path,
-        data,
+        data.clone(),
         limits,
         ShardDurability::Immediate,
     )
@@ -110,18 +110,20 @@ pub fn write_system_shard(
 pub(crate) fn write_system_shard_with_durability(
     sqlite_path: &Path,
     navigation_path: &Path,
-    data: &SystemShardData,
+    data: SystemShardData,
     limits: SystemShardLimits,
     durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
-    let stored = StoredNavigationRef {
-        schema_version: NAVIGATION_SCHEMA_VERSION,
-        system_id: data.system_id.as_str(),
-        generation: data.generation,
-        games: &data.games,
+    let navigation = {
+        let stored = StoredNavigationRef {
+            schema_version: NAVIGATION_SCHEMA_VERSION,
+            system_id: data.system_id.as_str(),
+            generation: data.generation,
+            games: &data.games,
+        };
+        encode_navigation(&stored, limits)?
     };
-    let navigation = encode_navigation(&stored, limits)?;
     let navigation_hash = checksum_hex(&navigation);
     let preview_archive_default = common_preview_archive_path(&data.games);
     create_parent(sqlite_path)?;
@@ -262,11 +264,18 @@ pub(crate) fn write_system_shard_with_durability(
             .and_then(|file| file.sync_all())
             .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
     }
+    let system_id = data.system_id.clone();
+    let generation = data.generation;
+    drop(data);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::malloc_trim(0);
+    }
     open_system_shard(
         sqlite_path,
         navigation_path,
-        &data.system_id,
-        data.generation,
+        &system_id,
+        generation,
         limits,
     )
 }
