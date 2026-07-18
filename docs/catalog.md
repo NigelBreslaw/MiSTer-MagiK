@@ -236,8 +236,10 @@ Fresh-build reconciliation rows report `pipeline_overlap_us`,
 `pipeline_queue_wait_us`, `pipeline_peak_in_flight`, and `pipeline_fallbacks`.
 A qualifying pipelined run has positive overlap, never exceeds two in-flight
 shards, and reports fallback only when tmpfs capacity forced sequential
-on-media staging. `artifact_copy_hash_us` covers the fused copy/checksum phase,
-and `artifact_publish_bytes` records bytes passed to the publisher.
+on-media staging. `shard_build_wall_us` and `shard_publication_wall_us` report
+the independently accumulated construction and publication wall time used to
+interpret that overlap. `artifact_copy_hash_us` covers the fused copy/checksum
+phase, and `artifact_publish_bytes` records bytes passed to the publisher.
 The two first-scan invocations distinguish a genuine first-ever fallback from
 the production retained-index recovery path; the latter removes `catalog-v3`
 but deliberately preserves `arcade-bootstrap.nav.lz4b`.

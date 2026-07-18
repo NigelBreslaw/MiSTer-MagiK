@@ -190,12 +190,8 @@ fn publish_system_artifacts_with_options(
         .map_err(|error| RegistryError::with("create system generation directory", error))?;
     let (sqlite_hash, navigation_hash, copy_hash_time, copied_bytes) = if copy_staged {
         let copied = (|| {
-            let sqlite = copy_staged_artifact(
-                staged_sqlite,
-                &target_sqlite,
-                "SQLite",
-                sqlite_bytes,
-            )?;
+            let sqlite =
+                copy_staged_artifact(staged_sqlite, &target_sqlite, "SQLite", sqlite_bytes)?;
             let navigation = copy_staged_artifact(
                 staged_navigation,
                 &target_navigation,
@@ -290,8 +286,8 @@ fn copy_staged_artifact(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(RegistryError::with("remove stale artifact copy", error)),
     }
-    let mut input = File::open(source)
-        .map_err(|error| RegistryError::with("open staged artifact", error))?;
+    let mut input =
+        File::open(source).map_err(|error| RegistryError::with("open staged artifact", error))?;
     let mut output = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -979,7 +975,9 @@ mod tests {
 
         assert!(error.message().contains("size does not match"));
         assert!(!target.exists());
-        assert!(!root.join(format!(".target.tmp.{}", std::process::id())).exists());
+        assert!(!root
+            .join(format!(".target.tmp.{}", std::process::id()))
+            .exists());
         fs::remove_dir_all(root).unwrap();
     }
 
