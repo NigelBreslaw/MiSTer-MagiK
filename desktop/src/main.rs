@@ -1736,6 +1736,12 @@ impl FramebufferBenchMode {
 fn framebuffer_stream_bench_args(
 ) -> Result<Option<(FramebufferBenchMode, FramebufferBenchLimit)>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    parse_framebuffer_stream_bench_args(&args)
+}
+
+fn parse_framebuffer_stream_bench_args(
+    args: &[String],
+) -> Result<Option<(FramebufferBenchMode, FramebufferBenchLimit)>, Box<dyn Error>> {
     let Some(first) = args.first() else {
         return Ok(None);
     };
@@ -6907,6 +6913,97 @@ mod tests {
             is_skeleton: false,
             loading_children_badge: "loading".to_string(),
         }
+    }
+
+    #[test]
+    fn framebuffer_stream_bench_cli_parses_modes_limits_and_defaults() {
+        assert_eq!(parse_framebuffer_stream_bench_args(&[]).unwrap(), None);
+        assert_eq!(
+            parse_framebuffer_stream_bench_args(&["--unrelated".to_string()]).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_framebuffer_stream_bench_args(&[
+                "--framebuffer-stream-bench".to_string(),
+                "0".to_string(),
+            ])
+            .unwrap(),
+            Some((
+                FramebufferBenchMode::Stream,
+                FramebufferBenchLimit::Frames(1)
+            ))
+        );
+        assert_eq!(
+            parse_framebuffer_stream_bench_args(&[
+                "--framebuffer-stream-drain-bench-secs".to_string(),
+                "5".to_string(),
+            ])
+            .unwrap(),
+            Some((
+                FramebufferBenchMode::Drain,
+                FramebufferBenchLimit::Duration(Duration::from_secs(5))
+            ))
+        );
+        assert_eq!(
+            parse_framebuffer_stream_bench_args(&[
+                "--framebuffer-stream-dump".to_string(),
+                "/tmp/frames".to_string(),
+                "7".to_string(),
+            ])
+            .unwrap(),
+            Some((
+                FramebufferBenchMode::Dump(PathBuf::from("/tmp/frames")),
+                FramebufferBenchLimit::Frames(7)
+            ))
+        );
+    }
+
+    #[test]
+    fn framebuffer_stream_bench_cli_rejects_missing_or_invalid_values() {
+        assert!(
+            parse_framebuffer_stream_bench_args(&["--framebuffer-stream-dump".to_string()])
+                .is_err()
+        );
+        assert!(parse_framebuffer_stream_bench_args(&[
+            "--framebuffer-poll-bench".to_string(),
+            "not-a-count".to_string(),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn library_sync_failure_reducer_clears_transient_state_and_can_retry() {
+        let mut browser = LibraryBrowser::new();
+        browser.warning = "stale warning".to_string();
+
+        browser.start_sync();
+        assert!(browser.loading);
+        assert!(browser.warning.is_empty());
+        assert!(browser.last_error.is_empty());
+
+        browser.apply_sync_result(Err("copy failed".to_string()));
+        assert!(!browser.loading);
+        assert_eq!(browser.status, "Library sync failed.");
+        assert_eq!(browser.last_error, "copy failed");
+        assert!(browser.warning.is_empty());
+
+        browser.start_sync();
+        assert!(browser.loading);
+        assert!(browser.last_error.is_empty());
+    }
+
+    #[test]
+    fn empty_library_query_reducer_handles_invalid_actions_without_selection() {
+        let mut browser = LibraryBrowser::new();
+
+        browser.set_sort("unknown", "descending");
+        browser.set_filter("unknown", "value");
+        browser.set_page(-10);
+        browser.select_row("missing");
+
+        assert_eq!(browser.query.page, 1);
+        assert!(browser.selected_game().is_none());
+        assert_eq!(browser.result_summary(), "No library loaded.");
     }
 
     fn telemetry_sample(seq: u64) -> DeviceTelemetrySample {
