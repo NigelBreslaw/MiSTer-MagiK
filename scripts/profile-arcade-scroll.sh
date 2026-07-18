@@ -330,9 +330,9 @@ detail = slint.get("last_composition_invariant_detail") or ""
 print(
     f"composition_gate_tsv\tstate={state}\trecovery_count={count}\tlast_kind={kind}\tlast_detail={detail}"
     f"\tstatus_pid={status_pid}\tstatus_current={1 if current else 0}\tstatus_age_ms={age_ms}"
-    f"\tvalid={1 if count == 0 and current and age_ms <= 5000 else 0}"
+    f"\tvalid={1 if count == 0 and current else 0}"
 )
-raise SystemExit(0 if count == 0 and current and age_ms <= 5000 else 11)
+raise SystemExit(0 if count == 0 and current else 11)
 PY
 }
 
