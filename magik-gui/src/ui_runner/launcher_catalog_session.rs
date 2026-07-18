@@ -1223,7 +1223,7 @@ mod tests {
             ready_effects,
             vec!["request-media-seed", "catalog", "event", "ui", "sync"]
         );
-        assert_eq!(ready_ui, vec!["clear-catalog-scan"]);
+        assert_eq!(ready_ui, vec!["show-background-scan"]);
         assert!(!session.refresh_done());
 
         let (persisted_effects, persisted_ui) = effect_and_ui_names(session.handle_worker_message(
@@ -1262,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn foreground_rebuild_ready_clears_blocking_scan_until_persisted() {
+    fn foreground_rebuild_ready_moves_persistence_to_background_scan() {
         let now = Instant::now();
         let mut session = LauncherCatalogSession::new(true);
         let (ready_effects, ready_ui) = effect_and_ui_names(session.handle_worker_message(
@@ -1288,7 +1288,7 @@ mod tests {
             ready_effects,
             vec!["request-media-seed", "catalog", "event", "ui", "sync"]
         );
-        assert_eq!(ready_ui, vec!["clear-catalog-scan"]);
+        assert_eq!(ready_ui, vec!["show-background-scan"]);
         assert!(!session.refresh_done());
         assert!(!session.foreground_update());
 

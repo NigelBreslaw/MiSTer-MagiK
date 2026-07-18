@@ -749,7 +749,7 @@ mod tests {
             );
             state.advance_if(ran);
             if previous_dir > 0 && state.home_repeat_dir < 0 {
-                assert_eq!(previous_selected, catalog.systems.len() - 1);
+                assert_eq!(previous_selected, nav.current_menu_count() - 1);
                 saw_right_edge = true;
             }
             if previous_dir < 0 && state.home_repeat_dir > 0 {

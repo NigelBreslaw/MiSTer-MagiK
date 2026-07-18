@@ -1133,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn partially_hydrated_arcade_aggregate_stays_loading() {
+    fn arcade_collection_uses_loaded_rows_as_count_authority() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             vec![arcade_game("Arcade One").system_id("arcade").build()],
@@ -1157,8 +1157,8 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             1
         );
-        assert_eq!(nav.active_collection().expect("Arcade collection").count, 2);
-        assert!(active_system_games_loading(&catalog, &nav));
+        assert_eq!(active_system_header(&catalog, &nav, 0).count, 1);
+        assert!(!active_system_games_loading(&catalog, &nav));
     }
 
     #[test]
@@ -1278,15 +1278,13 @@ mod tests {
 
         assert!(rows.row_data(0).expect("first row").focused);
         assert!(!rows.row_data(1).expect("second row").focused);
-        assert!(!rows.row_data(2).expect("third row").focused);
 
-        nav.selected = 2;
+        nav.selected = 1;
         let updated_rows = models.menu_items(&nav, 1);
 
         assert!(!rows.row_data(0).expect("first row").focused);
-        assert!(!rows.row_data(1).expect("second row").focused);
-        assert!(rows.row_data(2).expect("third row").focused);
-        assert!(updated_rows.row_data(2).expect("updated third row").focused);
+        assert!(rows.row_data(1).expect("second row").focused);
+        assert!(updated_rows.row_data(1).expect("updated second row").focused);
     }
 
     #[test]

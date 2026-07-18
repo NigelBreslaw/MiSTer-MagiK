@@ -5448,12 +5448,9 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_projection_is_not_ready_for_arcade_navigation() {
+    pub(super) fn summary_projection_without_hot_rows_is_not_ready_for_arcade_navigation() {
         let catalog = summary_catalog_for_media_systems(&["arcade", "amiga"]);
-        let mut nav = LauncherNav::new();
-        assert!(nav.open_default_arcade(&catalog));
 
-        assert!(active_system_games_loading(&catalog, &nav));
         assert!(!arcade_catalog_rows_ready(&catalog));
         assert!(!arcade_navigation_ready(true, &catalog));
         assert_eq!(
@@ -6329,14 +6326,14 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_warm_validation_hydrates_navigation_but_rebuild_skips_old_projection() {
+    pub(super) fn summary_seed_worker_reuses_the_loaded_navigation_projection() {
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::CheckStamp, false),
-            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+            CatalogWorkerInitialCache::AlreadyLoadedReady
         );
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::LoadOnly, true),
-            CatalogWorkerInitialCache::ProbeNavigationThenSqlite
+            CatalogWorkerInitialCache::AlreadyLoadedReady
         );
         assert_eq!(
             summary_seed_catalog_worker_initial_cache(CatalogWorkerRequest::ForceBuild, false),
@@ -6345,7 +6342,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn stale_summary_defers_sqlite_probe_until_after_first_visible_frame() {
+    pub(super) fn startup_without_navigation_projection_forces_a_fresh_build() {
         assert_eq!(
             catalog_startup_without_summary_plan(
                 CatalogStartupSqliteState::HeaderValid,
@@ -6354,8 +6351,8 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::CheckStamp,
-                initial_cache: CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                request: CatalogWorkerRequest::ForceBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
         );
@@ -6367,11 +6364,11 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::LoadOnly,
-                initial_cache: CatalogWorkerInitialCache::ProbeNavigationThenSqlite,
+                request: CatalogWorkerRequest::ForceBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
-            "refresh-off still has to hydrate a usable cache, but only after first paint"
+            "without a navigation projection the retired SQLite cache is not a startup source"
         );
         assert_eq!(
             catalog_startup_without_summary_plan(
@@ -6398,7 +6395,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn existing_invalid_sqlite_defers_strict_load_and_recovery_until_after_first_frame()
+    pub(super) fn existing_invalid_sqlite_forces_v3_rebuild_after_first_frame()
     {
         let root = unique_temp_dir("catalog-invalid-header-startup");
         let sqlite_path = root.join("library.sqlite3");
@@ -6418,8 +6415,8 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::StrictLoad,
-                initial_cache: CatalogWorkerInitialCache::ProbeSqlite,
+                request: CatalogWorkerRequest::ForceBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             }
         );
@@ -6431,11 +6428,11 @@ mod tests {
                 false,
             ),
             CatalogStartupWithoutSummaryPlan::DeferredWorker {
-                request: CatalogWorkerRequest::StrictLoad,
-                initial_cache: CatalogWorkerInitialCache::ProbeSqlite,
+                request: CatalogWorkerRequest::ForceBuild,
+                initial_cache: CatalogWorkerInitialCache::AlreadyProbedMissing,
                 execution_mode: CatalogExecutionMode::ForegroundExclusive,
             },
-            "refresh-off must not hide an existing corrupt catalog or rebuild it automatically"
+            "the retired SQLite cache is never used as a V3 startup source"
         );
         assert_eq!(
             catalog_startup_without_summary_plan(
