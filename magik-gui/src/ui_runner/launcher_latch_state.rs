@@ -16,11 +16,21 @@ pub(super) enum LatchSlotHardwareState {
 pub(super) struct DirectLayerState {
     pub(super) rect: DirtyRect,
     pub(super) version: u64,
+    pub(super) content_offset_y: i64,
 }
 
 impl DirectLayerState {
     pub(super) fn new(rect: DirtyRect, version: u64) -> Self {
-        Self { rect, version }
+        Self {
+            rect,
+            version,
+            content_offset_y: 0,
+        }
+    }
+
+    pub(super) fn with_content_offset_y(mut self, content_offset_y: i64) -> Self {
+        self.content_offset_y = content_offset_y;
+        self
     }
 }
 
@@ -327,10 +337,24 @@ fn direct_layer_redraw_update(
     intersects_restore: bool,
 ) -> Option<ArcadeListUpdate> {
     let desired = desired?;
-    if current != Some(desired) || intersects_restore {
+    if intersects_restore {
         Some(ArcadeListUpdate::Full(desired.rect))
+    } else if let Some(current) = current {
+        if current.rect != desired.rect || current.version != desired.version {
+            Some(ArcadeListUpdate::Full(desired.rect))
+        } else if current.content_offset_y != desired.content_offset_y {
+            Some(ArcadeListUpdate::Scroll {
+                delta_y: desired
+                    .content_offset_y
+                    .saturating_sub(current.content_offset_y)
+                    .clamp(isize::MIN as i64, isize::MAX as i64) as isize,
+                rect: desired.rect,
+            })
+        } else {
+            dirty
+        }
     } else {
-        dirty
+        Some(ArcadeListUpdate::Full(desired.rect))
     }
 }
 
@@ -874,6 +898,21 @@ mod tests {
         assert_eq!(
             slot1,
             parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn matching_arcade_generation_accumulates_scroll_for_older_slot() {
+        let arcade = rect(0, 0, 4, 3);
+        let current = layer(arcade, 7).with_content_offset_y(-3);
+        let desired = layer(arcade, 7).with_content_offset_y(-11);
+
+        assert_eq!(
+            direct_layer_redraw_update(current.into(), desired.into(), None, false),
+            Some(ArcadeListUpdate::Scroll {
+                delta_y: -8,
+                rect: arcade,
+            })
         );
     }
 

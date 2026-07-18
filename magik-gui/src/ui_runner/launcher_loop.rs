@@ -1564,6 +1564,7 @@ pub(super) fn run_launcher_loop(
     let mut arcade_list_renderer = ArcadeListRenderer::new();
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
+    let mut launcher_arcade_scroll_offset = 0i64;
     let mut arcade_filter_items_cache = ArcadeFilterListItemCache::default();
     let mut composition = UiCompositionController::new();
     let cpu = cpu_profile::start();
@@ -3616,8 +3617,12 @@ pub(super) fn run_launcher_loop(
         if raw_preview_direct_rect.is_some() {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
         }
-        if arcade_list_rect.is_some() {
+        if matches!(arcade_list_rect, Some(ArcadeListUpdate::Full(_))) {
             launcher_arcade_version = launcher_arcade_version.wrapping_add(1).max(1);
+            launcher_arcade_scroll_offset = 0;
+        } else if let Some(ArcadeListUpdate::Scroll { delta_y, .. }) = arcade_list_rect {
+            launcher_arcade_scroll_offset =
+                launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
         let preview_desired = if composition_decision.allow_preview_blit
             && preview_direct_present_enabled()
@@ -3631,10 +3636,10 @@ pub(super) fn run_launcher_loop(
             None
         };
         let arcade_desired = if composition_decision.allow_arcade_list_blit {
-            Some(DirectLayerState::new(
-                arcade_list_renderer.dirty_rect(),
-                launcher_arcade_version,
-            ))
+            Some(
+                DirectLayerState::new(arcade_list_renderer.dirty_rect(), launcher_arcade_version)
+                    .with_content_offset_y(launcher_arcade_scroll_offset),
+            )
         } else {
             None
         };
