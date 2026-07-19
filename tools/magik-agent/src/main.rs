@@ -2255,9 +2255,8 @@ mod linux {
             .unwrap_or("status");
         match action {
             "status" => Ok(magik_status_json(action, None, None)),
-            "suspend" | "resume" | "restart-launcher" | "return-to-launcher" => {
-                magik_acknowledged_action(action, &args)
-            }
+            "suspend" | "resume" | "restart-launcher" | "return-to-launcher" | "launch"
+            | "exit-to-menu" => magik_acknowledged_action(action, &args),
             _ => Err(format!("unsupported magik action: {action}")),
         }
     }
@@ -3462,12 +3461,30 @@ mod linux {
             "resume" => "mister_magik_resume",
             "restart-launcher" => "mister_magik_restart_launcher",
             "return-to-launcher" => "load_core menu.rbf",
+            "exit-to-menu" => "mister_magik_exit_to_menu",
+            "launch" => {
+                let target = args
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing launch target".to_string())?;
+                if target.is_empty() || target.len() > 2048 || target.contains(['\n', '\r']) {
+                    return Err("invalid launch target".to_string());
+                }
+                return magik_acknowledged_launch(
+                    operation_id,
+                    before_generation,
+                    target,
+                    started,
+                    cache,
+                );
+            }
             _ => return Err(format!("unsupported magik action: {action}")),
         };
         write_main_command_nonblocking(command)?;
         let expected_state = match action {
             "suspend" => "LauncherSuspended",
             "resume" | "restart-launcher" | "return-to-launcher" => "LauncherActive",
+            "exit-to-menu" => "Unconfigured",
             _ => unreachable!(),
         };
         let deadline = Duration::from_secs(30);
@@ -3498,6 +3515,25 @@ mod linux {
             "terminal_reason": "acknowledged",
             "main_status": final_status,
         });
+        let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
+        if results.len() >= 128 {
+            results.clear();
+        }
+        results.insert(operation_id.to_string(), result.clone());
+        Ok(result)
+    }
+
+    fn magik_acknowledged_launch(
+        operation_id: &str,
+        before_generation: u64,
+        target: &str,
+        started: Instant,
+        cache: &Mutex<HashMap<String, Value>>,
+    ) -> Result<Value, String> {
+        let command = format!("mister_magik_launch {target}");
+        write_main_command_nonblocking(&command)?;
+        let final_status = wait_for_main_ready(Some(before_generation), Duration::from_secs(30))?;
+        let result = json!({"operation_id":operation_id,"action":"launch","command":command,"before_generation":before_generation,"after_generation":main_generation(&final_status),"elapsed_ms":started.elapsed().as_millis() as u64,"terminal_reason":"acknowledged","main_status":final_status});
         let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
         if results.len() >= 128 {
             results.clear();

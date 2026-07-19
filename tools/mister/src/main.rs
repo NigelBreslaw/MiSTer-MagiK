@@ -2109,9 +2109,10 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
 fn agent_magik(args: &[String]) -> Result<()> {
     let action = args.first().map(String::as_str).unwrap_or("status");
     match action {
-        "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher" => {}
+        "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher"
+        | "exit-to-menu" | "launch" => {}
         "-h" | "--help" => {
-            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher>");
+            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher|exit-to-menu|launch TARGET>");
             return Ok(());
         }
         other => return Err(format!("unknown agent magik action: {other}").into()),
@@ -2142,7 +2143,7 @@ fn agent_magik(args: &[String]) -> Result<()> {
     };
     let reply = agent_request(
         "magik",
-        json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation}),
+        json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation, "target": args.get(1)}),
         timeout,
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
