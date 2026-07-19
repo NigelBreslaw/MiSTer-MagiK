@@ -14,7 +14,9 @@ use crate::shard_registry::{
     manifest_slots_present, read_latest_manifest_lazy, ManifestSystem, RegistryLimits,
 };
 use crate::sharded_catalog::{PlannedSystem, PlannedSystemAction, ReconcilePlan, ReconcileReason};
-use crate::system_shard::{open_system_shard, SystemGame, SystemLaunchPlan};
+use crate::system_shard::{
+    open_system_shard, SystemGame, SystemLaunchPlan, SystemShardProjectionStats,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -196,7 +198,10 @@ fn published_system_matches(
         limits.shard,
     )
     .map_err(|error| ReconciliationError::new("projection-compare", error.to_string()))?;
-    Ok(loaded.games == candidate.games)
+    Ok(loaded.games == candidate.games
+        && candidate
+            .projection_stats
+            .is_none_or(|stats| loaded.projection_stats == Some(stats)))
 }
 
 pub fn publish_bound_production_projection(
@@ -372,6 +377,14 @@ fn materialize_catalog_system(
             ScanUnitId::parse(&format!("{}-catalog", system_id.as_str()))
                 .map_err(|error| ReconciliationError::new("projection", error.to_string()))?,
         ],
+        projection_stats: (system_id.as_str() == "atarilynx")
+            .then(|| catalog.system_projection_stats(system_id.as_str()))
+            .flatten()
+            .map(|stats| SystemShardProjectionStats {
+                source_games: stats.source_games,
+                visible_families: stats.visible_families,
+                collapsed_variants: stats.collapsed_variants,
+            }),
         games,
     })
 }

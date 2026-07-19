@@ -1184,6 +1184,7 @@ mod tests {
         let data = SystemShardData {
             system_id: system_id.clone(),
             generation,
+            projection_stats: None,
             games: vec![SystemGame {
                 stable_key: "one".to_string(),
                 title: "Synthetic One".to_string(),

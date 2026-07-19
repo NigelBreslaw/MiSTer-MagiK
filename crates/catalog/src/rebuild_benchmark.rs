@@ -221,6 +221,7 @@ impl ReconciliationMaterializer for BenchmarkMaterializer {
                 .map_err(|_| ReconciliationError::new("benchmark", "generation exceeds u32"))?,
             producers: vec![ScanUnitId::parse(&format!("{}-root", system_id.as_str()))
                 .map_err(|error| ReconciliationError::new("benchmark", error.to_string()))?],
+            projection_stats: None,
             games,
         })
     }

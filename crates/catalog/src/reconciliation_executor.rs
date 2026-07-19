@@ -78,6 +78,7 @@ pub struct MaterializedSystem {
     pub family: String,
     pub order: u32,
     pub producers: Vec<ScanUnitId>,
+    pub projection_stats: Option<crate::system_shard::SystemShardProjectionStats>,
     pub games: Vec<SystemGame>,
 }
 
@@ -851,6 +852,7 @@ fn build_and_validate_shard(
         SystemShardData {
             system_id: system_id.clone(),
             generation,
+            projection_stats: job.materialized.projection_stats,
             games: job.materialized.games,
         },
         limits.shard,
@@ -1566,6 +1568,7 @@ mod tests {
                 family: "Fixture".to_string(),
                 order: 0,
                 producers: vec![ScanUnitId::parse("fixture-root").unwrap()],
+                projection_stats: None,
                 games: vec![game("One")],
             })
         }
@@ -1599,6 +1602,7 @@ mod tests {
                 family: "Fixture".to_string(),
                 order: 0,
                 producers: vec![ScanUnitId::parse("fixture-root").unwrap()],
+                projection_stats: None,
                 games: vec![game("One")],
             })
         }
@@ -1645,6 +1649,7 @@ mod tests {
                 family: "Fixture".to_string(),
                 order: 0,
                 producers: vec![ScanUnitId::parse(&format!("{}-root", system_id.as_str())).unwrap()],
+                projection_stats: None,
                 games: self.games.get(system_id.as_str()).unwrap().clone(),
             };
             if self.invalid_on.as_ref() == Some(system_id) {

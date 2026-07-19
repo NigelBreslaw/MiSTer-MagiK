@@ -69,6 +69,13 @@ pub struct GameSystemEntry {
     pub count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemProjectionStats {
+    pub source_games: usize,
+    pub visible_families: usize,
+    pub collapsed_variants: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArcadeFilter {
     All,
@@ -96,6 +103,7 @@ pub struct ArcadeCatalog {
     filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
     preview_games_by_system: HashMap<String, Vec<usize>>,
     launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
+    projection_stats_by_system: HashMap<String, SystemProjectionStats>,
     search_keys: Vec<ArcadeSearchKey>,
     autocomplete: ArcadeAutocompleteIndex,
     lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
@@ -388,6 +396,7 @@ impl ArcadeCatalog {
             filter_options_by_system: indexes.filter_options_by_system,
             preview_games_by_system: indexes.preview_games_by_system,
             launch_plans_by_ref: indexes.launch_plans_by_ref,
+            projection_stats_by_system: HashMap::new(),
             search_keys: indexes.search_keys,
             autocomplete: indexes.autocomplete,
             lazy_text_indexes: Arc::new(OnceLock::new()),
@@ -447,6 +456,19 @@ impl ArcadeCatalog {
 
     pub fn is_empty(&self) -> bool {
         self.games.is_empty()
+    }
+
+    pub(crate) fn with_projection_stats(
+        mut self,
+        stats: HashMap<String, SystemProjectionStats>,
+    ) -> Self {
+        self.projection_stats_by_system.extend(stats);
+        self
+    }
+
+    #[cfg(feature = "builder")]
+    pub(crate) fn system_projection_stats(&self, system_id: &str) -> Option<SystemProjectionStats> {
+        self.projection_stats_by_system.get(system_id).copied()
     }
 
     pub fn platform_kind(&self, system_id: &str) -> PlatformKind {

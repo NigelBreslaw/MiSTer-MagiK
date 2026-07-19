@@ -121,6 +121,7 @@ pub fn bootstrap_global_fixture(
             &SystemShardData {
                 system_id: system_id.clone(),
                 generation,
+                projection_stats: None,
                 games: games.clone(),
             },
             limits.shard,

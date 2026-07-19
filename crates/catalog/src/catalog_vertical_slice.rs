@@ -127,6 +127,7 @@ pub fn bootstrap_fixture_system(
         &SystemShardData {
             system_id: system_id.clone(),
             generation: manifest_generation,
+            projection_stats: None,
             games: games.clone(),
         },
         limits.shard,

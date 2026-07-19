@@ -264,11 +264,22 @@ The two first-scan invocations distinguish a genuine first-ever fallback from
 the production retained-index recovery path; the latter removes `catalog-v3`
 but deliberately preserves `arcade-bootstrap.nav.lz4b`.
 
+Atari Lynx projection groups release variants by the normalized base title
+before parenthetical or bracketed annotations. The visible representative
+prefers final, MAME-identified, screenshot-bearing retail releases, then the
+highest stable version and the existing deterministic region/path ordering.
+All source games and launch plans remain in canonical catalog state; only the
+system shard and navigation list are collapsed. Variants remain hidden until a
+dedicated console variants UI is added.
+
 On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/mister catalog`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,
 scanner cache, every system shard, summed counts, and each system's keyed and
-available screenshot coverage. This expensive command is acceptance tooling,
-not a launcher startup path.
+available screenshot coverage. Per-system rows also report `source_games`,
+`visible_families`, and `collapsed_variants`; shards written before these
+optional metadata keys report their visible game count as the source/family
+count and zero collapsed variants. This expensive command is acceptance
+tooling, not a launcher startup path.
 
 `scripts/device-catalog-acceptance.sh` adds process/layout checks and ensures
 legacy catalog artifacts are absent. `scripts/profile-catalog-contention.sh`

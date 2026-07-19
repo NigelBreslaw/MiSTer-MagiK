@@ -8,6 +8,7 @@
 
 use crate::arcade_catalog::{
     self, ArcadeCatalog, ArcadeGameMetadataKey, PlatformKind, StructuredLaunchPlan,
+    SystemProjectionStats,
 };
 use crate::catalog_build::CatalogRefreshPipeline;
 use crate::catalog_checkpoint::CatalogDriftSummary;
@@ -1975,6 +1976,10 @@ fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progres
     platform_kinds: HashMap<String, PlatformKind>,
     index_progress: Option<&mut dyn FnMut(usize, usize)>,
 ) -> ArcadeCatalog {
+    let lynx_source_games = launcher_rows
+        .iter()
+        .filter(|row| row.game.system_id.as_ref() == "atarilynx")
+        .count();
     arcade_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     launcher_rows.sort_by_cached_key(|row| row.game.title.to_ascii_lowercase());
     let mut arcade_rows = catalog_projection::collapse_catalog_variant_rows(arcade_rows);
@@ -1989,14 +1994,27 @@ fn catalog_from_sqlite_launcher_projection_order_with_platform_kinds_and_progres
         .collect::<HashSet<_>>();
     launch_plans.retain(|plan| visible_refs.contains(plan.launch_ref.as_ref()));
     let systems = arcade_catalog::systems_from_games(&games);
-    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds_with_progress(
+    let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds_with_progress(
         root.as_ref().to_path_buf(),
         games,
         systems,
         launch_plans,
         platform_kinds,
         index_progress,
-    )
+    );
+    if lynx_source_games == 0 {
+        catalog
+    } else {
+        let visible_families = catalog.system_game_count("atarilynx");
+        catalog.with_projection_stats(HashMap::from([(
+            "atarilynx".to_string(),
+            SystemProjectionStats {
+                source_games: lynx_source_games,
+                visible_families,
+                collapsed_variants: lynx_source_games.saturating_sub(visible_families),
+            },
+        )]))
+    }
 }
 
 fn structured_launch_plan_for_discovery(

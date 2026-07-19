@@ -42,6 +42,26 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             .map_err(|error| format!("open V3 system {}: {error}", summary.system_id))?;
         let games = u64::try_from(system.games().len())
             .map_err(|_| "system game count exceeds u64".to_string())?;
+        let manifest_system = manifest
+            .systems
+            .iter()
+            .find(|system| system.system_id == summary.system_id)
+            .ok_or_else(|| format!("missing manifest system {}", summary.system_id))?;
+        let full_shard = crate::system_shard::open_system_shard(
+            &storage.join(&manifest_system.active.sqlite_path),
+            &storage.join(&manifest_system.active.navigation_path),
+            &summary.system_id,
+            summary.generation,
+            limits.shard,
+        )
+        .map_err(|error| format!("open V3 projection metadata {}: {error}", summary.system_id))?;
+        let projection_stats = full_shard.projection_stats.unwrap_or(
+            crate::system_shard::SystemShardProjectionStats {
+                source_games: system.games().len(),
+                visible_families: system.games().len(),
+                collapsed_variants: 0,
+            },
+        );
         let preview_keys = system
             .games()
             .iter()
@@ -79,8 +99,11 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             }
         };
         rows.push_str(&format!(
-            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\tpreview_keys={preview_keys}\tavailable_previews={available_previews}\n",
+            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\tpreview_keys={preview_keys}\tavailable_previews={available_previews}\tsource_games={}\tvisible_families={}\tcollapsed_variants={}\n",
             summary.system_id, summary.generation, summary.games, games,
+            projection_stats.source_games,
+            projection_stats.visible_families,
+            projection_stats.collapsed_variants,
         ));
     }
     let manifest_total = manifest.systems.iter().try_fold(0u64, |total, system| {
@@ -112,11 +135,14 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, GameSystemEntry};
+    use crate::arcade_catalog::{
+        ArcadeCatalog, ArcadeGameEntry, GameSystemEntry, SystemProjectionStats,
+    };
     use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
     use crate::catalog_stamp::CatalogStamp;
     use crate::catalog_state::{CatalogState, CatalogStateStats};
     use crate::scanner_cache::ScannerCacheState;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -130,7 +156,7 @@ mod tests {
             stamp: CatalogStamp::from_lines(vec!["lynx-inspection".to_string()]),
             checkpoint: CatalogDiscoveryCheckpoint::from_lines(vec!["lynx-inspection".to_string()]),
             stats: CatalogStateStats {
-                discoveries: 3,
+                discoveries: 5,
                 ..Default::default()
             },
         };
@@ -147,7 +173,15 @@ mod tests {
                 title: "Atari Lynx".to_string(),
                 count: 3,
             }],
-        );
+        )
+        .with_projection_stats(HashMap::from([(
+            "atarilynx".to_string(),
+            SystemProjectionStats {
+                source_games: 5,
+                visible_families: 3,
+                collapsed_variants: 2,
+            },
+        )]));
         let outcome = crate::production_sharded_projection::publish_bound_production_projection(
             &root,
             &catalog,
@@ -166,7 +200,7 @@ mod tests {
         let report = inspect_catalog(&root).expect("inspect Lynx catalog");
 
         assert!(report.contains(&format!(
-            "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tpreview_keys=2\tavailable_previews=1",
+            "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tpreview_keys=2\tavailable_previews=1\tsource_games=5\tvisible_families=3\tcollapsed_variants=2",
             outcome.generation
         )));
         let _ = std::fs::remove_dir_all(root);

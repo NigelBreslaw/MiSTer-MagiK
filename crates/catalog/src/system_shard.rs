@@ -55,7 +55,15 @@ pub struct SystemLaunchPlan {
 pub struct SystemShardData {
     pub system_id: SystemId,
     pub generation: u64,
+    pub projection_stats: Option<SystemShardProjectionStats>,
     pub games: Vec<SystemGame>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SystemShardProjectionStats {
+    pub source_games: usize,
+    pub visible_families: usize,
+    pub collapsed_variants: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +71,7 @@ pub struct LoadedSystemShard {
     pub system_id: SystemId,
     pub generation: u64,
     pub navigation_hash: String,
+    pub projection_stats: Option<SystemShardProjectionStats>,
     pub games: Vec<SystemGame>,
 }
 
@@ -199,6 +208,22 @@ pub(crate) fn write_system_shard_with_durability(
             )
             .map_err(|error| SystemShardError::with("insert shard metadata", error))?;
     }
+    if let Some(stats) = data.projection_stats {
+        for (key, value) in [
+            ("source_game_count", stats.source_games),
+            ("visible_family_count", stats.visible_families),
+            ("collapsed_variant_count", stats.collapsed_variants),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO shard_meta(key,value) VALUES (?1,?2)",
+                    rusqlite::params![key, value.to_string()],
+                )
+                .map_err(|error| {
+                    SystemShardError::with("insert shard projection metadata", error)
+                })?;
+        }
+    }
     {
         let mut statement = transaction
             .prepare(
@@ -271,13 +296,7 @@ pub(crate) fn write_system_shard_with_durability(
     unsafe {
         libc::malloc_trim(0);
     }
-    open_system_shard(
-        sqlite_path,
-        navigation_path,
-        &system_id,
-        generation,
-        limits,
-    )
+    open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits)
 }
 
 pub fn open_system_shard(
@@ -337,6 +356,7 @@ pub fn open_system_shard(
     }
     let stored_hash = meta_text(&connection, "navigation_hash")?;
     let preview_archive_default = meta_text(&connection, "preview_archive_path")?;
+    let projection_stats = optional_projection_stats(&connection, game_count)?;
     let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
     if checksum_hex(&navigation) != stored_hash {
         return Err(SystemShardError::new(
@@ -451,6 +471,7 @@ pub fn open_system_shard(
         system_id,
         generation,
         navigation_hash: stored_hash,
+        projection_stats,
         games: stored.games,
     })
 }
@@ -481,6 +502,7 @@ pub fn open_system_navigation(
         system_id: expected_system_id.clone(),
         generation: expected_generation,
         navigation_hash,
+        projection_stats: None,
         games,
     })
 }
@@ -623,6 +645,59 @@ fn meta_u64(connection: &Connection, key: &str) -> Result<u64, SystemShardError>
         .map_err(|_| SystemShardError::new("read", "invalid numeric shard metadata"))
 }
 
+fn optional_projection_stats(
+    connection: &Connection,
+    game_count: usize,
+) -> Result<Option<SystemShardProjectionStats>, SystemShardError> {
+    fn optional_usize(
+        connection: &Connection,
+        key: &str,
+    ) -> Result<Option<usize>, SystemShardError> {
+        match connection.query_row("SELECT value FROM shard_meta WHERE key=?1", [key], |row| {
+            row.get::<_, String>(0)
+        }) {
+            Ok(value) => value
+                .parse()
+                .map(Some)
+                .map_err(|_| SystemShardError::new("read", "invalid projection shard metadata")),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(SystemShardError::with(
+                "read optional projection shard metadata",
+                error,
+            )),
+        }
+    }
+
+    let values = [
+        optional_usize(connection, "source_game_count")?,
+        optional_usize(connection, "visible_family_count")?,
+        optional_usize(connection, "collapsed_variant_count")?,
+    ];
+    let [Some(source_games), Some(visible_families), Some(collapsed_variants)] = values else {
+        if values.iter().all(Option::is_none) {
+            return Ok(None);
+        }
+        return Err(SystemShardError::new(
+            "read",
+            "incomplete projection shard metadata",
+        ));
+    };
+    if visible_families != game_count
+        || source_games < visible_families
+        || collapsed_variants != source_games - visible_families
+    {
+        return Err(SystemShardError::new(
+            "read",
+            "inconsistent projection shard metadata",
+        ));
+    }
+    Ok(Some(SystemShardProjectionStats {
+        source_games,
+        visible_families,
+        collapsed_variants,
+    }))
+}
+
 pub(crate) fn checksum_hex(bytes: &[u8]) -> String {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in bytes {
@@ -692,6 +767,7 @@ mod tests {
         assert_eq!(loaded.system_id, data.system_id);
         assert_eq!(loaded.generation, 1);
         assert_eq!(loaded.games, data.games);
+        assert_eq!(loaded.projection_stats, None);
         assert_eq!(loaded.navigation_hash.len(), 16);
         let connection = Connection::open(&sqlite).unwrap();
         let defaults: i64 = connection
@@ -702,6 +778,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(defaults, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn projection_stats_round_trip_without_changing_the_games_schema() {
+        let root = temporary_root("projection-stats");
+        let sqlite = root.join("1.sqlite3");
+        let navigation = root.join("1.nav.lz4b");
+        let mut data = fixture_data();
+        data.projection_stats = Some(SystemShardProjectionStats {
+            source_games: data.games.len() + 4,
+            visible_families: data.games.len(),
+            collapsed_variants: 4,
+        });
+
+        let loaded = write_system_shard(&sqlite, &navigation, &data, limits()).unwrap();
+
+        assert_eq!(loaded.projection_stats, data.projection_stats);
+        let connection = Connection::open(&sqlite).unwrap();
+        let columns: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('games')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 13);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -794,6 +898,7 @@ mod tests {
         SystemShardData {
             system_id: SystemId::parse("snes").unwrap(),
             generation: 1,
+            projection_stats: None,
             games: vec![
                 SystemGame {
                     stable_key: "one".to_string(),
