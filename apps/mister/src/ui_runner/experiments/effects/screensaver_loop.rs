@@ -1281,6 +1281,7 @@ const PARADE_TILE_COUNT: usize = 14;
 const PARADE_TILE_W: usize = 96;
 const PARADE_TILE_H: usize = 72;
 const PARADE_MIN_TILE_SPEED: usize = 2;
+const PARADE_SPEED_COUNT: usize = 4;
 
 #[derive(Clone, Copy, Debug)]
 struct ParadeTile {
@@ -1319,15 +1320,20 @@ impl ParadeState {
         self.cursor = 0;
         self.image_count = image_count;
         let tile_count = PARADE_TILE_COUNT.min(image_count);
+        let mut initial_speeds = (0..tile_count)
+            .map(|i| PARADE_MIN_TILE_SPEED + i % PARADE_SPEED_COUNT)
+            .collect::<Vec<_>>();
+        shuffle(&mut initial_speeds, &mut self.rng);
         for i in 0..tile_count {
             let Some(image_idx) = self.next_image_for(i) else {
                 break;
             };
+            let x = self.random_below(w + PARADE_TILE_W) as isize - PARADE_TILE_W as isize;
+            let y = 40 + self.random_below(h.saturating_sub(120).max(1));
             self.tiles.push(ParadeTile {
-                x: ((i * (w + PARADE_TILE_W)) / tile_count.max(1)) as isize
-                    - PARADE_TILE_W as isize,
-                y: 40 + (i * 31) % h.saturating_sub(120).max(1),
-                speed: PARADE_MIN_TILE_SPEED + i % 4,
+                x,
+                y,
+                speed: initial_speeds[i],
                 image_idx,
             });
         }
@@ -1356,17 +1362,25 @@ impl ParadeState {
         None
     }
 
-    fn advance(&mut self, screen_w: usize) {
+    fn advance(&mut self, screen_w: usize, screen_h: usize) {
         for tile_idx in 0..self.tiles.len() {
             self.tiles[tile_idx].x += self.tiles[tile_idx].speed as isize;
             if self.tiles[tile_idx].x >= screen_w as isize {
                 if let Some(image_idx) = self.next_image_for(tile_idx) {
+                    let y = 40 + self.random_below(screen_h.saturating_sub(120).max(1));
+                    let speed = PARADE_MIN_TILE_SPEED + self.random_below(PARADE_SPEED_COUNT);
                     let tile = &mut self.tiles[tile_idx];
                     tile.x = -(PARADE_TILE_W as isize);
+                    tile.y = y;
+                    tile.speed = speed;
                     tile.image_idx = image_idx;
                 }
             }
         }
+    }
+
+    fn random_below(&mut self, upper: usize) -> usize {
+        advance_rng(&mut self.rng) as usize % upper.max(1)
     }
 }
 
@@ -1380,12 +1394,26 @@ fn random_seed() -> u64 {
 
 fn shuffle<T>(values: &mut [T], rng: &mut u64) {
     for i in (1..values.len()).rev() {
-        *rng ^= *rng << 13;
-        *rng ^= *rng >> 7;
-        *rng ^= *rng << 17;
-        let j = (*rng as usize) % (i + 1);
+        let j = (advance_rng(rng) as usize) % (i + 1);
         values.swap(i, j);
     }
+}
+
+fn advance_rng(rng: &mut u64) -> u64 {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    *rng
+}
+
+fn parade_draw_order(state: &ParadeState) -> ([usize; PARADE_TILE_COUNT], usize) {
+    let mut order = [usize::MAX; PARADE_TILE_COUNT];
+    let len = state.tiles.len().min(PARADE_TILE_COUNT);
+    for (idx, slot) in order.iter_mut().take(len).enumerate() {
+        *slot = idx;
+    }
+    order[..len].sort_unstable_by_key(|idx| state.tiles[*idx].speed);
+    (order, len)
 }
 
 fn render_parade(
@@ -1398,8 +1426,10 @@ fn render_parade(
 ) {
     render_horizontal_starfield(dst, w, h, frame);
     state.ensure_initialized(images.len(), w, h);
-    state.advance(w);
-    for tile in &state.tiles {
+    state.advance(w, h);
+    let (draw_order, draw_count) = parade_draw_order(state);
+    for tile_idx in draw_order.into_iter().take(draw_count) {
+        let tile = &state.tiles[tile_idx];
         blit_scaled(
             dst,
             w,
@@ -1661,11 +1691,11 @@ mod tests {
         state.tiles[0].x = 958;
         state.tiles[0].speed = 1;
 
-        state.advance(960);
+        state.advance(960, 540);
         assert_eq!(state.tiles[0].image_idx, original);
         assert_eq!(state.tiles[0].x, 959);
 
-        state.advance(960);
+        state.advance(960, 540);
         assert_eq!(state.tiles[0].x, -(PARADE_TILE_W as isize));
         assert_ne!(state.tiles[0].image_idx, original);
     }
@@ -1691,6 +1721,91 @@ mod tests {
         let star_travel = (x1 + width - x0) % width;
         let slowest_card_travel = PARADE_MIN_TILE_SPEED * 8;
         assert_eq!(star_travel * 2, slowest_card_travel);
+    }
+
+    #[test]
+    fn parade_initializes_all_four_card_speeds_in_randomized_slots() {
+        let mut state = ParadeState::new(0xfeed_face_cafe_beef);
+        state.ensure_initialized(64, 960, 540);
+        let mut counts = [0usize; PARADE_SPEED_COUNT];
+        for tile in &state.tiles {
+            counts[tile.speed - PARADE_MIN_TILE_SPEED] += 1;
+        }
+        assert!(counts.into_iter().all(|count| count >= 3));
+        let mut other = ParadeState::new(0x0123_4567_89ab_cdef);
+        other.ensure_initialized(64, 960, 540);
+        assert_ne!(
+            state
+                .tiles
+                .iter()
+                .map(|tile| (tile.x, tile.y, tile.speed))
+                .collect::<Vec<_>>(),
+            other
+                .tiles
+                .iter()
+                .map(|tile| (tile.x, tile.y, tile.speed))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn parade_draws_faster_cards_above_slower_cards() {
+        let mut state = ParadeState::new(11);
+        state.ensure_initialized(64, 960, 540);
+        for (tile, speed) in state.tiles.iter_mut().zip([5, 2, 4, 3].into_iter().cycle()) {
+            tile.speed = speed;
+        }
+        let (order, len) = parade_draw_order(&state);
+        let speeds = order
+            .into_iter()
+            .take(len)
+            .map(|idx| state.tiles[idx].speed)
+            .collect::<Vec<_>>();
+        assert!(speeds.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(speeds.first(), Some(&2));
+        assert_eq!(speeds.last(), Some(&5));
+    }
+
+    #[test]
+    fn parade_render_places_faster_card_pixels_above_slower_card_pixels() {
+        let slow = color565(255, 20, 20);
+        let fast = color565(20, 255, 20);
+        let images = vec![
+            SaverImage {
+                pixels: vec![slow],
+                w: 1,
+                h: 1,
+                stride: 1,
+            },
+            SaverImage {
+                pixels: vec![fast],
+                w: 1,
+                h: 1,
+                stride: 1,
+            },
+        ];
+        let mut state = ParadeState::new(13);
+        state.image_count = images.len();
+        state.deck = vec![0, 1];
+        state.tiles = vec![
+            ParadeTile {
+                x: 10,
+                y: 10,
+                speed: 2,
+                image_idx: 0,
+            },
+            ParadeTile {
+                x: 10,
+                y: 10,
+                speed: 5,
+                image_idx: 1,
+            },
+        ];
+        let mut dst = vec![Rgb565Pixel(0); 160 * 120];
+
+        render_parade(&mut dst, &mut state, 160, 120, &images, 1);
+
+        assert_eq!(dst[20 * 160 + 20], blend_565(color565(0, 0, 18), fast, 230));
     }
 
     #[test]
