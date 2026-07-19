@@ -167,7 +167,10 @@ durable progress in `catalog-v3/state/build-progress.sqlite3`. Completed scan
 targets are committed atomically with their eligible-input fingerprints. After
 a launcher handoff terminates MagiK, the next launcher re-enumerates target
 metadata, hydrates exact matches without reparsing or classifying them, and
-continues with new or changed targets under the same build ID. Completed,
+continues with new or changed targets under the same build ID. Scan outputs
+are committed in bounded groups of at most 16 targets or 2 MiB of encoded
+output, whichever comes first. This preserves atomic resume boundaries without
+paying an exFAT durability barrier for every small directory. Completed,
 unpublished system shards are likewise hash- and schema-checked before reuse.
 Resumable first-build shard publication is deliberately sequential: each shard
 is synced, validated, and journaled before the next begins. Warm replacement

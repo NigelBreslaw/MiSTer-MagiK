@@ -163,42 +163,55 @@ impl BuildProgressJournal {
 
     /// Atomically makes all output for one target resumable.
     pub fn checkpoint_target(&mut self, completed: &CompletedTarget) -> Result<(), String> {
+        self.checkpoint_targets(std::slice::from_ref(completed))
+    }
+
+    /// Atomically makes a bounded group of target outputs resumable with one
+    /// durable SQLite commit. Callers bound both row count and encoded bytes.
+    pub fn checkpoint_targets(&mut self, completed: &[CompletedTarget]) -> Result<(), String> {
+        if completed.is_empty() {
+            return Ok(());
+        }
         let tx = self
             .conn
             .transaction()
-            .map_err(|error| format!("begin target checkpoint: {error}"))?;
-        let expected = tx
-            .query_row(
-                "SELECT target_key,path FROM scan_targets WHERE ordinal=?1",
-                [completed.target.ordinal],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            .map_err(|error| format!("begin target checkpoint batch: {error}"))?;
+        for completed in completed {
+            let expected = tx
+                .query_row(
+                    "SELECT target_key,path FROM scan_targets WHERE ordinal=?1",
+                    [completed.target.ordinal],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(|error| format!("read checkpoint target: {error}"))?
+                .ok_or_else(|| {
+                    format!("unknown scan target ordinal {}", completed.target.ordinal)
+                })?;
+            if expected != (completed.target.key.clone(), completed.target.path.clone()) {
+                return Err(format!(
+                    "scan target {} does not match journal contract",
+                    completed.target.ordinal
+                ));
+            }
+            let stats_json = serde_json::to_string(&completed.accumulated_stats)
+                .map_err(|error| format!("encode target stats: {error}"))?;
+            tx.execute(
+                "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json)
+                 VALUES(?1,?2,?3,?4)
+                 ON CONFLICT(ordinal) DO UPDATE SET input_fingerprint=excluded.input_fingerprint,
+                     output_json=excluded.output_json,stats_json=excluded.stats_json",
+                params![
+                    completed.target.ordinal,
+                    completed.input_fingerprint,
+                    completed.output_json,
+                    stats_json
+                ],
             )
-            .optional()
-            .map_err(|error| format!("read checkpoint target: {error}"))?
-            .ok_or_else(|| format!("unknown scan target ordinal {}", completed.target.ordinal))?;
-        if expected != (completed.target.key.clone(), completed.target.path.clone()) {
-            return Err(format!(
-                "scan target {} does not match journal contract",
-                completed.target.ordinal
-            ));
+            .map_err(|error| format!("write target checkpoint: {error}"))?;
         }
-        let stats_json = serde_json::to_string(&completed.accumulated_stats)
-            .map_err(|error| format!("encode target stats: {error}"))?;
-        tx.execute(
-            "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json)
-             VALUES(?1,?2,?3,?4)
-             ON CONFLICT(ordinal) DO UPDATE SET input_fingerprint=excluded.input_fingerprint,
-                 output_json=excluded.output_json,stats_json=excluded.stats_json",
-            params![
-                completed.target.ordinal,
-                completed.input_fingerprint,
-                completed.output_json,
-                stats_json
-            ],
-        )
-        .map_err(|error| format!("write target checkpoint: {error}"))?;
         tx.commit()
-            .map_err(|error| format!("commit target checkpoint: {error}"))
+            .map_err(|error| format!("commit target checkpoint batch: {error}"))
     }
 
     pub fn record_shard(&mut self, shard: &CompletedShard) -> Result<(), String> {
@@ -524,6 +537,46 @@ mod tests {
         let mut invalid = completed();
         invalid.target.key = "wrong".into();
         assert!(journal.checkpoint_target(&invalid).is_err());
+        assert!(journal.completed_targets().unwrap().is_empty());
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn failed_target_batch_rolls_back_every_target() {
+        let path = temp_path("build-progress-batch-atomic");
+        let targets = vec![
+            ScanTarget {
+                ordinal: 0,
+                key: "first".into(),
+                path: "/games/first".into(),
+            },
+            ScanTarget {
+                ordinal: 1,
+                key: "second".into(),
+                path: "/games/second".into(),
+            },
+        ];
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets).unwrap();
+        let batch = vec![
+            CompletedTarget {
+                target: targets[0].clone(),
+                input_fingerprint: "first-fingerprint".into(),
+                output_json: "{}".into(),
+                accumulated_stats: BuildStats::default(),
+            },
+            CompletedTarget {
+                target: ScanTarget {
+                    key: "wrong".into(),
+                    ..targets[1].clone()
+                },
+                input_fingerprint: "second-fingerprint".into(),
+                output_json: "{}".into(),
+                accumulated_stats: BuildStats::default(),
+            },
+        ];
+
+        assert!(journal.checkpoint_targets(&batch).is_err());
         assert!(journal.completed_targets().unwrap().is_empty());
         remove(&path).unwrap();
     }

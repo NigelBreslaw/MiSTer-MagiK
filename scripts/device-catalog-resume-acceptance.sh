@@ -61,7 +61,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$SELF_TEST" -eq 1 ]; then
-  fixture=$'catalog_resume_tsv\tbuild_id=abc\tphase=target-committed\ttarget_ordinal=7\ttarget_count=20\tcommitted=1\treused=6\tinvalidated=0\treason=durable'
+  fixture=$'catalog_resume_tsv\tbuild_id=abc\tphase=targets-committed\ttarget_ordinal=7\ttarget_count=20\tcommitted=8\treused=6\tinvalidated=0\treason=durable-batch:8'
   [ "$(resume_field "$fixture" build_id)" = abc ]
   [ "$(resume_field "$fixture" target_ordinal)" = 7 ]
   inspect=$'catalog_v3_summary_tsv\tvalid=1\tsystems=2\ttotal_games=9\tfingerprint=deadbeef\ncatalog_v3_system_tsv\tsystem_id=snes\tgames=4\ncatalog_v3_system_tsv\tsystem_id=arcade\tgames=5'
@@ -146,7 +146,7 @@ write_test_env() {
 }
 
 arm_checkpoint_gate() {
-  remote "rm -f '$REMOTE_GATE' '$REMOTE_LOG' '$REMOTE_EVENTS'; ( elapsed=0; while [ \"\$elapsed\" -lt '$TIMEOUT' ]; do if grep -q 'catalog_resume_tsv.*phase=target-committed' '$REMOTE_LOG' 2>/dev/null; then : > '$REMOTE_GATE'; exit 0; fi; sleep 1; elapsed=\$((elapsed + 1)); done; exit 124 ) >/tmp/catalog-resume-watcher.log 2>&1 & echo \$! > '$REMOTE_WATCHER'"
+  remote "rm -f '$REMOTE_GATE' '$REMOTE_LOG' '$REMOTE_EVENTS'; ( elapsed=0; while [ \"\$elapsed\" -lt '$TIMEOUT' ]; do if grep -q 'catalog_resume_tsv.*phase=targets-committed' '$REMOTE_LOG' 2>/dev/null; then : > '$REMOTE_GATE'; exit 0; fi; sleep 1; elapsed=\$((elapsed + 1)); done; exit 124 ) >/tmp/catalog-resume-watcher.log 2>&1 & echo \$! > '$REMOTE_WATCHER'"
 }
 
 latest_resume_line() {
@@ -199,7 +199,7 @@ for cycle in 1 2 3; do
   launcher_pid="$ACTIVE_PID"
   [[ "$launcher_pid" =~ ^[0-9]+$ ]] || fail "cycle $cycle launcher PID missing"
   wait_remote "cycle $cycle durable target gate" "$TIMEOUT" "test -f '$REMOTE_GATE'"
-  commit_line="$(remote "grep 'catalog_resume_tsv.*phase=target-committed' '$REMOTE_LOG' | tail -1")"
+  commit_line="$(remote "grep 'catalog_resume_tsv.*phase=targets-committed' '$REMOTE_LOG' | tail -1")"
   ordinal="$(resume_field "$commit_line" target_ordinal)"
   checkpoint_count="$(resume_field "$commit_line" committed)"
   [[ "$ordinal" =~ ^[0-9]+$ ]] || fail "cycle $cycle missing committed target ordinal"

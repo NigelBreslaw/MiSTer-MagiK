@@ -180,7 +180,12 @@ struct ResumeScan {
     reused: usize,
     invalidated: usize,
     committed: usize,
+    pending: Vec<crate::build_progress::CompletedTarget>,
+    pending_bytes: usize,
 }
+
+const RESUME_CHECKPOINT_TARGET_BATCH: usize = 16;
+const RESUME_CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 struct Fingerprint(u64);
 
@@ -245,6 +250,45 @@ fn report_resume(state: &ResumeScan, phase: &str, ordinal: usize, reason: &str) 
         state.invalidated,
         reason.replace(['\t', '\n'], " ")
     );
+}
+
+fn flush_target_checkpoints(state: &mut ResumeScan) {
+    if state.pending.is_empty() {
+        return;
+    }
+    let pending = std::mem::take(&mut state.pending);
+    state.pending_bytes = 0;
+    let count = pending.len();
+    let ordinal = pending
+        .last()
+        .map_or(0, |completed| completed.target.ordinal as usize);
+    match state.journal.checkpoint_targets(&pending) {
+        Ok(()) => {
+            state.committed += count;
+            report_resume(
+                state,
+                "targets-committed",
+                ordinal,
+                &format!("durable-batch:{count}"),
+            );
+        }
+        Err(error) => report_resume(state, "checkpoint-failed", ordinal, &error),
+    }
+}
+
+fn queue_target_checkpoint(
+    state: &mut ResumeScan,
+    completed: crate::build_progress::CompletedTarget,
+) {
+    state.pending_bytes = state
+        .pending_bytes
+        .saturating_add(completed.output_json.len());
+    state.pending.push(completed);
+    if state.pending.len() >= RESUME_CHECKPOINT_TARGET_BATCH
+        || state.pending_bytes >= RESUME_CHECKPOINT_MAX_BYTES
+    {
+        flush_target_checkpoints(state);
+    }
 }
 
 fn prepare_resume_scan(
@@ -315,6 +359,8 @@ fn prepare_resume_scan(
         reused: 0,
         invalidated: 0,
         committed: durable_completed,
+        pending: Vec::with_capacity(RESUME_CHECKPOINT_TARGET_BATCH),
+        pending_bytes: 0,
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
     Some(state)
@@ -652,23 +698,7 @@ fn scan_library_with_progress_and_events(
                                         discoveries: discoveries.len() as u64,
                                     },
                                 };
-                                match state.journal.checkpoint_target(&completed) {
-                                    Ok(()) => {
-                                        state.committed += 1;
-                                        report_resume(
-                                            state,
-                                            "target-committed",
-                                            descriptor.ordinal,
-                                            "durable",
-                                        );
-                                    }
-                                    Err(error) => report_resume(
-                                        state,
-                                        "checkpoint-failed",
-                                        descriptor.ordinal,
-                                        &error,
-                                    ),
-                                }
+                                queue_target_checkpoint(state, completed);
                             }
                             Err(error) => report_resume(
                                 state,
@@ -898,6 +928,9 @@ fn scan_library_with_progress_and_events(
                 );
             }
         }
+    }
+    if let Some(state) = resume.as_mut() {
+        flush_target_checkpoints(state);
     }
     let _ = target_descriptor;
     if discover_us == 0 {
