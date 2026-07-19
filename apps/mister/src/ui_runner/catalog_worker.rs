@@ -11,6 +11,7 @@ use mister_magik_catalog::{
 };
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 
 fn send_ready_catalog(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
@@ -43,6 +44,89 @@ fn send_ready_catalog(
         publication_started.elapsed().as_micros(),
         durable_save_pending as u8,
     );
+}
+
+fn publish_persisted_registry_seed_at(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    root: &str,
+    storage: &Path,
+) -> Option<String> {
+    let load_started = Instant::now();
+    match super::launcher_loop::load_sharded_registry_seed_at(root, storage) {
+        Ok(seed) => {
+            let load_us = load_started.elapsed().as_micros() as u64;
+            let fingerprint = seed.catalog_fingerprint.clone();
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_post_persist_registry_load".to_string(),
+                detail: format!(
+                    "status=ready load_us={load_us} generation={} systems={} resident_games={}",
+                    seed.generation,
+                    seed.catalog.systems.len(),
+                    seed.catalog.games.len()
+                ),
+            });
+            send_ready_catalog(
+                tx,
+                seed.catalog,
+                None,
+                load_us,
+                CatalogSource::ShardedRegistry,
+                true,
+                Some(fingerprint.clone()),
+            );
+            Some(fingerprint)
+        }
+        Err(error) => {
+            let detail = format!(
+                "status={} load_us={} error={}",
+                error.status,
+                load_started.elapsed().as_micros(),
+                error.to_string().replace('\t', " ")
+            );
+            crate::ui_errln!("catalog post-persist registry hydration failed: {detail}");
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_post_persist_registry_load".to_string(),
+                detail,
+            });
+            None
+        }
+    }
+}
+
+fn send_persisted_catalog(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    root: &str,
+    summary: BuilderSummary,
+) {
+    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+    send_persisted_catalog_at(
+        tx,
+        root,
+        summary,
+        &storage,
+        &mister_magik_catalog::catalog_state::path_for_root(&storage),
+    );
+}
+
+fn send_persisted_catalog_at(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    root: &str,
+    summary: BuilderSummary,
+    storage: &Path,
+    state_path: &Path,
+) {
+    let completed_build_seconds = summary.completed_build_seconds;
+    let generation_fingerprint =
+        publish_persisted_registry_seed_at(tx, root, storage).or_else(|| {
+            mister_magik_catalog::catalog_state::read(state_path)
+                .ok()
+                .map(|state| state.stamp.fingerprint_hex())
+        });
+    let _ = tx.send(CatalogWorkerMessage::Persisted {
+        summary: refresh_summary(summary),
+        completed_build_seconds,
+        generation_fingerprint,
+    });
 }
 
 pub(super) fn catalog_builder_lock_available() -> bool {
@@ -857,17 +941,7 @@ fn handle_embedded_builder_event(
             }
         },
         CatalogBuilderEvent::Persisted { summary, .. } => {
-            let completed_build_seconds = summary.completed_build_seconds;
-            let generation_fingerprint = mister_magik_catalog::catalog_state::read(
-                &mister_magik_catalog::catalog_state::default_path(),
-            )
-            .ok()
-            .map(|state| state.stamp.fingerprint_hex());
-            let _ = tx.send(CatalogWorkerMessage::Persisted {
-                summary: refresh_summary(summary),
-                completed_build_seconds,
-                generation_fingerprint,
-            });
+            send_persisted_catalog(tx, root, summary);
         }
         CatalogBuilderEvent::Unchanged { summary, .. } => {
             let _ = tx.send(CatalogWorkerMessage::Unchanged {
@@ -1500,6 +1574,82 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
 mod tests {
     use super::*;
 
+    fn post_persist_registry_fixture() -> (PathBuf, String) {
+        use mister_magik_catalog::arcade_catalog::{ArcadeCatalog, GameSystemEntry};
+        use mister_magik_catalog::catalog_checkpoint::CatalogDiscoveryCheckpoint;
+        use mister_magik_catalog::catalog_state::{CatalogState, CatalogStateStats};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let storage = std::env::temp_dir().join(format!(
+            "mister-magik-post-persist-registry-{}-{nonce}",
+            std::process::id()
+        ));
+        let stamp = catalog_stamp::CatalogStamp::from_lines(vec!["post-persist-v1".into()]);
+        let fingerprint = stamp.fingerprint_hex();
+        let games = vec![
+            crate::test_support::arcade_game("Arcade Game").build(),
+            crate::test_support::arcade_game("Game Boy Game")
+                .path("/media/fat/games/Gameboy/Game Boy Game.gb")
+                .system_id("gb")
+                .build(),
+            crate::test_support::arcade_game("Game Boy Color Game")
+                .path("/media/fat/games/Gameboy2/Game Boy Color Game.gbc")
+                .system_id("gbc")
+                .build(),
+            crate::test_support::arcade_game("Lynx Game")
+                .path("/media/fat/games/AtariLynx/Lynx Game.lnx")
+                .system_id("atarilynx")
+                .build(),
+        ];
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            games,
+            vec![
+                GameSystemEntry {
+                    id: "arcade".into(),
+                    title: "Arcade".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "gb".into(),
+                    title: "Game Boy".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "gbc".into(),
+                    title: "Game Boy Color".into(),
+                    count: 1,
+                },
+                GameSystemEntry {
+                    id: "atarilynx".into(),
+                    title: "Atari Lynx".into(),
+                    count: 1,
+                },
+            ],
+        );
+        mister_magik_catalog::production_sharded_projection::publish_bound_production_projection(
+            &storage,
+            &catalog,
+            &fingerprint,
+            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        )
+        .expect("publish V3 fixture");
+        mister_magik_catalog::catalog_state::write(
+            &mister_magik_catalog::catalog_state::path_for_root(&storage),
+            &CatalogState {
+                stamp,
+                checkpoint: CatalogDiscoveryCheckpoint::from_lines(vec!["fixture".into()]),
+                stats: CatalogStateStats::default(),
+            },
+        )
+        .expect("write V3 fixture state");
+        (storage, fingerprint)
+    }
+
     #[test]
     fn navigation_projection_uses_sqlite_stamp_when_summary_is_missing() {
         let stored = catalog_stamp::CatalogStamp::from_lines(vec!["catalog-v1".into()]);
@@ -1580,6 +1730,160 @@ mod tests {
         worker.join().expect("catalog worker");
         assert!(rx.recv().is_err(), "worker must not start search indexing");
         assert!(!delivered_catalog.text_indexes_ready());
+    }
+
+    #[test]
+    fn persisted_event_rehydrates_live_handheld_counts_before_completion() {
+        let (storage, fingerprint) = post_persist_registry_fixture();
+        let (tx, rx) = mpsc::channel();
+        let worker_storage = storage.clone();
+        let worker = std::thread::spawn(move || {
+            let state_path = mister_magik_catalog::catalog_state::path_for_root(&worker_storage);
+            send_persisted_catalog_at(
+                &tx,
+                "/media/fat/_Arcade",
+                BuilderSummary::default(),
+                &worker_storage,
+                &state_path,
+            );
+        });
+
+        assert!(matches!(
+            rx.recv().expect("registry timing"),
+            CatalogWorkerMessage::Timing { name, detail }
+                if name == "catalog_post_persist_registry_load"
+                    && detail.contains("status=ready")
+        ));
+        let catalog = match rx.recv().expect("registry catalog") {
+            CatalogWorkerMessage::Ready {
+                catalog,
+                source,
+                durable_save_pending,
+                generation_fingerprint,
+                publication_ack,
+                ..
+            } => {
+                assert_eq!(source, CatalogSource::ShardedRegistry);
+                assert!(durable_save_pending);
+                assert_eq!(
+                    generation_fingerprint.as_deref(),
+                    Some(fingerprint.as_str())
+                );
+                publication_ack
+                    .expect("publication acknowledgement")
+                    .send(())
+                    .expect("acknowledge registry catalog");
+                catalog
+            }
+            _ => panic!("expected registry catalog"),
+        };
+        assert!(matches!(
+            rx.recv().expect("persistence completion"),
+            CatalogWorkerMessage::Persisted { generation_fingerprint, .. }
+                if generation_fingerprint.as_deref() == Some(fingerprint.as_str())
+        ));
+        worker.join().expect("registry worker");
+
+        assert_eq!(catalog.systems.len(), 4);
+        assert_eq!(
+            catalog
+                .systems
+                .iter()
+                .find(|system| system.id == "gb")
+                .unwrap()
+                .count,
+            1
+        );
+        assert_eq!(
+            catalog
+                .systems
+                .iter()
+                .find(|system| system.id == "gbc")
+                .unwrap()
+                .count,
+            1
+        );
+        assert_eq!(
+            catalog
+                .systems
+                .iter()
+                .find(|system| system.id == "atarilynx")
+                .unwrap()
+                .count,
+            1
+        );
+        assert_eq!(
+            catalog.games.len(),
+            1,
+            "only Arcade rows should be resident"
+        );
+        assert_eq!(catalog.games[0].system_id.as_ref(), "arcade");
+
+        let mut nav = LauncherNav::new();
+        nav.catalog_build_started();
+        for system_id in ["gb", "gbc", "atarilynx"] {
+            nav.catalog_system_discovered(system_id);
+        }
+        let bootstrap = ArcadeCatalog::new(
+            PathBuf::from("/media/fat/_Arcade"),
+            catalog.games.iter().cloned().collect(),
+            catalog
+                .systems
+                .iter()
+                .filter(|system| system.id == "arcade")
+                .cloned()
+                .collect(),
+        );
+        let shell_catalog = nav.catalog_with_build_shells(bootstrap);
+        nav.sync_launcher_taxonomy(&shell_catalog);
+        assert!(nav.open_menu(crate::launcher_taxonomy::HANDHELDS_MENU_ID));
+        assert!(nav.open_menu("menu:handhelds:nintendo"));
+        assert_eq!(nav.current_menu_game_count(), 0);
+
+        nav.sync_launcher_taxonomy(&catalog);
+        assert_eq!(nav.current_menu_id(), "menu:handhelds:nintendo");
+        assert_eq!(nav.current_menu_game_count(), 2);
+        assert!(nav.open_menu(crate::launcher_taxonomy::HANDHELDS_MENU_ID));
+        assert_eq!(nav.current_menu_game_count(), 3);
+        assert!(nav
+            .current_menu_items()
+            .iter()
+            .any(|item| item.title == "Nintendo" && item.count == 2));
+        assert!(nav
+            .current_menu_items()
+            .iter()
+            .any(|item| item.title.contains("Lynx") && item.count == 1));
+        assert!(nav.open_system(&catalog, "gb"));
+        assert!(super::super::launcher_bridge::active_system_games_loading(
+            &catalog, &nav
+        ));
+
+        std::fs::remove_dir_all(storage).expect("remove registry fixture");
+    }
+
+    #[test]
+    fn failed_post_persist_registry_hydration_is_nonfatal_and_publishes_no_catalog() {
+        let storage = std::env::temp_dir().join(format!(
+            "mister-magik-missing-post-persist-registry-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&storage);
+        let (tx, rx) = mpsc::channel();
+
+        assert_eq!(
+            publish_persisted_registry_seed_at(&tx, "/media/fat/_Arcade", &storage),
+            None
+        );
+        assert!(matches!(
+            rx.recv().expect("failure timing"),
+            CatalogWorkerMessage::Timing { name, detail }
+                if name == "catalog_post_persist_registry_load"
+                    && detail.contains("status=unavailable")
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "failure must not publish a Ready catalog"
+        );
     }
 
     #[test]
@@ -1698,6 +2002,12 @@ mod tests {
             protocol,
             summary: BuilderSummary::default(),
         });
+        assert!(matches!(
+            rx.recv().unwrap(),
+            CatalogWorkerMessage::Timing { name, detail }
+                if name == "catalog_post_persist_registry_load"
+                    && detail.contains("status=unavailable")
+        ));
         assert!(matches!(
             rx.recv().unwrap(),
             CatalogWorkerMessage::Persisted { .. }

@@ -1062,69 +1062,67 @@ fn catalog_from_sharded_registry_and_summary(
     )
 }
 
-struct ShardedCatalogSeed {
-    catalog: ArcadeCatalog,
-    catalog_fingerprint: String,
+pub(super) struct ShardedCatalogSeed {
+    pub(super) catalog: ArcadeCatalog,
+    pub(super) catalog_fingerprint: String,
+    pub(super) generation: u64,
 }
 
-fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatalogSeed> {
+pub(super) struct ShardedCatalogSeedLoadError {
+    pub(super) status: &'static str,
+    error: String,
+}
+
+impl std::fmt::Display for ShardedCatalogSeedLoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.error)
+    }
+}
+
+pub(super) fn load_sharded_registry_seed(
+    root: &str,
+) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
+    load_sharded_registry_seed_at(
+        root,
+        &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+    )
+}
+
+pub(super) fn load_sharded_registry_seed_at(
+    root: &str,
+    storage: &Path,
+) -> Result<ShardedCatalogSeed, ShardedCatalogSeedLoadError> {
     use mister_magik_catalog::sharded_catalog::CatalogReader;
 
-    let load_started = Instant::now();
-    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-    let reader = match mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-        &storage,
+    let reader = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+        storage,
         mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-    ) {
-        Ok(reader) => reader,
-        Err(error) => {
-            print_startup_event(
-                start,
-                "catalog_v3_registry_load",
-                format!(
-                    "status=unavailable elapsed_us={} path={} error={error}",
-                    load_started.elapsed().as_micros(),
-                    storage.display()
-                ),
-            );
-            return None;
-        }
-    };
-    let registry = match reader.open_registry() {
-        Ok(registry) if !registry.systems().is_empty() => registry,
-        Ok(_) => return None,
-        Err(error) => {
-            print_startup_event(
-                start,
-                "catalog_v3_registry_load",
-                format!(
-                    "status=failed elapsed_us={} path={} error={error}",
-                    load_started.elapsed().as_micros(),
-                    storage.display()
-                ),
-            );
-            return None;
-        }
-    };
+    )
+    .map_err(|error| ShardedCatalogSeedLoadError {
+        status: "unavailable",
+        error: error.to_string(),
+    })?;
+    let registry = reader
+        .open_registry()
+        .map_err(|error| ShardedCatalogSeedLoadError {
+            status: "failed",
+            error: error.to_string(),
+        })?;
+    if registry.systems().is_empty() {
+        return Err(ShardedCatalogSeedLoadError {
+            status: "empty",
+            error: "catalog registry has no systems".to_string(),
+        });
+    }
     let catalog_fingerprint =
-        match mister_magik_catalog::production_sharded_projection::validate_production_binding(
-            &storage,
+        mister_magik_catalog::production_sharded_projection::validate_production_binding(
+            storage,
             registry.generation(),
-        ) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                print_startup_event(
-                    start,
-                    "catalog_v3_registry_load",
-                    format!(
-                        "status=stale elapsed_us={} path={} error={error}",
-                        load_started.elapsed().as_micros(),
-                        storage.display()
-                    ),
-                );
-                return None;
-            }
-        };
+        )
+        .map_err(|error| ShardedCatalogSeedLoadError {
+            status: "stale",
+            error: error.to_string(),
+        })?;
     let systems = registry
         .systems()
         .iter()
@@ -1134,17 +1132,7 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatal
             count: usize::try_from(system.games).unwrap_or(usize::MAX),
         })
         .collect::<Vec<_>>();
-    print_startup_event(
-        start,
-        "catalog_v3_registry_load",
-        format!(
-            "status=ready elapsed_us={} path={} generation={} systems={}",
-            load_started.elapsed().as_micros(),
-            storage.display(),
-            registry.generation(),
-            systems.len()
-        ),
-    );
+    let generation = registry.generation();
     let arcade_id = mister_magik_catalog::catalog_classify::SystemId::parse(
         arcade_catalog::MENU_ARCADE_SYSTEM_ID.trim_start_matches("menu:"),
     )
@@ -1163,7 +1151,7 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatal
             )
         })
         .collect();
-    Some(ShardedCatalogSeed {
+    Ok(ShardedCatalogSeed {
         catalog: ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
             PathBuf::from(root),
             games,
@@ -1172,7 +1160,43 @@ fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatal
             platform_kinds,
         ),
         catalog_fingerprint,
+        generation,
     })
+}
+
+fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatalogSeed> {
+    let load_started = Instant::now();
+    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+    match load_sharded_registry_seed(root) {
+        Ok(seed) => {
+            print_startup_event(
+                start,
+                "catalog_v3_registry_load",
+                format!(
+                    "status=ready elapsed_us={} path={} generation={} systems={}",
+                    load_started.elapsed().as_micros(),
+                    storage.display(),
+                    seed.generation,
+                    seed.catalog.systems.len()
+                ),
+            );
+            Some(seed)
+        }
+        Err(error) if error.status == "empty" => None,
+        Err(error) => {
+            print_startup_event(
+                start,
+                "catalog_v3_registry_load",
+                format!(
+                    "status={} elapsed_us={} path={} error={error}",
+                    error.status,
+                    load_started.elapsed().as_micros(),
+                    storage.display()
+                ),
+            );
+            None
+        }
+    }
 }
 
 fn arcade_rows_from_shard(
