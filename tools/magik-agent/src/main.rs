@@ -3115,6 +3115,7 @@ mod linux {
         file.sync_all().map_err(|err| err.to_string())?;
         fs::set_permissions(&upload, fs::Permissions::from_mode(0o755))
             .map_err(|err| err.to_string())?;
+        file.sync_all().map_err(|err| err.to_string())?;
         let receive_ms = receive_t.elapsed().as_millis() as u64;
         let operation_id = format!(
             "deploy-{}-{}",
@@ -3141,6 +3142,29 @@ mod linux {
             &json!({"operation_id": format!("{operation_id}-resume")}),
         ) {
             Ok(resume) => {
+                let mut published = File::open(remote_path).map_err(|err| err.to_string())?;
+                let mut published_hasher = Sha256::new();
+                let mut hash_buffer = [0u8; 64 * 1024];
+                loop {
+                    let count = published
+                        .read(&mut hash_buffer)
+                        .map_err(|err| err.to_string())?;
+                    if count == 0 {
+                        break;
+                    }
+                    published_hasher.update(&hash_buffer[..count]);
+                }
+                let published_checksum = format!("{:x}", published_hasher.finalize());
+                if published_checksum != expectations.checksum {
+                    let failed = parent.join(".mister-magik-fb.failed");
+                    let _ = fs::remove_file(&failed);
+                    let _ = fs::rename(remote_path, &failed);
+                    fs::rename(&rollback, remote_path).map_err(|err| {
+                        format!("published checksum mismatch and rollback failed: {err}")
+                    })?;
+                    let _ = fs::remove_file(&failed);
+                    return Err(format!("published checksum mismatch expected={} actual={published_checksum}; previous executable restored", expectations.checksum));
+                }
                 let _ = fs::remove_file(&rollback);
                 if let Ok(dir) = File::open(parent) {
                     let _ = dir.sync_all();
@@ -3406,6 +3430,14 @@ mod linux {
             .get("operation_id")
             .and_then(Value::as_str)
             .ok_or_else(|| "missing operation_id".to_string())?;
+        if operation_id.is_empty()
+            || operation_id.len() > 128
+            || !operation_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err("invalid operation_id".to_string());
+        }
         let cache = MAGIK_OPERATION_RESULTS.get_or_init(|| Mutex::new(HashMap::new()));
         if let Some(result) = cache
             .lock()
@@ -3418,6 +3450,13 @@ mod linux {
         let started = Instant::now();
         let ready = wait_for_main_ready(None, Duration::from_secs(15))?;
         let before_generation = main_generation(&ready).unwrap_or(0);
+        if let Some(expected) = args.get("expected_generation").and_then(Value::as_u64) {
+            if expected != before_generation {
+                return Err(format!(
+                    "stale_main_generation expected={expected} actual={before_generation}"
+                ));
+            }
+        }
         let command = match action {
             "suspend" => "mister_magik_suspend",
             "resume" => "mister_magik_resume",
@@ -3459,10 +3498,11 @@ mod linux {
             "terminal_reason": "acknowledged",
             "main_status": final_status,
         });
-        cache
-            .lock()
-            .map_err(|_| "operation cache poisoned")?
-            .insert(operation_id.to_string(), result.clone());
+        let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
+        if results.len() >= 128 {
+            results.clear();
+        }
+        results.insert(operation_id.to_string(), result.clone());
         Ok(result)
     }
 

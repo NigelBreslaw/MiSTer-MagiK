@@ -600,7 +600,7 @@ fn mame_metadata_build(args: &[String]) -> Result<()> {
 fn load_mame_software_list_xmls(
     args: &[String],
 ) -> Result<(Vec<MameSoftwareItem>, Vec<MameSoftwareHash>)> {
-    const TARGET_LISTS: &[&str] = &["nes", "snes", "n64", "sms", "megadriv", "saturn"];
+    const TARGET_LISTS: &[&str] = &["nes", "snes", "n64", "sms", "megadriv", "saturn", "lynx"];
 
     let mut paths = option_values(args, "--software-list")
         .into_iter()
@@ -2128,9 +2128,21 @@ fn agent_magik(args: &[String]) -> Result<()> {
     } else {
         Duration::from_secs(40)
     };
+    let expected_generation = if action == "status" {
+        None
+    } else {
+        let status = agent_request("magik", json!({"action": "status"}), Duration::from_secs(5))?;
+        Some(
+            status
+                .response
+                .pointer("/result/files/main_status/main_generation")
+                .and_then(Value::as_u64)
+                .ok_or("agent Main status missing generation")?,
+        )
+    };
     let reply = agent_request(
         "magik",
-        json!({"action": action, "operation_id": operation_id}),
+        json!({"action": action, "operation_id": operation_id, "expected_generation": expected_generation}),
         timeout,
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
