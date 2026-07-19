@@ -92,9 +92,12 @@ Console screenshot packs live under:
 /media/fat/mister-magik/assets/megadrive-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/saturn-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/amiga-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/atarilynx-screenshots-160x102.mmlz4b
 ```
 
-The current public pack size is `320x320`. Legacy fixed-name packs such as
+The default public pack size is `320x320`; Atari Lynx uses its native
+`160x102` landscape geometry, with portrait titles stored as `102x160`.
+Legacy fixed-name packs such as
 `saturn-screenshots.mmlz4b` are still readable as fallback, but new runtime
 downloads preserve the image size in the filename. The preview worker resolves
 legacy catalog paths through

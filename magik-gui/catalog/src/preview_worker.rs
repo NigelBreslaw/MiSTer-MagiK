@@ -14,9 +14,10 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::media_identity::{
-    default_screenshot_asset_dir, legacy_screenshot_pack_path, screenshot_media_state_path_in_root,
-    screenshot_pack_id_from_legacy_filename, size_qualified_screenshot_pack_path_in_root,
-    supported_screenshot_pack_ids, valid_screenshot_image_size, DEFAULT_SCREENSHOT_IMAGE_SIZE,
+    default_screenshot_asset_dir, legacy_screenshot_pack_path, preferred_screenshot_image_size,
+    screenshot_media_state_path_in_root, screenshot_pack_id_from_legacy_filename,
+    size_qualified_screenshot_pack_path_in_root, supported_screenshot_pack_ids,
+    valid_screenshot_image_size, DEFAULT_SCREENSHOT_IMAGE_SIZE,
 };
 use crate::preview_archive::{
     read_file_entry, read_sidecar_entry, read_u32, validate_entry_count, validate_entry_geometry,
@@ -1676,7 +1677,7 @@ fn auto_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
 }
 
 fn preferred_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
-    let preferred_size = preferred_media_size();
+    let preferred_size = preferred_media_size(system);
     state_archive_path_for_system(root, system, &preferred_size)
         .filter(|path| Path::new(path).exists())
         .or_else(|| {
@@ -1692,11 +1693,11 @@ fn preferred_archive_path_for_system(root: &Path, system: &str) -> Option<String
         })
 }
 
-fn preferred_media_size() -> String {
+fn preferred_media_size(system: &str) -> String {
     std::env::var("MISTER_MEDIA_SIZE")
         .ok()
         .filter(|size| valid_screenshot_image_size(size))
-        .unwrap_or_else(|| DEFAULT_MEDIA_SIZE.to_string())
+        .unwrap_or_else(|| preferred_screenshot_image_size(system).to_string())
 }
 
 fn state_archive_path_for_system(

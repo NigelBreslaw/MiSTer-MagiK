@@ -14,6 +14,7 @@ pub fn default_screenshot_asset_dir() -> PathBuf {
         .unwrap_or_else(|_| crate::device_layout::current_app_path("assets"))
 }
 pub const DEFAULT_SCREENSHOT_IMAGE_SIZE: &str = "320x320";
+pub const ATARI_LYNX_SCREENSHOT_IMAGE_SIZE: &str = "160x102";
 pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
 
 const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
@@ -26,6 +27,7 @@ const SUPPORTED_SCREENSHOT_PACK_IDS: &[ScreenshotPackId] = &[
     ScreenshotPackId::MegaDrive,
     ScreenshotPackId::Saturn,
     ScreenshotPackId::Amiga,
+    ScreenshotPackId::AtariLynx,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -39,6 +41,7 @@ pub enum ScreenshotPackId {
     MegaDrive,
     Saturn,
     Amiga,
+    AtariLynx,
 }
 
 impl ScreenshotPackId {
@@ -53,6 +56,7 @@ impl ScreenshotPackId {
             "megadrive" => Some(Self::MegaDrive),
             "saturn" => Some(Self::Saturn),
             "amiga" => Some(Self::Amiga),
+            "atarilynx" => Some(Self::AtariLynx),
             _ => None,
         }
     }
@@ -68,6 +72,7 @@ impl ScreenshotPackId {
             Self::MegaDrive => "megadrive",
             Self::Saturn => "saturn",
             Self::Amiga => "amiga",
+            Self::AtariLynx => "atarilynx",
         }
     }
 
@@ -93,6 +98,13 @@ impl ScreenshotPackId {
 
     pub fn size_qualified_path_in(self, root: &Path, image_size: &ScreenshotImageSize) -> PathBuf {
         root.join(self.size_qualified_filename(image_size))
+    }
+}
+
+pub fn preferred_screenshot_image_size(system: &str) -> &'static str {
+    match system {
+        "atarilynx" => ATARI_LYNX_SCREENSHOT_IMAGE_SIZE,
+        _ => DEFAULT_SCREENSHOT_IMAGE_SIZE,
     }
 }
 
@@ -279,6 +291,16 @@ mod tests {
         assert!(!valid_screenshot_image_size("0x320"));
         assert!(!valid_screenshot_image_size("320x"));
         assert!(!valid_screenshot_image_size("320xabc"));
+    }
+
+    #[test]
+    fn lynx_uses_native_screenshot_geometry() {
+        assert_eq!(preferred_screenshot_image_size("atarilynx"), "160x102");
+        assert_eq!(preferred_screenshot_image_size("saturn"), "320x320");
+        assert_eq!(
+            ScreenshotPackId::parse("atarilynx"),
+            Some(ScreenshotPackId::AtariLynx)
+        );
     }
 
     #[test]

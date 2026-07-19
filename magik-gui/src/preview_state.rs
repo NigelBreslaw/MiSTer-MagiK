@@ -1955,6 +1955,8 @@ fn preview_result_system_id(result: &PreviewResult) -> &'static str {
         "saturn"
     } else if path.contains("amiga-screenshots") {
         "amiga"
+    } else if path.contains("atarilynx-screenshots") {
+        "atarilynx"
     } else if path.contains("arcade-screenshots") {
         "arcade"
     } else {

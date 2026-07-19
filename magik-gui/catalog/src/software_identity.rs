@@ -435,6 +435,7 @@ pub(crate) fn software_list_for_platform(platform_id: &str) -> Option<&'static s
         "sms" => Some("sms"),
         "megadrive" => Some("megadriv"),
         "saturn" => Some("saturn"),
+        "atarilynx" => Some("lynx"),
         _ => None,
     }
 }
@@ -1000,6 +1001,7 @@ pub(crate) fn console_preview_asset(
 pub(crate) fn preview_platform_for_software_list(list_name: &str) -> &str {
     match list_name {
         "megadriv" => "megadrive",
+        "lynx" => "atarilynx",
         value => value,
     }
 }

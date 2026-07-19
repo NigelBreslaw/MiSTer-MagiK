@@ -5,6 +5,7 @@ use crate::artifact_publish::{
     hidden_timestamped_temp_path_for, prepare_artifact_publish, sync_path_rust_best_effort,
     timestamped_temp_path_for, ArtifactPublishLabels,
 };
+use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
 use mister_magik_catalog::preview_worker::invalidate_preview_archive_metadata_cache;
 use mister_magik_catalog::runtime_thread::{apply_runtime_thread_policy, RuntimeThreadRole};
 use mister_magik_fb::media_update::{
@@ -265,7 +266,14 @@ fn run_screenshot_media_worker(
 fn packs_by_system_for_size(packs: &[MediaPack], image_size: &str) -> BTreeMap<String, MediaPack> {
     packs
         .iter()
-        .filter(|pack| pack.image_size == image_size)
+        .filter(|pack| {
+            let preferred = if image_size == DEFAULT_IMAGE_SIZE {
+                preferred_screenshot_image_size(&pack.id)
+            } else {
+                image_size
+            };
+            pack.image_size == preferred
+        })
         .map(|pack| (pack.id.clone(), pack.clone()))
         .collect()
 }

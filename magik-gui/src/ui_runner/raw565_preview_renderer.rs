@@ -1794,6 +1794,21 @@ impl Raw565PreviewRenderer {
             PreviewRawPixels::Rgb565 {
                 pixels,
                 stride_pixels,
+            } if frame.display_w == frame.source_w.saturating_mul(2)
+                && frame.display_h == frame.source_h.saturating_mul(2) =>
+            {
+                for y in rect.y0..rect.y1 {
+                    let src_y = (((y as isize - image_y).max(0) as usize) >> 1).min(src_h - 1);
+                    let src_row = src_y * stride_pixels;
+                    for x in rect.x0..rect.x1 {
+                        let src_x = (((x as isize - image_x).max(0) as usize) >> 1).min(src_w - 1);
+                        cached[surface.row_start(y, x)] = pixels[src_row + src_x];
+                    }
+                }
+            }
+            PreviewRawPixels::Rgb565 {
+                pixels,
+                stride_pixels,
             } => {
                 for y in rect.y0..rect.y1 {
                     let src_y = ((y as isize - image_y).max(0) as usize / scale_y).min(src_h - 1);
@@ -1936,6 +1951,48 @@ mod tests {
         assert_eq!(
             Raw565PreviewRenderer::compose_frame(&mut cached, &ui, &frame, false),
             None
+        );
+    }
+
+    #[test]
+    fn raw565_two_x_path_duplicates_each_source_pixel_exactly() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let pixels = [
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+        ];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 4,
+            display_h: 4,
+        };
+        let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
+
+        let rect = Raw565PreviewRenderer::compose_frame(&mut cached, &ui, &frame, false).unwrap();
+        let rows = (rect.y0..rect.y1)
+            .map(|y| {
+                cached[y * ui.render_w() + rect.x0..y * ui.render_w() + rect.x1]
+                    .iter()
+                    .map(|p| p.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                vec![1, 1, 2, 2],
+                vec![1, 1, 2, 2],
+                vec![3, 3, 4, 4],
+                vec![3, 3, 4, 4]
+            ]
         );
     }
 
