@@ -17,8 +17,10 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[3]
-FORMAT = "mister-magik-platform-bundle-v0.1"
-MANIFEST_NAME = "platform-bundle-v0.1.json"
+FORMAT_V1 = "mister-magik-platform-bundle-v0.1"
+FORMAT = "mister-magik-platform-bundle-v0.2"
+MANIFEST_V1 = "platform-bundle-v0.1.json"
+MANIFEST_NAME = "platform-bundle-v0.2.json"
 HEX40 = 40
 HEX64 = 64
 
@@ -60,12 +62,21 @@ def fields(path: Path) -> dict[str, str]:
     return result
 
 
-def bundle_id(fpga_id: str, kernel_id: str) -> str:
+def legacy_bundle_id(fpga_id: str, kernel_id: str) -> str:
     helper = load_module("platform_component_id", ROOT / "scripts/release/platform/platform-component-id.py")
     try:
         return helper.bundle_id(fpga_id, kernel_id)
     except ValueError as error:
         raise BundleError(str(error)) from error
+
+
+def bundle_id(main_id: str, fpga_id: str, kernel_id: str) -> str:
+    for name, value in (("main", main_id), ("fpga", fpga_id), ("kernel", kernel_id)):
+        require_hex(f"{name}_input_sha256", value, HEX64)
+    material = (
+        f"format={FORMAT}\nmain={main_id}\nfpga={fpga_id}\nkernel={kernel_id}\n"
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def require_release_version(value: object) -> int:
@@ -77,12 +88,14 @@ def require_release_version(value: object) -> int:
 def update_plan(
     current: dict[str, object] | None,
     current_version: int,
+    main_id: str,
     fpga_id: str,
     kernel_id: str,
 ) -> dict[str, object]:
+    require_hex("main_input_sha256", main_id, HEX64)
     require_hex("fpga_input_sha256", fpga_id, HEX64)
     require_hex("kernel_input_sha256", kernel_id, HEX64)
-    identity = bundle_id(fpga_id, kernel_id)
+    identity = bundle_id(main_id, fpga_id, kernel_id)
     if current is None:
         if current_version != 0:
             raise BundleError("current platform version requires a manifest")
@@ -97,14 +110,19 @@ def update_plan(
         return result
     if current_version < 1:
         raise BundleError("current platform manifest requires a positive version")
-    if current.get("format") != FORMAT:
+    current_format = current.get("format")
+    if current_format not in (FORMAT_V1, FORMAT):
         raise BundleError("unsupported platform bundle format")
     stored_version = current.get("release_version")
     if stored_version is not None and require_release_version(stored_version) != current_version:
         raise BundleError("platform release tag and manifest version differ")
     current_fpga = str(current.get("fpga_input_sha256", ""))
     current_kernel = str(current.get("kernel_input_sha256", ""))
-    current_identity = bundle_id(current_fpga, current_kernel)
+    if current_format == FORMAT_V1:
+        current_identity = legacy_bundle_id(current_fpga, current_kernel)
+    else:
+        current_main = str(current.get("main_input_sha256", ""))
+        current_identity = bundle_id(current_main, current_fpga, current_kernel)
     if current.get("bundle_id") != current_identity:
         raise BundleError("current bundle identity does not match components")
     result = {
@@ -112,7 +130,7 @@ def update_plan(
         "next_version": current_version + 1,
         "current_bundle_id": current_identity,
         "bundle_id": identity,
-        "update_needed": current_identity != identity,
+        "update_needed": current_format == FORMAT_V1 or current_identity != identity,
     }
     result["release_tag"] = f"platform-v0.{result['next_version']}"
     return result
@@ -170,33 +188,45 @@ def write_checksums(root: Path, paths: list[Path]) -> None:
 
 def create(args: argparse.Namespace) -> Path:
     release_version = require_release_version(args.release_version)
+    main_id = args.main_id
     fpga_id = args.fpga_id
     kernel_id = args.kernel_id
+    require_hex("main_input_sha256", main_id, HEX64)
     require_hex("fpga_input_sha256", fpga_id, HEX64)
     require_hex("kernel_input_sha256", kernel_id, HEX64)
-    for name, value in (("fpga_run_id", args.fpga_run_id), ("kernel_run_id", args.kernel_run_id)):
+    for name, value in (("main_run_id", args.main_run_id), ("fpga_run_id", args.fpga_run_id), ("kernel_run_id", args.kernel_run_id)):
         if not value.isdigit():
             raise BundleError(f"invalid {name}")
-    for name, value in (("fpga_head_sha", args.fpga_head_sha), ("kernel_head_sha", args.kernel_head_sha)):
+    for name, value in (("main_head_sha", args.main_head_sha), ("fpga_head_sha", args.fpga_head_sha), ("kernel_head_sha", args.kernel_head_sha)):
         require_hex(name, value, HEX40)
+    main = load_module("main_component", ROOT / "scripts/release/platform/main-component.py")
+    try:
+        main_receipt = main.verify(args.main_dir, args.main_head_sha)
+    except (ValueError, OSError, json.JSONDecodeError) as error:
+        raise BundleError(f"invalid Main component: {error}") from error
+    if main_receipt.get("component_id") != main_id:
+        raise BundleError("Main component identity does not match artifact")
     contract, _, _ = verify_component_inputs(args.fpga_dir, args.scanout_dir, fpga_id, kernel_id)
-    identity = bundle_id(fpga_id, kernel_id)
+    identity = bundle_id(main_id, fpga_id, kernel_id)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"mister-magik-platform-v0.{release_version}.zip"
     manifest = output / MANIFEST_NAME
     with tempfile.TemporaryDirectory(prefix="mister-magik-platform-bundle-") as temporary:
         stage = Path(temporary) / "bundle"
+        shutil.copytree(args.main_dir, stage / "main")
         shutil.copytree(args.fpga_dir, stage / "fpga")
         shutil.copytree(args.scanout_dir, stage / "scanout")
         payload = {
             "format": FORMAT,
             "release_version": release_version,
             "bundle_id": identity,
+            "main_input_sha256": main_id,
             "fpga_input_sha256": fpga_id,
             "kernel_input_sha256": kernel_id,
             "platform_contract_sha256": contract,
             "components": {
+                "main": {"workflow": "main-mister.yml", "run_id": args.main_run_id, "head_sha": args.main_head_sha, "head_branch": "mister-magik"},
                 "fpga": {"workflow": "fpga-vblank-latch.yml", "run_id": args.fpga_run_id, "head_sha": args.fpga_head_sha, "head_branch": "main"},
                 "kernel": {"workflow": "kernel-scanout.yml", "run_id": args.kernel_run_id, "head_sha": args.kernel_head_sha, "head_branch": "main"},
             },
@@ -228,13 +258,15 @@ def verify(
                 if path.is_absolute() or ".." in path.parts or not info.filename or info.is_dir():
                     raise BundleError(f"unsafe archive member: {info.filename}")
                 source.extract(info, root)
-        stored_manifest = root / MANIFEST_NAME
+        manifest_name = MANIFEST_NAME if (root / MANIFEST_NAME).is_file() else MANIFEST_V1
+        stored_manifest = root / manifest_name
         if not stored_manifest.is_file() or not (root / "SHA256SUMS").is_file():
             raise BundleError("bundle is missing its manifest or checksums")
         payload = json.loads(stored_manifest.read_text())
         if manifest_path is not None and json.loads(manifest_path.read_text()) != payload:
             raise BundleError("release manifest differs from archive manifest")
-        if payload.get("format") != FORMAT:
+        bundle_format = payload.get("format")
+        if bundle_format not in (FORMAT_V1, FORMAT):
             raise BundleError("unsupported platform bundle format")
         release_version = payload.get("release_version")
         if release_version is not None:
@@ -247,19 +279,21 @@ def verify(
                 raise BundleError("platform release tag and manifest version differ")
         fpga_id = str(payload.get("fpga_input_sha256", ""))
         kernel_id = str(payload.get("kernel_input_sha256", ""))
-        expected = bundle_id(fpga_id, kernel_id)
+        main_id = str(payload.get("main_input_sha256", ""))
+        expected = legacy_bundle_id(fpga_id, kernel_id) if bundle_format == FORMAT_V1 else bundle_id(main_id, fpga_id, kernel_id)
         if payload.get("bundle_id") != expected:
             raise BundleError("bundle identity does not match components")
-        for component in ("fpga", "kernel"):
+        for component in (("fpga", "kernel") if bundle_format == FORMAT_V1 else ("main", "fpga", "kernel")):
             origin = payload.get("components", {}).get(component, {})
             if origin.get("head_sha") is None:
                 raise BundleError(f"missing {component} origin")
             require_hex(f"{component} head_sha", str(origin["head_sha"]), HEX40)
-            if origin.get("head_branch") != "main":
-                raise BundleError(f"{component} origin is not main")
+            expected_branch = "mister-magik" if component == "main" else "main"
+            if origin.get("head_branch") != expected_branch:
+                raise BundleError(f"{component} origin is not {expected_branch}")
         expected_files = {entry["path"]: entry for entry in payload.get("files", [])}
         actual_files = tree_entries(root)
-        actual_files = [entry for entry in actual_files if entry["path"] not in {MANIFEST_NAME, "SHA256SUMS"}]
+        actual_files = [entry for entry in actual_files if entry["path"] not in {manifest_name, "SHA256SUMS"}]
         if expected_files != {entry["path"]: entry for entry in actual_files}:
             raise BundleError("bundle file manifest does not match archive")
         checksums = fields(root / "SHA256SUMS") if False else None
@@ -271,6 +305,14 @@ def verify(
         contract, _, _ = verify_component_inputs(root / "fpga", root / "scanout", fpga_id, kernel_id)
         if contract != payload.get("platform_contract_sha256"):
             raise BundleError("bundle platform contract does not match components")
+        if bundle_format == FORMAT:
+            main = load_module("main_component_verify", ROOT / "scripts/release/platform/main-component.py")
+            try:
+                receipt = main.verify(root / "main", str(payload["components"]["main"]["head_sha"]))
+            except (ValueError, OSError, json.JSONDecodeError) as error:
+                raise BundleError(f"invalid bundled Main component: {error}") from error
+            if receipt.get("component_id") != main_id:
+                raise BundleError("bundled Main identity does not match receipt")
         return payload
 
 
@@ -278,12 +320,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     create_parser = commands.add_parser("create")
+    create_parser.add_argument("--main-dir", required=True, type=Path)
     create_parser.add_argument("--fpga-dir", required=True, type=Path)
     create_parser.add_argument("--scanout-dir", required=True, type=Path)
+    create_parser.add_argument("--main-id", required=True)
     create_parser.add_argument("--fpga-id", required=True)
     create_parser.add_argument("--kernel-id", required=True)
+    create_parser.add_argument("--main-run-id", required=True)
     create_parser.add_argument("--fpga-run-id", required=True)
     create_parser.add_argument("--kernel-run-id", required=True)
+    create_parser.add_argument("--main-head-sha", required=True)
     create_parser.add_argument("--fpga-head-sha", required=True)
     create_parser.add_argument("--kernel-head-sha", required=True)
     create_parser.add_argument("--release-version", required=True, type=int)
@@ -295,6 +341,7 @@ def main() -> int:
     plan = commands.add_parser("plan-update")
     plan.add_argument("--manifest", type=Path)
     plan.add_argument("--current-version", required=True, type=int)
+    plan.add_argument("--main-id", required=True)
     plan.add_argument("--fpga-id", required=True)
     plan.add_argument("--kernel-id", required=True)
     plan.add_argument("--github-output", type=Path)
@@ -306,7 +353,7 @@ def main() -> int:
             print(json.dumps(verify(args.archive, args.manifest, args.release_version), sort_keys=True))
         else:
             current = json.loads(args.manifest.read_text()) if args.manifest else None
-            result = update_plan(current, args.current_version, args.fpga_id, args.kernel_id)
+            result = update_plan(current, args.current_version, args.main_id, args.fpga_id, args.kernel_id)
             if args.github_output:
                 with args.github_output.open("a") as output:
                     for key, value in result.items():

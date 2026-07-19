@@ -31,9 +31,31 @@ class PlatformBundleTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.fpga = self.root / "fpga"
         self.scanout = self.root / "scanout"
+        self.main = self.root / "main"
+        self.main_revision = "e" * 40
+        self.main_id = bundle.load_module(
+            "test_main_component", bundle.ROOT / "scripts/release/platform/main-component.py"
+        ).component_id(self.main_revision)
         self.fpga_id = "a" * 64
         self.kernel_id = "b" * 64
         self.contract = "c" * 64
+        self.main.mkdir()
+        main_binary = self.main / "MiSTer_MagiK"
+        main_binary.write_bytes(b"main")
+        main_receipt = {
+            "format": "mister-magik-main-component-v0.1",
+            "repository": "NigelBreslaw/Main_MiSTer",
+            "branch": "mister-magik",
+            "source_revision": self.main_revision,
+            "toolchain": "gcc-arm-10.2-2020.11-x86_64-arm-none-linux-gnueabihf",
+            "component_id": self.main_id,
+            "binary": {"path": "MiSTer_MagiK", "size": main_binary.stat().st_size, "sha256": sha(main_binary)},
+        }
+        receipt = self.main / "main-component-v0.1.json"
+        receipt.write_text(json.dumps(main_receipt, indent=2, sort_keys=True) + "\n")
+        (self.main / "SHA256SUMS").write_text(
+            f"{sha(main_binary)}  MiSTer_MagiK\n{sha(receipt)}  main-component-v0.1.json\n"
+        )
         for flavour in ("stock", "patched"):
             directory = self.fpga / flavour
             reports = directory / "reports"
@@ -81,12 +103,16 @@ class PlatformBundleTests(unittest.TestCase):
 
     def create(self) -> Path:
         args = type("Args", (), {
+            "main_dir": self.main,
             "fpga_dir": self.fpga,
             "scanout_dir": self.scanout,
+            "main_id": self.main_id,
             "fpga_id": self.fpga_id,
             "kernel_id": self.kernel_id,
+            "main_run_id": "100",
             "fpga_run_id": "123",
             "kernel_run_id": "456",
+            "main_head_sha": self.main_revision,
             "fpga_head_sha": "8" * 40,
             "kernel_head_sha": "9" * 40,
             "release_version": 2,
@@ -96,14 +122,15 @@ class PlatformBundleTests(unittest.TestCase):
 
     def test_round_trip(self) -> None:
         archive = self.create()
-        payload = bundle.verify(archive, self.root / "output/platform-bundle-v0.1.json")
+        payload = bundle.verify(archive, self.root / "output/platform-bundle-v0.2.json")
+        self.assertEqual(payload["main_input_sha256"], self.main_id)
         self.assertEqual(payload["fpga_input_sha256"], self.fpga_id)
         self.assertEqual(payload["kernel_input_sha256"], self.kernel_id)
         self.assertEqual(payload["release_version"], 2)
         self.assertEqual(archive.name, "mister-magik-platform-v0.2.zip")
 
     def test_update_plan_starts_at_one(self) -> None:
-        plan = bundle.update_plan(None, 0, self.fpga_id, self.kernel_id)
+        plan = bundle.update_plan(None, 0, self.main_id, self.fpga_id, self.kernel_id)
         self.assertEqual(plan["next_version"], 1)
         self.assertEqual(plan["release_tag"], "platform-v0.1")
         self.assertTrue(plan["update_needed"])
@@ -111,24 +138,28 @@ class PlatformBundleTests(unittest.TestCase):
     def test_update_plan_increments_only_for_changed_identity(self) -> None:
         archive = self.create()
         current = bundle.verify(archive)
-        unchanged = bundle.update_plan(current, 2, self.fpga_id, self.kernel_id)
-        changed = bundle.update_plan(current, 2, self.fpga_id, "d" * 64)
+        unchanged = bundle.update_plan(current, 2, self.main_id, self.fpga_id, self.kernel_id)
+        changed = bundle.update_plan(current, 2, self.main_id, self.fpga_id, "d" * 64)
         self.assertFalse(unchanged["update_needed"])
         self.assertEqual(unchanged["next_version"], 3)
         self.assertTrue(changed["update_needed"])
         self.assertEqual(changed["next_version"], 3)
         self.assertEqual(changed["release_tag"], "platform-v0.3")
 
-    def test_update_plan_accepts_legacy_v1_manifest(self) -> None:
-        current = bundle.verify(self.create())
-        current.pop("release_version")
-        plan = bundle.update_plan(current, 1, self.fpga_id, self.kernel_id)
-        self.assertFalse(plan["update_needed"])
+    def test_update_plan_migrates_legacy_v1_manifest(self) -> None:
+        current = {
+            "format": bundle.FORMAT_V1,
+            "bundle_id": bundle.legacy_bundle_id(self.fpga_id, self.kernel_id),
+            "fpga_input_sha256": self.fpga_id,
+            "kernel_input_sha256": self.kernel_id,
+        }
+        plan = bundle.update_plan(current, 1, self.main_id, self.fpga_id, self.kernel_id)
+        self.assertTrue(plan["update_needed"])
 
     def test_update_plan_rejects_tag_manifest_version_mismatch(self) -> None:
         current = bundle.verify(self.create())
         with self.assertRaisesRegex(ValueError, "tag and manifest"):
-            bundle.update_plan(current, 3, self.fpga_id, self.kernel_id)
+            bundle.update_plan(current, 3, self.main_id, self.fpga_id, self.kernel_id)
 
     def test_verify_rejects_tag_manifest_version_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "tag and manifest"):
@@ -138,27 +169,26 @@ class PlatformBundleTests(unittest.TestCase):
         archive = self.create()
         legacy = self.root / "legacy.zip"
         with zipfile.ZipFile(archive) as source, zipfile.ZipFile(legacy, "w") as target:
-            manifest = json.loads(source.read("platform-bundle-v0.1.json"))
+            manifest = json.loads(source.read(bundle.MANIFEST_NAME))
+            manifest["format"] = bundle.FORMAT_V1
+            manifest["bundle_id"] = bundle.legacy_bundle_id(self.fpga_id, self.kernel_id)
             manifest.pop("release_version")
-            for info in source.infolist():
-                payload = source.read(info.filename)
-                if info.filename == "platform-bundle-v0.1.json":
-                    payload = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
-                elif info.filename == "SHA256SUMS":
-                    lines = [
-                        line
-                        for line in payload.decode().splitlines()
-                        if not line.endswith("  platform-bundle-v0.1.json")
-                    ]
-                    manifest_bytes = (
-                        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-                    ).encode()
-                    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
-                    payload = (
-                        "\n".join(lines + [f"{manifest_hash}  platform-bundle-v0.1.json"])
-                        + "\n"
-                    ).encode()
-                target.writestr(info, payload)
+            manifest.pop("main_input_sha256")
+            manifest["components"].pop("main")
+            manifest["files"] = [entry for entry in manifest["files"] if not entry["path"].startswith("main/")]
+            payloads = {
+                info.filename: source.read(info.filename)
+                for info in source.infolist()
+                if not info.filename.startswith("main/") and info.filename not in {bundle.MANIFEST_NAME, "SHA256SUMS"}
+            }
+            payloads[bundle.MANIFEST_V1] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+            sums = "".join(
+                f"{hashlib.sha256(value).hexdigest()}  {name}\n"
+                for name, value in sorted(payloads.items())
+            ).encode()
+            payloads["SHA256SUMS"] = sums
+            for name, payload in payloads.items():
+                target.writestr(name, payload)
         payload = bundle.verify(legacy, expected_release_version=1)
         self.assertNotIn("release_version", payload)
 
@@ -172,6 +202,18 @@ class PlatformBundleTests(unittest.TestCase):
                     payload = b"tampered"
                 target.writestr(info, payload)
         with self.assertRaisesRegex(ValueError, "manifest|checksum|provenance"):
+            bundle.verify(altered)
+
+    def test_main_tampering_is_rejected(self) -> None:
+        archive = self.create()
+        altered = self.root / "altered-main.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(altered, "w") as target:
+            for info in source.infolist():
+                payload = source.read(info.filename)
+                if info.filename == "main/MiSTer_MagiK":
+                    payload = b"tampered"
+                target.writestr(info, payload)
+        with self.assertRaisesRegex(ValueError, "manifest|checksum|Main"):
             bundle.verify(altered)
 
     def test_mixed_contract_is_rejected(self) -> None:
