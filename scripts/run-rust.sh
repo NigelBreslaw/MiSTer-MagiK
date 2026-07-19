@@ -75,13 +75,14 @@ if [[ "$SCENE" == "launcher" ]]; then
     fi
   done
   if [[ "${#env_exports[@]}" -eq 0 ]]; then
-    "$MISTER" run "rm -f '$REMOTE_ENV'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+    "$MISTER" run "rm -f '$REMOTE_ENV'"
+    "$MISTER" agent magik restart-launcher
   else
     tmp_env="$(mktemp "${TMPDIR:-/tmp}/mister-magik-launcher-env.XXXXXX")"
     printf '%s\n' "${env_exports[@]}" >"$tmp_env"
     "$MISTER" put "$tmp_env" "$REMOTE_ENV" >/dev/null
     rm -f "$tmp_env"
-    "$MISTER" run "if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+    "$MISTER" agent magik restart-launcher
   fi
   exit 0
 fi

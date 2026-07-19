@@ -98,12 +98,9 @@ mkdir -p "$SNAP" /media/fat/mister-magik-dev/fpga
 cp /etc/inittab "$SNAP/inittab" 2>/dev/null || true
 cp /media/fat/MiSTer.ini "$SNAP/MiSTer.ini" 2>/dev/null || true
 cp /media/fat/mister-magik-dev/platform-v2.manifest "$SNAP/platform-v2.manifest" 2>/dev/null || true
-if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then
-  printf "mister_magik_suspend\n" > /dev/MiSTer_cmd
-  sleep 1
-fi
 echo "snapshot: $SNAP"
 '
+"$ROOT/scripts/mister" agent magik suspend
 
 declare -a LOCAL=(
   "$GUI_BIN" "$MAIN_BIN" "$MODULE" "$MODULE_META" "$RBF" "$RBF_META"

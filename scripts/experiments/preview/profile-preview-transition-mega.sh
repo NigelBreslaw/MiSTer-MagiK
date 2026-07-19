@@ -75,7 +75,8 @@ local_log="$OUT_DIR/${label}-mega.log"
 
 cleanup() {
   rm -f "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -95,7 +96,8 @@ trap cleanup EXIT
 
 echo "==> preview transition mega label=$label effects=$effect_count secs=$secs segment_secs=$segment_secs transition_ms=$transition_ms"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$REMOTE_LOG' '$remote_tsv'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+"$MISTER" run "rm -f '$REMOTE_LOG' '$remote_tsv'" >/dev/null
+"$MISTER" agent magik restart-launcher >/dev/null
 sleep $((secs + 7))
 "$MISTER" get "$remote_tsv" "$local_tsv" >/dev/null
 "$MISTER" get "$REMOTE_LOG" "$local_log" >/dev/null || true

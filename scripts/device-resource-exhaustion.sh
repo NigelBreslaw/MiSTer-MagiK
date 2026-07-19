@@ -121,7 +121,8 @@ main_reports_launcher_crashed() {
 
 cleanup_remote() {
   echo "==> Cleaning resource-exhaustion repro files"
-  remote "if [ -s '$REMOTE_MEM_PID' ]; then kill -9 \$(cat '$REMOTE_MEM_PID') 2>/dev/null || true; fi; rm -rf '$REMOTE_FILL_DIR'; rm -f '$REMOTE_DD_LOG' '$REMOTE_MEM_LOG'; df -h /tmp; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" || true
+  remote "if [ -s '$REMOTE_MEM_PID' ]; then kill -9 \$(cat '$REMOTE_MEM_PID') 2>/dev/null || true; fi; rm -rf '$REMOTE_FILL_DIR'; rm -f '$REMOTE_DD_LOG' '$REMOTE_MEM_LOG'; df -h /tmp" || true
+  "$MISTER" agent magik restart-launcher || true
 }
 
 dump_artifacts() {

@@ -14,7 +14,16 @@ mister_supervision_command() {
     return 2
   fi
 
-  "$mister_bin" run "if [ -p /dev/MiSTer_cmd ]; then printf '$command\n' > /dev/MiSTer_cmd; sleep '$settle'; fi"
+  local action
+  case "$command" in
+    mister_magik_suspend) action=suspend ;;
+    mister_magik_resume) action=resume ;;
+    mister_magik_restart_launcher) action=restart-launcher ;;
+    "load_core menu.rbf") action=return-to-launcher ;;
+    *) echo "unsupported acknowledged Main command: $command" >&2; return 2 ;;
+  esac
+  "$mister_bin" agent magik "$action"
+  sleep "$settle"
 }
 
 mister_suspend_launcher() {

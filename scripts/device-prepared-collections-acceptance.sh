@@ -11,7 +11,6 @@ exit 2
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MISTER="$HERE/scripts/mister"
-source "$HERE/scripts/lib/mister-fifo-lib.sh"
 source "$HERE/scripts/lib/library-sql-output-lib.sh"
 
 REMOTE_ENV="/media/fat/mister-magik-dev/launcher.env"

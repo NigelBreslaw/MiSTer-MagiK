@@ -62,7 +62,12 @@ remote_run() {
 }
 
 magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  case "$1" in
+    mister_magik_suspend) "$HERE/scripts/mister" agent magik suspend ;;
+    mister_magik_resume) "$HERE/scripts/mister" agent magik resume ;;
+    mister_magik_restart_launcher) "$HERE/scripts/mister" agent magik restart-launcher ;;
+    *) echo "unsupported acknowledged Main command: $1" >&2; return 2 ;;
+  esac
 }
 
 cleanup_deploy_lock() {

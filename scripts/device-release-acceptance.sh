@@ -444,7 +444,8 @@ wait_remote_trace_rows() {
 }
 
 restart_launcher() {
-  remote "rm -f '$REMOTE_ENV'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  remote "rm -f '$REMOTE_ENV'"
+  "$MISTER" agent magik restart-launcher
   wait_status_expr "wait normal launcher restart" 60 \
     "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['slint_status'].get('scene') == 'launcher'" \
     "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
@@ -458,8 +459,8 @@ export MISTER_LAUNCHER_BENCH_SCENARIO=idle
 export MISTER_PREVIEW_SCROLL_TRACE_SECS=5
 export MISTER_CATALOG_REFRESH=off
 EOF
-if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi
-printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+"
+  "$MISTER" agent magik restart-launcher
   wait_status_expr "wait supervised Arcade restart" 60 \
     "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['slint_status'].get('screen') == 'arcade'" \
     "str(data['runtime'].get('slint_status', {}).get('screen', '?')) + ' ' + str(data['runtime'].get('slint_status', {}).get('catalog_ready', '?'))"
@@ -487,7 +488,8 @@ write_launcher_env() {
 
 restart_with_env() {
   local label="$1" remote_trace="${2:-}" expected_scenario="${3:-}"
-  remote "rm -f /tmp/mister-magik-slint.log '$remote_trace'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+  remote "rm -f /tmp/mister-magik-slint.log '$remote_trace'"
+  "$MISTER" agent magik restart-launcher
   wait_status_expr "$label" 60 \
     "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and data['runtime']['slint_status'].get('screen') == 'arcade'" \
     "str(data['runtime'].get('slint_status', {}).get('screen', '?')) + ' fps=' + str(data['runtime'].get('slint_status', {}).get('rolling_fps', data['runtime'].get('slint_status', {}).get('fps_estimate', '?')))"
@@ -592,7 +594,7 @@ run_launch_matrix() {
     [ -n "$target" ] || continue
     idx=$((idx + 1))
     restart_launcher
-    remote "printf 'mister_magik_launch %s\n' '$target' > /dev/MiSTer_cmd"
+    "$MISTER" agent magik launch "$target"
     wait_status_expr "launch matrix handoff $idx" 45 \
       "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')" \
       "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
@@ -608,7 +610,7 @@ run_exit_menu_loop() {
   local i
   for i in 1 2; do
     restart_launcher
-    remote "printf 'mister_magik_exit_to_menu\n' > /dev/MiSTer_cmd"
+    "$MISTER" agent magik exit-to-menu
     wait_status_expr "exit-menu handoff loop $i" 30 \
       "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')" \
       "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
@@ -959,7 +961,7 @@ run_tier_launcher_lifecycle() {
 }
 
 run_tier_handoff() {
-  remote "printf 'mister_magik_exit_to_menu\n' > /dev/MiSTer_cmd"
+  "$MISTER" agent magik exit-to-menu
   wait_status_expr "wait exit-to-menu handoff" 30 \
     "data['runtime']['main_status'].get('launcher_state') in ('HandoffToStockMenu', 'Unconfigured')" \
     "data['runtime'].get('main_status', {}).get('launcher_state', '?')"
@@ -974,7 +976,7 @@ run_tier_handoff() {
   assert_status "$OUT/status-post-exit-menu-reboot.json" "launcher recovers after exit-to-menu smoke" \
     "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid', 0)) > 0 and data['runtime']['slint_status'].get('scene') == 'launcher'"
 
-  remote "printf 'mister_magik_launch %s\n' '$LAUNCH_REF' > /dev/MiSTer_cmd"
+  "$MISTER" agent magik launch "$LAUNCH_REF"
   wait_status_expr "wait game handoff" 45 \
     "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured')" \
     "data['runtime'].get('main_status', {}).get('launcher_state', '?')"

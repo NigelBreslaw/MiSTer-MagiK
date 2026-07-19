@@ -28,7 +28,8 @@ fi
 env_file="$(mktemp)"
 cleanup() {
   rm -f "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -45,6 +46,6 @@ for filter in nearest box lanczos hybrid; do
     printf 'export MISTER_PREVIEW_RUN_LABEL=%q\n' "$filter resize - $FORMAT - $MAX_SIZE"
   } >"$env_file"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+  "$MISTER" agent magik restart-launcher >/dev/null
   sleep "$SECS"
 done

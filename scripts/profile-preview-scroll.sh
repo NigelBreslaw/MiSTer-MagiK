@@ -387,7 +387,8 @@ write_launcher_env() {
 restart_supervised_launcher() {
   local trace_path="$1"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$REMOTE_LOG' '$trace_path'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+  "$MISTER" run "rm -f '$REMOTE_LOG' '$trace_path'" >/dev/null
+  "$MISTER" agent magik restart-launcher >/dev/null
 }
 
 run_case() {

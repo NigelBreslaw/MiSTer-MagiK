@@ -108,7 +108,8 @@ cleanup() {
   if [[ -n "$env_file" ]]; then
     rm -f "$env_file"
   fi
-  "$MISTER" run "rm -f '$REMOTE_ENV'; sync; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" run "rm -f '$REMOTE_ENV'; sync" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -196,7 +197,7 @@ for system in "${systems[@]}"; do
   printf 'preview_turbo_start_tsv\tlabel=%s\tsystem=%s\tselected_index=%s\n' "$label" "$system" "$selected_index"
   write_env_for_system "$system" "$selected_index"
   if [[ "$skip_reboot" == "1" ]]; then
-    "$MISTER" run "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null
+    "$MISTER" agent magik restart-launcher >/dev/null
   else
     "$MISTER" reboot-wait
   fi

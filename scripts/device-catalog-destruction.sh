@@ -252,7 +252,7 @@ cleanup() {
       remote "tail -160 /tmp/mister-magik-catalog-destruction-cleanup.log 2>/dev/null || true" >&2 || true
     }
   fi
-  remote "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
   exit "$rc"
 }
 trap cleanup EXIT

@@ -82,7 +82,6 @@ for script in \
   "$ROOT/scripts/lib/library-sql-output-lib.sh" \
   "$ROOT/scripts/mister" \
   "$ROOT/scripts/mister-asset-diagnostics.sh" \
-  "$ROOT/scripts/lib/mister-fifo-lib.sh" \
   "$ROOT/scripts/mister-magik-agent.sh" \
   "$ROOT/scripts/mister-shutdown-trace.sh" \
   "$ROOT/scripts/lib/mister-supervision-lib.sh" \
@@ -479,12 +478,12 @@ esac
 echo "retired library I/O profiler fail-closed self-test ok"
 bash "$ROOT/scripts/lib/benchmark-cleanup-lib.sh" --self-test
 bash "$ROOT/scripts/lib/arming-state-lib.sh" --self-test
+bash "$ROOT/scripts/checks/check-no-direct-main-fifo.sh"
 bash "$ROOT/scripts/lib/platform-manifest-lib.sh" --self-test
 bash "$ROOT/scripts/lib/catalog-device-test-lib.sh" --self-test
 "$ROOT/scripts/bench-toolchain.sh" --self-test
 "$ROOT/scripts/lib/library-sql-output-lib.sh"
 "$ROOT/scripts/lib/reboot-wait-lib.sh"
-"$ROOT/scripts/lib/mister-fifo-lib.sh"
 "$ROOT/scripts/profile-first-scan.sh" --self-test
 "$ROOT/scripts/profile-media-cold-boot.sh" --self-test
 "$ROOT/scripts/profile-media-arcade-contention.sh" --self-test

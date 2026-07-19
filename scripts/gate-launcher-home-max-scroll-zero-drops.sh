@@ -104,7 +104,8 @@ fpga_latch_after="$OUT_DIR/${label}-fpga-latch-after.log"
 
 cleanup() {
   rm -f "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -138,7 +139,7 @@ if [[ "$present_backend" == "fpga-vblank-latch-hidden" ]]; then
 fi
 "$MISTER" run "rm -f '$remote_trace' '$REMOTE_LOG'; sync" >/dev/null
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+"$MISTER" agent magik restart-launcher >/dev/null
 sleep $((secs + 7))
 
 if ! "$MISTER" get "$remote_trace" "$trace" >/dev/null; then

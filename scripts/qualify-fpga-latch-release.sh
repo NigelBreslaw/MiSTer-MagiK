@@ -139,7 +139,7 @@ require_counter_advance "$BEFORE" "$AFTER_OVERFLOW" drop_count
 RECOVERY="$($MISTER run "MISTER_FPGA_LATCH_PATTERN_FRAMES=12 MISTER_FPGA_LATCH_PATTERN_PERIOD_US=16667 '$REMOTE_BIN' fpga-latch-pattern")"
 grep -q 'unsupported_posts=0' <<<"$RECOVERY"
 $MISTER run "set -e; for i in \$(seq 1 10); do report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0'; then exit 0; fi; sleep 1; done; echo \"\$report\"; exit 1" >/dev/null
-$MISTER run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
+$MISTER agent magik launch "$REMOTE_RBF"
 $MISTER run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiKDev 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then report=\$('$REMOTE_BIN' fpga-latch-report); if echo \"\$report\" | grep -q 'pending=0' && echo \"\$report\" | grep -q 'drop_count=0'; then exit 0; fi; fi; sleep 1; done; echo \"\${report:-no latch report}\"; exit 1" >/dev/null
 
 echo "==> Motion gates at both framebuffer geometries"
@@ -153,7 +153,7 @@ echo "==> Lifecycle, reload, and fallback"
 "$MISTER" reboot-wait
 "$ROOT/scripts/run-rust.sh" launcher 0
 "$ROOT/scripts/device-launch-return-smoke.sh"
-"$MISTER" run "printf 'mister_magik_launch $REMOTE_RBF\\n' > /dev/MiSTer_cmd"
+"$MISTER" agent magik launch "$REMOTE_RBF"
 "$MISTER" run "set -e; for i in \$(seq 1 30); do pid=\$(pidof MiSTer_MagiKDev 2>/dev/null || true); if [ -n \"\$pid\" ] && tr '\\000' ' ' < /proc/\$pid/cmdline | grep -Fq '$REMOTE_RBF'; then exit 0; fi; sleep 1; done; exit 1"
 "$ROOT/scripts/gate-launcher-home-max-scroll-zero-drops.sh" "$LABEL-FB0" --skip-build --present-backend fb0-dirty
 MISTER_PRESENT_BACKEND=fpga-vblank-latch-hidden "$ROOT/scripts/run-rust.sh" launcher 0

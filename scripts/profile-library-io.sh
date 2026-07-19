@@ -124,7 +124,11 @@ remote_run() {
 }
 
 magik_command() {
-  remote_run "if [ -p /dev/MiSTer_cmd ] && pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf '$1\n' > /dev/MiSTer_cmd; else echo 'MiSTer_MagiKDev supervision unavailable' >&2; exit 12; fi" >/dev/null
+  case "$1" in
+    mister_magik_suspend) "$MISTER" agent magik suspend ;;
+    mister_magik_resume) "$MISTER" agent magik resume ;;
+    *) echo "unsupported acknowledged Main command: $1" >&2; return 2 ;;
+  esac
 }
 
 launcher_suspended=0

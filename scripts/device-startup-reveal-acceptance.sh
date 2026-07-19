@@ -29,7 +29,8 @@ esac
 COLD_BACKUP_CATALOG="/media/fat/mister-magik-dev/catalog-v3.startup-reveal-$LABEL.bak"
 
 cleanup() {
-  remote "rm -f '$REMOTE_ENV'; if [ -d '$COLD_BACKUP_CATALOG' ]; then rm -rf '$REMOTE_CATALOG'; mv '$COLD_BACKUP_CATALOG' '$REMOTE_CATALOG'; fi; if [ -s '$RETURN_STATE' ] && [ -p /dev/MiSTer_cmd ]; then printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd; fi; sync" >/dev/null 2>&1 || true
+  remote "rm -f '$REMOTE_ENV'; if [ -d '$COLD_BACKUP_CATALOG' ]; then rm -rf '$REMOTE_CATALOG'; mv '$COLD_BACKUP_CATALOG' '$REMOTE_CATALOG'; fi; sync" >/dev/null 2>&1 || true
+  if remote "test -s '$RETURN_STATE'" >/dev/null 2>&1; then "$MISTER" agent magik return-to-launcher >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
 
@@ -157,7 +158,7 @@ run_cold() {
   [ "$reveal" -ge "$ready" ] || fail "cold reveal $reveal before library_ready $ready"
   collect_and_assert_common cold_no_catalog 1 "$log"
   remote "rm -rf '$REMOTE_CATALOG'; if [ -d '$COLD_BACKUP_CATALOG' ]; then mv '$COLD_BACKUP_CATALOG' '$REMOTE_CATALOG'; fi; sync"
-  remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null || true
+  "$MISTER" agent magik restart-launcher >/dev/null || true
 }
 
 run_warm() {
@@ -196,18 +197,20 @@ run_return() {
     old_pid="$(remote "pidof mister-magik-fb 2>/dev/null || true")"
     old_pid="${old_pid##* }"
     old_pid="${old_pid:-0}"
-    remote "rm -f '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+    remote "rm -f '$REMOTE_ENV' '$RETURN_STATE' '$REMOTE_LOG' /tmp/mister-magik/events.jsonl"
+    "$MISTER" agent magik restart-launcher
     wait_status "return-prime-$i" 60 "data['runtime']['main_status'].get('launcher_state') == 'LauncherActive' and int(data['runtime']['main_status'].get('launcher_pid') or 0) != $old_pid" ||
       fail "return iteration $i could not prime launcher"
     "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-    remote "printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd"
+    "$MISTER" agent magik restart-launcher
     wait_status "return-state-written-$i" 90 "data['runtime']['main_status'].get('launcher_state') in ('HandoffToGame', 'Unconfigured') or data['runtime']['main_status'].get('launcher_active') is False" ||
       true
     remote "test -s '$RETURN_STATE'" >/dev/null || fail "return state not written for iteration $i"
     remote "grep -Eq '\"game_index\"[[:space:]]*:[[:space:]]*$SELECTED([,}])' '$RETURN_STATE'" >/dev/null ||
       fail "return iteration $i captured the wrong arcade row; expected $SELECTED"
     reset_remote_logs
-    remote "rm -f '$REMOTE_ENV'; printf 'load_core menu.rbf\n' > /dev/MiSTer_cmd"
+    remote "rm -f '$REMOTE_ENV'"
+    "$MISTER" agent magik return-to-launcher
     wait_status "return-restored-$i" 90 "data['runtime']['slint_status'].get('input_enabled') is True and data['runtime']['slint_status'].get('screen') == 'arcade' and int(data['runtime']['slint_status'].get('arcade_selected', -1)) == $SELECTED" ||
       fail "return iteration $i did not restore arcade row $SELECTED"
     remote "test ! -e '$RETURN_STATE'" >/dev/null || fail "return state not consumed for iteration $i"

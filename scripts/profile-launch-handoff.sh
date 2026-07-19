@@ -104,7 +104,8 @@ count_trace_samples() {
 
 cleanup() {
   rm -f "$env_file"
-  "$MISTER" run "rm -f '$REMOTE_ENV'; if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null 2>&1 || true
+  "$MISTER" run "rm -f '$REMOTE_ENV'" >/dev/null 2>&1 || true
+  "$MISTER" agent magik restart-launcher >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -122,7 +123,8 @@ trap cleanup EXIT
 
 echo "== launch handoff profile label=$LABEL mode=$MODE iterations=$ITERATIONS delay_ms=$DELAY_MS"
 "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-"$MISTER" run "rm -f '$REMOTE_LOG' '$remote_trace'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+"$MISTER" run "rm -f '$REMOTE_LOG' '$remote_trace'" >/dev/null
+"$MISTER" agent magik restart-launcher >/dev/null
 
 wait_timeout_secs=$((30 + ITERATIONS * (((DELAY_MS + 999) / 1000) + 4)))
 deadline=$((SECONDS + wait_timeout_secs))

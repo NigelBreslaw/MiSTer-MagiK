@@ -17,7 +17,6 @@ ORIGINAL_ARGS=("$@")
 source "$HERE/scripts/lib/thread-sampler-lib.sh"
 source "$HERE/scripts/lib/bench-context-lib.sh"
 source "$HERE/scripts/lib/benchmark-cleanup-lib.sh"
-source "$HERE/scripts/lib/mister-fifo-lib.sh"
 source "$HERE/scripts/lib/platform-manifest-lib.sh"
 source "$HERE/scripts/lib/latch-readiness-lib.sh"
 
@@ -977,7 +976,8 @@ else
   rm -f "$local_tsv" "$local_log" "$local_status_json" "$local_entry_tsv" "$local_entry_log" "$local_cpu_svg" "$local_stream_tsv" "$local_stream_log" "$local_cadence_tsv" "$local_latch_before" "$local_latch_after" "$local_latch_drop_report"
   capture_latch_report before "$local_latch_before"
   "$MISTER" put "$env_file" "$REMOTE_ENV" >/dev/null
-  "$MISTER" run "rm -f '$remote_tsv' '$remote_log' '$cpu_profile_remote_svg'; if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd" >/dev/null
+  "$MISTER" run "rm -f '$remote_tsv' '$remote_log' '$cpu_profile_remote_svg'" >/dev/null
+  "$MISTER" agent magik restart-launcher >/dev/null
   start_stream_consumer
   thread_sample_start "$label" "arcade-scroll" "$OUT_DIR" $((secs + 10))
   sleep $((secs + 7))

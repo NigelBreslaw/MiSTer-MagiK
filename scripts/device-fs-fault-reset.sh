@@ -199,7 +199,7 @@ recover_catalog_and_launcher() {
     remote "tail -160 $(sq "$REMOTE_LOG") 2>/dev/null || true" >&2 || true
     return 1
   }
-  remote "if [ -p /dev/MiSTer_cmd ]; then printf 'mister_magik_restart_launcher\n' > /dev/MiSTer_cmd; fi" >/dev/null || true
+  "$MISTER" agent magik restart-launcher >/dev/null || true
 }
 
 wait_for_down_up() {

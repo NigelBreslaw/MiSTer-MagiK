@@ -35,7 +35,6 @@ latch_readiness_activate() {
   local mister="$1"
   local app="${MISTER_MAGIK_APP_DIR:?select a MagiK layout first}"
   local latch_rbf="$app/fpga/menu-magik-vblank-latch.rbf"
-  local fifo_command
 
   local probe_output probe_status
   set +e
@@ -58,8 +57,7 @@ latch_readiness_activate() {
   fi
   platform_manifest_verify "$mister" "$MISTER_MAGIK_LAYOUT" "$MISTER_MAGIK_MANIFEST" "" verify
 
-  fifo_command="$(mister_fifo_remote_command "mister_magik_launch $latch_rbf" 5)"
-  "$mister" run "$fifo_command"
+  "$mister" agent magik launch "$latch_rbf"
   # Main re-execs through the qualified RBF. Keep this bounded and use one
   # follow-up device probe so transport failures are never retried blindly.
   sleep "${MISTER_LATCH_ACTIVATION_SETTLE_SECS:-3}"
@@ -91,6 +89,5 @@ latch_readiness_self_test() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/magik-layout.sh"
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mister-fifo-lib.sh"
   latch_readiness_self_test
 fi

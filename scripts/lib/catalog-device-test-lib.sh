@@ -35,7 +35,8 @@ catalog_device_assert_remote() {
 catalog_device_restart_launcher() {
   local action="${1:-}"
   write_launcher_env "$action"
-  catalog_device_remote "rm -f $(catalog_device_shell_quote "$REMOTE_LOG") $(catalog_device_shell_quote "$REMOTE_EVENTS") $(catalog_device_shell_quote "$REMOTE_STATUS"); if [ ! -p /dev/MiSTer_cmd ]; then echo 'missing /dev/MiSTer_cmd'; exit 12; fi; printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
+  catalog_device_remote "rm -f $(catalog_device_shell_quote "$REMOTE_LOG") $(catalog_device_shell_quote "$REMOTE_EVENTS") $(catalog_device_shell_quote "$REMOTE_STATUS")"
+  "$MISTER" agent magik restart-launcher
   catalog_device_wait_remote "launcher process" 25 "test \"\$(ps w | grep '[m]ister-magik-fb ui launcher' | wc -l)\" = 1"
 }
 
