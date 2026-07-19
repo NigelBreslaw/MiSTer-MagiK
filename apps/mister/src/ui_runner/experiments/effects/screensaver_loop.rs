@@ -26,11 +26,35 @@ pub(super) enum ScreensaverMode {
     RandomAccessLoader,
     ColorClashGallery,
     RadialStarfield,
+    PixelGrid,
     IdleMegademo,
 }
 
 impl ScreensaverMode {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
+        Self::AttractWall,
+        Self::MvsCarousel,
+        Self::SuperScalerFlyby,
+        Self::StarfieldCabinets,
+        Self::ScreenshotRain,
+        Self::TilemapMuseum,
+        Self::RasterGallery,
+        Self::KefrensScreenshotBars,
+        Self::PreviewPlasmaCollage,
+        Self::PhosphorGrid,
+        Self::WarpTunnel,
+        Self::Mode7Floor,
+        Self::ScannerContactSheet,
+        Self::SpriteMultiplexParade,
+        Self::CabinetMarquee,
+        Self::RandomAccessLoader,
+        Self::ColorClashGallery,
+        Self::RadialStarfield,
+        Self::PixelGrid,
+        Self::IdleMegademo,
+    ];
+
+    const MEGA: [Self; 19] = [
         Self::AttractWall,
         Self::MvsCarousel,
         Self::SuperScalerFlyby,
@@ -72,6 +96,7 @@ impl ScreensaverMode {
             Self::RandomAccessLoader => "random-access-loader",
             Self::ColorClashGallery => "color-clash-gallery",
             Self::RadialStarfield => "radial-starfield",
+            Self::PixelGrid => "pixel-grid",
             Self::IdleMegademo => "idle-megademo",
         }
     }
@@ -96,7 +121,7 @@ impl ScreensaverConfig {
             spec.trim().to_ascii_lowercase().as_str(),
             "" | "mega" | "all" | "demo"
         ) {
-            ScreensaverMode::ALL.to_vec()
+            ScreensaverMode::MEGA.to_vec()
         } else {
             let mut modes = Vec::new();
             for part in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
@@ -434,12 +459,62 @@ fn render_screensaver_frame(
         }
         ScreensaverMode::ColorClashGallery => render_color_clash(dst, state, w, h, images, frame),
         ScreensaverMode::RadialStarfield => render_starfield(dst, w, h, frame),
+        ScreensaverMode::PixelGrid => render_pixel_grid(dst, w, h),
         ScreensaverMode::IdleMegademo => {
             let sub =
-                ScreensaverMode::ALL[((frame / 240) as usize) % (ScreensaverMode::ALL.len() - 1)];
+                ScreensaverMode::MEGA[((frame / 240) as usize) % (ScreensaverMode::MEGA.len() - 1)];
             render_screensaver_frame(dst, state, w, h, images, sub, frame);
         }
     }
+}
+
+fn render_pixel_grid(dst: &mut [Rgb565Pixel], w: usize, h: usize) {
+    let white = color565(255, 255, 255);
+    let black = color565(0, 0, 0);
+    let pattern = std::env::var("MISTER_SCALER_PATTERN")
+        .unwrap_or_else(|_| "pixel-grid".into())
+        .to_ascii_lowercase();
+    for y in 0..h {
+        let row = y * w;
+        for x in 0..w {
+            dst[row + x] = match pattern.as_str() {
+                "vertical" => {
+                    if x % 2 == 0 {
+                        black
+                    } else {
+                        white
+                    }
+                }
+                "horizontal" => {
+                    if y % 2 == 0 {
+                        black
+                    } else {
+                        white
+                    }
+                }
+                "column-codes" => scaler_column_code(x, w),
+                _ => {
+                    if x % 2 == 0 || y % 2 == 0 {
+                        black
+                    } else {
+                        white
+                    }
+                }
+            };
+        }
+    }
+}
+
+fn scaler_column_code(x: usize, w: usize) -> Rgb565Pixel {
+    let center = w / 2;
+    if x == center {
+        return color565(255, 255, 255);
+    }
+    if x + 1 == center || x == center + 1 {
+        return color565(0, 0, 0);
+    }
+    let code = ((x as u32).wrapping_mul(0x9e37) ^ ((x as u32) << 7)) as u16;
+    Rgb565Pixel(code | 0x0821)
 }
 
 fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
@@ -1814,5 +1889,29 @@ mod tests {
             ScreensaverMode::parse("radial-starfield"),
             Some(ScreensaverMode::RadialStarfield)
         );
+    }
+
+    #[test]
+    fn scaler_column_codes_mark_the_center_and_distinguish_neighbors() {
+        let width = 960;
+        assert_eq!(
+            scaler_column_code(width / 2, width),
+            color565(255, 255, 255)
+        );
+        assert_eq!(scaler_column_code(width / 2 - 1, width), color565(0, 0, 0));
+        assert_eq!(scaler_column_code(width / 2 + 1, width), color565(0, 0, 0));
+        assert_ne!(
+            scaler_column_code(100, width),
+            scaler_column_code(101, width)
+        );
+    }
+
+    #[test]
+    fn scaler_diagnostic_is_selectable_but_not_part_of_the_megademo() {
+        assert_eq!(
+            ScreensaverMode::parse("pixel-grid"),
+            Some(ScreensaverMode::PixelGrid)
+        );
+        assert!(!ScreensaverMode::MEGA.contains(&ScreensaverMode::PixelGrid));
     }
 }

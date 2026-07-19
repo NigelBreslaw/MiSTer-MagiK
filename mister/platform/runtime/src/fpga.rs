@@ -489,15 +489,14 @@ impl Fpga {
         // direct_video offsets: xoff = item[4] - FB_DV_LBRD, yoff = item[8] - FB_DV_UBRD.
         let xoff = mode.hbp as i32 - FB_DV_LBRD;
         let yoff = mode.vbp as i32 - FB_DV_UBRD;
-        // The MiSTer HPS framebuffer path exposes an unstable shimmer on the
-        // final HDMI column when the scaled rectangle reaches the inclusive
-        // active-area right edge. Keep one guard column off the scan rectangle;
-        // /dev/fb0 still contains the full frame, but HDMI no longer samples the
-        // noisy edge. Override only for hardware diagnostics.
+        // Keep the full active width by default. Removing a guard column makes
+        // exact ratios such as 960->1920 non-integral and produces a visible
+        // scaler phase correction near the center. Retain the override for
+        // targeted right-edge diagnostics.
         let right_guard_cols = std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(1)
+            .unwrap_or(0)
             .clamp(0, mode.hact.saturating_sub(1) as i32);
         let right = xoff + mode.hact as i32 - 1 - right_guard_cols;
         let bottom = yoff + mode.vact as i32 - 1;
