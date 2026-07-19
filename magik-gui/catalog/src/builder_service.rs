@@ -259,6 +259,7 @@ fn run_with_backend<B: BuilderBackend>(
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
+    let first_visible_published = bootstrap.is_some();
     let background_build = operation == BuilderOperation::Rebuild || bootstrap.is_some();
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
@@ -345,56 +346,72 @@ fn run_with_backend<B: BuilderBackend>(
     };
     emit_timings(protocol, prepared.timings, emit);
     let games = backend.games(&prepared.value);
-    let load_us = backend.load_us(&prepared.value);
     wait_for_background_heavy_work_enabled(background_build);
-    let snapshot_started = Instant::now();
-    let snapshot_timings = {
-        let protocol_output = RefCell::new(&mut *emit);
-        let mut snapshot_progress = |title: &str, detail: &str| {
-            wait_for_background_heavy_work_enabled(background_build);
-            (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
-                protocol,
-                title: title.into(),
-                detail: detail.into(),
-            });
+    if first_visible_published {
+        // The launcher already owns the usable Arcade projection. Publishing
+        // another all-system snapshot here makes it deserialize the complete
+        // RAM catalog only to discard it once the V3 registry is durable.
+        // Persisted is the authoritative-generation transition; non-Arcade
+        // navigation opens lazily from its system shard after that event.
+        emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_authoritative_catalog_prepared".into(),
+            detail: format!(
+                "elapsed_us={} games={games} resident=arcade-bootstrap",
+                run_started.elapsed().as_micros()
+            ),
+        });
+    } else {
+        let load_us = backend.load_us(&prepared.value);
+        let snapshot_started = Instant::now();
+        let snapshot_timings = {
+            let protocol_output = RefCell::new(&mut *emit);
+            let mut snapshot_progress = |title: &str, detail: &str| {
+                wait_for_background_heavy_work_enabled(background_build);
+                (protocol_output.borrow_mut())(CatalogBuilderEvent::Progress {
+                    protocol,
+                    title: title.into(),
+                    detail: detail.into(),
+                });
+            };
+            backend
+                .write_snapshot(&snapshot_path, &prepared.value, &mut snapshot_progress)
+                .map_err(|error| fail(protocol, "snapshot", error, emit))?
         };
-        backend
-            .write_snapshot(&snapshot_path, &prepared.value, &mut snapshot_progress)
-            .map_err(|error| fail(protocol, "snapshot", error, emit))?
-    };
-    emit_timings(protocol, snapshot_timings, emit);
-    emit(CatalogBuilderEvent::Progress {
-        protocol,
-        title: "Indexing library".into(),
-        detail: format!("Opening library — {games} games"),
-    });
-    emit(CatalogBuilderEvent::Timing {
-        protocol,
-        name: "builder_catalog_ready".into(),
-        detail: format!(
-            "elapsed_us={} snapshot_us={}",
-            run_started.elapsed().as_micros(),
-            snapshot_started.elapsed().as_micros()
-        ),
-    });
-    emit(CatalogBuilderEvent::CatalogReady {
-        protocol,
-        snapshot_path: snapshot_path.display().to_string(),
-        games,
-        load_us,
-    });
-    match backend.retain_first_visible_snapshot(&snapshot_path, &prepared.value) {
-        Ok(Some(detail)) => emit(CatalogBuilderEvent::Timing {
+        emit_timings(protocol, snapshot_timings, emit);
+        emit(CatalogBuilderEvent::Progress {
             protocol,
-            name: "builder_arcade_bootstrap_index_refresh".into(),
-            detail,
-        }),
-        Ok(None) => {}
-        Err(error) => emit(CatalogBuilderEvent::Timing {
+            title: "Indexing library".into(),
+            detail: format!("Opening library — {games} games"),
+        });
+        emit(CatalogBuilderEvent::Timing {
             protocol,
-            name: "builder_arcade_bootstrap_index_refresh".into(),
-            detail: format!("status=error error={}", error.replace('\t', " ")),
-        }),
+            name: "builder_catalog_ready".into(),
+            detail: format!(
+                "elapsed_us={} snapshot_us={}",
+                run_started.elapsed().as_micros(),
+                snapshot_started.elapsed().as_micros()
+            ),
+        });
+        emit(CatalogBuilderEvent::CatalogReady {
+            protocol,
+            snapshot_path: snapshot_path.display().to_string(),
+            games,
+            load_us,
+        });
+        match backend.retain_first_visible_snapshot(&snapshot_path, &prepared.value) {
+            Ok(Some(detail)) => emit(CatalogBuilderEvent::Timing {
+                protocol,
+                name: "builder_arcade_bootstrap_index_refresh".into(),
+                detail,
+            }),
+            Ok(None) => {}
+            Err(error) => emit(CatalogBuilderEvent::Timing {
+                protocol,
+                name: "builder_arcade_bootstrap_index_refresh".into(),
+                detail: format!("status=error error={}", error.replace('\t', " ")),
+            }),
+        }
     }
     apply_runtime_thread_policy(if background_build {
         RuntimeThreadRole::CatalogWorker
@@ -1604,8 +1621,6 @@ mod tests {
                 "retain-first-visible",
                 "scan",
                 "prepare-catalog",
-                "snapshot",
-                "retain-first-visible",
                 "persist",
                 "build-duration"
             ]
@@ -1617,7 +1632,7 @@ mod tests {
                 matches!(event, CatalogBuilderEvent::CatalogReady { .. }).then_some(index)
             })
             .collect::<Vec<_>>();
-        assert_eq!(ready.len(), 2);
+        assert_eq!(ready.len(), 1);
         let retained = events
             .iter()
             .position(|event| {
@@ -1626,8 +1641,8 @@ mod tests {
             .expect("retained first-visible timing");
         assert_eq!(
             backend.snapshot_background_scopes,
-            [false, true],
-            "only the acknowledged first-visible snapshot remains foreground"
+            [false],
+            "fresh builds publish only the foreground first-visible snapshot"
         );
         let full_scan_timing = events
             .iter()
@@ -1638,7 +1653,18 @@ mod tests {
         assert!(ready[0] < full_scan_timing);
         assert!(ready[0] < retained);
         assert!(retained < full_scan_timing);
-        assert!(full_scan_timing < ready[1]);
+        let authoritative_prepared = events
+            .iter()
+            .position(|event| {
+                matches!(event, CatalogBuilderEvent::Timing { name, .. } if name == "builder_authoritative_catalog_prepared")
+            })
+            .expect("authoritative prepared timing");
+        let persisted = events
+            .iter()
+            .position(|event| matches!(event, CatalogBuilderEvent::Persisted { .. }))
+            .expect("persisted event");
+        assert!(full_scan_timing < authoritative_prepared);
+        assert!(authoritative_prepared < persisted);
     }
 
     #[test]
