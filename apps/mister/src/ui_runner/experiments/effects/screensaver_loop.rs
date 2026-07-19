@@ -1361,11 +1361,13 @@ fn render_scanner(
     }
 }
 
-const PARADE_TILE_COUNT: usize = 14;
+const PARADE_LAYER_TARGETS: [usize; 5] = [6, 5, 4, 3, 2];
+const PARADE_TILE_COUNT: usize = 20;
 const PARADE_TILE_W: usize = 96;
 const PARADE_TILE_H: usize = 72;
-const PARADE_MIN_TILE_SPEED: usize = 2;
-const PARADE_SPEED_COUNT: usize = 4;
+const PARADE_MIN_TILE_SPEED: usize = 1;
+const PARADE_SPEED_COUNT: usize = 5;
+const PARADE_PLACEMENT_GAP: isize = 18;
 
 fn parade_depth_style(speed: usize) -> (usize, usize, u8) {
     let depth = speed
@@ -1378,8 +1380,18 @@ fn parade_depth_style(speed: usize) -> (usize, usize, u8) {
     (
         (PARADE_TILE_W * 2 * speed + fastest_speed / 2) / fastest_speed,
         (PARADE_TILE_H * 2 * speed + fastest_speed / 2) / fastest_speed,
-        [160, 192, 224, 255][depth],
+        [120, 154, 188, 221, 255][depth],
     )
+}
+
+fn parade_layer_interval_frames(
+    screen_w: usize,
+    tile_w: usize,
+    speed: usize,
+    target_count: usize,
+) -> u64 {
+    let travel_frames = (screen_w + tile_w).div_ceil(speed);
+    (travel_frames / target_count.max(1)).max(1) as u64
 }
 
 const LANCZOS_RADIUS: f64 = 3.0;
@@ -1500,12 +1512,22 @@ fn scale_lanczos3_rgb565_tinted(
 
 struct ParadeTile {
     x: isize,
-    y: usize,
+    y: isize,
     speed: usize,
     image_idx: usize,
     scaled: SaverImage,
+    active: bool,
     next: Option<PreparedParadeCard>,
     pending_image_idx: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct ParadeLayerSchedule {
+    next_spawn_frame: u64,
+    interval_frames: u64,
+    spawn_count: u64,
+    active_sum: u64,
+    sample_count: u64,
 }
 
 struct PreparedParadeCard {
@@ -1538,6 +1560,7 @@ struct ParadeState {
     scale_max_us: u128,
     scale_tx: Sender<ParadeScaleJob>,
     scale_rx: Receiver<ParadeScaleResult>,
+    layers: [ParadeLayerSchedule; PARADE_SPEED_COUNT],
 }
 
 impl ParadeState {
@@ -1580,6 +1603,13 @@ impl ParadeState {
             scale_max_us: 0,
             scale_tx,
             scale_rx,
+            layers: [ParadeLayerSchedule {
+                next_spawn_frame: 0,
+                interval_frames: 1,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
+            }; PARADE_SPEED_COUNT],
         }
     }
 
@@ -1593,28 +1623,44 @@ impl ParadeState {
         shuffle(&mut self.deck, &mut self.rng);
         self.cursor = 0;
         self.image_count = image_count;
-        let tile_count = PARADE_TILE_COUNT.min(image_count);
-        let mut initial_speeds = (0..tile_count)
-            .map(|i| PARADE_MIN_TILE_SPEED + i % PARADE_SPEED_COUNT)
-            .collect::<Vec<_>>();
-        shuffle(&mut initial_speeds, &mut self.rng);
-        for i in 0..tile_count {
-            let Some(image_idx) = self.next_image_for(i) else {
-                break;
+        for (layer_idx, target) in PARADE_LAYER_TARGETS.iter().copied().enumerate() {
+            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+            let (tile_w, _, _) = parade_depth_style(speed);
+            let interval_frames = parade_layer_interval_frames(w, tile_w, speed, target);
+            let phase = self.random_below(interval_frames as usize) as u64;
+            self.layers[layer_idx] = ParadeLayerSchedule {
+                next_spawn_frame: phase,
+                interval_frames,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
             };
-            let speed = initial_speeds[i];
-            let scaled = self.scale_image(&images[image_idx], speed);
-            let x = self.random_below(w + scaled.w) as isize - scaled.w as isize;
-            let y = self.random_tile_y(h, scaled.h);
-            self.tiles.push(ParadeTile {
-                x,
-                y,
-                speed,
-                image_idx,
-                scaled,
-                next: None,
-                pending_image_idx: None,
-            });
+            for rank in 0..target {
+                if self.tiles.len() >= image_count {
+                    break;
+                }
+                let tile_idx = self.tiles.len();
+                let Some(image_idx) = self.next_image_for(tile_idx) else {
+                    break;
+                };
+                let scaled = self.scale_image(&images[image_idx], speed);
+                let frames_until_exit = phase + rank as u64 * interval_frames;
+                let x = w as isize - (frames_until_exit * speed as u64) as isize;
+                let y = self
+                    .random_tile_y(h, x, scaled.w, scaled.h, speed, tile_idx)
+                    .unwrap_or(-(scaled.h as isize * 2 / 3));
+                let active = self.placement_is_clear(x, y, scaled.w, scaled.h, speed, tile_idx);
+                self.tiles.push(ParadeTile {
+                    x,
+                    y,
+                    speed,
+                    image_idx,
+                    scaled,
+                    active,
+                    next: None,
+                    pending_image_idx: None,
+                });
+            }
         }
         // Prepare one successor per tile before scan-out starts. Later
         // successors are generated by the worker while the current card moves.
@@ -1622,7 +1668,7 @@ impl ParadeState {
             let Some(image_idx) = self.next_image_for(tile_idx) else {
                 continue;
             };
-            let speed = PARADE_MIN_TILE_SPEED + self.random_below(PARADE_SPEED_COUNT);
+            let speed = self.tiles[tile_idx].speed;
             let scaled = self.scale_image(&images[image_idx], speed);
             self.tiles[tile_idx].next = Some(PreparedParadeCard {
                 image_idx,
@@ -1645,7 +1691,7 @@ impl ParadeState {
             let candidate = self.deck[self.cursor];
             self.cursor += 1;
             let already_visible = self.tiles.iter().enumerate().any(|(idx, tile)| {
-                (idx != replacing_tile && tile.image_idx == candidate)
+                (idx != replacing_tile && tile.active && tile.image_idx == candidate)
                     || tile
                         .next
                         .as_ref()
@@ -1659,22 +1705,56 @@ impl ParadeState {
         None
     }
 
-    fn advance(&mut self, screen_w: usize, screen_h: usize, images: &[SaverImage]) {
+    fn advance(&mut self, screen_w: usize, screen_h: usize, images: &[SaverImage], frame: u64) {
         self.collect_scaled_cards();
         for tile_idx in 0..self.tiles.len() {
-            self.tiles[tile_idx].x += self.tiles[tile_idx].speed as isize;
-            if self.tiles[tile_idx].x >= screen_w as isize {
-                if let Some(next) = self.tiles[tile_idx].next.take() {
-                    let y = self.random_tile_y(screen_h, next.scaled.h);
-                    let tile = &mut self.tiles[tile_idx];
-                    tile.x = -(next.scaled.w as isize);
-                    tile.y = y;
-                    tile.speed = next.speed;
-                    tile.image_idx = next.image_idx;
-                    tile.scaled = next.scaled;
-                    self.queue_successor(tile_idx, images);
+            if self.tiles[tile_idx].active {
+                self.tiles[tile_idx].x += self.tiles[tile_idx].speed as isize;
+                if self.tiles[tile_idx].x >= screen_w as isize {
+                    self.tiles[tile_idx].active = false;
                 }
             }
+        }
+        for layer_idx in 0..PARADE_SPEED_COUNT {
+            if frame < self.layers[layer_idx].next_spawn_frame {
+                continue;
+            }
+            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+            let Some(tile_idx) = self
+                .tiles
+                .iter()
+                .position(|tile| tile.speed == speed && !tile.active && tile.next.is_some())
+            else {
+                continue;
+            };
+            let next = self.tiles[tile_idx].next.take().expect("checked above");
+            let x = -(next.scaled.w as isize);
+            let Some(y) =
+                self.random_tile_y(screen_h, x, next.scaled.w, next.scaled.h, speed, tile_idx)
+            else {
+                self.tiles[tile_idx].next = Some(next);
+                continue;
+            };
+            let tile = &mut self.tiles[tile_idx];
+            tile.x = x;
+            tile.y = y;
+            tile.image_idx = next.image_idx;
+            tile.scaled = next.scaled;
+            tile.active = true;
+            self.queue_successor(tile_idx, images);
+            let interval = self.jittered_interval(self.layers[layer_idx].interval_frames);
+            self.layers[layer_idx].next_spawn_frame = frame + interval;
+            self.layers[layer_idx].spawn_count += 1;
+        }
+        for layer_idx in 0..PARADE_SPEED_COUNT {
+            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+            let active = self
+                .tiles
+                .iter()
+                .filter(|tile| tile.active && tile.speed == speed)
+                .count() as u64;
+            self.layers[layer_idx].active_sum += active;
+            self.layers[layer_idx].sample_count += 1;
         }
     }
 
@@ -1682,7 +1762,7 @@ impl ParadeState {
         let Some(image_idx) = self.next_image_for(tile_idx) else {
             return;
         };
-        let speed = PARADE_MIN_TILE_SPEED + self.random_below(PARADE_SPEED_COUNT);
+        let speed = self.tiles[tile_idx].speed;
         self.tiles[tile_idx].pending_image_idx = Some(image_idx);
         if self
             .scale_tx
@@ -1721,9 +1801,52 @@ impl ParadeState {
         scaled
     }
 
-    fn random_tile_y(&mut self, screen_h: usize, tile_h: usize) -> usize {
-        const MARGIN: usize = 32;
-        MARGIN + self.random_below(screen_h.saturating_sub(tile_h + MARGIN * 2).max(1))
+    fn jittered_interval(&mut self, base: u64) -> u64 {
+        let variance = (base / 8).max(1);
+        let offset = self.random_below((variance * 2 + 1) as usize) as i64 - variance as i64;
+        (base as i64 + offset).max(1) as u64
+    }
+
+    fn random_tile_y(
+        &mut self,
+        screen_h: usize,
+        x: isize,
+        tile_w: usize,
+        tile_h: usize,
+        speed: usize,
+        replacing_tile: usize,
+    ) -> Option<isize> {
+        let min_y = -(tile_h as isize * 2 / 3);
+        let max_y = screen_h as isize - tile_h as isize / 3;
+        let span = (max_y - min_y + 1).max(1) as usize;
+        for _ in 0..64 {
+            let y = min_y + self.random_below(span) as isize;
+            if self.placement_is_clear(x, y, tile_w, tile_h, speed, replacing_tile) {
+                return Some(y);
+            }
+        }
+        (min_y..=max_y)
+            .find(|y| self.placement_is_clear(x, *y, tile_w, tile_h, speed, replacing_tile))
+    }
+
+    fn placement_is_clear(
+        &self,
+        x: isize,
+        y: isize,
+        tile_w: usize,
+        tile_h: usize,
+        speed: usize,
+        replacing_tile: usize,
+    ) -> bool {
+        self.tiles.iter().enumerate().all(|(idx, tile)| {
+            if idx == replacing_tile || !tile.active || tile.speed != speed {
+                return true;
+            }
+            x + tile_w as isize + PARADE_PLACEMENT_GAP <= tile.x
+                || tile.x + tile.scaled.w as isize + PARADE_PLACEMENT_GAP <= x
+                || y + tile_h as isize + PARADE_PLACEMENT_GAP <= tile.y
+                || tile.y + tile.scaled.h as isize + PARADE_PLACEMENT_GAP <= y
+        })
     }
 
     fn log_scaler_stats(&self) {
@@ -1735,6 +1858,21 @@ impl ParadeState {
             average_us,
             self.scale_max_us
         );
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let speed = PARADE_MIN_TILE_SPEED + layer_idx;
+            let (w, h, _) = parade_depth_style(speed);
+            let average_active = layer.active_sum as f64 / layer.sample_count.max(1) as f64;
+            crate::ui_logln!(
+                "screensaver_parade_layer speed={} size={}x{} target={} interval_ms={} spawns={} average_active={:.2}",
+                speed,
+                w,
+                h,
+                PARADE_LAYER_TARGETS[layer_idx],
+                layer.interval_frames * 1_000 / 60,
+                layer.spawn_count,
+                average_active
+            );
+        }
     }
 
     fn random_below(&mut self, upper: usize) -> usize {
@@ -1766,9 +1904,12 @@ fn advance_rng(rng: &mut u64) -> u64 {
 
 fn parade_draw_order(state: &ParadeState) -> ([usize; PARADE_TILE_COUNT], usize) {
     let mut order = [usize::MAX; PARADE_TILE_COUNT];
-    let len = state.tiles.len().min(PARADE_TILE_COUNT);
-    for (idx, slot) in order.iter_mut().take(len).enumerate() {
-        *slot = idx;
+    let mut len = 0;
+    for (idx, tile) in state.tiles.iter().enumerate() {
+        if tile.active && len < PARADE_TILE_COUNT {
+            order[len] = idx;
+            len += 1;
+        }
     }
     order[..len].sort_unstable_by_key(|idx| state.tiles[*idx].speed);
     (order, len)
@@ -1784,7 +1925,7 @@ fn render_parade(
 ) {
     render_horizontal_starfield(dst, w, h, frame);
     state.ensure_initialized(images, w, h);
-    state.advance(w, h, images);
+    state.advance(w, h, images, frame);
     let (draw_order, draw_count) = parade_draw_order(state);
     for tile_idx in draw_order.into_iter().take(draw_count) {
         let tile = &state.tiles[tile_idx];
@@ -1794,7 +1935,7 @@ fn render_parade(
             h,
             &tile.scaled,
             tile.x,
-            tile.y as isize,
+            tile.y,
             tile.scaled.w,
             tile.scaled.h,
             255,
@@ -2065,11 +2206,13 @@ mod tests {
         let width = state.tiles[0].scaled.w;
         state.tiles[0].x = 960 - speed as isize - 1;
 
-        state.advance(960, 540, &images);
+        state.advance(960, 540, &images, 0);
         assert_eq!(state.tiles[0].image_idx, original);
         assert_eq!(state.tiles[0].x, 959);
 
-        state.advance(960, 540, &images);
+        let layer_idx = speed - PARADE_MIN_TILE_SPEED;
+        state.layers[layer_idx].next_spawn_frame = 0;
+        state.advance(960, 540, &images, 1);
         assert_eq!(state.tiles[0].x, -(state.tiles[0].scaled.w as isize));
         assert_ne!(state.tiles[0].image_idx, original);
         assert_ne!(state.tiles[0].scaled.w, 0);
@@ -2100,7 +2243,7 @@ mod tests {
     }
 
     #[test]
-    fn parade_initializes_all_four_card_speeds_in_randomized_slots() {
+    fn parade_initializes_all_five_layers_at_their_target_populations() {
         let mut state = ParadeState::new(0xfeed_face_cafe_beef);
         let images = test_images(64);
         state.ensure_initialized(&images, 960, 540);
@@ -2108,7 +2251,20 @@ mod tests {
         for tile in &state.tiles {
             counts[tile.speed - PARADE_MIN_TILE_SPEED] += 1;
         }
-        assert!(counts.into_iter().all(|count| count >= 3));
+        assert_eq!(counts, PARADE_LAYER_TARGETS);
+        assert!(state.tiles.iter().all(|tile| tile.active));
+        for (idx, tile) in state.tiles.iter().enumerate() {
+            assert!(tile.y >= -(tile.scaled.h as isize * 2 / 3));
+            assert!(tile.y <= 540 - tile.scaled.h as isize / 3);
+            assert!(state.placement_is_clear(
+                tile.x,
+                tile.y,
+                tile.scaled.w,
+                tile.scaled.h,
+                tile.speed,
+                idx
+            ));
+        }
         let mut other = ParadeState::new(0x0123_4567_89ab_cdef);
         other.ensure_initialized(&images, 960, 540);
         assert_ne!(
@@ -2123,6 +2279,23 @@ mod tests {
                 .map(|tile| (tile.x, tile.y, tile.speed))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn parade_layer_frequency_decreases_as_cards_get_larger() {
+        let intervals = (1..=5)
+            .map(|speed| {
+                let (w, _, _) = parade_depth_style(speed);
+                parade_layer_interval_frames(960, w, speed, PARADE_LAYER_TARGETS[speed - 1])
+            })
+            .collect::<Vec<_>>();
+        let populations = PARADE_LAYER_TARGETS;
+        assert!(populations.windows(2).all(|pair| pair[0] > pair[1]));
+        for speed in 1..=5 {
+            let (w, _, _) = parade_depth_style(speed);
+            let minimum_left_edge_gap = intervals[speed - 1] as usize * speed;
+            assert!(minimum_left_edge_gap > w + PARADE_PLACEMENT_GAP as usize);
+        }
     }
 
     #[test]
@@ -2171,7 +2344,8 @@ mod tests {
                 y: 10,
                 speed: 2,
                 image_idx: 0,
-                scaled: scale_lanczos3_rgb565_tinted(&images[0], 77, 58, 160),
+                scaled: scale_lanczos3_rgb565_tinted(&images[0], 77, 58, 154),
+                active: true,
                 next: None,
                 pending_image_idx: None,
             },
@@ -2181,6 +2355,7 @@ mod tests {
                 speed: 5,
                 image_idx: 1,
                 scaled: scale_lanczos3_rgb565_tinted(&images[1], 192, 144, 255),
+                active: true,
                 next: None,
                 pending_image_idx: None,
             },
@@ -2194,11 +2369,12 @@ mod tests {
 
     #[test]
     fn parade_card_size_and_brightness_increase_with_speed() {
-        let styles = (2..=5).map(parade_depth_style).collect::<Vec<_>>();
-        assert_eq!(styles[0], (77, 58, 160));
-        assert_eq!(styles[1], (115, 86, 192));
-        assert_eq!(styles[2], (154, 115, 224));
-        assert_eq!(styles[3], (192, 144, 255));
+        let styles = (1..=5).map(parade_depth_style).collect::<Vec<_>>();
+        assert_eq!(styles[0], (38, 29, 120));
+        assert_eq!(styles[1], (77, 58, 154));
+        assert_eq!(styles[2], (115, 86, 188));
+        assert_eq!(styles[3], (154, 115, 221));
+        assert_eq!(styles[4], (192, 144, 255));
         assert!(styles.windows(2).all(|pair| {
             pair[0].0 < pair[1].0 && pair[0].1 < pair[1].1 && pair[0].2 < pair[1].2
         }));
