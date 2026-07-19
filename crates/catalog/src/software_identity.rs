@@ -461,6 +461,23 @@ pub(crate) fn mame_software_identity_for_discovery_with_hash_matcher(
 ) -> Option<SoftwareIdentity> {
     let list_name = software_list_for_platform(&discovery.platform_id)?;
     let title_key = library_db::canonical_variant_title(&discovery.title);
+    if list_name == "lynx" {
+        if let Some(software_name) = hash_matcher(discovery, list_name, metadata) {
+            return software_identity_from_metadata(
+                list_name,
+                &software_name,
+                metadata,
+                "mame-software",
+            );
+        }
+        return metadata
+            .title_index
+            .get(&(list_name.to_string(), title_key))
+            .filter(|names| !names.is_empty())
+            .and_then(|names| {
+                software_identity_from_metadata(list_name, &names[0], metadata, "filename")
+            });
+    }
     if let Some(names) = metadata
         .title_index
         .get(&(list_name.to_string(), title_key))
@@ -516,7 +533,7 @@ pub(crate) fn match_software_by_file_hash(
         discovery,
         list_name,
         metadata,
-        library_db::env_bool("MISTER_LIBRARY_SOFTWARE_HASH"),
+        list_name == "lynx" || library_db::env_bool("MISTER_LIBRARY_SOFTWARE_HASH"),
         software_hash_cache,
     )
 }
@@ -643,11 +660,18 @@ pub(crate) fn software_hash_cache_key(
         return None;
     }
     Some(SoftwareHashCacheKey {
-        list_name: list_name.to_string(),
+        list_name: software_hash_cache_namespace(list_name).to_string(),
         file_path: source_path.to_string(),
         size: signature.size,
         mtime_secs: signature.mtime_secs,
     })
+}
+
+fn software_hash_cache_namespace(list_name: &str) -> &str {
+    match list_name {
+        "lynx" => "lynx:v2",
+        value => value,
+    }
 }
 
 pub(crate) fn chd_raw_sha1(path: &str) -> Option<String> {
@@ -692,6 +716,12 @@ pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>>
             out.push(swap_pairs(bytes));
             out.push(swap_words(bytes));
             out.push(reverse_words(bytes));
+        }
+        "lynx" => {
+            if bytes.len() > 64 && &bytes[..4] == b"LYNX" {
+                out.push(bytes[64..].to_vec());
+            }
+            out.push(bytes.to_vec());
         }
         "sms" | "megadriv" => out.push(bytes.to_vec()),
         _ => out.push(bytes.to_vec()),
@@ -883,6 +913,8 @@ pub(crate) fn preview_asset_pack_platform(path: &str) -> &'static str {
         "megadrive"
     } else if path.contains("amiga-screenshots") {
         "amiga"
+    } else if path.contains("atarilynx-screenshots") {
+        "atarilynx"
     } else if path.contains("saturn") {
         "saturn"
     } else {
@@ -1194,6 +1226,87 @@ mod tests {
     }
 
     #[test]
+    fn lynx_software_identity_prefers_content_hash_over_title() {
+        let mut metadata = MameSoftwareMetadata::default();
+        for (name, description) in [
+            ("titlematch", "Example Game (USA)"),
+            ("hashmatch", "Example Game (Europe)"),
+        ] {
+            metadata.items.insert(
+                ("lynx".to_string(), name.to_string()),
+                MameSoftwareItemMetadata {
+                    description: description.to_string(),
+                    ..Default::default()
+                },
+            );
+        }
+        metadata.title_index.insert(
+            ("lynx".to_string(), "example-game".to_string()),
+            vec!["titlematch".to_string()],
+        );
+        let mut discovery = payload("/media/fat/games/AtariLynx/Example Game (USA).lyx");
+        discovery.platform_id = "atarilynx".to_string();
+        discovery.title = "Example Game (USA)".to_string();
+
+        let identity = mame_software_identity_for_discovery_with_hash_matcher(
+            &discovery,
+            &metadata,
+            |_, list_name, _| {
+                assert_eq!(list_name, "lynx");
+                Some("hashmatch".to_string())
+            },
+        )
+        .expect("Lynx software identity");
+
+        assert_eq!(identity.software_name, "hashmatch");
+        assert_eq!(identity.source, "mame-software");
+    }
+
+    #[test]
+    fn lynx_software_identity_falls_back_to_normalized_title_after_hash_miss() {
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata.items.insert(
+            ("lynx".to_string(), "beast".to_string()),
+            MameSoftwareItemMetadata {
+                description: "Shadow of the Beast (Europe, USA)".to_string(),
+                ..Default::default()
+            },
+        );
+        metadata.title_index.insert(
+            ("lynx".to_string(), "shadow-of-the-beast".to_string()),
+            vec!["beast".to_string()],
+        );
+        let mut discovery =
+            payload("/media/fat/games/AtariLynx/Shadow of the Beast (USA, Europe).lyx");
+        discovery.platform_id = "atarilynx".to_string();
+        discovery.title = "Shadow of the Beast (USA, Europe)".to_string();
+
+        let identity = mame_software_identity_for_discovery_with_hash_matcher(
+            &discovery,
+            &metadata,
+            |_, _, _| None,
+        )
+        .expect("title fallback identity");
+
+        assert_eq!(identity.software_name, "beast");
+        assert_eq!(identity.source, "filename");
+    }
+
+    #[test]
+    fn unmatched_lynx_software_has_no_identity() {
+        let mut discovery = payload("/media/fat/games/AtariLynx/Unknown Homebrew.lyx");
+        discovery.platform_id = "atarilynx".to_string();
+        discovery.title = "Unknown Homebrew".to_string();
+
+        assert!(mame_software_identity_for_discovery_with_hash_matcher(
+            &discovery,
+            &MameSoftwareMetadata::default(),
+            |_, _, _| None,
+        )
+        .is_none());
+    }
+
+    #[test]
     fn software_identity_hash_match_is_disabled_by_default() {
         let root = unique_temp_dir("software-hash-disabled");
         let rom_path = root.join("Fixture.sfc");
@@ -1231,6 +1344,77 @@ mod tests {
             match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, true, &mut cache);
 
         assert_eq!(matched, Some("fixture".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lynx_hash_match_projects_family_screenshot_key_without_global_opt_in() {
+        let root = unique_temp_dir("lynx-default-hash-preview");
+        let rom_path = root.join("Collection Name.lyx");
+        std::fs::write(&rom_path, b"raw-lynx-rom").expect("write Lynx ROM");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(
+            &mame_db,
+            &[
+                (
+                    "lynx",
+                    "parent",
+                    None,
+                    "Example Lynx Game (USA)",
+                    Some("1991"),
+                    Some("Example"),
+                    Some("usa"),
+                ),
+                (
+                    "lynx",
+                    "child",
+                    Some("parent"),
+                    "Example Lynx Game (Europe)",
+                    Some("1991"),
+                    Some("Example"),
+                    Some("europe"),
+                ),
+            ],
+            &[("lynx", "child", 12, crc32(b"raw-lynx-rom"))],
+        );
+        let db = root.join("library.sqlite3");
+        let mut discovery = payload(&rom_path.display().to_string());
+        discovery.platform_id = "atarilynx".to_string();
+        discovery.category = "Console".to_string();
+        discovery.core_id = "AtariLynx".to_string();
+        discovery.hardware_id = "atarilynx".to_string();
+        discovery.title = "Collection Name".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/atarilynx-screenshots-160x102.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: vec![software_asset_key("lynx", "parent")],
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![discovery]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save Lynx catalog");
+
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
+        let row: (String, String, String, i64) = conn
+            .query_row(
+                "SELECT i.identity_id,i.family_id,l.preview_asset_key,l.has_preview
+                 FROM launchable_identities i
+                 JOIN launchables lb ON lb.launchable_id=i.launchable_id
+                 JOIN launcher_catalog_text l ON l.launch_ref=lb.launch_ref
+                 WHERE i.namespace='mame-software'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("Lynx software identity row");
+
+        assert_eq!(row.0, "lynx:child");
+        assert_eq!(row.1, "lynx:parent");
+        assert_eq!(row.2, software_asset_key("lynx", "parent"));
+        assert_eq!(row.3, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1294,6 +1478,39 @@ mod tests {
             match_software_by_file_hash_with_cache(&discovery, "snes", &metadata, true, &mut cache);
 
         assert_eq!(matched, Some("fresh".to_string()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lynx_hash_policy_ignores_cache_rows_from_the_old_algorithm() {
+        let root = unique_temp_dir("lynx-versioned-hash-cache");
+        let rom_path = root.join("Fixture.lyx");
+        std::fs::write(&rom_path, b"fresh-lynx").expect("write ROM");
+        let signature = file_signature(&rom_path);
+        let db = root.join("library.sqlite3");
+        write_software_hash_cache_fixture(
+            &db,
+            &[(
+                "lynx",
+                &rom_path.display().to_string(),
+                signature.size,
+                signature.mtime_secs,
+                None,
+            )],
+        );
+        let mut cache = SoftwareHashCache::load(&db);
+        let mut metadata = MameSoftwareMetadata::default();
+        metadata.hash_index.insert(
+            ("lynx".to_string(), 10, crc32(b"fresh-lynx")),
+            vec!["fresh".to_string()],
+        );
+        let discovery = payload(&rom_path.display().to_string());
+
+        let matched =
+            match_software_by_file_hash_with_cache(&discovery, "lynx", &metadata, true, &mut cache);
+
+        assert_eq!(matched, Some("fresh".to_string()));
+        assert!(cache.entries.keys().any(|key| key.list_name == "lynx:v2"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1619,7 +1836,18 @@ mod tests {
     }
 
     #[test]
-    fn rom_normalization_covers_snes_and_n64_byte_orders() {
+    fn rom_normalization_covers_lynx_headers_snes_and_n64_byte_orders() {
+        let lynx_payload = b"raw-lynx-rom";
+        let mut lnx = vec![0; 64];
+        lnx[..4].copy_from_slice(b"LYNX");
+        lnx.extend_from_slice(lynx_payload);
+        let lynx_candidates = rom_hash_candidates("lynx", &lnx);
+        assert_eq!(
+            lynx_candidates.first().map(Vec::as_slice),
+            Some(&lynx_payload[..])
+        );
+        assert!(lynx_candidates.iter().any(|candidate| candidate == &lnx));
+
         let snes = [0xaa; 512]
             .into_iter()
             .chain(b"plain-snes".iter().copied())
