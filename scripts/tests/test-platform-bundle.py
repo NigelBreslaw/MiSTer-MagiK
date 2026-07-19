@@ -120,6 +120,32 @@ class PlatformBundleTests(unittest.TestCase):
         })()
         return bundle.create(args)
 
+    def legacy_archive(self) -> Path:
+        archive = self.create()
+        legacy = self.root / "legacy.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(legacy, "w") as target:
+            manifest = json.loads(source.read(bundle.MANIFEST_NAME))
+            manifest["format"] = bundle.FORMAT_V1
+            manifest["bundle_id"] = bundle.legacy_bundle_id(self.fpga_id, self.kernel_id)
+            manifest.pop("release_version")
+            manifest.pop("main_input_sha256")
+            manifest["components"].pop("main")
+            manifest["files"] = [entry for entry in manifest["files"] if not entry["path"].startswith("main/")]
+            payloads = {
+                info.filename: source.read(info.filename)
+                for info in source.infolist()
+                if not info.filename.startswith("main/") and info.filename not in {bundle.MANIFEST_NAME, "SHA256SUMS"}
+            }
+            payloads[bundle.MANIFEST_V1] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+            payloads["SHA256SUMS"] = "".join(
+                f"{hashlib.sha256(value).hexdigest()}  {name}\n"
+                for name, value in sorted(payloads.items())
+            ).encode()
+            for name, payload in payloads.items():
+                target.writestr(name, payload)
+        (self.root / bundle.MANIFEST_V1).write_bytes(zipfile.ZipFile(legacy).read(bundle.MANIFEST_V1))
+        return legacy
+
     def test_round_trip(self) -> None:
         archive = self.create()
         payload = bundle.verify(archive, self.root / "output/platform-bundle-v0.2.json")
@@ -166,31 +192,38 @@ class PlatformBundleTests(unittest.TestCase):
             bundle.verify(self.create(), expected_release_version=3)
 
     def test_verify_accepts_legacy_v1_without_release_version(self) -> None:
-        archive = self.create()
-        legacy = self.root / "legacy.zip"
-        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(legacy, "w") as target:
-            manifest = json.loads(source.read(bundle.MANIFEST_NAME))
-            manifest["format"] = bundle.FORMAT_V1
-            manifest["bundle_id"] = bundle.legacy_bundle_id(self.fpga_id, self.kernel_id)
-            manifest.pop("release_version")
-            manifest.pop("main_input_sha256")
-            manifest["components"].pop("main")
-            manifest["files"] = [entry for entry in manifest["files"] if not entry["path"].startswith("main/")]
-            payloads = {
-                info.filename: source.read(info.filename)
-                for info in source.infolist()
-                if not info.filename.startswith("main/") and info.filename not in {bundle.MANIFEST_NAME, "SHA256SUMS"}
-            }
-            payloads[bundle.MANIFEST_V1] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
-            sums = "".join(
-                f"{hashlib.sha256(value).hexdigest()}  {name}\n"
-                for name, value in sorted(payloads.items())
-            ).encode()
-            payloads["SHA256SUMS"] = sums
-            for name, payload in payloads.items():
-                target.writestr(name, payload)
+        legacy = self.legacy_archive()
         payload = bundle.verify(legacy, expected_release_version=1)
         self.assertNotIn("release_version", payload)
+
+    def test_extracts_each_exact_v2_component_with_origin(self) -> None:
+        archive = self.create()
+        manifest = self.root / "output" / bundle.MANIFEST_NAME
+        for component, identity, marker in (
+            ("main", self.main_id, "MiSTer_MagiK"),
+            ("fpga", self.fpga_id, "patched/menu-magik-vblank-latch.rbf"),
+            ("kernel", self.kernel_id, "mister_magik_scanout_slots.ko"),
+        ):
+            output = self.root / f"extracted-{component}"
+            result = bundle.extract_component(archive, manifest, component, identity, output)
+            self.assertTrue((output / marker).is_file())
+            self.assertEqual(result["component_id"], identity)
+            self.assertTrue(str(result["run_id"]).isdigit())
+
+    def test_extract_rejects_mismatched_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "identity"):
+            bundle.extract_component(
+                self.create(), self.root / "output" / bundle.MANIFEST_NAME,
+                "kernel", "d" * 64, self.root / "wrong",
+            )
+
+    def test_legacy_extracts_fpga_and_kernel_but_not_main(self) -> None:
+        archive = self.legacy_archive()
+        manifest = self.root / bundle.MANIFEST_V1
+        bundle.extract_component(archive, manifest, "fpga", self.fpga_id, self.root / "legacy-fpga")
+        bundle.extract_component(archive, manifest, "kernel", self.kernel_id, self.root / "legacy-kernel")
+        with self.assertRaisesRegex(ValueError, "does not contain main"):
+            bundle.extract_component(archive, manifest, "main", self.main_id, self.root / "legacy-main")
 
     def test_tampering_is_rejected(self) -> None:
         archive = self.create()

@@ -327,6 +327,44 @@ def verify(
         return payload
 
 
+def extract_component(
+    archive: Path,
+    manifest_path: Path,
+    component: str,
+    component_id: str,
+    output: Path,
+) -> dict[str, object]:
+    require_hex(f"{component}_input_sha256", component_id, HEX64)
+    payload = verify(archive, manifest_path)
+    keys = {"main": "main_input_sha256", "fpga": "fpga_input_sha256", "kernel": "kernel_input_sha256"}
+    directories = {"main": "main", "fpga": "fpga", "kernel": "scanout"}
+    if component not in keys:
+        raise BundleError(f"unsupported component: {component}")
+    if payload.get(keys[component]) is None:
+        raise BundleError(f"platform bundle does not contain {component}")
+    if payload.get(keys[component]) != component_id:
+        raise BundleError(f"platform bundle {component} identity does not match request")
+    origin = payload.get("components", {}).get(component)
+    if not isinstance(origin, dict):
+        raise BundleError(f"platform bundle is missing {component} origin")
+    if output.exists():
+        raise BundleError(f"component output already exists: {output}")
+    with tempfile.TemporaryDirectory(prefix="mister-magik-platform-extract-") as temporary:
+        root = Path(temporary)
+        with zipfile.ZipFile(archive) as source:
+            source.extractall(root)
+        shutil.copytree(root / directories[component], output)
+    return {
+        "component": component,
+        "component_id": component_id,
+        "run_id": origin["run_id"],
+        "head_sha": origin["head_sha"],
+        "workflow": origin["workflow"],
+        "head_branch": origin["head_branch"],
+        "release_version": payload.get("release_version", 1),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -349,6 +387,12 @@ def main() -> int:
     check.add_argument("archive", type=Path)
     check.add_argument("--manifest", type=Path)
     check.add_argument("--release-version", type=int)
+    extract = commands.add_parser("extract-component")
+    extract.add_argument("archive", type=Path)
+    extract.add_argument("--manifest", required=True, type=Path)
+    extract.add_argument("--component", required=True, choices=("main", "fpga", "kernel"))
+    extract.add_argument("--component-id", required=True)
+    extract.add_argument("--output", required=True, type=Path)
     plan = commands.add_parser("plan-update")
     plan.add_argument("--manifest", type=Path)
     plan.add_argument("--current-version", required=True, type=int)
@@ -362,6 +406,8 @@ def main() -> int:
             print(create(args))
         elif args.command == "verify":
             print(json.dumps(verify(args.archive, args.manifest, args.release_version), sort_keys=True))
+        elif args.command == "extract-component":
+            print(json.dumps(extract_component(args.archive, args.manifest, args.component, args.component_id, args.output), sort_keys=True))
         else:
             current = json.loads(args.manifest.read_text()) if args.manifest else None
             result = update_plan(current, args.current_version, args.main_id, args.fpga_id, args.kernel_id)

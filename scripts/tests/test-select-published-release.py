@@ -56,6 +56,18 @@ class PublishedReleaseSelectionTests(unittest.TestCase):
         draft = release("platform-v0.99", "2026-05-01T00:00:00Z", draft=True)
         self.assertEqual(selector.select_platform([v9, v10, legacy, draft])["tag_name"], "platform-v0.10")
 
+    def test_durable_platform_history_is_numeric_and_excludes_legacy_and_drafts(self) -> None:
+        releases = [
+            release("platform-v0.9", "2026-03-01T00:00:00Z"),
+            release("platform-v0.10", "2026-01-01T00:00:00Z"),
+            release("platform-v0.1-" + "a" * 64, "2026-04-01T00:00:00Z"),
+            release("platform-v0.11", draft=True),
+        ]
+        self.assertEqual(
+            [item["tag_name"] for item in selector.durable_platforms(releases)],
+            ["platform-v0.10", "platform-v0.9"],
+        )
+
     def test_platform_version_supports_numbered_and_legacy_tags(self) -> None:
         self.assertEqual(selector.platform_version("platform-v0.12"), 12)
         self.assertEqual(selector.platform_version("platform-v0.1-" + "f" * 64), 1)
