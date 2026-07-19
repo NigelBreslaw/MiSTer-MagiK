@@ -166,13 +166,25 @@ releases use immutable `v0.2.<build>` tags and are never overwritten.
 - A non-main FPGA, scanout, Main, or promotion dispatch is intentionally rejected.
 - A missing published platform release requires a successful main promotion; do
   not use an Actions artifact from a PR or another branch.
-- An expired FPGA or kernel artifact requires its component workflow on `main`.
-  An absent or expired exact Main artifact is rebuilt automatically by
-  `main-mister.yml`; successful Main artifacts are retained for 90 days.
+- Published numbered platform assets are the permanent component store and do
+  not expire automatically. Actions artifacts are retained for 90 days and are
+  only a transport/cache layer.
+- Component resolution searches numbered platform releases newest-first for the
+  exact identity, then a non-expired successful Actions artifact. Main builds
+  only after both miss. A missing new FPGA or kernel identity requires its
+  component workflow; unchanged published components are never rebuilt merely
+  because an Actions artifact expired.
+- Different components may be recovered from different historical platform
+  releases. Their original workflow run IDs and source revisions remain in the
+  new candidate. v0.1 bundles can recover FPGA and kernel; durable Main recovery
+  begins with the first published v0.2 bundle.
 - A Main receipt with the wrong fork revision, authority, toolchain, binary
   hash, or unsuccessful origin run is rejected rather than reused.
 - A mismatched platform contract is a failed qualification and must be fixed
   before promotion; a platform release is never patched in place.
+- If a release is manually deleted or corrupt, recovery tries the next older
+  verified exact release, then a live Actions artifact, and finally rebuilds
+  only the component that no durable source can supply.
 
 ## Numbered platform releases
 

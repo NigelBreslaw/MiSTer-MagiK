@@ -21,6 +21,9 @@ manual pre-release gate rather than GitHub-hosted CI.
 - Main, FPGA, and kernel binaries originate from an immutable main-qualified
   platform bundle; legacy v0.1 bundles remain a migration fallback only;
   PR artifacts are never eligible for publication.
+- Numbered platform releases are the durable store for unchanged component
+  identities. Expiration of the 90-day Actions cache must not force a rebuild
+  of a component that remains available in a verified platform release.
 - MAME and HBMAME metadata originate from the highest numbered immutable
   `game-databases-vN` release, with archive, manifest, and `SHA256SUMS` verified
   together. Application publication never rebuilds them or accepts raw database

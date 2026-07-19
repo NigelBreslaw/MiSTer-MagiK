@@ -171,8 +171,9 @@ Do not stack branches.
 
 1. Merge each fork repo PR to `Main_MiSTer/mister-magik`.
 2. Run the fork host tests and patch-surface check. MagiK's `main-mister.yml`
-   reuses a non-expired artifact for that exact component identity or builds it
-   with the pinned toolchain on a miss.
+   first recovers the exact identity from an immutable published v0.2 platform,
+   then tries a non-expired Actions artifact, and builds with the pinned
+   toolchain only when neither exists.
 3. Merge app repo deploy/docs changes to `mister-slint/main`.
 4. Promote a candidate platform bundle. It captures the fork head once and
    combines that exact Main artifact with independently selected FPGA and kernel
