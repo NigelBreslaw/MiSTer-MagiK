@@ -30,6 +30,10 @@ for needle in required:
 assert "repository: NigelBreslaw/Main_MiSTer" in text
 assert "ref: ${{ steps.identity.outputs.main_revision }}" in text
 assert "captured_authoritative_head" not in text
+trigger = text.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+assert "inputs:" not in trigger
+assert "Optional exact Main_MiSTer" not in text
+assert "REQUESTED_REVISION" not in text
 assert "path: Main_MiSTer/bin" not in text
 assert "main-build-cache" not in text
 assert text.index("Recover Main from immutable platform releases") < text.index("Find an existing exact component artifact")

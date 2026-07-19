@@ -5,11 +5,6 @@ name: Main_MiSTer component
 
 on:
   workflow_call:
-    inputs:
-      main_revision:
-        description: Exact Main_MiSTer mister-magik revision; empty resolves branch head
-        required: false
-        type: string
     outputs:
       main_revision:
         value: ${{ jobs.component.outputs.main_revision }}
@@ -20,11 +15,6 @@ on:
       run_id:
         value: ${{ jobs.component.outputs.run_id }}
   workflow_dispatch:
-    inputs:
-      main_revision:
-        description: Optional exact Main_MiSTer mister-magik revision
-        required: false
-        type: string
 
 permissions:
   actions: read
@@ -58,18 +48,10 @@ jobs:
 
       - name: Resolve exact authoritative Main revision
         id: identity
-        env:
-          REQUESTED_REVISION: ${{ inputs.main_revision }}
         run: |
           set -euo pipefail
-          head_revision="$(git ls-remote "https://github.com/$MAIN_REPOSITORY.git" "refs/heads/$MAIN_BRANCH" | awk '{print $1}')"
-          test "$head_revision" != ""
-          revision="${REQUESTED_REVISION:-$head_revision}"
+          revision="$(git ls-remote "https://github.com/$MAIN_REPOSITORY.git" "refs/heads/$MAIN_BRANCH" | awk '{print $1}')"
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
-          if [ "$revision" != "$head_revision" ]; then
-            echo "Requested Main revision is not the current authoritative branch head." >&2
-            exit 1
-          fi
           component_id="$(python3 scripts/release/platform/main-component.py identity --revision "$revision")"
           artifact_name="mister-magik-main-v0.1-$component_id"
           echo "main_revision=$revision" >> "$GITHUB_OUTPUT"
