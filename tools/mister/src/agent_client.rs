@@ -5,7 +5,7 @@ use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
 use serde_json::Value;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -113,10 +113,10 @@ fn read_agent_binary_response<R: BufRead>(
     })
 }
 
-pub(crate) fn agent_stream_request(
+pub(crate) fn agent_stream_request_reader(
     cmd: &str,
     args: Value,
-    payload: &[u8],
+    payload: &mut dyn Read,
     timeout: Duration,
 ) -> Result<AgentResponse> {
     let token = agent_token()?;
@@ -130,9 +130,14 @@ pub(crate) fn agent_stream_request(
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     writeln!(stream, "{request}")?;
-    write_agent_stream_payload(stream, payload, start)
+    io::copy(payload, &mut stream)?;
+    stream.flush()?;
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    parse_agent_response_line(line, start)
 }
 
+#[cfg(test)]
 fn write_agent_stream_payload<T: Read + Write>(
     mut stream: T,
     payload: &[u8],

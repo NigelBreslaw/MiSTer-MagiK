@@ -32,7 +32,7 @@ fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
     Ok(mac)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 fn decompress_lz4_block_exact(
     payload: &[u8],
     expected_raw: usize,
@@ -2119,10 +2119,12 @@ mod linux {
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
-            "deploy_magik_bin" => match deploy_magik_bin(args) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
-            },
+            "deploy_magik_bin" => response(
+                id,
+                false,
+                None,
+                Some("legacy buffered deployment is disabled"),
+            ),
             "deploy_magik_bin_stream" => match deploy_magik_bin_stream(args, reader) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
@@ -2995,30 +2997,6 @@ mod linux {
         start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
     }
 
-    fn deploy_magik_bin(args: Value) -> Result<Value, String> {
-        let remote = args
-            .get("remote")
-            .and_then(Value::as_str)
-            .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
-        validate_deploy_remote(remote)?;
-        let expectations = deploy_expectations(&args)?;
-        let hex = args
-            .get("data_hex")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "missing deploy data".to_string())?;
-
-        let decode_t = Instant::now();
-        let payload = decode_hex(hex)?;
-        let bytes = decode_deploy_payload(&expectations, payload)?;
-        deploy_magik_bin_bytes(
-            remote,
-            &expectations,
-            bytes,
-            "hex",
-            decode_t.elapsed().as_millis() as u64,
-        )
-    }
-
     fn deploy_magik_bin_stream(args: Value, reader: &mut dyn Read) -> Result<Value, String> {
         let remote = args
             .get("remote")
@@ -3026,32 +3004,7 @@ mod linux {
             .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
         validate_deploy_remote(remote)?;
         let expectations = deploy_expectations(&args)?;
-        if expectations.encoding == "raw" && expectations.payload_size == expectations.raw_size {
-            return deploy_magik_bin_stream_raw(remote, &expectations, reader);
-        }
-        let receive_t = Instant::now();
-        let payload_size = usize::try_from(expectations.payload_size)
-            .map_err(|_| "deploy payload size overflows usize".to_string())?;
-        let mut payload = Vec::new();
-        payload
-            .try_reserve_exact(payload_size)
-            .map_err(|err| format!("allocate deploy payload ({payload_size} bytes): {err}"))?;
-        payload.resize(payload_size, 0);
-        reader
-            .read_exact(&mut payload)
-            .map_err(|err| err.to_string())?;
-        let receive_ms = receive_t.elapsed().as_millis() as u64;
-        let decode_t = Instant::now();
-        let bytes = decode_deploy_payload(&expectations, payload)?;
-        let decode_ms = decode_t.elapsed().as_millis() as u64;
-        deploy_magik_bin_bytes(remote, &expectations, bytes, "stream", receive_ms).map(
-            |mut result| {
-                if let Some(object) = result.as_object_mut() {
-                    object.insert("decode_ms".to_string(), json!(decode_ms));
-                }
-                result
-            },
-        )
+        deploy_magik_bin_stream_raw(remote, &expectations, reader)
     }
 
     fn deploy_magik_bin_stream_raw(
@@ -3199,9 +3152,7 @@ mod linux {
 
     struct DeployExpectations {
         raw_size: u64,
-        payload_size: u64,
         checksum: String,
-        encoding: String,
     }
 
     fn deploy_expectations(args: &Value) -> Result<DeployExpectations, String> {
@@ -3219,9 +3170,10 @@ mod linux {
             .and_then(Value::as_str)
             .unwrap_or("raw")
             .to_string();
-        match encoding.as_str() {
-            "raw" | "lz4-block" => {}
-            _ => return Err(format!("unsupported deploy encoding: {encoding}")),
+        if encoding != "raw" {
+            return Err(format!(
+                "unsupported transactional deploy encoding: {encoding}"
+            ));
         }
         let payload_size = args
             .get("payload_size")
@@ -3243,104 +3195,8 @@ mod linux {
             .ok_or_else(|| "missing deploy checksum".to_string())?;
         Ok(DeployExpectations {
             raw_size,
-            payload_size,
             checksum: checksum.to_string(),
-            encoding,
         })
-    }
-
-    fn decode_deploy_payload(
-        expectations: &DeployExpectations,
-        payload: Vec<u8>,
-    ) -> Result<Vec<u8>, String> {
-        if payload.len() as u64 != expectations.payload_size {
-            return Err(format!(
-                "deploy payload size mismatch expected={} actual={}",
-                expectations.payload_size,
-                payload.len()
-            ));
-        }
-        match expectations.encoding.as_str() {
-            "raw" => Ok(payload),
-            "lz4-block" => crate::decompress_lz4_block_exact(
-                &payload,
-                expectations.raw_size as usize,
-                MAX_DEPLOY_BYTES as usize,
-                "deploy payload",
-            ),
-            _ => Err(format!(
-                "unsupported deploy encoding: {}",
-                expectations.encoding
-            )),
-        }
-    }
-
-    fn deploy_magik_bin_bytes(
-        remote: &str,
-        expectations: &DeployExpectations,
-        bytes: Vec<u8>,
-        transport: &str,
-        receive_ms: u64,
-    ) -> Result<Value, String> {
-        let total_t = Instant::now();
-        if bytes.len() as u64 != expectations.raw_size {
-            return Err(format!(
-                "deploy size mismatch expected={} actual={}",
-                expectations.raw_size,
-                bytes.len()
-            ));
-        }
-        let checksum = fnv64_hex(&bytes);
-        if checksum != expectations.checksum {
-            return Err(format!(
-                "deploy checksum mismatch expected={} actual={checksum}",
-                expectations.checksum
-            ));
-        }
-
-        append_log_line(format!(
-            "deploy_magik_bin_start remote={remote} bytes={} payload_bytes={} encoding={} checksum={}",
-            expectations.raw_size,
-            expectations.payload_size,
-            expectations.encoding,
-            expectations.checksum
-        ));
-        let suspend_t = Instant::now();
-        magik_fifo_action("suspend")?;
-        let suspend_ms = suspend_t.elapsed().as_millis() as u64;
-
-        let swap_t = Instant::now();
-        let swap_result = deploy_bytes_to_remote(&bytes, remote);
-        let swap_ms = swap_t.elapsed().as_millis() as u64;
-        if let Err(err) = swap_result {
-            let _ = magik_fifo_action("resume");
-            append_log_line(format!("deploy_magik_bin_error remote={remote} err={err}"));
-            return Err(err);
-        }
-
-        let resume_t = Instant::now();
-        let resume = magik_fifo_action("resume")?;
-        let resume_ms = resume_t.elapsed().as_millis() as u64;
-        let remote_bytes = fs::metadata(remote).map(|meta| meta.len()).unwrap_or(0);
-        append_log_line(format!(
-            "deploy_magik_bin_done remote={remote} bytes={remote_bytes} checksum={}",
-            expectations.checksum
-        ));
-        Ok(json!({
-            "transport": transport,
-            "encoding": expectations.encoding,
-            "remote": remote,
-            "bytes": expectations.raw_size,
-            "payload_bytes": expectations.payload_size,
-            "remote_bytes": remote_bytes,
-            "checksum": expectations.checksum,
-            "receive_ms": receive_ms,
-            "suspend_ms": suspend_ms,
-            "swap_ms": swap_ms,
-            "resume_ms": resume_ms,
-            "total_ms": total_t.elapsed().as_millis() as u64,
-            "resume": resume,
-        }))
     }
 
     fn validate_deploy_remote(remote: &str) -> Result<(), String> {
@@ -3350,27 +3206,6 @@ mod linux {
         if remote.ends_with('/') || remote.contains('\0') || remote.contains("/../") {
             return Err(format!("unsupported deploy remote: {remote}"));
         }
-        Ok(())
-    }
-
-    fn deploy_bytes_to_remote(bytes: &[u8], remote: &str) -> Result<(), String> {
-        let remote_path = Path::new(remote);
-        let parent = remote_path
-            .parent()
-            .ok_or_else(|| "deploy remote has no parent".to_string())?;
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        let upload = parent.join(format!(
-            ".{}.upload",
-            remote_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("mister-magik-fb")
-        ));
-        let _ = fs::remove_file(&upload);
-        fs::write(&upload, bytes).map_err(|err| err.to_string())?;
-        fs::set_permissions(&upload, fs::Permissions::from_mode(0o755))
-            .map_err(|err| err.to_string())?;
-        fs::rename(&upload, remote).map_err(|err| err.to_string())?;
         Ok(())
     }
 
@@ -3444,6 +3279,13 @@ mod linux {
             .get(operation_id)
             .cloned()
         {
+            if result.get("terminal_reason").and_then(Value::as_str) == Some("failed") {
+                return Err(result
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("cached operation failure")
+                    .to_string());
+            }
             return Ok(result);
         }
         let started = Instant::now();
@@ -3480,7 +3322,10 @@ mod linux {
             }
             _ => return Err(format!("unsupported magik action: {action}")),
         };
-        write_main_command_nonblocking(command)?;
+        if let Err(error) = write_main_command_nonblocking(command) {
+            cache_operation_failure(cache, operation_id, action, &error, started.elapsed());
+            return Err(error);
+        }
         let expected_state = match action {
             "suspend" => "LauncherSuspended",
             "resume" | "restart-launcher" | "return-to-launcher" => "LauncherActive",
@@ -3499,9 +3344,10 @@ mod linux {
                 break status;
             }
             if started.elapsed() >= deadline {
-                return Err(format!(
-                    "operation_timeout action={action} expected_state={expected_state}"
-                ));
+                let error =
+                    format!("operation_timeout action={action} expected_state={expected_state}");
+                cache_operation_failure(cache, operation_id, action, &error, started.elapsed());
+                return Err(error);
             }
             thread::sleep(Duration::from_millis(50));
         };
@@ -3523,6 +3369,21 @@ mod linux {
         Ok(result)
     }
 
+    fn cache_operation_failure(
+        cache: &Mutex<HashMap<String, Value>>,
+        operation_id: &str,
+        action: &str,
+        error: &str,
+        elapsed: Duration,
+    ) {
+        if let Ok(mut results) = cache.lock() {
+            if results.len() >= 128 {
+                results.clear();
+            }
+            results.insert(operation_id.to_string(), json!({"operation_id":operation_id,"action":action,"terminal_reason":"failed","error":error,"elapsed_ms":elapsed.as_millis() as u64}));
+        }
+    }
+
     fn magik_acknowledged_launch(
         operation_id: &str,
         before_generation: u64,
@@ -3531,8 +3392,24 @@ mod linux {
         cache: &Mutex<HashMap<String, Value>>,
     ) -> Result<Value, String> {
         let command = format!("mister_magik_launch {target}");
-        write_main_command_nonblocking(&command)?;
-        let final_status = wait_for_main_ready(Some(before_generation), Duration::from_secs(30))?;
+        if let Err(error) = write_main_command_nonblocking(&command) {
+            cache_operation_failure(cache, operation_id, "launch", &error, started.elapsed());
+            return Err(error);
+        }
+        let final_status =
+            match wait_for_main_ready(Some(before_generation), Duration::from_secs(30)) {
+                Ok(status) => status,
+                Err(error) => {
+                    cache_operation_failure(
+                        cache,
+                        operation_id,
+                        "launch",
+                        &error,
+                        started.elapsed(),
+                    );
+                    return Err(error);
+                }
+            };
         let result = json!({"operation_id":operation_id,"action":"launch","command":command,"before_generation":before_generation,"after_generation":main_generation(&final_status),"elapsed_ms":started.elapsed().as_millis() as u64,"terminal_reason":"acknowledged","main_status":final_status});
         let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
         if results.len() >= 128 {
@@ -3540,51 +3417,6 @@ mod linux {
         }
         results.insert(operation_id.to_string(), result.clone());
         Ok(result)
-    }
-
-    fn magik_fifo_action(action: &str) -> Result<Value, String> {
-        let command = match action {
-            "suspend" => "mister_magik_suspend",
-            "resume" => "mister_magik_resume",
-            "restart-launcher" => "mister_magik_restart_launcher",
-            _ => return Err(format!("unsupported magik action: {action}")),
-        };
-
-        let main_name = active_magik_main_name()
-            .ok_or_else(|| "no MiSTer MagiK Main is running".to_string())?;
-        let before_main = pid_string(main_name);
-        let before_launcher = pid_string("mister-magik-fb");
-        append_log_line(format!(
-            "magik_command action={action} command={command} main_pids={before_main} launcher_pids={before_launcher}"
-        ));
-
-        if !Path::new("/dev/MiSTer_cmd").exists() {
-            let err = "missing /dev/MiSTer_cmd".to_string();
-            append_log_line(format!("magik_command_error action={action} err={err}"));
-            return Err(err);
-        }
-        fs::write("/dev/MiSTer_cmd", format!("{command}\n")).map_err(|err| {
-            append_log_line(format!("magik_command_error action={action} err={err}"));
-            err.to_string()
-        })?;
-
-        let settle_ms = if action == "suspend" { 400 } else { 1500 };
-        thread::sleep(Duration::from_millis(settle_ms));
-        let after_main = pid_string(main_name);
-        let after_launcher = pid_string("mister-magik-fb");
-        if before_main != after_main || before_launcher != after_launcher {
-            append_log_line(format!(
-                "magik_pid_change action={action} main_before={before_main} main_after={after_main} launcher_before={before_launcher} launcher_after={after_launcher}"
-            ));
-        }
-        append_log_line(format!(
-            "magik_command_done action={action} command={command} main_pids={after_main} launcher_pids={after_launcher}"
-        ));
-        Ok(magik_status_json(
-            action,
-            Some(command.to_string()),
-            Some(settle_ms),
-        ))
     }
 
     fn magik_status_json(action: &str, command: Option<String>, settle_ms: Option<u64>) -> Value {
@@ -3695,40 +3527,6 @@ mod linux {
         current_status_pid(status, pids).is_some()
     }
 
-    fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
-        if !hex.len().is_multiple_of(2) {
-            return Err("hex payload has odd length".to_string());
-        }
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        let raw = hex.as_bytes();
-        let mut i = 0;
-        while i < raw.len() {
-            let hi = hex_value(raw[i])?;
-            let lo = hex_value(raw[i + 1])?;
-            bytes.push((hi << 4) | lo);
-            i += 2;
-        }
-        Ok(bytes)
-    }
-
-    fn hex_value(byte: u8) -> Result<u8, String> {
-        match byte {
-            b'0'..=b'9' => Ok(byte - b'0'),
-            b'a'..=b'f' => Ok(byte - b'a' + 10),
-            b'A'..=b'F' => Ok(byte - b'A' + 10),
-            _ => Err(format!("invalid hex byte: {byte}")),
-        }
-    }
-
-    fn fnv64_hex(bytes: &[u8]) -> String {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in bytes {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        format!("{hash:016x}")
-    }
-
     fn tail_text_value(path: &str, n: usize) -> Value {
         let Ok(text) = fs::read_to_string(path) else {
             return Value::Null;
@@ -3768,7 +3566,7 @@ mod linux {
         thread::spawn(move || {
             thread::sleep(Duration::from_millis(200));
             let result = if thread_mode == "supervised" {
-                fs::write("/dev/MiSTer_cmd", "mister_magik_reboot\n").map_err(|err| err.to_string())
+                write_main_command_nonblocking("mister_magik_reboot")
             } else {
                 std::process::Command::new("/bin/sh")
                     .arg("-c")
@@ -3850,10 +3648,6 @@ mod linux {
             .map(Value::from)
             .collect();
         Value::Array(pids)
-    }
-
-    fn pid_string(name: &str) -> String {
-        read_pidof(name).unwrap_or_default().replace(' ', ",")
     }
 
     fn active_magik_main_name() -> Option<&'static str> {

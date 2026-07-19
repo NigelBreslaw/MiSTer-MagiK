@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use ssh2::Session;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -20,7 +20,7 @@ mod media;
 mod remote;
 
 use agent_client::{
-    agent_binary_request_bounded, agent_request, agent_stream_request, agent_token,
+    agent_binary_request_bounded, agent_request, agent_stream_request_reader, agent_token,
     verify_agent_deploy_result, AGENT_PORT,
 };
 use remote::{
@@ -36,7 +36,6 @@ const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 #[cfg(test)]
 const DEFAULT_FB_BPP: usize = 32;
-const AGENT_DEPLOY_COMPRESS_MIN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES: u64 = 17 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
@@ -2026,76 +2025,47 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
     let total_t = Instant::now();
     let read_t = Instant::now();
-    let bytes = fs::read(local)?;
+    let mut source = fs::File::open(local)?;
+    let byte_count = source.metadata()?.len();
+    let mut hasher = Sha256::new();
+    let mut hash_buffer = [0u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut hash_buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&hash_buffer[..count]);
+    }
+    let checksum = format!("{:x}", hasher.finalize());
+    source = fs::File::open(local)?;
     let read_ms = read_t.elapsed().as_millis();
-    let checksum = format!("{:x}", Sha256::digest(&bytes));
-    let requested_encoding =
-        env::var("MISTER_AGENT_DEPLOY_ENCODING").unwrap_or_else(|_| "raw".to_string());
-    let min_compress_bytes = env::var("MISTER_AGENT_DEPLOY_COMPRESS_MIN_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(AGENT_DEPLOY_COMPRESS_MIN_BYTES);
-    let compress_t = Instant::now();
-    let should_try_compress = match requested_encoding.as_str() {
-        "auto" => bytes.len() >= min_compress_bytes,
-        "lz4-block" => true,
-        "raw" => false,
-        other => return Err(format!("unsupported MISTER_AGENT_DEPLOY_ENCODING: {other}").into()),
-    };
-    let compressed = if should_try_compress {
-        Some(lz4_flex::block::compress(&bytes))
-    } else {
-        None
-    };
-    let compress_ms = compress_t.elapsed().as_millis();
-    let compression_decision;
-    let (encoding, payload) = match (requested_encoding.as_str(), compressed) {
-        ("raw", _) => {
-            compression_decision = "forced-raw".to_string();
-            ("raw", bytes.clone())
-        }
-        ("auto", None) => {
-            compression_decision = format!("below-min-size:{min_compress_bytes}");
-            ("raw", bytes.clone())
-        }
-        ("auto", Some(compressed)) if compressed.len() < bytes.len() => {
-            compression_decision = "smaller".to_string();
-            ("lz4-block", compressed)
-        }
-        ("auto", Some(_)) => {
-            compression_decision = "not-smaller".to_string();
-            ("raw", bytes.clone())
-        }
-        ("lz4-block", Some(compressed)) => {
-            compression_decision = "forced-lz4-block".to_string();
-            ("lz4-block", compressed)
-        }
-        _ => return Err("invalid deploy compression state".into()),
-    };
+    let encoding = "raw";
+    let compression_decision = "streamed-raw";
+    let compress_ms = 0;
     let args = json!({
         "remote": &remote,
-        "size": bytes.len() as u64,
-        "payload_size": payload.len() as u64,
+        "size": byte_count,
+        "payload_size": byte_count,
         "checksum": checksum,
         "encoding": encoding,
     });
-    let reply = agent_stream_request(
+    let reply = agent_stream_request_reader(
         "deploy_magik_bin_stream",
         args,
-        &payload,
+        &mut source,
         Duration::from_secs(120),
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
-    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, &remote, &checksum)?;
+    let remote_bytes = verify_agent_deploy_result(result, byte_count, &remote, &checksum)?;
     println!(
         "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
         remote,
         encoding,
         compression_decision,
-        bytes.len(),
+        byte_count,
         remote_bytes,
-        payload.len(),
+        byte_count,
         checksum,
         total_t.elapsed().as_millis(),
         read_ms,
