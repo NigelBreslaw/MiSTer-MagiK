@@ -440,6 +440,7 @@ pub(super) fn sync_bridge_launcher(
         Screen::About => 4,
         Screen::Licenses => 5,
         Screen::Info => 6,
+        Screen::Screensaver => 7,
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
@@ -451,6 +452,9 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_settings_focused(nav.settings_focused);
     bridge.set_settings_selected(nav.settings_selected as i32);
     bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
+    bridge.set_screensaver_settings_selected(nav.screensaver_selected as i32);
+    bridge.set_screensaver_enabled(nav.settings.screensaver_enabled);
+    bridge.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
     bridge.set_licenses_selected(nav.licenses_selected as i32);
     bridge.set_licenses_expanded(nav.licenses_expanded);
     bridge.set_licenses_scroll_y(nav.licenses_scroll_y());
@@ -545,6 +549,7 @@ pub(super) fn sync_bridge_launcher_light(
             Screen::About => 4,
             Screen::Licenses => 5,
             Screen::Info => 6,
+            Screen::Screensaver => 7,
         }
     );
     set_bridge_if_changed!(
@@ -595,6 +600,24 @@ pub(super) fn sync_bridge_launcher_light(
         get_simple_joystick_handling,
         set_simple_joystick_handling,
         nav.settings.simple_joystick_handling
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_settings_selected,
+        set_screensaver_settings_selected,
+        nav.screensaver_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_enabled,
+        set_screensaver_enabled,
+        nav.settings.screensaver_enabled
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_screensaver_delay_minutes,
+        set_screensaver_delay_minutes,
+        nav.settings.screensaver_delay_minutes as i32
     );
     set_bridge_if_changed!(
         bridge,

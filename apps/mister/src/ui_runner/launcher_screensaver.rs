@@ -5,7 +5,33 @@ use super::*;
 use crate::preview_worker;
 use std::fs::File;
 use std::io::Write;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+#[cfg(not(mister_bench_scenes))]
+fn hash2_u8(x: usize, y: usize) -> u8 {
+    let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
+    v ^= v >> 16;
+    v = v.wrapping_mul(0x45d9f3b);
+    (v >> 24) as u8
+}
+
+#[cfg(not(mister_bench_scenes))]
+fn triangle_wave_u8(x: usize, phase: u8) -> u8 {
+    let v = ((x as u32).wrapping_mul(13).wrapping_add(phase as u32)) & 0xff;
+    let v = if v < 128 { v } else { 255 - v };
+    (v * 2).min(255) as u8
+}
+
+#[cfg(not(mister_bench_scenes))]
+fn plasma_gate(x: usize, y: usize, phase: u8) -> u8 {
+    ((triangle_wave_u8(x / 3 + y / 7, phase) as u16
+        + triangle_wave_u8(x / 9 + y / 2, phase.wrapping_mul(3)) as u16)
+        / 2) as u8
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScreensaverMode {
@@ -212,6 +238,70 @@ struct ScreensaverRenderState {
     starfield_contact_valid: bool,
 }
 
+pub(in crate::ui_runner) struct LauncherScreensaver {
+    images: Vec<SaverImage>,
+    parade: ParadeState,
+    frame: u64,
+}
+
+impl LauncherScreensaver {
+    fn load(w: usize, h: usize, cancelled: &AtomicBool) -> Option<Self> {
+        let images = load_screensaver_images_cancellable(256, Some(cancelled));
+        if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        let mut parade = ParadeState::new(random_seed());
+        if !parade.ensure_initialized_cancellable(&images, w, h, Some(cancelled)) {
+            return None;
+        }
+        Some(Self {
+            images,
+            parade,
+            frame: 0,
+        })
+    }
+
+    pub(in crate::ui_runner) fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) {
+        render_parade(dst, &mut self.parade, w, h, &self.images, self.frame);
+        self.frame = self.frame.wrapping_add(1);
+    }
+}
+
+pub(in crate::ui_runner) struct LauncherScreensaverLoader {
+    ready_rx: Receiver<LauncherScreensaver>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl LauncherScreensaverLoader {
+    pub(in crate::ui_runner) fn start(w: usize, h: usize) -> Self {
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        std::thread::Builder::new()
+            .name("screensaver-load".into())
+            .spawn(move || {
+                if let Some(saver) = LauncherScreensaver::load(w, h, &worker_cancelled) {
+                    let _ = ready_tx.send(saver);
+                }
+            })
+            .expect("spawn screensaver loader");
+        Self {
+            ready_rx,
+            cancelled,
+        }
+    }
+
+    pub(in crate::ui_runner) fn try_ready(&self) -> Option<LauncherScreensaver> {
+        self.ready_rx.try_recv().ok()
+    }
+}
+
+impl Drop for LauncherScreensaverLoader {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
 impl ScreensaverRenderState {
     fn new(w: usize, h: usize) -> Self {
         Self {
@@ -249,8 +339,10 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
     hardware: &mut Fpga,
     display_session: &mut LauncherDisplaySession,
 ) {
+    let startup_started = Instant::now();
     let mut cfg = ScreensaverConfig::from_env();
     let images = load_screensaver_images(cfg.cache_cap);
+    let image_load_us = startup_started.elapsed().as_micros();
     let portrait_images = images.iter().filter(|image| image.h > image.w).count();
     let landscape_images = images.iter().filter(|image| image.w > image.h).count();
     let square_images = images.len() - portrait_images - landscape_images;
@@ -281,6 +373,12 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
             .parade
             .ensure_initialized(&images, ui.render_w(), ui.render_h());
     }
+    crate::ui_logln!(
+        "screensaver_startup image_load_us={} initialize_us={} ready_us={}",
+        image_load_us,
+        startup_started.elapsed().as_micros() - image_load_us,
+        startup_started.elapsed().as_micros()
+    );
     let mut presenter = match FpgaVblankLatchHiddenPresenter::open(ui) {
         Ok(presenter) => presenter,
         Err(failure) => {
@@ -370,11 +468,18 @@ pub(in crate::ui_runner) fn run_screensaver_loop(
         }
         frame = frame.wrapping_add(1);
     }
-    render_state.parade.collect_scaled_cards();
+    render_state.parade.collect_scaled_cards(&images);
     render_state.parade.log_scaler_stats();
 }
 
 fn load_screensaver_images(cap: usize) -> Vec<SaverImage> {
+    load_screensaver_images_cancellable(cap, None)
+}
+
+fn load_screensaver_images_cancellable(
+    cap: usize,
+    cancelled: Option<&AtomicBool>,
+) -> Vec<SaverImage> {
     let arcade_screenshot_pack =
         std::path::Path::new(mister_magik_catalog::catalog_config::DEFAULT_SQLITE_PATH)
             .parent()
@@ -399,6 +504,9 @@ fn load_screensaver_images(cap: usize) -> Vec<SaverImage> {
     shuffle(&mut asset_keys, &mut rng);
     let mut images = Vec::new();
     for asset_key in asset_keys {
+        if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+            break;
+        }
         if images.len() >= cap {
             break;
         }
@@ -667,38 +775,13 @@ fn blit_scaled_subpixel_x(
         }
         return;
     }
-    for src_y in 0..image.h {
-        let dst_y = y + src_y as isize;
-        if dst_y < 0 || dst_y >= screen_h as isize {
-            continue;
-        }
-        let src_row = src_y * image.stride;
-        let dst_row = dst_y as usize * screen_w;
-        for edge_x in 0..=image.w {
-            let dst_x = x + edge_x as isize;
-            if dst_x < 0 || dst_x >= screen_w as isize {
-                continue;
-            }
-            let pixel = match edge_x {
-                0 => blend_565(
-                    dst[dst_row + dst_x as usize],
-                    image.pixels[src_row],
-                    255 - fraction,
-                ),
-                edge if edge == image.w => blend_565(
-                    dst[dst_row + dst_x as usize],
-                    image.pixels[src_row + image.w - 1],
-                    fraction,
-                ),
-                _ => blend_565(
-                    image.pixels[src_row + edge_x - 1],
-                    image.pixels[src_row + edge_x],
-                    fraction,
-                ),
-            };
-            dst[dst_row + dst_x as usize] = pixel;
-        }
-    }
+    // Parade velocities are deliberately restricted to whole- and half-pixel
+    // phases. Snap an unsupported future phase instead of silently falling
+    // back to the ARM-hostile per-pixel fractional compositor.
+    let snapped_x = if fraction < 128 { x } else { x + 1 };
+    blit_scaled(
+        dst, screen_w, screen_h, image, snapped_x, y, image.w, image.h, 255,
+    );
 }
 
 fn prepare_half_shifted(image: &SaverImage) -> SaverImage {
@@ -1009,28 +1092,42 @@ fn render_horizontal_starfield(
     _motion: ParadeMotion,
 ) {
     clear(dst, color565(0, 0, 10));
-    for i in 0..420usize {
+    for i in 0..210usize {
         let layer = i & 3;
-        let x = horizontal_star_x(i, w, frame);
+        let (x, fraction) = horizontal_star_position(i, w, frame);
         let y = (i.wrapping_mul(83).wrapping_add(i.wrapping_mul(i) * 7)) % h;
         let brightness = [70, 110, 170, 235][layer];
         let color = color565(brightness / 2, brightness, 255);
-        dst[y * w + x] = color;
-        if layer == 3 && x + 1 < w {
-            dst[y * w + x + 1] = color;
+        let row = y * w;
+        dst[row + x] = blend_565(dst[row + x], color, 255 - fraction);
+        if fraction > 0 {
+            let next_x = (x + 1) % w;
+            dst[row + next_x] = blend_565(dst[row + next_x], color, fraction);
         }
     }
 }
 
 fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
+    horizontal_star_position(star, width, frame).0
+}
+
+fn horizontal_star_position(star: usize, width: usize, frame: u64) -> (usize, u8) {
     const STAR_SPEED_DENOMINATOR: u64 = 16;
+    const SUBPIXEL_ONE: u64 = 256;
     let speed_numerator = PARADE_MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
     let start_x = (star
         .wrapping_mul(197)
         .wrapping_add(star.wrapping_mul(star) * 13))
         % width;
-    let travel = frame.saturating_mul(speed_numerator) / STAR_SPEED_DENOMINATOR;
-    (start_x + travel as usize) % width
+    let travel = frame
+        .saturating_mul(speed_numerator)
+        .saturating_mul(SUBPIXEL_ONE)
+        / STAR_SPEED_DENOMINATOR;
+    let position = (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
+    (
+        (position / SUBPIXEL_ONE) as usize,
+        (position % SUBPIXEL_ONE) as u8,
+    )
 }
 
 fn render_starfield_cabinets(
@@ -1733,8 +1830,11 @@ struct ParadeState {
     scale_count: u64,
     scale_total_us: u128,
     scale_max_us: u128,
-    scale_tx: Sender<ParadeScaleJob>,
+    scale_tx: SyncSender<ParadeScaleJob>,
     scale_rx: Receiver<ParadeScaleResult>,
+    scale_worker_connected: bool,
+    scale_queue_depth: usize,
+    scale_queue_max: usize,
     layers: [ParadeLayerSchedule; PARADE_SPEED_COUNT],
     motion: ParadeMotion,
 }
@@ -1745,7 +1845,7 @@ impl ParadeState {
     }
 
     fn new_with_motion(seed: u64, motion: ParadeMotion) -> Self {
-        let (scale_tx, job_rx) = mpsc::channel::<ParadeScaleJob>();
+        let (scale_tx, job_rx) = mpsc::sync_channel::<ParadeScaleJob>(PARADE_TILE_COUNT);
         let (result_tx, scale_rx) = mpsc::channel::<ParadeScaleResult>();
         std::thread::Builder::new()
             .name("screensaver-lanczos".into())
@@ -1785,6 +1885,9 @@ impl ParadeState {
             scale_max_us: 0,
             scale_tx,
             scale_rx,
+            scale_worker_connected: true,
+            scale_queue_depth: 0,
+            scale_queue_max: 0,
             layers: [ParadeLayerSchedule {
                 next_spawn_frame: 0,
                 interval_frames: 1,
@@ -1797,9 +1900,19 @@ impl ParadeState {
     }
 
     fn ensure_initialized(&mut self, images: &[SaverImage], w: usize, h: usize) {
+        let _ = self.ensure_initialized_cancellable(images, w, h, None);
+    }
+
+    fn ensure_initialized_cancellable(
+        &mut self,
+        images: &[SaverImage],
+        w: usize,
+        h: usize,
+        cancelled: Option<&AtomicBool>,
+    ) -> bool {
         let image_count = images.len();
         if self.image_count == image_count && !self.tiles.is_empty() {
-            return;
+            return true;
         }
         self.tiles.clear();
         self.deck = (0..image_count).collect();
@@ -1820,6 +1933,9 @@ impl ParadeState {
                 sample_count: 0,
             };
             for rank in 0..target {
+                if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+                    return false;
+                }
                 if self.tiles.len() >= image_count {
                     break;
                 }
@@ -1851,23 +1967,12 @@ impl ParadeState {
                 });
             }
         }
-        // Prepare one successor per tile before scan-out starts. Later
-        // successors are generated by the worker while the current card moves.
+        // Initial cards are ready before the first frame. Successors are then
+        // prepared off-thread instead of doubling synchronous startup work.
         for tile_idx in 0..self.tiles.len() {
-            let Some(image_idx) = self.next_image_for(tile_idx) else {
-                continue;
-            };
-            let speed = self.tiles[tile_idx].speed;
-            let scaled = self.scale_image(&images[image_idx], speed);
-            let half_shifted = prepare_half_shifted(&scaled);
-            self.tiles[tile_idx].next = Some(PreparedParadeCard {
-                image_idx,
-                speed,
-                scaled,
-                half_shifted,
-                scale_us: 0,
-            });
+            self.queue_successor(tile_idx, images);
         }
+        true
     }
 
     fn next_image_for(&mut self, replacing_tile: usize) -> Option<usize> {
@@ -1897,7 +2002,7 @@ impl ParadeState {
     }
 
     fn advance(&mut self, screen_w: usize, screen_h: usize, images: &[SaverImage], frame: u64) {
-        self.collect_scaled_cards();
+        self.collect_scaled_cards(images);
         for tile_idx in 0..self.tiles.len() {
             if self.tiles[tile_idx].active {
                 self.tiles[tile_idx].x_fp += self.tiles[tile_idx].velocity_fp;
@@ -1924,6 +2029,7 @@ impl ParadeState {
                 self.random_tile_y(screen_h, x, next.scaled.w, next.scaled.h, speed, tile_idx)
             else {
                 self.tiles[tile_idx].next = Some(next);
+                self.layers[layer_idx].next_spawn_frame = frame + 1;
                 continue;
             };
             let tile = &mut self.tiles[tile_idx];
@@ -1951,10 +2057,30 @@ impl ParadeState {
     }
 
     fn queue_successor(&mut self, tile_idx: usize, images: &[SaverImage]) {
+        if self.tiles[tile_idx].next.is_some() || self.tiles[tile_idx].pending_image_idx.is_some() {
+            return;
+        }
         let Some(image_idx) = self.next_image_for(tile_idx) else {
             return;
         };
+        self.queue_scale(tile_idx, image_idx, images);
+    }
+
+    fn queue_scale(&mut self, tile_idx: usize, image_idx: usize, images: &[SaverImage]) {
         let speed = self.tiles[tile_idx].speed;
+        if !self.scale_worker_connected {
+            let scaled = self.scale_image(&images[image_idx], speed);
+            let half_shifted = prepare_half_shifted(&scaled);
+            let card = PreparedParadeCard {
+                image_idx,
+                speed,
+                scaled,
+                half_shifted,
+                scale_us: 0,
+            };
+            self.tiles[tile_idx].next = Some(card);
+            return;
+        }
         self.tiles[tile_idx].pending_image_idx = Some(image_idx);
         if self
             .scale_tx
@@ -1966,18 +2092,58 @@ impl ParadeState {
             })
             .is_err()
         {
+            self.scale_worker_connected = false;
             self.tiles[tile_idx].pending_image_idx = None;
+            self.queue_successor(tile_idx, images);
+        } else {
+            self.scale_queue_depth += 1;
+            self.scale_queue_max = self.scale_queue_max.max(self.scale_queue_depth);
         }
     }
 
-    fn collect_scaled_cards(&mut self) {
-        while let Ok(result) = self.scale_rx.try_recv() {
-            self.scale_count += 1;
-            self.scale_total_us += result.card.scale_us;
-            self.scale_max_us = self.scale_max_us.max(result.card.scale_us);
-            if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
-                tile.pending_image_idx = None;
-                tile.next = Some(result.card);
+    fn collect_scaled_cards(&mut self, images: &[SaverImage]) {
+        loop {
+            match self.scale_rx.try_recv() {
+                Ok(result) => {
+                    self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
+                    self.scale_count += 1;
+                    self.scale_total_us += result.card.scale_us;
+                    self.scale_max_us = self.scale_max_us.max(result.card.scale_us);
+                    if let Some(tile) = self.tiles.get_mut(result.tile_idx) {
+                        tile.pending_image_idx = None;
+                        tile.next = Some(result.card);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.scale_worker_connected = false;
+                    break;
+                }
+            }
+        }
+        if !self.scale_worker_connected {
+            let stranded = self
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(|(tile_idx, tile)| {
+                    tile.pending_image_idx
+                        .map(|image_idx| (tile_idx, image_idx, tile.speed))
+                })
+                .collect::<Vec<_>>();
+            self.scale_queue_depth = 0;
+            for (tile_idx, image_idx, speed) in stranded {
+                let scaled = self.scale_image(&images[image_idx], speed);
+                let half_shifted = prepare_half_shifted(&scaled);
+                self.tiles[tile_idx].pending_image_idx = None;
+                let card = PreparedParadeCard {
+                    image_idx,
+                    speed,
+                    scaled,
+                    half_shifted,
+                    scale_us: 0,
+                };
+                self.tiles[tile_idx].next = Some(card);
             }
         }
     }
@@ -2044,11 +2210,13 @@ impl ParadeState {
     fn log_scaler_stats(&self) {
         let average_us = self.scale_total_us / self.scale_count.max(1) as u128;
         crate::ui_logln!(
-            "screensaver_lanczos scales={} total_us={} average_us={} max_us={}",
+            "screensaver_lanczos scales={} total_us={} average_us={} max_us={} queue_max={} worker_connected={}",
             self.scale_count,
             self.scale_total_us,
             average_us,
-            self.scale_max_us
+            self.scale_max_us,
+            self.scale_queue_max,
+            self.scale_worker_connected
         );
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
@@ -2355,12 +2523,34 @@ mod tests {
             .collect()
     }
 
+    fn collect_initial_successors(
+        state: &mut ParadeState,
+        images: &[SaverImage],
+        minimum_ready: usize,
+    ) {
+        for _ in 0..5_000 {
+            state.collect_scaled_cards(images);
+            if state
+                .tiles
+                .iter()
+                .filter(|tile| tile.next.is_some())
+                .count()
+                >= minimum_ready
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("screensaver scale worker did not prepare initial successors");
+    }
+
     #[test]
     fn parade_keeps_visible_games_unique_and_exhausts_the_pool_before_recycling() {
         let image_count = 64;
         let images = test_images(image_count);
         let mut state = ParadeState::new(0x1234_5678_9abc_def0);
         state.ensure_initialized(&images, 960, 540);
+        collect_initial_successors(&mut state, &images, PARADE_TILE_COUNT);
         assert_eq!(state.tiles.len(), PARADE_TILE_COUNT);
 
         let mut history = state
@@ -2393,6 +2583,7 @@ mod tests {
         let mut state = ParadeState::new(7);
         let images = test_images(32);
         state.ensure_initialized(&images, 960, 540);
+        collect_initial_successors(&mut state, &images, 1);
         let original = state.tiles[0].image_idx;
         let speed = state.tiles[0].speed;
         let velocity_fp = state.tiles[0].velocity_fp;
@@ -2436,10 +2627,13 @@ mod tests {
     }
 
     #[test]
-    fn slowest_star_returns_to_pixel_stepped_motion() {
-        let x0 = horizontal_star_x(0, 960, 0);
-        assert!((1..16).all(|frame| horizontal_star_x(0, 960, frame) == x0));
-        assert_eq!(horizontal_star_x(0, 960, 16), (x0 + 1) % 960);
+    fn slowest_star_has_a_new_subpixel_phase_every_frame() {
+        let (_, fraction0) = horizontal_star_position(0, 960, 0);
+        for frame in 1..16 {
+            let (_, fraction) = horizontal_star_position(0, 960, frame);
+            assert_ne!(fraction, fraction0);
+            assert_eq!(fraction, frame as u8 * 16);
+        }
     }
 
     #[test]

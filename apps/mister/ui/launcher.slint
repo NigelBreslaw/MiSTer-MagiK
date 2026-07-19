@@ -8,6 +8,7 @@ import { SetupOverlay } from "controller_setup.slint";
 import { ArcadeListScreen } from "views/arcade_list.slint";
 import { HomeGrid } from "views/home.slint";
 import { SettingsScreen } from "views/settings.slint";
+import { ScreensaverSettingsScreen } from "views/screensaver_settings.slint";
 import { LicensesScreen } from "views/licenses.slint";
 import { AboutScreen } from "views/about.slint";
 import { InfoScreen } from "views/info.slint";
@@ -46,6 +47,7 @@ export component Launcher inherits MisterWindow {
     if MisterBridge.screen-mode == 4 : AboutScreen { }
     if MisterBridge.screen-mode == 5 : LicensesScreen { }
     if MisterBridge.screen-mode == 6 : InfoScreen { }
+    if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
 
     if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
 

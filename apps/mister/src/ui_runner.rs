@@ -59,11 +59,10 @@ use mister_magik_fb::framebuffer::present::{
     copy_direct_preview_rect_to_hidden,
 };
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
-#[cfg(mister_experiments)]
-use mister_magik_fb::framebuffer::target::{blend_565, brighten_565};
 use mister_magik_fb::framebuffer::target::{
-    build_launcher_present_plan_from_layers, dirty_rect, format_dirty_rect, CachedFrameView,
-    DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry, UiFrameTarget,
+    blend_565, brighten_565, build_launcher_present_plan_from_layers, dirty_rect,
+    format_dirty_rect, CachedFrameView, DirectPreviewView, DirtyRect, DirtyRectList,
+    FramebufferTargetGeometry, UiFrameTarget,
 };
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,
@@ -95,6 +94,7 @@ mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
 mod launcher_scheduler;
+mod launcher_screensaver;
 mod launcher_worker_intents;
 mod media_worker;
 mod raw565_preview_renderer;
@@ -129,6 +129,7 @@ use launcher_lifecycle::*;
 use launcher_loop::*;
 use launcher_present::*;
 use launcher_scheduler::*;
+use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use media_worker::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
@@ -154,6 +155,7 @@ fn screen_label(screen: Screen) -> &'static str {
         Screen::About => "about",
         Screen::Licenses => "licenses",
         Screen::Info => "info",
+        Screen::Screensaver => "screensaver-settings",
     }
 }
 

@@ -67,6 +67,24 @@ impl<'a> LayerTarget<'a> {
         slint_dirty
     }
 
+    pub(super) fn render_screensaver(&mut self, saver: &mut LauncherScreensaver) -> DirtyRect {
+        saver.render(
+            self.target.cached_565_mut(),
+            self.ui.render_w(),
+            self.ui.render_h(),
+        );
+        DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.ui.render_w(),
+            y1: self.ui.render_h(),
+        }
+    }
+
+    pub(super) fn clear_cached(&mut self) {
+        self.target.cached_565_mut().fill(Rgb565Pixel(0));
+    }
+
     pub(super) fn blit_raw_preview_if_needed(
         &mut self,
         preview: &mut PreviewState,

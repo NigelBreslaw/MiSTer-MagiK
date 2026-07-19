@@ -41,10 +41,12 @@ pub struct PadReader {
     state: PadState,
 }
 
-/// Poll connected joysticks and keyboards and merge them into one navigation [`PadState`].
+/// Poll connected joysticks, keyboards, and mouse activity and merge navigation into [`PadState`].
 pub struct PadPool {
     pads: Vec<PadReader>,
     keyboards: Vec<KeyboardReader>,
+    mouse: Option<File>,
+    user_activity: bool,
     merged: PadState,
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
@@ -84,6 +86,8 @@ impl PadPool {
                     }
                 })
                 .collect(),
+            mouse: open_mouse_activity(),
+            user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
             db,
@@ -217,6 +221,7 @@ impl PadPool {
     /// Drain all pads; returns true if merged state changed.
     pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> bool {
         let mut changed = false;
+        self.user_activity = false;
 
         if self.last_rescan.elapsed() >= PAD_RESCAN_INTERVAL {
             changed |= self.rescan();
@@ -229,6 +234,7 @@ impl PadPool {
                 Ok(true) => {
                     self.active_idx = i;
                     changed = true;
+                    self.user_activity = true;
                     i += 1;
                 }
                 Ok(false) => {
@@ -250,6 +256,7 @@ impl PadPool {
             match self.keyboards[i].poll() {
                 Ok(keyboard_changed) => {
                     changed |= keyboard_changed;
+                    self.user_activity |= keyboard_changed;
                     i += 1;
                 }
                 Err(e) => {
@@ -260,10 +267,34 @@ impl PadPool {
                 }
             }
         }
+        if let Some(mouse) = self.mouse.as_mut() {
+            let mut bytes = [0_u8; 64];
+            loop {
+                match mouse.read(&mut bytes) {
+                    Ok(0) => {
+                        self.mouse = None;
+                        break;
+                    }
+                    Ok(_) => {
+                        changed = true;
+                        self.user_activity = true;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(_) => {
+                        self.mouse = None;
+                        break;
+                    }
+                }
+            }
+        }
         if changed {
             self.rebuild_merged_state();
         }
         changed
+    }
+
+    pub fn user_activity(&self) -> bool {
+        self.user_activity
     }
 
     fn active_pad(&self) -> Option<&PadReader> {
@@ -306,6 +337,9 @@ impl PadPool {
                 }
                 Err(e) => crate::ui_errln!("keyboard: hotplug skip {path}: {e}"),
             }
+        }
+        if self.mouse.is_none() {
+            self.mouse = open_mouse_activity();
         }
         changed
     }
@@ -357,6 +391,8 @@ impl PadPool {
                 })
                 .collect(),
             keyboards: Vec::new(),
+            mouse: None,
+            user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
@@ -385,6 +421,12 @@ impl PadPool {
     }
 }
 
+fn open_mouse_activity() -> Option<File> {
+    let file = OpenOptions::new().read(true).open("/dev/input/mice").ok()?;
+    set_nonblocking(&file).ok()?;
+    Some(file)
+}
+
 impl crate::setup_nav::SetupPadSource for PadPool {
     fn index_needing_setup(&self) -> Option<usize> {
         self.index_needing_setup()
@@ -399,7 +441,7 @@ impl crate::setup_nav::SetupPadSource for PadPool {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct KeyboardState {
     up: bool,
     down: bool,
@@ -453,6 +495,9 @@ fn drain_keyboard_events<R: Read>(reader: &mut R, state: &mut KeyboardState) -> 
                 if event_type != EV_KEY {
                     continue;
                 }
+                // Every keyboard key is activity, even when it has no launcher
+                // navigation binding (for example Shift or a letter key).
+                changed = true;
                 let pressed = value != 0;
                 let field = match code {
                     KEY_UP => Some(&mut state.up),
@@ -1257,6 +1302,8 @@ mod tests {
         PadPool {
             pads: Vec::new(),
             keyboards: Vec::new(),
+            mouse: None,
+            user_activity: false,
             merged: PadState::default(),
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
@@ -1304,6 +1351,16 @@ mod tests {
         assert!(state.dpad_up);
         assert!(state.btn_a);
         assert!(state.btn_b);
+    }
+
+    #[test]
+    fn unbound_keyboard_key_still_reports_activity() {
+        let mut reader =
+            PendingEventsThenWouldBlock::new(input_event_bytes(EV_KEY, 42, 1).to_vec());
+        let mut keyboard = KeyboardState::default();
+
+        assert!(drain_keyboard_events(&mut reader, &mut keyboard).expect("drain keyboard"));
+        assert_eq!(keyboard, KeyboardState::default());
     }
 
     #[test]

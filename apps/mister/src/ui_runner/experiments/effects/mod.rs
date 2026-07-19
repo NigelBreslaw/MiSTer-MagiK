@@ -8,6 +8,7 @@ use super::super::*;
 mod camera_effects_loop;
 mod effect_loop_support;
 mod raster_effects_loop;
+#[path = "../../launcher_screensaver.rs"]
 mod screensaver_loop;
 mod sprite_effects_loop;
 mod text_effects_loop;

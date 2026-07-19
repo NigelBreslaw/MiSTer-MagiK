@@ -194,6 +194,26 @@ summarize_by_mode() {
   ' "$tsv"
 }
 
+summarize_pipeline() {
+  local tsv="$1"
+  awk '
+    BEGIN { FS="\t" }
+    NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
+    NF {
+      draw = $(col["draw_us"]) + 0
+      present = $(col["fb_present_us"]) + 0
+      wall = $(col["wall_us"]) + 0
+      streak = $(col["vsync_miss_streak"]) + 0
+      if (draw > draw_max) draw_max = draw
+      if (present > present_max) present_max = present
+      if (wall > wall_max) wall_max = wall
+      if (streak > miss_max) miss_max = streak
+      if ($(col["vsync_source"]) != "vsync") non_vsync++
+    }
+    END { printf "%d\t%d\t%d\t%d\t%d\n", draw_max, present_max, wall_max, miss_max, non_vsync + 0 }
+  ' "$tsv"
+}
+
 echo
 echo $'case\tframes\tavg_wall_us\tp95_wall_us\tp99_wall_us\tslow_gt_16_7ms\tslow_gt_20ms\tcpu_percent\trss_hwm_kb'
 read -r frames avg p95 p99 slow16 slow20 < <(summarize "$local_tsv")
@@ -204,3 +224,8 @@ printf "screensaver\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$frames" "$avg" "$p95" "
 echo
 echo $'mode\tframes\tavg_wall_us\tp95_wall_us\tp99_wall_us\tslow_gt_16_7ms\tslow_gt_20ms'
 summarize_by_mode "$local_tsv"
+
+echo
+echo $'draw_max_us\tpresent_max_us\twall_max_us\tmax_vsync_miss_streak\tnon_vsync_frames'
+summarize_pipeline "$local_tsv"
+sed -n 's/^screensaver_startup /startup /p; s/^screensaver_lanczos /lanczos /p' "$local_log"

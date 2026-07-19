@@ -148,6 +148,7 @@ fn launcher_screen_from_env(name: &str) -> Option<Screen> {
         "about" => Some(Screen::About),
         "licenses" => Some(Screen::Licenses),
         "info" => Some(Screen::Info),
+        "screensaver" | "screensaver-settings" => Some(Screen::Screensaver),
         _ => None,
     }
 }

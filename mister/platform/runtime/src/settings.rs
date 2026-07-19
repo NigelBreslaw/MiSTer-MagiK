@@ -15,6 +15,18 @@ pub struct MagikSettings {
     pub version: u32,
     #[serde(default)]
     pub simple_joystick_handling: bool,
+    #[serde(default = "default_screensaver_enabled")]
+    pub screensaver_enabled: bool,
+    #[serde(default = "default_screensaver_delay_minutes")]
+    pub screensaver_delay_minutes: u8,
+}
+
+const fn default_screensaver_enabled() -> bool {
+    true
+}
+
+const fn default_screensaver_delay_minutes() -> u8 {
+    5
 }
 
 impl Default for MagikSettings {
@@ -22,6 +34,8 @@ impl Default for MagikSettings {
         Self {
             version: SETTINGS_VERSION,
             simple_joystick_handling: false,
+            screensaver_enabled: default_screensaver_enabled(),
+            screensaver_delay_minutes: default_screensaver_delay_minutes(),
         }
     }
 }
@@ -37,7 +51,11 @@ impl MagikSettings {
         let path = path.as_ref();
         match fs::read_to_string(path) {
             Ok(text) => match serde_json::from_str::<Self>(&text) {
-                Ok(settings) if settings.version == SETTINGS_VERSION => settings,
+                Ok(mut settings) if settings.version == SETTINGS_VERSION => {
+                    settings.screensaver_delay_minutes =
+                        settings.screensaver_delay_minutes.clamp(1, 10);
+                    settings
+                }
                 Ok(settings) => {
                     crate::ui_errln!(
                         "settings: unsupported version {} in {}, using defaults",
@@ -129,6 +147,8 @@ mod tests {
         let settings = MagikSettings::load_from(path);
 
         assert!(settings.simple_joystick_handling);
+        assert!(settings.screensaver_enabled);
+        assert_eq!(settings.screensaver_delay_minutes, 5);
     }
 
     #[test]
@@ -162,5 +182,21 @@ mod tests {
 
         assert_eq!(loaded, settings);
         assert!(!path.with_file_name("settings.json.tmp").exists());
+    }
+
+    #[test]
+    fn screensaver_delay_is_clamped_to_supported_range() {
+        let path = temp_settings_path("delay-clamp");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"version":1,"screensaver_enabled":false,"screensaver_delay_minutes":99}"#,
+        )
+        .unwrap();
+
+        let settings = MagikSettings::load_from(path);
+
+        assert!(!settings.screensaver_enabled);
+        assert_eq!(settings.screensaver_delay_minutes, 10);
     }
 }
