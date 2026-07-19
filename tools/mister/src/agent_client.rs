@@ -174,6 +174,7 @@ pub(crate) fn verify_agent_deploy_result(
     result: &Value,
     expected_bytes: u64,
     expected_remote: &str,
+    expected_checksum: &str,
 ) -> Result<u64> {
     let remote = result.get("remote").and_then(Value::as_str).unwrap_or("");
     if remote != expected_remote {
@@ -191,6 +192,13 @@ pub(crate) fn verify_agent_deploy_result(
             "agent deployed size mismatch expected={expected_bytes} remote={remote_bytes}"
         )
         .into());
+    }
+    if result.get("checksum_algorithm").and_then(Value::as_str) != Some("sha256")
+        || result.get("checksum").and_then(Value::as_str) != Some(expected_checksum)
+        || result.get("published").and_then(Value::as_bool) != Some(true)
+        || result.get("rolled_back").and_then(Value::as_bool) != Some(false)
+    {
+        return Err("agent deployment was not verified and authoritatively published".into());
     }
     Ok(remote_bytes)
 }

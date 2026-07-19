@@ -2086,7 +2086,7 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
         Duration::from_secs(120),
     )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
-    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, &remote)?;
+    let remote_bytes = verify_agent_deploy_result(result, bytes.len() as u64, &remote, &checksum)?;
     println!(
         "agent_deploy_magik_bin local={} remote={} encoding={} compression_decision={} bytes={} remote_bytes={} payload_bytes={} checksum={} total_ms={} read_ms={} compress_ms={} request_ms={} result={}",
         local,
@@ -5788,19 +5788,38 @@ H: Handlers=event3 js0"#
     fn agent_deploy_result_verifies_remote_and_size() {
         let result = json!({
             "remote": "/media/fat/mister-magik/mister-magik-fb",
-            "remote_bytes": 42
+            "remote_bytes": 42,
+            "checksum_algorithm": "sha256",
+            "checksum": "abc",
+            "published": true,
+            "rolled_back": false
         });
 
         assert_eq!(
-            verify_agent_deploy_result(&result, 42, "/media/fat/mister-magik/mister-magik-fb")
-                .unwrap(),
+            verify_agent_deploy_result(
+                &result,
+                42,
+                "/media/fat/mister-magik/mister-magik-fb",
+                "abc"
+            )
+            .unwrap(),
             42
         );
-        assert!(
-            verify_agent_deploy_result(&result, 43, "/media/fat/mister-magik/mister-magik-fb")
-                .is_err()
-        );
-        assert!(verify_agent_deploy_result(&result, 42, "/tmp/other").is_err());
+        assert!(verify_agent_deploy_result(
+            &result,
+            43,
+            "/media/fat/mister-magik/mister-magik-fb",
+            "abc"
+        )
+        .is_err());
+        assert!(verify_agent_deploy_result(&result, 42, "/tmp/other", "abc").is_err());
+        assert!(verify_agent_deploy_result(
+            &result,
+            42,
+            "/media/fat/mister-magik/mister-magik-fb",
+            "wrong"
+        )
+        .is_err());
     }
 
     #[test]
