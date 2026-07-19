@@ -1327,6 +1327,7 @@ pub(crate) fn load_joined_launcher_catalog(
                     setname: row.get::<_, String>(12)?,
                     parent: row.get::<_, String>(13)?,
                     family_key: None,
+                    identity_matched: false,
                     prepared: None,
                 },
             ))
@@ -3112,6 +3113,7 @@ fn write_sqlite_scan_with_sources_inner(
                             setname: discovery.setname.clone().unwrap_or_default(),
                             parent: discovery.parent.clone().unwrap_or_default(),
                             family_key: software_family_key,
+                            identity_matched: software_identity.is_some(),
                             prepared: discovery.prepared,
                         },
                     )

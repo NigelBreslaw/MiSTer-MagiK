@@ -1894,6 +1894,7 @@ impl CatalogProjectionBuildContext<'_> {
                 setname,
                 parent,
                 family_key,
+                identity_matched: software_identity.is_some(),
                 prepared: discovery.prepared,
             },
         );
@@ -2144,6 +2145,7 @@ fn build_arcade_catalog_from_scan_with_metadata(
                 setname,
                 parent,
                 family_key: Some(family_key),
+                identity_matched: false,
                 prepared: discovery.prepared,
             },
         ));

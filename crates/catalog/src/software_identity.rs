@@ -1419,6 +1419,55 @@ mod tests {
     }
 
     #[test]
+    fn lynx_projection_hides_variants_but_retains_games_and_launch_plans() {
+        let root = unique_temp_dir("lynx-hidden-variants");
+        let db = root.join("library.sqlite3");
+        let mame_db = root.join("mame.sqlite3");
+        write_mame_software_fixture_db(&mame_db, &[], &[]);
+        let mut first = payload("/media/fat/games/AtariLynx/Alien (World) (v1.02).lnx");
+        first.platform_id = "atarilynx".to_string();
+        first.title = "Alien (World) (v1.02)".to_string();
+        let mut second = payload("/media/fat/games/AtariLynx/Alien (World) (v1.06).lnx");
+        second.platform_id = "atarilynx".to_string();
+        second.title = "Alien (World) (v1.06)".to_string();
+        let pack = preview_worker::PreviewArchiveIndex {
+            path: "/media/fat/mister-magik/assets/atarilynx-screenshots.mmlz4b".to_string(),
+            codec: "mmlz4b",
+            entries: Vec::new(),
+        };
+
+        write_sqlite_scan_with_mame_and_preview_pack(
+            &db,
+            &sqlite_scan_with_discoveries(vec![first, second]),
+            &mame_db,
+            &pack,
+        )
+        .expect("save collapsed Lynx catalog");
+
+        let conn = library_db::open_sqlite_read_only(&db).expect("open library sqlite");
+        for (table, expected) in [
+            ("game_rows", 2),
+            ("launch_target_rows", 2),
+            ("launch_plans", 2),
+            ("launcher_catalog_rows", 1),
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count Lynx projection rows");
+            assert_eq!(count, expected, "{table}");
+        }
+        let title: String = conn
+            .query_row("SELECT title FROM launcher_catalog_text", [], |row| {
+                row.get(0)
+            })
+            .expect("preferred Lynx title");
+        assert_eq!(title, "Alien (World) (v1.06)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn software_identity_hash_cache_hit_avoids_file_read() {
         let root = unique_temp_dir("software-hash-cache-hit");
         let payload_dir = root.join("Cached.sfc");

@@ -80,6 +80,7 @@ pub(crate) struct CatalogProjectionRow {
     pub(crate) setname: String,
     pub(crate) parent: String,
     pub(crate) family_key: Option<String>,
+    pub(crate) identity_matched: bool,
     pub(crate) prepared: Option<PreparedLaunchProvenance>,
 }
 
@@ -89,6 +90,7 @@ pub(crate) struct CatalogProjectionSource {
     pub(crate) setname: String,
     pub(crate) parent: String,
     pub(crate) family_key: Option<String>,
+    pub(crate) identity_matched: bool,
     pub(crate) prepared: Option<PreparedLaunchProvenance>,
 }
 
@@ -177,6 +179,7 @@ impl CatalogProjectionRow {
             setname: source.setname,
             parent: source.parent,
             family_key: source.family_key,
+            identity_matched: source.identity_matched,
             prepared: source.prepared,
         }
     }
@@ -263,6 +266,12 @@ pub(crate) fn sort_catalog_projection_rows(rows: &mut [CatalogProjectionRow]) {
 }
 
 fn catalog_variant_group_key(row: &CatalogProjectionRow) -> String {
+    if row.game.system_id.as_ref() == "atarilynx" {
+        let base_title = variant_title_without_annotations(&row.game.title);
+        if !base_title.is_empty() {
+            return format!("lynx:title:{}", library_db::normalize_id(&base_title));
+        }
+    }
     if let Some(family_key) = row.family_key.as_deref() {
         return format!("family:{}", library_db::normalize_id(family_key));
     }
@@ -289,6 +298,9 @@ fn catalog_variant_group_key(row: &CatalogProjectionRow) -> String {
 }
 
 fn prefer_catalog_variant(a: &CatalogProjectionRow, b: &CatalogProjectionRow) -> bool {
+    if a.game.system_id.as_ref() == "atarilynx" && b.game.system_id.as_ref() == "atarilynx" {
+        return prefer_lynx_variant(a, b);
+    }
     let a_score = catalog_variant_score(a);
     let b_score = catalog_variant_score(b);
     if a_score != b_score {
@@ -298,6 +310,65 @@ fn prefer_catalog_variant(a: &CatalogProjectionRow, b: &CatalogProjectionRow) ->
         return a.game.has_preview;
     }
     a.game.mra_path < b.game.mra_path
+}
+
+fn prefer_lynx_variant(a: &CatalogProjectionRow, b: &CatalogProjectionRow) -> bool {
+    let a_title = a.game.title.to_ascii_lowercase();
+    let b_title = b.game.title.to_ascii_lowercase();
+    let a_rank = (
+        !is_development_variant(&a_title),
+        a.identity_matched,
+        a.game.has_preview,
+        !is_non_retail_variant(&a_title),
+        lynx_version(&a_title),
+        variant_score_from_haystack(&a_title),
+    );
+    let b_rank = (
+        !is_development_variant(&b_title),
+        b.identity_matched,
+        b.game.has_preview,
+        !is_non_retail_variant(&b_title),
+        lynx_version(&b_title),
+        variant_score_from_haystack(&b_title),
+    );
+    a_rank > b_rank || (a_rank == b_rank && a.game.mra_path < b.game.mra_path)
+}
+
+fn is_development_variant(title: &str) -> bool {
+    variant_annotations(title).any(|annotation| {
+        ["proto", "prototype", "beta", "demo", "sample"]
+            .iter()
+            .any(|marker| annotation.starts_with(marker))
+    })
+}
+
+fn is_non_retail_variant(title: &str) -> bool {
+    variant_annotations(title).any(|annotation| {
+        ["aftermarket", "unl", "unlicensed", "pirate"]
+            .iter()
+            .any(|marker| annotation.starts_with(marker))
+    })
+}
+
+fn variant_annotations(title: &str) -> impl Iterator<Item = &str> {
+    title
+        .split(['(', '['])
+        .skip(1)
+        .filter_map(|part| part.split([')', ']']).next())
+        .map(str::trim)
+}
+
+fn lynx_version(title: &str) -> Vec<u32> {
+    let Some(start) = title.find("(v") else {
+        return Vec::new();
+    };
+    title[start + 2..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect::<String>()
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 fn catalog_variant_score(row: &CatalogProjectionRow) -> i32 {
@@ -318,6 +389,10 @@ fn catalog_variant_score(row: &CatalogProjectionRow) -> i32 {
 }
 
 pub(crate) fn canonical_variant_title(title: &str) -> String {
+    library_db::normalize_id(&variant_title_without_annotations(title))
+}
+
+fn variant_title_without_annotations(title: &str) -> String {
     let mut out = String::new();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -331,9 +406,8 @@ pub(crate) fn canonical_variant_title(title: &str) -> String {
             _ => {}
         }
     }
-    library_db::normalize_id(
-        out.trim_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == ','),
-    )
+    out.trim_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == ',')
+        .to_string()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -801,6 +875,129 @@ mod tests {
     use super::*;
     use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
     use crate::test_support::*;
+
+    fn lynx_row(
+        title: &str,
+        path: &str,
+        identity_matched: bool,
+        has_preview: bool,
+    ) -> CatalogProjectionRow {
+        let mut row = catalog_entry_row(title, path);
+        row.game.system_id = "atarilynx".into();
+        row.game.has_preview = has_preview;
+        row.identity_matched = identity_matched;
+        row
+    }
+
+    #[test]
+    fn lynx_variants_collapse_by_base_title_and_choose_best_final_build() {
+        let rows = vec![
+            lynx_row(
+                "Alien (World) (v1.06) (Beta)",
+                "/alien-beta.lnx",
+                true,
+                true,
+            ),
+            lynx_row("Alien (World) (v1.02)", "/alien-102.lnx", true, false),
+            lynx_row("Alien (World) (v1.06)", "/alien-106.lnx", true, false),
+            lynx_row(
+                "Alien (USA) (v1.07) (Aftermarket) (Unl)",
+                "/alien-107.lnx",
+                true,
+                true,
+            ),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(games.len(), 1);
+        assert_eq!(
+            games[0].title.as_ref(),
+            "Alien (USA) (v1.07) (Aftermarket) (Unl)"
+        );
+    }
+
+    #[test]
+    fn lynx_preference_orders_identity_then_screenshot_before_retail_and_version() {
+        let identity = lynx_row(
+            "Game (World) (v1.0) (Aftermarket) (Unl)",
+            "/identity.lnx",
+            true,
+            false,
+        );
+        let screenshot = lynx_row("Game (World) (v2.0)", "/screenshot.lnx", false, true);
+        let games = collapse_catalog_variants(vec![screenshot, identity]);
+        assert_eq!(games[0].mra_path.as_ref(), "/identity.lnx");
+
+        let screenshot = lynx_row(
+            "Other (World) (v1.0) (Aftermarket) (Unl)",
+            "/shot.lnx",
+            true,
+            true,
+        );
+        let retail = lynx_row("Other (World) (v2.0)", "/retail.lnx", true, false);
+        let games = collapse_catalog_variants(vec![retail, screenshot]);
+        assert_eq!(games[0].mra_path.as_ref(), "/shot.lnx");
+
+        let retail = lynx_row("Third (World) (v1.0)", "/retail-v1.lnx", true, true);
+        let aftermarket = lynx_row(
+            "Third (World) (v2.0) (Aftermarket) (Unl)",
+            "/aftermarket-v2.lnx",
+            true,
+            true,
+        );
+        let games = collapse_catalog_variants(vec![aftermarket, retail]);
+        assert_eq!(games[0].mra_path.as_ref(), "/retail-v1.lnx");
+
+        let older = lynx_row("Fourth (World) (v1.9)", "/v19.lnx", true, true);
+        let newer = lynx_row("Fourth (World) (v1.10)", "/v110.lnx", true, true);
+        let games = collapse_catalog_variants(vec![newer, older]);
+        assert_eq!(games[0].mra_path.as_ref(), "/v110.lnx");
+    }
+
+    #[test]
+    fn lynx_family_handles_regions_unmatched_rows_empty_titles_and_deterministic_ties() {
+        let rows = vec![
+            lynx_row(
+                "Eye of the Beholder (USA) (Proto 1)",
+                "/eye-proto.lnx",
+                true,
+                true,
+            ),
+            lynx_row(
+                "Eye of the Beholder (World) (Unl)",
+                "/eye-final.lnx",
+                false,
+                false,
+            ),
+            lynx_row("(World)", "/empty-a.lnx", false, false),
+            lynx_row("[Proto]", "/empty-b.lnx", false, false),
+            lynx_row("Tie (World)", "/z.lnx", false, false),
+            lynx_row("Tie (World)", "/a.lnx", false, false),
+        ];
+
+        let games = collapse_catalog_variants(rows);
+
+        assert_eq!(games.len(), 4);
+        assert!(games
+            .iter()
+            .any(|game| game.mra_path.as_ref() == "/eye-final.lnx"));
+        assert!(games
+            .iter()
+            .any(|game| game.mra_path.as_ref() == "/empty-a.lnx"));
+        assert!(games
+            .iter()
+            .any(|game| game.mra_path.as_ref() == "/empty-b.lnx"));
+        assert!(games.iter().any(|game| game.mra_path.as_ref() == "/a.lnx"));
+    }
+
+    #[test]
+    fn title_family_inference_is_lynx_only() {
+        let first = catalog_entry_row("Game (USA)", "/game-us.bin");
+        let second = catalog_entry_row("Game (Europe)", "/game-eu.bin");
+
+        assert_eq!(collapse_catalog_variants(vec![first, second]).len(), 2);
+    }
 
     #[test]
     fn catalog_variants_group_by_parent_and_prefer_us_release() {
