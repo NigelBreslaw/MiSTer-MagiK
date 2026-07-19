@@ -266,8 +266,9 @@ but deliberately preserves `arcade-bootstrap.nav.lz4b`.
 
 On a device, `mister-magik-fb catalog-v3-inspect` (or `scripts/mister catalog`)
 eagerly verifies both manifest slots, artifact sizes and hashes, state binding,
-scanner cache, every system shard, and summed counts. This expensive command is
-acceptance tooling, not a launcher startup path.
+scanner cache, every system shard, summed counts, and each system's keyed and
+available screenshot coverage. This expensive command is acceptance tooling,
+not a launcher startup path.
 
 `scripts/device-catalog-acceptance.sh` adds process/layout checks and ensures
 legacy catalog artifacts are absent. `scripts/profile-catalog-contention.sh`

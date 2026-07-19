@@ -42,6 +42,16 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             .map_err(|error| format!("open V3 system {}: {error}", summary.system_id))?;
         let games = u64::try_from(system.games().len())
             .map_err(|_| "system game count exceeds u64".to_string())?;
+        let preview_keys = system
+            .games()
+            .iter()
+            .filter(|game| !game.preview_asset_key.is_empty())
+            .count();
+        let available_previews = system
+            .games()
+            .iter()
+            .filter(|game| game.has_preview)
+            .count();
         if games != summary.games {
             return Err(format!(
                 "V3 system {} registry/shard mismatch: {} != {}",
@@ -69,8 +79,8 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             }
         };
         rows.push_str(&format!(
-            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\n",
-            summary.system_id, summary.generation, summary.games, games
+            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\tpreview_keys={preview_keys}\tavailable_previews={available_previews}\n",
+            summary.system_id, summary.generation, summary.games, games,
         ));
     }
     let manifest_total = manifest.systems.iter().try_fold(0u64, |total, system| {
@@ -97,4 +107,89 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
     );
     output.push_str(&rows);
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, GameSystemEntry};
+    use crate::catalog_checkpoint::CatalogDiscoveryCheckpoint;
+    use crate::catalog_stamp::CatalogStamp;
+    use crate::catalog_state::{CatalogState, CatalogStateStats};
+    use crate::scanner_cache::ScannerCacheState;
+    use std::path::PathBuf;
+
+    #[test]
+    fn inspector_reports_lynx_keyed_available_and_unmatched_coverage() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-lynx-inspection-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let state = CatalogState {
+            stamp: CatalogStamp::from_lines(vec!["lynx-inspection".to_string()]),
+            checkpoint: CatalogDiscoveryCheckpoint::from_lines(vec!["lynx-inspection".to_string()]),
+            stats: CatalogStateStats {
+                discoveries: 3,
+                ..Default::default()
+            },
+        };
+        let fingerprint = state.stamp.fingerprint_hex();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            vec![
+                lynx_game("Available", "mame-software__lynx__available", true),
+                lynx_game("Unavailable", "mame-software__lynx__unavailable", false),
+                lynx_game("Unmatched", "", false),
+            ],
+            vec![GameSystemEntry {
+                id: "atarilynx".to_string(),
+                title: "Atari Lynx".to_string(),
+                count: 3,
+            }],
+        );
+        let outcome = crate::production_sharded_projection::publish_bound_production_projection(
+            &root,
+            &catalog,
+            &fingerprint,
+            crate::production_sharded_projection::production_registry_limits(),
+        )
+        .expect("publish Lynx catalog");
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&root), &state)
+            .expect("write catalog state");
+        let scanner_path =
+            crate::catalog_state::path_for_root(&root).with_file_name("scanner-cache.sqlite3");
+        crate::scanner_cache::stage(&scanner_path, &ScannerCacheState::default())
+            .and_then(|staged| staged.publish())
+            .expect("publish scanner cache");
+
+        let report = inspect_catalog(&root).expect("inspect Lynx catalog");
+
+        assert!(report.contains(&format!(
+            "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tpreview_keys=2\tavailable_previews=1",
+            outcome.generation
+        )));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn lynx_game(title: &str, preview_asset_key: &str, has_preview: bool) -> ArcadeGameEntry {
+        let preview_archive_path = if preview_asset_key.is_empty() {
+            ""
+        } else {
+            "/assets/atarilynx-screenshots-160x102.mmlz4b"
+        };
+        ArcadeGameEntry {
+            title: title.into(),
+            mra_path: format!("/games/AtariLynx/{title}.lyx").into(),
+            preview_archive_path: preview_archive_path.into(),
+            preview_asset_key: preview_asset_key.into(),
+            has_preview,
+            system_id: "atarilynx".into(),
+            year: None,
+            manufacturer: "".into(),
+            players: None,
+            control: "".into(),
+            is_new: false,
+        }
+    }
 }
