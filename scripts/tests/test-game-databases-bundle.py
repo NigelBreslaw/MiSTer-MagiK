@@ -40,7 +40,7 @@ def build_mame(path: Path, tag: str = "mame0288") -> None:
                    '0.288 ({tag})' FROM seq;
             CREATE TABLE mame_software_items(list_name TEXT NOT NULL, item_name TEXT NOT NULL);
             INSERT INTO mame_software_items VALUES
-              ('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
+              ('lynx','one'),('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');
             """
         )
 

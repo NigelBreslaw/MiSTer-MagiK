@@ -8,7 +8,10 @@ from pathlib import Path
 
 text = (Path(__file__).resolve().parents[2] / ".github/workflows/game-databases.yml").read_text()
 trigger = text.split("on:\n", 1)[1].split("\nconcurrency:", 1)[0]
-assert trigger == "  workflow_dispatch:\n"
+assert "  workflow_dispatch:\n" in trigger
+assert "force_mame_rebuild:" in trigger
+assert "type: boolean" in trigger
+assert "default: false" in trigger
 
 for required in (
     "github.ref != 'refs/heads/main'",
@@ -23,6 +26,11 @@ for required in (
     "update-needed == 'true'",
     "mame-changed == 'true'",
     "hbmame-changed == 'true'",
+    "FORCE_MAME_REBUILD",
+    "mame_changed=true",
+    "update_needed=true",
+    "Verify Atari Lynx software list",
+    "WHERE list_name='lynx'",
     "Reuse unchanged MAME database",
     "Reuse unchanged HBMAME database",
     "mame-listxml.sha256",

@@ -18,6 +18,7 @@ The first console identity pass covers:
 - Sega Master System: MAME list `sms`
 - Mega Drive: MAME list `megadriv`
 - Saturn: MAME list `saturn`
+- Atari Lynx: MAME list `lynx`
 
 Library identities use:
 

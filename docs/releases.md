@@ -220,8 +220,12 @@ When neither changed, the workflow exits successfully as already up to date.
 When one changed, only that database is rebuilt; the other is verified and
 reused. The first publication is `game-databases-v1` with
 `mister-magik-game-databases-v1.zip`, and each later upstream change increments
-the whole release number. These support releases are immutable prereleases so
-they do not replace the application release reported by GitHub as latest.
+the whole release number. For an intentional database-builder change, dispatch
+with `force_mame_rebuild=true`; this publishes the next numbered release even
+when the upstream identities are unchanged, rebuilding MAME while verifying and
+reusing the current HBMAME database. These support releases are immutable
+prereleases so they do not replace the application release reported by GitHub
+as latest.
 
 Application distribution downloads the numbered ZIP,
 `game-databases-manifest.json`, and `SHA256SUMS` as one release directory. The
