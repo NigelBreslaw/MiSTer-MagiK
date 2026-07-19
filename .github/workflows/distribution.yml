@@ -12,6 +12,7 @@ on:
         type: choice
         default: beta
         options:
+          - alpha
           - beta
           - release
 
@@ -59,11 +60,19 @@ jobs:
           build_number="$(git rev-list --count "$GITHUB_SHA")"
           version="0.2.$build_number"
           channel='${{ github.event.inputs.release_channel }}'
-          if [ "$channel" = beta ]; then
-            tag=beta
-          else
-            tag="v$version"
-          fi
+          case "$channel" in
+            alpha)
+              tag=alpha
+              ;;
+            beta)
+              alpha_sha="$(git rev-parse -q --verify 'refs/tags/alpha^{commit}' || true)"
+              scripts/release/check-alpha-promotion.sh "$channel" "$alpha_sha" "$GITHUB_SHA"
+              tag=beta
+              ;;
+            release)
+              tag="v$version"
+              ;;
+          esac
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -343,7 +352,7 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           channel = os.environ["RELEASE_CHANNEL"]
           assert receipt["version"] == version == f"0.2.{build}"
-          expected_tag = "beta" if channel == "beta" else f"v{version}"
+          expected_tag = channel if channel in {"alpha", "beta"} else f"v{version}"
           assert tag == expected_tag
           assert receipt["archive"] == f"mister-magik-{version}.zip"
           with zipfile.ZipFile(root / receipt["archive"]) as package:
@@ -362,6 +371,9 @@ jobs:
           assert database["db_id"] == "mister_magik"
           assert database["release"] == {"version": version, "build_number": build}
           assert tag in json.dumps(database)
+          alpha_installer = root / "mister-magik-alpha-installer.zip"
+          if channel == "alpha":
+              assert not alpha_installer.exists()
           PY
 
       - name: Upload immutable candidate
@@ -399,9 +411,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
         run: |
           set -euo pipefail
           (cd candidate && sha256sum --check SHA256SUMS)
+          if [ "$RELEASE_CHANNEL" = beta ]; then
+            alpha_sha="$(gh api "repos/$GH_REPO/commits/alpha" --jq .sha 2>/dev/null || true)"
+            if [ -z "$alpha_sha" ]; then
+              echo "Beta publication requires an existing alpha tag." >&2
+              exit 1
+            fi
+            if [ "$alpha_sha" != "$GITHUB_SHA" ]; then
+              echo "Beta publication requires the tested alpha commit $alpha_sha; got $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
           if [ '${{ github.event.inputs.release_channel }}' = release ] && \
              gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Tag $RELEASE_TAG already exists; immutable releases are never overwritten." >&2
@@ -419,16 +443,17 @@ jobs:
         run: |
           set -euo pipefail
           title="MiSTer MagiK $RELEASE_VERSION"
-          if [ "$RELEASE_CHANNEL" = beta ]; then
-            title="$title Beta"
+          if [ "$RELEASE_CHANNEL" = alpha ] || [ "$RELEASE_CHANNEL" = beta ]; then
+            channel_title="${RELEASE_CHANNEL^}"
+            title="$title $channel_title"
           fi
           mapfile -t assets < <(find candidate -type f -print | sort)
-          if [ "$RELEASE_CHANNEL" = beta ]; then
-            notes="Rolling beta for build $RELEASE_VERSION. Assets and the beta tag are replaced by each approved beta publication."
-            if gh release view beta --repo "$GH_REPO" >/dev/null 2>&1; then
-              gh release upload beta "${assets[@]}" --repo "$GH_REPO" --clobber
-              gh release edit beta --repo "$GH_REPO" --title "$title" --notes "$notes" --prerelease
-              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/beta" \
+          if [ "$RELEASE_CHANNEL" = alpha ] || [ "$RELEASE_CHANNEL" = beta ]; then
+            notes="Rolling $RELEASE_CHANNEL for build $RELEASE_VERSION. Assets and the $RELEASE_CHANNEL tag are replaced by each approved $RELEASE_CHANNEL publication."
+            if gh release view "$RELEASE_CHANNEL" --repo "$GH_REPO" >/dev/null 2>&1; then
+              gh release upload "$RELEASE_CHANNEL" "${assets[@]}" --repo "$GH_REPO" --clobber
+              gh release edit "$RELEASE_CHANNEL" --repo "$GH_REPO" --title "$title" --notes "$notes" --prerelease
+              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$RELEASE_CHANNEL" \
                 -f sha="$GITHUB_SHA" -F force=true >/dev/null
               declare -A expected_assets=()
               for asset_path in "${assets[@]}"; do
@@ -438,10 +463,10 @@ jobs:
                 if [[ -z "${expected_assets[$asset_name]+present}" ]]; then
                   gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
                 fi
-              done < <(gh release view beta --repo "$GH_REPO" --json assets \
+              done < <(gh release view "$RELEASE_CHANNEL" --repo "$GH_REPO" --json assets \
                 --jq '.assets[] | [(.apiUrl | split("/")[-1]), .name] | @tsv')
             else
-              gh release create beta "${assets[@]}" \
+              gh release create "$RELEASE_CHANNEL" "${assets[@]}" \
                 --repo "$GH_REPO" --target "$GITHUB_SHA" --title "$title" \
                 --notes "$notes" --prerelease
             fi
@@ -518,7 +543,7 @@ jobs:
           feed_head="$(gh api "repos/$GH_REPO/git/ref/heads/downloader" --jq .object.sha)"
           feed_tree="$(gh api "repos/$GH_REPO/git/commits/$feed_head" --jq .tree.sha)"
           unexpected_paths="$(gh api "repos/$GH_REPO/git/trees/$feed_tree" --jq \
-            '.tree[].path | select(. != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")')"
+            '.tree[].path | select(. != "mister-magik-alpha-db.json.zip" and . != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")')"
           test -z "$unexpected_paths"
           gh api "repos/$GH_REPO/contents/mister-magik-$RELEASE_CHANNEL-db.json.zip?ref=downloader" \
             --jq .sha >/dev/null

@@ -43,11 +43,12 @@ class DownloaderDatabaseTests(unittest.TestCase):
             receipt_path.write_text(json.dumps(receipt))
 
             cases = (
-                ("rolling-beta", "beta", "beta"),
-                ("promoted-beta", "beta", "v0.2.42"),
-                ("release", "release", "v0.2.42"),
+                ("rolling-alpha", "alpha", "alpha", False),
+                ("rolling-beta", "beta", "beta", True),
+                ("promoted-beta", "beta", "v0.2.42", True),
+                ("release", "release", "v0.2.42", True),
             )
-            for case, channel, tag in cases:
+            for case, channel, tag, has_installer in cases:
                 output = root / case
                 MODULE.generate(
                     receipt_path, output, channel, "Owner/Repo", tag, 1_700_000_000
@@ -64,13 +65,17 @@ class DownloaderDatabaseTests(unittest.TestCase):
                 item = database["files"]["Scripts/MiSTer-MagiK.sh"]
                 self.assertEqual(item["hash"], receipt["files"][0]["md5"])
                 self.assertIn(f"/releases/download/{tag}/", item["url"])
-                with zipfile.ZipFile(output / f"mister-magik-{channel}-installer.zip") as archive:
-                    names = archive.namelist()
-                    self.assertEqual(names, ["downloader_mister_magik.ini"])
-                    ini = archive.read(names[0]).decode()
-                    self.assertIn(f"mister-magik-{channel}-db.json.zip", ini)
-                    self.assertNotIn("reboot", ini.lower())
-                    self.assertNotIn("restart", ini.lower())
+                installer = output / f"mister-magik-{channel}-installer.zip"
+                self.assertEqual(installer.exists(), has_installer)
+                self.assertFalse((output / "downloader_mister_magik.ini").exists())
+                if has_installer:
+                    with zipfile.ZipFile(installer) as archive:
+                        names = archive.namelist()
+                        self.assertEqual(names, ["downloader_mister_magik.ini"])
+                        ini = archive.read(names[0]).decode()
+                        self.assertIn(f"mister-magik-{channel}-db.json.zip", ini)
+                        self.assertNotIn("reboot", ini.lower())
+                        self.assertNotIn("restart", ini.lower())
                 self.assertNotIn("downloader_mister_magik.ini", database["files"])
 
     def test_rejects_forbidden_owned_path_and_version_mismatch(self) -> None:
@@ -94,6 +99,10 @@ class DownloaderDatabaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "disagree"):
                 MODULE.generate(
                     receipt, root / "out", "release", "Owner/Repo", "v0.2.8", 1_700_000_000
+                )
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                MODULE.generate(
+                    receipt, root / "out", "alpha", "Owner/Repo", "v0.2.7", 1_700_000_000
                 )
 
 

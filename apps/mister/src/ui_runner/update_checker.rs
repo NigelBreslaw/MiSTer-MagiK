@@ -13,6 +13,7 @@ use std::time::Duration;
 const DEFAULT_DROP_IN: &str = "/media/fat/downloader_mister_magik.ini";
 const DB_SECTION: &str = "mister_magik";
 const RELEASE_MARKER_KEY: &str = "mister-magik/release-v1.txt";
+const ALPHA_DATABASE_URL: &str = "https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-alpha-db.json.zip";
 const BETA_DATABASE_URL: &str = "https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-beta-db.json.zip";
 const RELEASE_DATABASE_URL: &str = "https://raw.githubusercontent.com/NigelBreslaw/MiSTer-MagiK/downloader/mister-magik-release-db.json.zip";
 const UPDATE_CHECK_RETRY_DELAYS: [Duration; 3] = [
@@ -123,7 +124,7 @@ fn configured_db_url(ini: &str) -> Option<&str> {
 
 fn downloader_database_url(url: &str) -> Option<&str> {
     match url {
-        BETA_DATABASE_URL | RELEASE_DATABASE_URL => Some(url),
+        ALPHA_DATABASE_URL | BETA_DATABASE_URL | RELEASE_DATABASE_URL => Some(url),
         _ => None,
     }
 }
@@ -264,6 +265,10 @@ mod tests {
 
     #[test]
     fn accepts_only_canonical_channel_urls() {
+        assert_eq!(
+            downloader_database_url(ALPHA_DATABASE_URL),
+            Some(ALPHA_DATABASE_URL)
+        );
         assert_eq!(
             downloader_database_url(BETA_DATABASE_URL),
             Some(BETA_DATABASE_URL)

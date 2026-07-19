@@ -5,11 +5,13 @@
 """Static safety contract for the manually published distribution workflow."""
 
 from pathlib import Path
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 text = (ROOT / ".github/workflows/distribution.yml").read_text()
 cross = (ROOT / "apps/mister/Cross.toml").read_text()
 packager = (ROOT / "scripts/package-distribution.sh").read_text()
+promotion_guard = ROOT / "scripts/release/check-alpha-promotion.sh"
 
 for variable in (
     "MISTER_MAGIK_BUILD_NUMBER",
@@ -26,6 +28,7 @@ for forbidden in ("\n  push:", "\n  pull_request:", "\n  schedule:", "\n  workfl
 required = (
     "release_channel:",
     "type: choice",
+    "- alpha",
     "- beta",
     "- release",
     "fetch-depth: 0",
@@ -34,9 +37,9 @@ required = (
     "environment:\n      name: publish-${{ github.event.inputs.release_channel }}",
     "contents: write",
     "gh release create",
-    'if [ "$RELEASE_CHANNEL" = beta ]; then',
-    'gh release upload beta "${assets[@]}" --repo "$GH_REPO" --clobber',
-    'repos/$GH_REPO/git/refs/tags/beta',
+    'if [ "$RELEASE_CHANNEL" = alpha ] || [ "$RELEASE_CHANNEL" = beta ]; then',
+    'gh release upload "$RELEASE_CHANNEL" "${assets[@]}" --repo "$GH_REPO" --clobber',
+    'repos/$GH_REPO/git/refs/tags/$RELEASE_CHANNEL',
     'repos/$GH_REPO/releases/assets/$asset_id',
     'expected_assets["$(basename "$asset_path")"]',
     'gh release delete "$tag" --repo "$GH_REPO" --cleanup-tag --yes',
@@ -61,7 +64,10 @@ required = (
     "group: mister-magik-downloader-feed",
     "cancel-in-progress: false",
     'test "$(gh api "repos/$GH_REPO/git/commits/$commit_sha" --jq \'.parents | length\')" = 0',
-    'select(. != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")',
+    'select(. != "mister-magik-alpha-db.json.zip" and . != "mister-magik-beta-db.json.zip" and . != "mister-magik-release-db.json.zip")',
+    "scripts/release/check-alpha-promotion.sh",
+    'gh api "repos/$GH_REPO/commits/alpha" --jq .sha',
+    "assert not alpha_installer.exists()",
 )
 for value in required:
     assert value in text, f"distribution workflow is missing: {value}"
@@ -70,8 +76,39 @@ before_publish, publish = text.split("\n  publish:\n", 1)
 assert "contents: write" not in before_publish
 assert "permissions:\n      actions: read\n      contents: write" in publish
 feed_publish = publish.split("      - name: Update channel feed\n", 1)[1]
+publication_verification = publish.split("      - name: Verify publication target\n", 1)[1].split(
+    "      - name: Publish GitHub Release\n", 1
+)[0]
 assert '-f sha="$GITHUB_SHA"' not in feed_publish
-assert 'tag=beta' in text
+assert "tag=alpha" in text
+assert "tag=beta" in text
+assert "alpha_sha=\"$(git rev-parse -q --verify 'refs/tags/alpha^{commit}' || true)\"" in text
+assert "mister-magik-alpha-installer.zip" not in feed_publish
+assert 'gh api "repos/$GH_REPO/commits/alpha" --jq .sha' in publication_verification
+assert 'if [ -z "$alpha_sha" ]; then' in publication_verification
+assert 'if [ "$alpha_sha" != "$GITHUB_SHA" ]; then' in publication_verification
+assert "scripts/release/check-alpha-promotion.sh" not in publication_verification
+
+exact_sha = "a" * 40
+for channel, alpha_sha, candidate_sha, expected_status in (
+    ("alpha", "", exact_sha, 0),
+    ("release", "", exact_sha, 0),
+    ("beta", "", exact_sha, 1),
+    ("beta", "b" * 40, exact_sha, 1),
+    ("beta", exact_sha, exact_sha, 0),
+):
+    result = subprocess.run(
+        [promotion_guard, channel, alpha_sha, candidate_sha],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected_status, (
+        channel,
+        alpha_sha,
+        candidate_sha,
+        result.stderr,
+    )
 
 for forbidden_input in ("main_ref:", "fpga_run_id:", "scanout_run_id:", "hbmame_ref:"):
     assert forbidden_input not in trigger, f"internal input leaked into dispatch UI: {forbidden_input}"

@@ -1,8 +1,9 @@
 # Releases and update_all installation
 
 MiSTer MagiK is distributed through GitHub Releases and a MiSTer Downloader
-database consumed by `update_all`. Publication is manual. The current public
-channel is Beta.
+database consumed by `update_all`. Publication is manual. Beta is the public
+testing channel; Alpha is an operator-only bootstrap channel used on the
+maintainer's personal MiSTer before promotion to Beta.
 
 ## Install the Beta channel
 
@@ -56,6 +57,22 @@ The `downloader` ref is an orphan, artifact-only branch. Its root commit has no
 source-history parent. The current release package intentionally includes no
 channel-selection script.
 
+## Alpha verification channel
+
+Alpha is a rolling GitHub prerelease and Downloader feed for testing a build on
+the maintainer's personal MiSTer. Publication intentionally produces no Alpha
+installer ZIP and no downloadable `downloader_mister_magik.ini`. The Alpha
+drop-in is created and retained locally by the operator; it is not a supported
+public installation route and its contents are not published in this guide.
+
+Dispatch **Publish MiSTer MagiK** from `main` with `alpha`, inspect the candidate,
+and approve the protected `publish-alpha` environment. After `update_all` and
+device verification succeed on the personal MiSTer, dispatch the same `main`
+commit with `beta`. Beta publication fails before building unless the dispatched
+commit exactly matches the current rolling `alpha` tag. Beta then rebuilds that
+revision through the normal distribution pipeline; it does not reuse Alpha
+artifacts byte-for-byte.
+
 ## Restore and uninstall
 
 To restore stock boot without deleting MiSTer MagiK data, run this from a
@@ -106,16 +123,19 @@ Before dispatch:
    no-change dispatch performs no heavyweight builds and creates neither a
    candidate nor a release.
 4. Configure protected GitHub environments named `publish-platform`,
-   `publish-game-databases`, `publish-beta`, and `publish-release`, with required
-   reviewers. Keep repository-wide GitHub Release immutability disabled while
-   Beta uses its rolling release; the numbered platform, database, and
-   production workflows enforce immutability by refusing existing tags.
+   `publish-game-databases`, `publish-alpha`, `publish-beta`, and
+   `publish-release`, with required reviewers. Keep repository-wide GitHub
+   Release immutability disabled while Alpha and Beta use rolling releases; the
+   numbered platform, database, and production workflows enforce immutability
+   by refusing existing tags.
 5. Dispatch **Promote MiSTer MagiK Game Databases** from `main`. The first run
    publishes `game-databases-v1`; later no-change runs exit without publishing.
 6. Confirm rollback with `scripts/restore-stock-boot.sh` on the test MiSTer.
 
 In GitHub Actions, choose **Publish MiSTer MagiK**, click **Run workflow**, make
-sure the branch is `main`, and select `beta`. This is the only release input.
+sure the branch is `main`, and select `alpha`, `beta`, or `release`. This is the
+only release input. Publish Alpha first for personal-device verification, then
+dispatch Beta from the same commit after Alpha passes.
 The workflow consumes the highest numbered published `platform-v0.N` bundle
 (with legacy `platform-v0.1-<bundle-id>` compatibility) and the highest
 numbered published `game-databases-vN` bundle. A v0.2 platform bundle already
@@ -130,6 +150,7 @@ publication. The application version is computed from the dispatched commit:
 ```text
 build        = git rev-list --count <dispatched-commit>
 version      = 0.2.<build>
+alpha tag    = alpha
 beta tag     = beta
 release tag  = v0.2.<build>
 ```
@@ -144,7 +165,8 @@ scripts/device-release-acceptance.sh --skip-deploy
 ```
 
 Check the candidate contains the expected ZIP, individual Downloader assets,
-channel database and bootstrap ZIP, `release-assets.json`, and `SHA256SUMS`.
+channel database, `release-assets.json`, and `SHA256SUMS`. Beta and Release
+candidates must also contain their bootstrap ZIP; Alpha must not contain one.
 Confirm Settings -> Info, the package filename, `mister-magik/release-v1.txt`,
 and all database asset URLs use the same `0.2.<build>`. Test fresh Beta install,
 Beta-to-Beta update, interrupted-update repair, non-destructive stock restore
@@ -152,7 +174,10 @@ and re-enable, and full uninstall. Approve `publish-beta` only after those
 checks pass.
 
 The publish job rejects non-`main` dispatches and verifies all candidate
-checksums again. Beta publication creates or updates the single rolling
+checksums again. Alpha publication creates or updates a rolling prerelease,
+replaces its assets, moves the `alpha` tag, and updates only the Alpha feed; its
+candidate and release contain no Alpha bootstrap ZIP. Beta publication requires
+that exact Alpha revision, then creates or updates the single rolling
 prerelease titled `MiSTer MagiK 0.2.<build> Beta`, replaces its assets, moves
 the `beta` tag, and then updates only the Beta feed. After the new feed is live,
 it removes superseded `v0.2.<build>` prereleases and their tags. This

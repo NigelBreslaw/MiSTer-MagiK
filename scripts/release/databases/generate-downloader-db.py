@@ -59,11 +59,14 @@ def generate(
     build = receipt.get("build_number")
     if receipt.get("format") != "mister-magik-release-assets-v1":
         raise ValueError("unsupported release-assets receipt")
-    if channel not in {"beta", "release"}:
+    if channel not in {"alpha", "beta", "release"}:
         raise ValueError(f"unsupported release channel: {channel}")
-    allowed_tags = {f"v{version}"}
-    if channel == "beta":
-        allowed_tags.add("beta")
+    if channel == "alpha":
+        allowed_tags = {"alpha"}
+    elif channel == "beta":
+        allowed_tags = {"beta", f"v{version}"}
+    else:
+        allowed_tags = {f"v{version}"}
     if version != f"0.2.{build}" or tag not in allowed_tags:
         raise ValueError("receipt version, build number, and tag disagree")
     if timestamp < 1_000_000_000:
@@ -108,22 +111,23 @@ def generate(
     (output / base).write_bytes(encoded)
     write_zip(output / f"{base}.zip", base, encoded)
 
-    ini = (
-        "[mister_magik]\n"
-        f"db_url = {FEED_URL.format(repository=repository, channel=channel)}\n"
-    ).encode()
-    write_zip(
-        output / f"mister-magik-{channel}-installer.zip",
-        "downloader_mister_magik.ini",
-        ini,
-    )
+    if channel != "alpha":
+        ini = (
+            "[mister_magik]\n"
+            f"db_url = {FEED_URL.format(repository=repository, channel=channel)}\n"
+        ).encode()
+        write_zip(
+            output / f"mister-magik-{channel}-installer.zip",
+            "downloader_mister_magik.ini",
+            ini,
+        )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--channel", required=True, choices=("beta", "release"))
+    parser.add_argument("--channel", required=True, choices=("alpha", "beta", "release"))
     parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--timestamp", required=True, type=int)

@@ -97,6 +97,7 @@ for script in \
   "$ROOT/scripts/profile-preview-scroll.sh" \
   "$ROOT/scripts/profile-screenshot-download.sh" \
   "$ROOT/scripts/regression-arm-noop.sh" \
+  "$ROOT/scripts/release/check-alpha-promotion.sh" \
   "$ROOT/scripts/lib/reboot-wait-lib.sh" \
   "$ROOT/scripts/restore-stock-boot.sh" \
   "$ROOT/scripts/switch-ui.sh" \
