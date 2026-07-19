@@ -142,22 +142,6 @@ export component ArcadeListScreen inherits Rectangle {
 
             if MisterBridge.arcade-search-active : SearchKeyboard { }
 
-            if !MisterBridge.arcade-search-active : Text {
-                x: 16px * s;
-                y: 16px * s;
-                text: MisterBridge.active-system-title;
-                color: #e8e0f0;
-                font-size: 24px * s;
-            }
-
-            if !MisterBridge.arcade-search-active : Text {
-                x: 16px * s;
-                y: 44px * s;
-                text: count + " games";
-                color: #706080;
-                font-size: 8px * s;
-            }
-
             // Rust draws the animated game rows into this reserved viewport.
             if !MisterBridge.arcade-search-active : Rectangle {
                 x: MisterBridge.arcade-list-x * 1px * s;
@@ -239,6 +223,32 @@ export component ArcadeListScreen inherits Rectangle {
                     clip: true;
                 }
             }
+        }
+    }
+
+    if !MisterBridge.arcade-search-active : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: MisterBridge.arcade-list-y * 1px * root.s;
+        background: #1a1424;
+
+        Text {
+            x: 16px * root.s;
+            y: 16px * root.s;
+            width: parent.width - 32px * root.s;
+            text: MisterBridge.active-system-title;
+            color: #e8e0f0;
+            font-size: 24px * root.s;
+            overflow: elide;
+        }
+
+        Text {
+            x: 16px * root.s;
+            y: 44px * root.s;
+            text: root.count + " games";
+            color: #706080;
+            font-size: 8px * root.s;
         }
     }
 }
