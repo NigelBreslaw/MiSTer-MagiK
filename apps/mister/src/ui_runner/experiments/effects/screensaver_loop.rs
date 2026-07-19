@@ -818,12 +818,14 @@ fn render_horizontal_starfield(dst: &mut [Rgb565Pixel], w: usize, h: usize, fram
 }
 
 fn horizontal_star_x(star: usize, width: usize, frame: u64) -> usize {
-    let speed = (star & 3) + 1;
+    const STAR_SPEED_DENOMINATOR: u64 = 8;
+    let speed_numerator = PARADE_MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
     let start_x = (star
         .wrapping_mul(197)
         .wrapping_add(star.wrapping_mul(star) * 13))
         % width;
-    (start_x + frame as usize * speed) % width
+    let travel = frame.saturating_mul(speed_numerator) / STAR_SPEED_DENOMINATOR;
+    (start_x + travel as usize) % width
 }
 
 fn render_starfield_cabinets(
@@ -1278,6 +1280,7 @@ fn render_scanner(
 const PARADE_TILE_COUNT: usize = 14;
 const PARADE_TILE_W: usize = 96;
 const PARADE_TILE_H: usize = 72;
+const PARADE_MIN_TILE_SPEED: usize = 2;
 
 #[derive(Clone, Copy, Debug)]
 struct ParadeTile {
@@ -1324,7 +1327,7 @@ impl ParadeState {
                 x: ((i * (w + PARADE_TILE_W)) / tile_count.max(1)) as isize
                     - PARADE_TILE_W as isize,
                 y: 40 + (i * 31) % h.saturating_sub(120).max(1),
-                speed: 2 + i % 4,
+                speed: PARADE_MIN_TILE_SPEED + i % 4,
                 image_idx,
             });
         }
@@ -1671,10 +1674,23 @@ mod tests {
     fn parade_starfield_moves_horizontally_in_depth_bands() {
         let width = 960;
         for star in 0..4 {
-            let x0 = horizontal_star_x(star, width, 20);
-            let x1 = horizontal_star_x(star, width, 21);
-            assert_eq!((x1 + width - x0) % width, star + 1);
+            let x0 = horizontal_star_x(star, width, 0);
+            let x1 = horizontal_star_x(star, width, 8);
+            assert_eq!(
+                (x1 + width - x0) % width,
+                PARADE_MIN_TILE_SPEED * (star + 1)
+            );
         }
+    }
+
+    #[test]
+    fn fastest_star_layer_is_half_the_slowest_card_speed() {
+        let width = 960;
+        let x0 = horizontal_star_x(3, width, 0);
+        let x1 = horizontal_star_x(3, width, 8);
+        let star_travel = (x1 + width - x0) % width;
+        let slowest_card_travel = PARADE_MIN_TILE_SPEED * 8;
+        assert_eq!(star_travel * 2, slowest_card_travel);
     }
 
     #[test]
