@@ -2117,14 +2117,30 @@ fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
 fn agent_magik(args: &[String]) -> Result<()> {
     let action = args.first().map(String::as_str).unwrap_or("status");
     match action {
-        "status" | "suspend" | "resume" | "restart-launcher" => {}
+        "status" | "suspend" | "resume" | "restart-launcher" | "return-to-launcher" => {}
         "-h" | "--help" => {
-            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher>");
+            println!("usage: scripts/mister agent magik <status|suspend|resume|restart-launcher|return-to-launcher>");
             return Ok(());
         }
         other => return Err(format!("unknown agent magik action: {other}").into()),
     }
-    let reply = agent_request("magik", json!({"action": action}), Duration::from_secs(5))?;
+    let operation_id = format!(
+        "host-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis()
+    );
+    let timeout = if action == "status" {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(40)
+    };
+    let reply = agent_request(
+        "magik",
+        json!({"action": action, "operation_id": operation_id}),
+        timeout,
+    )?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
     if action == "status" {
         println!("{}", serde_json::to_string_pretty(result)?);
