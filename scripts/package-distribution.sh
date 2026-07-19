@@ -59,7 +59,7 @@ Options:
   --platform-manifest PATH
                        Required canonical manifest matching every platform artifact.
   --platform-bundle-manifest PATH
-                       Required durable platform bundle v0.1 manifest.
+                       Required durable platform bundle v0.1 or v0.2 manifest.
   --name NAME          Output basename. Default: mister-magik
   --out-dir PATH       Output directory. Default: dist
   --version VERSION    Required release version (0.2.BUILD).
@@ -76,7 +76,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   mister-magik/assets/...     when --asset-pack is provided
   MiSTer_MagiK
   mister-magik/platform-v2.manifest
-  mister-magik/platform-bundle-v0.1.json
+  mister-magik/platform-bundle-v0.1.json or platform-bundle-v0.2.json
   mister-magik/game-databases-manifest.json
   mister-magik/mister_magik_scanout_slots.ko
   mister-magik/mister_magik_scanout_slots.metadata.txt
@@ -282,13 +282,18 @@ if [[ "$(sed -n 's/^main_revision=//p' "$PLATFORM_MANIFEST")" != "$MAIN_SOURCE_R
   echo "ERROR: --main-source-revision does not match platform manifest" >&2
   exit 1
 fi
-PLATFORM_BUNDLE_ID="$(python3 - "$PLATFORM_BUNDLE_MANIFEST" <<'PY'
+PLATFORM_BUNDLE_BASENAME="$(basename "$PLATFORM_BUNDLE_MANIFEST")"
+PLATFORM_BUNDLE_ID="$(python3 - "$PLATFORM_BUNDLE_MANIFEST" "$PLATFORM_BUNDLE_BASENAME" <<'PY'
 import json
 import re
 import sys
 
 payload = json.load(open(sys.argv[1]))
-if payload.get("format") != "mister-magik-platform-bundle-v0.1":
+formats = {
+    "platform-bundle-v0.1.json": "mister-magik-platform-bundle-v0.1",
+    "platform-bundle-v0.2.json": "mister-magik-platform-bundle-v0.2",
+}
+if formats.get(sys.argv[2]) != payload.get("format"):
     raise SystemExit("unsupported platform bundle manifest")
 bundle_id = payload.get("bundle_id", "")
 if not re.fullmatch(r"[0-9a-f]{64}", bundle_id):
@@ -325,14 +330,16 @@ cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.
 cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
 cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
 cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v2.manifest"
-cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/platform-bundle-v0.1.json"
+cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/$PLATFORM_BUNDLE_BASENAME"
 cp "$GAME_DATABASES_MANIFEST" "$STAGE/mister-magik/game-databases-manifest.json"
+MAIN_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$MAIN_BIN")"
 cat >"$STAGE/mister-magik/release-v1.txt" <<EOF
 format=mister-magik-release-v1
 version=$VERSION
 build_number=$BUILD_NUMBER
 magik_revision=$MAGIK_SOURCE_REVISION
 main_revision=$MAIN_SOURCE_REVISION
+main_sha256=$MAIN_SHA256
 features=$BIN_FEATURES
 platform_bundle_id=$PLATFORM_BUNDLE_ID
 game_database_version=$GAME_DATABASE_VERSION

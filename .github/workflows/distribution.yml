@@ -98,25 +98,8 @@ jobs:
           finished="$(date +%s)"
           printf 'cross_image_pull_seconds=%s\n' "$((finished - started))" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout Main_MiSTer fork
-        uses: actions/checkout@v7
-        with:
-          repository: NigelBreslaw/Main_MiSTer
-          ref: ${{ env.MAIN_REF }}
-          path: Main_MiSTer
-          fetch-depth: 0
-
-      - name: Resolve Main_MiSTer revision
-        id: main-rev
-        run: echo "sha=$(git -C Main_MiSTer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Test Main_MiSTer state and patch surface
-        working-directory: Main_MiSTer
-        run: |
-          scripts/test-magik-state.sh
-          scripts/check-magik-patch-surface.sh
-
       - name: Download current published platform and game databases
+        id: platform
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -131,13 +114,27 @@ jobs:
           platform_version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/published/releases.json)"
           mkdir -p build/qualified
           gh release download "$platform_tag" --repo "$GITHUB_REPOSITORY" --dir build/qualified \
-            --pattern 'mister-magik-platform-v0.*.zip' --pattern platform-bundle-v0.1.json
+            --pattern 'mister-magik-platform-v0.*.zip' --pattern 'platform-bundle-v0.*.json'
           archive="$(find build/qualified -name 'mister-magik-platform-v0.*.zip' -print -quit)"
-          test -n "$archive"
+          manifest="$(find build/qualified -name 'platform-bundle-v0.*.json' -print -quit)"
+          test -n "$archive" && test -n "$manifest"
           python3 scripts/release/platform/platform-bundle.py verify "$archive" \
-            --manifest build/qualified/platform-bundle-v0.1.json \
+            --manifest "$manifest" \
             --release-version "$platform_version" >/dev/null
           unzip -q -o "$archive" -d build/qualified
+          format="$(jq -r .format "$manifest")"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          if [ "$format" = mister-magik-platform-bundle-v0.2 ]; then
+            python3 scripts/release/platform/main-component.py verify \
+              --artifact build/qualified/main >/dev/null
+            echo "format=v0.2" >> "$GITHUB_OUTPUT"
+            echo "main_bin=build/qualified/main/MiSTer_MagiK" >> "$GITHUB_OUTPUT"
+            echo "main_revision=$(jq -r .source_revision build/qualified/main/main-component-v0.1.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "format=v0.1" >> "$GITHUB_OUTPUT"
+            echo "main_bin=" >> "$GITHUB_OUTPUT"
+            echo "main_revision=" >> "$GITHUB_OUTPUT"
+          fi
 
           if ! databases_tag="$(python3 scripts/release/databases/select-published-release.py game-databases --releases build/published/releases.json)"; then
             echo "::error::No published numbered game-database release exists. Run Promote MiSTer MagiK Game Databases."
@@ -152,6 +149,27 @@ jobs:
           python3 scripts/release/databases/game-databases-bundle.py verify "$databases_archive" \
             --manifest build/game-databases/game-databases-manifest.json \
             --checksums build/game-databases/SHA256SUMS >/dev/null
+
+      - name: Checkout Main_MiSTer fork for v0.1 compatibility
+        if: steps.platform.outputs.format == 'v0.1'
+        uses: actions/checkout@v7
+        with:
+          repository: NigelBreslaw/Main_MiSTer
+          ref: ${{ env.MAIN_REF }}
+          path: Main_MiSTer
+          fetch-depth: 0
+
+      - name: Resolve Main_MiSTer revision for v0.1 compatibility
+        if: steps.platform.outputs.format == 'v0.1'
+        id: main-rev
+        run: echo "sha=$(git -C Main_MiSTer rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Test Main_MiSTer state and patch surface for v0.1 compatibility
+        if: steps.platform.outputs.format == 'v0.1'
+        working-directory: Main_MiSTer
+        run: |
+          scripts/test-magik-state.sh
+          scripts/check-magik-patch-surface.sh
 
       - name: Install Rust toolchain
         working-directory: magik-gui
@@ -210,6 +228,7 @@ jobs:
         run: python3 scripts/release/packaging/generate-third-party-licenses.py
 
       - name: Cache Main_MiSTer build outputs
+        if: steps.platform.outputs.format == 'v0.1'
         id: main-build-cache
         uses: actions/cache@v6
         with:
@@ -217,7 +236,7 @@ jobs:
           key: main-mister-bin-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}-${{ steps.main-rev.outputs.sha }}
 
       - name: Cache Main_MiSTer toolchain
-        if: steps.main-build-cache.outputs.cache-hit != 'true'
+        if: steps.platform.outputs.format == 'v0.1' && steps.main-build-cache.outputs.cache-hit != 'true'
         id: main-toolchain-cache
         uses: actions/cache@v6
         with:
@@ -225,14 +244,14 @@ jobs:
           key: main-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-${{ env.MAIN_TOOLCHAIN_VERSION }}
 
       - name: Install Main_MiSTer toolchain
-        if: steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
+        if: steps.platform.outputs.format == 'v0.1' && steps.main-build-cache.outputs.cache-hit != 'true' && steps.main-toolchain-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.cache/mister-magik
           wget -qO- "https://developer.arm.com/-/media/Files/downloads/gnu-a/10.2-2020.11/binrel/${MAIN_TOOLCHAIN_VERSION}.tar.xz" \
             | tar -xJ -C ~/.cache/mister-magik
 
       - name: Build Main_MiSTer fork
-        if: steps.main-build-cache.outputs.cache-hit != 'true'
+        if: steps.platform.outputs.format == 'v0.1' && steps.main-build-cache.outputs.cache-hit != 'true'
         working-directory: Main_MiSTer
         run: |
           export PATH="$HOME/.cache/mister-magik/$MAIN_TOOLCHAIN_VERSION/bin:$PATH"
@@ -253,26 +272,33 @@ jobs:
           rbf_meta="$(find build/qualified/fpga -path '*/patched/menu-magik-vblank-latch.metadata.txt' -print -quit)"
           module="$(find build/qualified/scanout -name mister_magik_scanout_slots.ko -print -quit)"
           module_meta="$(find build/qualified/scanout -name provenance.txt -print -quit)"
+          main_bin='${{ steps.platform.outputs.main_bin }}'
+          main_revision='${{ steps.platform.outputs.main_revision }}'
+          if [ '${{ steps.platform.outputs.format }}' = v0.1 ]; then
+            main_bin=Main_MiSTer/bin/MiSTer
+            main_revision='${{ steps.main-rev.outputs.sha }}'
+          fi
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
+          test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
           scripts/release/platform/platform-manifest.py generate \
             --output build/platform-v2.manifest \
-            --main Main_MiSTer/bin/MiSTer \
+            --main "$main_bin" \
             --gui magik-gui/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
-            --main-revision "${{ steps.main-rev.outputs.sha }}" \
+            --main-revision "$main_revision" \
             --magik-revision "$GITHUB_SHA"
           scripts/package-distribution.sh \
-            --main-bin Main_MiSTer/bin/MiSTer \
-            --main-source-revision "${{ steps.main-rev.outputs.sha }}" \
+            --main-bin "$main_bin" \
+            --main-source-revision "$main_revision" \
             --scanout-module "$module" \
             --scanout-metadata "$module_meta" \
             --latch-rbf "$rbf" \
             --latch-metadata "$rbf_meta" \
             --platform-manifest build/platform-v2.manifest \
-            --platform-bundle-manifest build/qualified/platform-bundle-v0.1.json \
+            --platform-bundle-manifest '${{ steps.platform.outputs.manifest }}' \
             --game-databases-release-dir build/game-databases \
             --version "$RELEASE_VERSION" \
             --build-number "$RELEASE_BUILD_NUMBER" \

@@ -49,7 +49,12 @@ required = (
     "game-databases-manifest.json",
     "--checksums build/game-databases/SHA256SUMS",
     "--game-databases-release-dir",
-    "platform-bundle-v0.1.json",
+    "platform-bundle-v0.*.json",
+    "mister-magik-platform-bundle-v0.2",
+    "scripts/release/platform/main-component.py verify",
+    "steps.platform.outputs.main_bin",
+    "steps.platform.outputs.main_revision",
+    "steps.platform.outputs.format == 'v0.1'",
     "MAIN_REF: mister-magik",
     'assert version.encode() in package.read("mister-magik/mister-magik-fb")',
     "initialize_feed_branch()",
@@ -86,6 +91,8 @@ for forbidden in (
 ):
     assert forbidden not in text, f"distribution still builds support bundle content: {forbidden}"
 assert 'unzip -q -o "$archive" -d build/qualified' in text
+assert "--main-bin \"$main_bin\"" in text
+assert "--main-source-revision \"$main_revision\"" in text
 
 for forbidden in (
     "--mame-sqlite)",
@@ -95,6 +102,8 @@ for forbidden in (
 ):
     assert forbidden not in packager, f"production packager still accepts raw database input: {forbidden}"
 assert "--game-databases-release-dir)" in packager
+assert "mister-magik-platform-bundle-v0.2" in packager
+assert "main_sha256=$MAIN_SHA256" in packager
 
 for workflow in (ROOT / ".github/workflows").glob("*.yml"):
     if workflow.name == "game-databases.yml":
