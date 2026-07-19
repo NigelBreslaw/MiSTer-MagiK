@@ -846,11 +846,11 @@ mod library_snapshot {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{parse_control_request, ControlRequest};
     use super::scanout_slots_contract::{
         ScanoutSlotsLayout, DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT,
         GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
     };
+    use super::{parse_control_request, ControlRequest};
     use flate2::{write::ZlibEncoder, Compression};
     use libc::{
         c_char, c_int, c_short, c_ulong, close, if_nametoindex, ifreq, in_addr, ioctl, rtentry,
@@ -860,6 +860,7 @@ mod linux {
     };
     use mister_magik_framebuffer_stream::SCHEMA as FRAMEBUFFER_STREAM_SCHEMA;
     use serde_json::{json, Value};
+    use sha2::{Digest, Sha256};
     use std::collections::{HashMap, VecDeque};
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
@@ -3027,6 +3028,9 @@ mod linux {
             .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
         validate_deploy_remote(remote)?;
         let expectations = deploy_expectations(&args)?;
+        if expectations.encoding == "raw" && expectations.payload_size == expectations.raw_size {
+            return deploy_magik_bin_stream_raw(remote, &expectations, reader);
+        }
         let receive_t = Instant::now();
         let payload_size = usize::try_from(expectations.payload_size)
             .map_err(|_| "deploy payload size overflows usize".to_string())?;
@@ -3050,6 +3054,125 @@ mod linux {
                 result
             },
         )
+    }
+
+    fn deploy_magik_bin_stream_raw(
+        remote: &str,
+        expectations: &DeployExpectations,
+        reader: &mut dyn Read,
+    ) -> Result<Value, String> {
+        let remote_path = Path::new(remote);
+        let parent = remote_path
+            .parent()
+            .ok_or_else(|| "deploy remote has no parent".to_string())?;
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        let upload = parent.join(format!(
+            ".{}.upload",
+            remote_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("mister-magik-fb")
+        ));
+        let rollback = parent.join(format!(
+            ".{}.rollback",
+            remote_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("mister-magik-fb")
+        ));
+        let _ = fs::remove_file(&upload);
+        let receive_t = Instant::now();
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&upload)
+            .map_err(|err| err.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut remaining = expectations.raw_size;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining > 0 {
+            let wanted = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| "deploy size overflow")?;
+            let count = reader
+                .read(&mut buffer[..wanted])
+                .map_err(|err| err.to_string())?;
+            if count == 0 {
+                let _ = fs::remove_file(&upload);
+                return Err(format!("deploy payload truncated remaining={remaining}"));
+            }
+            file.write_all(&buffer[..count])
+                .map_err(|err| err.to_string())?;
+            hasher.update(&buffer[..count]);
+            remaining -= count as u64;
+        }
+        let checksum = format!("{:x}", hasher.finalize());
+        if checksum != expectations.checksum {
+            let _ = fs::remove_file(&upload);
+            return Err(format!(
+                "deploy checksum mismatch expected={} actual={checksum}",
+                expectations.checksum
+            ));
+        }
+        file.sync_all().map_err(|err| err.to_string())?;
+        fs::set_permissions(&upload, fs::Permissions::from_mode(0o755))
+            .map_err(|err| err.to_string())?;
+        let receive_ms = receive_t.elapsed().as_millis() as u64;
+        let operation_id = format!(
+            "deploy-{}-{}",
+            std::process::id(),
+            receive_t.elapsed().as_nanos()
+        );
+        magik_acknowledged_action(
+            "suspend",
+            &json!({"operation_id": format!("{operation_id}-suspend")}),
+        )?;
+        let _ = fs::remove_file(&rollback);
+        if remote_path.exists() {
+            fs::rename(remote_path, &rollback).map_err(|err| err.to_string())?;
+        }
+        if let Err(err) = fs::rename(&upload, remote_path) {
+            let _ = fs::rename(&rollback, remote_path);
+            return Err(err.to_string());
+        }
+        if let Ok(dir) = File::open(parent) {
+            dir.sync_all().map_err(|err| err.to_string())?;
+        }
+        match magik_acknowledged_action(
+            "resume",
+            &json!({"operation_id": format!("{operation_id}-resume")}),
+        ) {
+            Ok(resume) => {
+                let _ = fs::remove_file(&rollback);
+                if let Ok(dir) = File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+                Ok(
+                    json!({"transport":"stream","encoding":"raw","remote":remote,"bytes":expectations.raw_size,"remote_bytes":expectations.raw_size,"checksum":checksum,"checksum_algorithm":"sha256","receive_ms":receive_ms,"published":true,"rolled_back":false,"resume":resume}),
+                )
+            }
+            Err(health_error) => {
+                let failed = parent.join(format!(
+                    ".{}.failed",
+                    remote_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("mister-magik-fb")
+                ));
+                let _ = fs::remove_file(&failed);
+                let _ = fs::rename(remote_path, &failed);
+                let rollback_result = fs::rename(&rollback, remote_path);
+                let _ = fs::remove_file(&failed);
+                if let Ok(dir) = File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+                rollback_result.map_err(|err| {
+                    format!("deployment health failed ({health_error}); rollback failed: {err}")
+                })?;
+                Err(format!(
+                    "deployment health failed; previous executable restored: {health_error}"
+                ))
+            }
+        }
     }
 
     struct DeployExpectations {
@@ -3233,21 +3356,37 @@ mod linux {
         status.get("main_generation").and_then(Value::as_u64)
     }
 
-    fn wait_for_main_ready(minimum_generation: Option<u64>, timeout: Duration) -> Result<Value, String> {
+    fn wait_for_main_ready(
+        minimum_generation: Option<u64>,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let started = Instant::now();
         loop {
             let status = read_json_value("/tmp/mister-magik/main-status.json");
             let ready = status.get("command_channel").and_then(Value::as_str) == Some("ready");
-            let current_pid = status.get("pid").and_then(Value::as_u64).is_some_and(|pid| {
-                read_pid_list("MiSTer_MagiKDev").as_array().is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
-                    || read_pid_list("MiSTer_MagiK").as_array().is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+            let current_pid = status
+                .get("pid")
+                .and_then(Value::as_u64)
+                .is_some_and(|pid| {
+                    read_pid_list("MiSTer_MagiKDev")
+                        .as_array()
+                        .is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+                        || read_pid_list("MiSTer_MagiK")
+                            .as_array()
+                            .is_some_and(|pids| pids.iter().any(|p| p.as_u64() == Some(pid)))
+                });
+            let generation_ok = minimum_generation.is_none_or(|minimum| {
+                main_generation(&status).is_some_and(|value| value > minimum)
             });
-            let generation_ok = minimum_generation.is_none_or(|minimum| main_generation(&status).is_some_and(|value| value > minimum));
             if ready && current_pid && generation_ok {
                 return Ok(status);
             }
             if started.elapsed() >= timeout {
-                return Err(format!("command_channel_unavailable timeout_ms={} minimum_generation={:?}", timeout.as_millis(), minimum_generation));
+                return Err(format!(
+                    "command_channel_unavailable timeout_ms={} minimum_generation={:?}",
+                    timeout.as_millis(),
+                    minimum_generation
+                ));
             }
             thread::sleep(Duration::from_millis(50));
         }
@@ -3264,10 +3403,17 @@ mod linux {
     }
 
     fn magik_acknowledged_action(action: &str, args: &Value) -> Result<Value, String> {
-        let operation_id = args.get("operation_id").and_then(Value::as_str)
+        let operation_id = args
+            .get("operation_id")
+            .and_then(Value::as_str)
             .ok_or_else(|| "missing operation_id".to_string())?;
         let cache = MAGIK_OPERATION_RESULTS.get_or_init(|| Mutex::new(HashMap::new()));
-        if let Some(result) = cache.lock().map_err(|_| "operation cache poisoned")?.get(operation_id).cloned() {
+        if let Some(result) = cache
+            .lock()
+            .map_err(|_| "operation cache poisoned")?
+            .get(operation_id)
+            .cloned()
+        {
             return Ok(result);
         }
         let started = Instant::now();
@@ -3289,13 +3435,18 @@ mod linux {
         let deadline = Duration::from_secs(30);
         let final_status = loop {
             let status = read_json_value("/tmp/mister-magik/main-status.json");
-            let generation_ok = action != "return-to-launcher" || main_generation(&status).is_some_and(|g| g > before_generation);
-            if generation_ok && status.get("command_channel").and_then(Value::as_str) == Some("ready")
-                && status.get("launcher_state").and_then(Value::as_str) == Some(expected_state) {
+            let generation_ok = action != "return-to-launcher"
+                || main_generation(&status).is_some_and(|g| g > before_generation);
+            if generation_ok
+                && status.get("command_channel").and_then(Value::as_str) == Some("ready")
+                && status.get("launcher_state").and_then(Value::as_str) == Some(expected_state)
+            {
                 break status;
             }
             if started.elapsed() >= deadline {
-                return Err(format!("operation_timeout action={action} expected_state={expected_state}"));
+                return Err(format!(
+                    "operation_timeout action={action} expected_state={expected_state}"
+                ));
             }
             thread::sleep(Duration::from_millis(50));
         };
@@ -3309,7 +3460,10 @@ mod linux {
             "terminal_reason": "acknowledged",
             "main_status": final_status,
         });
-        cache.lock().map_err(|_| "operation cache poisoned")?.insert(operation_id.to_string(), result.clone());
+        cache
+            .lock()
+            .map_err(|_| "operation cache poisoned")?
+            .insert(operation_id.to_string(), result.clone());
         Ok(result)
     }
 
