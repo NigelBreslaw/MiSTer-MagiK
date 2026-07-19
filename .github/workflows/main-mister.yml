@@ -162,7 +162,6 @@ jobs:
             --artifact build/main-component --revision "$MAIN_REVISION" >/dev/null
 
       - name: Upload exact Main component
-        if: steps.existing.outputs.hit != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.identity.outputs.artifact_name }}

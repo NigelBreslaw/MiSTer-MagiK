@@ -5,6 +5,12 @@ name: Promote MiSTer MagiK Platform Bundle
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish after candidate verification (requires protected environment approval)
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: promote-mister-magik-platform
@@ -15,8 +21,30 @@ permissions:
   contents: read
 
 jobs:
+  resolve-main:
+    name: Resolve authoritative Main fork head
+    runs-on: ubuntu-24.04
+    outputs:
+      revision: ${{ steps.main.outputs.revision }}
+    steps:
+      - name: Resolve exact authoritative Main revision
+        id: main
+        run: |
+          set -euo pipefail
+          revision="$(git ls-remote https://github.com/NigelBreslaw/Main_MiSTer.git refs/heads/mister-magik | awk '{print $1}')"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+  main-component:
+    name: Reuse or build exact Main component
+    needs: resolve-main
+    uses: ./.github/workflows/main-mister.yml
+    with:
+      main_revision: ${{ needs.resolve-main.outputs.revision }}
+
   assemble:
     name: Assemble main-qualified platform bundle
+    needs: [resolve-main, main-component]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
@@ -48,10 +76,8 @@ jobs:
           set -euo pipefail
           fpga_id="$(python3 scripts/release/platform/platform-component-id.py component fpga)"
           kernel_id="$(python3 scripts/release/platform/platform-component-id.py component kernel)"
-          bundle_id="$(python3 scripts/release/platform/platform-component-id.py bundle --fpga-id "$fpga_id" --kernel-id "$kernel_id")"
           printf 'fpga_id=%s\n' "$fpga_id" >> "$GITHUB_OUTPUT"
           printf 'kernel_id=%s\n' "$kernel_id" >> "$GITHUB_OUTPUT"
-          printf 'bundle_id=%s\n' "$bundle_id" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify current numbered release
         id: current
@@ -64,14 +90,16 @@ jobs:
           if tag="$(python3 scripts/release/databases/select-published-release.py platform --releases build/platform-current/releases.json 2>/dev/null)"; then
             version="$(python3 scripts/release/databases/select-published-release.py platform --field version --releases build/platform-current/releases.json)"
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir build/platform-current/release \
-              --pattern 'mister-magik-platform-v0.*.zip' --pattern platform-bundle-v0.1.json
+              --pattern 'mister-magik-platform-v0.*.zip' --pattern 'platform-bundle-v0.*.json'
             archive="$(find build/platform-current/release -name 'mister-magik-platform-v0.*.zip' -print -quit)"
+            manifest="$(find build/platform-current/release -name 'platform-bundle-v0.*.json' -print -quit)"
             test -n "$archive"
+            test -n "$manifest"
             python3 scripts/release/platform/platform-bundle.py verify "$archive" \
-              --manifest build/platform-current/release/platform-bundle-v0.1.json \
+              --manifest "$manifest" \
               --release-version "$version" >/dev/null
             echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "manifest=build/platform-current/release/platform-bundle-v0.1.json" >> "$GITHUB_OUTPUT"
+            echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
           else
             echo "No existing numbered platform release; v0.1 will be created."
             echo "version=0" >> "$GITHUB_OUTPUT"
@@ -83,6 +111,7 @@ jobs:
         env:
           CURRENT_MANIFEST: ${{ steps.current.outputs.manifest }}
           CURRENT_VERSION: ${{ steps.current.outputs.version }}
+          MAIN_ID: ${{ needs.main-component.outputs.component_id }}
           FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
           KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
         run: |
@@ -92,7 +121,8 @@ jobs:
             args+=(--manifest "$CURRENT_MANIFEST")
           fi
           python3 scripts/release/platform/platform-bundle.py plan-update "${args[@]}" \
-            --current-version "$CURRENT_VERSION" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+            --current-version "$CURRENT_VERSION" --main-id "$MAIN_ID" \
+            --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: Report update decision
@@ -107,16 +137,26 @@ jobs:
             if [ "$UPDATE_NEEDED" = true ]; then
               echo "Preparing v0.$NEXT_VERSION (current v0.$CURRENT_VERSION)."
             else
-              echo "Platform bundle v0.$CURRENT_VERSION already contains the current FPGA and kernel components."
+              echo "Platform bundle v0.$CURRENT_VERSION already contains the current Main, FPGA, and kernel components."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Download latest successful main component artifacts
+      - name: Download selected Main component
+        if: steps.plan.outputs.update_needed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.main-component.outputs.artifact_name }}
+          path: build/platform-input/main
+
+      - name: Download exact FPGA and kernel component artifacts
         if: steps.plan.outputs.update_needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           FPGA_ID: ${{ steps.identity.outputs.fpga_id }}
           KERNEL_ID: ${{ steps.identity.outputs.kernel_id }}
+          MAIN_ID: ${{ needs.main-component.outputs.component_id }}
+          MAIN_REVISION: ${{ needs.main-component.outputs.main_revision }}
+          MAIN_RUN_ID: ${{ needs.main-component.outputs.run_id }}
         run: |
           set -euo pipefail
           find_run() {
@@ -146,10 +186,13 @@ jobs:
           fpga_sha="$(gh run view "$fpga_run" --json headSha --jq .headSha)"
           kernel_sha="$(gh run view "$kernel_run" --json headSha --jq .headSha)"
           python3 scripts/release/platform/platform-bundle.py create \
+            --main-dir build/platform-input/main \
             --fpga-dir build/platform-input/fpga \
             --scanout-dir build/platform-input/scanout \
-            --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+            --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
+            --main-run-id "$MAIN_RUN_ID" \
             --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
+            --main-head-sha "$MAIN_REVISION" \
             --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
             --release-version '${{ steps.plan.outputs.next_version }}' \
             --output build/platform-bundle
@@ -167,7 +210,7 @@ jobs:
     name: Publish immutable platform bundle
     runs-on: ubuntu-24.04
     needs: assemble
-    if: needs.assemble.outputs.update-needed == 'true'
+    if: needs.assemble.outputs.update-needed == 'true' && inputs.publish == true
     timeout-minutes: 15
     environment:
       name: publish-platform
@@ -195,7 +238,7 @@ jobs:
         run: |
           set -euo pipefail
           archive="candidate/mister-magik-platform-v0.$VERSION.zip"
-          manifest="candidate/platform-bundle-v0.1.json"
+          manifest="candidate/platform-bundle-v0.2.json"
           test -f "$archive" && test -f "$manifest"
           python3 scripts/release/platform/platform-bundle.py verify "$archive" --manifest "$manifest" \
             --release-version "$VERSION" >/dev/null
