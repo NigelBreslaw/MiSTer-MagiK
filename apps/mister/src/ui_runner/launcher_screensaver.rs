@@ -3,8 +3,11 @@
 
 use super::*;
 use crate::preview_worker;
+use mister_magik_catalog::device_layout::DeviceLayout;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -480,11 +483,10 @@ fn load_screensaver_images_cancellable(
     cap: usize,
     cancelled: Option<&AtomicBool>,
 ) -> Vec<SaverImage> {
-    let arcade_screenshot_pack =
-        std::path::Path::new(mister_magik_catalog::catalog_config::DEFAULT_SQLITE_PATH)
-            .parent()
-            .expect("default catalog has an application directory")
-            .join("assets/arcade-screenshots-320x320.mmlz4b");
+    let arcade_screenshot_pack = screensaver_archive_path(
+        std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
+        DeviceLayout::current(),
+    );
     let mut asset_keys =
         match preview_worker::preview_archive_sidecar_entry_stems(&arcade_screenshot_pack) {
             Ok(Some(sidecar)) => sidecar.entries,
@@ -518,7 +520,19 @@ fn load_screensaver_images_cancellable(
             images.push(image);
         }
     }
+    crate::ui_logln!(
+        "screensaver_loader path={} images={}",
+        arcade_screenshot_pack.display(),
+        images.len()
+    );
     images
+}
+
+fn screensaver_archive_path(asset_dir: Option<&OsStr>, layout: DeviceLayout) -> PathBuf {
+    asset_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| layout.app_path("assets"))
+        .join("arcade-screenshots-320x320.mmlz4b")
 }
 
 fn preview_pixels_to_saver_image(image: preview_worker::PreviewPixels) -> SaverImage {
@@ -2511,6 +2525,33 @@ fn render_color_clash(
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn screensaver_archive_path_uses_public_layout_by_default() {
+        assert_eq!(
+            screensaver_archive_path(None, DeviceLayout::Public),
+            PathBuf::from("/media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b")
+        );
+    }
+
+    #[test]
+    fn screensaver_archive_path_uses_development_layout_by_default() {
+        assert_eq!(
+            screensaver_archive_path(None, DeviceLayout::Dev),
+            PathBuf::from("/media/fat/mister-magik-dev/assets/arcade-screenshots-320x320.mmlz4b")
+        );
+    }
+
+    #[test]
+    fn screensaver_archive_path_honors_explicit_asset_directory() {
+        assert_eq!(
+            screensaver_archive_path(
+                Some(OsStr::new("/tmp/screensaver-assets")),
+                DeviceLayout::Dev
+            ),
+            PathBuf::from("/tmp/screensaver-assets/arcade-screenshots-320x320.mmlz4b")
+        );
+    }
 
     fn test_images(count: usize) -> Vec<SaverImage> {
         (0..count)

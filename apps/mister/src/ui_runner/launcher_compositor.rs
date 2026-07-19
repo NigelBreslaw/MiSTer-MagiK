@@ -81,8 +81,12 @@ impl<'a> LayerTarget<'a> {
         }
     }
 
-    pub(super) fn clear_cached(&mut self) {
-        self.target.cached_565_mut().fill(Rgb565Pixel(0));
+    pub(super) fn snapshot_cached(&self) -> Vec<Rgb565Pixel> {
+        snapshot_cached_565(self.target)
+    }
+
+    pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
+        restore_cached_565(self.target, snapshot)
     }
 
     pub(super) fn blit_raw_preview_if_needed(
@@ -145,6 +149,19 @@ impl<'a> LayerTarget<'a> {
     }
 }
 
+fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
+    target.cached_565().to_vec()
+}
+
+fn restore_cached_565(target: &mut UiFrameTarget, snapshot: &[Rgb565Pixel]) -> bool {
+    let cached = target.cached_565_mut();
+    if cached.len() != snapshot.len() {
+        return false;
+    }
+    cached.copy_from_slice(snapshot);
+    true
+}
+
 pub(super) struct LauncherPresentResult {
     pub(super) copied_rows: u32,
     pub(super) direct_preview_rows: u32,
@@ -171,4 +188,24 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_wait_us: u64,
     pub(super) main_present_route_us: u64,
     pub(super) arcade_update_label: ArcadeUpdateTrace,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screensaver_frame_overwrite_can_restore_launcher_cache_exactly() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        let launcher_frame = (0..12)
+            .map(|value| Rgb565Pixel(0x1000 + value))
+            .collect::<Vec<_>>();
+        target.cached_565_mut().copy_from_slice(&launcher_frame);
+
+        let snapshot = snapshot_cached_565(&target);
+        target.cached_565_mut().fill(Rgb565Pixel(0x0001));
+
+        assert!(restore_cached_565(&mut target, &snapshot));
+        assert_eq!(target.cached_565(), launcher_frame);
+    }
 }

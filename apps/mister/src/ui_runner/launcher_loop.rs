@@ -1500,6 +1500,7 @@ pub(super) fn run_launcher_loop(
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_active);
     let mut screensaver_renderer: Option<LauncherScreensaver> = None;
     let mut screensaver_loader: Option<LauncherScreensaverLoader> = None;
+    let mut screensaver_launcher_frame: Option<Vec<Rgb565Pixel>> = None;
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let launcher_bench_after_input_script =
@@ -3654,7 +3655,15 @@ pub(super) fn run_launcher_loop(
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         if screensaver.take_restore_full_frame() {
-            layer_target.clear_cached();
+            if let Some(snapshot) = screensaver_launcher_frame.take() {
+                if !layer_target.restore_cached(&snapshot) {
+                    crate::ui_errln!(
+                        "screensaver: launcher frame restore size mismatch snapshot={} cached={}",
+                        snapshot.len(),
+                        layer_target.cached_frame_view().pixels().len()
+                    );
+                }
+            }
             window.request_redraw();
             full_frame_present = true;
         }
@@ -3669,8 +3678,12 @@ pub(super) fn run_launcher_loop(
         }
         if !screensaver.active {
             screensaver_loader = None;
+            screensaver_launcher_frame = None;
         }
         let this_rect = if screensaver.active && screensaver_renderer.is_some() {
+            if screensaver_launcher_frame.is_none() {
+                screensaver_launcher_frame = Some(layer_target.snapshot_cached());
+            }
             Some(
                 layer_target
                     .render_screensaver(screensaver_renderer.as_mut().expect("checked above")),
@@ -6820,6 +6833,8 @@ mod tests {
         assert!(saver.handle_input(start + Duration::from_secs(1), true, true));
         assert!(!saver.active);
         assert!(saver.take_restore_full_frame());
+        assert!(!saver.take_restore_full_frame());
+        assert!(!saver.handle_input(start + Duration::from_secs(2), true, true));
     }
 
     #[test]
