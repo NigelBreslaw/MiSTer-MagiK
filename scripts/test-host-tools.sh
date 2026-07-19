@@ -211,7 +211,7 @@ if command -v sqlite3 >/dev/null 2>&1 && command -v zip >/dev/null 2>&1; then
      WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<50000)
      INSERT INTO mame_machines SELECT 'machine'||i,'','Machine '||i,1+(i%4),'joy','0.288 (mame0288)' FROM seq;
      CREATE TABLE mame_software_items(list_name TEXT NOT NULL,item_name TEXT NOT NULL);
-     INSERT INTO mame_software_items VALUES('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');"
+     INSERT INTO mame_software_items VALUES('lynx','one'),('megadriv','one'),('n64','one'),('nes','one'),('saturn','one'),('sms','one'),('snes','one');"
   if "$ROOT/scripts/package-distribution.sh" \
       --binary "$package_tmp/mister-magik-fb" \
       --mame-sqlite "$package_tmp/mame.sqlite3" \

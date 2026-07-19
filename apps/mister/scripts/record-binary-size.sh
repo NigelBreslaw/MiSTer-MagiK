@@ -13,7 +13,7 @@ PROFILE="$1"
 FEATURES="$2"
 BIN="$3"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
 LOG="$ROOT/build/binary-size.tsv"
 
 if [ ! -f "$BIN" ]; then

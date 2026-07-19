@@ -5,10 +5,8 @@
 # Run the experimental full-screen RGB565 screensaver scene on the MiSTer.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-MISTER="$HERE/scripts/mister"
-OUT_DIR="$HERE/build/screensaver-profiles"
-REMOTE="/media/fat/mister-magik-dev/mister-magik-fb"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+effect_profile_setup "screensaver-profiles" "results-screensaver.tsv"
 
 usage() {
   cat <<'EOF'
@@ -52,7 +50,7 @@ if [[ ! "$visual_captures" =~ ^[0-9]+$ ]]; then echo "--visual-captures must be 
 
 if [[ -z "$secs" ]]; then
   if [[ "$mode" == "mega" || "$mode" == "all" || "$mode" == "demo" ]]; then
-    secs=$((segment_secs * 18))
+    secs=$((segment_secs * 19))
   else
     IFS=',' read -r -a modes <<<"$mode"
     secs=$((segment_secs * ${#modes[@]}))

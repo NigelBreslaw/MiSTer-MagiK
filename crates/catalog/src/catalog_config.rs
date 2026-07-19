@@ -21,7 +21,7 @@ pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-v3";
 
 pub const SCHEMA_VERSION: u32 = 66;
-pub const CATALOG_BUILD_VERSION: u32 = 12;
+pub const CATALOG_BUILD_VERSION: u32 = 14;
 
 pub fn default_sqlite_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_SQLITE")

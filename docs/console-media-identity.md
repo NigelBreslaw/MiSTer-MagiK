@@ -18,6 +18,7 @@ The first console identity pass covers:
 - Sega Master System: MAME list `sms`
 - Mega Drive: MAME list `megadriv`
 - Saturn: MAME list `saturn`
+- Atari Lynx: MAME list `lynx`
 
 Library identities use:
 
@@ -70,6 +71,10 @@ Cartridge systems are matched by normalized ROM bytes:
 - SNES: try 512-byte copier-header-stripped bytes, then raw.
 - Nintendo 64: try raw, byte-swapped, word-swapped, and reversed word forms.
 - SMS and Mega Drive: try raw bytes.
+- Atari Lynx: hash ROM content by default, trying a standard 64-byte
+  `LYNX`-header-stripped payload before raw bytes. Lynx prefers the hash match
+  and falls back to the normalized filename/title match; other cartridge
+  systems retain the global hash opt-in policy.
 
 Saturn matching prefers CHD raw SHA1 from the CHD header against software-list
 `disk_sha1`. Saturn disc header parsing records product/region metadata, but v1
@@ -160,6 +165,11 @@ that an image exists. Runtime preview loading tries the stored archive/key pair;
 if the entry is missing, the preview worker records the failed lookup and the UI
 shows the blank preview state. Preview pack changes are not catalog stamp inputs
 and do not trigger database rebuilds.
+
+For device acceptance, `scripts/mister catalog` reports `preview_keys` and
+`available_previews` on every `catalog_v3_system_tsv` row. Atari Lynx must have
+nonzero values for both after rebuilding with current MAME metadata and the
+installed screenshot-pack index.
 
 ## Performance Notes
 

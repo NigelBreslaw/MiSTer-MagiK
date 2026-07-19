@@ -160,6 +160,9 @@ class PlatformBundleTests(unittest.TestCase):
         self.assertEqual(plan["next_version"], 1)
         self.assertEqual(plan["release_tag"], "platform-v0.1")
         self.assertTrue(plan["update_needed"])
+        self.assertTrue(plan["main_changed"])
+        self.assertTrue(plan["fpga_changed"])
+        self.assertTrue(plan["kernel_changed"])
 
     def test_update_plan_increments_only_for_changed_identity(self) -> None:
         archive = self.create()
@@ -167,10 +170,25 @@ class PlatformBundleTests(unittest.TestCase):
         unchanged = bundle.update_plan(current, 2, self.main_id, self.fpga_id, self.kernel_id)
         changed = bundle.update_plan(current, 2, self.main_id, self.fpga_id, "d" * 64)
         self.assertFalse(unchanged["update_needed"])
+        self.assertFalse(unchanged["main_changed"])
+        self.assertFalse(unchanged["fpga_changed"])
+        self.assertFalse(unchanged["kernel_changed"])
         self.assertEqual(unchanged["next_version"], 3)
         self.assertTrue(changed["update_needed"])
         self.assertEqual(changed["next_version"], 3)
         self.assertEqual(changed["release_tag"], "platform-v0.3")
+        self.assertFalse(changed["main_changed"])
+        self.assertFalse(changed["fpga_changed"])
+        self.assertTrue(changed["kernel_changed"])
+
+    def test_update_plan_reports_each_changed_component(self) -> None:
+        current = bundle.verify(self.create())
+        main = bundle.update_plan(current, 2, "d" * 64, self.fpga_id, self.kernel_id)
+        fpga = bundle.update_plan(current, 2, self.main_id, "d" * 64, self.kernel_id)
+        all_changed = bundle.update_plan(current, 2, "d" * 64, "e" * 64, "f" * 64)
+        self.assertEqual((main["main_changed"], main["fpga_changed"], main["kernel_changed"]), (True, False, False))
+        self.assertEqual((fpga["main_changed"], fpga["fpga_changed"], fpga["kernel_changed"]), (False, True, False))
+        self.assertTrue(all_changed["main_changed"] and all_changed["fpga_changed"] and all_changed["kernel_changed"])
 
     def test_update_plan_migrates_legacy_v1_manifest(self) -> None:
         current = {
@@ -237,6 +255,26 @@ class PlatformBundleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "manifest|checksum|provenance"):
             bundle.verify(altered)
 
+    def test_missing_component_is_rejected(self) -> None:
+        archive = self.create()
+        altered = self.root / "missing-component.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(altered, "w") as target:
+            for info in source.infolist():
+                if info.filename != "scanout/mister_magik_scanout_slots.ko":
+                    target.writestr(info, source.read(info.filename))
+        with self.assertRaisesRegex(ValueError, "manifest|missing|module"):
+            bundle.verify(altered)
+
+    def test_malformed_manifest_is_rejected(self) -> None:
+        archive = self.create()
+        altered = self.root / "malformed-manifest.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(altered, "w") as target:
+            for info in source.infolist():
+                payload = b"{not-json\n" if info.filename == bundle.MANIFEST_NAME else source.read(info.filename)
+                target.writestr(info, payload)
+        with self.assertRaises((ValueError, json.JSONDecodeError)):
+            bundle.verify(altered)
+
     def test_main_tampering_is_rejected(self) -> None:
         archive = self.create()
         altered = self.root / "altered-main.zip"
@@ -262,6 +300,20 @@ class PlatformBundleTests(unittest.TestCase):
                 target.writestr(info, payload)
         with self.assertRaisesRegex(ValueError, "origin workflow"):
             bundle.verify(altered)
+
+    def test_unified_workflow_and_component_source_are_verified(self) -> None:
+        args = type("Args", (), {
+            "main_dir": self.main, "fpga_dir": self.fpga, "scanout_dir": self.scanout,
+            "main_id": self.main_id, "fpga_id": self.fpga_id, "kernel_id": self.kernel_id,
+            "main_run_id": "100", "fpga_run_id": "100", "kernel_run_id": "100",
+            "main_head_sha": self.main_revision, "fpga_head_sha": "8" * 40, "kernel_head_sha": "9" * 40,
+            "main_workflow": "platform-bundle.yml", "fpga_workflow": "platform-bundle.yml", "kernel_workflow": "platform-bundle.yml",
+            "main_source": "built-in-current-run", "fpga_source": "reused-from-latest-release", "kernel_source": "reused-from-latest-release",
+            "release_version": 3, "output": self.root / "unified-output",
+        })()
+        payload = bundle.verify(bundle.create(args))
+        self.assertEqual(payload["components"]["main"]["source"], "built-in-current-run")
+        self.assertEqual(payload["components"]["fpga"]["source"], "reused-from-latest-release")
 
     def test_non_numeric_component_run_is_rejected(self) -> None:
         archive = self.create()

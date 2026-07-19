@@ -661,7 +661,7 @@ fn configured_fpga_latch_right_guard_cols() -> i32 {
         std::env::var("MISTER_FB_RIGHT_GUARD_COLS")
             .ok()
             .and_then(|value| value.parse::<i32>().ok())
-            .unwrap_or(1)
+            .unwrap_or(0)
     })
 }
 

@@ -363,9 +363,12 @@ events must report `launcher_revealed` and `launcher_input_enabled`.
 
 Host-side lifecycle control is owned by the authenticated resident agent. Main
 publishes its process generation, executable identity, and command-channel
-readiness; the agent waits through Main replacement and acknowledges the final
-state. `/dev/MiSTer_cmd` is an internal transport, not a host API or readiness
-signal.
+readiness. State-changing commands use the paired internal FIFOs
+`/dev/MiSTer_cmd` and `/dev/MiSTer_cmd_reply`: Main returns one human-readable
+`ok`, `rejected`, or `error` line instead of making callers poll for an inferred
+result. Main refreshes `main-status.json` every five seconds as a health
+heartbeat; a stopped heartbeat indicates failure but is not a command deadline.
+The FIFOs remain internal transports, not host APIs or readiness signals.
 
 Screenshot pack download popups are also state-owned. The popup is driven only
 by real pack download progress, not by local pack checks, current-pack skips,

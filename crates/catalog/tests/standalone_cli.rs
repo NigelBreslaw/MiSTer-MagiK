@@ -178,6 +178,10 @@ fn production_builder_publishes_v3_without_creating_v2_artifacts() {
     assert!(report.contains("catalog_v3_summary_tsv\tvalid=1\tschema=1"));
     assert!(report.contains("\tsystems=2\ttotal_games=3\tarcade_resident_games=1"));
     assert_eq!(report.matches("catalog_v3_system_tsv").count(), 2);
+    assert!(report
+        .lines()
+        .filter(|line| line.starts_with("catalog_v3_system_tsv"))
+        .all(|line| line.contains("\tpreview_keys=") && line.contains("\tavailable_previews=")));
     assert!(!legacy.exists());
     assert!(!temp.join("library.summary.json").exists());
     assert!(!temp.join("library.nav.lz4b").exists());

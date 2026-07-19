@@ -170,14 +170,13 @@ The manifest is activated last. The deploy script never writes root
 Do not stack branches.
 
 1. Merge each fork repo PR to `Main_MiSTer/mister-magik`.
-2. Run the fork host tests and patch-surface check. MagiK's `main-mister.yml`
-   first recovers the exact identity from an immutable published v0.2 platform,
-   then tries a non-expired Actions artifact, and builds with the pinned
-   toolchain only when neither exists.
+2. Run the fork host tests and patch-surface check. The unified platform
+   workflow reuses Main from the latest platform release when its identity is
+   unchanged and builds it with the pinned toolchain only when it changed.
 3. Merge app repo deploy/docs changes to `mister-slint/main`.
-4. Promote a candidate platform bundle. It captures the fork head once and
-   combines that exact Main artifact with independently selected FPGA and kernel
-   artifacts. Approve immutable publication only after candidate verification.
+4. Run **Build MiSTer MagiK Platform**. It captures the fork head once, reuses
+   unchanged components from the latest release, and builds only changed
+   components. Approve immutable publication only after candidate verification.
 5. Application publication consumes Main from the highest v0.2 platform bundle;
    only a legacy v0.1 bundle invokes the temporary source-build fallback.
 6. Deploy from `mister-slint` with the fork checkout available at

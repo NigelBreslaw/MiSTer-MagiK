@@ -4,7 +4,8 @@
 //! SQLite catalog import, publish, and loading.
 
 use crate::arcade_catalog::{
-    self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, PlatformKind, StructuredLaunchPlan,
+    self, ArcadeCatalog, ArcadeGameEntry, ArcadeGameMetadataKey, PlatformKind,
+    StructuredLaunchPlan, SystemProjectionStats,
 };
 use crate::catalog_checkpoint::{self, CatalogDriftSummary};
 use crate::catalog_config::{
@@ -710,13 +711,37 @@ fn load_arcade_catalog_from_connection(
     let platform_kinds = load_system_platform_kinds(conn)?;
     let systems_us = systems_t.elapsed().as_micros() as u64;
     let catalog_t = Instant::now();
-    let catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+    let mut catalog = ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
         root,
         games,
         systems,
         launch_plans,
         platform_kinds,
     );
+    let lynx_source_games = conn
+        .query_row(
+            "SELECT count(*)
+             FROM game_rows
+             JOIN string_values systems ON systems.string_id=game_rows.system_string_id
+             JOIN launch_target_rows ON launch_target_rows.launch_id=game_rows.game_key_id
+             WHERE systems.value='atarilynx'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .ok()
+        .and_then(|count| usize::try_from(count).ok())
+        .unwrap_or(0);
+    if lynx_source_games > 0 {
+        let visible_families = catalog.system_game_count("atarilynx");
+        catalog = catalog.with_projection_stats(HashMap::from([(
+            "atarilynx".to_string(),
+            SystemProjectionStats {
+                source_games: lynx_source_games,
+                visible_families,
+                collapsed_variants: lynx_source_games.saturating_sub(visible_families),
+            },
+        )]));
+    }
     let catalog_us = catalog_t.elapsed().as_micros() as u64;
     Ok(LibraryCatalogLoad {
         catalog,
@@ -1327,6 +1352,7 @@ pub(crate) fn load_joined_launcher_catalog(
                     setname: row.get::<_, String>(12)?,
                     parent: row.get::<_, String>(13)?,
                     family_key: None,
+                    identity_matched: false,
                     prepared: None,
                 },
             ))
@@ -3112,6 +3138,7 @@ fn write_sqlite_scan_with_sources_inner(
                             setname: discovery.setname.clone().unwrap_or_default(),
                             parent: discovery.parent.clone().unwrap_or_default(),
                             family_key: software_family_key,
+                            identity_matched: software_identity.is_some(),
                             prepared: discovery.prepared,
                         },
                     )

@@ -176,21 +176,21 @@ selected by the framebuffer route command. At the stock menu, `/dev/fb0` can be
 correct while HDMI still shows another buffer.
 
 The production vblank-latched Menu RBF is built only by manually starting the
-`FPGA Vblank Latch RBF` GitHub Actions workflow. Do not run this workflow on
-every push or pull request; Quartus builds are heavyweight and should be kicked
-off only when a new shared RBF artifact is actually needed. The manual form has
-no custom inputs: select the MiSTer MagiK branch, normally `main`, and run it.
+`Build MiSTer MagiK Platform` GitHub Actions workflow. Quartus runs only when
+the FPGA component identity differs from the latest verified platform release.
+Select the MiSTer MagiK `main` branch and leave `publish` clear for a candidate.
 The workflow restores the installed Quartus runtime from the private
 `mister-magik-ci-cache` R2 bucket and installs from the official Intel payloads
 only on a content-addressed miss. See `apps/mister/BUILD.md` for the required
 bucket-scoped Actions credentials.
-That branch supplies the latch patch and scripts; the workflow builds the exact
-qualified `Menu_MiSTer` revision in
-`mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit`. It does not build the separate
-`Main_MiSTer` MagiK fork. From a checked-out repo with GitHub CLI auth:
+The branch supplies the latch patch and scripts; when required, the workflow
+builds the exact qualified `Menu_MiSTer` revision in
+`mister/platform/fpga/menu-vblank-latch/Menu_MiSTer.commit`. The same workflow
+also builds changed Main and kernel components. From a checked-out repo with
+GitHub CLI auth:
 
 ```bash
-gh workflow run fpga-vblank-latch.yml --repo NigelBreslaw/MiSTer-MagiK --ref main
+gh workflow run platform-bundle.yml --repo NigelBreslaw/MiSTer-MagiK --ref main -f publish=false
 ```
 
 The built RBF is only one part of the fast hidden-buffer path. Seeing

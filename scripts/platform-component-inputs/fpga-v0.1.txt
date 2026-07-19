@@ -8,4 +8,4 @@ scripts/build-fpga-vblank-latch-core.sh
 scripts/install-quartus-lite-docker.sh
 scripts/checks/check-fpga-quartus-delta.py
 scripts/checks/verify-fpga-rbf-manifest.py
-.github/workflows/fpga-vblank-latch.yml
+.github/workflows/platform-bundle.yml

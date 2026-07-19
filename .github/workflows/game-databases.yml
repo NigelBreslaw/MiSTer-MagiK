@@ -5,6 +5,12 @@ name: Promote MiSTer MagiK Game Databases
 
 on:
   workflow_dispatch:
+    inputs:
+      force_mame_rebuild:
+        description: Rebuild MAME even when its upstream tag and SHA are unchanged
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: promote-mister-magik-game-databases
@@ -104,6 +110,7 @@ jobs:
         id: plan
         env:
           CURRENT_MANIFEST: ${{ steps.current.outputs.manifest }}
+          FORCE_MAME_REBUILD: ${{ inputs.force_mame_rebuild }}
           MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
           MAME_SHA: ${{ steps.upstream.outputs.mame_sha }}
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
@@ -118,6 +125,10 @@ jobs:
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
             --github-output "$GITHUB_OUTPUT"
+          if [ "$FORCE_MAME_REBUILD" = true ]; then
+            echo "mame_changed=true" >> "$GITHUB_OUTPUT"
+            echo "update_needed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Report update decision
         env:
@@ -174,6 +185,13 @@ jobs:
 
       - name: Build MAME database
         run: scripts/mister mame-metadata-build --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+
+      - name: Verify Atari Lynx software list
+        run: |
+          set -euo pipefail
+          lynx_rows="$(sqlite3 build/mame.sqlite3 "SELECT count(*) FROM mame_software_items WHERE list_name='lynx';")"
+          test "$lynx_rows" -gt 0
+          echo "Atari Lynx software-list rows: $lynx_rows"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -319,6 +337,10 @@ jobs:
     name: Publish numbered game-database release
     runs-on: ubuntu-24.04
     needs: [inspect, assemble]
+    if: |
+      always() &&
+      needs.inspect.result == 'success' &&
+      needs.assemble.result == 'success'
     timeout-minutes: 15
     environment:
       name: publish-game-databases

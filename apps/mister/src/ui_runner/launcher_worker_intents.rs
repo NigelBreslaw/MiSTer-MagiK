@@ -374,7 +374,7 @@ impl MediaProgressDisplay {
             .values()
             .take(3)
             .map(|row| slint_ui::launcher::ScreenshotPackProgress {
-                system: row.system.clone().into(),
+                system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
                 image_size: row.image_size.clone().into(),
                 phase: row.phase.clone().into(),
                 percent: row.percent,
@@ -654,6 +654,24 @@ mod tests {
         assert_eq!(display.active["neogeo"].percent, 12);
         assert_eq!(display.active["neogeo"].phase, "download");
         assert_eq!(display.summary(), "screenshots 2 active · 0/2 done");
+    }
+
+    #[test]
+    fn media_progress_model_uses_launch_tile_system_titles() {
+        for (system, expected_title) in [
+            ("neogeo", "NeoGeo"),
+            ("n64", "Nintendo 64"),
+            ("sms", "Sega Master System"),
+            ("megadrive", "Mega Drive"),
+            ("atarilynx", "Atari Lynx"),
+        ] {
+            let mut display = MediaProgressDisplay::default();
+            let _ =
+                display.progress_intent(&media_progress_event(system, "download", 128, 1024, 1, 1));
+
+            let row = display.model().row_data(0).expect("progress row");
+            assert_eq!(row.system.as_str(), expected_title, "{system}");
+        }
     }
 
     #[test]

@@ -173,6 +173,7 @@ pub(crate) fn catalog_row(
         setname: setname.to_string(),
         parent: parent.to_string(),
         family_key: None,
+        identity_matched: false,
         prepared: None,
     }
 }
@@ -185,6 +186,7 @@ pub(crate) fn catalog_launcher_row(title: &str, path: &str) -> CatalogProjection
         setname: String::new(),
         parent: String::new(),
         family_key: None,
+        identity_matched: false,
         prepared: None,
     }
 }
@@ -197,6 +199,7 @@ pub(crate) fn catalog_entry_row(title: &str, path: &str) -> CatalogProjectionRow
         setname: String::new(),
         parent: String::new(),
         family_key: None,
+        identity_matched: false,
         prepared: None,
     }
 }

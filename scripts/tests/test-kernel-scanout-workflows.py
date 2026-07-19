@@ -21,6 +21,7 @@ HEAVY_PATHS = {
     "scripts/platform-component-inputs/kernel-v0.1.txt",
     "scripts/release/platform/platform-component-id.py",
     ".github/workflows/kernel-scanout.yml",
+    ".github/workflows/platform-bundle.yml",
 }
 LIGHT_PATHS = {
     "mister/platform/runtime/src/framebuffer/scanout_slots.rs",
@@ -55,22 +56,18 @@ def step_block(text: str, name: str) -> str:
 
 
 assert event_paths(HEAVY, "pull_request", "push") == HEAVY_PATHS
-assert event_paths(HEAVY, "push", "workflow_dispatch") == HEAVY_PATHS
-assert "  workflow_dispatch:\n" in HEAVY
+assert event_paths(HEAVY, "push", None) == HEAVY_PATHS
+assert "  workflow_dispatch:\n" not in HEAVY
 for required in (
     "contract-and-build:",
     "clang-build:",
     "coccinelle:",
     "Sparse type check",
     "Warning-clean rebuild",
-    "Upload attested module",
 ):
     assert required in HEAVY, f"heavyweight workflow lost required behavior: {required}"
-refusal = step_block(HEAVY, "Refuse non-main manual artifact production")
-assert "if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'" in refusal
-upload = step_block(HEAVY, "Upload attested module")
-assert "if: github.ref == 'refs/heads/main'" in upload
-assert "uses: actions/upload-artifact@v7" in upload
+assert "upload-artifact" not in HEAVY
+assert "component_input_sha256=" not in HEAVY
 
 assert event_paths(LIGHT, "pull_request", "push") == LIGHT_PATHS
 assert event_paths(LIGHT, "push", None) == LIGHT_PATHS

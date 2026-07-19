@@ -188,6 +188,7 @@ mod tests {
             &SystemShardData {
                 system_id: snes_id.clone(),
                 generation: 2,
+                projection_stats: None,
                 games: vec![SystemGame {
                     stable_key: "new".to_string(),
                     title: "New SNES Game".to_string(),
@@ -245,6 +246,7 @@ mod tests {
                 &SystemShardData {
                     system_id: system_id.clone(),
                     generation: 1,
+                    projection_stats: None,
                     games: vec![SystemGame {
                         stable_key: title.to_ascii_lowercase(),
                         title: title.to_string(),

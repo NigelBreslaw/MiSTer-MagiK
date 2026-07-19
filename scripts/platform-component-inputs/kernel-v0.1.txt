@@ -7,3 +7,4 @@ scripts/build-scanout-slots-module.sh
 scripts/checks/check-scanout-slots-contract.sh
 scripts/tests/test-scanout-platform-contract.py
 .github/workflows/kernel-scanout.yml
+.github/workflows/platform-bundle.yml

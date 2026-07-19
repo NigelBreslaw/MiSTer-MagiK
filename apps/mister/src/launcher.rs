@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,6 +38,7 @@ const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
 const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
 
 const CMD_FIFO: &str = "/dev/MiSTer_cmd";
+const CMD_REPLY_FIFO: &str = "/dev/MiSTer_cmd_reply";
 const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 const INPUT_POLICY_MARKER_PATH: &str = "/tmp/mister-magik/input-policy";
@@ -61,7 +63,6 @@ const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
-const MAGIK_HANDOFF_ACK_TIMEOUT: Duration = Duration::from_millis(750);
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
 const SETTINGS_MAX_SELECTED: usize = 5;
@@ -3266,6 +3267,77 @@ fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
     ))
 }
 
+fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
+    let command_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open("/tmp/mister-magik/command-operation.lock")
+        .map_err(|error| format!("failed to open command lock: {error}"))?;
+    if unsafe { libc::flock(command_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(format!(
+            "failed to lock command channel: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut reply = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(CMD_REPLY_FIFO)
+        .map_err(|error| format!("failed to open {CMD_REPLY_FIFO}: {error}"))?;
+    let mut discard = [0u8; 256];
+    while reply.read(&mut discard).is_ok_and(|count| count > 0) {}
+    write_mister_command_nonblocking(cmd)?;
+    let mut bytes = Vec::with_capacity(128);
+    let mut heartbeat = main_heartbeat().unwrap_or(0);
+    let mut heartbeat_seen = Instant::now();
+    loop {
+        let mut chunk = [0u8; 128];
+        match reply.read(&mut chunk) {
+            Ok(0) => return Err("MiSTer command channel closed".to_string()),
+            Ok(count) => {
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                    let response = String::from_utf8_lossy(&bytes[..end]);
+                    return parse_magik_command_reply(&response);
+                }
+                if bytes.len() > 512 {
+                    return Err("MiSTer command reply too long".to_string());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(format!("failed to read {CMD_REPLY_FIFO}: {error}")),
+        }
+        if !mister_running() {
+            return Err("MiSTer command channel closed".to_string());
+        }
+        let current_heartbeat = main_heartbeat().unwrap_or(heartbeat);
+        if current_heartbeat != heartbeat {
+            heartbeat = current_heartbeat;
+            heartbeat_seen = Instant::now();
+        } else if heartbeat_seen.elapsed() >= Duration::from_secs(10) {
+            return Err("MiSTer Main heartbeat stopped".to_string());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse_magik_command_reply(response: &str) -> Result<(), String> {
+    if response == "ok" || response.starts_with("ok ") {
+        Ok(())
+    } else {
+        Err(response.to_string())
+    }
+}
+
+fn main_heartbeat() -> Option<u64> {
+    let text = fs::read_to_string(MAIN_STATUS_PATH).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("ts_boot_ms")
+        .and_then(serde_json::Value::as_u64)
+}
+
 trait LaunchIo {
     fn target_exists(&mut self, path: &str) -> bool;
     fn mister_running(&mut self) -> bool;
@@ -3282,7 +3354,6 @@ trait LaunchIo {
         simple_joystick_handling: bool,
     ) -> Result<(), String>;
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
-    fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool;
 }
 
 struct SystemLaunchIo;
@@ -3342,11 +3413,11 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
-        write_mister_command_nonblocking(cmd)
-    }
-
-    fn wait_for_magik_handoff_ack(&mut self, before: Option<MagikMainStatusSnapshot>) -> bool {
-        wait_for_magik_handoff_ack(before)
+        if cmd.starts_with("mister_magik_") {
+            write_magik_command_acknowledged(cmd)
+        } else {
+            write_mister_command_nonblocking(cmd)
+        }
     }
 }
 
@@ -3390,10 +3461,6 @@ fn restore_menu_wallpaper() {
             hidden.display()
         ))
         .status();
-}
-
-fn write_mister_command(cmd: &str) -> Result<(), String> {
-    write_mister_command_nonblocking(cmd)
 }
 
 fn write_input_policy_marker(simple_joystick_handling: bool) -> Result<(), String> {
@@ -3532,7 +3599,7 @@ pub fn exit_to_mister() -> Result<(), String> {
         if !wait_for_fifo() {
             return Err(format!("timed out waiting for {CMD_FIFO}"));
         }
-        write_mister_command("mister_magik_exit_to_menu\n")?;
+        write_magik_command_acknowledged("mister_magik_exit_to_menu\n")?;
     } else {
         spawn_mister()?;
     }
@@ -3561,59 +3628,6 @@ pub fn mister_running_arcade_core() -> bool {
     }
     let cmdline = String::from_utf8_lossy(&output.stdout);
     cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MagikMainStatusSnapshot {
-    ts_boot_ms: u64,
-    handoff_acknowledged: bool,
-}
-
-fn read_magik_main_status_snapshot() -> Option<MagikMainStatusSnapshot> {
-    let text = fs::read_to_string(MAIN_STATUS_PATH).ok()?;
-    magik_main_status_snapshot_from_text(&text)
-}
-
-fn wait_for_magik_handoff_ack(before: Option<MagikMainStatusSnapshot>) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < MAGIK_HANDOFF_ACK_TIMEOUT {
-        if magik_main_status_acknowledged_handoff_after(before) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    false
-}
-
-fn magik_main_status_acknowledged_handoff_after(before: Option<MagikMainStatusSnapshot>) -> bool {
-    let Some(snapshot) = read_magik_main_status_snapshot() else {
-        return false;
-    };
-    if !snapshot.handoff_acknowledged {
-        return false;
-    }
-    magik_handoff_ack_is_newer(before, snapshot)
-}
-
-fn magik_main_status_snapshot_from_text(text: &str) -> Option<MagikMainStatusSnapshot> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return None;
-    };
-    let ts_boot_ms = value.get("ts_boot_ms").and_then(|value| value.as_u64())?;
-    let state = value
-        .get("launcher_state")
-        .and_then(|state| state.as_str())?;
-    Some(MagikMainStatusSnapshot {
-        ts_boot_ms,
-        handoff_acknowledged: matches!(state, "HandoffToGame" | "Unconfigured"),
-    })
-}
-
-fn magik_handoff_ack_is_newer(
-    before: Option<MagikMainStatusSnapshot>,
-    snapshot: MagikMainStatusSnapshot,
-) -> bool {
-    before.is_none_or(|before| snapshot.ts_boot_ms > before.ts_boot_ms)
 }
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
@@ -3707,10 +3721,6 @@ pub fn execute_game_launch_handoff_bench(
                 Err("benchmark handoff does not write the real MiSTer FIFO".to_string())
             }
         }
-
-        fn wait_for_magik_handoff_ack(&mut self, _before: Option<MagikMainStatusSnapshot>) -> bool {
-            self.mode == LaunchHandoffBenchMode::Success
-        }
     }
 
     let mut io = BenchLaunchIo {
@@ -3777,9 +3787,6 @@ fn execute_game_launch_with(
     }
 
     let magik_running = io.magik_running();
-    let main_status_before_handoff = magik_running
-        .then(read_magik_main_status_snapshot)
-        .flatten();
     if magik_running {
         let simple_joystick_handling = io.simple_joystick_handling();
         if simple_joystick_handling {
@@ -3835,16 +3842,6 @@ fn execute_game_launch_with(
         }
         return Err(LaunchError::new(e, spawned));
     }
-    if magik_running && !io.wait_for_magik_handoff_ack(main_status_before_handoff) {
-        let _ = io.write_input_policy_marker(false);
-        return Err(LaunchError::new(
-            format!(
-                "timed out waiting for MiSTer_MagiK launch acknowledgement in {MAIN_STATUS_PATH}"
-            ),
-            spawned,
-        ));
-    }
-
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
     Ok(spawned)
 }
@@ -3960,6 +3957,19 @@ mod tests {
 
     static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    #[test]
+    fn direct_command_replies_accept_ok_and_preserve_failures() {
+        assert_eq!(parse_magik_command_reply("ok LauncherSuspended"), Ok(()));
+        assert_eq!(
+            parse_magik_command_reply("rejected LauncherCrashed"),
+            Err("rejected LauncherCrashed".to_string())
+        );
+        assert_eq!(
+            parse_magik_command_reply("error rbf-not-found"),
+            Err("error rbf-not-found".to_string())
+        );
+    }
+
     struct FakeLaunchIo {
         target_exists: bool,
         mister_running: bool,
@@ -3969,7 +3979,6 @@ mod tests {
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
-        handoff_ack: bool,
         start_calls: usize,
         prepare_simple_input_profile_calls: usize,
         input_policy_markers: Vec<bool>,
@@ -4039,10 +4048,6 @@ mod tests {
             self.commands.push(cmd.to_string());
             self.write_result.clone()
         }
-
-        fn wait_for_magik_handoff_ack(&mut self, _before: Option<MagikMainStatusSnapshot>) -> bool {
-            self.handoff_ack
-        }
     }
 
     fn launch_io() -> FakeLaunchIo {
@@ -4055,7 +4060,6 @@ mod tests {
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
-            handoff_ack: true,
             start_calls: 0,
             prepare_simple_input_profile_calls: 0,
             input_policy_markers: Vec::new(),
@@ -6928,33 +6932,30 @@ mod tests {
     }
 
     #[test]
-    fn magik_launch_requires_post_write_handoff_ack() {
+    fn magik_launch_surfaces_direct_rejection() {
         let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
-        io.handoff_ack = false;
+        io.write_result = Err("rejected LauncherCrashed".to_string());
 
         let err = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
-            .expect_err("missing Main acknowledgement should fail launch");
+            .expect_err("Main rejection should fail launch");
 
         assert_eq!(
             io.commands,
             vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
         );
-        assert!(err
-            .to_string()
-            .contains("MiSTer_MagiK launch acknowledgement"));
+        assert!(err.to_string().contains("rejected LauncherCrashed"));
         assert_eq!(io.input_policy_markers, vec![false, false]);
         assert!(!launch_in_progress());
     }
 
     #[test]
-    fn stock_main_launch_does_not_wait_for_magik_ack() {
+    fn stock_main_launch_does_not_use_magik_reply() {
         let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
         reset_launch();
         let mut io = launch_io();
         io.magik_running = false;
-        io.handoff_ack = false;
 
         execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
             .expect("stock Main launch does not use MagiK status ack");
@@ -7028,56 +7029,6 @@ mod tests {
         assert!(io.button_override_writes.is_empty());
         assert_eq!(io.prepare_simple_input_profile_calls, 0);
         reset_launch();
-    }
-
-    #[test]
-    fn magik_main_status_ack_accepts_known_handoff_states_only() {
-        let handoff = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":10,"launcher_state":"HandoffToGame"}"#,
-        )
-        .expect("parse handoff status");
-        assert!(handoff.handoff_acknowledged);
-
-        let unconfigured = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":11,"launcher_state":"Unconfigured"}"#,
-        )
-        .expect("parse unconfigured status");
-        assert!(unconfigured.handoff_acknowledged);
-
-        let active = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":12,"launcher_state":"LauncherActive"}"#,
-        )
-        .expect("parse active status");
-        assert!(!active.handoff_acknowledged);
-
-        let crashed = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":13,"launcher_state":"LauncherCrashed"}"#,
-        )
-        .expect("parse crash status");
-        assert!(!crashed.handoff_acknowledged);
-
-        assert!(magik_main_status_snapshot_from_text("{}").is_none());
-    }
-
-    #[test]
-    fn magik_main_status_ack_requires_newer_status_timestamp() {
-        let before = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":42,"launcher_state":"LauncherActive"}"#,
-        )
-        .expect("parse before status");
-        let stale = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":42,"launcher_state":"HandoffToGame"}"#,
-        )
-        .expect("parse stale handoff status");
-        let fresh = magik_main_status_snapshot_from_text(
-            r#"{"ts_boot_ms":43,"launcher_state":"HandoffToGame"}"#,
-        )
-        .expect("parse fresh handoff status");
-
-        assert!(stale.handoff_acknowledged);
-        assert!(!magik_handoff_ack_is_newer(Some(before), stale));
-        assert!(magik_handoff_ack_is_newer(Some(before), fresh));
-        assert!(magik_handoff_ack_is_newer(None, fresh));
     }
 
     #[test]
